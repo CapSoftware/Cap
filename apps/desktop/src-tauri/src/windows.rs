@@ -45,6 +45,12 @@ use cap_recording::{feeds, sources::screen_capture::ScreenCaptureTarget};
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
+#[cfg(target_os = "macos")]
+const MAIN_PANEL_LEVEL: i32 = 100;
+
+#[cfg(target_os = "macos")]
+const TELEPROMPTER_PANEL_LEVEL: objc2_app_kit::NSWindowLevel = MAIN_PANEL_LEVEL as isize + 1;
+
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
 
@@ -937,6 +943,7 @@ pub enum CapWindowId {
     Debug,
     ScreenshotEditor { id: u32 },
     Onboarding,
+    Teleprompter,
 }
 
 impl FromStr for CapWindowId {
@@ -955,6 +962,7 @@ impl FromStr for CapWindowId {
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
             "onboarding" => Self::Onboarding,
+            "teleprompter" => Self::Teleprompter,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
@@ -1005,6 +1013,7 @@ impl std::fmt::Display for CapWindowId {
             Self::Debug => write!(f, "debug"),
             Self::ScreenshotEditor { id } => write!(f, "screenshot-editor-{id}"),
             Self::Onboarding => write!(f, "onboarding"),
+            Self::Teleprompter => write!(f, "teleprompter"),
         }
     }
 }
@@ -1027,6 +1036,7 @@ impl CapWindowId {
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
             Self::TargetSelectOverlay { .. } => "Cap Target Select".to_string(),
+            Self::Teleprompter => "Cap Teleprompter".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -1087,6 +1097,7 @@ impl CapWindowId {
             | Self::RecordingControls
             | Self::TargetSelectOverlay { .. } => None,
             Self::Settings => Some(Some(LogicalPosition::new(22.0, 22.0))),
+            Self::Teleprompter => Some(Some(LogicalPosition::new(14.0, 14.0))),
             _ => Some(None),
         }
     }
@@ -1619,8 +1630,6 @@ impl ShowCapWindow {
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                             use tauri_nspanel::panel_delegate;
                             use crate::panel_manager::try_to_panel;
-
-                            const MAIN_PANEL_LEVEL: i32 = 100;
 
                             let delegate = panel_delegate!(MainPanelDelegate {
                                 window_did_become_key,
@@ -3057,10 +3066,16 @@ impl ShowCapWindow {
 
         #[cfg(windows)]
         {
+            let browser_args = windows_webview2_browser_args();
+            let browser_args_json = serde_json::to_string(&browser_args)
+                .expect("Failed to serialize Windows WebView2 browser arguments");
             builder = builder
                 .decorations(false)
                 .zoom_hotkeys_enabled(false)
-                .additional_browser_args(&windows_webview2_browser_args());
+                .additional_browser_args(&browser_args)
+                .initialization_script(format!(
+                    "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.windowsWebview2BrowserArgs = {browser_args_json};"
+                ));
         }
 
         // Linux has no native macOS-style traffic lights, so we drop the window
@@ -3233,6 +3248,38 @@ pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(
     );
 }
 
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_window))]
+pub fn set_teleprompter_window_level(_window: tauri::Window, _always_on_top: bool) {
+    #[cfg(target_os = "macos")]
+    if _window.label() == CapWindowId::Teleprompter.to_string() {
+        let level = if _always_on_top {
+            TELEPROMPTER_PANEL_LEVEL
+        } else {
+            objc2_app_kit::NSNormalWindowLevel
+        };
+        crate::platform::set_window_level(_window, level);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if _window.label() == CapWindowId::Teleprompter.to_string()
+        && let Err(error) = _window.set_always_on_top(_always_on_top)
+    {
+        warn!(?error, "Failed to update teleprompter window level");
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(_window))]
+pub fn set_teleprompter_window_opacity(_window: tauri::Window, _opacity: f64) {
+    #[cfg(target_os = "macos")]
+    if _window.label() == CapWindowId::Teleprompter.to_string() {
+        crate::platform::set_window_opacity(_window, _opacity);
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn position_traffic_lights_impl(
     window: &tauri::Window,
@@ -3305,7 +3352,11 @@ fn content_protection_enabled(app: &AppHandle<Wry>) -> bool {
         .unwrap_or(false)
 }
 
-fn window_matches_exclusion_list(app: &AppHandle<Wry>, window_title: &str) -> bool {
+fn window_capture_excluded(app: &AppHandle<Wry>, window_title: &str) -> bool {
+    if window_title == CapWindowId::Teleprompter.title() {
+        return true;
+    }
+
     let matches = |list: &[WindowExclusion]| {
         list.iter()
             .any(|entry| entry.matches(None, None, Some(window_title)))
@@ -3321,7 +3372,7 @@ fn window_matches_exclusion_list(app: &AppHandle<Wry>, window_title: &str) -> bo
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
     content_protection_enabled(app)
         && !capture_exclusion_hides_ui()
-        && window_matches_exclusion_list(app, window_title)
+        && window_capture_excluded(app, window_title)
 }
 
 pub fn apply_content_protection(app: &AppHandle<Wry>, enabled: bool) {
@@ -3343,7 +3394,7 @@ pub fn apply_content_protection(app: &AppHandle<Wry>, enabled: bool) {
         }
 
         let title = id.title();
-        let should_protect = enabled && window_matches_exclusion_list(app, &title);
+        let should_protect = enabled && window_capture_excluded(app, &title);
         let _ = window.set_content_protected(should_protect);
 
         #[cfg(target_os = "windows")]
@@ -3558,8 +3609,13 @@ pub async fn apply_macos_liquid_glass_background(
 
         _window
             .run_on_main_thread(move || {
-                let result =
-                    crate::platform::apply_liquid_glass_background(&window, _enabled, _radius);
+                let result = if window.label() == CapWindowId::Main.label() {
+                    crate::platform::apply_main_window_liquid_glass_background(
+                        &window, _enabled, _radius,
+                    )
+                } else {
+                    crate::platform::apply_liquid_glass_background(&window, _enabled, _radius)
+                };
                 let _ = tx.send(result);
             })
             .map_err(|error| error.to_string())?;

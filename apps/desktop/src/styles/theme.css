@@ -360,6 +360,15 @@
 	border-radius: 16px;
 }
 
+[data-macos-native-material="teleprompter"] .cap-window-shell {
+	border-radius: 16px;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="teleprompter"]
+	.cap-window-shell {
+	border-radius: 22px;
+}
+
 /* Tone down the see-through on the main panel under Liquid Glass: layer a
    translucent white (or dark in dark mode) wash over the NSGlassEffectView
    backdrop so the window reads as a "more white" surface overall instead of

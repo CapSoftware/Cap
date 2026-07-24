@@ -1574,7 +1574,8 @@ export function createCropOptionsMenuItems(options: {
 			(ratio) =>
 				({
 					text: `${ratio[0]}:${ratio[1]}`,
-					checked: options.aspect === ratio,
+					checked:
+						options.aspect?.[0] === ratio[0] && options.aspect[1] === ratio[1],
 					action: () => options.onAspectSet(ratio),
 				}) satisfies CheckMenuItemOptions,
 		),

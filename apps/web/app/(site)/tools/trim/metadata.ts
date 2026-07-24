@@ -1,16 +1,14 @@
 import type { Metadata } from "next";
 import { trimVideoContent } from "@/components/tools/content";
+import { buildMarketingMetadata } from "@/lib/og/url";
 
 export const metadata: Metadata = {
-	title: trimVideoContent.title,
-	description: trimVideoContent.description,
-	keywords: trimVideoContent.tags?.join(", "),
-	openGraph: {
+	...buildMarketingMetadata({
 		title: trimVideoContent.title,
 		description: trimVideoContent.description,
-		type: "website",
-	},
-	alternates: {
-		canonical: "https://cap.so/tools/trim",
-	},
+		path: "/tools/trim",
+		ogTitle: "Trim videos online — free, in your browser",
+		ogTag: "Tools",
+	}),
+	keywords: trimVideoContent.tags?.join(", "),
 };

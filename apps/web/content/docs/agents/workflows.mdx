@@ -1,0 +1,181 @@
+---
+title: "Agent Workflows"
+summary: "Practical Cap scenarios with safe prompts, expected actions, and success checks"
+tags: "Agents"
+---
+
+> **Agent-readable page:** Send this page with the task you want completed. The agent must run `cap guide --json`, prefer JSON output, inspect current state before changing it, and follow the confirmation boundary in each workflow.
+
+## Understand a recording
+
+**Ask your agent:**
+
+> Summarize this Cap for someone who missed the meeting. Include decisions, owners, action items, open questions, and useful timestamps: `<Cap URL>`.
+
+The agent should:
+
+1. Run `cap caps context <id-or-url> --json`.
+2. Use the returned title, AI output, chapters, transcript, comments, reactions, views, permissions, and processing state.
+3. If content is already processing, optionally observe it with `cap caps wait <id-or-url> --for all --json`.
+4. Never claim that `wait` started transcription or AI processing.
+
+**Success check:** The answer is grounded in returned Cap content, distinguishes missing or still-processing fields, and does not start paid work.
+
+## Search across your library
+
+**Ask your agent:**
+
+> Find my Caps about customer onboarding, identify the three most relevant, and combine their decisions and unresolved questions. Do not modify anything.
+
+The agent should start with:
+
+```sh
+cap caps list --search "customer onboarding" --json
+```
+
+It can narrow by `--scope`, `--organization`, `--folder`, or `--updated-after`, then call `cap caps context` only for relevant results.
+
+**Success check:** The agent explains its selection, works from the returned IDs, and stays read-only.
+
+## Draft and post a comment
+
+**Ask your agent:**
+
+> Read this Cap and draft a concise timestamped comment asking for clarification at the point where pricing is discussed. Show me the exact comment before posting it.
+
+The agent should read the Cap, draft the text and timestamp, and stop for confirmation. Only after you approve should it run a confirmed command such as:
+
+```sh
+cap caps comments add <id-or-url> "<approved comment>" --timestamp-ms <timestamp> --yes --json
+```
+
+Replies and reactions use the same review-first pattern through `cap caps comments reply` and `cap caps reactions add`.
+
+**Success check:** The posted content exactly matches what you approved, and the agent re-reads the Cap or command result to verify it exists.
+
+## Record and share a bug reproduction
+
+**Ask your agent:**
+
+> Help me record a short reproduction of this bug. Ask before capture starts, stop after the reproduction, validate the recording, then ask again before uploading it.
+
+The agent should:
+
+1. Check `cap doctor --json` and branch on `captureReady`.
+2. Discover inputs with `cap targets --json` and show you the selected screen, window, camera, microphone, and audio settings.
+3. Get your explicit confirmation before capture.
+4. Start a detached recording and retain its `recordingId` and `path`.
+5. Stop that exact session and require `recordingMetaExists: true`.
+6. Run `cap project validate <path.cap> --json`.
+7. Export locally if needed.
+8. Show the upload plan and obtain a second confirmation before `cap upload`.
+
+```sh
+cap record start --screen <screen-id> --detach --json
+cap record stop --id <recording-id> --json
+cap project validate <path.cap> --json
+cap export <path.cap> --output bug-repro.mp4 --json
+cap upload bug-repro.mp4 --json
+```
+
+**Success check:** The validated recording corresponds to the session that was started, export reaches a terminal completion event, and upload returns a Cap ID and share link.
+
+## Upload an existing recording
+
+**Ask your agent:**
+
+> Upload `demo.mp4` to Cap with the title “July product demo” and give me the link. Show me the exact file and title before uploading.
+
+After confirmation:
+
+```sh
+cap upload demo.mp4 --name "July product demo" --json
+```
+
+For a `.cap` project without an export, the agent can propose `cap upload <path.cap> --export --json`.
+
+**Success check:** The agent checks the command's JSON result for the returned ID and link instead of inventing or reconstructing a URL.
+
+## Review engagement
+
+**Ask your agent:**
+
+> Compare this month's organization analytics with the context from our most-watched Caps. Explain likely patterns, but do not change anything.
+
+The agent can inspect organizations and run a bounded analytics query:
+
+```sh
+cap organizations list --json
+cap analytics --organization <organization-id> --range month --json
+```
+
+It may add `--space` or `--cap` for a narrower view.
+
+**Success check:** Time range and scope are explicit, observed metrics are separated from interpretation, and no settings are changed.
+
+## Organize team content
+
+**Ask your agent:**
+
+> Find the correct product space and release folder for this Cap. Show me the current and proposed location, then move it only after I approve.
+
+The agent should inspect organizations, spaces, folders, and the Cap's current context first:
+
+```sh
+cap organizations list --json
+cap library spaces list <organization-id> --json
+cap library folders list <organization-id> --space <space-id> --json
+cap caps context <id-or-url> --json
+```
+
+After confirmation, it can use `cap caps move` with the exact organization, container, space, and folder identifiers returned by discovery.
+
+**Success check:** The agent re-reads the Cap and confirms its final location. It must not infer IDs from display names.
+
+Read [Working With Your Team](/docs/teams) for the organization roles, spaces, folders, storage, and analytics that this workflow can manage.
+
+## Configure organization storage
+
+**Ask your agent:**
+
+> Inspect our organization's current storage and show me a plan to use Google Drive for new uploads. Do not open an authorization flow, choose a folder, or change the provider until I approve each step.
+
+The agent should run `cap guide --json`, inspect the organization and existing storage integrations, and explain that a provider change applies to future uploads rather than moving existing files. Google authorization must happen in the browser, and the exact writable Drive folder must be confirmed before activation.
+
+**Success check:** The agent re-reads the organization storage state, tests the connection, and verifies one non-sensitive sample upload and playback before recommending a team-wide rollout.
+
+Read [Google Drive](/docs/teams/google-drive) for the complete workflow and rollout checklist.
+
+## Run a Loom migration
+
+**Ask your agent:**
+
+> Import this Loom URL into our organization, assign it to the confirmed owner email and Cap space name, and wait for the migration to finish. Preview the exact mapping before starting.
+
+After checking organization, member, and space state, the agent should show the mapping and get confirmation. A confirmed import can be run as:
+
+```sh
+cap caps import loom <loom-url> --organization <organization-id> --owner-email <email> --space <space-name> --yes --json
+cap jobs wait <operation-id> --json
+```
+
+The import command also supports `--wait`. For a batch migration, process one explicit row at a time, preserve the source URL and returned operation ID, and reconcile conflicts before retrying. The operation is durable, but starting an import is not itself an idempotent action.
+
+**Success check:** Every source row has a terminal job result and a verified destination. An accepted or queued response is not treated as complete.
+
+For CSV limits, owner and space mapping, large-batch controls, and source-unavailable handling, read [Migrating to Cap](/docs/migrating-to-cap).
+
+## Use Cap for administration or development
+
+Cap also exposes account, organization, notification, storage, billing, and developer workflows. Ask the agent to discover the current surface rather than copying commands from an old prompt:
+
+```sh
+cap guide --json
+cap account --help
+cap organizations --help
+cap developers --help
+```
+
+Use the `admin` login profile for organization and billing work and `full` only for developer tasks. Billing, storage, domains, membership, credential rotation, auto top-up, and destructive changes always require an exact preview and explicit confirmation.
+
+Read [Safety & Troubleshooting](/docs/agents/safety) for the rules that apply to every workflow.

@@ -7,6 +7,7 @@ import {
 } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 interface ConversionPageProps {
@@ -33,6 +34,10 @@ export async function generateMetadata(
 	const config = CONVERSION_CONFIGS[conversionPath];
 	const sourceUpper = sourceFormat.toUpperCase();
 	const targetUpper = targetFormat.toUpperCase();
+	const ogImage = ogImageUrl({
+		title: `Convert ${sourceUpper} to ${targetUpper} — free, in your browser`,
+		tag: "Tools",
+	});
 
 	return {
 		title: `${sourceUpper} to ${targetUpper} Converter | Free Online Tool | Cap`,
@@ -45,10 +50,10 @@ export async function generateMetadata(
 			description: `Convert ${sourceUpper} files to ${targetUpper} format directly in your browser. No uploads required, processing happens locally for maximum privacy.`,
 			images: [
 				{
-					url: "/og.png",
+					url: ogImage,
 					width: 1200,
 					height: 630,
-					alt: `Cap ${sourceUpper} to ${targetUpper} Converter Tool`,
+					alt: `Convert ${sourceUpper} to ${targetUpper} — free, in your browser`,
 				},
 			],
 		},

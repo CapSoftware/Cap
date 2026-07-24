@@ -4,7 +4,7 @@ use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
-    TimelineSegment, XY,
+    TimelineFrameMapping, TimelineSegment, XY,
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
@@ -171,6 +171,7 @@ impl EditorInstance {
                             end: duration,
                             timescale: 1.0,
                             name: None,
+                            speed_audio_mode: None,
                         }],
                         _ => {
                             warn!(
@@ -203,6 +204,7 @@ impl EditorInstance {
                             end: duration,
                             timescale: 1.0,
                             name: None,
+                            speed_audio_mode: None,
                         })
                     })
                     .collect(),
@@ -211,6 +213,7 @@ impl EditorInstance {
             if !timeline_segments.is_empty() {
                 project.timeline = Some(TimelineConfiguration {
                     segments: timeline_segments,
+                    transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
@@ -522,10 +525,23 @@ impl EditorInstance {
                     }
 
                     let project = self.project_config.1.borrow().clone();
+                    let frame_time = frame_number as f64 / fps as f64;
+                    let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
+                        if timeline.transitions.is_empty() {
+                            return None;
+                        }
+                        match timeline.get_frame_mapping(frame_time) {
+                            Some(TimelineFrameMapping::Transition {
+                                outgoing,
+                                kind,
+                                progress,
+                                ..
+                            }) => Some((outgoing, kind, progress)),
+                            _ => None,
+                        }
+                    });
 
-                    let Some((segment_time, segment)) =
-                        project.get_segment_time(frame_number as f64 / fps as f64)
-                    else {
+                    let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
                         warn!(
                             "Preview renderer: no segment found for frame {}",
                             frame_number
@@ -542,48 +558,6 @@ impl EditorInstance {
 
                     let new_cancel_token = CancellationToken::new();
                     prefetch_cancel_token = Some(new_cancel_token.clone());
-
-                    let playback_is_active = *self.playback_active_rx.borrow();
-                    let export_preview_is_active =
-                        self.export_preview_active.load(Ordering::Acquire);
-                    let export_is_active = self.export_active.load(Ordering::Acquire);
-                    if !playback_is_active && !export_preview_is_active && !export_is_active {
-                        let prefetch_frames_count = 15u32;
-                        let hide_camera = project.camera.hide;
-                        let playback_rx = self.playback_active_rx.clone();
-                        for offset in 1..=prefetch_frames_count {
-                            let prefetch_frame = frame_number + offset;
-                            if let Some((prefetch_segment_time, prefetch_segment)) =
-                                project.get_segment_time(prefetch_frame as f64 / fps as f64)
-                                && let Some(prefetch_segment_media) = self
-                                    .segment_medias
-                                    .get(prefetch_segment.recording_clip as usize)
-                            {
-                                let prefetch_clip_offsets = project
-                                    .clips
-                                    .iter()
-                                    .find(|v| v.index == prefetch_segment.recording_clip)
-                                    .map(|v| v.offsets)
-                                    .unwrap_or_default();
-                                let decoders = prefetch_segment_media.decoders.clone();
-                                let cancel_token = new_cancel_token.clone();
-                                let playback_rx = playback_rx.clone();
-                                tokio::spawn(async move {
-                                    if cancel_token.is_cancelled() || *playback_rx.borrow() {
-                                        return;
-                                    }
-                                    let _ = decoders
-                                        .get_frames(
-                                            prefetch_segment_time as f32,
-                                            !hide_camera,
-                                            true,
-                                            prefetch_clip_offsets,
-                                        )
-                                        .await;
-                                });
-                            }
-                        }
-                    }
 
                     tokio::select! {
                         biased;
@@ -617,14 +591,80 @@ impl EditorInstance {
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
                             // back to a divergent direct interpolation).
-                            let mut zoom_timeline = ZoomTransformTimeline::from_project(
+                            let mut zoom_timeline =
+                                ZoomTransformTimeline::from_project_for_clip(
                                 &project,
                                 &segment_medias.cursor,
                                 total_duration,
                                 self.render_constants.options.screen_size,
+                                segment.recording_clip,
                             );
                             zoom_timeline
                                 .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
+
+                            let outgoing_transition = if let Some((outgoing, kind, progress)) =
+                                transition_mapping
+                            {
+                                let outgoing_media =
+                                    &self.segment_medias[outgoing.segment.recording_clip as usize];
+                                let outgoing_offsets = project
+                                    .clips
+                                    .iter()
+                                    .find(|clip| clip.index == outgoing.segment.recording_clip)
+                                    .map(|clip| clip.offsets)
+                                    .unwrap_or_default();
+                                let outgoing_frames = tokio::select! {
+                                    biased;
+                                    _ = preview_rx.changed() => {
+                                        continue;
+                                    }
+                                    frames = outgoing_media.decoders.get_frames_initial(
+                                        outgoing.source_time as f32,
+                                        !project.camera.hide,
+                                        true,
+                                        outgoing_offsets,
+                                    ) => frames,
+                                };
+                                if let Some(outgoing_frames) = outgoing_frames {
+                                    let mut outgoing_zoom =
+                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                            &project,
+                                            &outgoing_media.cursor,
+                                            total_duration,
+                                            self.render_constants.options.screen_size,
+                                            outgoing.segment.recording_clip,
+                                        );
+                                    outgoing_zoom.ensure_precomputed_until(
+                                        (frame_number as f32 + 1.0) / fps as f32,
+                                    );
+                                    let outgoing_uniforms = ProjectUniforms::new(
+                                        &self.render_constants,
+                                        &project,
+                                        frame_number,
+                                        fps,
+                                        resolution_base,
+                                        &outgoing_media.cursor,
+                                        &outgoing_frames,
+                                        total_duration,
+                                        &outgoing_zoom,
+                                    );
+                                    Some((
+                                        outgoing_frames,
+                                        outgoing_uniforms,
+                                        outgoing_media.cursor.clone(),
+                                        kind,
+                                        progress as f32,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            if preview_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
 
                             let mut next_segment_frames = segment_frames_opt;
                             let mut rendered = false;
@@ -646,15 +686,40 @@ impl EditorInstance {
                                     &zoom_timeline,
                                 );
 
-                                if self
-                                    .renderer
-                                    .render_frame_confirmed(
-                                        segment_frames,
-                                        uniforms,
-                                        segment_medias.cursor.clone(),
-                                    )
-                                    .await
+                                let render_confirmed = if let Some((
+                                    outgoing_frames,
+                                    outgoing_uniforms,
+                                    outgoing_cursor,
+                                    kind,
+                                    progress,
+                                )) = &outgoing_transition
                                 {
+                                    self.renderer
+                                        .render_transition_frame_confirmed(
+                                            editor::RendererTransitionInput {
+                                                segment_frames: outgoing_frames.clone(),
+                                                uniforms: outgoing_uniforms.clone(),
+                                                cursor: outgoing_cursor.clone(),
+                                            },
+                                            editor::RendererTransitionInput {
+                                                segment_frames,
+                                                uniforms,
+                                                cursor: segment_medias.cursor.clone(),
+                                            },
+                                            *kind,
+                                            *progress,
+                                        )
+                                        .await
+                                } else {
+                                    self.renderer
+                                        .render_frame_confirmed(
+                                            segment_frames,
+                                            uniforms,
+                                            segment_medias.cursor.clone(),
+                                        )
+                                        .await
+                                };
+                                if render_confirmed {
                                     rendered = true;
                                     break;
                                 }
@@ -686,6 +751,67 @@ impl EditorInstance {
                                     attempts = PREVIEW_RENDER_MAX_ATTEMPTS,
                                     "Preview renderer: frame render failed"
                                 );
+                            }
+
+                            if rendered
+                                && !preview_rx.has_changed().unwrap_or(true)
+                                && !*self.playback_active_rx.borrow()
+                                && !self.export_preview_active.load(Ordering::Acquire)
+                                && !self.export_active.load(Ordering::Acquire)
+                            {
+                                let this = self.clone();
+                                let project = project.clone();
+                                let cancel_token = new_cancel_token.clone();
+                                let playback_rx = self.playback_active_rx.clone();
+                                tokio::spawn(async move {
+                                    for offset in 1..=15u32 {
+                                        if cancel_token.is_cancelled()
+                                            || *playback_rx.borrow()
+                                            || this.export_preview_active.load(Ordering::Acquire)
+                                            || this.export_active.load(Ordering::Acquire)
+                                        {
+                                            break;
+                                        }
+
+                                        let prefetch_frame =
+                                            frame_number.saturating_add(offset);
+                                        let Some((prefetch_segment_time, prefetch_segment)) =
+                                            project.get_segment_time(
+                                                prefetch_frame as f64 / fps as f64,
+                                            )
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(prefetch_segment_media) = this
+                                            .segment_medias
+                                            .get(prefetch_segment.recording_clip as usize)
+                                        else {
+                                            continue;
+                                        };
+                                        let prefetch_clip_offsets = project
+                                            .clips
+                                            .iter()
+                                            .find(|v| {
+                                                v.index == prefetch_segment.recording_clip
+                                            })
+                                            .map(|v| v.offsets)
+                                            .unwrap_or_default();
+                                        tokio::select! {
+                                            biased;
+                                            _ = cancel_token.cancelled() => break,
+                                            _ = prefetch_segment_media.decoders.get_frames(
+                                                prefetch_segment_time as f32,
+                                                !project.camera.hide,
+                                                true,
+                                                prefetch_clip_offsets,
+                                            ) => {}
+                                        }
+
+                                        if cancel_token.is_cancelled() {
+                                            break;
+                                        }
+                                    }
+                                });
                             }
                         }
                     }

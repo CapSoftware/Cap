@@ -91,6 +91,7 @@
 }
 
 .cap-extension-camera-window:hover .cap-extension-camera-controls,
+.cap-extension-camera-window.is-preview-hovered .cap-extension-camera-controls,
 .cap-extension-camera-controls:focus-within {
 	opacity: 1;
 	transform: translateY(0);
@@ -153,6 +154,116 @@
 	background: #000;
 	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
 	color: #fff;
+}
+
+.cap-extension-camera-resize-layer {
+	position: absolute;
+	top: 52px;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	z-index: 4;
+	pointer-events: none;
+}
+
+.cap-extension-camera-resize-handle {
+	all: unset;
+	position: absolute;
+	z-index: 1;
+	display: block;
+	width: 30px;
+	height: 30px;
+	box-sizing: border-box;
+	opacity: 0;
+	pointer-events: none;
+	touch-action: none;
+	user-select: none;
+	transition: opacity 140ms ease;
+}
+
+.cap-extension-camera-window:hover .cap-extension-camera-resize-handle,
+.cap-extension-camera-window.is-preview-hovered
+	.cap-extension-camera-resize-handle,
+.cap-extension-camera-window:focus-within .cap-extension-camera-resize-handle,
+.cap-extension-camera-window.is-resizing .cap-extension-camera-resize-handle {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.cap-extension-camera-resize-handle::after {
+	position: absolute;
+	width: 14px;
+	height: 14px;
+	border-color: rgba(255, 255, 255, 0.86);
+	content: "";
+	filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+	pointer-events: none;
+	transform: scale(0.9);
+	transition:
+		border-color 140ms ease,
+		transform 140ms ease;
+}
+
+.cap-extension-camera-resize-handle:hover::after,
+.cap-extension-camera-resize-handle.is-active::after {
+	border-color: #fff;
+	transform: scale(1.08);
+}
+
+.cap-extension-camera-resize-handle.is-nw {
+	top: 0;
+	left: 0;
+	cursor: nwse-resize;
+}
+
+.cap-extension-camera-resize-handle.is-ne {
+	top: 0;
+	right: 0;
+	cursor: nesw-resize;
+}
+
+.cap-extension-camera-resize-handle.is-sw {
+	bottom: 0;
+	left: 0;
+	cursor: nesw-resize;
+}
+
+.cap-extension-camera-resize-handle.is-se {
+	right: 0;
+	bottom: 0;
+	cursor: nwse-resize;
+}
+
+.cap-extension-camera-resize-handle.is-nw::after {
+	top: 6px;
+	left: 6px;
+	border-top: 2px solid;
+	border-left: 2px solid;
+	border-radius: 6px 0 0;
+}
+
+.cap-extension-camera-resize-handle.is-ne::after {
+	top: 6px;
+	right: 6px;
+	border-top: 2px solid;
+	border-right: 2px solid;
+	border-radius: 0 6px 0 0;
+}
+
+.cap-extension-camera-resize-handle.is-sw::after {
+	bottom: 6px;
+	left: 6px;
+	border-bottom: 2px solid;
+	border-left: 2px solid;
+	border-radius: 0 0 0 6px;
+}
+
+.cap-extension-camera-resize-handle.is-se::after {
+	right: 6px;
+	bottom: 6px;
+	border-right: 2px solid;
+	border-bottom: 2px solid;
+	border-radius: 0 0 6px;
 }
 
 .cap-extension-camera-iframe {
@@ -427,12 +538,6 @@
 	animation: cap-extension-pulse 1.6s ease-in-out infinite;
 }
 
-.cap-extension-control-bar-dot.is-creating {
-	background: #f59f00;
-	box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.18);
-	animation: cap-extension-pulse 1.6s ease-in-out infinite;
-}
-
 .cap-extension-control-bar-dot.is-paused {
 	background: #b4b4b4;
 }
@@ -490,6 +595,12 @@
 .cap-extension-control-bar-icon-button:disabled {
 	opacity: 0.45;
 	cursor: not-allowed;
+}
+
+.cap-extension-control-bar-icon-button.is-compact {
+	width: 32px;
+	height: 32px;
+	border-radius: 9px;
 }
 
 .cap-extension-control-bar-icon-button.is-quiet {
@@ -556,6 +667,14 @@
 	background: #d93036;
 }
 
+.cap-extension-control-bar-pill.is-stop.is-compact {
+	width: 34px;
+	height: 32px;
+	justify-content: center;
+	padding: 0;
+	border-radius: 9px;
+}
+
 .cap-extension-control-bar-pill.is-start {
 	background: #2563eb;
 	border-color: #1d4ed8;
@@ -568,22 +687,21 @@
 
 .cap-extension-recording-rail {
 	position: fixed;
-	left: 16px;
-	top: 50%;
 	z-index: 2147483647;
 	display: flex;
-	flex-direction: column;
 	align-items: center;
-	gap: 8px;
-	padding: 10px 8px 8px;
+	gap: 2px;
+	padding: 4px;
 	border: 1px solid rgba(18, 18, 23, 0.08);
-	border-radius: 18px;
+	border-radius: 14px;
 	background: rgba(252, 252, 252, 0.97);
 	box-shadow:
-		0 24px 64px rgba(0, 0, 0, 0.28),
-		0 4px 16px rgba(0, 0, 0, 0.12);
+		0 16px 40px rgba(0, 0, 0, 0.22),
+		0 3px 10px rgba(0, 0, 0, 0.1);
 	color: #202020;
+	cursor: grab;
 	pointer-events: auto;
+	touch-action: none;
 	user-select: none;
 	backdrop-filter: blur(20px);
 	font-family:
@@ -592,27 +710,103 @@
 	font-size: 13px;
 	letter-spacing: 0;
 	line-height: 1;
-	transform: translateY(-50%);
+	isolation: isolate;
 	animation: cap-extension-rail-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.cap-extension-recording-rail.is-dragging {
+	cursor: grabbing;
+}
+
 .cap-extension-recording-rail-timer {
+	position: relative;
+	z-index: 1;
 	display: flex;
-	flex-direction: column;
 	align-items: center;
-	gap: 7px;
-	padding: 4px 6px 2px;
+	gap: 6px;
+	min-width: 70px;
+	height: 32px;
+	padding: 0 4px 0 0;
+}
+
+.cap-extension-recording-rail-grip {
+	flex: 0 0 auto;
+	color: #a1a1aa;
 }
 
 .cap-extension-recording-rail-time {
-	min-width: 40px;
-	font-size: 15px;
+	min-width: 38px;
+	font-size: 13px;
 	font-weight: 600;
 	line-height: 1;
 	color: #18181b;
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
+}
+
+.cap-extension-recording-rail-actions {
+	position: absolute;
+	top: 1px;
+	left: calc(100% + 6px);
+	z-index: 2;
+	display: flex;
+	height: 40px;
+	align-items: center;
+	gap: 2px;
+	padding: 3px 4px;
+	border: 1px solid rgba(18, 18, 23, 0.08);
+	border-radius: 14px;
+	background: rgba(252, 252, 252, 0.97);
+	box-shadow:
+		0 12px 30px rgba(0, 0, 0, 0.16),
+		0 2px 8px rgba(0, 0, 0, 0.08);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transform: translateX(-4px) scale(0.98);
+	transform-origin: left center;
+	transition:
+		opacity 120ms ease,
+		transform 160ms ease,
+		visibility 0s linear 160ms;
+}
+
+.cap-extension-recording-rail-actions::before {
+	position: absolute;
+	top: 0;
+	right: 100%;
+	width: 8px;
+	height: 100%;
+	content: "";
+}
+
+.cap-extension-recording-rail > .cap-extension-control-bar-pill {
+	position: relative;
+	z-index: 1;
+}
+
+.cap-extension-recording-rail.opens-left .cap-extension-recording-rail-actions {
+	right: calc(100% + 6px);
+	left: auto;
+	transform: translateX(4px) scale(0.98);
+	transform-origin: right center;
+}
+
+.cap-extension-recording-rail.opens-left
+	.cap-extension-recording-rail-actions::before {
+	right: auto;
+	left: 100%;
+}
+
+.cap-extension-recording-rail:hover .cap-extension-recording-rail-actions,
+.cap-extension-recording-rail:focus-within
+	.cap-extension-recording-rail-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+	transform: translateX(0) scale(1);
+	transition-delay: 0s;
 }
 
 .cap-extension-recording-rail-timer.is-warning
@@ -623,11 +817,11 @@
 @keyframes cap-extension-rail-in {
 	from {
 		opacity: 0;
-		transform: translateY(-50%) translateX(-14px) scale(0.97);
+		transform: translateY(6px) scale(0.97);
 	}
 	to {
 		opacity: 1;
-		transform: translateY(-50%) translateX(0) scale(1);
+		transform: translateY(0) scale(1);
 	}
 }
 

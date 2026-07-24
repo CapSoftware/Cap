@@ -15,6 +15,49 @@ mod sc_shareable_content;
 
 pub use sc_shareable_content::*;
 
+fn constrain_position_to_visible_top(
+    position: tauri::PhysicalPosition<i32>,
+    monitor_top: i32,
+    scale_factor: f64,
+    visible_frame_top_inset: f64,
+    safe_area_top_inset: f64,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    let top_inset = visible_frame_top_inset.max(safe_area_top_inset).max(0.0);
+    let minimum_y = monitor_top.saturating_add((top_inset * scale_factor).round() as i32);
+
+    (position.y < minimum_y).then(|| tauri::PhysicalPosition::new(position.x, minimum_y))
+}
+
+pub fn constrain_main_window_to_visible_top(
+    window: &tauri::Window,
+    position: tauri::PhysicalPosition<i32>,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    use objc2::{runtime::NSObjectProtocol, sel};
+    use objc2_app_kit::NSWindow;
+
+    let monitor = window.current_monitor().ok().flatten()?;
+    let ns_window = window.ns_window().ok()? as *const NSWindow;
+    let screen = unsafe { (*ns_window).screen() }?;
+    let frame = screen.frame();
+    let visible_frame = screen.visibleFrame();
+    let safe_area_top_inset = if screen.respondsToSelector(sel!(safeAreaInsets)) {
+        unsafe { screen.safeAreaInsets().top }
+    } else {
+        0.0
+    };
+    // Tauri runtime 2.8 omits this macOS top offset from Monitor::work_area().position.
+    let visible_frame_top_inset =
+        frame.origin.y + frame.size.height - visible_frame.origin.y - visible_frame.size.height;
+
+    constrain_position_to_visible_top(
+        position,
+        monitor.position().y,
+        monitor.scale_factor(),
+        visible_frame_top_inset,
+        safe_area_top_inset,
+    )
+}
+
 pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLevel) {
     let c_window = window.clone();
     _ = window.run_on_main_thread(move || unsafe {
@@ -23,6 +66,21 @@ pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLev
         };
         let ns_win = ns_win as *const objc2_app_kit::NSWindow;
         (*ns_win).setLevel(level);
+    });
+}
+
+pub fn set_window_opacity(window: tauri::Window, opacity: f64) {
+    let opacity = opacity.clamp(0.45, 1.0);
+    let c_window = window.clone();
+    _ = window.run_on_main_thread(move || unsafe {
+        use cocoa::base::id;
+        use objc::{msg_send, sel, sel_impl};
+
+        let Ok(ns_win) = c_window.ns_window() else {
+            return;
+        };
+        let ns_win = ns_win as id;
+        let _: () = msg_send![ns_win, setAlphaValue: opacity];
     });
 }
 
@@ -56,6 +114,21 @@ pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
 
 const TAURI_VIBRANCY_VIEW_TAG: isize = 91376254;
 const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
+const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiquidGlassActivity {
+    SystemManaged,
+    AlwaysActive,
+}
+
+pub fn apply_main_window_liquid_glass_background(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::SystemManaged)
+}
 
 unsafe fn remove_tagged_subview(container: cocoa::base::id, tag: isize) {
     use objc::{msg_send, sel, sel_impl};
@@ -131,6 +204,15 @@ pub fn apply_liquid_glass_background(
     enabled: bool,
     radius: f64,
 ) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::AlwaysActive)
+}
+
+fn apply_liquid_glass_background_inner(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+    activity: LiquidGlassActivity,
+) -> Result<bool, String> {
     use cocoa::{
         base::{id, nil},
         foundation::{NSRect, NSString},
@@ -203,21 +285,27 @@ pub fn apply_liquid_glass_background(
             let _: () = msg_send![glass_view, setCornerRadius: radius];
         }
 
+        if activity == LiquidGlassActivity::SystemManaged {
+            let _: () = msg_send![glass_view, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
+        }
+
         // Pin the glass to its "always-active" representation so it keeps re-rendering
         // the live backdrop regardless of which window currently has key state. The
         // default for an NSVisualEffectView-derived view is FollowsWindowActiveState,
         // which dims the material whenever another Cap window (camera, settings, etc.)
         // becomes key and masks the backdrop reactivity that's the whole point of
-        // Liquid Glass. NSGlassEffectView is private SPI introduced in macOS 26, so we
-        // probe multiple state knobs (`setState:`, `setActive:`) instead of assuming a
-        // single inheritance path.
+        // Liquid Glass. The always-active state is private SPI, so we probe multiple
+        // state knobs (`setState:`, `setActive:`) instead of assuming one inheritance
+        // path. The main window does not enter this branch and remains system-managed.
         //
         // macOS 26.3 shipped an NSGlassEffectView that responds to neither selector,
         // so the pin silently fails. In that state the material can't be relied on
         // (it dims whenever another window becomes key), so abandon the private SPI
         // entirely and let the caller fall back to NSVisualEffectView vibrancy
         // (Ok(false)).
-        if !force_glass_view_always_active(glass_view) {
+        if activity == LiquidGlassActivity::AlwaysActive
+            && !force_glass_view_always_active(glass_view)
+        {
             // Never entered the view hierarchy; balance the alloc and bail. The
             // content-layer squircle clip applied above is kept (plain Core Animation,
             // not a WindowServer/occlusion mutation) so the vibrancy fallback still gets
@@ -255,10 +343,12 @@ pub fn apply_liquid_glass_background(
             relativeTo: nil
         ];
 
-        // Re-apply after the view enters the hierarchy: some private AppKit views
-        // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
-        // is what actually sticks.
-        force_glass_view_always_active(glass_view);
+        if activity == LiquidGlassActivity::AlwaysActive {
+            // Re-apply after the view enters the hierarchy: some private AppKit views
+            // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
+            // is what actually sticks.
+            force_glass_view_always_active(glass_view);
+        }
 
         crate::crash_sentinel::set_liquid_glass_outcome("applied");
         Ok(true)
@@ -420,9 +510,8 @@ unsafe fn enable_webview_occlusion_detection(content_view: cocoa::base::id) {
 }
 
 /// Reverse every WindowServer-visible mutation `apply_liquid_glass_background` makes:
-/// remove the private NSGlassEffectView (the load-bearing step — it synchronously
-/// detaches the private compositor relationship), then restore window/WKWebView
-/// occlusion detection and window opacity. MUST run on the AppKit main thread.
+/// remove the NSGlassEffectView, then restore window/WKWebView occlusion detection and
+/// window opacity. MUST run on the AppKit main thread.
 unsafe fn teardown_liquid_glass_ns(ns_window: cocoa::base::id) {
     use cocoa::{
         base::{id, nil},
@@ -518,3 +607,49 @@ pub async fn teardown_all_liquid_glass(app: &tauri::AppHandle) -> Result<(), Str
 //         let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
 //     })
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::constrain_position_to_visible_top;
+    use tauri::PhysicalPosition;
+
+    #[test]
+    fn moves_a_window_below_a_notched_visible_frame() {
+        let position = PhysicalPosition::new(640, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            Some(PhysicalPosition::new(640, 38))
+        );
+    }
+
+    #[test]
+    fn uses_the_safe_area_when_the_menu_bar_is_hidden() {
+        let position = PhysicalPosition::new(200, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 0.0, 37.0),
+            Some(PhysicalPosition::new(200, 74))
+        );
+    }
+
+    #[test]
+    fn preserves_negative_coordinates_on_a_monitor_above_the_primary() {
+        let position = PhysicalPosition::new(-600, -1800);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, -1800, 1.5, 25.0, 0.0),
+            Some(PhysicalPosition::new(-600, -1762))
+        );
+    }
+
+    #[test]
+    fn leaves_an_accessible_position_unchanged() {
+        let position = PhysicalPosition::new(300, 100);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            None
+        );
+    }
+}

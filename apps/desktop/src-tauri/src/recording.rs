@@ -57,6 +57,8 @@ use crate::camera::{CameraPreviewManager, CameraPreviewShape};
 use crate::general_settings;
 use crate::permissions;
 use crate::web_api::AuthedApiError;
+#[cfg(target_os = "macos")]
+use crate::window_exclusion::WindowExclusion;
 use crate::{
     App, CameraWindowOperationLock, CurrentRecordingChanged, EditorRecordingAdded,
     FinalizingRecordings, MutableState, NewStudioRecordingAdded, RecordingStarted, RecordingState,
@@ -1865,6 +1867,16 @@ pub async fn start_recording(
                 } else {
                     window_exclusions
                 };
+
+                let teleprompter_exclusion = WindowExclusion {
+                    bundle_identifier: None,
+                    owner_name: None,
+                    window_title: Some(CapWindowId::Teleprompter.title()),
+                };
+                let mut window_exclusions = window_exclusions;
+                if !window_exclusions.contains(&teleprompter_exclusion) {
+                    window_exclusions.push(teleprompter_exclusion);
+                }
 
                 let mut excluded_window_ids =
                     crate::window_exclusion::resolve_window_ids(&window_exclusions);
@@ -3828,6 +3840,7 @@ fn project_config_from_recording(
             end: segment.duration(),
             timescale: 1.0,
             name: None,
+            speed_audio_mode: None,
         })
         .collect::<Vec<_>>();
 
@@ -3839,6 +3852,7 @@ fn project_config_from_recording(
 
     config.timeline = Some(TimelineConfiguration {
         segments: timeline_segments,
+        transitions: Vec::new(),
         zoom_segments,
         scene_segments: Vec::new(),
         mask_segments: Vec::new(),

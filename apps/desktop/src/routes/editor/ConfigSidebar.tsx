@@ -61,6 +61,7 @@ import {
 	type CameraYPosition,
 	type CaptionTrackSegment,
 	type ClipOffsets,
+	type ClipSpeedAudioMode,
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
@@ -76,7 +77,6 @@ import {
 import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
-import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
@@ -104,7 +104,14 @@ import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
-import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
+import {
+	encodeMaskEffect,
+	getMaskEffect,
+	getMaskEffectAmount,
+	type MaskEffect,
+	type MaskKind,
+	type MaskSegment,
+} from "./masks";
 import {
 	DEFAULT_BACKGROUND_PADDING,
 	DEFAULT_BACKGROUND_ROUNDING,
@@ -3780,7 +3787,7 @@ function MaskSegmentConfig(props: {
 	segmentIndex: number;
 	segment: MaskSegment;
 }) {
-	const { setProject, editorState } = useEditorContext();
+	const { setProject } = useEditorContext();
 
 	const updateSegment = (fn: (segment: MaskSegment) => void) => {
 		setProject(
@@ -3809,32 +3816,24 @@ function MaskSegmentConfig(props: {
 		});
 	});
 
-	const currentAbsoluteTime = () =>
-		editorState.previewTime ?? editorState.playbackTime ?? props.segment.start;
-	const _maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
+	const maskEffect = () => getMaskEffect(props.segment);
+	const maskEffectAmount = () => getMaskEffectAmount(props.segment);
 
-	const clearKeyframes = (segment: MaskSegment) => {
-		segment.keyframes.position = [];
-		segment.keyframes.size = [];
-		segment.keyframes.intensity = [];
-	};
-
-	const _setPosition = (value: { x: number; y: number }) =>
+	const setMaskEffect = (effect: MaskEffect) =>
 		updateSegment((segment) => {
-			segment.center = value;
-			clearKeyframes(segment);
+			segment.pixelation = encodeMaskEffect(
+				effect,
+				getMaskEffectAmount(segment),
+			);
+			segment.opacity = 1;
+			segment.keyframes.intensity = [];
 		});
 
-	const _setSize = (value: { x: number; y: number }) =>
+	const setMaskEffectAmount = (amount: number) =>
 		updateSegment((segment) => {
-			segment.size = value;
-			clearKeyframes(segment);
-		});
-
-	const setIntensity = (value: number) =>
-		updateSegment((segment) => {
-			segment.opacity = value;
-			clearKeyframes(segment);
+			segment.pixelation = encodeMaskEffect(getMaskEffect(segment), amount);
+			segment.opacity = 1;
+			segment.keyframes.intensity = [];
 		});
 
 	return (
@@ -3890,29 +3889,48 @@ function MaskSegmentConfig(props: {
 				</div>
 			</Field>
 			<Show when={props.segment.maskType === "sensitive"}>
-				<Field name="Intensity" icon={<IconLucideGauge class="size-4" />}>
-					<Slider
-						value={[props.segment.opacity]}
-						onChange={([v]) => setIntensity(v)}
-						minValue={0}
-						maxValue={1}
-						step={0.01}
-						formatTooltip="%"
-					/>
+				<Field name="Effect" icon={<IconLucideEyeOff class="size-4" />}>
+					<RadioGroup
+						class="grid grid-cols-2 gap-2"
+						value={maskEffect()}
+						onChange={(value) => setMaskEffect(value as MaskEffect)}
+					>
+						{[
+							{ value: "blur", label: "Blur" },
+							{ value: "pixelate", label: "Pixelate" },
+						].map((option) => (
+							<RadioGroup.Item
+								value={option.value}
+								class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
+							>
+								<RadioGroup.ItemInput class="sr-only" />
+								<RadioGroup.ItemLabel class="flex items-center gap-2 p-2 text-sm text-gray-12">
+									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
+									{option.label}
+								</RadioGroup.ItemLabel>
+							</RadioGroup.Item>
+						))}
+					</RadioGroup>
 				</Field>
 			</Show>
 			<Show when={props.segment.maskType === "sensitive"}>
-				<Field name="Pixelation" icon={<IconLucideGrid class="size-4" />}>
+				<Field
+					name={maskEffect() === "blur" ? "Blur" : "Pixel Size"}
+					icon={
+						maskEffect() === "blur" ? (
+							<IconLucideWind class="size-4" />
+						) : (
+							<IconLucideGrid class="size-4" />
+						)
+					}
+				>
 					<Slider
-						value={[props.segment.pixelation]}
-						onChange={([v]) =>
-							updateSegment((segment) => {
-								segment.pixelation = v;
-							})
-						}
-						minValue={1}
+						value={[maskEffectAmount()]}
+						onChange={([v]) => setMaskEffectAmount(v)}
+						minValue={4}
 						maxValue={80}
 						step={1}
+						formatTooltip="px"
 					/>
 				</Field>
 			</Show>
@@ -4401,6 +4419,19 @@ function ClipSegmentConfig(props: {
 		);
 	}
 
+	function setSpeedAudioMode(value: string) {
+		if (
+			value === "mute" ||
+			value === "maintainPitch" ||
+			value === "matchSpeed"
+		) {
+			projectActions.setClipSegmentSpeedAudioMode(
+				props.segmentIndex,
+				value satisfies ClipSpeedAudioMode,
+			);
+		}
+	}
+
 	return (
 		<>
 			<div class="flex flex-row justify-between items-center">
@@ -4432,10 +4463,6 @@ function ClipSegmentConfig(props: {
 			</div>
 
 			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
-				<p class="text-gray-11 -mt-3">
-					Modifying speed will mute this segment's audio.
-				</p>
-
 				<KRadioGroup
 					class="flex flex-row gap-1.5 -mt-1"
 					value={props.segment.timescale.toString()}
@@ -4456,6 +4483,36 @@ function ClipSegmentConfig(props: {
 						)}
 					</For>
 				</KRadioGroup>
+
+				<Show when={props.segment.timescale !== 1}>
+					<div class="space-y-2 pt-2">
+						<p class="text-gray-11">
+							Mute is fastest. Maintain pitch keeps voices natural, while Match
+							speed raises or lowers pitch with playback speed.
+						</p>
+						<KRadioGroup
+							class="grid grid-cols-3 gap-1.5"
+							value={props.segment.speedAudioMode ?? "mute"}
+							onChange={setSpeedAudioMode}
+						>
+							<For
+								each={[
+									{ value: "mute", label: "Mute" },
+									{ value: "maintainPitch", label: "Maintain pitch" },
+									{ value: "matchSpeed", label: "Match speed" },
+								]}
+							>
+								{(option) => (
+									<KRadioGroup.Item value={option.value}>
+										<KRadioGroup.ItemControl class="w-full px-2 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md data-checked:bg-gray-3 data-checked:border-gray-4 data-checked:text-gray-12">
+											{option.label}
+										</KRadioGroup.ItemControl>
+									</KRadioGroup.Item>
+								)}
+							</For>
+						</KRadioGroup>
+					</div>
+				</Show>
 			</Field>
 
 			<div class="space-y-0.5 pt-2">

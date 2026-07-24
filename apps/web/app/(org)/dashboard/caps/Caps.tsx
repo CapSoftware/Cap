@@ -86,6 +86,7 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
+	const moveLocation = { type: "personal" } as const;
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -277,7 +278,12 @@ export const Caps = ({
 					</div>
 					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 						{folders.map((folder) => (
-							<Folder key={folder.id} {...folder} />
+							<Folder
+								key={folder.id}
+								{...folder}
+								canMove
+								moveRootLabel="My Caps"
+							/>
 						))}
 					</div>
 				</>
@@ -313,6 +319,9 @@ export const Caps = ({
 									isSelected={selectedCaps.includes(video.id)}
 									anyCapSelected={anyCapSelected}
 									onSelectToggle={() => handleCapSelection(video.id)}
+									canMove
+									moveLocation={moveLocation}
+									moveRootLabel="My Caps"
 								/>
 							);
 						})}
@@ -329,6 +338,8 @@ export const Caps = ({
 				setSelectedCaps={setSelectedCaps}
 				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
 				isDeleting={isDeletingCaps || isDeletingCap}
+				moveLocation={moveLocation}
+				moveRootLabel="My Caps"
 			/>
 			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">

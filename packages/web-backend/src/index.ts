@@ -1,3 +1,5 @@
+export * from "./AgentAuth.ts";
+export * from "./AgentManagement.ts";
 export * from "./Auth.ts";
 export * from "./Aws.ts";
 export * from "./Database.ts";

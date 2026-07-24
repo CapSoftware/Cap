@@ -423,21 +423,32 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 				integrationId: Storage.StorageIntegrationId,
 				prefix: string | undefined,
 				maxKeys: number | undefined,
+				continuationToken: string | undefined,
 			) =>
-				db.use((db) => {
-					const where = prefix
-						? Dz.and(
-								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${`${escapeLikePattern(prefix)}%`}`,
-							)
-						: Dz.eq(Db.storageObjects.integrationId, integrationId);
-
-					return db
+				db.use(async (db) => {
+					const pageSize = Math.min(Math.max(maxKeys ?? 1_000, 1), 1_000);
+					const objects = await db
 						.select()
 						.from(Db.storageObjects)
-						.where(where)
-						.orderBy(Db.storageObjects.objectKey)
-						.limit(maxKeys ?? 1000);
+						.where(
+							Dz.and(
+								Dz.eq(Db.storageObjects.integrationId, integrationId),
+								prefix
+									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${`${escapeLikePattern(prefix)}%`}`
+									: undefined,
+								continuationToken
+									? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`
+									: undefined,
+							),
+						)
+						.orderBy(Dz.sql`BINARY ${Db.storageObjects.objectKey}`)
+						.limit(pageSize + 1);
+					const page = objects.slice(0, pageSize);
+					return {
+						objects: page,
+						nextContinuationToken:
+							objects.length > pageSize ? page.at(-1)?.objectKey : undefined,
+					};
 				}),
 		);
 

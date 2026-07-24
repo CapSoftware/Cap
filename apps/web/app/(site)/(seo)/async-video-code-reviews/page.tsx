@@ -3,7 +3,13 @@ import {
 	AsyncVideoCodeReviewsPage,
 	asyncVideoCodeReviewsContent,
 } from "@/components/pages/seo/AsyncVideoCodeReviewsPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Async video code reviews",
+	tag: "Solutions",
+});
 
 export const metadata: Metadata = {
 	title: "Async Video Code Reviews — Ship Faster Without the Meetings | Cap",
@@ -20,7 +26,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Async Video Code Reviews",
@@ -34,7 +40,7 @@ export const metadata: Metadata = {
 		title: "Async Video Code Reviews — Ship Faster Without the Meetings | Cap",
 		description:
 			"Record PR walkthroughs and share instant links with timestamped comments. No meetings, no scheduling. Just faster code reviews.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

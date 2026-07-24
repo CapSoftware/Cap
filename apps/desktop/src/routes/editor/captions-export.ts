@@ -7,6 +7,7 @@ import {
 	getCaptionTextFromWords,
 	mapCaptionsToEditedTimeline,
 } from "./captions";
+import type { ClipTransition } from "./clip-transitions";
 
 export type CaptionExportFormat = "srt" | "vtt";
 
@@ -107,11 +108,13 @@ export function createCaptionExportCues(
 	segments: CaptionSegment[],
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
 ): CaptionExportCue[] {
 	return mapCaptionsToEditedTimeline(
 		segments,
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	)
 		.map(cueFromCaptionSegment)
 		.filter((cue): cue is CaptionExportCue => cue !== null)

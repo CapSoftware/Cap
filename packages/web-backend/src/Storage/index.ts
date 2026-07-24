@@ -489,10 +489,15 @@ const makeGoogleDriveAccess = ({
 			continuationToken?: string;
 		}) =>
 			mapStorageError(
-				repo.listObjectsByPrefix(integrationId, input.prefix, input.maxKeys),
+				repo.listObjectsByPrefix(
+					integrationId,
+					input.prefix,
+					input.maxKeys,
+					input.continuationToken,
+				),
 			).pipe(
-				Effect.map((objects) => ({
-					Contents: objects
+				Effect.map(({ objects, nextContinuationToken }) => {
+					const contents = objects
 						.filter(
 							(object) =>
 								object.contentType !== GOOGLE_DRIVE_FOLDER_MIME_TYPE &&
@@ -503,16 +508,14 @@ const makeGoogleDriveAccess = ({
 							Key: object.objectKey,
 							Size: object.contentLength ?? undefined,
 							LastModified: object.updatedAt,
-						})),
-					KeyCount: objects.filter(
-						(object) =>
-							object.contentType !== GOOGLE_DRIVE_FOLDER_MIME_TYPE &&
-							!object.objectKey.startsWith(".cap-folders/") &&
-							!object.objectKey.startsWith(".cap-warnings/"),
-					).length,
-					IsTruncated: false,
-					NextContinuationToken: undefined,
-				})),
+						}));
+					return {
+						Contents: contents,
+						KeyCount: contents.length,
+						IsTruncated: nextContinuationToken !== undefined,
+						NextContinuationToken: nextContinuationToken,
+					};
+				}),
 			),
 		headObject: (key: string) =>
 			getObjectRecord(key).pipe(

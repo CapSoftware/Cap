@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::{OutputFormat, doctor::SCHEMA_VERSION, write_json};
+use crate::{OutputFormat, write_json};
+
+const GUIDE_SCHEMA_VERSION: u32 = 3;
 
 /// Machine-readable capability + schema manifest. `cap guide --json` is the single document an agent
 /// can fetch to learn the output convention, env vars, exit codes, and the per-command output shape
@@ -92,7 +94,7 @@ const fn cmd(
 
 fn build() -> Guide {
     Guide {
-        schema_version: SCHEMA_VERSION,
+        schema_version: GUIDE_SCHEMA_VERSION,
         binary: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
         description: "Cap screen recording, driven from the command line. Add --json to any command \
@@ -115,8 +117,14 @@ fn build() -> Guide {
             EnvVar {
                 name: "CAP_SERVER_URL",
                 required: false,
-                used_by: "upload",
+                used_by: "upload, auth login, caps, mcp",
                 description: "Cap server base URL. Defaults to https://cap.so.",
+            },
+            EnvVar {
+                name: "CAP_AGENT_TOKEN",
+                required: false,
+                used_by: "caps, mcp",
+                description: "Overrides the OS-stored Cap agent credential for headless use.",
             },
             EnvVar {
                 name: "CAP_NO_MODIFY_PATH",
@@ -215,7 +223,133 @@ fn build() -> Guide {
             ),
             cmd(
                 "auth status",
-                "Report whether uploads are authenticated and the source (desktop login or CAP_API_KEY).",
+                "Report credential presence and verify Cap CLI agent credentials with the configured server.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "auth login|logout",
+                "Authorize with browser approval and PKCE, or revoke the OS-stored Cap agent credential.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps list|get|context|status",
+                "Read the authenticated Cap library. `get` is lightweight; `context` includes content and activity.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps wait",
+                "Wait for existing transcript or AI processing with backoff. Never starts processing.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps transcript|download",
+                "Stream a transcript or video to a temporary file and atomically rename it to --output.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps process|transcript-replace",
+                "Explicitly start owner-authorized processing or replace a transcript with optimistic revision checking.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps import loom",
+                "Start a durable Loom import. Optional owner and space assignment provide a retry-safe per-row primitive for migration batches.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps duplicate|delete|password",
+                "Run confirmed Cap lifecycle operations or securely set and clear Cap passwords. Duplicate and delete can be observed with jobs wait.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps unlock",
+                "Securely unlock a password-protected Cap with an interactive prompt or --password-stdin; stores only a short-lived access grant.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "caps comments|reactions|update|sharing",
+                "Create idempotent feedback or change an owner Cap title or visibility. Capabilities remain server-enforced.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "account get|update|image|referrals|sign-out-all",
+                "Read and manage the authenticated Cap profile, image, default organization, referral provider handoff, and active sessions. Image files and global sign-out require confirmed CLI commands.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "organizations list|get|members|invites",
+                "Inspect organizations, membership, invitations, billing state, and storage integrations.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "organizations create|update|icon|shareable-icon|settings|invite|member|domain|delete",
+                "Manage organization lifecycle, branding, preferences, email-delivered or link-only invitations, roles, membership, Pro seats, custom domains, and durable deletion jobs.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "organizations billing get|checkout|portal",
+                "Inspect billing or create a confirmed browser handoff for Cap Pro checkout and the billing portal.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "organizations storage list|s3|provider|google-drive",
+                "Inspect and manage S3 or Google Drive storage. S3 credentials are accepted only by secure CLI input; Google OAuth uses a browser handoff.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "library folders|spaces",
+                "List and manage folders, spaces, public collection pages and logos, sharing locations, and space membership.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "notifications list|preferences|read",
+                "Read notifications, update notification preferences, or mark notifications read.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "analytics get",
+                "Read organization, space, or Cap analytics for a bounded time range.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "developers list|get|create|update|delete|domains|keys|auto-top-up|credits|videos|transactions",
+                "Manage developer apps, SDK videos, credit history, domains, credentials, auto top-up, and credit checkout. New credentials are returned only by confirmed CLI commands.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "jobs get|wait",
+                "Inspect or wait for asynchronous Cap operations without starting new work.",
+                OutputMode::SingleJson,
+                &[],
+            ),
+            cmd(
+                "mcp serve",
+                "Run the local stdio MCP server. Stdout is reserved exclusively for protocol traffic.",
+                OutputMode::TextOnly,
+                &[],
+            ),
+            cmd(
+                "agents install",
+                "Preview and install the Cap skill, MCP configuration, or both for one explicit agent target.",
                 OutputMode::SingleJson,
                 &[],
             ),
@@ -276,6 +410,8 @@ fn build() -> Guide {
             "Automations authored in Cap Desktop run automatically after `cap screenshot`, `cap record` \
              finishes, and `cap upload`. Clipboard/OCR/notification/editor actions are desktop-only and \
              are skipped on the CLI. List them with `cap automations list`.",
+            "Cap library reads and waits never start transcription, AI generation, or other paid processing.",
+            "MCP never accepts passwords, S3 credentials, image files, or newly issued developer credentials. Use confirmed secure CLI commands for those values.",
         ],
     }
 }

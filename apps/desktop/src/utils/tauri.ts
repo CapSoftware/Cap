@@ -266,7 +266,7 @@ async saveFileDialog(fileName: string, fileType: string) : Promise<string | null
 async listRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
-async listScreenshots() : Promise<([string, RecordingMeta])[]> {
+async listScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_screenshots");
 },
 async checkUpgradedAndUpdate() : Promise<boolean> {
@@ -304,6 +304,12 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
+},
+async setTeleprompterWindowLevel(alwaysOnTop: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_teleprompter_window_level", { alwaysOnTop });
+},
+async setTeleprompterWindowOpacity(opacity: number) : Promise<void> {
+    await TAURI_INVOKE("set_teleprompter_window_opacity", { opacity });
 },
 async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
     return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });
@@ -685,6 +691,9 @@ export type ClipConfiguration = { index: number; offsets: ClipOffsets;
  */
 offsetsAutoCalculated?: boolean }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }
+export type ClipSpeedAudioMode = "mute" | "maintainPitch" | "matchSpeed"
+export type ClipTransition = { segmentIndex: number; type: ClipTransitionType; duration: number }
+export type ClipTransitionType = "cross-fade" | "fade-through-black"
 export type ClipboardSource = "raw" | "rendered"
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Condition = { type: "captureTargetIs"; target: CaptureTargetKind } | { type: "recordingModeIs"; mode: AutomationRecordingMode } | { type: "durationAtLeast"; secs: number } | { type: "durationAtMost"; secs: number } | { type: "windowTitleContains"; pattern: string } | { type: "organizationIs"; id: string }
@@ -856,7 +865,7 @@ export type RecordingDeleted = { path: string }
 export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Paused" } | { variant: "Resumed" } | { variant: "Failed"; error: string } | { variant: "StartFailed"; error: string } | { variant: "InputLost"; input: RecordingInputKind } | { variant: "InputRestored"; input: RecordingInputKind } | { variant: "Degraded"; reason: string } | { variant: "Recovered" }
 export type RecordingInputKind = "microphone" | "camera"
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }
-export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus; clip_count: number }
+export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus; clip_count: number; sort_time_millis: number }
 export type RecordingMode = "studio" | "instant" | "screenshot"
 export type RecordingOptionsChanged = null
 export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean; organizationId: string | null; cameraDeviceSettings: { [key in string]: CameraDeviceSettings }; microphoneDeviceSettings: { [key in string]: MicrophoneDeviceSettings } }
@@ -885,6 +894,7 @@ export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen" 
 export type SceneSegment = { start: number; end: number; mode?: SceneMode; splitLayout?: SplitLayout | null; transitionIn?: number; transitionOut?: number }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds } | { variant: "cameraOnly" }
 export type ScreenMovementSpring = { stiffness: number; damping: number; mass: number }
+export type ScreenshotMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { sort_time_millis: number }
 export type ScreenshotOcrLine = { text: string; confidence: number | null; bounds: ScreenshotOcrRegion }
 export type ScreenshotOcrRegion = { x: number; y: number; width: number; height: number }
 export type ScreenshotOcrResult = { text: string; lines: ScreenshotOcrLine[]; engine: string }
@@ -908,8 +918,8 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsR
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
-export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
+export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
 export type UpdateChannel = "stable" | "nightly"

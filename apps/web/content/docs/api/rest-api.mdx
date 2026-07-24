@@ -284,7 +284,7 @@ curl https://cap.so/api/developer/v1/usage \
 }
 ```
 
-Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). Video creation costs 5,000 micro-credits per minute of video duration.
+Credits are tracked in micro-credits (1 dollar = 100,000 micro-credits). Completed SDK uploads are billed at 5,000 micro-credits per minute using the validated duration with a file-size-based minimum. Billing duration is capped at four hours.
 
 ---
 
@@ -401,7 +401,7 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 | `parts[].partNumber` | number | Yes | The part number |
 | `parts[].etag` | string | Yes | The ETag returned when the part was uploaded |
 | `parts[].size` | number | Yes | The size of the part in bytes |
-| `durationInSecs` | number | No | Video duration in seconds (used for billing) |
+| `durationInSecs` | number | Yes | Positive video duration in seconds (validated and used for billing) |
 | `width` | number | No | Video width in pixels |
 | `height` | number | No | Video height in pixels |
 | `fps` | number | No | Video frame rate |
@@ -414,7 +414,7 @@ POST /api/developer/sdk/v1/upload/multipart/complete
 }
 ```
 
-When `durationInSecs` is provided, credits are debited at 5,000 micro-credits per minute.
+Credits are debited when the upload completes. Cap bills 5,000 micro-credits per minute using the greater of the submitted duration and the file-size-based minimum, capped at four hours.
 
 #### Abort Upload
 

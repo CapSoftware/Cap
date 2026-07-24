@@ -1,69 +1,66 @@
-# Cap — Open-Source Screen Recorder & Loom Alternative
+# Cap: Screen Recording, Sharing, and Video Collaboration
 
-> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS and Windows (built on Tauri + Rust, not Electron), a Linux .deb package, and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording.
+> Cap is an open-source screen recorder and async video platform. Cap Desktop records displays, windows, selected areas, screenshots, and camera-only video with supported camera, microphone, and system-audio inputs. Instant Mode creates a shareable Cap; Studio Mode creates a local editable project. Native releases are produced for Apple Silicon and Intel macOS, 64-bit Windows, and x86_64 Linux as a Debian package.
 
-Made by Cap Software, Inc. Website: https://cap.so · Source (AGPLv3): https://github.com/CapSoftware/Cap
+Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
 
-For the full, detailed reference, see https://cap.so/llms-full.txt.
+Most of the repository is licensed under AGPLv3. The LICENSE file identifies a limited set of camera and screen-capture crates that use MIT. Distributed Cap Desktop binaries and commercial use have separate terms described at https://cap.so/docs/commercial-license.
 
-## Three Modes, One App
+For the expanded machine-readable reference, see https://cap.so/llms-full.txt.
 
-- **Instant Mode** — record and upload at once; a shareable link is live the moment you stop, with an auto-generated title, summary, chapters, and transcript.
-- **Studio Mode** — local, highest-quality recording with a full editor (backgrounds, camera overlay, auto-zoom, captions); free for personal use.
-- **Screenshot Mode** — capture a still, annotate it, and copy or share (Windows includes OCR).
+## Recording Modes
 
-## Key Features
+- **Instant Mode** uploads recording data while recording and prepares a shareable Cap after stop and processing.
+- **Studio Mode** saves a local `.cap` project for editing, local export, clipboard export, or a later shareable-link export.
+- **Screenshot Mode** captures a display, window, or selected area.
 
-- Record full screen, a window, a custom area, or camera-only, with microphone and system audio, up to 4K at 60fps with hardware-accelerated encoding.
-- Studio editor: backgrounds/wallpapers, camera positioning + blur, smart auto-zoom, cursor smoothing, captions, trim/split, speed 0.25x–3x, and styling presets.
-- Cap AI (Pro): auto titles, summaries, clickable chapters, and searchable transcripts.
-- Sharing & collaboration: instant links, embeds, threaded timestamped comments, emoji reactions, viewer analytics, password protection, custom domains, organizations, team workspaces, spaces, and folders.
-- Bring your own storage: Cap Cloud, Google Drive, any S3-compatible bucket (AWS S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi, etc.), or fully local.
-- Export to MP4, GIF, or transparent MOV (captions to SRT); no watermarks on any plan.
-- Built-in Loom video importer; desktop automations with webhooks; REST API and webhooks.
-- `cap` CLI built for AI agents: `--json` on any command, `cap guide --json`, plus `record`, `export`, `upload`, `targets`, `doctor`, and more.
+Cap does not assign global recording shortcuts by default. Users configure supported actions in Settings > Shortcuts.
 
-## Platforms
+## Verified Product Surfaces
 
-- macOS (Apple Silicon & Intel, recommended 13.1+), Windows 10/11, Linux x86_64 (.deb for Debian/Ubuntu), and a browser viewer.
+- Capture a display, window, selected area, or camera-only recording with supported camera, microphone, and system-audio inputs.
+- Studio editing includes timeline changes, background styling, crop and frame controls, zooms, camera treatment, cursor treatment, captions, and other project-dependent overlays and audio.
+- Standard exports support MP4 and GIF with format-dependent resolution, frame-rate, and quality controls. Specialized transparent or cursor-only workflows use their supported output format.
+- Public, private, and password-protected Caps with browser playback and embeds.
+- Signed-in timestamped comments, replies, and emoji reactions when effective viewer settings allow them.
+- Organization roles, members, spaces, folders, branding, viewer settings, and aggregate analytics.
+- Cap-managed storage, Google Drive for new uploads, and S3-compatible storage. Provider changes do not automatically move existing files.
+- Single Loom imports, organization CSV imports up to 500 rows per self-serve batch, and a durable per-video agent import workflow.
+- A developer REST API plus `@cap/sdk-recorder` and `@cap/sdk-embed`. A public customer webhook subscription API is not currently documented.
 
-## Pricing
+Captions, transcripts, titles, summaries, and chapters depend on the recording, processing state, plan, and effective organization settings. Do not promise that every recording has every AI field immediately.
 
-- **Free** — personal use; Studio Mode + full local editor; 4K/60fps export; recordings limited to 5 minutes.
-- **Desktop License** — commercial use: $29/license/year or $58 one-time; unlimited local recording/editing; 20 cloud links/month.
-- **Cap Pro** — $12/user/month, or $8.16/user/month billed annually (save 32%): everything in Desktop plus unlimited cloud storage, all AI features, custom domain, password protection, viewer analytics, team workspaces, Loom importer, custom S3 & Google Drive, priority support.
-- **Enterprise** — custom: SLAs, SAML SSO & SCIM, managed self-hosting, volume discounts.
-- Discounts: STUDENT50 (30% off), MIGRATE20 (20% off first year for Loom switchers); volume discounts for teams 10+.
+## Teams, Storage, and Migration
 
-## How Cap Compares
+- Working with your team: https://cap.so/docs/teams
+- Google Drive storage: https://cap.so/docs/teams/google-drive
+- Migrating to Cap: https://cap.so/docs/migrating-to-cap
 
-- **vs Loom** — open source and self-hostable; from $8.16 vs $18/user/month; 4K on free & paid plans; custom domains on Pro; bring your own S3/Google Drive; built-in Loom importer; works offline.
-- **vs OBS Studio** — simpler, with instant cloud sharing and AI built in.
-- **vs Camtasia / ScreenFlow / Vidyard / Panopto** — free, open source, cross-platform, bring-your-own storage, self-hostable.
+Google Drive is a storage provider for new uploads, not a general Drive sync or existing-library importer. Personal connections use a private Cap folder. Organization owners and admins can select an organization-managed writable Drive location.
 
-## Use Cases
+Cap has run organization migrations spanning hundreds of users and tens of thousands of recordings. A correct migration inventories unique source URLs, maps owner emails and single Cap space names, runs controlled batches, waits for terminal job results, reconciles every failure, and verifies playback, ownership, and location before the source is retired.
 
-Async team updates, bug reports & QA, product demos & sales, async code reviews, developer documentation, education & onboarding, and customer support.
+## Use Cap With an AI Agent
+
+Cap can be operated through a shell-capable agent using the `cap` CLI or its MCP server.
+
+- Overview and copyable prompt: https://cap.so/docs/agents
+- Setup: https://cap.so/docs/agents/setup
+- Workflows: https://cap.so/docs/agents/workflows
+- Safety and troubleshooting: https://cap.so/docs/agents/safety
+- Installed contract: run `cap guide --json`; do not guess command flags or output schemas.
+- Safety: begin read-only, preview the exact change, obtain explicit confirmation before every mutation or paid action, wait for asynchronous jobs, and keep passwords, API keys, storage credentials, and newly issued developer secrets out of chat and MCP.
+
+For Loom imports, `--space` takes one Cap space name rather than a folder path. Without `--wait`, preserve the returned operation ID and use `cap jobs wait <operation-id> --json` before reporting completion.
 
 ## Key Links
 
-- Full reference: https://cap.so/llms-full.txt
 - Home: https://cap.so
-- Pricing: https://cap.so/pricing
+- Current pricing: https://cap.so/pricing
 - Features: https://cap.so/features
 - Download: https://cap.so/download
 - Docs: https://cap.so/docs
-- Loom alternative: https://cap.so/loom-alternative
-- Open-source screen recorder: https://cap.so/open-source-screen-recorder
-- Self-hosting: https://cap.so/self-hosting
+- Sharing: https://cap.so/docs/sharing/share-a-cap
+- Self-hosting: https://cap.so/docs/self-hosting
 - REST API: https://cap.so/docs/api/rest-api
 - Source code: https://github.com/CapSoftware/Cap
-- Community (Discord): https://discord.gg/y8gdQ3WRN3
-
-## Common Questions
-
-- **Is Cap free?** Yes — 100% free for personal use with Studio Mode and the local editor; paid plans add commercial rights and cloud features.
-- **Is Cap a good Loom alternative?** Yes — the leading open-source Loom alternative, with instant sharing, AI summaries, custom storage, and a built-in importer at a lower price.
-- **Can I self-host Cap?** Yes — open source (AGPLv3) and fully self-hostable.
-- **Can I use my own storage?** Yes — Google Drive, any S3-compatible bucket, Cap Cloud, or fully local.
-- **Does Cap record system audio and 4K?** Yes — screen, camera, mic, and system audio up to 4K at 60fps.

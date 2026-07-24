@@ -282,15 +282,20 @@ export function CaptionsTab(props: {
 				if (!source) return;
 
 				const recordingSegments = editorInstance.recordings.segments;
+				const sourceRange = { start: source.start, end: source.end };
 				const start = mapEditedTimeToSource(
 					timelineSegment.start,
 					timeline.segments,
 					recordingSegments,
+					timeline.transitions ?? [],
+					sourceRange,
 				);
 				const end = mapEditedTimeToSource(
 					timelineSegment.end,
 					timeline.segments,
 					recordingSegments,
+					timeline.transitions ?? [],
+					sourceRange,
 				);
 				if (start !== null) source.start = start;
 				if (end !== null) source.end = end;

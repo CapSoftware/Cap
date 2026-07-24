@@ -15,6 +15,7 @@ export const sendEmail = async ({
 	cc,
 	replyTo,
 	fromOverride,
+	idempotencyKey,
 }: {
 	email: string;
 	subject: string;
@@ -25,6 +26,7 @@ export const sendEmail = async ({
 	cc?: string | string[];
 	replyTo?: string;
 	fromOverride?: string;
+	idempotencyKey?: string;
 }) => {
 	const r = resend();
 	if (!r) {
@@ -40,13 +42,16 @@ export const sendEmail = async ({
 		from = "Cap Auth <no-reply@auth.cap.so>";
 	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
 
-	return r.emails.send({
-		from,
-		to: test ? "delivered@resend.dev" : email,
-		subject,
-		react,
-		scheduledAt,
-		cc: test ? undefined : cc,
-		replyTo: replyTo,
-	});
+	return r.emails.send(
+		{
+			from,
+			to: test ? "delivered@resend.dev" : email,
+			subject,
+			react,
+			scheduledAt,
+			cc: test ? undefined : cc,
+			replyTo: replyTo,
+		},
+		idempotencyKey ? { idempotencyKey } : undefined,
+	);
 };

@@ -4,13 +4,14 @@ import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import {
 	readAnalyticsAnonymousId,
-	scheduleLegacyPostHogEvent,
 	scheduleServerProductEvent,
 } from "@/lib/analytics/server";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
-	const { priceId, quantity } = await request.json();
+	const { priceId, quantity, platform } = await request.json();
+	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 	const analyticsAnonymousId = readAnalyticsAnonymousId(request);
 	const checkoutAnonymousId = analyticsAnonymousId ?? `guest:${randomUUID()}`;
 
@@ -23,14 +24,18 @@ export async function POST(request: NextRequest) {
 
 	try {
 		console.log("Creating guest checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			line_items: [{ price: priceId, quantity: quantity || 1 }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&guest=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
 			metadata: {
-				platform: "web",
+				platform: checkoutPlatform,
 				guestCheckout: "true",
 				analyticsIsFirstPurchase: "true",
 				analyticsAnonymousId: checkoutAnonymousId,
@@ -43,22 +48,10 @@ export async function POST(request: NextRequest) {
 				eventId: `checkout:${checkoutSession.id}`,
 				eventName: "guest_checkout_started",
 				anonymousId: checkoutAnonymousId,
-				platform: "web",
+				platform: checkoutPlatform,
 				properties: {
 					price_id: priceId,
 					quantity: quantity || 1,
-				},
-			});
-
-			scheduleLegacyPostHogEvent({
-				distinctId: checkoutAnonymousId,
-				eventName: "guest_checkout_started",
-				properties: {
-					$insert_id: `checkout:${checkoutSession.id}`,
-					price_id: priceId,
-					quantity: quantity || 1,
-					platform: "web",
-					session_id: checkoutSession.id,
 				},
 			});
 

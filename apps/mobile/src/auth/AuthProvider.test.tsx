@@ -8,6 +8,7 @@ type HostProps = {
 };
 
 const secureStoreMock = vi.hoisted(() => ({
+	WHEN_UNLOCKED_THIS_DEVICE_ONLY: "whenUnlockedThisDeviceOnly",
 	deleteItemAsync: vi.fn((_key: string) => Promise.resolve()),
 	getItemAsync: vi.fn((_key: string) => Promise.resolve(null as string | null)),
 	setItemAsync: vi.fn((_key: string, _value: string) => Promise.resolve()),
@@ -25,10 +26,19 @@ const apiMock = vi.hoisted(() => ({
 	),
 	getAuthConfig: vi.fn(() =>
 		Promise.resolve({
+			appleAuthAvailable: true,
 			googleAuthAvailable: true,
 			workosAuthAvailable: true,
 		}),
 	),
+	createSessionRequestUrl: vi.fn(
+		() => "https://cap.so/api/mobile/session/request",
+	),
+}));
+
+const webBrowserMock = vi.hoisted(() => ({
+	maybeCompleteAuthSession: vi.fn(),
+	openAuthSessionAsync: vi.fn(),
 }));
 
 vi.mock("react-native", async () => {
@@ -54,10 +64,7 @@ vi.mock("expo-linking", () => ({
 
 vi.mock("expo-secure-store", () => secureStoreMock);
 
-vi.mock("expo-web-browser", () => ({
-	maybeCompleteAuthSession: vi.fn(),
-	openAuthSessionAsync: vi.fn(),
-}));
+vi.mock("expo-web-browser", () => webBrowserMock);
 
 vi.mock("@/api/mobile", () => ({
 	createMobileApiClient: vi.fn(() => ({
@@ -66,9 +73,7 @@ vi.mock("@/api/mobile", () => ({
 		revokeSession: vi.fn(() => Promise.resolve({ success: true })),
 		setActiveOrganization: vi.fn(),
 	})),
-	createSessionRequestUrl: vi.fn(
-		() => "https://cap.so/api/mobile/session/request",
-	),
+	createSessionRequestUrl: apiMock.createSessionRequestUrl,
 }));
 
 (
@@ -88,8 +93,11 @@ const states: Array<{
 	userId: string | null;
 }> = [];
 
+let latestAuth: ReturnType<typeof useAuth> | null = null;
+
 const Probe = () => {
 	const auth = useAuth();
+	latestAuth = auth;
 	states.push({
 		apiKey: auth.apiKey,
 		status: auth.status,
@@ -101,6 +109,7 @@ const Probe = () => {
 describe("AuthProvider", () => {
 	beforeEach(() => {
 		states.length = 0;
+		latestAuth = null;
 		secureStoreMock.deleteItemAsync.mockClear();
 		secureStoreMock.getItemAsync.mockReset();
 		secureStoreMock.getItemAsync.mockResolvedValue(null);
@@ -115,8 +124,81 @@ describe("AuthProvider", () => {
 		});
 		apiMock.getAuthConfig.mockReset();
 		apiMock.getAuthConfig.mockResolvedValue({
+			appleAuthAvailable: true,
 			googleAuthAvailable: true,
 			workosAuthAvailable: true,
+		});
+		apiMock.createSessionRequestUrl.mockClear();
+		webBrowserMock.openAuthSessionAsync.mockReset();
+	});
+
+	it("stores a mobile session returned by Sign in with Apple", async () => {
+		webBrowserMock.openAuthSessionAsync.mockResolvedValueOnce({
+			type: "success",
+			url: "cap://auth?api_key=apple_key&user_id=apple_user",
+		});
+
+		await act(async () => {
+			TestRenderer.create(
+				React.createElement(AuthProvider, null, React.createElement(Probe)),
+			);
+			await flushMicrotasks();
+		});
+		await act(async () => {
+			await latestAuth?.signInWithApple();
+			await flushMicrotasks();
+		});
+
+		expect(apiMock.createSessionRequestUrl).toHaveBeenCalledWith(
+			"https://cap.so",
+			"cap://auth",
+			"apple",
+		);
+		expect(webBrowserMock.openAuthSessionAsync).toHaveBeenCalledWith(
+			"https://cap.so/api/mobile/session/request",
+			"cap://auth",
+		);
+		expect(secureStoreMock.setItemAsync).toHaveBeenCalledWith(
+			"cap.mobile.apiKey",
+			"apple_key",
+			{
+				keychainAccessible: "whenUnlockedThisDeviceOnly",
+			},
+		);
+		expect(secureStoreMock.setItemAsync).toHaveBeenCalledWith(
+			"cap.mobile.userId",
+			"apple_user",
+			{
+				keychainAccessible: "whenUnlockedThisDeviceOnly",
+			},
+		);
+		expect(states.at(-1)).toMatchObject({
+			apiKey: "apple_key",
+			status: "signedIn",
+			userId: "apple_user",
+		});
+	});
+
+	it("leaves the user signed out when Apple authentication is cancelled", async () => {
+		webBrowserMock.openAuthSessionAsync.mockResolvedValueOnce({
+			type: "cancel",
+		});
+
+		await act(async () => {
+			TestRenderer.create(
+				React.createElement(AuthProvider, null, React.createElement(Probe)),
+			);
+			await flushMicrotasks();
+		});
+		await act(async () => {
+			await latestAuth?.signInWithApple();
+		});
+
+		expect(secureStoreMock.setItemAsync).not.toHaveBeenCalled();
+		expect(states.at(-1)).toMatchObject({
+			apiKey: null,
+			status: "signedOut",
+			userId: null,
 		});
 	});
 

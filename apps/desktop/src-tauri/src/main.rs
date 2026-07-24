@@ -9,6 +9,15 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn main() {
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    if std::env::var_os("ORT_DYLIB_PATH").is_none()
+        && let Some(path) = cap_camera_effects::onnx_runtime_library_path()
+    {
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", path);
+        }
+    }
+
     #[cfg(debug_assertions)]
     unsafe {
         std::env::set_var("RUST_LOG", "trace");

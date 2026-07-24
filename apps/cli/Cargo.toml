@@ -19,7 +19,7 @@ cap-cli-install = { path = "../../crates/cli-install" }
 scap-targets = { path = "../../crates/scap-targets" }
 serde = { workspace = true }
 serde_json = "1.0.133"
-tokio = { workspace = true, features = ["signal"] }
+tokio = { workspace = true, features = ["io-util", "net", "signal"] }
 tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1.11.1", features = ["v4"] }
 ffmpeg = { workspace = true }
@@ -30,6 +30,14 @@ futures = { workspace = true }
 dirs = "6.0.0"
 image = "0.25.2"
 chrono = "0.4.31"
+base64 = "0.22.1"
+keyring = "4.1.5"
+open = "5.3.6"
+rmcp = { version = "2.2.0", features = ["transport-io"] }
+rpassword = "7.5.4"
+sha2 = "0.10.9"
+toml_edit = "0.23.7"
+url = "2.5.7"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
 cpal = { workspace = true }
@@ -43,6 +51,7 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }
 

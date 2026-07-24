@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::camera::{CameraPreviewState, MAX_CAMERA_SIZE, MIN_CAMERA_SIZE, is_low_spec_preview};
-use crate::frame_ws::{WSFrame, create_watch_frame_ws};
+use crate::frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws_with_instant_tracking};
 
 const WS_READBACK_PENDING: u8 = 0;
 const WS_READBACK_READY_OK: u8 = 1;
@@ -97,10 +97,7 @@ fn with_pooled_buffer(
     buf
 }
 
-// Copies rows without ffmpeg's stride padding so the payload is packed
-// (stride == width * 4); this lets the frontend skip stride correction.
-fn pack_rows(dst: &mut Vec<u8>, src: &[u8], width: u32, height: u32, stride: u32) {
-    let row_bytes = (width as usize) * 4;
+fn pack_plane_rows(dst: &mut Vec<u8>, src: &[u8], row_bytes: usize, height: u32, stride: u32) {
     let stride = stride as usize;
     let height = height as usize;
     dst.reserve(row_bytes * height);
@@ -111,6 +108,51 @@ fn pack_rows(dst: &mut Vec<u8>, src: &[u8], width: u32, height: u32, stride: u32
             let start = row * stride;
             dst.extend_from_slice(&src[start..start + row_bytes]);
         }
+    }
+}
+
+fn pack_rgba_rows(dst: &mut Vec<u8>, frame: &ffmpeg::util::frame::Video) {
+    pack_plane_rows(
+        dst,
+        frame.data(0),
+        frame.width() as usize * 4,
+        frame.height(),
+        frame.stride(0) as u32,
+    );
+}
+
+fn pack_nv12_planes(dst: &mut Vec<u8>, frame: &ffmpeg::util::frame::Video) {
+    let width = frame.width() as usize;
+    pack_plane_rows(
+        dst,
+        frame.data(0),
+        width,
+        frame.height(),
+        frame.stride(0) as u32,
+    );
+    pack_plane_rows(
+        dst,
+        frame.data(1),
+        width,
+        frame.height() / 2,
+        frame.stride(1) as u32,
+    );
+}
+
+fn prepare_ws_data(
+    frame: &ffmpeg::util::frame::Video,
+    format: WSFrameFormat,
+    frame_pool: &mut Vec<Arc<Vec<u8>>>,
+) -> (Arc<Vec<u8>>, u32) {
+    match format {
+        WSFrameFormat::Rgba => (
+            with_pooled_buffer(frame_pool, |vec| pack_rgba_rows(vec, frame)),
+            frame.width() * 4,
+        ),
+        WSFrameFormat::Nv12 { .. } => (
+            with_pooled_buffer(frame_pool, |vec| pack_nv12_planes(vec, frame)),
+            frame.width(),
+        ),
     }
 }
 
@@ -149,8 +191,10 @@ pub async fn create_camera_preview_ws(
     let (camera_tx, camera_rx) = flume::bounded::<FFmpegVideoFrame>(1);
     let (frame_tx, frame_rx) = watch::channel::<Option<Arc<WSFrame>>>(None);
     let subscriber_count = Arc::new(AtomicUsize::new(0));
+    let instant_subscriber_count = Arc::new(AtomicUsize::new(0));
     let frame_tx_clone = frame_tx.clone();
     let thread_subscriber_count = subscriber_count.clone();
+    let thread_instant_subscriber_count = instant_subscriber_count.clone();
     std::thread::spawn(move || {
         use ffmpeg::format::Pixel;
 
@@ -173,7 +217,7 @@ pub async fn create_camera_preview_ws(
             }
         }
 
-        let mut converter: Option<(Pixel, ffmpeg::software::scaling::Context)> = None;
+        let mut converter: Option<(Pixel, Pixel, ffmpeg::software::scaling::Context)> = None;
         let mut reusable_frame: Option<ffmpeg::util::frame::Video> = None;
         let mut state_rx = state_rx;
 
@@ -182,13 +226,15 @@ pub async fn create_camera_preview_ws(
         let mut frame_pool: Vec<Arc<Vec<u8>>> = Vec::new();
         let mut frame_counter: u32 = 0;
         let mut idle = true;
-
         while let Ok(raw_frame) = camera_rx.recv() {
             let mut frame = raw_frame.inner;
 
             while let Ok(newer) = camera_rx.try_recv() {
                 frame = newer.inner;
             }
+
+            let instant_preview_active =
+                thread_instant_subscriber_count.load(Ordering::Acquire) > 0;
 
             // With no connected ws clients, skip all conversion work and
             // release retained resources; the cleared watch cell also stops
@@ -223,9 +269,25 @@ pub async fn create_camera_preview_ws(
                 cap_project::BackgroundBlurMode::Heavy => cap_camera_effects::BlurMode::Heavy,
             };
 
-            let (target_width, target_height) =
+            let (mut target_width, mut target_height) =
                 scaled_preview_dimensions(frame.width(), frame.height(), &state);
-            let needs_convert = frame.format() != Pixel::RGBA
+            let use_nv12 = cfg!(target_os = "macos")
+                && instant_preview_active
+                && !blur_enabled
+                && frame.format() == Pixel::NV12;
+            let (output_pixel, output_format) = if use_nv12 {
+                target_width = target_width.max(2) & !1;
+                target_height = target_height.max(2) & !1;
+                (
+                    Pixel::NV12,
+                    WSFrameFormat::Nv12 {
+                        full_range: frame.color_range() == ffmpeg::color::Range::JPEG,
+                    },
+                )
+            } else {
+                (Pixel::RGBA, WSFrameFormat::Rgba)
+            };
+            let needs_convert = frame.format() != output_pixel
                 || frame.width() != target_width
                 || frame.height() != target_height;
 
@@ -235,8 +297,9 @@ pub async fn create_camera_preview_ws(
 
             if needs_convert {
                 let ctx = match &mut converter {
-                    Some((format, ctx))
-                        if *format == frame.format()
+                    Some((input_format, cached_output_format, ctx))
+                        if *input_format == frame.format()
+                            && *cached_output_format == output_pixel
                             && ctx.input().width == frame.width()
                             && ctx.input().height == frame.height()
                             && ctx.output().width == target_width
@@ -249,7 +312,7 @@ pub async fn create_camera_preview_ws(
                             frame.format(),
                             frame.width(),
                             frame.height(),
-                            Pixel::RGBA,
+                            output_pixel,
                             target_width,
                             target_height,
                             ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
@@ -258,13 +321,15 @@ pub async fn create_camera_preview_ws(
                         };
 
                         reusable_frame = None;
-                        &mut converter.insert((frame.format(), new_converter)).1
+                        &mut converter
+                            .insert((frame.format(), output_pixel, new_converter))
+                            .2
                     }
                 };
 
                 let out_frame = reusable_frame.get_or_insert_with(|| {
                     ffmpeg::util::frame::Video::new(
-                        Pixel::RGBA,
+                        output_pixel,
                         ctx.output().width,
                         ctx.output().height,
                     )
@@ -277,7 +342,7 @@ pub async fn create_camera_preview_ws(
                 let width = out_frame.width();
                 let height = out_frame.height();
                 let src_stride = out_frame.stride(0) as u32;
-                let data = if blur_enabled {
+                let (data, stride) = if blur_enabled {
                     blur_state.process(
                         out_frame.data(0),
                         width,
@@ -289,28 +354,25 @@ pub async fn create_camera_preview_ws(
                 } else {
                     None
                 }
-                .unwrap_or_else(|| {
-                    with_pooled_buffer(&mut frame_pool, |vec| {
-                        pack_rows(vec, out_frame.data(0), width, height, src_stride)
-                    })
-                });
+                .map(|data| (data, width * 4))
+                .unwrap_or_else(|| prepare_ws_data(out_frame, output_format, &mut frame_pool));
 
                 frame_counter = frame_counter.wrapping_add(1);
                 let _previous_frame = frame_tx_clone.send_replace(Some(Arc::new(WSFrame {
                     data,
                     width,
                     height,
-                    stride: width * 4,
+                    stride,
                     frame_number: frame_counter,
                     target_time_ns: 0,
-                    format: crate::frame_ws::WSFrameFormat::Rgba,
+                    format: output_format,
                     created_at: Instant::now(),
                 })));
             } else {
                 let width = frame.width();
                 let height = frame.height();
                 let src_stride = frame.stride(0) as u32;
-                let data = if blur_enabled {
+                let (data, stride) = if blur_enabled {
                     blur_state.process(
                         frame.data(0),
                         width,
@@ -322,27 +384,29 @@ pub async fn create_camera_preview_ws(
                 } else {
                     None
                 }
-                .unwrap_or_else(|| {
-                    with_pooled_buffer(&mut frame_pool, |vec| {
-                        pack_rows(vec, frame.data(0), width, height, src_stride)
-                    })
-                });
+                .map(|data| (data, width * 4))
+                .unwrap_or_else(|| prepare_ws_data(&frame, output_format, &mut frame_pool));
 
                 frame_counter = frame_counter.wrapping_add(1);
                 let _previous_frame = frame_tx_clone.send_replace(Some(Arc::new(WSFrame {
                     data,
                     width,
                     height,
-                    stride: width * 4,
+                    stride,
                     frame_number: frame_counter,
                     target_time_ns: 0,
-                    format: crate::frame_ws::WSFrameFormat::Rgba,
+                    format: output_format,
                     created_at: Instant::now(),
                 })));
             }
         }
     });
-    let (camera_ws_port, _shutdown) = create_watch_frame_ws(frame_rx, subscriber_count).await;
+    let (camera_ws_port, _shutdown) = create_watch_frame_ws_with_instant_tracking(
+        frame_rx,
+        subscriber_count,
+        instant_subscriber_count,
+    )
+    .await;
 
     (camera_tx, camera_ws_port, _shutdown)
 }
@@ -652,4 +716,29 @@ fn init_headless_blur() -> Option<WsBlurResources> {
         readbacks: None,
         current_idx: 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_plane_rows_without_stride_padding() {
+        let src = [0, 1, 2, 3, 90, 91, 4, 5, 6, 7, 92, 93, 8, 9, 10, 11, 94, 95];
+        let mut dst = vec![99];
+
+        pack_plane_rows(&mut dst, &src, 4, 3, 6);
+
+        assert_eq!(dst, [99, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn packs_contiguous_plane_as_one_slice() {
+        let src = [0, 1, 2, 3, 4, 5, 6, 7];
+        let mut dst = Vec::new();
+
+        pack_plane_rows(&mut dst, &src, 4, 2, 4);
+
+        assert_eq!(dst, src);
+    }
 }

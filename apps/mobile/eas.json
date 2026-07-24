@@ -1,0 +1,45 @@
+{
+	"cli": {
+		"appVersionSource": "remote",
+		"version": ">= 21.0.2"
+	},
+	"build": {
+		"development": {
+			"channel": "development",
+			"developmentClient": true,
+			"distribution": "internal",
+			"environment": "development",
+			"env": {
+				"CAP_MOBILE_BUILD_REACT_NATIVE_FROM_SOURCE": "1"
+			},
+			"ios": {
+				"simulator": true
+			}
+		},
+		"preview": {
+			"channel": "preview",
+			"distribution": "internal",
+			"environment": "preview"
+		},
+		"production": {
+			"autoIncrement": true,
+			"channel": "production",
+			"credentialsSource": "remote",
+			"distribution": "store",
+			"environment": "production"
+		}
+	},
+	"submit": {
+		"production": {
+			"ios": {
+				"appleTeamId": "47B7FCLL43",
+				"appName": "Cap",
+				"bundleIdentifier": "so.cap.mobile",
+				"companyName": "Cap Software, Inc.",
+				"language": "en-US",
+				"metadataPath": "./store.config.json",
+				"sku": "cap-mobile-ios"
+			}
+		}
+	}
+}

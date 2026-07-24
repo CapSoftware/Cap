@@ -1,10 +1,10 @@
 use crate::editor_window::{OptionalWindowEditorInstance, WindowEditorInstance};
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::{ExporterBase, make_cursor_only_project};
-use cap_project::{RecordingMeta, XY};
+use cap_project::{RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
-    RendererLayers, ZoomTransformTimeline,
+    RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
 };
 use futures::FutureExt;
 use image::codecs::jpeg::JpegEncoder;
@@ -1328,7 +1328,7 @@ pub async fn get_export_estimates(
     let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
     let project_config = meta.project_config();
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.segments.iter().map(|s| s.duration()).sum()
+        timeline.duration()
     } else {
         metadata.duration
     };
@@ -1513,6 +1513,21 @@ async fn generate_export_preview_inner(
         })
         .collect();
 
+    let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
+        if timeline.transitions.is_empty() {
+            return None;
+        }
+        match timeline.get_frame_mapping(frame_time) {
+            Some(TimelineFrameMapping::Transition {
+                outgoing,
+                kind,
+                progress,
+                ..
+            }) => Some((outgoing, kind, progress)),
+            _ => None,
+        }
+    });
+
     let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
         return Err("Frame time is outside video duration".to_string());
     };
@@ -1543,11 +1558,12 @@ async fn generate_export_preview_inner(
         .map(|t| t.duration())
         .unwrap_or(0.0);
 
-    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+    let mut zoom_timeline = ZoomTransformTimeline::from_project_for_clip(
         &project_config,
         &render_segment.cursor,
         total_duration,
         render_constants.options.screen_size,
+        segment.recording_clip,
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
@@ -1570,16 +1586,74 @@ async fn generate_export_preview_inner(
         render_constants.is_software_adapter,
     );
 
-    let frame = frame_renderer
-        .render_immediate(
-            segment_frames,
-            uniforms,
-            &render_segment.cursor,
-            render_segment.render_display,
-            &mut layers,
-        )
-        .await
-        .map_err(|e| format!("Failed to render frame: {e}"))?;
+    let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
+        let outgoing_segment = &render_segments[outgoing.segment.recording_clip as usize];
+        let outgoing_offsets = project_config
+            .clips
+            .iter()
+            .find(|clip| clip.index == outgoing.segment.recording_clip)
+            .map(|clip| clip.offsets)
+            .unwrap_or_default();
+        let outgoing_frames = outgoing_segment
+            .decoders
+            .get_frames(
+                outgoing.source_time as f32,
+                !project_config.camera.hide,
+                outgoing_segment.render_display,
+                outgoing_offsets,
+            )
+            .await
+            .ok_or_else(|| "Failed to decode outgoing frame".to_string())?;
+        let mut outgoing_zoom = ZoomTransformTimeline::from_project_for_outgoing_clip(
+            &project_config,
+            &outgoing_segment.cursor,
+            total_duration,
+            render_constants.options.screen_size,
+            outgoing.segment.recording_clip,
+        );
+        outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
+        let outgoing_uniforms = ProjectUniforms::new(
+            &render_constants,
+            &project_config,
+            frame_number,
+            settings.fps,
+            settings.resolution_base,
+            &outgoing_segment.cursor,
+            &outgoing_frames,
+            total_duration,
+            &outgoing_zoom,
+        );
+        frame_renderer
+            .render_transition_immediate(
+                TransitionRenderInput {
+                    segment_frames: outgoing_frames,
+                    uniforms: outgoing_uniforms,
+                    cursor: &outgoing_segment.cursor,
+                    render_display: outgoing_segment.render_display,
+                },
+                TransitionRenderInput {
+                    segment_frames,
+                    uniforms,
+                    cursor: &render_segment.cursor,
+                    render_display: render_segment.render_display,
+                },
+                kind,
+                progress as f32,
+                &mut layers,
+            )
+            .await
+    } else {
+        frame_renderer
+            .render_immediate(
+                segment_frames,
+                uniforms,
+                &render_segment.cursor,
+                render_segment.render_display,
+                &mut layers,
+            )
+            .await
+    }
+    .map_err(|e| format!("Failed to render frame: {e}"))?;
 
     let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -1612,7 +1686,7 @@ async fn generate_export_preview_inner(
 
     let metadata = get_video_metadata(project_path.clone()).await?;
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.segments.iter().map(|s| s.duration()).sum()
+        timeline.duration()
     } else {
         metadata.duration
     };
@@ -1761,6 +1835,20 @@ async fn generate_export_preview_fast_inner(
         editor.project_config.1.borrow().clone(),
         settings.cursor_only,
     );
+    let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
+        if timeline.transitions.is_empty() {
+            return None;
+        }
+        match timeline.get_frame_mapping(frame_time) {
+            Some(TimelineFrameMapping::Transition {
+                outgoing,
+                kind,
+                progress,
+                ..
+            }) => Some((outgoing, kind, progress)),
+            _ => None,
+        }
+    });
 
     let Some((segment_time, segment)) = project_config.get_segment_time(frame_time) else {
         return Err("Frame time is outside video duration".to_string());
@@ -1792,11 +1880,12 @@ async fn generate_export_preview_fast_inner(
         .map(|t| t.duration())
         .unwrap_or(0.0);
 
-    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+    let mut zoom_timeline = ZoomTransformTimeline::from_project_for_clip(
         &project_config,
         &segment_media.cursor,
         total_duration,
         editor.render_constants.options.screen_size,
+        segment.recording_clip,
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
 
@@ -1819,16 +1908,74 @@ async fn generate_export_preview_fast_inner(
         editor.render_constants.is_software_adapter,
     );
 
-    let frame = frame_renderer
-        .render_immediate(
-            segment_frames,
-            uniforms,
-            &segment_media.cursor,
-            !settings.cursor_only,
-            &mut layers,
-        )
-        .await
-        .map_err(|e| format!("Failed to render frame: {e}"))?;
+    let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
+        let outgoing_media = &editor.segment_medias[outgoing.segment.recording_clip as usize];
+        let outgoing_offsets = project_config
+            .clips
+            .iter()
+            .find(|clip| clip.index == outgoing.segment.recording_clip)
+            .map(|clip| clip.offsets)
+            .unwrap_or_default();
+        let outgoing_frames = outgoing_media
+            .decoders
+            .get_frames(
+                outgoing.source_time as f32,
+                !project_config.camera.hide,
+                !settings.cursor_only,
+                outgoing_offsets,
+            )
+            .await
+            .ok_or_else(|| "Failed to decode outgoing frame".to_string())?;
+        let mut outgoing_zoom = ZoomTransformTimeline::from_project_for_outgoing_clip(
+            &project_config,
+            &outgoing_media.cursor,
+            total_duration,
+            editor.render_constants.options.screen_size,
+            outgoing.segment.recording_clip,
+        );
+        outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
+        let outgoing_uniforms = ProjectUniforms::new(
+            &editor.render_constants,
+            &project_config,
+            frame_number,
+            settings.fps,
+            settings.resolution_base,
+            &outgoing_media.cursor,
+            &outgoing_frames,
+            total_duration,
+            &outgoing_zoom,
+        );
+        frame_renderer
+            .render_transition_immediate(
+                TransitionRenderInput {
+                    segment_frames: outgoing_frames,
+                    uniforms: outgoing_uniforms,
+                    cursor: &outgoing_media.cursor,
+                    render_display: !settings.cursor_only,
+                },
+                TransitionRenderInput {
+                    segment_frames,
+                    uniforms,
+                    cursor: &segment_media.cursor,
+                    render_display: !settings.cursor_only,
+                },
+                kind,
+                progress as f32,
+                &mut layers,
+            )
+            .await
+    } else {
+        frame_renderer
+            .render_immediate(
+                segment_frames,
+                uniforms,
+                &segment_media.cursor,
+                !settings.cursor_only,
+                &mut layers,
+            )
+            .await
+    }
+    .map_err(|e| format!("Failed to render frame: {e}"))?;
 
     let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 

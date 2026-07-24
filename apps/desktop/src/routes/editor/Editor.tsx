@@ -957,6 +957,8 @@ function Dialogs() {
 								let cropperRef: CropperRef | undefined;
 								let previewCanvas: HTMLCanvasElement | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
+								const [cropInteracting, setCropInteracting] =
+									createSignal(false);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
 								const [frameUrl, setFrameUrl] = createSignal<string | null>(
@@ -1292,6 +1294,7 @@ function Dialogs() {
 															<Cropper
 																ref={cropperRef}
 																onCropChange={setCrop}
+																onInteraction={setCropInteracting}
 																aspectRatio={aspect() ?? undefined}
 																targetSize={{
 																	x: display.width,
@@ -1323,6 +1326,29 @@ function Dialogs() {
 																	}
 																/>
 															</Cropper>
+															<Show
+																when={
+																	cropInteracting() &&
+																	crop().width > 0 &&
+																	crop().height > 0
+																}
+															>
+																<div
+																	aria-hidden="true"
+																	class="absolute z-40 border pointer-events-none border-black/90 shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+																	style={{
+																		left: `${(crop().x / display.width) * 100}%`,
+																		top: `${(crop().y / display.height) * 100}%`,
+																		width: `${(crop().width / display.width) * 100}%`,
+																		height: `${(crop().height / display.height) * 100}%`,
+																	}}
+																>
+																	<div class="absolute left-0 top-[calc(100%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute left-0 top-[calc(200%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute top-0 left-[calc(100%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute top-0 left-[calc(200%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
+																</div>
+															</Show>
 														</div>
 														<Show when={!frameLoaded()}>
 															<div class="flex absolute inset-0 z-40 flex-col gap-3 justify-center items-center bg-gray-3">

@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { RefreshControl } from "react-native";
 import TestRenderer, { act, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
-import { CapRefreshControl } from "./CapRefreshControl";
+import { CapRefreshControl, CapRefreshOverlay } from "./CapRefreshControl";
 
 type HostProps = {
 	children?: ReactNode;
@@ -31,6 +31,7 @@ vi.mock("react-native", async () => {
 			React.createElement(name, props, children);
 
 	return {
+		Platform: { OS: "ios" },
 		RefreshControl: createHost("RefreshControl"),
 		StyleSheet: {
 			create: <T extends Record<string, unknown>>(styles: T) => styles,
@@ -38,8 +39,28 @@ vi.mock("react-native", async () => {
 	};
 });
 
+vi.mock("react-native-reanimated", async () => {
+	const React = await import("react");
+	return {
+		default: {
+			View: ({ children, ...props }: HostProps) =>
+				React.createElement("Animated.View", props, children),
+		},
+		FadeIn: { duration: () => ({}) },
+		FadeOut: { duration: () => ({}) },
+	};
+});
+
+vi.mock("./CapLoadingIndicator", async () => {
+	const React = await import("react");
+	return {
+		CapLoadingIndicator: (props: HostProps) =>
+			React.createElement("CapLoadingIndicator", props),
+	};
+});
+
 describe("CapRefreshControl", () => {
-	it("uses Cap web colors for native pull-to-refresh", async () => {
+	it("hides the native iOS spinner so the Cap overlay can replace it", async () => {
 		const onRefresh = vi.fn();
 		const renderer = await renderComponent(
 			<CapRefreshControl refreshing onRefresh={onRefresh} />,
@@ -47,11 +68,26 @@ describe("CapRefreshControl", () => {
 		const refreshControl = renderer.root.findByType(RefreshControl);
 
 		expect(refreshControl.props).toMatchObject({
-			colors: ["#0d74ce"],
 			onRefresh,
-			progressBackgroundColor: "#fcfcfc",
 			refreshing: true,
-			tintColor: "#0d74ce",
+			tintColor: "transparent",
 		});
+	});
+});
+
+describe("CapRefreshOverlay", () => {
+	it("shows the compact Cap loader while refreshing", async () => {
+		const renderer = await renderComponent(<CapRefreshOverlay refreshing />);
+		const loader = renderer.root.findByProps({ size: 32 });
+
+		expect(loader.props).toMatchObject({ size: 32 });
+	});
+
+	it("renders nothing when not refreshing", async () => {
+		const renderer = await renderComponent(
+			<CapRefreshOverlay refreshing={false} />,
+		);
+
+		expect(renderer.toJSON()).toBeNull();
 	});
 });

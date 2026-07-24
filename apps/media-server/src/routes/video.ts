@@ -15,6 +15,7 @@ import {
 	getJobProgress,
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
+	hasCriticalMemoryPressure,
 	sendWebhook,
 	touchJob,
 	updateJob,
@@ -56,6 +57,10 @@ const PROCESSING_HEARTBEAT_MS = 60 * 1000;
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
+const VIDEO_MEMORY_PRESSURE_ERROR =
+	"SERVER_BUSY: container memory pressure is too high";
+const SEGMENT_DOWNLOAD_MAX_ATTEMPTS = 3;
+const SEGMENT_DOWNLOAD_RETRY_BASE_MS = 250;
 
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
@@ -205,7 +210,11 @@ function summarizeVideoInput(videoUrl: string, inputExtension?: string) {
 }
 
 function isBusyError(err: unknown): boolean {
-	return err instanceof Error && err.message.includes("Server is busy");
+	return (
+		err instanceof Error &&
+		(err.message.includes("Server is busy") ||
+			err.message.includes("SERVER_BUSY"))
+	);
 }
 
 function isTimeoutError(err: unknown): boolean {
@@ -295,6 +304,34 @@ async function withJobHeartbeat<T>(
 
 	try {
 		return await operation();
+	} finally {
+		clearInterval(interval);
+	}
+}
+
+async function withMuxMemoryGuard<T>(
+	abortController: AbortController,
+	operation: () => Promise<T>,
+): Promise<T> {
+	let memoryPressureExceeded = false;
+	const interval = setInterval(() => {
+		if (!hasCriticalMemoryPressure()) return;
+		memoryPressureExceeded = true;
+		abortController.abort();
+	}, 1000);
+	interval.unref?.();
+
+	try {
+		const result = await operation();
+		if (memoryPressureExceeded) {
+			throw new Error(VIDEO_MEMORY_PRESSURE_ERROR);
+		}
+		return result;
+	} catch (error) {
+		if (memoryPressureExceeded) {
+			throw new Error(VIDEO_MEMORY_PRESSURE_ERROR);
+		}
+		throw error;
 	} finally {
 		clearInterval(interval);
 	}
@@ -1618,15 +1655,30 @@ async function streamConcatFiles(
 	inputPaths: string[],
 	outputPath: string,
 ): Promise<void> {
-	const { open, readFile } = await import("node:fs/promises");
-	const handle = await open(outputPath, "w");
+	const writer = file(outputPath).writer();
+	let lastMemoryCheckAt = 0;
 	try {
 		for (const filePath of inputPaths) {
-			const data = await readFile(filePath);
-			await handle.write(data);
+			const reader = file(filePath).stream().getReader();
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					writer.write(value);
+					const now = Date.now();
+					if (now - lastMemoryCheckAt >= 1000) {
+						lastMemoryCheckAt = now;
+						if (hasCriticalMemoryPressure()) {
+							throw new Error(VIDEO_MEMORY_PRESSURE_ERROR);
+						}
+					}
+				}
+			} finally {
+				reader.releaseLock();
+			}
 		}
 	} finally {
-		await handle.close();
+		await writer.end();
 	}
 }
 
@@ -1639,16 +1691,122 @@ function redactPresignedUrl(url: string): string {
 	}
 }
 
-async function downloadUrlToFile(url: string, destPath: string): Promise<void> {
-	const resp = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+class MediaDownloadError extends Error {
+	constructor(
+		message: string,
+		readonly retryable: boolean,
+	) {
+		super(message);
+	}
+}
+
+function isRetryableDownloadStatus(status: number): boolean {
+	return (
+		status === 408 ||
+		status === 425 ||
+		status === 429 ||
+		status === 500 ||
+		status === 502 ||
+		status === 503 ||
+		status === 504
+	);
+}
+
+async function downloadUrlToFileOnce(
+	url: string,
+	destPath: string,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	const abortController = new AbortController();
+	const timeoutSignal = AbortSignal.timeout(120_000);
+	const resp = await fetch(url, {
+		signal: abortSignal
+			? AbortSignal.any([abortController.signal, abortSignal, timeoutSignal])
+			: AbortSignal.any([abortController.signal, timeoutSignal]),
+	});
 	if (!resp.ok) {
-		throw new Error(
+		await resp.body?.cancel().catch(() => {});
+		throw new MediaDownloadError(
 			`Download failed (${resp.status}): ${redactPresignedUrl(url)}`,
+			isRetryableDownloadStatus(resp.status),
 		);
 	}
-	const data = Buffer.from(await resp.arrayBuffer());
-	const { writeFile } = await import("node:fs/promises");
-	await writeFile(destPath, data);
+	if (!resp.body) {
+		throw new MediaDownloadError(
+			`Download returned no body: ${redactPresignedUrl(url)}`,
+			true,
+		);
+	}
+
+	const reader = resp.body.getReader();
+	const writer = file(destPath).writer();
+	let lastMemoryCheckAt = 0;
+	let failure: unknown;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			writer.write(value);
+			const now = Date.now();
+			if (now - lastMemoryCheckAt >= 1000) {
+				lastMemoryCheckAt = now;
+				if (hasCriticalMemoryPressure()) {
+					throw new Error(VIDEO_MEMORY_PRESSURE_ERROR);
+				}
+			}
+		}
+	} catch (error) {
+		failure = error;
+		abortController.abort();
+		await reader.cancel().catch(() => {});
+	} finally {
+		reader.releaseLock();
+		try {
+			await writer.end();
+		} catch (error) {
+			failure ??= error;
+		}
+	}
+
+	if (failure !== undefined) {
+		const { rm } = await import("node:fs/promises");
+		await rm(destPath, { force: true }).catch(() => {});
+		throw failure instanceof Error
+			? failure
+			: new Error("Download failed while streaming response body");
+	}
+}
+
+async function downloadUrlToFile(
+	url: string,
+	destPath: string,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt < SEGMENT_DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+		abortSignal?.throwIfAborted();
+		try {
+			await downloadUrlToFileOnce(url, destPath, abortSignal);
+			return;
+		} catch (error) {
+			if (abortSignal?.aborted) throw error;
+			if (isBusyError(error)) throw error;
+
+			const downloadError =
+				error instanceof Error ? error : new Error(String(error));
+			if (error instanceof MediaDownloadError && !error.retryable) {
+				throw downloadError;
+			}
+			lastError = downloadError;
+		}
+
+		if (attempt < SEGMENT_DOWNLOAD_MAX_ATTEMPTS - 1) {
+			await Bun.sleep(SEGMENT_DOWNLOAD_RETRY_BASE_MS * 2 ** attempt);
+		}
+	}
+
+	throw lastError ?? new Error("Download failed");
 }
 
 async function downloadSegmentsBatchTracked(
@@ -1657,30 +1815,41 @@ async function downloadSegmentsBatchTracked(
 	jobId: string,
 	progressBase: number,
 	progressRange: number,
-): Promise<number> {
+): Promise<string[]> {
 	const { join } = await import("node:path");
 	let completed = 0;
-	let failed = 0;
+	let fatalError: Error | undefined;
 	const total = urls.length;
+	const indexWidth = Math.max(3, String(total).length);
+	const outputPaths = new Array<string>(total);
 	const pending = [...urls.entries()];
+	let pendingIndex = 0;
+	const batchAbortController = new AbortController();
 	const CONCURRENCY = 10;
 
 	async function worker() {
-		while (pending.length > 0) {
-			const entry = pending.shift();
+		while (pendingIndex < pending.length && !fatalError) {
+			const entry = pending[pendingIndex++];
 			if (!entry) break;
 			const [i, url] = entry;
 			try {
-				await downloadUrlToFile(
-					url,
-					join(dir, `segment_${String(i + 1).padStart(3, "0")}.m4s`),
+				const outputPath = join(
+					dir,
+					`segment_${String(i + 1).padStart(indexWidth, "0")}.m4s`,
 				);
+				outputPaths[i] = outputPath;
+				await downloadUrlToFile(url, outputPath, batchAbortController.signal);
 			} catch (err) {
-				failed++;
-				console.error(
-					`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
-					err instanceof Error ? err.message : err,
-				);
+				if (!fatalError) {
+					fatalError = err instanceof Error ? err : new Error(String(err));
+					pendingIndex = pending.length;
+					batchAbortController.abort();
+					console.error(
+						`[mux-segments] Failed to download segment ${i + 1}/${total}:`,
+						err instanceof Error ? err.message : err,
+					);
+				}
+				break;
 			}
 			completed++;
 			if (total > 0) {
@@ -1696,7 +1865,8 @@ async function downloadSegmentsBatchTracked(
 	await Promise.all(
 		Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()),
 	);
-	return failed;
+	if (fatalError) throw fatalError;
+	return outputPaths;
 }
 
 function sendCurrentJobWebhook(jobId: string): void {
@@ -1720,7 +1890,7 @@ async function muxSegmentsAsync(
 	audioSegmentUrls: string[] | null,
 ): Promise<void> {
 	const { ensureTempDir } = await import("../lib/temp-files");
-	const { mkdir, readdir } = await import("node:fs/promises");
+	const { mkdir, rm } = await import("node:fs/promises");
 	const { join } = await import("node:path");
 
 	const workDir = join(
@@ -1731,8 +1901,16 @@ async function muxSegmentsAsync(
 	const abortController = new AbortController();
 	updateJob(jobId, { abortController });
 	let outputUploadStarted = false;
+	const startedAt = Date.now();
 
 	try {
+		logVideoEvent("video_mux_started", {
+			jobId,
+			videoId,
+			videoSegmentCount: videoSegmentUrls.length,
+			audioSegmentCount: audioSegmentUrls?.length ?? 0,
+			...getVideoCapacitySnapshot(),
+		});
 		await ensureTempDir();
 		updateJob(jobId, { phase: "downloading", progress: 0 });
 		sendCurrentJobWebhook(jobId);
@@ -1747,7 +1925,7 @@ async function muxSegmentsAsync(
 		updateJob(jobId, { phase: "downloading", progress: 5 });
 		sendCurrentJobWebhook(jobId);
 
-		const videoFailed = await downloadSegmentsBatchTracked(
+		const videoSegmentFiles = await downloadSegmentsBatchTracked(
 			videoSegmentUrls,
 			videoDir,
 			jobId,
@@ -1755,46 +1933,22 @@ async function muxSegmentsAsync(
 			45,
 		);
 
-		if (videoFailed > 0) {
-			const failRatio = videoFailed / videoSegmentUrls.length;
-			if (failRatio >= 0.5) {
-				throw new Error(
-					`Too many video segments failed: ${videoFailed}/${videoSegmentUrls.length} (${Math.round(failRatio * 100)}%)`,
-				);
-			}
-			console.warn(
-				`[mux-segments] ${videoFailed}/${videoSegmentUrls.length} video segments failed to download for ${videoId}`,
-			);
-		}
-
-		let audioInput =
+		const audioInput =
 			audioInitUrl !== null &&
 			audioSegmentUrls !== null &&
 			audioSegmentUrls.length > 0
 				? { initUrl: audioInitUrl, segmentUrls: audioSegmentUrls }
 				: null;
+		let audioSegmentFiles: string[] = [];
 		if (audioInput) {
 			await downloadUrlToFile(audioInput.initUrl, join(audioDir, "init.mp4"));
-			const audioFailed = await downloadSegmentsBatchTracked(
+			audioSegmentFiles = await downloadSegmentsBatchTracked(
 				audioInput.segmentUrls,
 				audioDir,
 				jobId,
 				50,
 				10,
 			);
-			if (audioFailed > 0) {
-				const audioFailRatio = audioFailed / audioInput.segmentUrls.length;
-				if (audioFailRatio >= 0.5) {
-					console.warn(
-						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed for ${videoId} (${Math.round(audioFailRatio * 100)}%), proceeding without audio`,
-					);
-					audioInput = null;
-				} else {
-					console.warn(
-						`[mux-segments] ${audioFailed}/${audioInput.segmentUrls.length} audio segments failed to download for ${videoId}`,
-					);
-				}
-			}
 		}
 
 		updateJob(jobId, { phase: "processing", progress: 60 });
@@ -1802,55 +1956,57 @@ async function muxSegmentsAsync(
 
 		const combinedVideoPath = join(workDir, "combined_video.mp4");
 		const videoInitPath = join(videoDir, "init.mp4");
-		const videoSegmentFiles = (await readdir(videoDir))
-			.filter((f) => f.endsWith(".m4s"))
-			.sort()
-			.map((f) => join(videoDir, f));
 
 		await streamConcatFiles(
 			[videoInitPath, ...videoSegmentFiles],
 			combinedVideoPath,
 		);
+		await rm(videoDir, { recursive: true, force: true });
 
-		const videoOnlyPath = join(workDir, "video_only.mp4");
-		await muxMediaTracksToMp4(
-			combinedVideoPath,
-			null,
-			videoOnlyPath,
-			abortController.signal,
-		);
-
-		let resultPath: string;
+		let combinedAudioPath: string | null = null;
 
 		if (audioInput) {
-			const combinedAudioPath = join(workDir, "combined_audio.mp4");
+			combinedAudioPath = join(workDir, "combined_audio.mp4");
 			const audioInitPath = join(audioDir, "init.mp4");
-			const audioSegmentFiles = (await readdir(audioDir))
-				.filter((f) => f.endsWith(".m4s"))
-				.sort()
-				.map((f) => join(audioDir, f));
 
 			await streamConcatFiles(
 				[audioInitPath, ...audioSegmentFiles],
 				combinedAudioPath,
 			);
+			await rm(audioDir, { recursive: true, force: true });
+		}
 
-			resultPath = join(workDir, "result.mp4");
-			await muxMediaTracksToMp4(
-				videoOnlyPath,
+		if (hasCriticalMemoryPressure()) {
+			throw new Error(VIDEO_MEMORY_PRESSURE_ERROR);
+		}
+		logVideoEvent("video_mux_inputs_materialized", {
+			jobId,
+			videoId,
+			combinedVideoSize: file(combinedVideoPath).size,
+			combinedAudioSize: combinedAudioPath ? file(combinedAudioPath).size : 0,
+			resources: getSystemResources(),
+		});
+
+		const resultPath = join(workDir, "result.mp4");
+		await withMuxMemoryGuard(abortController, () =>
+			muxMediaTracksToMp4(
+				combinedVideoPath,
 				combinedAudioPath,
 				resultPath,
 				abortController.signal,
-			);
-		} else {
-			resultPath = join(workDir, "result.mp4");
-			await muxMediaTracksToMp4(
-				videoOnlyPath,
-				null,
-				resultPath,
-				abortController.signal,
-			);
+			),
+		);
+		await rm(combinedVideoPath, { force: true });
+		if (combinedAudioPath) {
+			await rm(combinedAudioPath, { force: true });
 		}
+		logVideoEvent("video_mux_output_ready", {
+			jobId,
+			videoId,
+			outputSize: file(resultPath).size,
+			durationMs: Date.now() - startedAt,
+			resources: getSystemResources(),
+		});
 
 		updateJob(jobId, { phase: "uploading", progress: 80 });
 		sendCurrentJobWebhook(jobId);
@@ -1900,9 +2056,23 @@ async function muxSegmentsAsync(
 			metadata,
 		});
 		sendCurrentJobWebhook(jobId);
+		logVideoEvent("video_mux_succeeded", {
+			jobId,
+			videoId,
+			durationMs: Date.now() - startedAt,
+			metadata,
+			resources: getSystemResources(),
+		});
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (error: unknown) {
+		logVideoEvent("video_mux_failed", {
+			jobId,
+			videoId,
+			durationMs: Date.now() - startedAt,
+			error: error instanceof Error ? error.message : String(error),
+			resources: getSystemResources(),
+		});
 		if (!outputUploadStarted) {
 			await abortStorageUploadTarget(outputUpload).catch((abortError) => {
 				console.warn(
@@ -1918,7 +2088,6 @@ async function muxSegmentsAsync(
 		});
 		sendCurrentJobWebhook(jobId);
 	} finally {
-		const { rm } = await import("node:fs/promises");
 		await rm(workDir, { recursive: true, force: true }).catch(() => {});
 	}
 }

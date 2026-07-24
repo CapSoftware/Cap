@@ -16,18 +16,19 @@ import type {
 	VideoMetadata,
 } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { AwsCredentials, Storage } from "@cap/web-backend";
+import { AwsCredentials } from "@cap/web-backend/src/Aws";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	getEditSpecOutputDuration,
 	remapCurrentOutputTimeThroughEdit,
 } from "@/lib/video-edits";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface EditVideoWorkflowPayload {
 	videoId: string;
@@ -259,13 +260,13 @@ async function renderVideoEditOnMediaServer(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	const sourceUrl = await bucket
 		.getInternalSignedObjectUrl(sourceKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
@@ -279,13 +280,13 @@ async function renderVideoEditOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const outputVerificationUrl = await bucket
 		.getInternalSignedObjectUrl(outputKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -295,7 +296,7 @@ async function renderVideoEditOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -306,7 +307,7 @@ async function renderVideoEditOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -444,13 +445,13 @@ async function verifyRenderedEditOutput(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const outputUrl = await bucket
 		.getInternalSignedObjectUrl(outputKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	let lastError: Error | undefined;
 
@@ -522,15 +523,15 @@ async function queueTranscriptionRegeneration(
 async function clearTranscriptObjects(video: typeof videos.$inferSelect) {
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 	const prefix = `${video.ownerId}/${video.id}/transcription`;
-	const listed = await bucket.listObjects({ prefix }).pipe(runPromise);
+	const listed = await bucket.listObjects({ prefix }).pipe(runWorkflowPromise);
 	const objects = (listed.Contents ?? [])
 		.map((object) => ({ Key: object.Key }))
 		.filter((object): object is { Key: string } => Boolean(object.Key));
 
 	if (objects.length > 0) {
-		await bucket.deleteObjects(objects).pipe(runPromise);
+		await bucket.deleteObjects(objects).pipe(runWorkflowPromise);
 	}
 }
 
@@ -631,7 +632,7 @@ async function invalidateEditedVideoCache(
 	try {
 		const cloudfront = new CloudFrontClient({
 			region: serverEnv().CAP_AWS_REGION || "us-east-1",
-			credentials: await runPromise(
+			credentials: await runWorkflowPromise(
 				Effect.map(AwsCredentials, (credentials) => credentials.credentials),
 			),
 		});

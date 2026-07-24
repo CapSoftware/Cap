@@ -7,10 +7,7 @@ import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import {
-	scheduleLegacyPostHogEvent,
-	scheduleServerProductEvent,
-} from "@/lib/analytics/server";
+import { scheduleServerProductEvent } from "@/lib/analytics/server";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
 const relevantEvents = new Set([
@@ -57,11 +54,12 @@ function scheduleSubscriptionPurchaseEvents({
 	const platform =
 		session.metadata?.platform === "desktop"
 			? "desktop"
-			: session.metadata?.platform === "web"
-				? "web"
-				: "server";
+			: session.metadata?.platform === "mobile"
+				? "mobile"
+				: session.metadata?.platform === "web"
+					? "web"
+					: "server";
 	const anonymousId = session.metadata?.analyticsAnonymousId;
-	const distinctId = user?.id ?? anonymousId ?? `stripe:${session.id}`;
 	const price = subscription.items.data[0]?.price;
 	const revenueProperties = {
 		payment_status: session.payment_status,
@@ -89,23 +87,6 @@ function scheduleSubscriptionPurchaseEvents({
 			price_id: price?.id,
 			quantity: inviteQuota,
 			is_onboarding: session.metadata?.isOnBoarding === "true",
-			is_first_purchase: isFirstPurchase,
-			is_guest_checkout: isGuestCheckout,
-		},
-	});
-
-	scheduleLegacyPostHogEvent({
-		distinctId,
-		eventName: "purchase_completed",
-		properties: {
-			$insert_id: `stripe:${eventId}:purchase_completed`,
-			subscription_id: subscription.id,
-			...revenueProperties,
-			invite_quota: inviteQuota,
-			price_id: price?.id,
-			quantity: inviteQuota,
-			is_onboarding: session.metadata?.isOnBoarding === "true",
-			platform: platform === "server" ? "unknown" : platform,
 			is_first_purchase: isFirstPurchase,
 			is_guest_checkout: isGuestCheckout,
 		},

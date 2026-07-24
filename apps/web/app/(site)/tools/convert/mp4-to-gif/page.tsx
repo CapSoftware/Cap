@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Convert MP4 to GIF — free, in your browser",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
@@ -16,10 +22,10 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap MP4 to GIF Converter — Free Online Animated GIF Maker",
+				alt: "Convert MP4 to GIF — free, in your browser",
 			},
 		],
 		locale: "en_US",
@@ -30,7 +36,7 @@ export const metadata: Metadata = {
 		title: "MP4 to GIF Converter — Free Online Animated GIF Maker | Cap",
 		description:
 			"Convert MP4 to animated GIF directly in your browser. No uploads, no installs, 100% private.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/convert/mp4-to-gif",

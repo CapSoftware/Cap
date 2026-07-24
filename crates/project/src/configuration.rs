@@ -1,7 +1,9 @@
 use std::{
+    collections::BTreeMap,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
+    sync::LazyLock,
 };
 
 use serde::{Deserialize, Serialize};
@@ -689,6 +691,17 @@ pub struct TimelineSegment {
     pub end: f64,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_audio_mode: Option<ClipSpeedAudioMode>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipSpeedAudioMode {
+    #[default]
+    Mute,
+    MaintainPitch,
+    MatchSpeed,
 }
 
 impl TimelineSegment {
@@ -758,6 +771,24 @@ pub enum MaskKind {
     Highlight,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskEffectContract {
+    pub blur_encoding_offset: f64,
+    pub default_amount: f64,
+    pub min_amount: f64,
+    pub max_amount: f64,
+}
+
+static MASK_EFFECT_CONTRACT: LazyLock<MaskEffectContract> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../mask-effects.json"))
+        .expect("embedded mask effect contract must be valid JSON")
+});
+
+pub fn mask_effect_contract() -> &'static MaskEffectContract {
+    &MASK_EFFECT_CONTRACT
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MaskScalarKeyframe {
@@ -800,7 +831,7 @@ pub struct MaskSegment {
     pub feather: f64,
     #[serde(default = "MaskSegment::default_opacity")]
     pub opacity: f64,
-    #[serde(default)]
+    #[serde(default = "MaskSegment::default_pixelation")]
     pub pixelation: f64,
     #[serde(default)]
     pub darkness: f64,
@@ -817,6 +848,10 @@ impl MaskSegment {
 
     fn default_opacity() -> f64 {
         1.0
+    }
+
+    fn default_pixelation() -> f64 {
+        mask_effect_contract().default_amount
     }
 
     fn default_fade_duration() -> f64 {
@@ -983,10 +1018,47 @@ impl AudioTrackSegment {
     }
 }
 
+pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClipTransitionType {
+    #[default]
+    CrossFade,
+    FadeThroughBlack,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTransition {
+    pub segment_index: u32,
+    #[serde(rename = "type")]
+    pub kind: ClipTransitionType,
+    pub duration: f64,
+}
+
+fn deserialize_clip_transitions<'de, D>(deserializer: D) -> Result<Vec<ClipTransition>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let transitions = Vec::<ClipTransition>::deserialize(deserializer)?;
+    let mut by_segment = BTreeMap::new();
+    for transition in transitions {
+        by_segment.insert(transition.segment_index, transition);
+    }
+    Ok(by_segment.into_values().collect())
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_clip_transitions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
     #[serde(default)]
     pub scene_segments: Vec<SceneSegment>,
@@ -1000,6 +1072,29 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub audio_segments: Vec<AudioTrackSegment>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TimelineSource<'a> {
+    pub source_time: f64,
+    pub segment_index: usize,
+    pub segment: &'a TimelineSegment,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TimelineFrameMapping<'a> {
+    Single {
+        source: TimelineSource<'a>,
+        output_end: f64,
+    },
+    Transition {
+        outgoing: TimelineSource<'a>,
+        incoming: TimelineSource<'a>,
+        kind: ClipTransitionType,
+        progress: f64,
+        duration: f64,
+        output_end: f64,
+    },
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -1026,14 +1121,150 @@ pub struct CaptionTrackSegment {
 }
 
 impl TimelineConfiguration {
+    pub fn effective_transition(&self, segment_index: usize) -> Option<ClipTransition> {
+        if segment_index == 0 || segment_index >= self.segments.len() {
+            return None;
+        }
+
+        debug_assert!(
+            self.transitions.windows(2).all(|transitions| {
+                transitions[0].segment_index <= transitions[1].segment_index
+            })
+        );
+
+        let transition_position = self
+            .transitions
+            .partition_point(|transition| transition.segment_index as usize <= segment_index);
+        let transition = self.transitions.get(transition_position.checked_sub(1)?)?;
+        if transition.segment_index as usize != segment_index {
+            return None;
+        }
+        if !transition.duration.is_finite() || transition.duration <= 0.0 {
+            return None;
+        }
+
+        let maximum = self.segments[segment_index - 1]
+            .duration()
+            .min(self.segments[segment_index].duration())
+            / 2.0;
+        if !maximum.is_finite() || maximum < MIN_CLIP_TRANSITION_DURATION {
+            return None;
+        }
+
+        Some(ClipTransition {
+            duration: transition
+                .duration
+                .clamp(MIN_CLIP_TRANSITION_DURATION, maximum),
+            ..*transition
+        })
+    }
+
+    pub fn get_frame_mapping(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
+        if self.transitions.is_empty() {
+            return self.get_segment_time_without_transitions(frame_time).map(
+                |(source_time, segment, segment_index, output_end)| TimelineFrameMapping::Single {
+                    source: TimelineSource {
+                        source_time,
+                        segment_index,
+                        segment,
+                    },
+                    output_end,
+                },
+            );
+        }
+
+        let mut segment_start = 0.0;
+
+        for (segment_index, segment) in self.segments.iter().enumerate() {
+            let incoming = self.effective_transition(segment_index);
+            let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
+
+            if let Some(transition) = incoming {
+                let output_end = segment_start + transition.duration;
+                if frame_time >= segment_start && frame_time < output_end {
+                    let elapsed = frame_time - segment_start;
+                    let outgoing_segment = &self.segments[segment_index - 1];
+                    let outgoing_time = outgoing_segment.interpolate_time(
+                        outgoing_segment.duration() - transition.duration + elapsed,
+                    )?;
+                    let incoming_time = segment.interpolate_time(elapsed)?;
+
+                    return Some(TimelineFrameMapping::Transition {
+                        outgoing: TimelineSource {
+                            source_time: outgoing_time,
+                            segment_index: segment_index - 1,
+                            segment: outgoing_segment,
+                        },
+                        incoming: TimelineSource {
+                            source_time: incoming_time,
+                            segment_index,
+                            segment,
+                        },
+                        kind: transition.kind,
+                        progress: (elapsed / transition.duration).clamp(0.0, 1.0),
+                        duration: transition.duration,
+                        output_end,
+                    });
+                }
+            }
+
+            let next_transition = self.effective_transition(segment_index + 1);
+            let next_duration = next_transition.as_ref().map_or(0.0, |value| value.duration);
+            let single_start = segment_start + incoming_duration;
+            let output_end = segment_start + segment.duration() - next_duration;
+
+            if frame_time >= single_start && frame_time < output_end {
+                let source_time = segment.interpolate_time(frame_time - segment_start)?;
+                return Some(TimelineFrameMapping::Single {
+                    source: TimelineSource {
+                        source_time,
+                        segment_index,
+                        segment,
+                    },
+                    output_end,
+                });
+            }
+
+            segment_start += segment.duration() - next_duration;
+        }
+
+        None
+    }
+
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
+        if !self.transitions.is_empty() {
+            return match self.get_frame_mapping(frame_time)? {
+                TimelineFrameMapping::Single { source, .. } => {
+                    Some((source.source_time, source.segment))
+                }
+                TimelineFrameMapping::Transition { incoming, .. } => {
+                    Some((incoming.source_time, incoming.segment))
+                }
+            };
+        }
+
+        self.get_segment_time_without_transitions(frame_time)
+            .map(|(source_time, segment, _, _)| (source_time, segment))
+    }
+
+    fn get_segment_time_without_transitions(
+        &self,
+        frame_time: f64,
+    ) -> Option<(f64, &TimelineSegment, usize, f64)> {
         let mut accum_duration = 0.0;
 
-        for segment in self.segments.iter() {
+        for (segment_index, segment) in self.segments.iter().enumerate() {
             if frame_time < accum_duration + segment.duration() {
                 return segment
                     .interpolate_time(frame_time - accum_duration)
-                    .map(|t| (t, segment));
+                    .map(|time| {
+                        (
+                            time,
+                            segment,
+                            segment_index,
+                            accum_duration + segment.duration(),
+                        )
+                    });
             }
 
             accum_duration += segment.duration();
@@ -1043,7 +1274,16 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
-        self.segments.iter().map(|s| s.duration()).sum()
+        let segment_duration = self.segments.iter().map(TimelineSegment::duration).sum();
+        if self.transitions.is_empty() {
+            return segment_duration;
+        }
+
+        segment_duration
+            - (1..self.segments.len())
+                .filter_map(|segment_index| self.effective_transition(segment_index))
+                .map(|transition| transition.duration)
+                .sum::<f64>()
     }
 }
 
@@ -1579,6 +1819,169 @@ pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;
 mod tests {
     use super::*;
 
+    fn timeline_with_transitions(transitions: Vec<ClipTransition>) -> TimelineConfiguration {
+        TimelineConfiguration {
+            segments: vec![
+                TimelineSegment {
+                    recording_clip: 0,
+                    timescale: 1.0,
+                    start: 0.0,
+                    end: 4.0,
+                    name: None,
+                    speed_audio_mode: None,
+                },
+                TimelineSegment {
+                    recording_clip: 1,
+                    timescale: 1.0,
+                    start: 10.0,
+                    end: 16.0,
+                    name: None,
+                    speed_audio_mode: None,
+                },
+            ],
+            transitions,
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn timeline_without_transitions_keeps_legacy_mapping() {
+        let timeline = timeline_with_transitions(Vec::new());
+
+        assert_eq!(timeline.duration(), 10.0);
+        let (time, segment) = timeline.get_segment_time(4.5).unwrap();
+        assert_eq!(time, 10.5);
+        assert_eq!(segment.recording_clip, 1);
+        assert!(matches!(
+            timeline.get_frame_mapping(4.5),
+            Some(TimelineFrameMapping::Single { source, output_end: 10.0 })
+                if source.segment_index == 1 && source.source_time == 10.5
+        ));
+        assert!(
+            serde_json::to_value(&timeline)
+                .unwrap()
+                .get("transitions")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn timeline_maps_both_sources_inside_transition() {
+        let timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 1.0,
+        }]);
+
+        assert_eq!(timeline.duration(), 9.0);
+        assert_eq!(
+            serde_json::to_value(&timeline).unwrap()["transitions"][0]["type"],
+            "cross-fade"
+        );
+        assert!(matches!(
+            timeline.get_frame_mapping(3.5),
+            Some(TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind: ClipTransitionType::CrossFade,
+                progress,
+                duration: 1.0,
+                output_end: 4.0,
+            }) if outgoing.segment_index == 0
+                && outgoing.source_time == 3.5
+                && incoming.segment_index == 1
+                && incoming.source_time == 10.5
+                && progress == 0.5
+        ));
+    }
+
+    #[test]
+    fn timeline_segment_speed_audio_mode_is_backward_compatible() {
+        let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert_eq!(legacy.speed_audio_mode, None);
+
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("speedAudioMode").is_none());
+
+        let maintain_pitch: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0,
+            "speedAudioMode": "maintainPitch"
+        }))
+        .unwrap();
+        assert_eq!(
+            maintain_pitch.speed_audio_mode,
+            Some(ClipSpeedAudioMode::MaintainPitch)
+        );
+    }
+
+    #[test]
+    fn timeline_clamps_transition_to_half_the_shorter_clip() {
+        let timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::FadeThroughBlack,
+            duration: 9.0,
+        }]);
+
+        let transition = timeline.effective_transition(1).unwrap();
+        assert_eq!(transition.duration, 2.0);
+        assert_eq!(timeline.duration(), 8.0);
+    }
+
+    #[test]
+    fn legacy_timeline_json_defaults_to_no_transitions() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+
+        assert!(timeline.transitions.is_empty());
+        assert_eq!(timeline.duration(), 4.0);
+    }
+
+    #[test]
+    fn transition_json_is_normalized_by_segment_index() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 8.0 },
+                { "recordingSegment": 0, "timescale": 1.0, "start": 8.0, "end": 12.0 }
+            ],
+            "transitions": [
+                { "segmentIndex": 2, "type": "cross-fade", "duration": 0.5 },
+                { "segmentIndex": 1, "type": "cross-fade", "duration": 0.25 },
+                { "segmentIndex": 2, "type": "fade-through-black", "duration": 1.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+
+        assert_eq!(timeline.transitions.len(), 2);
+        assert_eq!(timeline.transitions[0].segment_index, 1);
+        assert_eq!(timeline.transitions[1].segment_index, 2);
+        assert_eq!(
+            timeline.transitions[1].kind,
+            ClipTransitionType::FadeThroughBlack
+        );
+    }
+
     fn write_config_with_motion_blur_values(
         project_path: &std::path::Path,
         cursor_motion_blur: f64,
@@ -1617,6 +2020,20 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 1.0);
         assert_eq!(config.screen_motion_blur, 1.0);
+    }
+
+    #[test]
+    fn mask_without_pixelation_uses_a_visible_safe_default() {
+        let segment: MaskSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+            "maskType": "sensitive",
+            "center": { "x": 0.5, "y": 0.5 },
+            "size": { "x": 0.25, "y": 0.25 }
+        }))
+        .unwrap();
+
+        assert_eq!(segment.pixelation, 16.0);
     }
 
     #[test]
@@ -1710,6 +2127,7 @@ mod tests {
         let config = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments: Vec::new(),
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
                 mask_segments: Vec::new(),

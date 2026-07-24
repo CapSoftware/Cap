@@ -17,15 +17,17 @@ const readSimulators = () => {
 	return JSON.parse(result.stdout);
 };
 
-const findSimulator = () => {
-	const requestedUdid = process.env.IOS_SIMULATOR_UDID;
-	const requestedName = process.env.IOS_SIMULATOR_DEVICE;
-	const data = readSimulators();
-	const devices = Object.values(data.devices ?? {})
+const availableIphones = () =>
+	Object.values(readSimulators().devices ?? {})
 		.flat()
 		.filter(
 			(device) => device?.isAvailable && device?.name?.includes("iPhone"),
 		);
+
+const findSimulator = () => {
+	const requestedUdid = process.env.IOS_SIMULATOR_UDID;
+	const requestedName = process.env.IOS_SIMULATOR_DEVICE;
+	const devices = availableIphones();
 
 	if (requestedUdid) {
 		const requested = devices.find((device) => device.udid === requestedUdid);
@@ -44,6 +46,33 @@ const findSimulator = () => {
 
 	const preferred = devices.find((device) => device.name.includes("Pro"));
 	return preferred ?? devices[0] ?? null;
+};
+
+const findSimulatorByUdid = (udid) =>
+	availableIphones().find((device) => device.udid === udid) ?? null;
+
+const ensureSimulatorReady = (device) => {
+	if (device.state !== "Booted") {
+		console.log(`Booting iOS simulator: ${device.name} (${device.udid})`);
+		const boot = spawnSync("xcrun", ["simctl", "boot", device.udid], {
+			encoding: "utf8",
+		});
+		if (boot.status !== 0) {
+			const current = findSimulatorByUdid(device.udid);
+			if (current?.state !== "Booted" && current?.state !== "Booting") {
+				throw new Error(boot.stderr || `Unable to boot ${device.name}`);
+			}
+		}
+	}
+
+	const ready = spawnSync(
+		"xcrun",
+		["simctl", "bootstatus", device.udid, "-b"],
+		{ stdio: "inherit" },
+	);
+	if (ready.status !== 0) {
+		throw new Error(`Simulator did not finish booting: ${device.name}`);
+	}
 };
 
 const simulator = findSimulator();
@@ -74,6 +103,8 @@ if (process.env.CAP_MOBILE_DRY_RUN === "1") {
 	process.exit(0);
 }
 
+ensureSimulatorReady(simulator);
+
 if (
 	process.env.CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS === "1" &&
 	needsDevPrebuild()
@@ -99,9 +130,22 @@ if (
 	}
 }
 
-const result = spawnSync("pnpm", command, {
-	stdio: "inherit",
-	env: process.env,
-});
+const runExpo = () =>
+	spawnSync("pnpm", command, {
+		stdio: "inherit",
+		env: process.env,
+	});
+
+let result = runExpo();
+if (result.status !== 0) {
+	const current = findSimulatorByUdid(simulator.udid);
+	if (current && current.state !== "Booted") {
+		console.warn(
+			`iOS simulator stopped while Expo was launching. Rebooting ${current.name} and retrying once.`,
+		);
+		ensureSimulatorReady(current);
+		result = runExpo();
+	}
+}
 
 process.exit(result.status ?? 1);

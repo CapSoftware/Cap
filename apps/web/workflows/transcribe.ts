@@ -1,15 +1,9 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
-import {
-	organizations,
-	users,
-	videos,
-	videoUploads,
-} from "@cap/database/schema";
+import { organizations, videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
@@ -18,7 +12,7 @@ import {
 	type Video,
 } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { FatalError } from "workflow";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -33,9 +27,9 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
-import { runPromise } from "@/lib/server";
 import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface TranscribeWorkflowPayload {
 	videoId: string;
@@ -46,7 +40,6 @@ interface TranscribeWorkflowPayload {
 interface VideoData {
 	video: typeof videos.$inferSelect;
 	transcriptionDisabled: boolean;
-	isOwnerPro: boolean;
 	aiGenerationLanguage: AiGenerationLanguage;
 }
 
@@ -57,7 +50,13 @@ export async function transcribeVideoWorkflow(
 
 	const { videoId, userId, aiGenerationEnabled } = payload;
 
-	const videoData = await validateVideo(videoId);
+	let videoData: VideoData;
+	try {
+		videoData = await validateVideo(videoId);
+	} catch (error) {
+		await markError(videoId);
+		throw error;
+	}
 
 	if (videoData.transcriptionDisabled) {
 		await markSkipped(videoId);
@@ -107,11 +106,9 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 			video: videos,
 			settings: videos.settings,
 			orgSettings: organizations.settings,
-			owner: users,
 		})
 		.from(videos)
 		.leftJoin(organizations, eq(videos.orgId, organizations.id))
-		.innerJoin(users, eq(videos.ownerId, users.id))
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	if (query.length === 0) {
@@ -128,12 +125,6 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		result.orgSettings?.disableTranscript ??
 		false;
 
-	const isOwnerPro = userIsPro(result.owner);
-
-	console.log(
-		`[transcribe] Owner check: stripeSubscriptionStatus=${result.owner.stripeSubscriptionStatus}, thirdPartyStripeSubscriptionId=${result.owner.thirdPartyStripeSubscriptionId}, isOwnerPro=${isOwnerPro}`,
-	);
-
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "PROCESSING" })
@@ -142,7 +133,6 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 	return {
 		video: result.video,
 		transcriptionDisabled,
-		isOwnerPro,
 		aiGenerationLanguage: parseAiGenerationLanguage(
 			result.orgSettings?.aiGenerationLanguage,
 		),
@@ -173,7 +163,12 @@ async function markError(videoId: string): Promise<void> {
 	await db()
 		.update(videos)
 		.set({ transcriptionStatus: "ERROR" })
-		.where(eq(videos.id, videoId as Video.VideoId));
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				eq(videos.transcriptionStatus, "PROCESSING"),
+			),
+		);
 }
 
 async function extractAudio(
@@ -185,7 +180,7 @@ async function extractAudio(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
 
@@ -251,11 +246,11 @@ async function extractAudio(
 		.putObject(audioKey, audioBuffer, {
 			contentType: "audio/mpeg",
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const audioSignedUrl = await bucket
 		.getInternalSignedObjectUrl(audioKey)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	return audioSignedUrl;
 }
@@ -267,7 +262,7 @@ async function resolveVideoSourceUrl(
 ): Promise<string> {
 	const [resolvedBucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	const upload = await db()
 		.select({ rawFileKey: videoUploads.rawFileKey })
@@ -286,7 +281,7 @@ async function resolveVideoSourceUrl(
 	for (const key of candidateKeys) {
 		const url = await resolvedBucket
 			.getInternalSignedObjectUrl(key)
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 		const response = await fetch(url, {
 			method: "GET",
 			headers: { range: "bytes=0-0" },
@@ -384,13 +379,13 @@ async function saveTranscription(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	await bucket
 		.putObject(`${userId}/${videoId}/transcription.vtt`, transcription, {
 			contentType: "text/vtt",
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	await db()
 		.update(videos)
@@ -410,9 +405,9 @@ async function cleanupTempAudio(
 	try {
 		const [bucket] = await Storage.getAccessForVideo(
 			decodeStorageVideo(video),
-		).pipe(runPromise);
+		).pipe(runWorkflowPromise);
 
-		await bucket.deleteObject(audioKey).pipe(runPromise);
+		await bucket.deleteObject(audioKey).pipe(runWorkflowPromise);
 	} catch (error) {
 		console.error(
 			`[transcribe] Failed to cleanup temp audio file: ${audioKey}`,
@@ -469,7 +464,7 @@ async function _enhanceAndSaveAudio(
 
 		const [bucket] = await Storage.getAccessForVideo(
 			decodeStorageVideo(video),
-		).pipe(runPromise);
+		).pipe(runWorkflowPromise);
 
 		const enhancedAudioKey = `${userId}/${videoId}/enhanced-audio.${ENHANCED_AUDIO_EXTENSION}`;
 
@@ -477,7 +472,7 @@ async function _enhanceAndSaveAudio(
 			.putObject(enhancedAudioKey, enhancedBuffer, {
 				contentType: ENHANCED_AUDIO_CONTENT_TYPE,
 			})
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 
 		const [videoRecord] = await db()
 			.select({ metadata: videos.metadata })

@@ -18,8 +18,8 @@ import {
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindowWithThumbnail,
 	commands,
-	type RecordingMeta,
 	type RecordingMetaWithMetadata,
+	type ScreenshotMetaWithMetadata,
 } from "~/utils/tauri";
 import IconCapLink from "~icons/cap/link";
 import IconCapTrash from "~icons/cap/trash";
@@ -35,7 +35,7 @@ import IconMdiMonitor from "~icons/mdi/monitor";
 import IconPhWarningBold from "~icons/ph/warning-bold";
 
 export type RecordingWithPath = RecordingMetaWithMetadata & { path: string };
-export type ScreenshotWithPath = RecordingMeta & { path: string };
+export type ScreenshotWithPath = ScreenshotMetaWithMetadata & { path: string };
 
 function formatResolution(width?: number, height?: number) {
 	if (!width || !height) return undefined;

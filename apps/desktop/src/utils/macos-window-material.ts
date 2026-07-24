@@ -8,7 +8,7 @@ import {
 } from "@tauri-apps/api/window";
 import { type as osType, version as osVersion } from "@tauri-apps/plugin-os";
 
-type MacOSWindowMaterial = "panel" | "settings";
+type MacOSWindowMaterial = "panel" | "settings" | "teleprompter";
 
 let focusUnlisten: Promise<UnlistenFn> | undefined;
 
@@ -30,7 +30,13 @@ export async function applyMacOSWindowMaterial(material: MacOSWindowMaterial) {
 	const majorVersion = macOSMajorVersion() ?? 0;
 	const visualSystem = majorVersion >= 26 ? "liquid-glass" : "vibrancy";
 	const radius =
-		material === "settings" && visualSystem === "liquid-glass" ? 26 : 16;
+		visualSystem === "liquid-glass"
+			? material === "settings"
+				? 26
+				: material === "teleprompter"
+					? 22
+					: 16
+			: 16;
 	const root = document.documentElement;
 	root.dataset.macosNativeMaterial = material;
 	root.dataset.macosVisualSystem = visualSystem;

@@ -3,6 +3,8 @@ import { createSignal, type JSX, onCleanup } from "solid-js";
 
 interface WindowChromeState {
 	hideMaximize?: boolean;
+	maximized?: boolean;
+	onMaximize?: () => void;
 	items?: JSX.Element;
 }
 
@@ -28,10 +30,20 @@ export function useWindowChrome(state: WindowChromeState) {
 
 export function WindowChromeHeader(props: {
 	hideMaximize?: boolean;
+	maximized?: boolean;
+	onMaximize?: () => void;
 	children?: JSX.Element;
 }) {
 	useWindowChrome({
-		hideMaximize: props.hideMaximize,
+		get hideMaximize() {
+			return props.hideMaximize;
+		},
+		get maximized() {
+			return props.maximized;
+		},
+		get onMaximize() {
+			return props.onMaximize;
+		},
 		get items() {
 			return props.children;
 		},

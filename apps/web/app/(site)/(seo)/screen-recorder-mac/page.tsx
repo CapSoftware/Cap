@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { ScreenRecordMacPage } from "@/components/pages/seo/ScreenRecordMacPage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "The best screen recorder for Mac",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Best Screen Recorder for Mac | High-Quality, Free & Easy (2026)",
@@ -13,7 +19,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Best Screen Recorder for Mac",
@@ -27,7 +33,7 @@ export const metadata: Metadata = {
 		title: "Best Screen Recorder for Mac | Cap",
 		description:
 			"Cap is the best free screen recorder for Mac, with HD quality, no time limit in Studio Mode, and easy export. Ideal for tutorials, presentations, and educational videos.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/screen-recorder-mac",

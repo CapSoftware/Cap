@@ -1,6 +1,7 @@
 import { format, parseISO } from "date-fns";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { buildMarketingMetadata } from "@/lib/og/url";
 import {
 	getGitHubReleases,
 	hasDownloads,
@@ -8,11 +9,14 @@ import {
 	type ReleaseDownloads,
 } from "@/utils/releases";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildMarketingMetadata({
 	title: "All Versions — Cap",
 	description:
 		"Download previous versions of Cap for macOS, Windows, and Linux.",
-};
+	path: "/download/versions",
+	ogTitle: "All Cap versions",
+	ogTag: "Download",
+});
 
 export const revalidate = 60;
 

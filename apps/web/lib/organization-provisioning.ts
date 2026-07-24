@@ -10,7 +10,10 @@ import {
 } from "@cap/database/schema";
 import { type Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { calculateProSeats } from "@/utils/organization";
+import {
+	calculateProSeats,
+	hasActiveDirectSubscription,
+} from "@/utils/organization";
 
 type ProvisionOrganizationRole = "admin" | "member";
 
@@ -136,14 +139,16 @@ export async function provisionOrganizationInvitee({
 			if (organization) {
 				const [owner] = await tx
 					.select({
+						id: users.id,
 						inviteQuota: users.inviteQuota,
 						stripeSubscriptionId: users.stripeSubscriptionId,
+						stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 					})
 					.from(users)
 					.where(eq(users.id, organization.ownerId))
 					.limit(1);
 
-				if (owner?.stripeSubscriptionId) {
+				if (owner?.stripeSubscriptionId && hasActiveDirectSubscription(owner)) {
 					const allMembers = await tx
 						.select({
 							id: organizationMembers.id,
@@ -154,6 +159,8 @@ export async function provisionOrganizationInvitee({
 
 					const { proSeatsRemaining } = calculateProSeats({
 						inviteQuota: owner.inviteQuota ?? 1,
+						ownerId: organization.ownerId,
+						ownerIsPro: true,
 						members: allMembers,
 					});
 

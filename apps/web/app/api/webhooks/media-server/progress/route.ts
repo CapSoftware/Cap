@@ -6,6 +6,10 @@ import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
+import {
+	queueVideoTranscription,
+	shouldQueueTranscriptionAfterMediaComplete,
+} from "@/lib/queue-video-transcription";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 
 interface ProgressWebhookPayload {
@@ -153,6 +157,30 @@ export async function POST(request: NextRequest) {
 			await invalidateGoogleDriveStorageQuotaCache(
 				currentVideo?.storageIntegrationId,
 			);
+
+			if (
+				shouldQueueTranscriptionAfterMediaComplete(
+					currentVideo?.source.type,
+					Boolean(isEditUpload),
+				)
+			) {
+				try {
+					const result = await queueVideoTranscription(
+						payload.videoId as Video.VideoId,
+					);
+					if (!result.success) {
+						console.warn(
+							"[media-server-webhook] Failed to queue transcription",
+							{ videoId: payload.videoId, message: result.message },
+						);
+					}
+				} catch (error) {
+					console.warn("[media-server-webhook] Failed to queue transcription", {
+						videoId: payload.videoId,
+						error,
+					});
+				}
+			}
 		} else if (dbPhase === "error") {
 			const processingError =
 				payload.error || payload.message || "Unknown error";

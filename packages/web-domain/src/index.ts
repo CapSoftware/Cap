@@ -1,3 +1,4 @@
+export * as Agent from "./Agent.ts";
 export * from "./Authentication.ts";
 export * as Comment from "./Comment.ts";
 export * from "./Database.ts";

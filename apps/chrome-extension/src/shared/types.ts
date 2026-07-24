@@ -461,6 +461,10 @@ export type ServiceWorkerRequest =
 			durationMs: number;
 	  }
 	| {
+			target: "service-worker";
+			type: "hide-recording-start-overlays";
+	  }
+	| {
 			// The recorded tab's confirm overlay reports the user's decision back to
 			// the service worker, which is blocking the recording start on it.
 			target: "service-worker";
@@ -572,6 +576,7 @@ export type CameraPreviewEvent =
 	| { type: "frame"; frame: WebcamPreviewFrame }
 	| { type: "error"; reason: CameraPreviewErrorReason; message: string }
 	| { type: "pip-state"; active: boolean; supported: boolean }
+	| { type: "pointer-presence"; inside: boolean }
 	| { type: "drag-start"; clientX: number; clientY: number }
 	| { type: "drag-move"; clientX: number; clientY: number }
 	| { type: "drag-end" };

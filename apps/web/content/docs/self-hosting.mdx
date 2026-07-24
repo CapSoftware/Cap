@@ -125,6 +125,20 @@ GOOGLE_CLIENT_ID=your-client-id
 GOOGLE_CLIENT_SECRET=your-secret
 ```
 
+### Apple OAuth
+
+Create a Sign in with Apple Services ID, register
+`https://your-domain.example/api/auth/callback/apple` as its return URL, and
+generate a client-secret JWT:
+
+```bash
+APPLE_CLIENT_ID=your-services-id
+APPLE_CLIENT_SECRET=your-client-secret-jwt
+```
+
+Apple client-secret JWTs expire, so rotate the secret before its configured
+expiration date.
+
 ## Production Checklist
 
 <Warning title="Critical: Change Default Secrets Before Going Public">

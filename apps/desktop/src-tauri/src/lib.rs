@@ -3793,10 +3793,11 @@ pub struct RecordingMetaWithMetadata {
     pub status: StudioRecordingStatus,
     // Number of recorded takes (segments) the recording is made up of.
     pub clip_count: u32,
+    pub sort_time_millis: f64,
 }
 
 impl RecordingMetaWithMetadata {
-    fn new(inner: RecordingMeta) -> Self {
+    fn new(inner: RecordingMeta, sort_time_millis: f64) -> Self {
         Self {
             mode: match &inner.inner {
                 RecordingMetaInner::Studio(_) => RecordingMode::Studio,
@@ -3829,9 +3830,17 @@ impl RecordingMetaWithMetadata {
                     StudioRecordingStatus::Complete
                 }
             },
+            sort_time_millis,
             inner,
         }
     }
+}
+
+#[derive(Serialize, specta::Type)]
+pub struct ScreenshotMetaWithMetadata {
+    #[serde(flatten)]
+    pub inner: RecordingMeta,
+    pub sort_time_millis: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
@@ -3848,9 +3857,29 @@ fn get_recording_meta(
     path: PathBuf,
     _file_type: FileType,
 ) -> Result<RecordingMetaWithMetadata, String> {
+    let sort_time_millis = media_sort_time_millis(&path);
     RecordingMeta::load_for_project(&path)
-        .map(RecordingMetaWithMetadata::new)
+        .map(|meta| RecordingMetaWithMetadata::new(meta, sort_time_millis))
         .map_err(|e| format!("Failed to load recording meta: {e}"))
+}
+
+fn media_sort_time(path: &Path) -> SystemTime {
+    let Ok(metadata) = path.metadata() else {
+        return UNIX_EPOCH;
+    };
+
+    metadata
+        .created()
+        .or_else(|_| metadata.modified())
+        .unwrap_or(UNIX_EPOCH)
+}
+
+fn media_sort_time_millis(path: &Path) -> f64 {
+    media_sort_time(path)
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        * 1000.0
 }
 
 #[tauri::command]
@@ -3879,19 +3908,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
         }
     }
 
-    result.sort_by(|a, b| {
-        let b_time =
-            b.0.metadata()
-                .and_then(|m| m.created())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        let a_time =
-            a.0.metadata()
-                .and_then(|m| m.created())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        b_time.cmp(&a_time)
-    });
+    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
 
     Ok(result)
 }
@@ -3946,7 +3963,7 @@ async fn delete_recording_directory(app: AppHandle, path: PathBuf) -> Result<(),
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, String> {
+fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
     let screenshots_dir = screenshots_path(&app);
 
     let mut result = std::fs::read_dir(&screenshots_dir)
@@ -3966,23 +3983,21 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, Str
                     .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
                     .map(|e| e.path())?;
 
-                Some((png_path, meta))
+                let sort_time_millis = media_sort_time_millis(&png_path);
+                Some((
+                    png_path,
+                    ScreenshotMetaWithMetadata {
+                        inner: meta,
+                        sort_time_millis,
+                    },
+                ))
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
 
-    result.sort_by(|a, b| {
-        b.0.metadata()
-            .and_then(|m| m.created())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-            .cmp(
-                &a.0.metadata()
-                    .and_then(|m| m.created())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-            )
-    });
+    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
 
     Ok(result)
 }
@@ -4911,6 +4926,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             clip_thumbnails::get_clip_thumbnail,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::set_teleprompter_window_level,
+            windows::set_teleprompter_window_opacity,
             windows::apply_macos_liquid_glass_background,
             global_message_dialog,
             show_window,
@@ -5803,7 +5820,43 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::Moved(position) => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                    let window_id = CapWindowId::from_str(label);
+
+                    #[cfg(target_os = "macos")]
+                    if matches!(&window_id, Ok(CapWindowId::Main))
+                        && let Some(constrained_position) =
+                            platform::constrain_main_window_to_visible_top(window, *position)
+                    {
+                        match window.set_position(constrained_position) {
+                            Ok(()) => {
+                                let scale_factor = window
+                                    .current_monitor()
+                                    .ok()
+                                    .flatten()
+                                    .map(|monitor| monitor.scale_factor())
+                                    .unwrap_or_else(|| window.scale_factor().unwrap_or(1.0));
+                                let logical_pos =
+                                    constrained_position.to_logical::<f64>(scale_factor);
+                                let display_id = display_for_position(logical_pos.x, logical_pos.y)
+                                    .map(|display| display.id());
+                                window_position_persistence::queue_main_position(
+                                    app,
+                                    general_settings::WindowPosition {
+                                        x: logical_pos.x,
+                                        y: logical_pos.y,
+                                        display_id,
+                                    },
+                                );
+                                return;
+                            }
+                            Err(error) => warn!(
+                                %error,
+                                "Failed to constrain main window to the visible screen area"
+                            ),
+                        }
+                    }
+
+                    if let Ok(window_id) = window_id {
                         let scale_factor = window.scale_factor().unwrap_or(1.0);
                         let logical_pos = position.to_logical::<f64>(scale_factor);
 

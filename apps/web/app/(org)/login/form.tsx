@@ -49,6 +49,7 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const mobileAppleSignInStarted = useRef(false);
 	const mobileGoogleSignInStarted = useRef(false);
 	const mobileWorkosSignInStarted = useRef(false);
 	const loginFormMounted = useRef(false);
@@ -136,6 +137,18 @@ export function LoginForm() {
 		});
 	}, [getNextPath]);
 
+	const handleAppleSignIn = useCallback(() => {
+		const nextPath = getNextPath();
+		trackEvent("auth_started", {
+			method: "apple",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		signIn("apple", {
+			...(nextPath ? { callbackUrl: nextPath } : {}),
+		});
+	}, [getNextPath]);
+
 	const handleWorkosSignIn = useCallback(
 		async (orgId: string) => {
 			const nextPath = getNextPath();
@@ -153,6 +166,13 @@ export function LoginForm() {
 	);
 
 	useEffect(() => {
+		if (searchParams?.get("mobileProvider") === "apple") {
+			if (mobileAppleSignInStarted.current) return;
+			mobileAppleSignInStarted.current = true;
+			handleAppleSignIn();
+			return;
+		}
+
 		if (searchParams?.get("mobileProvider") === "google") {
 			if (mobileGoogleSignInStarted.current) return;
 			mobileGoogleSignInStarted.current = true;
@@ -175,7 +195,7 @@ export function LoginForm() {
 			setShowOrgInput(true);
 			toast.error("Organization not found or SSO not configured");
 		});
-	}, [handleGoogleSignIn, handleWorkosSignIn, searchParams]);
+	}, [handleAppleSignIn, handleGoogleSignIn, handleWorkosSignIn, searchParams]);
 
 	const handleOrganizationLookup = async (e: React.FormEvent) => {
 		e.preventDefault();

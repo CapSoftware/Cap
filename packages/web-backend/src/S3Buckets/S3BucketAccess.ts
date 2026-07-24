@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/s3-presigned-post";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import { S3Error } from "@cap/web-domain";
+import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { type Cause, Effect, Option, Stream } from "effect";
 
@@ -13,8 +14,54 @@ import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 
 const DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS = 3600;
 const DEFAULT_PRESIGNED_PUT_EXPIRES_SECONDS = 3600;
+const localHostnames = new Set([
+	"0.0.0.0",
+	"127.0.0.1",
+	"[::1]",
+	"::1",
+	"localhost",
+]);
 
 type NodeReadableWebStream = Parameters<typeof Readable.fromWeb>[0];
+
+const isPrivateNetworkHostname = (hostname: string) => {
+	if (hostname.endsWith(".local")) return true;
+
+	const octets = hostname.split(".").map(Number);
+	if (
+		octets.length !== 4 ||
+		octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+	) {
+		return false;
+	}
+
+	return (
+		octets[0] === 10 ||
+		(octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31) ||
+		(octets[0] === 192 && octets[1] === 168)
+	);
+};
+
+export const getRequestAccessibleS3Endpoint = (
+	publicEndpoint: string,
+	requestUrl: string,
+) => {
+	try {
+		const endpoint = new URL(publicEndpoint);
+		const request = new URL(requestUrl);
+		if (
+			!localHostnames.has(endpoint.hostname) ||
+			!isPrivateNetworkHostname(request.hostname)
+		) {
+			return null;
+		}
+
+		endpoint.hostname = request.hostname;
+		return endpoint.toString().replace(/\/$/, "");
+	} catch {
+		return null;
+	}
+};
 
 const wrapS3Promise = <T>(
 	promise: Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,
@@ -43,6 +90,74 @@ const wrapS3Promise = <T>(
 
 export const createS3BucketAccess = Effect.gen(function* () {
 	const provider = yield* S3BucketClientProvider;
+	let requestAccessiblePublicClient: {
+		endpoint: string;
+		client: S3.S3Client;
+	} | null = null;
+	const getPublicSigningClient = provider.getPublic.pipe(
+		Effect.flatMap((client) =>
+			Effect.serviceOption(HttpServerRequest.HttpServerRequest).pipe(
+				Effect.flatMap(
+					Option.match({
+						onNone: () => Effect.succeed(client),
+						onSome: (request) =>
+							Effect.tryPromise({
+								try: async () => {
+									const endpointProvider = client.config.endpoint;
+									if (!endpointProvider) return client;
+
+									const configuredEndpoint = await endpointProvider();
+									const configuredEndpointUrl = new URL(
+										`${configuredEndpoint.protocol}//${configuredEndpoint.hostname}`,
+									);
+									if (configuredEndpoint.port) {
+										configuredEndpointUrl.port = String(
+											configuredEndpoint.port,
+										);
+									}
+									configuredEndpointUrl.pathname = configuredEndpoint.path;
+									const endpoint = getRequestAccessibleS3Endpoint(
+										configuredEndpointUrl.toString(),
+										request.originalUrl,
+									);
+									if (!endpoint) return client;
+
+									if (requestAccessiblePublicClient?.endpoint === endpoint) {
+										return requestAccessiblePublicClient.client;
+									}
+
+									const requestClient = new S3.S3Client({
+										credentials: client.config.credentials,
+										endpoint,
+										forcePathStyle: client.config.forcePathStyle,
+										region: client.config.region,
+									});
+									requestAccessiblePublicClient?.client.destroy();
+									requestAccessiblePublicClient = {
+										client: requestClient,
+										endpoint,
+									};
+									return requestClient;
+								},
+								catch: (cause) => new S3Error({ cause }),
+							}),
+					}),
+				),
+			),
+		),
+	);
+	const withPublicSigningClient = <T>(
+		use: (client: S3.S3Client) => Promise<T>,
+	) =>
+		getPublicSigningClient.pipe(
+			Effect.flatMap((client) =>
+				Effect.tryPromise({
+					try: () => use(client),
+					catch: (cause) => new S3Error({ cause }),
+				}),
+			),
+		);
+
 	return {
 		bucketName: provider.bucket,
 		isPathStyle: provider.isPathStyle,
@@ -50,17 +165,13 @@ export const createS3BucketAccess = Effect.gen(function* () {
 			key: string,
 			signingArgs?: RequestPresigningArguments,
 		) =>
-			wrapS3Promise(
-				provider.getPublic.pipe(
-					Effect.map((client) =>
-						S3Presigner.getSignedUrl(
-							client,
-							new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
-							signingArgs ?? {
-								expiresIn: DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS,
-							},
-						),
-					),
+			withPublicSigningClient((client) =>
+				S3Presigner.getSignedUrl(
+					client,
+					new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+					signingArgs ?? {
+						expiresIn: DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS,
+					},
 				),
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
 		getInternalSignedObjectUrl: (
@@ -223,21 +334,17 @@ export const createS3BucketAccess = Effect.gen(function* () {
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
 			signingArgs?: RequestPresigningArguments,
 		) =>
-			wrapS3Promise(
-				provider.getPublic.pipe(
-					Effect.map((client) =>
-						S3Presigner.getSignedUrl(
-							client,
-							new S3.PutObjectCommand({
-								Bucket: provider.bucket,
-								Key: key,
-								...args,
-							}),
-							signingArgs ?? {
-								expiresIn: DEFAULT_PRESIGNED_PUT_EXPIRES_SECONDS,
-							},
-						),
-					),
+			withPublicSigningClient((client) =>
+				S3Presigner.getSignedUrl(
+					client,
+					new S3.PutObjectCommand({
+						Bucket: provider.bucket,
+						Key: key,
+						...args,
+					}),
+					signingArgs ?? {
+						expiresIn: DEFAULT_PRESIGNED_PUT_EXPIRES_SECONDS,
+					},
 				),
 			),
 		getInternalPresignedPutUrl: (
@@ -266,16 +373,12 @@ export const createS3BucketAccess = Effect.gen(function* () {
 			key: string,
 			args: Omit<PresignedPostOptions, "Bucket" | "Key">,
 		) =>
-			wrapS3Promise(
-				provider.getPublic.pipe(
-					Effect.map((client) =>
-						createPresignedPost(client, {
-							...args,
-							Bucket: provider.bucket,
-							Key: key,
-						}),
-					),
-				),
+			withPublicSigningClient((client) =>
+				createPresignedPost(client, {
+					...args,
+					Bucket: provider.bucket,
+					Key: key,
+				}),
 			),
 		multipart: {
 			create: (
@@ -304,21 +407,17 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					"Key" | "Bucket" | "PartNumber" | "UploadId"
 				>,
 			) =>
-				wrapS3Promise(
-					provider.getPublic.pipe(
-						Effect.map((client) =>
-							S3Presigner.getSignedUrl(
-								client,
-								new S3.UploadPartCommand({
-									...args,
-									Bucket: provider.bucket,
-									Key: key,
-									UploadId: uploadId,
-									PartNumber: partNumber,
-								}),
-								{ expiresIn: 3600 },
-							),
-						),
+				withPublicSigningClient((client) =>
+					S3Presigner.getSignedUrl(
+						client,
+						new S3.UploadPartCommand({
+							...args,
+							Bucket: provider.bucket,
+							Key: key,
+							UploadId: uploadId,
+							PartNumber: partNumber,
+						}),
+						{ expiresIn: 3600 },
 					),
 				),
 			complete: (

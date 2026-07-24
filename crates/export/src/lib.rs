@@ -117,12 +117,14 @@ impl ExporterBuilder {
                         end: duration,
                         timescale: 1.0,
                         name: None,
+                        speed_audio_mode: None,
                     })
                 })
                 .collect();
             if !segments.is_empty() {
                 project_config.timeline = Some(TimelineConfiguration {
                     segments,
+                    transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),

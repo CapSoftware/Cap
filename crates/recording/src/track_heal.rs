@@ -531,8 +531,7 @@ fn evaluate_display_stretch(inputs: &DisplayStretchInputs) -> Option<StretchDeci
     }
 
     let ratio = inputs.display_secs / expected_span_secs;
-    if ratio < DISPLAY_MIN_STRETCH_RATIO
-        || ratio > DISPLAY_MAX_STRETCH_RATIO
+    if !(DISPLAY_MIN_STRETCH_RATIO..=DISPLAY_MAX_STRETCH_RATIO).contains(&ratio)
         || inputs.display_secs - expected_span_secs < DISPLAY_MIN_STRETCH_SECS
     {
         return None;
@@ -1034,15 +1033,16 @@ mod tests {
         };
 
         let dir = tempfile::tempdir().unwrap();
-        let mut config = ProjectConfiguration::default();
-        config.timeline = Some(TimelineConfiguration {
+        let timeline = TimelineConfiguration {
             segments: vec![TimelineSegment {
                 recording_clip: 0,
                 timescale: 1.0,
                 start: 0.0,
                 end: 202.220711,
                 name: None,
+                speed_audio_mode: None,
             }],
+            transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
                 start: 100.0,
                 end: 150.0,
@@ -1059,7 +1059,11 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
-        });
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
         config.write(dir.path()).unwrap();
 
         let scale = 0.4468;
@@ -1081,8 +1085,7 @@ mod tests {
         };
 
         let dir = tempfile::tempdir().unwrap();
-        let mut config = ProjectConfiguration::default();
-        config.timeline = Some(TimelineConfiguration {
+        let timeline = TimelineConfiguration {
             segments: vec![
                 TimelineSegment {
                     recording_clip: 0,
@@ -1090,6 +1093,7 @@ mod tests {
                     start: 0.0,
                     end: 100.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1097,8 +1101,10 @@ mod tests {
                     start: 0.0,
                     end: 50.0,
                     name: None,
+                    speed_audio_mode: None,
                 },
             ],
+            transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
                 start: 10.0,
                 end: 20.0,
@@ -1115,7 +1121,11 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
-        });
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
         config.write(dir.path()).unwrap();
 
         let mut scales = HashMap::new();

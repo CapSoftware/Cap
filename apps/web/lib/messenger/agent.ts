@@ -317,7 +317,6 @@ const postAnthropicMessages = async ({
 		},
 		body: JSON.stringify({
 			model: MESSENGER_ANTHROPIC_MODEL,
-			temperature: 0.65,
 			max_tokens: maxTokens,
 			system: systemPrompt,
 			messages,

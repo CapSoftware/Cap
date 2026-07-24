@@ -18,6 +18,7 @@ import { defaultCaptionSettings } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import {
 	getCaptionTextFromWords,
+	type MappedTimeRange,
 	mapEditedTimeToSource,
 	mapSourceRangeToEdited,
 	mapSourceTimeToEdited,
@@ -29,6 +30,10 @@ import {
 	createCaptionExportCues,
 	formatCaptionCues,
 } from "./captions-export";
+import {
+	clipCutPreservesTransitionGeometry,
+	rangeIntersectsClipTransition,
+} from "./clip-transitions";
 import { FPS, useEditorContext } from "./context";
 import { rippleDeleteAllTracks } from "./timeline-utils";
 
@@ -84,6 +89,7 @@ export function TranscriptPanel() {
 			project.captions?.segments ?? [],
 			project.timeline?.segments ?? [],
 			recordingSegments(),
+			project.timeline?.transitions ?? [],
 		),
 	);
 
@@ -180,6 +186,9 @@ export function TranscriptPanel() {
 				outputStart,
 				project.timeline?.segments ?? [],
 				recordingSegments(),
+				project.timeline?.transitions ?? [],
+				undefined,
+				"incoming",
 			) ?? outputStart;
 		const end = start + defaultDuration;
 		const text = "New caption";
@@ -205,6 +214,7 @@ export function TranscriptPanel() {
 					textSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					transitions: [],
 				};
 
 				p.captions.segments.push({
@@ -259,6 +269,9 @@ export function TranscriptPanel() {
 			editorState.playbackTime,
 			project.timeline?.segments ?? [],
 			recordingSegments(),
+			project.timeline?.transitions ?? [],
+			undefined,
+			"incoming",
 		);
 		if (sourceTime === null) return -1;
 
@@ -283,6 +296,7 @@ export function TranscriptPanel() {
 				word.start,
 				project.timeline?.segments ?? [],
 				recordingSegments(),
+				project.timeline?.transitions ?? [],
 			);
 			if (outputTime === null) return;
 			if (editorState.playing) {
@@ -331,10 +345,6 @@ export function TranscriptPanel() {
 			}
 		}
 
-		// Deleting transcript words also removes the matching span of video. The
-		// caption master is source-timed, so translate the deleted source ranges
-		// into the output-time ranges they currently occupy and ripple those out
-		// of every output-time track (clips + zoom/mask/text/keyboard).
 		const outputRanges = mergedSourceRanges
 			.flatMap((range) =>
 				mapSourceRangeToEdited(
@@ -342,18 +352,49 @@ export function TranscriptPanel() {
 					range.end,
 					project.timeline?.segments ?? [],
 					recordingSegments(),
+					project.timeline?.transitions ?? [],
 				),
 			)
-			.sort((a, b) => a.start - b.start);
+			.sort((a, b) => a.start - b.start || a.segmentIndex - b.segmentIndex);
 
-		const mergedOutputRanges: { start: number; end: number }[] = [];
+		const mergedOutputRanges: MappedTimeRange[] = [];
 		for (const range of outputRanges) {
 			const last = mergedOutputRanges[mergedOutputRanges.length - 1];
-			if (last && range.start <= last.end + 0.0001) {
+			if (
+				last &&
+				last.segmentIndex === range.segmentIndex &&
+				range.start <= last.end + 0.0001
+			) {
 				last.end = Math.max(last.end, range.end);
 			} else {
 				mergedOutputRanges.push({ ...range });
 			}
+		}
+
+		const timeline = project.timeline;
+		if (
+			timeline &&
+			mergedOutputRanges.some(
+				(range) =>
+					rangeIntersectsClipTransition(
+						timeline.segments,
+						timeline.transitions ?? [],
+						range.start,
+						range.end,
+					) ||
+					!clipCutPreservesTransitionGeometry(
+						timeline.segments,
+						timeline.transitions ?? [],
+						range.segmentIndex,
+						range.start,
+						range.end,
+					),
+			)
+		) {
+			toast.error(
+				"Remove the nearby transition before deleting this transcript range.",
+			);
+			return;
 		}
 
 		setProject(
@@ -382,19 +423,22 @@ export function TranscriptPanel() {
 				if (p.timeline) {
 					for (const range of [...mergedOutputRanges].reverse()) {
 						if (range.end - range.start <= 0.001) continue;
-						rippleDeleteAllTracks(p.timeline, range.start, range.end);
+						rippleDeleteAllTracks(
+							p.timeline,
+							range.start,
+							range.end,
+							range.segmentIndex,
+						);
 					}
 				}
 			}),
 		);
+		setEditorState("timeline", "selection", null);
 
 		setEditorState("captions", "isStale", false);
 
-		const newDuration = project.timeline?.segments.reduce(
-			(acc, s) => acc + (s.end - s.start) / s.timescale,
-			0,
-		);
-		if (newDuration !== undefined && editorState.playbackTime > newDuration) {
+		const newDuration = totalDuration();
+		if (editorState.playbackTime > newDuration) {
 			setEditorState("playbackTime", Math.max(newDuration - 0.01, 0));
 		}
 	};

@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
 import { createQuery, useQueryClient } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -16,6 +17,7 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
+import toast from "solid-toast";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
@@ -405,6 +407,15 @@ export default function Settings(props: RouteSectionProps) {
 			await clearLocalAuth();
 		}
 	};
+	const copyVersion = async (appVersion: string) => {
+		try {
+			await writeText(appVersion);
+			toast.success("Version copied to clipboard");
+		} catch (error) {
+			console.error("Failed to copy app version:", error);
+			toast.error("Failed to copy version");
+		}
+	};
 
 	const checkForUpdates = async () => {
 		setIsCheckingForUpdates(true);
@@ -507,7 +518,15 @@ export default function Settings(props: RouteSectionProps) {
 					<Show when={version()}>
 						{(v) => (
 							<div class="mb-2 text-xs text-gray-11 flex flex-col items-start gap-1.5">
-								<span>v{v()}</span>
+								<button
+									type="button"
+									class="-ml-1 cursor-copy rounded px-1 py-0.5 transition-colors hover:bg-gray-3 hover:text-gray-12"
+									title="Copy version to clipboard"
+									aria-label={`Copy version ${v()} to clipboard`}
+									onClick={() => copyVersion(v())}
+								>
+									v{v()}
+								</button>
 								<div class="flex flex-col items-start gap-1.5">
 									<button
 										type="button"
