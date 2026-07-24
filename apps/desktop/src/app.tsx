@@ -11,7 +11,9 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
+import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
+import { appearanceIsDark } from "./utils/appearance";
 import { AutoRevealWindowOnReady } from "./utils/RevealWindow";
 import titlebar from "./utils/titlebar-state";
 import { usePrefersDarkMode } from "./utils/use-media-query";
@@ -110,10 +112,14 @@ export default function App() {
 }
 
 function Inner() {
+	const generalSettings = generalSettingsStore.createQuery();
 	const prefersDark = usePrefersDarkMode();
 
 	createEffect(() =>
-		document.documentElement.classList.toggle("dark", prefersDark()),
+		document.documentElement.classList.toggle(
+			"dark",
+			appearanceIsDark(generalSettings.data?.appearance, prefersDark()),
+		),
 	);
 
 	onMount(() => {
