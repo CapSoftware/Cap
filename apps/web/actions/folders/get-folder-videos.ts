@@ -51,7 +51,7 @@ export async function getFolderVideoIds(
 					.where(
 						and(
 							eq(sharedVideos.folderId, folderId),
-							eq(sharedVideos.organizationId, spaceId),
+							eq(sharedVideos.organizationId, user.activeOrganizationId),
 						),
 					)
 			: await db()
