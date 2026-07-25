@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
+import { makeCurrentUserLayer, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
@@ -36,7 +36,13 @@ export async function GET(request: NextRequest) {
 		return yield* Effect.promise(() =>
 			db().select().from(videos).where(eq(videos.id, videoId)).limit(1),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
-	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+	}).pipe(
+		// The route already required auth above, so provide the user we have
+		// rather than `provideOptionalAuth`, which would re-run
+		// getServerSession() and re-query `users`.
+		Effect.provide(makeCurrentUserLayer(user)),
+		EffectRuntime.runPromiseExit,
+	);
 
 	if (Exit.isFailure(exit)) {
 		return Response.json(
