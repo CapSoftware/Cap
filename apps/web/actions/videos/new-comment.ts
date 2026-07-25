@@ -49,11 +49,19 @@ export async function newComment(data: {
 		const videosPolicy = yield* VideosPolicy;
 
 		return yield* Effect.promise(() =>
-			db().select({ id: videos.id }).from(videos).where(eq(videos.id, videoId)),
+			db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(eq(videos.id, videoId))
+				.limit(1),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(accessExit) || accessExit.value.length === 0) {
+	if (Exit.isFailure(accessExit)) {
+		throw new Error("Video not found");
+	}
+
+	if (accessExit.value.length === 0) {
 		throw new Error("Video not found");
 	}
 
