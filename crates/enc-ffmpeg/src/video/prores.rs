@@ -53,6 +53,10 @@ impl ProResEncoderBuilder {
             .unwrap_or((input_config.width, input_config.height));
         let output_format = format::Pixel::YUVA444P10LE;
 
+        // Set to `false` if swscale can't be told to emit full range, so the
+        // range we declare on the stream keeps matching the pixels we hand it.
+        let mut declare_full_range = true;
+
         let converter = if input_config.pixel_format != output_format
             || input_config.width != output_width
             || input_config.height != output_height
@@ -97,15 +101,17 @@ impl ProResEncoderBuilder {
 
                 if details < 0 {
                     tracing::warn!(
-                        "sws_getColorspaceDetails failed ({details}); ProRes output will stay limited-range while the stream declares full range"
+                        "sws_getColorspaceDetails failed ({details}); falling back to declaring limited range"
                     );
+                    declare_full_range = false;
                 } else {
                     let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
 
                     if coefficients.is_null() {
                         tracing::warn!(
-                            "sws_getCoefficients returned null for ITU709; leaving swscale colour range unchanged"
+                            "sws_getCoefficients returned null for ITU709; falling back to declaring limited range"
                         );
+                        declare_full_range = false;
                     } else {
                         let ret = ffmpeg::ffi::sws_setColorspaceDetails(
                             context.as_mut_ptr(),
@@ -120,8 +126,9 @@ impl ProResEncoderBuilder {
 
                         if ret < 0 {
                             tracing::warn!(
-                                "sws_setColorspaceDetails failed ({ret}); ProRes output will stay limited-range while the stream declares full range"
+                                "sws_setColorspaceDetails failed ({ret}); falling back to declaring limited range"
                             );
+                            declare_full_range = false;
                         }
                     }
                 }
@@ -145,7 +152,13 @@ impl ProResEncoderBuilder {
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
         encoder.set_colorspace(color::Space::BT709);
-        encoder.set_color_range(color::Range::JPEG);
+        encoder.set_color_range(if declare_full_range {
+            color::Range::JPEG
+        } else {
+            // swscale is still emitting its limited-range default, so declaring
+            // full range here would recreate the very mismatch this avoids.
+            color::Range::MPEG
+        });
         unsafe {
             (*encoder.as_mut_ptr()).color_primaries =
                 ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
