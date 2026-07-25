@@ -22,6 +22,10 @@ export async function getFolderVideoIds(
 			throw new Error("Folder ID is required");
 		}
 
+		if (!spaceId) {
+			throw new Error("Space ID is required");
+		}
+
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
 		// `spaceId` is caller-supplied, so the space branch needs a membership
