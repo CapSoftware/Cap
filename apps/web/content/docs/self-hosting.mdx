@@ -139,6 +139,22 @@ APPLE_CLIENT_SECRET=your-client-secret-jwt
 Apple client-secret JWTs expire, so rotate the secret before its configured
 expiration date.
 
+### Chrome Extension
+
+Required if you want to sign in to your instance from the Cap Chrome
+extension. Without it, the extension's login request is rejected with a
+`400 Bad Request` — the auth endpoint only accepts an unpinned extension id on
+localhost, because otherwise any installed extension could mint auth keys for
+a signed-in user.
+
+```bash
+CAP_CHROME_EXTENSION_ID=your-extension-id
+```
+
+Use the id shown for the extension on `chrome://extensions`. The Chrome Web
+Store build is `fefjaffcodfiogbbngmjkcjpbpclbdcp`; a locally loaded unpacked
+copy gets a different id, so set this to whichever build you actually use.
+
 ## Production Checklist
 
 <Warning title="Critical: Change Default Secrets Before Going Public">
