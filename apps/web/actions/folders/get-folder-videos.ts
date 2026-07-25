@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sharedVideos, spaceVideos } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function getFolderVideoIds(
@@ -24,9 +24,15 @@ export async function getFolderVideoIds(
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
-		// `spaceId` is caller-supplied. `activeOrganizationId` is read from the
-		// user record so the all-spaces branch is already scoped to them, but the
-		// space branch would otherwise expose folder contents of any space.
+		// `spaceId` is caller-supplied, so the space branch needs a membership
+		// check. The all-spaces branch compares against `activeOrganizationId`,
+		// which is read from the user record, so it is already scoped.
+		//
+		// The membership check alone is not sufficient: `folderId` is also
+		// caller-supplied, so the queries below must be constrained to the space
+		// (or org) we just authorized. Otherwise a caller could pass a space they
+		// legitimately belong to together with a folder from another space and
+		// still read its contents.
 		if (!isAllSpacesEntry) {
 			const access = await getSpaceAccess(user.id, spaceId);
 			if (!access || (!access.organizationRole && !access.spaceRole)) {
@@ -38,11 +44,21 @@ export async function getFolderVideoIds(
 			? await db()
 					.select({ id: sharedVideos.videoId })
 					.from(sharedVideos)
-					.where(eq(sharedVideos.folderId, folderId))
+					.where(
+						and(
+							eq(sharedVideos.folderId, folderId),
+							eq(sharedVideos.organizationId, spaceId),
+						),
+					)
 			: await db()
 					.select({ id: spaceVideos.videoId })
 					.from(spaceVideos)
-					.where(eq(spaceVideos.folderId, folderId));
+					.where(
+						and(
+							eq(spaceVideos.folderId, folderId),
+							eq(spaceVideos.spaceId, spaceId),
+						),
+					);
 
 		return {
 			success: true,
