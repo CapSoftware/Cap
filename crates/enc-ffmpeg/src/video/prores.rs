@@ -57,7 +57,7 @@ impl ProResEncoderBuilder {
             || input_config.width != output_width
             || input_config.height != output_height
         {
-            Some(ffmpeg::software::scaling::Context::get(
+            let mut context = ffmpeg::software::scaling::Context::get(
                 input_config.pixel_format,
                 input_config.width,
                 input_config.height,
@@ -65,7 +65,52 @@ impl ProResEncoderBuilder {
                 output_width,
                 output_height,
                 ffmpeg::software::scaling::flag::Flags::BICUBIC,
-            )?)
+            )?;
+
+            // swscale defaults to limited-range (16-235) YUV output, but this
+            // encoder advertises `Range::JPEG` in the stream metadata below.
+            // Left as-is the two disagree: full-range RGB is squeezed into
+            // limited range, then players expand it again as if it were full
+            // range, which crushes contrast and shifts colour.
+            //
+            // ProRes 4444 is a full-range format, so tell swscale to match
+            // what we declare.
+            unsafe {
+                let mut inv_table: *const i32 = std::ptr::null();
+                let mut table: *const i32 = std::ptr::null();
+                let mut src_range: i32 = 0;
+                let mut dst_range: i32 = 0;
+                let mut brightness: i32 = 0;
+                let mut contrast: i32 = 0;
+                let mut saturation: i32 = 0;
+
+                if ffmpeg::ffi::sws_getColorspaceDetails(
+                    context.as_mut_ptr(),
+                    &mut inv_table as *mut _ as *mut *mut i32,
+                    &mut src_range,
+                    &mut table as *mut _ as *mut *mut i32,
+                    &mut dst_range,
+                    &mut brightness,
+                    &mut contrast,
+                    &mut saturation,
+                ) >= 0
+                {
+                    let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+
+                    ffmpeg::ffi::sws_setColorspaceDetails(
+                        context.as_mut_ptr(),
+                        coefficients,
+                        1,
+                        coefficients,
+                        1,
+                        brightness,
+                        contrast,
+                        saturation,
+                    );
+                }
+            }
+
+            Some(context)
         } else {
             None
         };
