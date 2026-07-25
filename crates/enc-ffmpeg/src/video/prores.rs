@@ -76,8 +76,8 @@ impl ProResEncoderBuilder {
             // ProRes 4444 is a full-range format, so tell swscale to match
             // what we declare.
             unsafe {
-                let mut inv_table: *const i32 = std::ptr::null();
-                let mut table: *const i32 = std::ptr::null();
+                let mut inv_table: *mut i32 = std::ptr::null_mut();
+                let mut table: *mut i32 = std::ptr::null_mut();
                 let mut src_range: i32 = 0;
                 let mut dst_range: i32 = 0;
                 let mut brightness: i32 = 0;
@@ -86,9 +86,9 @@ impl ProResEncoderBuilder {
 
                 if ffmpeg::ffi::sws_getColorspaceDetails(
                     context.as_mut_ptr(),
-                    &mut inv_table as *mut _ as *mut *mut i32,
+                    &mut inv_table,
                     &mut src_range,
-                    &mut table as *mut _ as *mut *mut i32,
+                    &mut table,
                     &mut dst_range,
                     &mut brightness,
                     &mut contrast,
