@@ -3,11 +3,15 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { comments } from "@cap/database/schema";
+import { comments, videos } from "@cap/database/schema";
+import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
-import { Comment, type Video } from "@cap/web-domain";
+import { Comment, Policy, type Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
+import { Effect, Exit } from "effect";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
+import * as EffectRuntime from "@/lib/server";
 
 export async function newComment(data: {
 	content: string;
@@ -37,6 +41,22 @@ export async function newComment(data: {
 	if (!content || !videoId) {
 		throw new Error("Content and videoId are required");
 	}
+
+	// The caller controls `videoId`, so being signed in is not enough — without
+	// this check any authenticated user can insert comments into a video they
+	// cannot view, including someone else's private recording.
+	const accessExit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db().select({ id: videos.id }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(accessExit) || accessExit.value.length === 0) {
+		throw new Error("Video not found");
+	}
+
 	const id = Comment.CommentId.make(nanoId());
 
 	const newComment = {
