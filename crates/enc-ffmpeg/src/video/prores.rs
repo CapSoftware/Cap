@@ -84,7 +84,7 @@ impl ProResEncoderBuilder {
                 let mut contrast: i32 = 0;
                 let mut saturation: i32 = 0;
 
-                if ffmpeg::ffi::sws_getColorspaceDetails(
+                let details = ffmpeg::ffi::sws_getColorspaceDetails(
                     context.as_mut_ptr(),
                     &mut inv_table,
                     &mut src_range,
@@ -93,20 +93,37 @@ impl ProResEncoderBuilder {
                     &mut brightness,
                     &mut contrast,
                     &mut saturation,
-                ) >= 0
-                {
+                );
+
+                if details < 0 {
+                    tracing::warn!(
+                        "sws_getColorspaceDetails failed ({details}); ProRes output will stay limited-range while the stream declares full range"
+                    );
+                } else {
                     let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
 
-                    ffmpeg::ffi::sws_setColorspaceDetails(
-                        context.as_mut_ptr(),
-                        coefficients,
-                        1,
-                        coefficients,
-                        1,
-                        brightness,
-                        contrast,
-                        saturation,
-                    );
+                    if coefficients.is_null() {
+                        tracing::warn!(
+                            "sws_getCoefficients returned null for ITU709; leaving swscale colour range unchanged"
+                        );
+                    } else {
+                        let ret = ffmpeg::ffi::sws_setColorspaceDetails(
+                            context.as_mut_ptr(),
+                            coefficients,
+                            1,
+                            coefficients,
+                            1,
+                            brightness,
+                            contrast,
+                            saturation,
+                        );
+
+                        if ret < 0 {
+                            tracing::warn!(
+                                "sws_setColorspaceDetails failed ({ret}); ProRes output will stay limited-range while the stream declares full range"
+                            );
+                        }
+                    }
                 }
             }
 
