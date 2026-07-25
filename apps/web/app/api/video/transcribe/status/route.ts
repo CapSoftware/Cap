@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 		const videosPolicy = yield* VideosPolicy;
 
 		return yield* Effect.promise(() =>
-			db().select().from(videos).where(eq(videos.id, videoId)),
+			db().select().from(videos).where(eq(videos.id, videoId)).limit(1),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
