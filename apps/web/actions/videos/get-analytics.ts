@@ -60,7 +60,12 @@ export async function getVideoAnalytics(
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(id)));
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(exit)) throw new Error("Video not found");
+	// An empty result means the video does not exist. Falling through would
+	// query Tinybird with no tenant filter, which both wastes a query and
+	// widens the match beyond a single org.
+	if (Exit.isFailure(exit) || exit.value.length === 0) {
+		throw new Error("Video not found");
+	}
 
 	const orgId = exit.value[0]?.orgId ?? null;
 
