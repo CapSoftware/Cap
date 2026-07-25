@@ -614,12 +614,24 @@ pub async fn spawn_instant_recording_actor(
             let (display, crop_bounds) = target_to_display_and_crop(&inputs.capture_target)
                 .context("target_display_crop")?;
 
+            #[cfg(target_os = "macos")]
+            let max_capture_size = max_output_size.and_then(|max_output_size| {
+                inputs.capture_target.physical_size().map(|size| {
+                    capture_size_constraint(
+                        (size.width() as u32, size.height() as u32),
+                        max_output_size,
+                    )
+                })
+            });
+            #[cfg(not(target_os = "macos"))]
+            let max_capture_size = None;
+
             let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
                 display,
                 crop_bounds,
                 true,
                 max_fps,
-                None,
+                max_capture_size,
                 timestamps.system_time(),
                 inputs.capture_system_audio,
                 #[cfg(target_os = "linux")]
@@ -705,6 +717,22 @@ fn current_time_f64() -> f64 {
         .as_secs_f64()
 }
 
+#[cfg(target_os = "macos")]
+fn capture_size_constraint(input: (u32, u32), max_output_size: u32) -> (u32, u32) {
+    let aspect_ratio = input.0 as f64 / input.1 as f64;
+    let max_short_edge = (max_output_size as f64 / 16.0 * 9.0) as u32;
+
+    if input.0 >= input.1 && aspect_ratio <= 16.0 / 9.0 {
+        (max_output_size, u32::MAX)
+    } else if input.0 <= input.1 && aspect_ratio >= 9.0 / 16.0 {
+        (u32::MAX, max_output_size)
+    } else if input.0 >= input.1 {
+        (u32::MAX, max_short_edge)
+    } else {
+        (max_short_edge, u32::MAX)
+    }
+}
+
 fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     // 16/9-ish
     if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) <= 16.0 / 9.0 {
@@ -750,6 +778,27 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn capture_size_constraint_preserves_instant_output_axis() {
+        assert_eq!(
+            capture_size_constraint((3024, 1964), 1920),
+            (1920, u32::MAX)
+        );
+        assert_eq!(
+            capture_size_constraint((1964, 3024), 1920),
+            (u32::MAX, 1920)
+        );
+        assert_eq!(
+            capture_size_constraint((5120, 1440), 1920),
+            (u32::MAX, 1080)
+        );
+        assert_eq!(
+            capture_size_constraint((1440, 5120), 1920),
+            (1080, u32::MAX)
+        );
+    }
 
     #[test]
     fn test_clamp_size_16_9_ish_landscape() {

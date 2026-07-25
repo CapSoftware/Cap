@@ -1,8 +1,14 @@
 import Constants from "expo-constants";
 import { Image } from "expo-image";
+import { router } from "expo-router";
 import { type SFSymbol, SymbolView } from "expo-symbols";
-import * as WebBrowser from "expo-web-browser";
-import { type ReactNode, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import {
 	ActionSheetIOS,
 	ActivityIndicator,
@@ -16,6 +22,7 @@ import {
 } from "react-native";
 import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
+import { getProPlan } from "@/billing/pro";
 import { GlassSurface } from "@/components/GlassSurface";
 import { OrgSwitcher } from "@/components/OrgSwitcher";
 import { Screen } from "@/components/Screen";
@@ -154,18 +161,141 @@ function SettingsSection({
 	);
 }
 
-type AccountAction =
-	| "appSettings"
-	| "organizationSettings"
-	| "refresh"
-	| "signOut";
+type AccountAction = "appSettings" | "refresh" | "signOut";
+
+type PlanStatus = "loading" | "free" | "pro" | "error";
+
+const openExternalPage = async (path: string) => {
+	try {
+		await Linking.openURL(new URL(path, apiBaseUrl).toString());
+	} catch {
+		Alert.alert("Unable to open page", "Check your connection and try again.");
+	}
+};
+
+function PlanStatusButton({
+	status,
+	disabled,
+	onRefresh,
+}: {
+	status: PlanStatus;
+	disabled: boolean;
+	onRefresh: () => void;
+}) {
+	if (status === "loading") {
+		return (
+			<View style={styles.planSection}>
+				<Text style={styles.sectionTitle}>Plan</Text>
+				<View
+					accessibilityLabel="Checking Cap plan"
+					accessibilityRole="summary"
+					style={styles.planStatusButton}
+				>
+					<View pointerEvents="none" style={styles.planStatusInsetHighlight} />
+					<View style={styles.planStatusIcon}>
+						<ActivityIndicator color={colors.white} size="small" />
+					</View>
+					<View style={styles.planStatusText}>
+						<Text style={styles.planStatusTitle}>Checking your plan...</Text>
+					</View>
+				</View>
+			</View>
+		);
+	}
+
+	if (status === "error") {
+		return (
+			<View style={styles.planSection}>
+				<Text style={styles.sectionTitle}>Plan</Text>
+				<Pressable
+					accessibilityHint="Checks your Cap plan again"
+					accessibilityLabel="Cap plan unavailable"
+					accessibilityRole="button"
+					accessibilityState={{ disabled }}
+					disabled={disabled}
+					onPress={onRefresh}
+					style={({ pressed }) => [
+						styles.planStatusButton,
+						disabled && styles.planStatusButtonDisabled,
+						pressed && !disabled && styles.planStatusButtonPressed,
+					]}
+				>
+					<View pointerEvents="none" style={styles.planStatusInsetHighlight} />
+					<View style={styles.planStatusIcon}>
+						<SymbolView
+							name="arrow.clockwise"
+							size={18}
+							tintColor={colors.white}
+							weight="semibold"
+						/>
+					</View>
+					<View style={styles.planStatusText}>
+						<Text style={styles.planStatusTitle}>Plan unavailable</Text>
+						<Text style={styles.planStatusDetail}>Tap to try again</Text>
+					</View>
+					<SymbolView
+						name="chevron.right"
+						size={14}
+						tintColor={colors.white}
+						weight="semibold"
+					/>
+				</Pressable>
+			</View>
+		);
+	}
+
+	const isPro = status === "pro";
+
+	const content = (
+		<>
+			<View pointerEvents="none" style={styles.planStatusInsetHighlight} />
+			<View style={styles.planStatusIcon}>
+				<SymbolView
+					name={isPro ? "checkmark" : "sparkles"}
+					size={18}
+					tintColor={colors.white}
+					weight="semibold"
+				/>
+			</View>
+			<View style={styles.planStatusText}>
+				<Text style={styles.planStatusTitle}>
+					{isPro ? "Cap Pro" : "Free plan"}
+				</Text>
+				<Text style={styles.planStatusDetail}>
+					{isPro
+						? "Unlimited recording time"
+						: "Free plan · Recordings are limited to 5 minutes"}
+				</Text>
+			</View>
+		</>
+	);
+
+	return (
+		<View style={styles.planSection}>
+			<Text style={styles.sectionTitle}>Plan</Text>
+			<View
+				accessibilityLabel={`Cap plan: ${isPro ? "Cap Pro" : "Free"}`}
+				accessibilityRole="summary"
+				accessibilityValue={{
+					text: isPro
+						? "Cap Pro. Unlimited recording time"
+						: "Free plan. Recordings are limited to 5 minutes",
+				}}
+				style={styles.planStatusButton}
+			>
+				{content}
+			</View>
+		</View>
+	);
+}
 
 export default function AccountScreen() {
 	const auth = useAuth();
-	const appVersion = Constants.expoConfig?.version ?? "0.1.0";
+	const appVersion = Constants.expoConfig?.version ?? "1.0.0";
 	const [accountAction, setAccountAction] = useState<AccountAction | null>(
 		null,
 	);
+	const [planStatus, setPlanStatus] = useState<PlanStatus>("loading");
 	const accountActionRef = useRef<AccountAction | null>(null);
 	const accountActionHint =
 		accountAction === "refresh"
@@ -176,6 +306,23 @@ export default function AccountScreen() {
 					? "Settings are opening"
 					: null;
 	const accountActionDisabled = accountAction !== null;
+
+	const refreshPlan = useCallback(async () => {
+		if (!auth.apiKey) return;
+		setPlanStatus("loading");
+		try {
+			const input = { apiKey: auth.apiKey, baseUrl: apiBaseUrl };
+			const plan = await getProPlan(input);
+			setPlanStatus(plan.upgraded ? "pro" : "free");
+		} catch {
+			setPlanStatus("error");
+		}
+	}, [auth.apiKey]);
+
+	useEffect(() => {
+		if (auth.status !== "signedIn" || !auth.apiKey) return;
+		void refreshPlan();
+	}, [auth.apiKey, auth.status, refreshPlan]);
 
 	const runAccountAction = async (
 		action: AccountAction,
@@ -238,12 +385,12 @@ export default function AccountScreen() {
 			</Screen>
 		);
 	}
-
 	return (
 		<Screen
 			title="Account"
 			subtitle={auth.bootstrap?.user.email ?? null}
 			scroll
+			contentInsetBottom={112}
 		>
 			{auth.bootstrap ? (
 				<GlassSurface
@@ -269,7 +416,9 @@ export default function AccountScreen() {
 						</View>
 						<View style={styles.identityText}>
 							<Text numberOfLines={1} style={styles.name}>
-								{auth.bootstrap.user.name ?? "Cap user"}
+								{[auth.bootstrap.user.name, auth.bootstrap.user.lastName]
+									.filter(Boolean)
+									.join(" ") || "Cap user"}
 							</Text>
 							<Text numberOfLines={1} style={styles.email}>
 								{auth.bootstrap.user.email}
@@ -282,34 +431,38 @@ export default function AccountScreen() {
 					/>
 				</GlassSurface>
 			) : null}
-			<SettingsSection title="Organization">
+			<SettingsSection title="Profile">
 				<SettingsRow
-					accessibilityValueText={
-						accountAction === "organizationSettings"
-							? "Opening organization settings"
+					accessibilityHint="Opens native profile settings"
+					disabled={accountActionDisabled}
+					label="Name and Profile Image"
+					symbol="person.crop.circle"
+					onPress={() => router.push("/profile-settings")}
+					value={
+						auth.bootstrap
+							? [auth.bootstrap.user.name, auth.bootstrap.user.lastName]
+									.filter(Boolean)
+									.join(" ") || undefined
 							: undefined
 					}
+				/>
+			</SettingsSection>
+			<PlanStatusButton
+				disabled={accountActionDisabled}
+				onRefresh={() => {
+					void refreshPlan();
+				}}
+				status={planStatus}
+			/>
+			<SettingsSection title="Organization">
+				<SettingsRow
 					accessibilityHint={
-						accountActionHint ??
-						"Opens organization settings in a browser sheet"
+						accountActionHint ?? "Opens native organization settings"
 					}
-					busy={accountAction === "organizationSettings"}
 					disabled={accountActionDisabled}
 					label="Organization Settings"
 					symbol="building.2"
-					onPress={() => {
-						void runAccountAction("organizationSettings", () =>
-							WebBrowser.openBrowserAsync(
-								new URL(
-									"/dashboard/settings/organization",
-									apiBaseUrl,
-								).toString(),
-							),
-						);
-					}}
-					value={
-						accountAction === "organizationSettings" ? "Opening..." : undefined
-					}
+					onPress={() => router.push("/organization-settings")}
 				/>
 			</SettingsSection>
 			<SettingsSection title="App">
@@ -323,7 +476,9 @@ export default function AccountScreen() {
 					label="Refresh"
 					symbol="arrow.clockwise"
 					onPress={() => {
-						void runAccountAction("refresh", auth.refresh);
+						void runAccountAction("refresh", () =>
+							Promise.all([auth.refresh(), refreshPlan()]),
+						);
 					}}
 					value={accountAction === "refresh" ? "Refreshing..." : undefined}
 				/>
@@ -369,11 +524,111 @@ export default function AccountScreen() {
 					value={accountAction === "signOut" ? "Signing out..." : undefined}
 				/>
 			</SettingsSection>
+			<SettingsSection title="Help & Legal">
+				<SettingsRow
+					accessibilityHint="Opens Cap help and support"
+					disabled={accountActionDisabled}
+					label="Help & Support"
+					symbol="questionmark.circle"
+					onPress={() => {
+						void openExternalPage("/docs");
+					}}
+				/>
+				<View style={styles.separator} />
+				<SettingsRow
+					accessibilityHint="Opens the Cap privacy policy"
+					disabled={accountActionDisabled}
+					label="Privacy Policy"
+					symbol="hand.raised"
+					onPress={() => {
+						void openExternalPage("/privacy");
+					}}
+				/>
+				<View style={styles.separator} />
+				<SettingsRow
+					accessibilityHint="Opens the Cap terms of service"
+					disabled={accountActionDisabled}
+					label="Terms of Service"
+					symbol="doc.text"
+					onPress={() => {
+						void openExternalPage("/terms");
+					}}
+				/>
+			</SettingsSection>
+			<SettingsSection title="Danger Zone">
+				<SettingsRow
+					accessibilityHint="Opens permanent account deletion"
+					disabled={accountActionDisabled}
+					label="Delete account"
+					symbol="trash"
+					onPress={() => router.push("/delete-account")}
+					tintColor={colors.red9}
+					destructive
+				/>
+			</SettingsSection>
 		</Screen>
 	);
 }
 
 const styles = StyleSheet.create({
+	planSection: {
+		marginTop: 16,
+		gap: 8,
+	},
+	planStatusButton: {
+		minHeight: 68,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		borderRadius: radius.full,
+		borderWidth: 1,
+		borderColor: colors.buttonBlueBorder,
+		backgroundColor: colors.buttonBlue,
+		paddingHorizontal: 16,
+		paddingVertical: 12,
+		...squircle,
+	},
+	planStatusInsetHighlight: {
+		position: "absolute",
+		top: 0,
+		left: 0,
+		right: 0,
+		height: 1.5,
+		backgroundColor: "rgba(255, 255, 255, 0.4)",
+	},
+	planStatusButtonPressed: {
+		backgroundColor: colors.buttonBlueHover,
+	},
+	planStatusButtonDisabled: {
+		borderColor: colors.gray8,
+		backgroundColor: colors.gray7,
+	},
+	planStatusIcon: {
+		width: 34,
+		height: 34,
+		borderRadius: radius.full,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: "rgba(255, 255, 255, 0.16)",
+		...squircle,
+	},
+	planStatusText: {
+		flex: 1,
+		minWidth: 0,
+		gap: 1,
+	},
+	planStatusTitle: {
+		fontFamily: fonts.bold,
+		fontSize: 16,
+		lineHeight: 20,
+		color: colors.white,
+	},
+	planStatusDetail: {
+		fontFamily: fonts.regular,
+		fontSize: 13,
+		lineHeight: 17,
+		color: "rgba(255, 255, 255, 0.82)",
+	},
 	card: {
 		borderRadius: radius.md,
 		borderWidth: StyleSheet.hairlineWidth,

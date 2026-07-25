@@ -1,21 +1,25 @@
-const associatedDomains =
-	process.env.CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS === "1"
-		? []
-		: process.env.CAP_MOBILE_ASSOCIATED_DOMAINS
-			? process.env.CAP_MOBILE_ASSOCIATED_DOMAINS.split(",")
-					.map((domain) => domain.trim())
-					.filter(Boolean)
-			: ["applinks:cap.so"];
+const associatedDomains = process.env.CAP_MOBILE_ASSOCIATED_DOMAINS
+	? process.env.CAP_MOBILE_ASSOCIATED_DOMAINS.split(",")
+			.map((domain) => domain.trim())
+			.filter(Boolean)
+	: [];
+const buildReactNativeFromSource =
+	process.env.CAP_MOBILE_BUILD_REACT_NATIVE_FROM_SOURCE === "1";
 const bundleIdentifier = "so.cap.mobile";
-const projectId = process.env.EXPO_PROJECT_ID;
+const projectId =
+	process.env.EXPO_PROJECT_ID ?? "616ebd7a-e876-4b21-82be-d626028042f6";
 const ios = {
+	appleTeamId: "47B7FCLL43",
 	bundleIdentifier,
+	config: {
+		usesNonExemptEncryption: false,
+	},
 	supportsTablet: false,
+	usesAppleSignIn: true,
 	infoPlist: {
 		NSPhotoLibraryUsageDescription:
 			"Cap imports videos from Photos for upload.",
 		NSPhotoLibraryAddUsageDescription: "Cap saves downloaded videos to Photos.",
-		UIBackgroundModes: ["processing"],
 	},
 };
 
@@ -28,8 +32,8 @@ module.exports = ({ config }) => ({
 	name: "Cap",
 	slug: "cap-mobile",
 	scheme: "cap",
-	owner: "cap",
-	version: "0.1.0",
+	owner: "cap-software-inc",
+	version: "1.0.0",
 	orientation: "portrait",
 	platforms: ["ios"],
 	userInterfaceStyle: "light",
@@ -47,7 +51,23 @@ module.exports = ({ config }) => ({
 		typedRoutes: true,
 	},
 	plugins: [
+		[
+			"expo-build-properties",
+			{
+				ios: {
+					buildReactNativeFromSource,
+				},
+			},
+		],
+		"expo-apple-authentication",
 		"expo-router",
+		[
+			"./modules/cap-screen-recorder/app.plugin.js",
+			{
+				appGroup: "group.so.cap.mobile.screen-recording",
+				extensionBundleIdentifier: "so.cap.mobile.screen-broadcast",
+			},
+		],
 		[
 			"expo-camera",
 			{

@@ -85,6 +85,13 @@ fn valid_playback_duration(duration: f64) -> Option<f64> {
     (duration.is_finite() && duration > 0.0).then_some(duration)
 }
 
+fn has_playback_audio(audio_segments: &[crate::audio::AudioSegment], has_music: bool) -> bool {
+    has_music
+        || audio_segments
+            .iter()
+            .any(|segment| !segment.tracks.is_empty())
+}
+
 #[derive(Debug)]
 pub enum PlaybackStartError {
     InvalidFps,
@@ -861,20 +868,19 @@ impl Playback {
             // stream. Blocks until the live callback is consuming the source,
             // so the clock below never runs ahead of audible audio.
             let audio_spawn_start = Instant::now();
-            let audio_generation =
-                if audio_segments.is_empty() || audio_segments[0].tracks.is_empty() {
-                    info!("No audio segments found, skipping audio playback.");
-                    None
-                } else {
-                    self.audio_output.play(PlaySpec {
-                        segments: audio_segments,
-                        music: self.music.clone(),
-                        project: self.project.borrow().clone(),
-                        duration_secs: duration,
-                        start_playhead_secs: self.start_frame_number as f64 / fps_f64,
-                        playhead_rx: audio_playhead_rx,
-                    })
-                };
+            let audio_generation = if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
+                info!("No audio segments found, skipping audio playback.");
+                None
+            } else {
+                self.audio_output.play(PlaySpec {
+                    segments: audio_segments,
+                    music: self.music.clone(),
+                    project: self.project.borrow().clone(),
+                    duration_secs: duration,
+                    start_playhead_secs: self.start_frame_number as f64 / fps_f64,
+                    playhead_rx: audio_playhead_rx,
+                })
+            };
             let has_audio = audio_generation.is_some();
             if let Some(telemetry) = &self.telemetry {
                 telemetry.emit(PlaybackTelemetryEvent::AudioPipelineReady {
@@ -1357,6 +1363,17 @@ impl Playback {
             .expect("failed to spawn playback thread");
 
         Ok(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeline_music_enables_audio_playback_without_recorded_audio() {
+        assert!(has_playback_audio(&[], true));
+        assert!(!has_playback_audio(&[], false));
     }
 }
 

@@ -2,7 +2,6 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import * as WebBrowser from "expo-web-browser";
 import { useEffect, useReducer, useRef, useState } from "react";
 import {
 	ActionSheetIOS,
@@ -17,7 +16,7 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import type { UploadFile } from "@/api/mobile";
-import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
 import { ActionButton } from "@/components/ActionButton";
 import { GlassSurface } from "@/components/GlassSurface";
@@ -227,12 +226,12 @@ export default function UploadScreen() {
 	const loomImportSubtitle =
 		loomImportError ??
 		(sourceLoading === "loom"
-			? "Continue in the browser sheet to import from Loom."
+			? "Opening the native Loom importer."
 			: activeId !== null
 				? activeUploadPreparing
 					? "Finish preparing this upload before importing from Loom."
 					: "Finish the current upload before importing from Loom."
-				: "Import a Loom share link or bulk import from CSV");
+				: "Import a Loom share link without leaving Cap");
 	const activeUploadAccessibilityLabel = activeUploadFileName
 		? activeUploadPreparing
 			? `Preparing upload ${activeUploadFileName}`
@@ -612,8 +611,7 @@ export default function UploadScreen() {
 		if (!beginUploadSource("loom")) return;
 
 		try {
-			const url = new URL("/dashboard/import/loom", apiBaseUrl);
-			await WebBrowser.openBrowserAsync(url.toString());
+			router.push("/loom-import");
 		} catch (error) {
 			setSourceError({
 				message: getUploadSourceErrorMessage(error, "loom"),
@@ -641,6 +639,27 @@ export default function UploadScreen() {
 			title="Import"
 			subtitle="Import videos from external sources or upload from your device."
 			scroll
+			contentInsetBottom={112}
+			headerLeft={
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="Back"
+					accessibilityHint="Returns to the previous screen"
+					hitSlop={8}
+					onPress={() => router.back()}
+					style={({ pressed }) => [
+						styles.backButton,
+						pressed ? styles.backButtonPressed : null,
+					]}
+				>
+					<SymbolView
+						name="chevron.left"
+						size={17}
+						tintColor={colors.gray12}
+						weight="semibold"
+					/>
+				</Pressable>
+			}
 		>
 			<GlassSurface
 				fallbackStyle={styles.importCardFallback}
@@ -728,7 +747,7 @@ export default function UploadScreen() {
 									<View
 										style={[
 											styles.importProgressFill,
-											{ width: `${activeProgress}%` },
+											{ transform: [{ scaleX: activeProgress / 100 }] },
 										]}
 									/>
 								</View>
@@ -773,7 +792,7 @@ export default function UploadScreen() {
 						accessibilityValue={uploadSourceActionValue("loom")}
 						accessibilityHint={uploadSourceActionHint(
 							"loom",
-							"Opens Loom import in a browser sheet",
+							"Opens native Loom import",
 						)}
 						onPress={() => {
 							void openLoomImport();
@@ -805,7 +824,7 @@ export default function UploadScreen() {
 									? activeUploadHint
 									: loomImportError
 										? "Retries Loom import"
-										: "Opens Loom import in a browser sheet"
+										: "Opens native Loom import"
 					}
 					accessibilityState={{
 						busy: uploadSourceBusy,
@@ -943,7 +962,7 @@ export default function UploadScreen() {
 															style={[
 																styles.progressFill,
 																{
-																	width: `${queueProgress}%`,
+																	transform: [{ scaleX: queueProgress / 100 }],
 																},
 															]}
 														/>
@@ -1064,6 +1083,18 @@ export default function UploadScreen() {
 }
 
 const styles = StyleSheet.create({
+	backButton: {
+		width: 40,
+		height: 40,
+		borderRadius: radius.full,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.gray3,
+		...squircle,
+	},
+	backButtonPressed: {
+		backgroundColor: colors.gray4,
+	},
 	importCard: {
 		borderRadius: radius.md,
 		borderWidth: StyleSheet.hairlineWidth,
@@ -1136,6 +1167,8 @@ const styles = StyleSheet.create({
 	},
 	importProgressFill: {
 		height: "100%",
+		width: "100%",
+		transformOrigin: "left",
 		borderRadius: radius.full,
 		backgroundColor: colors.buttonBlue,
 	},
@@ -1248,6 +1281,8 @@ const styles = StyleSheet.create({
 	},
 	progressFill: {
 		height: "100%",
+		width: "100%",
+		transformOrigin: "left",
 		borderRadius: radius.full,
 		backgroundColor: colors.buttonBlue,
 	},

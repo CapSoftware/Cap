@@ -22,12 +22,15 @@ type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 
 type AuthStub = {
 	status: "signedIn";
+	apiKey: string;
 	client: {
 		createComment: ReturnType<typeof vi.fn>;
 		createReaction: ReturnType<typeof vi.fn>;
 		deleteCap: ReturnType<typeof vi.fn>;
 		getCap: ReturnType<typeof vi.fn>;
 		getPlayback: ReturnType<typeof vi.fn>;
+		blockUser: ReturnType<typeof vi.fn>;
+		reportCap: ReturnType<typeof vi.fn>;
 		updateCapSharing: ReturnType<typeof vi.fn>;
 	};
 	refresh: ReturnType<typeof vi.fn>;
@@ -40,6 +43,7 @@ type AuthStub = {
 const detail: MobileCapDetail = {
 	cap: {
 		id: Video.VideoId.make("video_123"),
+		ownerId: User.UserId.make("user_123"),
 		shareUrl: "https://cap.so/s/video_123",
 		title: "Launch review",
 		createdAt: "2026-05-18T10:00:00.000Z",
@@ -54,6 +58,7 @@ const detail: MobileCapDetail = {
 		commentCount: 2,
 		reactionCount: 3,
 		upload: null,
+		ownedByCurrentUser: true,
 	},
 	summary: "A short launch walkthrough.",
 	chapters: [],
@@ -84,6 +89,12 @@ const createdComment = (content: string): MobileComment => ({
 	},
 });
 
+const createdComments = (count: number) =>
+	Array.from({ length: count }, (_, index) => ({
+		...createdComment(`Comment ${index + 1}`),
+		id: Comment.CommentId.make(`comment_${index + 1}`),
+	}));
+
 const createDeferred = <T,>() => {
 	let resolve!: (value: T | PromiseLike<T>) => void;
 	const promise = new Promise<T>((nextResolve) => {
@@ -97,7 +108,17 @@ const authState = vi.hoisted((): { value: AuthStub | null } => ({
 }));
 
 const videoPlayerState = vi.hoisted(() => ({
+	currentTime: 0,
+	play: vi.fn(),
 	replaceAsync: vi.fn(() => Promise.resolve()),
+}));
+
+const videoViewState = vi.hoisted(() => ({
+	renderCount: 0,
+}));
+
+const actionSheet = vi.hoisted(() => ({
+	showActionSheetWithOptions: vi.fn(),
 }));
 
 const renderComponent = async (
@@ -141,12 +162,15 @@ const resolveStyle = (
 
 const createAuth = (): AuthStub => ({
 	status: "signedIn",
+	apiKey: "api-key",
 	client: {
 		createComment: vi.fn(),
 		createReaction: vi.fn(),
 		deleteCap: vi.fn(),
 		getCap: vi.fn(() => Promise.resolve(detail)),
 		getPlayback: vi.fn(() => Promise.resolve(playback)),
+		blockUser: vi.fn(() => Promise.resolve({ success: true })),
+		reportCap: vi.fn(() => Promise.resolve({ success: true })),
 		updateCapSharing: vi.fn(),
 	},
 	refresh: vi.fn(() => Promise.resolve()),
@@ -160,9 +184,7 @@ vi.mock("react-native", async () => {
 			React.createElement(name, props, children);
 
 	return {
-		ActionSheetIOS: {
-			showActionSheetWithOptions: vi.fn(),
-		},
+		ActionSheetIOS: actionSheet,
 		Alert: {
 			alert: vi.fn(),
 		},
@@ -211,6 +233,7 @@ vi.mock("expo-router", async () => {
 	return {
 		router: {
 			back: vi.fn(),
+			push: vi.fn(),
 		},
 		Stack: {
 			Screen: (props: HostProps) =>
@@ -234,18 +257,65 @@ vi.mock("expo-symbols", async () => {
 vi.mock("expo-video", async () => {
 	const React = await import("react");
 	return {
-		VideoView: (props: Record<string, unknown>) =>
-			React.createElement("VideoView", props),
+		VideoView: React.forwardRef(
+			(props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+				videoViewState.renderCount += 1;
+				React.useImperativeHandle(ref, () => ({
+					enterFullscreen: vi.fn(() => Promise.resolve()),
+				}));
+				return React.createElement("VideoView", props);
+			},
+		),
 		useVideoPlayer: () => videoPlayerState,
 	};
 });
 
-vi.mock("expo-web-browser", () => ({
-	openBrowserAsync: vi.fn(),
+vi.mock("expo-haptics", () => ({
+	impactAsync: vi.fn(() => Promise.resolve()),
+	notificationAsync: vi.fn(() => Promise.resolve()),
+	selectionAsync: vi.fn(() => Promise.resolve()),
+	ImpactFeedbackStyle: {
+		Heavy: "heavy",
+		Light: "light",
+		Medium: "medium",
+		Rigid: "rigid",
+		Soft: "soft",
+	},
+	NotificationFeedbackType: {
+		Error: "error",
+		Success: "success",
+		Warning: "warning",
+	},
 }));
 
+vi.mock("react-native-reanimated", async () => {
+	const React = await import("react");
+	const AnimatedView = ({ children, ...props }: HostProps) =>
+		React.createElement("AnimatedView", props, children);
+	const builder = new Proxy(() => builder, {
+		get: () => () => builder,
+	});
+	const identity = <T,>(value: T) => value;
+	return {
+		default: { View: AnimatedView },
+		useSharedValue: <T,>(initial: T) =>
+			React.useRef({ value: initial }).current,
+		useAnimatedStyle: () => ({}),
+		withSpring: identity,
+		withTiming: identity,
+		withSequence: (...values: unknown[]) => values[values.length - 1],
+		withDelay: (_delay: number, value: unknown) => value,
+		cancelAnimation: () => {},
+		runOnJS:
+			<Args extends unknown[]>(fn: (...args: Args) => unknown) =>
+			(...args: Args) =>
+				fn(...args),
+		FadeIn: builder,
+		FadeInDown: builder,
+	};
+});
+
 vi.mock("@/auth/AuthContext", () => ({
-	apiBaseUrl: "https://cap.so",
 	useAuth: () => authState.value,
 }));
 
@@ -337,6 +407,7 @@ vi.mock("@/components/Screen", async () => {
 describe("Cap detail screen", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		videoViewState.renderCount = 0;
 		videoPlayerState.replaceAsync.mockResolvedValue(undefined);
 		authState.value = createAuth();
 	});
@@ -415,9 +486,153 @@ describe("Cap detail screen", () => {
 		expect(
 			hasProp(tree, "accessibilityLabel", "View analytics for Launch review"),
 		).toBe(true);
+		expect(hasProp(tree, "accessibilityHint", "Opens native analytics")).toBe(
+			true,
+		);
+	});
+
+	it("loads authenticated thumbnails with a stable cache key", async () => {
+		const auth = createAuth();
+		auth.client.getCap = vi.fn(() =>
+			Promise.resolve({
+				...detail,
+				cap: {
+					...detail.cap,
+					thumbnailUrl:
+						"https://cap.so/api/mobile/caps/video_123/thumbnail?v=1",
+					thumbnailCacheKey: "cap-thumbnail:video_123:1",
+				},
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const [image] = renderer.root.findAll(
+			(node) => String(node.type) === "Image" && node.props.source,
+		);
+
+		expect(image?.props.source).toEqual({
+			uri: "https://cap.so/api/mobile/caps/video_123/thumbnail?v=1",
+			cacheKey: "cap-thumbnail:video_123:1",
+			headers: { Authorization: "Bearer api-key" },
+		});
+	});
+
+	it("keeps another space member's Cap controls read-only", async () => {
+		const auth = createAuth();
+		auth.client.getCap = vi.fn(() =>
+			Promise.resolve({
+				...detail,
+				cap: {
+					...detail.cap,
+					ownedByCurrentUser: false,
+					protected: false,
+				},
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const tree = renderer.toJSON();
+		const text = getTextNodes(tree);
+
+		expect(text).toContain("Copy link");
+		expect(text).toContain("Share");
+		expect(text).not.toContain("Save video");
+		expect(text).not.toContain("View analytics");
 		expect(
-			hasProp(tree, "accessibilityHint", "Opens analytics in a browser sheet"),
-		).toBe(true);
+			hasProp(tree, "accessibilityLabel", "Change sharing for Launch review"),
+		).toBe(false);
+		const [stackScreen] = renderer.root.findAllByProps({
+			testID: "stack-screen",
+		});
+		if (!stackScreen) throw new Error("Stack screen options were not rendered");
+		expect(stackScreen.props.options.headerRight()).toBeNull();
+		expect(
+			renderer.root.findByProps({ testID: "cap-settings-sheet" }).props.visible,
+		).toBe(false);
+	});
+
+	it("submits an in-app content report with a review reason", async () => {
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const [safetyAction] = renderer.root.findAllByProps({
+			accessibilityLabel: "Report or block content",
+		});
+		if (!safetyAction)
+			throw new Error("Content safety action was not rendered");
+
+		await act(async () => {
+			safetyAction.props.onPress();
+		});
+		const safetyMenu = actionSheet.showActionSheetWithOptions.mock
+			.calls[0]?.[1] as ((index: number) => void) | undefined;
+		if (!safetyMenu) throw new Error("Content safety menu did not open");
+		await act(async () => {
+			safetyMenu(0);
+		});
+		const reasonMenu = actionSheet.showActionSheetWithOptions.mock
+			.calls[1]?.[1] as ((index: number) => void) | undefined;
+		if (!reasonMenu) throw new Error("Content report reasons did not open");
+		await act(async () => {
+			reasonMenu(0);
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		expect(authState.value?.client.reportCap).toHaveBeenCalledWith(
+			"video_123",
+			"harassment",
+		);
+	});
+
+	it("blocks another Cap owner from the content safety menu", async () => {
+		const auth = createAuth();
+		auth.client.getCap = vi.fn(() =>
+			Promise.resolve({
+				...detail,
+				cap: {
+					...detail.cap,
+					ownerId: User.UserId.make("user_456"),
+					ownerName: "Another user",
+					ownedByCurrentUser: false,
+				},
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const [safetyAction] = renderer.root.findAllByProps({
+			accessibilityLabel: "Report or block content",
+		});
+		if (!safetyAction)
+			throw new Error("Content safety action was not rendered");
+
+		await act(async () => {
+			safetyAction.props.onPress();
+		});
+		const safetyMenu = actionSheet.showActionSheetWithOptions.mock
+			.calls[0]?.[1] as ((index: number) => void) | undefined;
+		if (!safetyMenu) throw new Error("Content safety menu did not open");
+		await act(async () => {
+			safetyMenu(1);
+		});
+		const blockMenu = actionSheet.showActionSheetWithOptions.mock
+			.calls[1]?.[1] as ((index: number) => void) | undefined;
+		if (!blockMenu) throw new Error("Block confirmation did not open");
+		await act(async () => {
+			blockMenu(0);
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		const { router } = await import("expo-router");
+		expect(auth.client.blockUser).toHaveBeenCalledWith("user_456");
+		expect(router.back).toHaveBeenCalledTimes(1);
 	});
 
 	it("loads segmented playback explicitly as HLS with native controls", async () => {
@@ -451,19 +666,18 @@ describe("Cap detail screen", () => {
 		expect(screen.props.automaticallyAdjustKeyboardInsets).toBe(true);
 	});
 
-	it("offers a full reaction set without clipping it to one row", async () => {
+	it("offers the full reaction set in the reaction bar", async () => {
 		const renderer = await renderComponent(
 			React.createElement(CapDetailScreen),
 		);
 
 		for (const emoji of ["😂", "😍", "😮", "🙌", "👍", "👎", "👏", "🔥"]) {
-			expect(
-				renderer.root.findAll(
-					(node) =>
-						String(node.type) === "ActionButton" &&
-						node.props.accessibilityLabel === `React with ${emoji}`,
-				),
-			).toHaveLength(1);
+			const [option] = renderer.root.findAllByProps({
+				accessibilityLabel: `React with ${emoji}`,
+			});
+			if (!option) throw new Error(`Reaction option ${emoji} was not rendered`);
+			expect(option.props.accessibilityHint).toBe("Adds this reaction");
+			expect(option.props.onPress).toBeTypeOf("function");
 		}
 	});
 
@@ -525,6 +739,114 @@ describe("Cap detail screen", () => {
 		expect(enabledSend?.props.disabled).toBe(false);
 	});
 
+	it("keeps comment typing isolated from video rendering", async () => {
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const rendersBeforeTyping = videoViewState.renderCount;
+		const [commentInput] = renderer.root.findAllByProps({
+			accessibilityLabel: "Comment",
+		});
+		if (!commentInput) throw new Error("Comment input was not rendered");
+
+		await act(async () => {
+			commentInput.props.onChangeText("A smoother comment composer");
+		});
+
+		expect(videoViewState.renderCount).toBe(rendersBeforeTyping);
+	});
+
+	it("reveals long comment threads one bounded page at a time", async () => {
+		const comments = createdComments(60);
+		const auth = createAuth();
+		auth.client.getCap = vi.fn(() =>
+			Promise.resolve({
+				...detail,
+				cap: { ...detail.cap, commentCount: comments.length },
+				comments,
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+
+		expect(getTextNodes(renderer.toJSON())).toContain("Comment 24");
+		expect(getTextNodes(renderer.toJSON())).not.toContain("Comment 25");
+		const [firstPageButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Show 24 more comments",
+		});
+		if (!firstPageButton) throw new Error("Next comment page was not rendered");
+
+		await act(async () => {
+			firstPageButton.props.onPress();
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain("Comment 48");
+		expect(getTextNodes(renderer.toJSON())).not.toContain("Comment 49");
+		const [lastPageButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Show 12 more comments",
+		});
+		if (!lastPageButton) throw new Error("Last comment page was not rendered");
+
+		await act(async () => {
+			lastPageButton.props.onPress();
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain("Comment 60");
+		expect(
+			renderer.root.findAll(
+				(node) =>
+					typeof node.props.accessibilityLabel === "string" &&
+					node.props.accessibilityLabel.startsWith("Show ") &&
+					node.props.accessibilityLabel.endsWith(" more comments"),
+			),
+		).toHaveLength(0);
+	});
+
+	it("shows a newly created comment without mounting a whole long thread", async () => {
+		const comments = createdComments(60);
+		const auth = createAuth();
+		auth.client.getCap = vi.fn(() =>
+			Promise.resolve({
+				...detail,
+				cap: { ...detail.cap, commentCount: comments.length },
+				comments,
+			}),
+		);
+		auth.client.createComment.mockResolvedValueOnce(
+			createdComment("New comment"),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(
+			React.createElement(CapDetailScreen),
+		);
+		const [commentInput] = renderer.root.findAllByProps({
+			accessibilityLabel: "Comment",
+		});
+		if (!commentInput) throw new Error("Comment input was not rendered");
+
+		await act(async () => {
+			commentInput.props.onChangeText("New comment");
+		});
+		const [sendButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Send comment",
+		});
+		if (!sendButton) throw new Error("Send comment button was not rendered");
+
+		await act(async () => {
+			sendButton.props.onPress();
+			await Promise.resolve();
+		});
+
+		const text = getTextNodes(renderer.toJSON());
+		expect(text).toContain("New comment");
+		expect(text).not.toContain("Comment 25");
+		expect(
+			renderer.root.findByProps({ accessibilityLabel: "Comment" }).props.value,
+		).toBe("");
+	});
+
 	it("opens native settings from the sharing status", async () => {
 		const renderer = await renderComponent(
 			React.createElement(CapDetailScreen),
@@ -544,7 +866,7 @@ describe("Cap detail screen", () => {
 		expect(sheet?.props.visible).toBe(true);
 	});
 
-	it("opens analytics in the native browser sheet", async () => {
+	it("opens native analytics", async () => {
 		const renderer = await renderComponent(
 			React.createElement(CapDetailScreen),
 		);
@@ -553,17 +875,17 @@ describe("Cap detail screen", () => {
 		});
 		if (!analytics) throw new Error("Analytics row was not rendered");
 
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		openBrowserAsync.mockClear();
+		const { router } = await import("expo-router");
+		vi.mocked(router.push).mockClear();
 
 		await act(async () => {
 			analytics.props.onPress();
 		});
 
-		expect(openBrowserAsync).toHaveBeenCalledWith(
-			"https://cap.so/dashboard/analytics?capId=video_123",
-		);
+		expect(router.push).toHaveBeenCalledWith({
+			pathname: "/analytics",
+			params: { capId: "video_123" },
+		});
 	});
 
 	it("shows a save-specific busy state without blocking sharing as saving", async () => {

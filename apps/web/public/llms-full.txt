@@ -167,7 +167,7 @@ Current desktop app version: 0.5.3.
 - **Enterprise** — Custom. SLAs & priority support, SAML SSO & SCIM provisioning, managed self-hosting, volume discounts, advanced security controls, dedicated onboarding.
 - **Discounts** — STUDENT50 (30% off, students), MIGRATE20 (20% off first year, Loom switchers); volume discounts for teams over 10 users.
 
-Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 40,000+ users, teams, and creators.
+Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 50,000+ users, teams, and creators.
 
 ## How Cap Compares
 

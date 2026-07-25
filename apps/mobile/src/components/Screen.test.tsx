@@ -97,6 +97,44 @@ vi.mock("react-native-safe-area-context", async () => {
 	};
 });
 
+vi.mock("./CapLoadingIndicator", async () => {
+	const React = await import("react");
+	return {
+		CapLoadingIndicator: (props: HostProps) =>
+			React.createElement("CapLoadingIndicator", props),
+	};
+});
+
+vi.mock("./CapRefreshControl", async () => {
+	const React = await import("react");
+	return {
+		CapRefreshControl: (props: HostProps) =>
+			React.createElement("CapRefreshControl", props),
+		CapRefreshOverlay: (props: HostProps) =>
+			React.createElement("CapRefreshOverlay", props),
+	};
+});
+
+const findNodeByType = (
+	node: JsonNode,
+	type: string,
+): ReactTestRendererJSON | null => {
+	if (!node || typeof node === "string") return null;
+	if (Array.isArray(node)) {
+		for (const item of node) {
+			const match = findNodeByType(item, type);
+			if (match) return match;
+		}
+		return null;
+	}
+	if (node.type === type) return node;
+	for (const child of node.children ?? []) {
+		const match = findNodeByType(child, type);
+		if (match) return match;
+	}
+	return null;
+};
+
 describe("Screen", () => {
 	it("uses the Cap web subtitle scale", async () => {
 		const tree = await renderTree();
@@ -110,6 +148,12 @@ describe("Screen", () => {
 			lineHeight: 20,
 		});
 		expect(hasStyle(tree, { paddingBottom: 32 })).toBe(true);
+	});
+
+	it("shows the animated Cap logo while loading", async () => {
+		const tree = await renderTree(<Screen loading />);
+
+		expect(findNodeByType(tree, "CapLoadingIndicator")).not.toBeNull();
 	});
 
 	it("can keep focused inputs visible above the keyboard", async () => {

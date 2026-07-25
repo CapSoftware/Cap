@@ -6,16 +6,30 @@ Run every command in this directory unless noted otherwise.
 
 ## Local development
 
-From the repository root, `pnpm dev:mobile` starts the existing Cap web stack and launches the iOS development build. To run only the mobile client against an already-running backend:
+From the repository root, `pnpm dev:mobile` starts the Cap web stack and launches the iOS simulator:
+
+```sh
+pnpm dev:mobile
+```
+
+To start the web stack and install the development build on a connected iPhone, use:
+
+```sh
+pnpm dev:mobile:physical
+```
+
+The physical-device command discovers the Mac's current private LAN address and uses it for both the Cap API and Metro. Override it with `CAP_MOBILE_DEVICE_API_URL` only when the iPhone should use a different backend.
+
+To run only the mobile client against an already-running backend:
 
 ```sh
 pnpm dev
 ```
 
-For a physical iPhone, use:
+For a physical iPhone without starting the web stack, use:
 
 ```sh
-pnpm dev:device
+pnpm dev:physical
 ```
 
 ## One-time EAS setup
@@ -44,13 +58,13 @@ Create an internal iPhone build:
 pnpm build:preview
 ```
 
-Build the production app and submit it to App Store Connect:
+Build the production app:
 
 ```sh
 pnpm build:production
 ```
 
-Production build numbers are managed and incremented by EAS. To resubmit the latest production build without rebuilding it:
+Production build numbers are managed and incremented by EAS. After the build has passed release verification, submit the latest production build and the metadata in `store.config.json` to App Store Connect:
 
 ```sh
 pnpm submit:production

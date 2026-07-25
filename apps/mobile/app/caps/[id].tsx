@@ -1,10 +1,10 @@
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { type SFSymbol, SymbolView } from "expo-symbols";
 import { useVideoPlayer, VideoView } from "expo-video";
-import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionSheetIOS,
 	ActivityIndicator,
@@ -18,8 +18,19 @@ import {
 	TextInput,
 	View,
 } from "react-native";
-import type { MobileCapDetail, MobilePlaybackResponse } from "@/api/mobile";
-import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
+import Animated, {
+	FadeInDown,
+	useAnimatedStyle,
+	useSharedValue,
+	withSpring,
+	withTiming,
+} from "react-native-reanimated";
+import type {
+	MobileCapDetail,
+	MobileContentReportReason,
+	MobilePlaybackResponse,
+} from "@/api/mobile";
+import { useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
 import { CapSettingsSheet } from "@/caps/CapSettingsSheet";
 import { showCapPasswordActions } from "@/caps/passwordActions";
@@ -29,7 +40,10 @@ import {
 } from "@/caps/saveCapVideo";
 import { showCapTitleActions } from "@/caps/titleActions";
 import { ActionButton } from "@/components/ActionButton";
+import { Avatar } from "@/components/Avatar";
+import { CircleIconButton } from "@/components/CircleIconButton";
 import { GlassSurface } from "@/components/GlassSurface";
+import { ReactionBar, type ReactionCount } from "@/components/ReactionBar";
 import { Screen } from "@/components/Screen";
 import { colors, fonts, radius, squircle } from "@/theme";
 import { formatRelativeDate } from "@/utils/format";
@@ -71,8 +85,36 @@ const getCapDetailErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Unable to load this Cap";
 
 const reactionOptions = ["😂", "😍", "😮", "🙌", "👍", "👎", "👏", "🔥"];
+const reportReasons: ReadonlyArray<{
+	label: string;
+	value: MobileContentReportReason;
+}> = [
+	{ label: "Harassment or bullying", value: "harassment" },
+	{ label: "Hate speech", value: "hate" },
+	{ label: "Sexual content", value: "sexual" },
+	{ label: "Violence or threats", value: "violence" },
+	{ label: "Copyright infringement", value: "copyright" },
+	{ label: "Other concern", value: "other" },
+];
 
-type CapDetailOperation = "comment" | "save" | "visibility";
+const commentPageSize = 24;
+const animatedCommentCount = 12;
+
+const sectionEntrance = (order: number) =>
+	FadeInDown.springify()
+		.damping(18)
+		.stiffness(220)
+		.delay(order * 55);
+
+const formatChapterTime = (start: number) => {
+	const minutes = Math.floor(start / 60);
+	const seconds = Math.floor(start % 60)
+		.toString()
+		.padStart(2, "0");
+	return `${minutes}:${seconds}`;
+};
+
+type CapDetailOperation = "comment" | "safety" | "save" | "visibility";
 
 type AnalyticsMetricProps = {
 	symbol: SFSymbol;
@@ -80,8 +122,19 @@ type AnalyticsMetricProps = {
 };
 
 function AnalyticsMetric({ symbol, value }: AnalyticsMetricProps) {
+	const progress = useSharedValue(0);
+
+	useEffect(() => {
+		progress.value = withTiming(1, { duration: 320 });
+	}, [progress]);
+
+	const animatedStyle = useAnimatedStyle(() => ({
+		opacity: progress.value,
+		transform: [{ scale: 0.7 + progress.value * 0.3 }],
+	}));
+
 	return (
-		<View style={styles.metric}>
+		<Animated.View style={[styles.metric, animatedStyle]}>
 			<SymbolView
 				name={symbol}
 				size={15}
@@ -89,16 +142,271 @@ function AnalyticsMetric({ symbol, value }: AnalyticsMetricProps) {
 				weight="medium"
 			/>
 			<Text style={styles.metricText}>{value}</Text>
-		</View>
+		</Animated.View>
 	);
 }
+
+type PlayButtonProps = {
+	accessibilityHint: string;
+	accessibilityLabel: string;
+	onPress: () => void;
+};
+
+function PlayButton({
+	accessibilityHint,
+	accessibilityLabel,
+	onPress,
+}: PlayButtonProps) {
+	const scale = useSharedValue(1);
+
+	const animatedStyle = useAnimatedStyle(() => ({
+		transform: [{ scale: scale.value }],
+	}));
+
+	return (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityHint={accessibilityHint}
+			accessibilityLabel={accessibilityLabel}
+			hitSlop={16}
+			onPress={onPress}
+			onPressIn={() => {
+				scale.value = withSpring(0.92, {
+					damping: 18,
+					mass: 0.7,
+					stiffness: 320,
+				});
+			}}
+			onPressOut={() => {
+				scale.value = withSpring(1, { damping: 18, mass: 0.7, stiffness: 320 });
+			}}
+		>
+			<Animated.View style={[styles.playButton, animatedStyle]}>
+				<GlassSurface
+					fallbackStyle={styles.playButtonFallback}
+					glassEffectStyle="clear"
+					isInteractive
+					style={styles.playButtonGlass}
+					tintColor="rgba(255, 255, 255, 0.28)"
+				>
+					<SymbolView
+						name="play.fill"
+						size={28}
+						tintColor={colors.white}
+						weight="semibold"
+					/>
+				</GlassSurface>
+			</Animated.View>
+		</Pressable>
+	);
+}
+
+type CommentComposerProps = {
+	disabled: boolean;
+	isPosting: boolean;
+	onSubmit: (content: string) => Promise<boolean>;
+	title: string;
+};
+
+const CommentComposer = memo(function CommentComposer({
+	disabled,
+	isPosting,
+	onSubmit,
+	title,
+}: CommentComposerProps) {
+	const [comment, setComment] = useState("");
+	const trimmedComment = comment.trim();
+	const commentHint = isPosting
+		? "Comment is being sent"
+		: disabled
+			? "Current Cap action is in progress"
+			: "Add a comment to this Cap";
+	const sendCommentHint = isPosting
+		? "Comment is being sent"
+		: disabled
+			? "Current Cap action is in progress"
+			: trimmedComment
+				? "Adds this comment"
+				: "Enter a comment before sending";
+	const sendCommentAccessibilityLabel = isPosting
+		? `Sending comment on ${title}`
+		: "Send comment";
+	const canSendComment = Boolean(trimmedComment) && !disabled;
+
+	const submit = useCallback(async () => {
+		if (!trimmedComment || disabled) return;
+		if (await onSubmit(trimmedComment)) setComment("");
+	}, [disabled, onSubmit, trimmedComment]);
+
+	return (
+		<View style={styles.commentInputRow}>
+			<TextInput
+				accessibilityHint={commentHint}
+				accessibilityLabel="Comment"
+				accessibilityState={{ disabled }}
+				autoCapitalize="sentences"
+				autoCorrect
+				editable={!disabled}
+				enablesReturnKeyAutomatically
+				keyboardAppearance="light"
+				onChangeText={setComment}
+				onSubmitEditing={() => {
+					void submit();
+				}}
+				placeholder="Add a comment"
+				placeholderTextColor={colors.gray9}
+				returnKeyType="send"
+				selectionColor={colors.blue11}
+				style={[
+					styles.commentInput,
+					disabled ? styles.commentInputDisabled : null,
+				]}
+				submitBehavior="blurAndSubmit"
+				value={comment}
+				multiline
+			/>
+			<CircleIconButton
+				accessibilityHint={sendCommentHint}
+				accessibilityLabel={sendCommentAccessibilityLabel}
+				disabled={!canSendComment && !isPosting}
+				loading={isPosting}
+				onPress={() => {
+					void submit();
+				}}
+				size={46}
+				symbol="paperplane.fill"
+				tone="accent"
+			/>
+		</View>
+	);
+});
+
+type CommentListProps = {
+	comments: MobileCapDetail["comments"];
+};
+
+const CommentList = memo(function CommentList({ comments }: CommentListProps) {
+	return comments.map((item, index) => (
+		<Animated.View
+			entering={
+				index < animatedCommentCount
+					? FadeInDown.springify()
+							.damping(18)
+							.stiffness(220)
+							.delay(Math.min(index, 6) * 40)
+					: undefined
+			}
+			key={item.id}
+			style={styles.comment}
+		>
+			<Avatar
+				imageUrl={item.author.imageUrl}
+				name={item.author.name}
+				size={34}
+			/>
+			<View style={styles.commentBody}>
+				<View style={styles.commentMeta}>
+					<Text numberOfLines={1} style={styles.commentAuthor}>
+						{item.author.name ?? "Cap user"}
+					</Text>
+					<Text style={styles.commentDate}>
+						{formatRelativeDate(item.createdAt)}
+					</Text>
+				</View>
+				<Text style={styles.commentText}>{item.content}</Text>
+			</View>
+		</Animated.View>
+	));
+});
+
+type CommentsSectionProps = {
+	comments: MobileCapDetail["comments"];
+	disabled: boolean;
+	isPosting: boolean;
+	onCreateComment: (content: string) => Promise<string | null>;
+	title: string;
+};
+
+const CommentsSection = memo(function CommentsSection({
+	comments,
+	disabled,
+	isPosting,
+	onCreateComment,
+	title,
+}: CommentsSectionProps) {
+	const [visibleCommentCount, setVisibleCommentCount] =
+		useState(commentPageSize);
+	const [pinnedCommentId, setPinnedCommentId] = useState<string | null>(null);
+	const visibleComments = useMemo(() => {
+		const leadingComments = comments.slice(0, visibleCommentCount);
+		if (!pinnedCommentId) return leadingComments;
+		const pinnedComment = comments.find((item) => item.id === pinnedCommentId);
+		return pinnedComment &&
+			!leadingComments.some((item) => item.id === pinnedCommentId)
+			? [...leadingComments, pinnedComment]
+			: leadingComments;
+	}, [comments, pinnedCommentId, visibleCommentCount]);
+	const hiddenCommentCount = comments.length - visibleComments.length;
+	const nextCommentCount = Math.min(hiddenCommentCount, commentPageSize);
+	const submitComment = useCallback(
+		async (content: string) => {
+			const createdId = await onCreateComment(content);
+			if (!createdId) return false;
+			setPinnedCommentId(createdId);
+			return true;
+		},
+		[onCreateComment],
+	);
+
+	return (
+		<GlassSurface
+			fallbackStyle={styles.sectionFallback}
+			isInteractive
+			style={styles.section}
+			tintColor={colors.gray1}
+		>
+			<View style={styles.sectionHeader}>
+				<Text style={styles.sectionTitle}>Comments</Text>
+				<Text style={styles.countText}>{comments.length}</Text>
+			</View>
+			<CommentComposer
+				disabled={disabled}
+				isPosting={isPosting}
+				onSubmit={submitComment}
+				title={title}
+			/>
+			<CommentList comments={visibleComments} />
+			{hiddenCommentCount > 0 ? (
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel={`Show ${nextCommentCount} more comments`}
+					accessibilityHint="Shows the next comments"
+					onPress={() =>
+						setVisibleCommentCount((count) =>
+							Math.min(count + commentPageSize, comments.length),
+						)
+					}
+					style={({ pressed }) => [
+						styles.showAllComments,
+						pressed ? styles.showAllCommentsPressed : null,
+					]}
+				>
+					<Text style={styles.showAllCommentsText}>
+						Show {nextCommentCount} more comments
+					</Text>
+				</Pressable>
+			) : null}
+		</GlassSurface>
+	);
+});
 
 export default function CapDetailScreen() {
 	const { id } = useLocalSearchParams<{ id: string }>();
 	const auth = useAuth();
+	const authStatus = auth.status;
+	const apiClient = auth.client;
 	const [detail, setDetail] = useState<MobileCapDetail | null>(null);
 	const [playback, setPlayback] = useState<MobilePlaybackResponse | null>(null);
-	const [comment, setComment] = useState("");
 	const [loading, setLoading] = useState(true);
 	const [activeOperation, setActiveOperation] =
 		useState<CapDetailOperation | null>(null);
@@ -108,16 +416,19 @@ export default function CapDetailScreen() {
 	const [settingsVisible, setSettingsVisible] = useState(false);
 	const [playbackLoading, setPlaybackLoading] = useState(false);
 	const [playbackError, setPlaybackError] = useState<string | null>(null);
+	const [hasPlayed, setHasPlayed] = useState(false);
 	const player = useVideoPlayer(null);
+	const videoRef = useRef<VideoView>(null);
 
 	const load = useCallback(async () => {
-		if (auth.status !== "signedIn" || typeof id !== "string") return;
+		if (authStatus !== "signedIn" || typeof id !== "string") return;
 		setLoading(true);
 		setLoadError(null);
+		setHasPlayed(false);
 		try {
 			const [nextDetail, nextPlayback] = await Promise.all([
-				auth.client.getCap(id),
-				auth.client.getPlayback(id),
+				apiClient.getCap(id),
+				apiClient.getPlayback(id),
 			]);
 			setDetail(nextDetail);
 			setPlayback(nextPlayback);
@@ -128,11 +439,25 @@ export default function CapDetailScreen() {
 		} finally {
 			setLoading(false);
 		}
-	}, [auth, id]);
+	}, [apiClient, authStatus, id]);
 
 	useEffect(() => {
-		load().catch(() => {});
+		void load();
 	}, [load]);
+
+	const thumbnailUrl = detail?.cap.thumbnailUrl;
+	const thumbnailCacheKey = detail?.cap.thumbnailCacheKey;
+	const thumbnailCapId = detail?.cap.id;
+	const thumbnailSource = useMemo(() => {
+		if (!thumbnailUrl || !thumbnailCapId) return null;
+		return {
+			uri: thumbnailUrl,
+			cacheKey: thumbnailCacheKey ?? `cap-thumbnail:${thumbnailCapId}`,
+			headers: auth.apiKey
+				? { Authorization: `Bearer ${auth.apiKey}` }
+				: undefined,
+		};
+	}, [auth.apiKey, thumbnailCacheKey, thumbnailCapId, thumbnailUrl]);
 
 	useEffect(() => {
 		if (!playback?.url) {
@@ -177,12 +502,31 @@ export default function CapDetailScreen() {
 
 	const textComments = useMemo(
 		() => detail?.comments.filter((item) => item.type === "text") ?? [],
-		[detail],
+		[detail?.comments],
 	);
 	const reactions = useMemo(
 		() => detail?.comments.filter((item) => item.type === "emoji") ?? [],
-		[detail],
+		[detail?.comments],
 	);
+	const reactionCounts = useMemo<ReactionCount[]>(() => {
+		const tally = new Map<string, number>();
+		for (const item of reactions) {
+			tally.set(item.content, (tally.get(item.content) ?? 0) + 1);
+		}
+		const ordered: ReactionCount[] = [];
+		for (const emoji of reactionOptions) {
+			const count = tally.get(emoji);
+			if (count) {
+				ordered.push({ emoji, count });
+				tally.delete(emoji);
+			}
+		}
+		for (const [emoji, count] of tally) {
+			ordered.push({ emoji, count });
+		}
+		return ordered;
+	}, [reactions]);
+
 	const isActionInProgress = activeOperation !== null;
 	const isPostingComment = activeOperation === "comment";
 	const isSavingVideo = activeOperation === "save";
@@ -213,60 +557,49 @@ export default function CapDetailScreen() {
 			? actionInProgressHint
 			: "Opens sharing settings";
 	const sharingStatusLabel = detail?.cap.public ? "Shared" : "Not shared";
+	const canManageCap = detail ? detail.cap.ownedByCurrentUser !== false : false;
 	const sharingStatusAccessibilityValue =
 		isUpdatingVisibility && detail
 			? `Updating sharing for ${detail.cap.title}`
 			: undefined;
-	const commentHint = isPostingComment
-		? "Comment is being sent"
-		: isActionInProgress
-			? actionInProgressHint
-			: "Add a comment to this Cap";
-	const sendCommentHint = isPostingComment
-		? "Comment is being sent"
-		: isActionInProgress
-			? actionInProgressHint
-			: comment.trim().length > 0
-				? "Adds this comment"
-				: "Enter a comment before sending";
-	const sendCommentLabel = isPostingComment ? "Sending..." : "Send";
-	const sendCommentAccessibilityLabel =
-		isPostingComment && detail
-			? `Sending comment on ${detail.cap.title}`
-			: "Send comment";
-	const canSendComment = comment.trim().length > 0 && !isActionInProgress;
+	const capId = detail?.cap.id;
 
-	const createComment = async () => {
-		const trimmed = comment.trim();
-		if (!trimmed || !detail || isActionInProgress) return;
-		setActiveOperation("comment");
-		try {
-			const created = await auth.client.createComment(detail.cap.id, {
-				content: trimmed,
-				timestamp: null,
-			});
-			setDetail((current) =>
-				current
-					? {
-							...current,
-							comments: [...current.comments, created],
-							cap: {
-								...current.cap,
-								commentCount: current.cap.commentCount + 1,
-							},
-						}
-					: current,
-			);
-			setComment("");
-		} catch (error) {
-			Alert.alert(
-				"Comment failed",
-				error instanceof Error ? error.message : "Unable to add that comment.",
-			);
-		} finally {
-			setActiveOperation(null);
-		}
-	};
+	const createComment = useCallback(
+		async (content: string) => {
+			if (!capId || isActionInProgress) return null;
+			setActiveOperation("comment");
+			try {
+				const created = await apiClient.createComment(capId, {
+					content,
+					timestamp: null,
+				});
+				setDetail((current) =>
+					current
+						? {
+								...current,
+								comments: [...current.comments, created],
+								cap: {
+									...current.cap,
+									commentCount: current.cap.commentCount + 1,
+								},
+							}
+						: current,
+				);
+				return created.id;
+			} catch (error) {
+				Alert.alert(
+					"Comment failed",
+					error instanceof Error
+						? error.message
+						: "Unable to add that comment.",
+				);
+				return null;
+			} finally {
+				setActiveOperation(null);
+			}
+		},
+		[apiClient, capId, isActionInProgress],
+	);
 
 	const createReaction = async (emoji: string) => {
 		if (!detail) return;
@@ -300,6 +633,7 @@ export default function CapDetailScreen() {
 		try {
 			await Clipboard.setStringAsync(detail.shareUrl);
 			setCopied(true);
+			void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 		} catch (error) {
 			Alert.alert(
 				"Copy failed",
@@ -314,7 +648,7 @@ export default function CapDetailScreen() {
 	};
 
 	const updateVisibility = async (isPublic: boolean) => {
-		if (!detail || isActionInProgress) return;
+		if (!detail || !canManageCap || isActionInProgress) return;
 		setActiveOperation("visibility");
 		try {
 			const cap = await auth.client.updateCapSharing(detail.cap.id, {
@@ -335,7 +669,7 @@ export default function CapDetailScreen() {
 	};
 
 	const showPasswordActions = () => {
-		if (!detail || auth.status !== "signedIn") return;
+		if (!detail || !canManageCap || auth.status !== "signedIn") return;
 		showCapPasswordActions({
 			cap: detail.cap,
 			client: auth.client,
@@ -347,7 +681,7 @@ export default function CapDetailScreen() {
 	};
 
 	const showTitleActions = () => {
-		if (!detail || auth.status !== "signedIn") return;
+		if (!detail || !canManageCap || auth.status !== "signedIn") return;
 		showCapTitleActions({
 			cap: detail.cap,
 			client: auth.client,
@@ -359,11 +693,12 @@ export default function CapDetailScreen() {
 	};
 
 	const downloadVideo = async () => {
-		if (!detail || isActionInProgress) return;
+		if (!detail || !canManageCap || isActionInProgress) return;
 		setActiveOperation("save");
 		try {
 			await saveCapVideoToPhotos(auth.client, detail.cap.id);
 			setSaved(true);
+			void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 		} catch (error) {
 			if (error instanceof PhotosPermissionDeniedError) {
 				showPhotosSettingsAlert();
@@ -378,8 +713,23 @@ export default function CapDetailScreen() {
 		}
 	};
 
+	const playVideo = () => {
+		if (!playback?.url) return;
+		void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+		setHasPlayed(true);
+		player.play();
+		void videoRef.current?.enterFullscreen();
+	};
+
+	const seekToChapter = (start: number) => {
+		void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+		setHasPlayed(true);
+		player.currentTime = start;
+		player.play();
+	};
+
 	const deleteCap = () => {
-		if (!detail || isActionInProgress) return;
+		if (!detail || !canManageCap || isActionInProgress) return;
 		const confirmDelete = () => {
 			void (async () => {
 				setSettingsVisible(false);
@@ -418,14 +768,123 @@ export default function CapDetailScreen() {
 	};
 
 	const showMoreActions = () => {
+		if (!canManageCap) return;
 		setSettingsVisible(true);
 	};
 
 	const viewAnalytics = () => {
+		if (!detail || !canManageCap || isActionInProgress) return;
+		router.push({ pathname: "/analytics", params: { capId: detail.cap.id } });
+	};
+
+	const reportCap = async (reason: MobileContentReportReason) => {
 		if (!detail || isActionInProgress) return;
-		const url = new URL("/dashboard/analytics", apiBaseUrl);
-		url.searchParams.set("capId", detail.cap.id);
-		void WebBrowser.openBrowserAsync(url.toString());
+		setActiveOperation("safety");
+		try {
+			await auth.client.reportCap(detail.cap.id, reason);
+			Alert.alert(
+				"Report received",
+				"Cap Support will review this content promptly.",
+			);
+		} catch {
+			Alert.alert(
+				"Report failed",
+				"Your report could not be submitted. Check your connection and try again.",
+			);
+		} finally {
+			setActiveOperation(null);
+		}
+	};
+
+	const blockCapOwner = async () => {
+		const ownerId = detail?.cap.ownerId;
+		if (
+			!detail ||
+			!ownerId ||
+			detail.cap.ownedByCurrentUser !== false ||
+			isActionInProgress
+		) {
+			return;
+		}
+
+		setActiveOperation("safety");
+		try {
+			await auth.client.blockUser(ownerId);
+			await auth.refresh().catch(() => undefined);
+			router.back();
+			Alert.alert(
+				"User blocked",
+				"You and this user will no longer see each other’s Caps or comments in the mobile app.",
+			);
+		} catch {
+			Alert.alert(
+				"Block failed",
+				"This user could not be blocked. Check your connection and try again.",
+			);
+		} finally {
+			setActiveOperation(null);
+		}
+	};
+
+	const showReportReasons = () => {
+		ActionSheetIOS.showActionSheetWithOptions(
+			{
+				cancelButtonIndex: reportReasons.length,
+				options: [...reportReasons.map((reason) => reason.label), "Cancel"],
+				title: "Why are you reporting this Cap?",
+				tintColor: colors.blue11,
+				userInterfaceStyle: "light",
+			},
+			(index) => {
+				const reason = reportReasons[index];
+				if (reason) void reportCap(reason.value);
+			},
+		);
+	};
+
+	const confirmBlockOwner = () => {
+		if (!detail || detail.cap.ownedByCurrentUser !== false) return;
+		ActionSheetIOS.showActionSheetWithOptions(
+			{
+				cancelButtonIndex: 1,
+				destructiveButtonIndex: 0,
+				message:
+					"You and this user will no longer see each other’s Caps or comments in the mobile app.",
+				options: [`Block ${detail.cap.ownerName || "this user"}`, "Cancel"],
+				title: "Block this user?",
+				tintColor: colors.blue11,
+				userInterfaceStyle: "light",
+			},
+			(index) => {
+				if (index === 0) void blockCapOwner();
+			},
+		);
+	};
+
+	const showSafetyActions = () => {
+		if (!detail || isActionInProgress) return;
+		const canBlock =
+			Boolean(detail.cap.ownerId) && detail.cap.ownedByCurrentUser === false;
+		const options = canBlock
+			? [
+					"Report this Cap",
+					`Block ${detail.cap.ownerName || "this user"}`,
+					"Cancel",
+				]
+			: ["Report this Cap", "Cancel"];
+		ActionSheetIOS.showActionSheetWithOptions(
+			{
+				cancelButtonIndex: options.length - 1,
+				options,
+				title: "Content safety",
+				tintColor: colors.blue11,
+				userInterfaceStyle: "light",
+			},
+			(index) => {
+				if (index === 0) showReportReasons();
+				if (canBlock && index === 1) confirmBlockOwner();
+			},
+		);
 	};
 
 	if (auth.status === "signedOut") {
@@ -442,13 +901,14 @@ export default function CapDetailScreen() {
 				options={{
 					headerShown: true,
 					headerTransparent: true,
+					headerBackButtonDisplayMode: "minimal",
 					headerBlurEffect: "systemThinMaterialLight",
 					headerShadowVisible: false,
 					headerStyle: { backgroundColor: colors.glass },
 					headerTintColor: colors.gray12,
 					headerTitleStyle: { fontFamily: fonts.medium },
 					headerRight: () =>
-						detail ? (
+						detail && canManageCap ? (
 							<Pressable
 								accessibilityRole="button"
 								accessibilityLabel="More actions"
@@ -513,7 +973,10 @@ export default function CapDetailScreen() {
 					</View>
 				) : detail ? (
 					<>
-						<View style={styles.videoFrame}>
+						<Animated.View
+							entering={sectionEntrance(0)}
+							style={styles.videoCard}
+						>
 							{playback?.url ? (
 								<>
 									<VideoView
@@ -522,21 +985,42 @@ export default function CapDetailScreen() {
 										fullscreenOptions={{ enable: true }}
 										nativeControls
 										player={player}
+										ref={videoRef}
 										style={styles.video}
 									/>
 									{playbackLoading ? (
 										<View style={styles.videoLoadingOverlay}>
-											{detail.cap.thumbnailUrl ? (
+											{thumbnailSource ? (
 												<Image
 													cachePolicy="memory-disk"
 													contentFit="cover"
-													source={{ uri: detail.cap.thumbnailUrl }}
+													recyclingKey={detail.cap.id}
+													source={thumbnailSource}
 													style={StyleSheet.absoluteFillObject}
 												/>
 											) : null}
 											<View style={styles.videoLoadingIndicator}>
 												<ActivityIndicator color={colors.white} />
 											</View>
+										</View>
+									) : null}
+									{!hasPlayed && !playbackLoading && !playbackError ? (
+										<View style={styles.posterOverlay}>
+											{thumbnailSource ? (
+												<Image
+													cachePolicy="memory-disk"
+													contentFit="cover"
+													recyclingKey={detail.cap.id}
+													source={thumbnailSource}
+													style={StyleSheet.absoluteFillObject}
+												/>
+											) : null}
+											<View pointerEvents="none" style={styles.posterScrim} />
+											<PlayButton
+												accessibilityHint="Plays this video in fullscreen"
+												accessibilityLabel={`Play ${detail.cap.title}`}
+												onPress={playVideo}
+											/>
 										</View>
 									) : null}
 									{playbackError ? (
@@ -566,68 +1050,92 @@ export default function CapDetailScreen() {
 									<Text style={styles.placeholderText}>Processing video</Text>
 								</View>
 							)}
-						</View>
-						<View style={styles.titleBlock}>
+						</Animated.View>
+						<Animated.View
+							entering={sectionEntrance(1)}
+							style={styles.titleBlock}
+						>
 							<Text style={styles.title}>{detail.cap.title}</Text>
-							<Text style={styles.meta}>
-								{formatRelativeDate(detail.cap.createdAt)} ·{" "}
-								{detail.cap.ownerName}
-							</Text>
+							<View style={styles.ownerRow}>
+								<Avatar name={detail.cap.ownerName} size={38} />
+								<View style={styles.ownerText}>
+									<Text numberOfLines={1} style={styles.ownerName}>
+										{detail.cap.ownerName}
+									</Text>
+									<Text style={styles.ownerDate}>
+										{formatRelativeDate(detail.cap.createdAt)}
+									</Text>
+								</View>
+							</View>
 							<View style={styles.statusRow}>
-								<Pressable
-									accessibilityRole="button"
-									accessibilityLabel={`Change sharing for ${detail.cap.title}`}
-									accessibilityHint={sharingStatusHint}
-									accessibilityState={{ disabled: isActionInProgress }}
-									accessibilityValue={
-										isUpdatingVisibility
-											? {
-													text:
-														sharingStatusAccessibilityValue ??
-														sharingStatusLabel,
-												}
-											: undefined
-									}
-									disabled={isActionInProgress}
-									hitSlop={6}
-									onPress={() => setSettingsVisible(true)}
-									style={({ pressed }) => [
-										styles.shareStatusButton,
-										pressed && !isActionInProgress
-											? styles.shareStatusButtonPressed
-											: null,
-										isActionInProgress
-											? styles.shareStatusButtonDisabled
-											: null,
-									]}
-								>
-									<SymbolView
-										name={detail.cap.public ? "globe" : "lock.open"}
-										size={14}
-										tintColor={
-											isActionInProgress ? colors.gray9 : colors.gray10
+								{canManageCap ? (
+									<Pressable
+										accessibilityRole="button"
+										accessibilityLabel={`Change sharing for ${detail.cap.title}`}
+										accessibilityHint={sharingStatusHint}
+										accessibilityState={{ disabled: isActionInProgress }}
+										accessibilityValue={
+											isUpdatingVisibility
+												? {
+														text:
+															sharingStatusAccessibilityValue ??
+															sharingStatusLabel,
+													}
+												: undefined
 										}
-										weight="medium"
-									/>
-									<Text
-										style={[
-											styles.shareStatusText,
+										disabled={isActionInProgress}
+										hitSlop={6}
+										onPress={() => setSettingsVisible(true)}
+										style={({ pressed }) => [
+											styles.shareStatusButton,
+											pressed && !isActionInProgress
+												? styles.shareStatusButtonPressed
+												: null,
 											isActionInProgress
-												? styles.shareStatusTextDisabled
+												? styles.shareStatusButtonDisabled
 												: null,
 										]}
 									>
-										{sharingStatusLabel}
-									</Text>
-									<SymbolView
-										name="chevron.down"
-										size={10}
-										tintColor={
-											isActionInProgress ? colors.gray9 : colors.gray10
-										}
-										weight="semibold"
-									/>
-								</Pressable>
+										<SymbolView
+											name={detail.cap.public ? "globe" : "lock.open"}
+											size={14}
+											tintColor={
+												isActionInProgress ? colors.gray9 : colors.gray10
+											}
+											weight="medium"
+										/>
+										<Text
+											style={[
+												styles.shareStatusText,
+												isActionInProgress
+													? styles.shareStatusTextDisabled
+													: null,
+											]}
+										>
+											{sharingStatusLabel}
+										</Text>
+										<SymbolView
+											name="chevron.down"
+											size={10}
+											tintColor={
+												isActionInProgress ? colors.gray9 : colors.gray10
+											}
+											weight="semibold"
+										/>
+									</Pressable>
+								) : (
+									<View style={styles.shareStatusButton}>
+										<SymbolView
+											name={detail.cap.public ? "globe" : "lock.open"}
+											size={14}
+											tintColor={colors.gray10}
+											weight="medium"
+										/>
+										<Text style={styles.shareStatusText}>
+											{sharingStatusLabel}
+										</Text>
+									</View>
+								)}
 								{detail.cap.protected ? (
 									<View style={styles.passwordPill}>
 										<SymbolView
@@ -642,195 +1150,189 @@ export default function CapDetailScreen() {
 									</View>
 								) : null}
 							</View>
-						</View>
-						<View style={styles.actions}>
-							<ActionButton
-								label={copied ? "Copied" : "Copy link"}
+						</Animated.View>
+						<Animated.View entering={sectionEntrance(2)} style={styles.actions}>
+							<CircleIconButton
 								accessibilityHint="Copies this Cap link"
-								variant="secondary"
-								onPress={copyLink}
-								style={styles.actionButton}
-								symbol={copied ? "checkmark" : "doc.on.doc"}
+								accessibilityLabel={copied ? "Copied" : "Copy link"}
+								active={copied}
+								caption={copied ? "Copied" : "Copy link"}
+								onPress={() => {
+									void copyLink();
+								}}
+								symbol="doc.on.doc"
 							/>
-							<ActionButton
-								label="Share"
+							<CircleIconButton
 								accessibilityHint="Opens the native share sheet"
-								variant="secondary"
-								onPress={shareLink}
-								style={styles.actionButton}
+								accessibilityLabel="Share"
+								caption="Share"
+								onPress={() => {
+									void shareLink();
+								}}
 								symbol="square.and.arrow.up"
 							/>
-							<ActionButton
-								label={saveVideoLabel}
-								accessibilityLabel={saveVideoAccessibilityLabel}
-								accessibilityValue={saveVideoAccessibilityValue}
-								accessibilityHint={saveVideoHint}
-								variant="secondary"
-								onPress={downloadVideo}
-								disabled={isActionInProgress && !isSavingVideo}
-								loading={isSavingVideo}
-								style={styles.actionButton}
-								symbol={saved ? "checkmark" : "square.and.arrow.down"}
-							/>
-						</View>
-						<Pressable
-							accessibilityRole="button"
-							accessibilityLabel={`View analytics for ${detail.cap.title}`}
-							accessibilityHint="Opens analytics in a browser sheet"
-							onPress={viewAnalytics}
-							style={({ pressed }) => [
-								styles.analyticsPanel,
-								pressed && styles.analyticsPanelPressed,
-							]}
-						>
-							<View style={styles.analyticsMetrics}>
-								<AnalyticsMetric symbol="eye" value={detail.cap.viewCount} />
-								<AnalyticsMetric
-									symbol="text.bubble"
-									value={detail.cap.commentCount}
-								/>
-								<AnalyticsMetric
-									symbol="face.smiling"
-									value={detail.cap.reactionCount}
-								/>
-							</View>
-							<Text style={styles.analyticsLink}>View analytics</Text>
-						</Pressable>
-						{detail.summary ? (
-							<GlassSurface
-								fallbackStyle={styles.sectionFallback}
-								isInteractive
-								style={styles.section}
-								tintColor={colors.gray1}
-							>
-								<Text style={styles.sectionTitle}>Summary</Text>
-								<Text style={styles.bodyText}>{detail.summary}</Text>
-							</GlassSurface>
-						) : null}
-						{detail.chapters.length > 0 ? (
-							<GlassSurface
-								fallbackStyle={styles.sectionFallback}
-								isInteractive
-								style={styles.section}
-								tintColor={colors.gray1}
-							>
-								<Text style={styles.sectionTitle}>Chapters</Text>
-								{detail.chapters.map((chapter) => (
-									<View
-										key={`${chapter.start}-${chapter.title}`}
-										style={styles.chapter}
-									>
-										<Text style={styles.chapterTime}>
-											{Math.floor(chapter.start / 60)}:
-											{Math.floor(chapter.start % 60)
-												.toString()
-												.padStart(2, "0")}
-										</Text>
-										<Text numberOfLines={2} style={styles.chapterTitle}>
-											{chapter.title}
-										</Text>
-									</View>
-								))}
-							</GlassSurface>
-						) : null}
-						<GlassSurface
-							fallbackStyle={styles.sectionFallback}
-							isInteractive
-							style={styles.section}
-							tintColor={colors.gray1}
-						>
-							<View style={styles.sectionHeader}>
-								<Text style={styles.sectionTitle}>Reactions</Text>
-								<Text style={styles.countText}>{reactions.length}</Text>
-							</View>
-							<View style={styles.reactions}>
-								{reactionOptions.map((emoji) => (
-									<ActionButton
-										key={emoji}
-										label={emoji}
-										accessibilityLabel={`React with ${emoji}`}
-										accessibilityHint="Adds this reaction"
-										variant="secondary"
-										onPress={() => createReaction(emoji)}
-										style={styles.reactionButton}
-									>
-										{emoji}
-									</ActionButton>
-								))}
-							</View>
-						</GlassSurface>
-						<GlassSurface
-							fallbackStyle={styles.sectionFallback}
-							isInteractive
-							style={styles.section}
-							tintColor={colors.gray1}
-						>
-							<View style={styles.sectionHeader}>
-								<Text style={styles.sectionTitle}>Comments</Text>
-								<Text style={styles.countText}>{textComments.length}</Text>
-							</View>
-							<View style={styles.commentInputRow}>
-								<TextInput
-									accessibilityHint={commentHint}
-									accessibilityLabel="Comment"
-									accessibilityState={{ disabled: isActionInProgress }}
-									autoCapitalize="sentences"
-									autoCorrect
-									editable={!isActionInProgress}
-									enablesReturnKeyAutomatically
-									keyboardAppearance="light"
-									onChangeText={setComment}
-									onSubmitEditing={() => {
-										void createComment();
+							{canManageCap ? (
+								<CircleIconButton
+									accessibilityHint={saveVideoHint}
+									accessibilityLabel={
+										saveVideoAccessibilityLabel ?? saveVideoLabel
+									}
+									accessibilityValue={saveVideoAccessibilityValue}
+									active={saved}
+									caption={saveVideoLabel}
+									disabled={isActionInProgress && !isSavingVideo}
+									loading={isSavingVideo}
+									onPress={() => {
+										void downloadVideo();
 									}}
-									placeholder="Add a comment"
-									placeholderTextColor={colors.gray9}
-									returnKeyType="send"
-									selectionColor={colors.blue11}
-									style={[
-										styles.commentInput,
-										isActionInProgress ? styles.commentInputDisabled : null,
+									symbol="square.and.arrow.down"
+								/>
+							) : null}
+						</Animated.View>
+						<Animated.View entering={sectionEntrance(3)}>
+							{canManageCap ? (
+								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel={`View analytics for ${detail.cap.title}`}
+									accessibilityHint="Opens native analytics"
+									onPress={viewAnalytics}
+									style={({ pressed }) => [
+										styles.analyticsPanel,
+										pressed && styles.analyticsPanelPressed,
 									]}
-									submitBehavior="blurAndSubmit"
-									value={comment}
-									multiline
-								/>
-								<ActionButton
-									label={sendCommentLabel}
-									accessibilityLabel={sendCommentAccessibilityLabel}
-									accessibilityHint={sendCommentHint}
-									onPress={createComment}
-									disabled={!canSendComment && !isPostingComment}
-									loading={isPostingComment}
-									style={styles.sendButton}
-									symbol="paperplane.fill"
-								/>
-							</View>
-							{textComments.map((item) => (
-								<View key={item.id} style={styles.comment}>
-									<View style={styles.commentIcon}>
-										<SymbolView
-											name="text.bubble"
-											size={16}
-											tintColor={colors.blue11}
-											weight="medium"
+								>
+									<View style={styles.analyticsMetrics}>
+										<AnalyticsMetric
+											symbol="eye"
+											value={detail.cap.viewCount}
+										/>
+										<AnalyticsMetric
+											symbol="text.bubble"
+											value={detail.cap.commentCount}
+										/>
+										<AnalyticsMetric
+											symbol="face.smiling"
+											value={detail.cap.reactionCount}
 										/>
 									</View>
-									<View style={styles.commentBody}>
-										<Text numberOfLines={1} style={styles.commentAuthor}>
-											{item.author.name ?? "Cap user"}
-										</Text>
-										<Text style={styles.commentText}>{item.content}</Text>
+									<Text style={styles.analyticsLink}>View analytics</Text>
+								</Pressable>
+							) : (
+								<View style={styles.analyticsPanel}>
+									<View style={styles.analyticsMetrics}>
+										<AnalyticsMetric
+											symbol="eye"
+											value={detail.cap.viewCount}
+										/>
+										<AnalyticsMetric
+											symbol="text.bubble"
+											value={detail.cap.commentCount}
+										/>
+										<AnalyticsMetric
+											symbol="face.smiling"
+											value={detail.cap.reactionCount}
+										/>
 									</View>
 								</View>
-							))}
-						</GlassSurface>
+							)}
+						</Animated.View>
+						{detail.summary ? (
+							<Animated.View entering={sectionEntrance(4)}>
+								<GlassSurface
+									fallbackStyle={styles.sectionFallback}
+									isInteractive
+									style={styles.section}
+									tintColor={colors.gray1}
+								>
+									<Text style={styles.sectionTitle}>Summary</Text>
+									<Text style={styles.bodyText}>{detail.summary}</Text>
+								</GlassSurface>
+							</Animated.View>
+						) : null}
+						{detail.chapters.length > 0 ? (
+							<Animated.View entering={sectionEntrance(5)}>
+								<GlassSurface
+									fallbackStyle={styles.sectionFallback}
+									isInteractive
+									style={styles.section}
+									tintColor={colors.gray1}
+								>
+									<Text style={styles.sectionTitle}>Chapters</Text>
+									{detail.chapters.map((chapter) => (
+										<Pressable
+											accessibilityRole="button"
+											accessibilityHint="Plays this chapter"
+											accessibilityLabel={`Play chapter ${chapter.title}`}
+											key={`${chapter.start}-${chapter.title}`}
+											onPress={() => seekToChapter(chapter.start)}
+											style={({ pressed }) => [
+												styles.chapter,
+												pressed ? styles.chapterPressed : null,
+											]}
+										>
+											<Text style={styles.chapterTime}>
+												{formatChapterTime(chapter.start)}
+											</Text>
+											<Text numberOfLines={2} style={styles.chapterTitle}>
+												{chapter.title}
+											</Text>
+											<SymbolView
+												name="play.circle.fill"
+												size={20}
+												tintColor={colors.blue11}
+												weight="medium"
+											/>
+										</Pressable>
+									))}
+								</GlassSurface>
+							</Animated.View>
+						) : null}
+						<Animated.View entering={sectionEntrance(6)}>
+							<ReactionBar
+								counts={reactionCounts}
+								onReact={(emoji) => {
+									void createReaction(emoji);
+								}}
+								options={reactionOptions}
+								total={reactions.length}
+							/>
+						</Animated.View>
+						<Animated.View entering={sectionEntrance(7)}>
+							<CommentsSection
+								key={detail.cap.id}
+								comments={textComments}
+								disabled={isActionInProgress}
+								isPosting={isPostingComment}
+								onCreateComment={createComment}
+								title={detail.cap.title}
+							/>
+						</Animated.View>
+						<Pressable
+							accessibilityHint="Reports this Cap or blocks its owner"
+							accessibilityLabel="Report or block content"
+							accessibilityRole="button"
+							accessibilityState={{ disabled: isActionInProgress }}
+							disabled={isActionInProgress}
+							onPress={showSafetyActions}
+							style={({ pressed }) => [
+								styles.safetyAction,
+								pressed ? styles.safetyActionPressed : null,
+							]}
+						>
+							<SymbolView
+								name="exclamationmark.bubble"
+								size={16}
+								tintColor={colors.gray10}
+								weight="medium"
+							/>
+							<Text style={styles.safetyActionText}>Report or block</Text>
+						</Pressable>
 					</>
 				) : null}
 			</Screen>
 			<CapSettingsSheet
 				cap={detail?.cap ?? null}
-				visible={settingsVisible && detail !== null}
+				visible={settingsVisible && detail !== null && canManageCap}
 				onClose={() => setSettingsVisible(false)}
 				onCopyLink={() => {
 					void copyLink();
@@ -879,15 +1381,19 @@ const styles = StyleSheet.create({
 	headerActionDisabled: {
 		opacity: 0.55,
 	},
-	videoFrame: {
+	videoCard: {
 		width: "100%",
 		aspectRatio: 16 / 9,
-		borderRadius: radius.md,
+		borderRadius: radius.xl,
 		borderWidth: StyleSheet.hairlineWidth,
 		borderColor: colors.gray3,
 		overflow: "hidden",
 		backgroundColor: colors.black,
-		marginBottom: 14,
+		marginBottom: 18,
+		shadowColor: colors.black,
+		shadowOffset: { width: 0, height: 12 },
+		shadowOpacity: 0.16,
+		shadowRadius: 24,
 		...squircle,
 	},
 	video: {
@@ -907,6 +1413,16 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		justifyContent: "center",
 		backgroundColor: "rgba(0, 0, 0, 0.62)",
+	},
+	posterOverlay: {
+		...StyleSheet.absoluteFillObject,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.black,
+	},
+	posterScrim: {
+		...StyleSheet.absoluteFillObject,
+		backgroundColor: "rgba(0, 0, 0, 0.18)",
 	},
 	videoErrorOverlay: {
 		...StyleSheet.absoluteFillObject,
@@ -930,20 +1446,55 @@ const styles = StyleSheet.create({
 		fontFamily: fonts.medium,
 		color: colors.gray10,
 	},
+	playButton: {
+		width: 68,
+		height: 68,
+		borderRadius: radius.full,
+		overflow: "hidden",
+		borderWidth: StyleSheet.hairlineWidth,
+		borderColor: "rgba(255, 255, 255, 0.5)",
+		...squircle,
+	},
+	playButtonGlass: {
+		flex: 1,
+		alignItems: "center",
+		justifyContent: "center",
+		paddingLeft: 4,
+	},
+	playButtonFallback: {
+		backgroundColor: "rgba(0, 0, 0, 0.42)",
+	},
 	titleBlock: {
-		gap: 4,
-		marginBottom: 14,
+		gap: 14,
+		marginBottom: 20,
 	},
 	title: {
 		fontFamily: fonts.medium,
-		fontSize: 24,
-		lineHeight: 30,
+		fontSize: 28,
+		lineHeight: 34,
+		letterSpacing: -0.5,
 		color: colors.gray12,
 	},
-	meta: {
-		fontFamily: fonts.regular,
-		fontSize: 14,
+	ownerRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+	},
+	ownerText: {
+		flex: 1,
+		minWidth: 0,
+		gap: 1,
+	},
+	ownerName: {
+		fontFamily: fonts.medium,
+		fontSize: 15,
 		lineHeight: 20,
+		color: colors.gray12,
+	},
+	ownerDate: {
+		fontFamily: fonts.regular,
+		fontSize: 13,
+		lineHeight: 18,
 		color: colors.gray10,
 	},
 	statusRow: {
@@ -951,7 +1502,6 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		flexWrap: "wrap",
 		gap: 8,
-		marginTop: 4,
 	},
 	shareStatusButton: {
 		minHeight: 30,
@@ -1004,13 +1554,9 @@ const styles = StyleSheet.create({
 	},
 	actions: {
 		flexDirection: "row",
-		flexWrap: "wrap",
+		justifyContent: "space-around",
 		gap: 8,
-		marginBottom: 18,
-	},
-	actionButton: {
-		flexBasis: 112,
-		flexGrow: 1,
+		marginBottom: 22,
 	},
 	analyticsPanel: {
 		minHeight: 42,
@@ -1128,6 +1674,10 @@ const styles = StyleSheet.create({
 		padding: 10,
 		...squircle,
 	},
+	chapterPressed: {
+		backgroundColor: colors.gray3,
+		borderColor: colors.gray5,
+	},
 	chapterTime: {
 		width: 44,
 		fontFamily: fonts.medium,
@@ -1140,20 +1690,10 @@ const styles = StyleSheet.create({
 		fontSize: 14,
 		color: colors.gray12,
 	},
-	reactions: {
-		flexDirection: "row",
-		flexWrap: "wrap",
-		gap: 8,
-	},
-	reactionButton: {
-		flexBasis: "21%",
-		flexGrow: 1,
-		maxWidth: 80,
-	},
 	commentInputRow: {
 		flexDirection: "row",
 		alignItems: "flex-end",
-		gap: 8,
+		gap: 10,
 	},
 	commentInput: {
 		flex: 1,
@@ -1174,9 +1714,6 @@ const styles = StyleSheet.create({
 		backgroundColor: colors.gray3,
 		color: colors.gray10,
 	},
-	sendButton: {
-		width: 92,
-	},
 	comment: {
 		flexDirection: "row",
 		gap: 10,
@@ -1187,29 +1724,66 @@ const styles = StyleSheet.create({
 		padding: 12,
 		...squircle,
 	},
-	commentIcon: {
-		width: 30,
-		height: 30,
-		borderRadius: radius.sm,
-		alignItems: "center",
-		justifyContent: "center",
-		backgroundColor: colors.blue3,
-		...squircle,
-	},
 	commentBody: {
 		flex: 1,
 		minWidth: 0,
 		gap: 3,
 	},
+	commentMeta: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 8,
+	},
 	commentAuthor: {
+		flexShrink: 1,
 		fontFamily: fonts.medium,
 		fontSize: 14,
 		color: colors.gray12,
+	},
+	commentDate: {
+		fontFamily: fonts.regular,
+		fontSize: 12,
+		color: colors.gray9,
 	},
 	commentText: {
 		fontFamily: fonts.regular,
 		fontSize: 14,
 		lineHeight: 20,
 		color: colors.gray11,
+	},
+	safetyAction: {
+		alignItems: "center",
+		alignSelf: "center",
+		flexDirection: "row",
+		gap: 6,
+		marginTop: 6,
+		paddingHorizontal: 14,
+		paddingVertical: 10,
+	},
+	safetyActionPressed: {
+		opacity: 0.65,
+	},
+	safetyActionText: {
+		color: colors.gray10,
+		fontFamily: fonts.medium,
+		fontSize: 13,
+	},
+	showAllComments: {
+		minHeight: 42,
+		alignItems: "center",
+		justifyContent: "center",
+		borderRadius: radius.sm,
+		backgroundColor: colors.gray2,
+		borderWidth: StyleSheet.hairlineWidth,
+		borderColor: colors.gray3,
+		...squircle,
+	},
+	showAllCommentsPressed: {
+		backgroundColor: colors.gray3,
+	},
+	showAllCommentsText: {
+		fontFamily: fonts.medium,
+		fontSize: 14,
+		color: colors.blue11,
 	},
 });

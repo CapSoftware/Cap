@@ -3,7 +3,6 @@ import "react-native-reanimated";
 
 import { Stack, useSegments } from "expo-router";
 import {
-	ActivityIndicator,
 	KeyboardAvoidingView,
 	Platform,
 	ScrollView,
@@ -16,6 +15,7 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
 import { signInTitleForSegments } from "@/auth/signInDestination";
+import { CapLoadingIndicator } from "@/components/CapLoadingIndicator";
 import { RecordingUploadStatus } from "@/components/recording-upload-status";
 import { colors } from "@/theme";
 import { RecordingUploadProvider } from "@/uploads/recording-upload-provider";
@@ -27,7 +27,7 @@ function AppShell() {
 	if (auth.status === "loading") {
 		return (
 			<View style={styles.loadingScreen}>
-				<ActivityIndicator color={colors.blue11} />
+				<CapLoadingIndicator />
 			</View>
 		);
 	}
@@ -53,8 +53,11 @@ function AppShell() {
 
 	return (
 		<Stack screenOptions={{ headerShown: false }}>
-			<Stack.Screen name="(tabs)" />
+			<Stack.Screen name="(tabs)" options={{ title: "My Caps" }} />
 			<Stack.Screen name="caps/[id]" />
+			<Stack.Screen name="analytics" />
+			<Stack.Screen name="organization-settings" />
+			<Stack.Screen name="loom-import" />
 		</Stack>
 	);
 }

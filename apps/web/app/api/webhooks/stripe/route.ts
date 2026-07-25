@@ -348,11 +348,11 @@ export const POST = async (req: Request) => {
 							quantity: inviteQuota,
 							is_onboarding: session.metadata?.isOnBoarding === "true",
 							platform:
-								session.metadata?.platform === "desktop"
-									? "desktop"
-									: session.metadata?.platform === "web"
-										? "web"
-										: "unknown",
+								session.metadata?.platform === "desktop" ||
+								session.metadata?.platform === "mobile" ||
+								session.metadata?.platform === "web"
+									? session.metadata.platform
+									: "unknown",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
 						},

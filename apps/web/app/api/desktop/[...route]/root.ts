@@ -9,7 +9,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
+import { STRIPE_AVAILABLE, stripe, userIsPro } from "@cap/utils";
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
@@ -20,6 +20,7 @@ import { type Context, Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { runPromise } from "@/lib/server";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
@@ -696,14 +697,35 @@ app.patch(
 app.post(
 	"/subscribe",
 	withAuth,
-	zValidator("json", z.object({ priceId: z.string() })),
+	zValidator(
+		"json",
+		z.object({
+			priceId: z.string(),
+			platform: z.literal("mobile").optional(),
+		}),
+	),
 	async (c) => {
-		const { priceId } = c.req.valid("json");
+		const { priceId, platform } = c.req.valid("json");
 		const user = c.get("user");
+		const checkoutPlatform = platform ?? "desktop";
 
 		if (userIsPro(user)) {
 			console.log("[POST] Error: User already on Pro plan");
 			return c.json({ error: true, subscription: true }, { status: 400 });
+		}
+
+		if (!STRIPE_AVAILABLE()) {
+			console.error(
+				JSON.stringify({
+					level: "error",
+					message: "Stripe checkout is not configured",
+					route: "/api/desktop/subscribe",
+				}),
+			);
+			return c.json(
+				{ code: "billing_unavailable", error: true },
+				{ status: 503 },
+			);
 		}
 
 		let customerId = user.stripeCustomerId;
@@ -749,14 +771,18 @@ app.post(
 		}
 
 		console.log("[POST] Creating checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: 1 }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
-			metadata: { platform: "desktop", dubCustomerId: user.id },
+			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
 		});
 
 		if (checkoutSession.url) {
@@ -773,7 +799,7 @@ app.post(
 					properties: {
 						price_id: priceId,
 						quantity: 1,
-						platform: "desktop",
+						platform: checkoutPlatform,
 					},
 				});
 

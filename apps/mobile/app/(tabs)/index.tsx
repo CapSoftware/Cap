@@ -1,15 +1,17 @@
 import { FlashList } from "@shopify/flash-list";
 import * as Clipboard from "expo-clipboard";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import * as WebBrowser from "expo-web-browser";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionSheetIOS,
+	ActivityIndicator,
 	Alert,
 	Linking,
+	Modal,
 	Platform,
 	Pressable,
+	ScrollView,
 	Share,
 	StyleSheet,
 	Text,
@@ -19,9 +21,10 @@ import type {
 	MobileCapSummary,
 	MobileCapsListResponse,
 	MobileFolder,
+	MobileSpace,
 } from "@/api/mobile";
 import { MobileApiError } from "@/api/mobile";
-import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@/auth/AuthContext";
 import { SignInPanel } from "@/auth/SignInPanel";
 import { CapSettingsSheet } from "@/caps/CapSettingsSheet";
 import { showCapPasswordActions } from "@/caps/passwordActions";
@@ -33,15 +36,23 @@ import { showCapTitleActions } from "@/caps/titleActions";
 import { ActionButton } from "@/components/ActionButton";
 import { CapCard } from "@/components/CapCard";
 import { CapLogoBadge } from "@/components/CapLogoBadge";
-import { CapRefreshControl } from "@/components/CapRefreshControl";
+import {
+	CapRefreshControl,
+	CapRefreshOverlay,
+} from "@/components/CapRefreshControl";
 import { OrgSwitcher } from "@/components/OrgSwitcher";
 import { Screen } from "@/components/Screen";
 import { colors, fonts, radius, squircle } from "@/theme";
+import { useRecordingUploadLibraryRevision } from "@/uploads/recording-upload-provider";
 
 type ListItem =
-	| { type: "section"; id: "folders" | "videos"; title: string }
+	| { type: "section"; id: "folders"; title: string }
+	| { type: "space-switcher" }
+	| { type: "folder-crumb"; folder: MobileFolder }
+	| { type: "error"; message: string }
 	| { type: "folder"; folder: MobileFolder }
-	| { type: "cap"; cap: MobileCapSummary };
+	| { type: "cap"; cap: MobileCapSummary }
+	| { type: "empty" };
 
 const folderColorOptions: Array<{
 	label: string;
@@ -59,6 +70,29 @@ const folderTintByColor = {
 	red: colors.red9,
 	yellow: colors.yellow9,
 } as const;
+
+const activeUploadPhases = new Set([
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+]);
+const processingRefreshIntervalMs = 3000;
+const statusBatchSize = 25;
+const stickyHeaderIndices = [0];
+
+const uploadsMatch = (
+	left: MobileCapSummary["upload"],
+	right: MobileCapSummary["upload"],
+) =>
+	left === right ||
+	(left !== null &&
+		right !== null &&
+		left.uploaded === right.uploaded &&
+		left.total === right.total &&
+		left.phase === right.phase &&
+		left.processingProgress === right.processingProgress &&
+		left.processingMessage === right.processingMessage &&
+		left.processingError === right.processingError);
 
 const getCapsErrorMessage = (error: unknown) => {
 	if (error instanceof MobileApiError) {
@@ -103,12 +137,197 @@ const showPhotosSettingsAlert = () => {
 	);
 };
 
+const formatSpaceRole = (role: MobileSpace["role"]) =>
+	role ? role.slice(0, 1).toUpperCase() + role.slice(1) : null;
+
+function SpaceSwitcher({
+	spaces,
+	selectedSpaceId,
+	capCount,
+	onChange,
+}: {
+	spaces: readonly MobileSpace[];
+	selectedSpaceId: string | null;
+	capCount: number | null;
+	onChange: (spaceId: string | null) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
+	const selectedLabel = selectedSpace?.name ?? "My Caps";
+	const capCountLabel =
+		capCount === null ? null : `${capCount} ${capCount === 1 ? "cap" : "caps"}`;
+	const options = useMemo(
+		() => [
+			{ id: null, label: "My Caps" },
+			...spaces.map((space) => ({
+				id: space.id,
+				label: `${space.name}${space.hasPassword ? " · Locked" : ""}${formatSpaceRole(space.role) ? ` · ${formatSpaceRole(space.role)}` : ""}`,
+			})),
+		],
+		[spaces],
+	);
+
+	const openSwitcher = () => {
+		if (Platform.OS === "ios") {
+			const activeIndex = options.findIndex(
+				(option) => option.id === selectedSpaceId,
+			);
+			ActionSheetIOS.showActionSheetWithOptions(
+				{
+					cancelButtonIndex: options.length,
+					disabledButtonIndices: activeIndex >= 0 ? [activeIndex] : undefined,
+					disabledButtonTintColor: colors.gray9,
+					message: selectedLabel,
+					options: [...options.map((option) => option.label), "Cancel"],
+					title: "Space",
+					tintColor: colors.blue11,
+					userInterfaceStyle: "light",
+				},
+				(index) => {
+					const option = options[index];
+					if (option && option.id !== selectedSpaceId) onChange(option.id);
+				},
+			);
+			return;
+		}
+		setOpen(true);
+	};
+
+	return (
+		<>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityLabel="Switch space"
+				accessibilityHint="Shows My Caps and available spaces"
+				accessibilityValue={{
+					text: capCountLabel
+						? `${selectedLabel}, ${capCountLabel}`
+						: selectedLabel,
+				}}
+				onPress={openSwitcher}
+				style={({ pressed }) => [
+					styles.spaceTrigger,
+					pressed ? styles.spaceTriggerPressed : null,
+				]}
+			>
+				<View style={styles.spaceTriggerLabel}>
+					<Text numberOfLines={1} style={styles.spaceTriggerText}>
+						{selectedLabel}
+					</Text>
+					<SymbolView
+						name="chevron.up.chevron.down"
+						size={15}
+						tintColor={colors.gray10}
+						weight="semibold"
+					/>
+				</View>
+				{capCountLabel ? (
+					<Text style={styles.spaceCapCount}>{capCountLabel}</Text>
+				) : null}
+			</Pressable>
+			<Modal
+				allowSwipeDismissal
+				animationType="slide"
+				onRequestClose={() => setOpen(false)}
+				onDismiss={() => setOpen(false)}
+				presentationStyle="formSheet"
+				visible={open}
+			>
+				<View style={styles.spaceSheet}>
+					<View style={styles.spaceSheetHeader}>
+						<Text style={styles.spaceSheetTitle}>Choose a space</Text>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Close space selector"
+							onPress={() => setOpen(false)}
+							style={styles.spaceSheetClose}
+						>
+							<SymbolView
+								name="xmark"
+								size={15}
+								tintColor={colors.gray11}
+								weight="semibold"
+							/>
+						</Pressable>
+					</View>
+					<ScrollView contentContainerStyle={styles.spaceSheetContent}>
+						{options.map((option) => {
+							const space = option.id
+								? spaces.find((item) => item.id === option.id)
+								: null;
+							const selected = option.id === selectedSpaceId;
+							const detail = space
+								? space.kind === "organization"
+									? `Organization${formatSpaceRole(space.role) ? ` · ${formatSpaceRole(space.role)}` : ""}`
+									: `${space.privacy} space${formatSpaceRole(space.role) ? ` · ${formatSpaceRole(space.role)}` : ""}`
+								: "Personal library";
+							return (
+								<Pressable
+									key={option.id ?? "my-caps"}
+									accessibilityRole="button"
+									accessibilityState={{ selected }}
+									onPress={() => {
+										setOpen(false);
+										if (!selected) onChange(option.id);
+									}}
+									style={({ pressed }) => [
+										styles.spaceRow,
+										pressed ? styles.spaceRowPressed : null,
+									]}
+								>
+									<View style={styles.spaceRowIcon}>
+										<SymbolView
+											name={
+												space?.hasPassword
+													? "lock.fill"
+													: space?.kind === "organization"
+														? "building.2.fill"
+														: space
+															? "person.3.fill"
+															: "person.fill"
+											}
+											size={17}
+											tintColor={colors.blue11}
+											weight="medium"
+										/>
+									</View>
+									<View style={styles.spaceRowCopy}>
+										<Text numberOfLines={1} style={styles.spaceRowName}>
+											{option.id === null ? option.label : space?.name}
+										</Text>
+										<Text numberOfLines={1} style={styles.spaceRowDetail}>
+											{detail}
+										</Text>
+									</View>
+									{selected ? (
+										<SymbolView
+											name="checkmark"
+											size={18}
+											tintColor={colors.blue11}
+											weight="semibold"
+										/>
+									) : null}
+								</Pressable>
+							);
+						})}
+					</ScrollView>
+				</View>
+			</Modal>
+		</>
+	);
+}
+
 export default function CapsScreen() {
 	const auth = useAuth();
+	const authStatus = auth.status;
+	const apiClient = auth.client;
+	const libraryRevision = useRecordingUploadLibraryRevision();
+	const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
 	const [folder, setFolder] = useState<MobileFolder | null>(null);
 	const [result, setResult] = useState<MobileCapsListResponse | null>(null);
 	const [refreshing, setRefreshing] = useState(false);
 	const [loading, setLoading] = useState(false);
+	const [loadingMore, setLoadingMore] = useState(false);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [savingId, setSavingId] = useState<string | null>(null);
 	const [updatingSharingId, setUpdatingSharingId] = useState<string | null>(
@@ -119,28 +338,187 @@ export default function CapsScreen() {
 	const [creatingFolderName, setCreatingFolderName] = useState<string | null>(
 		null,
 	);
-
-	const load = useCallback(async () => {
-		if (auth.status !== "signedIn") return;
-		setLoading(true);
-		try {
-			const response = await auth.client.listCaps({
-				folderId: folder?.id ?? null,
-				page: 1,
-				limit: 30,
-			});
-			setResult(response);
-			setLoadError(null);
-		} catch (error) {
-			setLoadError(getCapsErrorMessage(error));
-		} finally {
-			setLoading(false);
-		}
-	}, [auth, folder?.id]);
+	const backgroundLoadInFlight = useRef(false);
+	const loadMoreInFlight = useRef(false);
+	const loadRequestId = useRef(0);
+	const spaces = auth.bootstrap?.spaces ?? [];
+	const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
+	const selectedCollectionName = selectedSpace?.name ?? "My Caps";
+	const canManageSelectedCollection = selectedSpace?.canManage ?? true;
+	const thumbnailAuthorization = auth.apiKey
+		? `Bearer ${auth.apiKey}`
+		: undefined;
 
 	useEffect(() => {
-		void load();
-	}, [load]);
+		if (selectedSpaceId && !selectedSpace) {
+			loadRequestId.current += 1;
+			setSelectedSpaceId(null);
+			setFolder(null);
+			setResult(null);
+		}
+	}, [selectedSpace, selectedSpaceId]);
+
+	const load = useCallback(
+		async (showLoading = true) => {
+			if (authStatus !== "signedIn") return;
+			const requestId = ++loadRequestId.current;
+			if (showLoading) setLoading(true);
+			try {
+				const response = await apiClient.listCaps({
+					folderId: folder?.id ?? null,
+					spaceId: selectedSpaceId,
+					page: 1,
+					limit: 30,
+				});
+				if (requestId !== loadRequestId.current) return;
+				setResult(response);
+				setLoadError(null);
+			} catch (error) {
+				if (requestId !== loadRequestId.current) return;
+				setLoadError(getCapsErrorMessage(error));
+			} finally {
+				if (showLoading && requestId === loadRequestId.current) {
+					setLoading(false);
+				}
+			}
+		},
+		[apiClient, authStatus, folder?.id, selectedSpaceId],
+	);
+
+	useFocusEffect(
+		useCallback(() => {
+			void load(libraryRevision === 0);
+		}, [libraryRevision, load]),
+	);
+
+	const loadMore = useCallback(async () => {
+		if (
+			authStatus !== "signedIn" ||
+			loading ||
+			refreshing ||
+			loadMoreInFlight.current ||
+			!result?.hasMore
+		) {
+			return;
+		}
+
+		const requestId = loadRequestId.current;
+		const currentPage = result.page;
+		loadMoreInFlight.current = true;
+		setLoadingMore(true);
+		try {
+			const response = await apiClient.listCaps({
+				folderId: folder?.id ?? null,
+				spaceId: selectedSpaceId,
+				page: currentPage + 1,
+				limit: result.limit,
+			});
+			if (requestId !== loadRequestId.current) return;
+			setResult((current) => {
+				if (!current || current.page !== currentPage) return current;
+				const capIds = new Set(current.caps.map((cap) => cap.id));
+				return {
+					...current,
+					caps: [
+						...current.caps,
+						...response.caps.filter((cap) => !capIds.has(cap.id)),
+					],
+					page: response.page,
+					total: response.total,
+					collectionTotal: response.collectionTotal,
+					hasMore: response.hasMore,
+				};
+			});
+		} catch (error) {
+			if (requestId === loadRequestId.current) {
+				setLoadError(getCapsErrorMessage(error));
+			}
+		} finally {
+			loadMoreInFlight.current = false;
+			setLoadingMore(false);
+		}
+	}, [
+		apiClient,
+		authStatus,
+		folder?.id,
+		loading,
+		refreshing,
+		result,
+		selectedSpaceId,
+	]);
+
+	const activeCapIds = useMemo(
+		() =>
+			result?.caps.flatMap((cap) =>
+				cap.ownedByCurrentUser !== false &&
+				cap.upload &&
+				activeUploadPhases.has(cap.upload.phase)
+					? [cap.id]
+					: [],
+			) ?? [],
+		[result],
+	);
+	const activeCapIdsKey = activeCapIds.join(",");
+
+	useFocusEffect(
+		useCallback(() => {
+			if (authStatus !== "signedIn" || activeCapIdsKey.length === 0) return;
+			const ids = activeCapIdsKey.split(",");
+			let cancelled = false;
+			const poll = async () => {
+				if (backgroundLoadInFlight.current) return;
+				backgroundLoadInFlight.current = true;
+				try {
+					const responses = await Promise.all(
+						Array.from(
+							{ length: Math.ceil(ids.length / statusBatchSize) },
+							(_, index) =>
+								apiClient.getCapStatuses(
+									ids.slice(
+										index * statusBatchSize,
+										(index + 1) * statusBatchSize,
+									),
+								),
+						),
+					);
+					if (cancelled) return;
+					const responseCaps = responses.flatMap((response) => response.caps);
+					const statuses = new Map(
+						responseCaps.map((cap) => [cap.id, cap.upload]),
+					);
+					setResult((current) => {
+						if (!current) return current;
+						let changed = false;
+						const caps = current.caps.map((cap) => {
+							if (!statuses.has(cap.id)) return cap;
+							const upload = statuses.get(cap.id) ?? null;
+							if (uploadsMatch(cap.upload, upload)) return cap;
+							changed = true;
+							return { ...cap, upload };
+						});
+						return changed ? { ...current, caps } : current;
+					});
+					const terminal =
+						responseCaps.length !== ids.length ||
+						responseCaps.some(
+							(cap) => !cap.upload || !activeUploadPhases.has(cap.upload.phase),
+						);
+					if (terminal) await load(false);
+				} catch {
+				} finally {
+					backgroundLoadInFlight.current = false;
+				}
+			};
+			void poll();
+			const timer = setInterval(() => {
+				void poll();
+			}, processingRefreshIntervalMs);
+			return () => {
+				cancelled = true;
+				clearInterval(timer);
+			};
+		}, [activeCapIdsKey, apiClient, authStatus, load]),
+	);
 
 	const refresh = useCallback(async () => {
 		setRefreshing(true);
@@ -291,11 +669,12 @@ export default function CapsScreen() {
 	const showCapSettings = useCallback((cap: MobileCapSummary) => {
 		setSettingsCap(cap);
 	}, []);
+	const openCap = useCallback((cap: MobileCapSummary) => {
+		router.push(`/caps/${cap.id}`);
+	}, []);
 
 	const viewAnalytics = useCallback((cap: MobileCapSummary) => {
-		const url = new URL("/dashboard/analytics", apiBaseUrl);
-		url.searchParams.set("capId", cap.id);
-		void WebBrowser.openBrowserAsync(url.toString());
+		router.push({ pathname: "/analytics", params: { capId: cap.id } });
 	}, []);
 
 	const createFolder = useCallback(
@@ -310,7 +689,11 @@ export default function CapsScreen() {
 			setCreatingFolder(true);
 			setCreatingFolderName(trimmedName);
 			try {
-				await auth.client.createFolder({ name: trimmedName, color });
+				await auth.client.createFolder({
+					name: trimmedName,
+					color,
+					spaceId: selectedSpace?.id,
+				});
 				setFolder(null);
 				await Promise.all([auth.refresh(), load()]);
 			} catch (error) {
@@ -325,7 +708,7 @@ export default function CapsScreen() {
 				setCreatingFolderName(null);
 			}
 		},
-		[auth, creatingFolder, load],
+		[auth, creatingFolder, load, selectedSpace],
 	);
 
 	const showFolderColorSheet = useCallback(
@@ -435,8 +818,10 @@ export default function CapsScreen() {
 	);
 
 	const items = useMemo<ListItem[]>(() => {
-		if (!result) return [];
-		const nextItems: ListItem[] = [];
+		const nextItems: ListItem[] = [{ type: "space-switcher" }];
+		if (folder) nextItems.push({ type: "folder-crumb", folder });
+		if (loadError) nextItems.push({ type: "error", message: loadError });
+		if (!result) return nextItems;
 		if (result.folders.length > 0) {
 			nextItems.push({ type: "section", id: "folders", title: "Folders" });
 			nextItems.push(
@@ -447,15 +832,15 @@ export default function CapsScreen() {
 			);
 		}
 		if (result.caps.length > 0) {
-			nextItems.push({ type: "section", id: "videos", title: "Videos" });
 			nextItems.push(
 				...result.caps.map((item) => ({ type: "cap" as const, cap: item })),
 			);
+		} else {
+			nextItems.push({ type: "empty" });
 		}
 		return nextItems;
-	}, [result]);
+	}, [folder, loadError, result]);
 
-	const userName = auth.bootstrap?.user.name?.split(" ")[0];
 	const folderCreationHint = creatingFolder
 		? "Folder creation is in progress"
 		: "Creates a folder for organizing Caps";
@@ -469,6 +854,12 @@ export default function CapsScreen() {
 	const dashboardActionHint = creatingFolder
 		? "Folder creation is in progress"
 		: null;
+	const isEmptyMyCaps =
+		selectedSpaceId === null &&
+		folder === null &&
+		result !== null &&
+		result.folders.length === 0 &&
+		result.caps.length === 0;
 	const savingCap =
 		savingId !== null
 			? settingsCap?.id === savingId
@@ -499,7 +890,7 @@ export default function CapsScreen() {
 		: undefined;
 
 	if (auth.status === "loading") {
-		return <Screen title="My Caps" loading />;
+		return <Screen loading />;
 	}
 
 	if (auth.status === "signedOut") {
@@ -511,119 +902,84 @@ export default function CapsScreen() {
 	}
 
 	return (
-		<Screen title="My Caps" loading={loading && !result}>
-			{auth.bootstrap ? (
-				<View style={styles.topBar}>
-					<OrgSwitcher
-						bootstrap={auth.bootstrap}
-						onChange={async (organizationId) => {
-							setFolder(null);
-							await auth.setActiveOrganization(organizationId);
-							await load();
-						}}
-					/>
-				</View>
-			) : null}
-			<View style={styles.actions}>
-				<ActionButton
-					label="Record Video"
-					accessibilityHint="Opens the camera recorder"
-					onPress={() => router.push("./record")}
-					disabled={creatingFolder}
-					size="sm"
-					style={styles.actionButton}
-					symbol="video.fill"
-					variant="blue"
-				/>
-				<ActionButton
-					label="New Folder"
-					accessibilityLabel={folderCreationAccessibilityLabel}
-					accessibilityHint={folderCreationHint}
-					accessibilityValue={folderCreationAccessibilityValue}
-					onPress={showNewFolderPrompt}
-					loading={creatingFolder}
-					size="sm"
-					style={styles.actionButton}
-					symbol="folder.badge.plus"
-					variant="dark"
-				/>
-				<ActionButton
-					label="Import Video"
-					accessibilityHint={dashboardActionHint ?? "Opens import options"}
-					accessibilityValue={folderCreationAccessibilityValue}
-					onPress={() => router.push("/upload")}
-					disabled={creatingFolder}
-					size="sm"
-					style={styles.actionButton}
-					symbol="square.and.arrow.up"
-					variant="dark"
-				/>
-			</View>
-			{folder ? (
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Back to My Caps"
-					onPress={() => setFolder(null)}
-					style={styles.folderCrumb}
-				>
-					<Text style={styles.folderCrumbText}>My Caps</Text>
-					<SymbolView
-						name="chevron.right"
-						size={14}
-						tintColor={colors.gray9}
-						weight="medium"
-					/>
-					<View style={styles.folderCrumbIcon}>
-						<SymbolView
-							name="folder.fill"
-							size={20}
-							tintColor={folderTintByColor[folder.color]}
-							weight="medium"
-						/>
-					</View>
-					<Text numberOfLines={1} style={styles.folderCurrent}>
-						{folder.name}
-					</Text>
-				</Pressable>
-			) : null}
-			{loadError ? (
-				<View
-					accessibilityLabel={`Library error: ${loadError}`}
-					accessibilityLiveRegion="polite"
-					accessibilityRole="alert"
-					style={styles.errorCard}
-				>
-					<View style={styles.errorIcon}>
-						<SymbolView
-							name="exclamationmark.triangle.fill"
-							size={18}
-							tintColor={colors.red9}
-							weight="medium"
-						/>
-					</View>
-					<View style={styles.errorCopy}>
-						<Text style={styles.errorTitle}>Unable to load Caps</Text>
-						<Text style={styles.errorText}>{loadError}</Text>
-					</View>
-					<ActionButton
-						label="Try again"
-						accessibilityHint="Reloads your Cap library"
-						onPress={load}
-						size="sm"
-						style={styles.errorButton}
-						symbol="arrow.clockwise"
-					/>
-				</View>
-			) : null}
-			{loadError && !result ? null : (
+		<Screen loading={loading && !result}>
+			<View style={styles.listWrap}>
 				<FlashList
+					ListHeaderComponent={
+						<>
+							{auth.bootstrap ? (
+								<View style={styles.topBar}>
+									<OrgSwitcher
+										bootstrap={auth.bootstrap}
+										onChange={async (organizationId) => {
+											loadRequestId.current += 1;
+											setSelectedSpaceId(null);
+											setFolder(null);
+											setResult(null);
+											await auth.setActiveOrganization(organizationId);
+										}}
+									/>
+								</View>
+							) : null}
+							{canManageSelectedCollection || selectedSpaceId === null ? (
+								<View style={styles.actions}>
+									{canManageSelectedCollection ? (
+										<ActionButton
+											label="New Folder"
+											accessibilityLabel={folderCreationAccessibilityLabel}
+											accessibilityHint={folderCreationHint}
+											accessibilityValue={folderCreationAccessibilityValue}
+											onPress={showNewFolderPrompt}
+											loading={creatingFolder}
+											size="sm"
+											style={styles.actionButton}
+											symbol="folder.badge.plus"
+											variant="dark"
+										/>
+									) : null}
+									{selectedSpaceId === null &&
+									result &&
+									(result.folders.length > 0 || result.caps.length > 0) ? (
+										<ActionButton
+											label="Import Media"
+											accessibilityHint={
+												dashboardActionHint ?? "Opens import options"
+											}
+											accessibilityValue={folderCreationAccessibilityValue}
+											onPress={() => router.push("/upload")}
+											disabled={creatingFolder}
+											size="sm"
+											style={styles.actionButton}
+											symbol="square.and.arrow.up"
+											variant="dark"
+										/>
+									) : null}
+								</View>
+							) : null}
+						</>
+					}
 					data={items}
+					ListFooterComponent={
+						loadingMore ? (
+							<View style={styles.listFooter}>
+								<ActivityIndicator color={colors.blue11} />
+							</View>
+						) : null
+					}
 					keyExtractor={(item) =>
 						item.type === "section"
 							? `section-${item.id}`
-							: item.type === "folder"
-								? `folder-${item.folder.id}`
-								: `cap-${item.cap.id}`
+							: item.type === "space-switcher"
+								? "space-switcher"
+								: item.type === "folder-crumb"
+									? `folder-crumb-${item.folder.id}`
+									: item.type === "error"
+										? "error"
+										: item.type === "folder"
+											? `folder-${item.folder.id}`
+											: item.type === "empty"
+												? `empty-${selectedSpaceId ?? "my-caps"}-${folder?.id ?? "root"}`
+												: `cap-${item.cap.id}`
 					}
 					refreshControl={
 						<CapRefreshControl refreshing={refreshing} onRefresh={refresh} />
@@ -631,41 +987,88 @@ export default function CapsScreen() {
 					showsVerticalScrollIndicator={false}
 					contentContainerStyle={styles.listContent}
 					getItemType={(item) => item.type}
-					ListEmptyComponent={
-						<View style={styles.emptyState}>
-							<View style={styles.emptyArt}>
-								<View style={[styles.emptyArtCard, styles.emptyArtCardBack]} />
-								<View style={styles.emptyArtCard} />
-								<View style={styles.emptyLogo}>
-									<CapLogoBadge size={52} />
-								</View>
-							</View>
-							<Text style={styles.emptyTitle}>
-								Hey{userName ? ` ${userName}` : ""}! Import your first Cap
-							</Text>
-							<Text style={styles.emptyText}>
-								Bring videos into Cap and share them instantly.
-							</Text>
-							<View style={styles.emptyActions}>
-								<ActionButton
-									label="Import Video"
-									accessibilityHint={
-										dashboardActionHint ?? "Opens import options"
-									}
-									accessibilityValue={folderCreationAccessibilityValue}
-									onPress={() => router.push("/upload")}
-									disabled={creatingFolder}
-									style={styles.emptyButton}
-									symbol="square.and.arrow.up"
-									variant="dark"
-								/>
-							</View>
-						</View>
-					}
+					onEndReached={() => {
+						void loadMore();
+					}}
+					onEndReachedThreshold={0.4}
+					stickyHeaderIndices={stickyHeaderIndices}
 					renderItem={({ item }) =>
 						item.type === "section" ? (
 							<View style={styles.sectionHeader}>
 								<Text style={styles.sectionTitle}>{item.title}</Text>
+							</View>
+						) : item.type === "space-switcher" ? (
+							<View style={styles.spaceSwitcherRow}>
+								<SpaceSwitcher
+									spaces={spaces}
+									selectedSpaceId={selectedSpaceId}
+									capCount={result?.collectionTotal ?? result?.total ?? null}
+									onChange={(spaceId) => {
+										loadRequestId.current += 1;
+										setSelectedSpaceId(spaceId);
+										setFolder(null);
+										setResult(null);
+										setLoadError(null);
+									}}
+								/>
+							</View>
+						) : item.type === "folder-crumb" ? (
+							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel={`Back to ${selectedCollectionName}`}
+								onPress={() => setFolder(null)}
+								style={styles.folderCrumb}
+							>
+								<Text style={styles.folderCrumbText}>
+									{selectedCollectionName}
+								</Text>
+								<SymbolView
+									name="chevron.right"
+									size={14}
+									tintColor={colors.gray9}
+									weight="medium"
+								/>
+								<View style={styles.folderCrumbIcon}>
+									<SymbolView
+										name="folder.fill"
+										size={20}
+										tintColor={folderTintByColor[item.folder.color]}
+										weight="medium"
+									/>
+								</View>
+								<Text numberOfLines={1} style={styles.folderCurrent}>
+									{item.folder.name}
+								</Text>
+							</Pressable>
+						) : item.type === "error" ? (
+							<View
+								accessibilityLabel={`Library error: ${item.message}`}
+								accessibilityLiveRegion="polite"
+								accessibilityRole="alert"
+								style={styles.errorCard}
+							>
+								<View style={styles.errorIcon}>
+									<SymbolView
+										name="exclamationmark.triangle.fill"
+										size={18}
+										tintColor={colors.red9}
+										weight="medium"
+									/>
+								</View>
+								<View style={styles.errorCopy}>
+									<Text style={styles.errorTitle}>Unable to load Caps</Text>
+									<Text style={styles.errorText}>{item.message}</Text>
+								</View>
+								<ActionButton
+									label="Try again"
+									accessibilityHint="Reloads your Cap library"
+									onPress={() => {
+										void load();
+									}}
+									size="sm"
+									style={styles.errorButton}
+									symbol="arrow.clockwise"
+								/>
 							</View>
 						) : item.type === "folder" ? (
 							<Pressable
@@ -701,15 +1104,78 @@ export default function CapsScreen() {
 									weight="medium"
 								/>
 							</Pressable>
+						) : item.type === "empty" ? (
+							<View style={styles.emptyState}>
+								<View style={styles.emptyArt}>
+									<View
+										style={[styles.emptyArtCard, styles.emptyArtCardBack]}
+									/>
+									<View style={styles.emptyArtCard} />
+									<View style={styles.emptyLogo}>
+										<CapLogoBadge size={52} />
+									</View>
+								</View>
+								<Text style={styles.emptyTitle}>
+									{isEmptyMyCaps
+										? "Welcome! Record or Import your first Cap"
+										: folder
+											? `No Caps in ${folder.name}`
+											: `No Caps in ${selectedCollectionName}`}
+								</Text>
+								<Text style={styles.emptyText}>
+									{isEmptyMyCaps
+										? "Bring videos into Cap and share them instantly."
+										: "Caps added to this space will appear here."}
+								</Text>
+								{isEmptyMyCaps ? (
+									<View style={styles.emptyActions}>
+										<ActionButton
+											label="Record"
+											accessibilityLabel="Record"
+											accessibilityHint="Opens the camera recorder"
+											onPress={() => router.push("/record")}
+											disabled={creatingFolder}
+											style={styles.emptyButton}
+											symbol="video.fill"
+											variant="dark"
+										/>
+										<ActionButton
+											label="Import Media"
+											accessibilityHint={
+												dashboardActionHint ?? "Opens import options"
+											}
+											accessibilityValue={folderCreationAccessibilityValue}
+											onPress={() => router.push("/upload")}
+											disabled={creatingFolder}
+											style={styles.emptyButton}
+											symbol="square.and.arrow.up"
+											variant="secondary"
+										/>
+									</View>
+								) : null}
+							</View>
 						) : (
 							<CapCard
 								cap={item.cap}
-								onAnalyticsPress={() => viewAnalytics(item.cap)}
-								onCopyPress={() => copyCapLink(item.cap)}
-								onPress={() => router.push(`/caps/${item.cap.id}`)}
-								onSharePress={() => shareCapLink(item.cap)}
-								onVisibilityPress={() => showSharingActions(item.cap)}
-								onMenuPress={() => showCapSettings(item.cap)}
+								thumbnailAuthorization={thumbnailAuthorization}
+								onAnalyticsPress={
+									item.cap.ownedByCurrentUser !== false
+										? viewAnalytics
+										: undefined
+								}
+								onCopyPress={copyCapLink}
+								onPress={openCap}
+								onSharePress={shareCapLink}
+								onVisibilityPress={
+									item.cap.ownedByCurrentUser !== false
+										? showSharingActions
+										: undefined
+								}
+								onMenuPress={
+									item.cap.ownedByCurrentUser !== false
+										? showCapSettings
+										: undefined
+								}
 								visibilityBusy={updatingSharingId === item.cap.id}
 								visibilityDisabled={updatingSharingId !== null}
 								visibilityDisabledHint={
@@ -726,7 +1192,8 @@ export default function CapsScreen() {
 						)
 					}
 				/>
-			)}
+				<CapRefreshOverlay refreshing={refreshing} />
+			</View>
 			<CapSettingsSheet
 				cap={settingsCap}
 				visible={settingsCap !== null}
@@ -772,8 +1239,15 @@ const styles = StyleSheet.create({
 		flexBasis: 104,
 		paddingHorizontal: 12,
 	},
+	listWrap: {
+		flex: 1,
+	},
 	listContent: {
-		paddingBottom: 22,
+		paddingBottom: 112,
+	},
+	listFooter: {
+		alignItems: "center",
+		paddingVertical: 20,
 	},
 	folderCrumb: {
 		minHeight: 40,
@@ -822,6 +1296,117 @@ const styles = StyleSheet.create({
 	sectionHeader: {
 		paddingTop: 8,
 		paddingBottom: 24,
+	},
+	spaceSwitcherRow: {
+		paddingTop: 8,
+		paddingBottom: 24,
+		backgroundColor: colors.gray1,
+	},
+	spaceTrigger: {
+		alignSelf: "stretch",
+		maxWidth: "100%",
+		minHeight: 36,
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 16,
+		borderRadius: radius.sm,
+		paddingHorizontal: 2,
+		...squircle,
+	},
+	spaceTriggerLabel: {
+		minWidth: 0,
+		flexShrink: 1,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 8,
+	},
+	spaceTriggerPressed: {
+		opacity: 0.62,
+	},
+	spaceTriggerText: {
+		flexShrink: 1,
+		fontFamily: fonts.medium,
+		fontSize: 24,
+		lineHeight: 30,
+		color: colors.gray12,
+	},
+	spaceCapCount: {
+		fontFamily: fonts.regular,
+		fontSize: 14,
+		lineHeight: 20,
+		color: colors.gray9,
+	},
+	spaceSheet: {
+		flex: 1,
+		backgroundColor: colors.gray1,
+		paddingTop: 18,
+	},
+	spaceSheetHeader: {
+		minHeight: 48,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		paddingHorizontal: 20,
+		paddingBottom: 10,
+		borderBottomWidth: StyleSheet.hairlineWidth,
+		borderBottomColor: colors.gray4,
+	},
+	spaceSheetTitle: {
+		flex: 1,
+		fontFamily: fonts.medium,
+		fontSize: 22,
+		lineHeight: 28,
+		color: colors.gray12,
+	},
+	spaceSheetClose: {
+		width: 32,
+		height: 32,
+		borderRadius: radius.full,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.gray3,
+	},
+	spaceSheetContent: {
+		padding: 14,
+		paddingBottom: 32,
+	},
+	spaceRow: {
+		minHeight: 64,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		borderRadius: radius.sm,
+		paddingHorizontal: 10,
+		paddingVertical: 8,
+		...squircle,
+	},
+	spaceRowPressed: {
+		backgroundColor: colors.gray3,
+	},
+	spaceRowIcon: {
+		width: 36,
+		height: 36,
+		borderRadius: radius.sm,
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.blue3,
+		...squircle,
+	},
+	spaceRowCopy: {
+		flex: 1,
+		minWidth: 0,
+		gap: 2,
+	},
+	spaceRowName: {
+		fontFamily: fonts.medium,
+		fontSize: 16,
+		color: colors.gray12,
+	},
+	spaceRowDetail: {
+		fontFamily: fonts.regular,
+		fontSize: 12,
+		color: colors.gray9,
 	},
 	sectionTitle: {
 		fontFamily: fonts.medium,
