@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments, videos } from "@cap/database/schema";
-import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
+import { makeCurrentUserLayer, VideosPolicy } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
 import { Comment, Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -55,7 +55,13 @@ export async function newComment(data: {
 				.where(eq(videos.id, videoId))
 				.limit(1),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
-	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+	}).pipe(
+		// This action already required auth above, so provide the user we have
+		// rather than `provideOptionalAuth`, which would re-run getServerSession()
+		// and re-query `users`.
+		Effect.provide(makeCurrentUserLayer(user)),
+		EffectRuntime.runPromiseExit,
+	);
 
 	if (Exit.isFailure(accessExit)) {
 		throw new Error("Video not found");
