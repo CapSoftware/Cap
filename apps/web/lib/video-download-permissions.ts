@@ -5,19 +5,17 @@ import {
 	spaceMembers,
 	spaceVideos,
 } from "@cap/database/schema";
-import type { Organisation, User, Video } from "@cap/web-domain";
+import type { User, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 
 export async function canUserDownloadVideo({
 	userId,
 	ownerId,
 	videoId,
-	orgId,
 }: {
 	userId: User.UserId;
 	ownerId: User.UserId;
 	videoId: Video.VideoId;
-	orgId: Organisation.OrganisationId;
 }): Promise<boolean> {
 	if (userId === ownerId) return true;
 
@@ -26,20 +24,27 @@ export async function canUserDownloadVideo({
 		.from(sharedVideos)
 		.where(eq(sharedVideos.videoId, videoId));
 
-	const orgIds = [orgId, ...sharedOrgs.map((org) => org.organizationId)];
+	// Only orgs this video was explicitly shared with count. The video's own
+	// orgId is where it lives, not a grant: including it would let any member of
+	// the owner's org download a video they cannot even view, since buildCanView
+	// requires a sharedVideos row for the org (VideosPolicy.ts).
+	if (sharedOrgs.length > 0) {
+		const [orgMembership] = await db()
+			.select({ id: organizationMembers.id })
+			.from(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.userId, userId),
+					inArray(
+						organizationMembers.organizationId,
+						sharedOrgs.map((org) => org.organizationId),
+					),
+				),
+			)
+			.limit(1);
 
-	const [orgMembership] = await db()
-		.select({ id: organizationMembers.id })
-		.from(organizationMembers)
-		.where(
-			and(
-				eq(organizationMembers.userId, userId),
-				inArray(organizationMembers.organizationId, orgIds),
-			),
-		)
-		.limit(1);
-
-	if (orgMembership) return true;
+		if (orgMembership) return true;
+	}
 
 	const sharedSpaces = await db()
 		.select({ spaceId: spaceVideos.spaceId })
