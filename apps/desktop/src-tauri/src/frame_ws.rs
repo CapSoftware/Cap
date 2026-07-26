@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -142,12 +143,24 @@ struct WsFrameStatsWindow {
     max_created_to_sent_ns: u64,
 }
 
-struct SubscriberCountGuard(Arc<AtomicUsize>);
+struct SubscriberCountGuard {
+    subscribers: Arc<AtomicUsize>,
+    instant_subscribers: Option<Arc<AtomicUsize>>,
+}
 
 impl Drop for SubscriberCountGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
+        self.subscribers.fetch_sub(1, Ordering::AcqRel);
+        if let Some(instant_subscribers) = &self.instant_subscribers {
+            instant_subscribers.fetch_sub(1, Ordering::AcqRel);
+        }
     }
+}
+
+#[derive(Deserialize)]
+struct WatchFrameQuery {
+    #[serde(default)]
+    instant: bool,
 }
 
 fn is_normal_socket_disconnect(error: &impl std::fmt::Debug) -> bool {
@@ -162,9 +175,25 @@ pub async fn create_watch_frame_ws(
     frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
     subscribers: Arc<AtomicUsize>,
 ) -> (u16, CancellationToken) {
+    create_watch_frame_ws_inner(frame_rx, subscribers, None).await
+}
+
+pub async fn create_watch_frame_ws_with_instant_tracking(
+    frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+    subscribers: Arc<AtomicUsize>,
+    instant_subscribers: Arc<AtomicUsize>,
+) -> (u16, CancellationToken) {
+    create_watch_frame_ws_inner(frame_rx, subscribers, Some(instant_subscribers)).await
+}
+
+async fn create_watch_frame_ws_inner(
+    frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+    subscribers: Arc<AtomicUsize>,
+    instant_subscribers: Option<Arc<AtomicUsize>>,
+) -> (u16, CancellationToken) {
     use axum::{
         extract::{
-            State,
+            Query, State,
             ws::{Message, WebSocket, WebSocketUpgrade},
         },
         response::IntoResponse,
@@ -174,27 +203,37 @@ pub async fn create_watch_frame_ws(
     type RouterState = (
         watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
         Arc<AtomicUsize>,
+        Option<Arc<AtomicUsize>>,
     );
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
-        State((state, subscribers)): State<RouterState>,
+        Query(query): Query<WatchFrameQuery>,
+        State((state, subscribers, instant_subscribers)): State<RouterState>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, state, subscribers))
+        let instant_subscribers = query.instant.then_some(instant_subscribers).flatten();
+        ws.on_upgrade(move |socket| handle_socket(socket, state, subscribers, instant_subscribers))
     }
 
     async fn handle_socket(
         mut socket: WebSocket,
         mut camera_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
         subscribers: Arc<AtomicUsize>,
+        instant_subscribers: Option<Arc<AtomicUsize>>,
     ) {
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
         let mut stats = WsFrameStats::default();
 
         subscribers.fetch_add(1, Ordering::AcqRel);
-        let _subscriber_guard = SubscriberCountGuard(subscribers);
+        if let Some(instant_subscribers) = &instant_subscribers {
+            instant_subscribers.fetch_add(1, Ordering::AcqRel);
+        }
+        let _subscriber_guard = SubscriberCountGuard {
+            subscribers,
+            instant_subscribers,
+        };
 
         {
             let packed = {
@@ -314,9 +353,11 @@ pub async fn create_watch_frame_ws(
         tracing::info!("Websocket closing after {elapsed:.2?}");
     }
 
-    let router = axum::Router::new()
-        .route("/", get(ws_handler))
-        .with_state((frame_rx, subscribers));
+    let router = axum::Router::new().route("/", get(ws_handler)).with_state((
+        frame_rx,
+        subscribers,
+        instant_subscribers,
+    ));
 
     let cancel_token = CancellationToken::new();
     let cancel_token_child = cancel_token.child_token();
@@ -467,4 +508,58 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
     });
 
     (port, cancel_token_child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(format: WSFrameFormat) -> WSFrame {
+        WSFrame {
+            data: Arc::new(vec![1, 2, 3, 4, 5, 6]),
+            width: 2,
+            height: 2,
+            stride: 2,
+            frame_number: 7,
+            target_time_ns: 8,
+            format,
+            created_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn packs_rgba_frame_with_legacy_metadata_shape() {
+        let packed = pack_ws_frame(&frame(WSFrameFormat::Rgba));
+
+        assert_eq!(packed.len(), 30);
+        assert_eq!(&packed[..6], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(u32::from_le_bytes(packed[6..10].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packed[18..22].try_into().unwrap()), 7);
+        assert_eq!(u64::from_le_bytes(packed[22..30].try_into().unwrap()), 8);
+    }
+
+    #[test]
+    fn packs_nv12_frame_with_video_range_marker() {
+        let packed = pack_ws_frame(&frame(WSFrameFormat::Nv12 { full_range: false }));
+
+        assert_eq!(packed.len(), 34);
+        assert_eq!(
+            u32::from_le_bytes(packed[30..34].try_into().unwrap()),
+            NV12_VIDEO_FORMAT_MAGIC
+        );
+    }
+
+    #[test]
+    fn subscriber_guard_decrements_both_counts() {
+        let subscribers = Arc::new(AtomicUsize::new(1));
+        let instant_subscribers = Arc::new(AtomicUsize::new(1));
+
+        drop(SubscriberCountGuard {
+            subscribers: subscribers.clone(),
+            instant_subscribers: Some(instant_subscribers.clone()),
+        });
+
+        assert_eq!(subscribers.load(Ordering::Acquire), 0);
+        assert_eq!(instant_subscribers.load(Ordering::Acquire), 0);
+    }
 }

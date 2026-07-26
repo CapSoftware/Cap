@@ -22,7 +22,7 @@
 		"dev:mobile": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
 		"dev:mobile:physical": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && CAP_MOBILE_DEVICE=physical CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
 		"dev:web": "pnpm dev --filter=!@cap/desktop --filter=!@cap/mobile",
-		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
+		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --filter=!@cap/mobile --env-mode=loose --ui tui",
 		"docker:clean": "turbo run docker:clean",
 		"docker:stop": "turbo run docker:stop",
 		"docker:up": "turbo run docker:up",
