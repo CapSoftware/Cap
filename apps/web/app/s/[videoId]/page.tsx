@@ -862,7 +862,6 @@ async function AuthorizedContent({
 					userId,
 					ownerId: video.owner.id,
 					videoId,
-					orgId: video.orgId,
 				})
 			: false;
 
