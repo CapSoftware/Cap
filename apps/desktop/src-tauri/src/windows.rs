@@ -1059,9 +1059,16 @@ impl CapWindow {
             }
         }
 
-        if matches!(self, Self::Settings { .. }) {
+        if let Self::Settings { page: Some(page) } = self {
             hide_recording_windows(app, true);
             release_camera_preview_if_idle(app);
+
+            // Ensure the URL is set correctly for settings pages if it's already open
+            if let Some(window) = self.id(app).get(app) {
+                let mut url = window.url()?;
+                url.set_path(&format!("/settings/{page}"));
+                window.navigate(url)?;
+            }
         }
 
         #[cfg(target_os = "macos")]

@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, sel};
 use objc2_app_kit::NSApplication;
@@ -12,7 +10,6 @@ use tauri_plugin_opener::OpenerExt;
 use crate::spawn_on_runtime;
 use crate::windows::CapWindow;
 
-const APP_MENU_QUIT_ID: &str = "app_quit";
 static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
@@ -73,6 +70,7 @@ unsafe fn setup_terminate_handler(nsapp: &NSApplication) {
     let delegate_class = (delegate.as_ref() as &objc2::runtime::AnyObject).class() as *const _
         as *mut objc2::runtime::AnyClass;
 
+    #[allow(non_snake_case)]
     unsafe extern "C-unwind" fn applicationShouldTerminate(
         _: &objc2::runtime::AnyObject,
         _: objc2::runtime::Sel,
@@ -212,28 +210,31 @@ pub fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 pub fn on_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let url = match event.id().as_ref() {
-        APP_MENU_QUIT_ID => {
-            let app = app.clone();
-            spawn_on_runtime(async move {
-                crate::request_app_exit(app).await;
-            });
-            return;
-        }
         "settings" => {
             let app = app.clone();
             spawn_on_runtime(async move {
-                let _ = CapWindow::Settings { page: None }.show(&app).await;
+                CapWindow::Settings { page: None }
+                    .show(&app)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(?e, "Failed to show Settings window");
+                    })
+                    .ok();
             });
             return;
         }
         "help.changelog" => {
             let app = app.clone();
             spawn_on_runtime(async move {
-                let _ = CapWindow::Settings {
-                    page: Some("/changelog".to_string()),
+                CapWindow::Settings {
+                    page: Some("changelog".to_string()),
                 }
                 .show(&app)
-                .await;
+                .await
+                .map_err(|e| {
+                    tracing::warn!(?e, "Failed to show Settings window");
+                })
+                .ok();
             });
             return;
         }
@@ -243,7 +244,7 @@ pub fn on_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "help.self_hosting" => "https://cap.so/self-hosting",
         "help.help_center" => "https://help.cap.so/",
         "help.status" => "https://cap.openstatus.dev/",
-        "help.discord" => "https://discord.gg/y8gdQ3WRN3",
+        "help.discord" => "https://cap.link/discord",
         _ => return,
     };
 
