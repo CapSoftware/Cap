@@ -25,9 +25,14 @@ const KNOWN_UNWIRED: Record<string, string> = {
  * Every key referenced somewhere other than its own declaration.
  *
  * Uses git's own file list so the search sees exactly the tracked sources and
- * never walks node_modules or .next.
+ * never walks node_modules or .next. Memoized: the scan reads every tracked
+ * TS/TSX file, and each test in this suite needs the same answer.
  */
+let referencedCache: Set<string> | undefined;
+
 function referencedKeys(): Set<string> {
+	if (referencedCache) return referencedCache;
+
 	const tracked = execFileSync(
 		"git",
 		["ls-files", "-z", "*.ts", "*.tsx"],
@@ -43,8 +48,13 @@ function referencedKeys(): Set<string> {
 		let source: string;
 		try {
 			source = readFileSync(join(WEB_ROOT, file), "utf8");
-		} catch {
-			continue; // deleted from the worktree but still in the index
+		} catch (error) {
+			// A tracked file missing from the worktree is expected (deleted but
+			// still in the index). Anything else - a permission problem, an I/O
+			// error - would silently shrink the scan and turn this guard into a
+			// no-op, so it has to surface.
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+			throw error;
 		}
 
 		for (const key of keys) {
@@ -52,6 +62,7 @@ function referencedKeys(): Set<string> {
 		}
 	}
 
+	referencedCache = found;
 	return found;
 }
 
