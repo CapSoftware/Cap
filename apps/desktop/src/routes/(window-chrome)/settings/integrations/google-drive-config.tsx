@@ -6,6 +6,7 @@ import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { Section, SectionCard, SettingsPageContent } from "../Setting";
 import { IntegrationConfigHeader } from "./config-header";
+import { describeS3ConfigError } from "./s3-config-error";
 
 const byteUnits = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
 const googleDriveConnectionPollIntervalMs = 1500;
@@ -71,7 +72,9 @@ const fetchS3Config = async (orgId: string | null) => {
 		headers: await protectedHeaders(),
 	});
 
-	if (response.status !== 200) throw new Error("Failed to fetch S3 config");
+	if (response.status !== 200) {
+		throw new Error(describeS3ConfigError(response));
+	}
 
 	return response.body;
 };
