@@ -7,6 +7,7 @@ import { RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const WEB_ROOT = join(__dirname, "..", "..");
 const DECLARATION_FILE = "lib/rate-limit.ts";
+const TEST_DIR = "__tests__/";
 
 /**
  * Ids that are intentionally declared ahead of being wired. Each entry needs a
@@ -39,7 +40,16 @@ function referencedKeys(): Set<string> {
 		{ cwd: WEB_ROOT, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 },
 	)
 		.split("\0")
-		.filter((file) => file && file !== DECLARATION_FILE);
+		.filter(
+			(file) =>
+				file &&
+				file !== DECLARATION_FILE &&
+				// Only runtime call sites count. A test that merely names an id
+				// would otherwise make an unwired endpoint look protected — and
+				// this file itself references every key, which would make the
+				// guard vacuous.
+				!file.startsWith(TEST_DIR),
+		);
 
 	const found = new Set<string>();
 	const keys = Object.keys(RATE_LIMIT_IDS);
