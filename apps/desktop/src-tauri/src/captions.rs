@@ -8,18 +8,20 @@ use ffmpeg::{
 use futures::StreamExt;
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 use parakeet_rs::{ParakeetTDT, TimestampMode, Transcriber};
+use reqwest::{StatusCode, header::RANGE};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::io::SeekFrom;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tempfile::tempdir;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Notify};
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -2246,6 +2248,11 @@ pub async fn delete_whisper_model(app: AppHandle, model_path: String) -> Result<
 
 const MODEL_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
+/// How many times a single model part is re-attempted after the transfer drops
+/// partway through. Each attempt resumes from what is already on disk, so the
+/// cost of a retry is the remaining bytes rather than the whole file.
+const MODEL_DOWNLOAD_MAX_ATTEMPTS: u32 = 5;
+
 const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &[&str])] = &[
     (
         "encoder-model.int8.onnx",
@@ -2496,43 +2503,122 @@ async fn download_parakeet_model_to_dir(
             for url in *urls {
                 tracing::info!("Downloading {filename} part from {url}");
 
-                let response = http_client
-                    .get(*url)
-                    .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
-                    .send()
+                // Where this part begins in the file. Some entries are split
+                // across several URLs appended in order (see
+                // PARAKEET_TDT_FULL_MODEL_FILES), so a restart must rewind to
+                // the start of *this* part, not to the start of the file.
+                let part_start = file
+                    .stream_position()
                     .await
-                    .map_err(|e| format!("Failed to download {filename}: {e}"))?;
+                    .map_err(|e| format!("Failed to read position for {filename}: {e}"))?;
 
-                if !response.status().is_success() {
-                    return Err(format!(
-                        "Failed to download {filename}: HTTP {}",
-                        response.status()
-                    ));
-                }
+                // Bytes of *this part* already written. A dropped connection
+                // resumes from here with a Range request instead of discarding
+                // the staging directory and starting the whole model again.
+                let mut part_downloaded: u64 = 0;
+                let mut attempt: u32 = 0;
 
-                let mut stream = response.bytes_stream();
-                while let Some(chunk_result) = stream.next().await {
-                    let chunk =
-                        chunk_result.map_err(|e| format!("Download error for {filename}: {e}"))?;
-                    file.write_all(&chunk)
-                        .await
-                        .map_err(|e| format!("Write error for {filename}: {e}"))?;
+                loop {
+                    attempt += 1;
 
-                    downloaded_total = downloaded_total.saturating_add(chunk.len() as u64);
+                    let mut request = http_client
+                        .get(*url)
+                        .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT);
+                    if part_downloaded > 0 {
+                        request = request.header(RANGE, format!("bytes={part_downloaded}-"));
+                    }
 
-                    let progress = if total_size > 0 {
-                        (downloaded_total as f64 / total_size as f64) * 100.0
-                    } else {
-                        ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
-                    };
+                    let attempt_result = async {
+                        let response = request
+                            .send()
+                            .await
+                            .map_err(|e| format!("Failed to download {filename}: {e}"))?;
 
-                    set_model_download_progress(
-                        app,
-                        download_key,
-                        progress,
-                        format!("Downloading {filename}: {progress:.0}%"),
-                    )
+                        if !response.status().is_success() {
+                            return Err(format!(
+                                "Failed to download {filename}: HTTP {}",
+                                response.status()
+                            ));
+                        }
+
+                        // A server that ignores Range answers 200 with the whole
+                        // body. Rewind so the bytes line up instead of appending
+                        // a second copy onto the first attempt's prefix.
+                        if part_downloaded > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
+                            tracing::warn!(
+                                "Range request for {filename} was not honoured; restarting part"
+                            );
+                            file.set_len(part_start)
+                                .await
+                                .map_err(|e| format!("Failed to reset {filename}: {e}"))?;
+                            file.seek(SeekFrom::Start(part_start))
+                                .await
+                                .map_err(|e| format!("Failed to reset {filename}: {e}"))?;
+                            downloaded_total = downloaded_total.saturating_sub(part_downloaded);
+                            part_downloaded = 0;
+                        }
+
+                        let mut stream = response.bytes_stream();
+                        while let Some(chunk_result) = stream.next().await {
+                            let chunk = chunk_result
+                                .map_err(|e| format!("Download error for {filename}: {e}"))?;
+                            file.write_all(&chunk)
+                                .await
+                                .map_err(|e| format!("Write error for {filename}: {e}"))?;
+
+                            part_downloaded = part_downloaded.saturating_add(chunk.len() as u64);
+                            downloaded_total = downloaded_total.saturating_add(chunk.len() as u64);
+
+                            let progress = if total_size > 0 {
+                                (downloaded_total as f64 / total_size as f64) * 100.0
+                            } else {
+                                ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
+                            };
+
+                            set_model_download_progress(
+                                app,
+                                download_key,
+                                progress,
+                                format!("Downloading {filename}: {progress:.0}%"),
+                            )
+                            .await;
+                        }
+
+                        Ok(())
+                    }
                     .await;
+
+                    match attempt_result {
+                        Ok(()) => break,
+                        Err(e) => {
+                            // Only a mid-transfer drop is worth resuming. Give up
+                            // immediately when nothing new arrived, otherwise a
+                            // hard failure (404, DNS) would burn every attempt.
+                            let made_progress = part_downloaded > 0;
+                            if attempt >= MODEL_DOWNLOAD_MAX_ATTEMPTS || !made_progress {
+                                return Err(e);
+                            }
+
+                            tracing::warn!(
+                                "{e}; resuming {filename} from {part_downloaded} bytes \
+                                 (attempt {attempt}/{MODEL_DOWNLOAD_MAX_ATTEMPTS})"
+                            );
+
+                            set_model_download_progress(
+                                app,
+                                download_key,
+                                if total_size > 0 {
+                                    (downloaded_total as f64 / total_size as f64) * 100.0
+                                } else {
+                                    ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
+                                },
+                                format!("Connection lost, resuming {filename}..."),
+                            )
+                            .await;
+
+                            tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+                        }
+                    }
                 }
             }
 
