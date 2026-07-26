@@ -12,6 +12,7 @@ import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -42,6 +43,15 @@ const decodeUrlEncodedHeaderValue = (value?: string | null) => {
 };
 
 export async function POST(request: NextRequest) {
+	// Unauthenticated by design (provideOptionalAuth), and every accepted call
+	// costs a Tinybird ingest and can fan out into view notifications and a
+	// first-view email.
+	if (await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
+		headers: request.headers,
+	})) {
+		return Response.json({ error: "Too many requests" }, { status: 429 });
+	}
+
 	let body: TrackPayload;
 	try {
 		body = (await request.json()) as TrackPayload;

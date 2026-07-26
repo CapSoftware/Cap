@@ -3,8 +3,17 @@ import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { PostHog } from "posthog-node";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
+	// Unauthenticated: every accepted call creates a real Stripe checkout
+	// session, so this is rate limited before anything is read from the body.
+	if (await isRateLimited(RATE_LIMIT_IDS.GUEST_CHECKOUT, {
+		headers: request.headers,
+	})) {
+		return Response.json({ error: "Too many requests" }, { status: 429 });
+	}
+
 	console.log("Starting guest checkout process");
 	const { priceId, quantity, platform } = await request.json();
 	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";

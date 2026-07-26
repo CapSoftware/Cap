@@ -5,6 +5,7 @@ import {
 	isMediaServerConfigured,
 } from "@/lib/media-client";
 import { convertRemoteVideoToMp4Buffer } from "@/lib/video-convert";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 function isHlsUrl(url: string): boolean {
 	return (url.split("?")[0] ?? "").toLowerCase().endsWith(".m3u8");
@@ -160,6 +161,14 @@ async function tryMp4CandidateDownload(
 }
 
 export async function GET(request: NextRequest) {
+	// Unauthenticated, and an accepted call downloads a remote video and can run
+	// it through ffmpeg, so it is bounded before any fetching starts.
+	if (await isRateLimited(RATE_LIMIT_IDS.LOOM_DOWNLOAD, {
+		headers: request.headers,
+	})) {
+		return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+	}
+
 	const videoId = request.nextUrl.searchParams.get("id");
 	const videoName = request.nextUrl.searchParams.get("name");
 
