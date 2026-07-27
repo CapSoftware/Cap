@@ -563,7 +563,7 @@ impl WebviewWindowExt for WebviewWindow {
             let webview = self.clone();
             move || {
                 let Ok(ns_window) = webview.ns_window() else {
-                    tracing::error!("NSWindow not ready");
+						tracing::warn!(label = %webview.label(), "NSWindow not ready");
                     return;
                 };
                 // SAFETY: Tauri runs this on the main thread
