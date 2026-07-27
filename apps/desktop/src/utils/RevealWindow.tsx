@@ -62,7 +62,7 @@ export function RevealWindowWithSuspense(
 	const resolved = children(() => props.children);
 
 	createEffect(() => {
-		if (resolved()) maybeShowWindow();
+		if (resolved() !== undefined) maybeShowWindow();
 	});
 
 	return <Suspense fallback={props.fallback}>{resolved()}</Suspense>;
