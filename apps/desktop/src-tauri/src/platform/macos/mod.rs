@@ -564,7 +564,7 @@ impl WebviewWindowExt for WebviewWindow {
             move || {
                 let Ok(ns_window) = webview.ns_window() else {
 						tracing::warn!(label = %webview.label(), "NSWindow not ready");
-                    return;
+                    tracing::warn!(label = %webview.label(), "NSWindow not ready");
                 };
                 // SAFETY: Tauri runs this on the main thread
                 let mtm = unsafe { MainThreadMarker::new_unchecked() };
