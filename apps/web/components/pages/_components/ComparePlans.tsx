@@ -111,8 +111,14 @@ const sections: FeatureSection[] = [
 		],
 	},
 	{
-		title: "Support & licensing",
+		title: "Security, support & licensing",
 		rows: [
+			{
+				label: "ISO 27001 compliance",
+				free: false,
+				desktop: false,
+				pro: true,
+			},
 			{ label: "Community support", free: true, desktop: true, pro: true },
 			{
 				label: "Priority support & early features",
