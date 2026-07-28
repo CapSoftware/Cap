@@ -1934,8 +1934,9 @@ function RecordingControls(props: {
 		}
 	});
 
-	const startDisabled = () =>
-		!!props.disabled || devices.isPending || recordingStartSafety.isPending;
+	const startLoading = () =>
+		devices.isPending || recordingStartSafety.isPending;
+	const startDisabled = () => !!props.disabled || startLoading();
 
 	const startRecording = async (confirmedWithoutMicrophone = false) => {
 		if (rawOptions.mode === "instant" && !auth.data) {
@@ -2182,6 +2183,7 @@ function RecordingControls(props: {
 											{(() => {
 												if (rawOptions.mode === "instant" && !auth.data)
 													return "Sign In To Use";
+												if (startLoading()) return "Preparing...";
 												if (rawOptions.mode === "screenshot")
 													return "Take Screenshot";
 												return "Start Recording";
