@@ -26,11 +26,17 @@ import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
-import { authStore, generalSettingsStore } from "~/store";
+import {
+	authStore,
+	generalSettingsStore,
+	recordingStartSafetyStore,
+} from "~/store";
 import { clientEnv } from "~/utils/env";
 import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
+	RECORDING_START_SAFETY_DEFAULTS,
+	type RecordingStartSafetySettings,
 } from "~/utils/general-settings";
 import {
 	type AppTheme,
@@ -126,11 +132,20 @@ const FREE_INSTANT_MODE_MAX_RESOLUTION = 1280;
 const PRO_INSTANT_MODE_MAX_RESOLUTION = 1920;
 
 export default function GeneralSettings() {
-	const [store] = createResource(() => generalSettingsStore.get());
+	const [stores] = createResource(() =>
+		Promise.all([generalSettingsStore.get(), recordingStartSafetyStore.get()]),
+	);
 
 	return (
-		<Show when={store.state === "ready" && ([store()] as const)}>
-			{(store) => <Inner initialStore={store()[0] ?? null} />}
+		<Show when={stores()} keyed>
+			{(stores) => (
+				<Inner
+					initialStore={stores[0] ?? null}
+					initialRecordingStartSafety={
+						stores[1] ?? RECORDING_START_SAFETY_DEFAULTS
+					}
+				/>
+			)}
 		</Show>
 	);
 }
@@ -209,9 +224,18 @@ function AppearanceSection(props: {
 	);
 }
 
-function Inner(props: { initialStore: GeneralSettingsStore | null }) {
+function Inner(props: {
+	initialStore: GeneralSettingsStore | null;
+	initialRecordingStartSafety: RecordingStartSafetySettings;
+}) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveGeneralSettings(props.initialStore),
+	);
+	const [
+		confirmBeforeRecordingWithoutMicrophone,
+		setConfirmBeforeRecordingWithoutMicrophone,
+	] = createSignal(
+		props.initialRecordingStartSafety.confirmBeforeRecordingWithoutMicrophone,
 	);
 	const auth = authStore.createQuery();
 	const hasCapPro = createMemo(() => {
@@ -309,6 +333,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		} catch (error) {
 			setSettings(key as keyof GeneralSettingsStore, previousValue);
 			console.error(`Failed to update ${key}`, error);
+		}
+	};
+
+	const handleRecordingStartSafetyChange = async (value: boolean) => {
+		const previousValue = confirmBeforeRecordingWithoutMicrophone();
+		setConfirmBeforeRecordingWithoutMicrophone(value);
+		try {
+			await recordingStartSafetyStore.set({
+				confirmBeforeRecordingWithoutMicrophone: value,
+			});
+		} catch (error) {
+			setConfirmBeforeRecordingWithoutMicrophone(previousValue);
+			console.error("Failed to update recording start safety", error);
 		}
 	};
 
@@ -551,6 +588,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								{ text: "5 seconds", value: 5 },
 								{ text: "10 seconds", value: 10 },
 							]}
+						/>
+						<ToggleSettingItem
+							label="Confirm before recording without a microphone"
+							description="Require confirmation when no microphone is selected or the selected microphone is unavailable."
+							value={confirmBeforeRecordingWithoutMicrophone()}
+							onChange={handleRecordingStartSafetyChange}
 						/>
 						<SelectSettingItem
 							label="Main window when recording starts"
