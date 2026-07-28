@@ -1,5 +1,6 @@
 export const dub = () => ({
 	links: {
-		create: () => Promise.resolve(),
+		create: (_input: { url: string; domain: string; key: string }) =>
+			Promise.resolve(),
 	},
 });

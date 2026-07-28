@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { dub } from "../../../../packages/utils/src/lib/dub";
 import { GET as getMarketingOg } from "../../app/api/og/route";
 import { signOgParams, verifyOgSignature } from "../../lib/og/signature";
 import { ogImageUrl } from "../../lib/og/url";
@@ -154,5 +155,20 @@ describe("rich share link", () => {
 		// The link and image are still present.
 		expect(html).toContain('<a href="https://cap.so/s/abc?&quot;&gt;');
 		expect(html).toContain("<img src=");
+	});
+});
+
+describe("Dub link creation", () => {
+	it("does not make a network request", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+		await dub().links.create({
+			url: "https://cap.so/s/abc123",
+			domain: "cap.link",
+			key: "abc123",
+		});
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		fetchSpy.mockRestore();
 	});
 });
