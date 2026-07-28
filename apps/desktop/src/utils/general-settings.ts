@@ -1,4 +1,7 @@
-import type { GeneralSettingsStore as TauriGeneralSettingsStore } from "~/utils/tauri";
+import type {
+	RecordingMode,
+	GeneralSettingsStore as TauriGeneralSettingsStore,
+} from "~/utils/tauri";
 
 export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	captureKeyboardEvents?: boolean;
@@ -13,6 +16,26 @@ export const DEFAULT_TRANSCRIPTION_HINTS = [
 	"My Brand Name",
 	"mywebsite.com",
 ];
+
+export type RecordingStartSafetySettings = {
+	confirmBeforeRecordingWithoutMicrophone: boolean;
+};
+
+export const RECORDING_START_SAFETY_DEFAULTS: RecordingStartSafetySettings = {
+	confirmBeforeRecordingWithoutMicrophone: true,
+};
+
+export function shouldConfirmRecordingWithoutMicrophone(
+	mode: RecordingMode,
+	confirmBeforeRecordingWithoutMicrophone: boolean,
+	selectedMicrophone: string | null,
+): boolean {
+	return (
+		mode !== "screenshot" &&
+		confirmBeforeRecordingWithoutMicrophone &&
+		selectedMicrophone === null
+	);
+}
 
 export function createDefaultGeneralSettings(): GeneralSettingsStore {
 	return {
