@@ -5,6 +5,7 @@ import { signOgParams, verifyOgSignature } from "../../lib/og/signature";
 import { ogImageUrl } from "../../lib/og/url";
 import { formatDuration, renderVideoOg } from "../../lib/og/video-og";
 import {
+	canonicalVideoShareUrl,
 	richVideoLinkHtml,
 	videoPreviewImageUrl,
 } from "../../lib/video-share-clipboard";
@@ -119,6 +120,21 @@ describe("video og", () => {
 });
 
 describe("rich share link", () => {
+	it("canonicalizes legacy video share links", () => {
+		expect(canonicalVideoShareUrl("https://cap.link/abc123")).toBe(
+			"https://cap.so/s/abc123",
+		);
+		expect(canonicalVideoShareUrl("https://cap.link/abc123?t=42")).toBe(
+			"https://cap.so/s/abc123?t=42",
+		);
+		expect(canonicalVideoShareUrl("https://cap.link/video/demo.mp4")).toBe(
+			"https://cap.link/video/demo.mp4",
+		);
+		expect(canonicalVideoShareUrl("https://team.example/s/abc123")).toBe(
+			"https://team.example/s/abc123",
+		);
+	});
+
 	it("builds the preview image url", () => {
 		expect(videoPreviewImageUrl("https://cap.so", "abc123")).toBe(
 			"https://cap.so/api/video/preview?videoId=abc123&fallback=og",

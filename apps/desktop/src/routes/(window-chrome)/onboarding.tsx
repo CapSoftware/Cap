@@ -968,7 +968,7 @@ function ShortcutsStep(props: { active: boolean }) {
 		},
 		{
 			title: "Custom Domain",
-			desc: "Use your own domain for shareable links instead of cap.link",
+			desc: "Use your own domain for shareable links instead of cap.so",
 		},
 		{
 			title: "Recording Preferences",
@@ -1443,7 +1443,7 @@ function InstantMockup(props: { active: boolean }) {
 							<div class="flex items-center gap-2 w-full">
 								<div class="flex-1 flex items-center px-3 py-2 rounded-lg bg-white dark:bg-gray-3 border border-gray-4">
 									<span class="text-[11px] text-gray-11 font-mono">
-										cap.link/m4k92x
+										cap.so/s/m4k92x
 									</span>
 								</div>
 								<div
