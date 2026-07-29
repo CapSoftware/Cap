@@ -1,0 +1,75 @@
+const assemblyAIWord = (
+	text: string,
+	start: number,
+	end: number,
+	confidence = 0.98,
+) => ({
+	text,
+	start,
+	end,
+	confidence,
+	speaker: null,
+});
+
+export const realAssemblyAIResponse = {
+	id: "transcript-real",
+	status: "completed",
+	speech_models: ["universal-3-5-pro", "universal-2"],
+	speech_model_used: "universal-3-5-pro",
+	language_detection: true,
+	language_code: "en",
+	language_confidence: 0.9726,
+	audio_duration: 4,
+	confidence: 0.9844434,
+	punctuate: true,
+	format_text: true,
+	text: "Hello everyone. Welcome to this demo video. AssemblyAI returns word timestamps.",
+	utterances: null,
+	words: [
+		assemblyAIWord("Hello", 80, 320, 0.99),
+		assemblyAIWord("everyone.", 340, 760, 0.99),
+		assemblyAIWord("Welcome", 920, 1_280),
+		assemblyAIWord("to", 1_300, 1_420, 0.99),
+		assemblyAIWord("this", 1_440, 1_620, 0.99),
+		assemblyAIWord("demo", 1_640, 1_920),
+		assemblyAIWord("video.", 1_940, 2_320, 0.99),
+		assemblyAIWord("AssemblyAI", 2_500, 2_980),
+		assemblyAIWord("returns", 3_000, 3_300),
+		assemblyAIWord("word", 3_320, 3_580, 0.99),
+		assemblyAIWord("timestamps.", 3_600, 4_080, 0.99),
+	],
+} as const;
+
+export const silentVideoAssemblyAIResponse = {
+	id: "transcript-silent",
+	status: "completed",
+	speech_models: ["universal-3-5-pro", "universal-2"],
+	speech_model_used: "universal-3-5-pro",
+	language_detection: true,
+	text: "",
+	utterances: null,
+	words: null,
+} as const;
+
+export const longVideoAssemblyAIResponse = {
+	id: "transcript-long",
+	status: "completed",
+	speech_models: ["universal-3-5-pro", "universal-2"],
+	speech_model_used: "universal-3-5-pro",
+	language_detection: true,
+	utterances: null,
+	words: [
+		assemblyAIWord("This", 0, 200),
+		assemblyAIWord("caption", 220, 500),
+		assemblyAIWord("contains", 520, 800),
+		assemblyAIWord("more", 820, 1_000),
+		assemblyAIWord("than", 1_020, 1_200),
+		assemblyAIWord("eight", 1_220, 1_420),
+		assemblyAIWord("consecutive", 1_440, 1_820),
+		assemblyAIWord("words", 1_840, 2_080),
+		assemblyAIWord("so", 2_100, 2_220),
+		assemblyAIWord("it", 2_240, 2_340),
+		assemblyAIWord("must", 2_360, 2_540),
+		assemblyAIWord("wrap.", 2_560, 2_900),
+	],
+} as const;
