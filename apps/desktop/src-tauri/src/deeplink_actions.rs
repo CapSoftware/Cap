@@ -163,7 +163,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        match url.domain() {
+        match url.host_str() {
             Some("action") => {
                 let params = url
                     .query_pairs()
@@ -195,7 +195,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                 let device_id = params
                     .get("id")
                     .or_else(|| params.get("camera"))
-                    .map(|s| s.to_string())
+                    .and_then(|s| (!s.is_empty()).then(|| s.to_string()))
                     .ok_or(ActionParseFromUrlError::Invalid)?;
                 Ok(Self::OpenCamera {
                     camera: DeviceOrModelID::DeviceID(device_id),
@@ -397,6 +397,35 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&resume_url),
             Ok(DeepLinkAction::ResumeRecording)
+        );
+    }
+
+    #[test]
+    fn parses_direct_scheme_urls() {
+        let pause_url = Url::parse("cap://pause").unwrap();
+        let resume_url = Url::parse("cap://resume").unwrap();
+        let mic_url = Url::parse("cap://switch-mic?label=Shure%20MV7%2B").unwrap();
+        let camera_url = Url::parse("cap://switch-camera?id=cam-1").unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&pause_url),
+            Ok(DeepLinkAction::PauseRecording)
+        );
+        assert_eq!(
+            DeepLinkAction::try_from(&resume_url),
+            Ok(DeepLinkAction::ResumeRecording)
+        );
+        assert_eq!(
+            DeepLinkAction::try_from(&mic_url),
+            Ok(DeepLinkAction::SwitchMicrophone {
+                mic_label: Some("Shure MV7+".to_string())
+            })
+        );
+        assert_eq!(
+            DeepLinkAction::try_from(&camera_url),
+            Ok(DeepLinkAction::OpenCamera {
+                camera: DeviceOrModelID::DeviceID("cam-1".to_string())
+            })
         );
     }
 
