@@ -8,8 +8,6 @@ import { getBootstrapData } from "@/utils/getBootstrapData";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./AuthContext";
 import { resolveCurrentUser } from "./current-user";
-import { GTag } from "./GTag";
-import { MetaPixel } from "./MetaPixel";
 import { PosthogIdentify } from "./PosthogIdentify";
 import { PurchaseTracker } from "./PurchaseTracker";
 import {
@@ -43,8 +41,6 @@ export async function AppProviders({ children }: PropsWithChildren) {
 									<SonnerToaster />
 									{children}
 									<PosthogIdentify />
-									<MetaPixel />
-									<GTag />
 									<Suspense fallback={null}>
 										<PurchaseTracker />
 									</Suspense>
