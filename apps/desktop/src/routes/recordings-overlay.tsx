@@ -374,7 +374,7 @@ export default function () {
 													>
 														<IconCapUpload class="size-4" />
 													</TooltipIconButton>
-													<div class="flex absolute inset-0 justify-center items-center">
+													<div class="flex flex-col absolute inset-0 justify-center items-center gap-1">
 														<Button
 															variant="white"
 															size="sm"
@@ -382,6 +382,13 @@ export default function () {
 														>
 															Export
 														</Button>
+														<Show when={metadata.latest}>
+															{(metadata) => (
+																<span class="text-[10px] text-gray-200 font-medium bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm">
+																	Est. {metadata().size.toFixed(1)} MB • ~{Math.ceil(metadata().estimatedExportTime)}s
+																</span>
+															)}
+														</Show>
 													</div>
 												</div>
 												<Show when={metadata.latest}>

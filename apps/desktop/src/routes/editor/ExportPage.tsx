@@ -1412,6 +1412,25 @@ export function ExportPage() {
 										</>
 									)}
 								</Button>
+								<Show when={renderEstimate()}>
+									{(est) => {
+										const sec = Math.max(
+											1,
+											Math.round(
+												(est().frameRenderTimeMs * est().totalFrames) / 1000,
+											),
+										);
+										const timeStr =
+											sec < 60
+												? `~${sec}s`
+												: `~${Math.floor(sec / 60)}m ${sec % 60}s`;
+										return (
+											<p class="text-xs text-gray-10 text-center mt-0.5">
+												Est. size: {est().estimatedSizeMb.toFixed(1)} MB • Est. time: {timeStr}
+											</p>
+										);
+									}}
+								</Show>
 							</div>
 						)}
 					</div>
