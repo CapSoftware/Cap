@@ -46,10 +46,17 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
-    #[cfg(debug_assertions)]
     PauseRecording,
-    #[cfg(debug_assertions)]
     ResumeRecording,
+    TogglePauseRecording,
+    RestartRecording,
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
+    SwitchCamera {
+        camera: Option<DeviceOrModelID>,
+    },
+    TakeScreenshot,
     #[cfg(debug_assertions)]
     OpenCamera {
         camera: DeviceOrModelID,
@@ -244,13 +251,41 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
-            #[cfg(debug_assertions)]
             DeepLinkAction::PauseRecording => {
                 crate::recording::pause_recording(app.clone(), app.state()).await
             }
-            #[cfg(debug_assertions)]
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::TogglePauseRecording => {
+                crate::recording::toggle_pause_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::RestartRecording => {
+                crate::recording::restart_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                crate::set_mic_input(app.state(), mic_label).await
+            }
+            DeepLinkAction::SwitchCamera { camera } => {
+                crate::set_camera_input(
+                    app.clone(),
+                    app.state::<ArcLock<App>>(),
+                    camera,
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+            DeepLinkAction::TakeScreenshot => {
+                let state = app.state::<ArcLock<App>>();
+                let capture_target = ScreenCaptureTarget::Display {
+                    id: cap_recording::screen_capture::list_displays()
+                        .into_iter()
+                        .next()
+                        .map(|(s, _)| s.id)
+                        .ok_or("No display available".to_string())?,
+                };
+                crate::recording::take_screenshot(app.clone(), capture_target).await
             }
             #[cfg(debug_assertions)]
             DeepLinkAction::OpenCamera { camera } => {
@@ -358,7 +393,6 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn parses_pause_and_resume_action_urls() {
         let pause_url = Url::parse("cap-desktop://action?value=%22pause_recording%22").unwrap();
@@ -371,6 +405,72 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&resume_url),
             Ok(DeepLinkAction::ResumeRecording)
+        );
+    }
+
+    #[test]
+    fn parses_toggle_pause_action_url() {
+        let url = Url::parse("cap-desktop://action?value=%22toggle_pause_recording%22").unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::TogglePauseRecording)
+        );
+    }
+
+    #[test]
+    fn parses_restart_action_url() {
+        let url = Url::parse("cap-desktop://action?value=%22restart_recording%22").unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::RestartRecording)
+        );
+    }
+
+    #[test]
+    fn parses_switch_microphone_action_url() {
+        let value = serde_json::json!({
+            "switch_microphone": {
+                "mic_label": "Built-in Microphone"
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::SwitchMicrophone {
+                mic_label: Some("Built-in Microphone".to_string())
+            })
+        );
+    }
+
+    #[test]
+    fn parses_switch_camera_action_url() {
+        let value = serde_json::json!({
+            "switch_camera": {
+                "camera": { "DeviceID": "camera-1" }
+            }
+        })
+        .to_string();
+        let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::SwitchCamera {
+                camera: Some(DeviceOrModelID::DeviceID("camera-1".to_string()))
+            })
+        );
+    }
+
+    #[test]
+    fn parses_take_screenshot_action_url() {
+        let url = Url::parse("cap-desktop://action?value=%22take_screenshot%22").unwrap();
+
+        assert_eq!(
+            DeepLinkAction::try_from(&url),
+            Ok(DeepLinkAction::TakeScreenshot)
         );
     }
 
