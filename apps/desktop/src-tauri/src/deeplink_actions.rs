@@ -163,6 +163,10 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
+        if !matches!(url.scheme(), "cap" | "cap-desktop") {
+            return Err(ActionParseFromUrlError::NotAction);
+        }
+
         match url.host_str() {
             Some("action") => {
                 let params = url
