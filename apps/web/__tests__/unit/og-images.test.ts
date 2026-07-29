@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { dub } from "../../../../packages/utils/src/lib/dub";
 import { GET as getMarketingOg } from "../../app/api/og/route";
 import { signOgParams, verifyOgSignature } from "../../lib/og/signature";
 import { ogImageUrl } from "../../lib/og/url";
 import { formatDuration, renderVideoOg } from "../../lib/og/video-og";
 import {
+	canonicalVideoShareUrl,
 	richVideoLinkHtml,
 	videoPreviewImageUrl,
 } from "../../lib/video-share-clipboard";
@@ -119,6 +121,21 @@ describe("video og", () => {
 });
 
 describe("rich share link", () => {
+	it("canonicalizes legacy video share links", () => {
+		expect(canonicalVideoShareUrl("https://cap.link/abc123")).toBe(
+			"https://cap.so/s/abc123",
+		);
+		expect(canonicalVideoShareUrl("https://cap.link/abc123?t=42")).toBe(
+			"https://cap.so/s/abc123?t=42",
+		);
+		expect(canonicalVideoShareUrl("https://cap.link/video/demo.mp4")).toBe(
+			"https://cap.link/video/demo.mp4",
+		);
+		expect(canonicalVideoShareUrl("https://team.example/s/abc123")).toBe(
+			"https://team.example/s/abc123",
+		);
+	});
+
 	it("builds the preview image url", () => {
 		expect(videoPreviewImageUrl("https://cap.so", "abc123")).toBe(
 			"https://cap.so/api/video/preview?videoId=abc123&fallback=og",
@@ -138,5 +155,20 @@ describe("rich share link", () => {
 		// The link and image are still present.
 		expect(html).toContain('<a href="https://cap.so/s/abc?&quot;&gt;');
 		expect(html).toContain("<img src=");
+	});
+});
+
+describe("Dub link creation", () => {
+	it("does not make a network request", async () => {
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+		await dub().links.create({
+			url: "https://cap.so/s/abc123",
+			domain: "cap.link",
+			key: "abc123",
+		});
+
+		expect(fetchSpy).not.toHaveBeenCalled();
+		fetchSpy.mockRestore();
 	});
 });

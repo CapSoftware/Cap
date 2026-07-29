@@ -1,7 +1,6 @@
-import { serverEnv } from "@cap/env";
-import { Dub } from "dub";
-
-export const dub = () =>
-	new Dub({
-		token: serverEnv().DUB_API_KEY,
-	});
+export const dub = () => ({
+	links: {
+		create: (_input: { url: string; domain: string; key: string }) =>
+			Promise.resolve(),
+	},
+});
