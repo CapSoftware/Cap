@@ -557,7 +557,7 @@ async function AuthorizedContent({
 	const env = serverEnv();
 	const transcriptionGenerationAvailable =
 		!video.isScreenshot &&
-		Boolean(env.DEEPGRAM_API_KEY) &&
+		Boolean(env.ASSEMBLY_API_KEY) &&
 		!rules.settings.disableTranscript;
 	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
 
