@@ -5,15 +5,14 @@ import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
-	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
-	type AiGenerationLanguageCode,
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
-import { createClient } from "@deepgram/sdk";
+import { AssemblyAI } from "assemblyai";
 import { and, eq } from "drizzle-orm";
 import { FatalError } from "workflow";
+import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
@@ -27,7 +26,7 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
-import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
+import { formatToWebVTT } from "@/lib/transcribe-utils";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -75,7 +74,7 @@ export async function transcribeVideoWorkflow(
 		}
 
 		const [transcription] = await Promise.all([
-			transcribeWithDeepgram(audioUrl, videoData.aiGenerationLanguage),
+			transcribeWithAssemblyAI(audioUrl, videoData.aiGenerationLanguage),
 		]);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
@@ -97,8 +96,8 @@ export async function transcribeVideoWorkflow(
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().DEEPGRAM_API_KEY) {
-		throw new FatalError("Missing DEEPGRAM_API_KEY");
+	if (!serverEnv().ASSEMBLY_API_KEY) {
+		throw new FatalError("Missing ASSEMBLY_API_KEY");
 	}
 
 	const query = await db()
@@ -296,30 +295,7 @@ async function resolveVideoSourceUrl(
 	throw new Error("Video file not accessible");
 }
 
-export function getDeepgramTranscriptionOptions(
-	language: AiGenerationLanguage,
-) {
-	const baseOptions = {
-		model: "nova-3",
-		smart_format: true,
-		utterances: true,
-		mime_type: "audio/mpeg",
-	} as const;
-
-	if (language === AI_GENERATION_LANGUAGE_AUTO) {
-		return {
-			...baseOptions,
-			detect_language: [...DEEPGRAM_DETECTABLE_LANGUAGES],
-		};
-	}
-
-	return {
-		...baseOptions,
-		language,
-	};
-}
-
-async function transcribeWithDeepgram(
+async function transcribeWithAssemblyAI(
 	audioUrl: string,
 	language: AiGenerationLanguage,
 ): Promise<string> {
@@ -333,41 +309,27 @@ async function transcribeWithDeepgram(
 	}
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+	const client = new AssemblyAI({
+		apiKey: serverEnv().ASSEMBLY_API_KEY as string,
+	});
 
-	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
+	const transcript = await client.transcripts.transcribe({
+		audio: audioBuffer,
+		...getAssemblyAITranscriptionOptions(language),
+	});
 
-	const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
-		audioBuffer,
-		getDeepgramTranscriptionOptions(language),
+	console.log(
+		`[transcribe] AssemblyAI transcript ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
 	);
 
-	if (error) {
+	if (transcript.status === "error") {
 		throw new Error(
-			`Deepgram transcription failed (language=${language}): ${error.message}`,
+			`AssemblyAI transcription failed (id=${transcript.id}, language=${language}): ${transcript.error ?? "Unknown error"}`,
 		);
 	}
 
-	return formatToWebVTT(result as unknown as DeepgramResult);
+	return formatToWebVTT(transcript);
 }
-
-const DEEPGRAM_DETECTABLE_LANGUAGES = [
-	"en",
-	"es",
-	"fr",
-	"de",
-	"pt",
-	"it",
-	"nl",
-	"pl",
-	"ro",
-	"sk",
-	"ru",
-	"tr",
-	"ja",
-	"ko",
-	"zh",
-	"hi",
-] as const satisfies readonly AiGenerationLanguageCode[];
 
 async function saveTranscription(
 	videoId: string,
