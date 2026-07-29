@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { formatTimestamp, formatToWebVTT } from "@/lib/transcribe-utils";
 import {
-	longVideoDeepgramResponse,
-	realDeepgramResponse,
-	silentVideoDeepgramResponse,
-} from "../fixtures/deepgram-responses";
+	longVideoAssemblyAIResponse,
+	realAssemblyAIResponse,
+	silentVideoAssemblyAIResponse,
+} from "../fixtures/assemblyai-responses";
 
 describe("formatTimestamp", () => {
 	it("formats zero correctly", () => {
@@ -12,148 +12,137 @@ describe("formatTimestamp", () => {
 	});
 
 	it("formats sub-second timestamps", () => {
-		expect(formatTimestamp(0.08)).toBe("00:00:00.080");
-		expect(formatTimestamp(0.5)).toBe("00:00:00.500");
-		expect(formatTimestamp(0.999)).toBe("00:00:00.999");
+		expect(formatTimestamp(80)).toBe("00:00:00.080");
+		expect(formatTimestamp(500)).toBe("00:00:00.500");
+		expect(formatTimestamp(999)).toBe("00:00:00.999");
 	});
 
 	it("formats seconds correctly", () => {
-		expect(formatTimestamp(1)).toBe("00:00:01.000");
-		expect(formatTimestamp(30.5)).toBe("00:00:30.500");
-		expect(formatTimestamp(59.999)).toBe("00:00:59.999");
+		expect(formatTimestamp(1_000)).toBe("00:00:01.000");
+		expect(formatTimestamp(30_500)).toBe("00:00:30.500");
+		expect(formatTimestamp(59_999)).toBe("00:00:59.999");
 	});
 
 	it("formats minutes correctly", () => {
-		expect(formatTimestamp(60)).toBe("00:01:00.000");
-		expect(formatTimestamp(90.25)).toBe("00:01:30.250");
-		expect(formatTimestamp(3599.5)).toBe("00:59:59.500");
+		expect(formatTimestamp(60_000)).toBe("00:01:00.000");
+		expect(formatTimestamp(90_250)).toBe("00:01:30.250");
+		expect(formatTimestamp(3_599_500)).toBe("00:59:59.500");
 	});
 
 	it("formats hours correctly", () => {
-		expect(formatTimestamp(3600)).toBe("01:00:00.000");
-		expect(formatTimestamp(7261.123)).toBe("02:01:01.123");
+		expect(formatTimestamp(3_600_000)).toBe("01:00:00.000");
+		expect(formatTimestamp(7_261_123)).toBe("02:01:01.123");
 	});
 
-	it("handles real timestamps from Deepgram", () => {
-		const firstWord = realDeepgramResponse.results.utterances[0]?.words[0];
+	it("handles AssemblyAI word timestamps", () => {
+		const firstWord = realAssemblyAIResponse.words[0];
 		expect(formatTimestamp(firstWord?.start ?? 0)).toBe("00:00:00.080");
 		expect(formatTimestamp(firstWord?.end ?? 0)).toBe("00:00:00.320");
 	});
 });
 
 describe("formatToWebVTT", () => {
+	it("matches the completed AssemblyAI response shape", () => {
+		expect(realAssemblyAIResponse).toMatchObject({
+			status: "completed",
+			speech_models: ["universal-3-5-pro", "universal-2"],
+			speech_model_used: "universal-3-5-pro",
+			language_detection: true,
+			utterances: null,
+		});
+		expect(realAssemblyAIResponse.words[0]).toEqual({
+			text: "Hello",
+			start: 80,
+			end: 320,
+			confidence: 0.99,
+			speaker: null,
+		});
+	});
+
 	it("generates valid WebVTT header", () => {
-		const result = formatToWebVTT({ results: { utterances: [] } });
-		expect(result).toBe("WEBVTT\n\n");
+		expect(formatToWebVTT({ words: [] })).toBe("WEBVTT\n\n");
 	});
 
-	it("handles null utterances", () => {
-		const result = formatToWebVTT({ results: { utterances: null } });
-		expect(result).toBe("WEBVTT\n\n");
+	it("handles null words", () => {
+		expect(formatToWebVTT({ words: null })).toBe("WEBVTT\n\n");
 	});
 
-	it("generates correct VTT from real Deepgram response", () => {
-		const vtt = formatToWebVTT(realDeepgramResponse);
+	it("generates correct VTT from an AssemblyAI response", () => {
+		const vtt = formatToWebVTT(realAssemblyAIResponse);
 
 		expect(vtt).toMatch(/^WEBVTT\n\n/);
 		expect(vtt).toContain("-->");
-		expect(vtt).toContain("Hello everyone");
-		expect(vtt).toContain("Welcome to this demo video");
+		expect(vtt).toContain("Hello everyone.");
+		expect(vtt).toContain("Welcome to this demo video.");
 	});
 
-	it("creates separate captions for each utterance ending in punctuation", () => {
-		const vtt = formatToWebVTT(realDeepgramResponse);
+	it("creates separate captions at punctuation", () => {
+		const vtt = formatToWebVTT(realAssemblyAIResponse);
+		const captionBlocks = vtt
+			.split("\n\n")
+			.filter((block) => block.includes("-->"));
 
-		const captionBlocks = vtt.split("\n\n").filter((block) => block.trim());
 		expect(captionBlocks.length).toBeGreaterThan(1);
 	});
 
 	it("formats timestamps correctly in VTT format", () => {
-		const vtt = formatToWebVTT(realDeepgramResponse);
-
+		const vtt = formatToWebVTT(realAssemblyAIResponse);
 		const timestampPattern =
 			/\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}/;
+
 		expect(vtt).toMatch(timestampPattern);
 	});
 
-	it("handles silent video (no utterances)", () => {
-		const vtt = formatToWebVTT(silentVideoDeepgramResponse);
-		expect(vtt).toBe("WEBVTT\n\n");
+	it("handles silent video", () => {
+		expect(formatToWebVTT(silentVideoAssemblyAIResponse)).toBe("WEBVTT\n\n");
 	});
 
-	it("breaks long utterances at 8 words", () => {
-		const vtt = formatToWebVTT(longVideoDeepgramResponse);
-		const lines = vtt.split("\n");
-
-		const captionTextLines = lines.filter(
-			(line) =>
-				line.trim() &&
-				!line.startsWith("WEBVTT") &&
-				!line.includes("-->") &&
-				!/^\d+$/.test(line.trim()),
-		);
+	it("breaks long captions at eight words", () => {
+		const vtt = formatToWebVTT(longVideoAssemblyAIResponse);
+		const captionTextLines = vtt
+			.split("\n")
+			.filter(
+				(line) =>
+					line.trim() &&
+					!line.startsWith("WEBVTT") &&
+					!line.includes("-->") &&
+					!/^\d+$/.test(line.trim()),
+			);
 
 		for (const line of captionTextLines) {
-			const wordCount = line.split(" ").length;
-			expect(wordCount).toBeLessThanOrEqual(8);
+			expect(line.split(" ").length).toBeLessThanOrEqual(8);
 		}
 	});
 
 	it("breaks captions at commas", () => {
-		const responseWithComma = {
-			results: {
-				utterances: [
-					{
-						words: [
-							{ word: "First", punctuated_word: "First,", start: 0, end: 0.3 },
-							{ word: "then", punctuated_word: "then", start: 0.4, end: 0.6 },
-							{
-								word: "second",
-								punctuated_word: "second.",
-								start: 0.7,
-								end: 1.0,
-							},
-						],
-					},
-				],
-			},
-		};
+		const vtt = formatToWebVTT({
+			words: [
+				{ text: "First,", start: 0, end: 300 },
+				{ text: "then", start: 400, end: 600 },
+				{ text: "second.", start: 700, end: 1_000 },
+			],
+		});
 
-		const vtt = formatToWebVTT(responseWithComma);
-
-		expect(vtt).toContain("First");
-		expect(vtt).toContain("then second");
+		expect(vtt).toContain("First,");
+		expect(vtt).toContain("then second.");
 	});
 
-	it("breaks captions at long pauses (>0.5s)", () => {
-		const responseWithPause = {
-			results: {
-				utterances: [
-					{
-						words: [
-							{ word: "Before", punctuated_word: "Before", start: 0, end: 0.3 },
-							{
-								word: "after",
-								punctuated_word: "after.",
-								start: 1.0,
-								end: 1.3,
-							},
-						],
-					},
-				],
-			},
-		};
+	it("breaks captions at long pauses", () => {
+		const vtt = formatToWebVTT({
+			words: [
+				{ text: "Before", start: 0, end: 300 },
+				{ text: "after.", start: 1_000, end: 1_300 },
+			],
+		});
+		const captionBlocks = vtt
+			.split("\n\n")
+			.filter((block) => block.includes("-->"));
 
-		const vtt = formatToWebVTT(responseWithPause);
-		const captionBlocks = vtt.split("\n\n").filter((b) => b.includes("-->"));
-
-		expect(captionBlocks.length).toBe(2);
+		expect(captionBlocks).toHaveLength(2);
 	});
 
 	it("preserves caption ordering with sequential numbers", () => {
-		const vtt = formatToWebVTT(realDeepgramResponse);
-		const lines = vtt.split("\n");
-
+		const lines = formatToWebVTT(realAssemblyAIResponse).split("\n");
 		const captionNumbers = lines
 			.filter((line) => /^\d+$/.test(line.trim()))
 			.map(Number);
@@ -163,39 +152,17 @@ describe("formatToWebVTT", () => {
 		}
 	});
 
-	it("handles utterance with empty words array", () => {
-		const result = formatToWebVTT({
-			results: {
-				utterances: [{ words: [] }],
-			},
+	it("includes remaining words after the last punctuation", () => {
+		const vtt = formatToWebVTT({
+			words: [
+				{ text: "Hello.", start: 0, end: 300 },
+				{ text: "Some", start: 500, end: 700 },
+				{ text: "trailing", start: 800, end: 1_100 },
+				{ text: "words", start: 1_200, end: 1_500 },
+			],
 		});
-		expect(result).toBe("WEBVTT\n\n");
-	});
 
-	it("includes remaining words after last punctuation", () => {
-		const responseWithTrailingWords = {
-			results: {
-				utterances: [
-					{
-						words: [
-							{ word: "Hello", punctuated_word: "Hello.", start: 0, end: 0.3 },
-							{ word: "Some", punctuated_word: "Some", start: 0.5, end: 0.7 },
-							{
-								word: "trailing",
-								punctuated_word: "trailing",
-								start: 0.8,
-								end: 1.1,
-							},
-							{ word: "words", punctuated_word: "words", start: 1.2, end: 1.5 },
-						],
-					},
-				],
-			},
-		};
-
-		const vtt = formatToWebVTT(responseWithTrailingWords);
-
-		expect(vtt).toContain("Hello");
+		expect(vtt).toContain("Hello.");
 		expect(vtt).toContain("Some trailing words");
 	});
 });
