@@ -187,6 +187,9 @@ impl TryFrom<&Url> for DeepLinkAction {
                 let mic_label = params
                     .get("mic_label")
                     .or_else(|| params.get("label"))
+                    .and_then(|s| (!s.is_empty()).then(|| s.to_string()));
+                    .get("mic_label")
+                    .or_else(|| params.get("label"))
                     .map(|s| s.to_string());
                 Ok(Self::SwitchMicrophone { mic_label })
             }
