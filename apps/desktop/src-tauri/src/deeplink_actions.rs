@@ -55,9 +55,7 @@ pub enum DeepLinkAction {
         camera: DeviceOrModelID,
     },
     SetCameraPreviewState {
-    SetCameraPreviewState {
         state: crate::camera::CameraPreviewState,
-    },
     },
     OpenEditor {
         project_path: PathBuf,
