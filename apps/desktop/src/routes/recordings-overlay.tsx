@@ -383,11 +383,20 @@ export default function () {
 															Export
 														</Button>
 														<Show when={metadata.latest}>
-															{(metadata) => (
-																<span class="text-[10px] text-gray-200 font-medium bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm">
-																	Est. {metadata().size.toFixed(1)} MB • ~{Math.ceil(metadata().estimatedExportTime)}s
-																</span>
-															)}
+															{(metadata) => {
+																const sec = Math.ceil(
+																	metadata().estimatedExportTime,
+																);
+																const timeStr =
+																	sec < 60
+																		? `~${sec}s`
+																		: `~${Math.floor(sec / 60)}m ${sec % 60}s`;
+																return (
+																	<span class="text-[10px] text-gray-200 font-medium bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm">
+																		Est. {metadata().size.toFixed(1)} MB • {timeStr}
+																	</span>
+																);
+															}}
 														</Show>
 													</div>
 												</div>
