@@ -277,14 +277,14 @@ impl DeepLinkAction {
                 Ok(())
             }
             DeepLinkAction::TakeScreenshot => {
-                let state = app.state::<ArcLock<App>>();
-                let capture_target = ScreenCaptureTarget::Display {
-                    id: cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .next()
-                        .map(|(s, _)| s.id)
-                        .ok_or("No display available".to_string())?,
-                };
+                let primary_id = scap_targets::Display::primary().id();
+                let mut displays = cap_recording::screen_capture::list_displays().into_iter();
+                let id = displays
+                    .find(|(s, _)| s.id == primary_id)
+                    .or_else(|| displays.next())
+                    .map(|(s, _)| s.id)
+                    .ok_or_else(|| "No display available".to_string())?;
+                let capture_target = ScreenCaptureTarget::Display { id };
                 crate::recording::take_screenshot(app.clone(), capture_target).await
             }
             #[cfg(debug_assertions)]
