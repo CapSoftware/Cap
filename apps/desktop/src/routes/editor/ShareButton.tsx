@@ -86,7 +86,7 @@ function ShareButton() {
 						x: RESOLUTION_OPTIONS._1080p.width,
 						y: RESOLUTION_OPTIONS._1080p.height,
 					},
-					compression: "Web",
+					compression: "Social",
 					custom_bpp: null,
 				},
 				(msg) => {
