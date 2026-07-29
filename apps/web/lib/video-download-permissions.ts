@@ -12,7 +12,7 @@ export async function canUserDownloadVideo({
 	userId,
 	ownerId,
 	videoId,
-	orgId,
+	orgId: _orgId,
 }: {
 	userId: User.UserId;
 	ownerId: User.UserId;
