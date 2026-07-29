@@ -267,21 +267,17 @@ impl DeepLinkAction {
                 crate::set_mic_input(app.state(), mic_label).await
             }
             DeepLinkAction::SwitchCamera { camera } => {
-                crate::set_camera_input(
-                    app.clone(),
-                    app.state::<ArcLock<App>>(),
-                    camera,
-                    None,
-                )
-                .await?;
+                crate::set_camera_input(app.clone(), app.state::<ArcLock<App>>(), camera, None)
+                    .await?;
                 Ok(())
             }
             DeepLinkAction::TakeScreenshot => {
                 let primary_id = scap_targets::Display::primary().id();
-                let mut displays = cap_recording::screen_capture::list_displays().into_iter();
+                let displays = cap_recording::screen_capture::list_displays();
                 let id = displays
+                    .iter()
                     .find(|(s, _)| s.id == primary_id)
-                    .or_else(|| displays.next())
+                    .or_else(|| displays.first())
                     .map(|(s, _)| s.id)
                     .ok_or_else(|| "No display available".to_string())?;
                 let capture_target = ScreenCaptureTarget::Display { id };
