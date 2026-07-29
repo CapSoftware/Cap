@@ -46,15 +46,14 @@ pub enum DeepLinkAction {
         mode: RecordingMode,
     },
     StopRecording,
-    #[cfg(debug_assertions)]
     PauseRecording,
-    #[cfg(debug_assertions)]
     ResumeRecording,
-    #[cfg(debug_assertions)]
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
     OpenCamera {
         camera: DeviceOrModelID,
     },
-    #[cfg(debug_assertions)]
     SetCameraPreviewState {
         state: CameraPreviewState,
     },
@@ -165,20 +164,46 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         match url.domain() {
-            Some("action") => {}
-            Some(_) => return Err(ActionParseFromUrlError::NotAction),
-            None => return Err(ActionParseFromUrlError::Invalid),
+            Some("action") => {
+                let params = url
+                    .query_pairs()
+                    .collect::<std::collections::HashMap<_, _>>();
+                let json_value = params
+                    .get("value")
+                    .ok_or(ActionParseFromUrlError::Invalid)?;
+                let action: Self = serde_json::from_str(json_value)
+                    .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))?;
+                Ok(action)
+            }
+            Some("stop" | "stop-recording") => Ok(Self::StopRecording),
+            Some("pause" | "pause-recording") => Ok(Self::PauseRecording),
+            Some("resume" | "resume-recording") => Ok(Self::ResumeRecording),
+            Some("switch-mic" | "switch-microphone") => {
+                let params = url
+                    .query_pairs()
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mic_label = params
+                    .get("mic_label")
+                    .or_else(|| params.get("label"))
+                    .map(|s| s.to_string());
+                Ok(Self::SwitchMicrophone { mic_label })
+            }
+            Some("open-camera" | "switch-camera") => {
+                let params = url
+                    .query_pairs()
+                    .collect::<std::collections::HashMap<_, _>>();
+                let device_id = params
+                    .get("id")
+                    .or_else(|| params.get("camera"))
+                    .map(|s| s.to_string())
+                    .ok_or(ActionParseFromUrlError::Invalid)?;
+                Ok(Self::OpenCamera {
+                    camera: DeviceOrModelID::DeviceID(device_id),
+                })
+            }
+            Some(_) => Err(ActionParseFromUrlError::NotAction),
+            None => Err(ActionParseFromUrlError::Invalid),
         }
-
-        let params = url
-            .query_pairs()
-            .collect::<std::collections::HashMap<_, _>>();
-        let json_value = params
-            .get("value")
-            .ok_or(ActionParseFromUrlError::Invalid)?;
-        let action: Self = serde_json::from_str(json_value)
-            .map_err(|e| ActionParseFromUrlError::ParseFailed(e.to_string()))?;
-        Ok(action)
     }
 }
 
@@ -244,15 +269,18 @@ impl DeepLinkAction {
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
-            #[cfg(debug_assertions)]
             DeepLinkAction::PauseRecording => {
                 crate::recording::pause_recording(app.clone(), app.state()).await
             }
-            #[cfg(debug_assertions)]
             DeepLinkAction::ResumeRecording => {
                 crate::recording::resume_recording(app.clone(), app.state()).await
             }
-            #[cfg(debug_assertions)]
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                let state = app.state::<ArcLock<App>>();
+                crate::set_mic_input(state, mic_label)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
             DeepLinkAction::OpenCamera { camera } => {
                 crate::set_camera_input(
                     app.clone(),
@@ -282,7 +310,6 @@ impl DeepLinkAction {
 
                 Ok(())
             }
-            #[cfg(debug_assertions)]
             DeepLinkAction::SetCameraPreviewState { state } => {
                 crate::set_camera_preview_state(app.state(), state).await
             }
@@ -358,7 +385,6 @@ mod tests {
         );
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn parses_pause_and_resume_action_urls() {
         let pause_url = Url::parse("cap-desktop://action?value=%22pause_recording%22").unwrap();
