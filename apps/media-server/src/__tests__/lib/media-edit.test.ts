@@ -3,6 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	buildStreamCopySegmentArgs,
+	buildTranscodeEditArgs,
 	buildTranscodeSegmentArgs,
 	normalizeEditRanges,
 	renderEditedVideo,
@@ -97,6 +98,30 @@ describe("media edit helpers", () => {
 			"[0:v:0]fps=30,trim=start=0.000:end=1.000,setpts=PTS-STARTPTS[v];[0:a:0]atrim=start=0.000:end=1.000,asetpts=PTS-STARTPTS[a]",
 		);
 		expect(args).toContain("[a]");
+	});
+
+	test("builds one transcode graph for many edit ranges", () => {
+		const args = buildTranscodeEditArgs(
+			"/input.mp4",
+			[
+				{ start: 0, end: 1 },
+				{ start: 1.2, end: 2 },
+				{ start: 2.3, end: 3 },
+			],
+			"/output.mp4",
+			true,
+			60,
+		);
+		const filter = args[args.indexOf("-filter_complex") + 1];
+
+		expect(args.filter((value) => value === "-i")).toHaveLength(1);
+		expect(filter).toContain("concat=n=3:v=1:a=1[v][a]");
+		expect(filter).toContain(
+			"[0:v:0]fps=60,trim=start=1.200:end=2.000,setpts=PTS-STARTPTS[v1]",
+		);
+		expect(filter).toContain(
+			"[0:a:0]atrim=start=2.300:end=3.000,asetpts=PTS-STARTPTS[a2]",
+		);
 	});
 });
 

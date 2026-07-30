@@ -1,8 +1,7 @@
-import { writeFile } from "node:fs/promises";
 import { file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import { registerSubprocess, terminateProcess } from "./subprocess";
-import { createTempFile, type TempFileHandle } from "./temp-files";
+import { createTempFile } from "./temp-files";
 
 export type EditRange = {
 	start: number;
@@ -147,21 +146,45 @@ export function buildTranscodeSegmentArgs(
 	];
 }
 
-function buildConcatArgs(listPath: string, outputPath: string) {
+export function buildTranscodeEditArgs(
+	inputPath: string,
+	ranges: EditRange[],
+	outputPath: string,
+	hasAudio: boolean,
+	fps = DEFAULT_OUTPUT_FPS,
+) {
+	const filters = ranges.flatMap((range, index) => {
+		const videoFilter = `[0:v:0]fps=${getOutputFps(fps)},trim=start=${formatTime(range.start)}:end=${formatTime(range.end)},setpts=PTS-STARTPTS[v${index}]`;
+		if (!hasAudio) return [videoFilter];
+		return [
+			videoFilter,
+			`[0:a:0]atrim=start=${formatTime(range.start)}:end=${formatTime(range.end)},asetpts=PTS-STARTPTS[a${index}]`,
+		];
+	});
+	const inputs = ranges
+		.map((_, index) => `[v${index}]${hasAudio ? `[a${index}]` : ""}`)
+		.join("");
+	const concat = `${inputs}concat=n=${ranges.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? "[a]" : ""}`;
+
 	return [
 		"ffmpeg",
 		"-hide_banner",
 		"-y",
-		"-f",
-		"concat",
-		"-safe",
-		"0",
 		"-i",
-		listPath,
+		inputPath,
+		"-filter_complex",
+		[...filters, concat].join(";"),
 		"-map",
-		"0",
-		"-c",
-		"copy",
+		"[v]",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"fast",
+		"-crf",
+		"18",
+		"-pix_fmt",
+		"yuv420p",
+		...(hasAudio ? ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"] : ["-an"]),
 		"-movflags",
 		"+faststart",
 		outputPath,
@@ -276,25 +299,27 @@ async function runFfmpegCommand(
 	}
 }
 
-function concatFileLine(path: string) {
-	return `file '${path.replaceAll("'", "'\\''")}'`;
-}
-
-async function concatSegments(
-	segmentFiles: TempFileHandle[],
+async function renderTranscodedEdit(
+	inputPath: string,
+	keepRanges: EditRange[],
+	hasAudio: boolean,
+	fps: number | undefined,
 	timeoutMs: number,
+	onProgress?: ProgressCallback,
 	abortSignal?: AbortSignal,
 ) {
-	const concatList = await createTempFile(".txt");
 	const outputFile = await createTempFile(".mp4");
 
 	try {
-		await writeFile(
-			concatList.path,
-			`${segmentFiles.map((segment) => concatFileLine(segment.path)).join("\n")}\n`,
-		);
+		onProgress?.(5, "Preparing edit...");
 		await runFfmpegCommand(
-			buildConcatArgs(concatList.path, outputFile.path),
+			buildTranscodeEditArgs(
+				inputPath,
+				keepRanges,
+				outputFile.path,
+				hasAudio,
+				fps,
+			),
 			timeoutMs,
 			abortSignal,
 		);
@@ -304,58 +329,11 @@ async function concatSegments(
 			throw new Error("FFmpeg produced empty edited output");
 		}
 
+		onProgress?.(75, "Edit prepared");
 		return outputFile;
 	} catch (error) {
 		await outputFile.cleanup();
 		throw error;
-	} finally {
-		await concatList.cleanup();
-	}
-}
-
-async function renderSegments({
-	keepRanges,
-	timeoutMs,
-	buildArgs,
-	onProgress,
-	abortSignal,
-	progressStart,
-	progressEnd,
-}: {
-	keepRanges: EditRange[];
-	timeoutMs: number;
-	buildArgs: (range: EditRange, outputPath: string) => string[];
-	onProgress?: ProgressCallback;
-	abortSignal?: AbortSignal;
-	progressStart: number;
-	progressEnd: number;
-}) {
-	const segmentFiles: TempFileHandle[] = [];
-
-	try {
-		for (const [index, range] of keepRanges.entries()) {
-			const segmentFile = await createTempFile(".mp4");
-			segmentFiles.push(segmentFile);
-			await runFfmpegCommand(
-				buildArgs(range, segmentFile.path),
-				timeoutMs,
-				abortSignal,
-			);
-			const progress =
-				progressStart +
-				((index + 1) / keepRanges.length) * (progressEnd - progressStart);
-			onProgress?.(progress, "Preparing edit...");
-		}
-
-		const outputFile = await concatSegments(
-			segmentFiles,
-			timeoutMs,
-			abortSignal,
-		);
-		onProgress?.(progressEnd, "Edit prepared");
-		return outputFile;
-	} finally {
-		await Promise.all(segmentFiles.map((segment) => segment.cleanup()));
 	}
 }
 
@@ -373,20 +351,13 @@ export async function renderEditedVideo({
 
 	const timeoutMs = getTimeoutMs(normalizedRanges);
 
-	return await renderSegments({
-		keepRanges: normalizedRanges,
+	return await renderTranscodedEdit(
+		inputPath,
+		normalizedRanges,
+		Boolean(metadata.audioCodec),
+		metadata.fps,
 		timeoutMs,
-		buildArgs: (range, outputPath) =>
-			buildTranscodeSegmentArgs(
-				inputPath,
-				range,
-				outputPath,
-				Boolean(metadata.audioCodec),
-				metadata.fps,
-			),
 		onProgress,
 		abortSignal,
-		progressStart: 5,
-		progressEnd: 75,
-	});
+	);
 }
