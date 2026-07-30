@@ -261,7 +261,9 @@ impl DeepLinkAction {
                 crate::recording::toggle_pause_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::RestartRecording => {
-                crate::recording::restart_recording(app.clone(), app.state()).await
+                crate::recording::restart_recording(app.clone(), app.state())
+                    .await
+                    .map(|_| ())
             }
             DeepLinkAction::SwitchMicrophone { mic_label } => {
                 crate::set_mic_input(app.state(), mic_label).await
@@ -274,7 +276,9 @@ impl DeepLinkAction {
             DeepLinkAction::TakeScreenshot => {
                 let id = scap_targets::Display::primary().id();
                 let capture_target = ScreenCaptureTarget::Display { id };
-                crate::recording::take_screenshot(app.clone(), capture_target).await
+                crate::recording::take_screenshot(app.clone(), capture_target)
+                    .await
+                    .map(|_| ())
             }
             #[cfg(debug_assertions)]
             DeepLinkAction::OpenCamera { camera } => {
