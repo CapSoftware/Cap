@@ -6,7 +6,7 @@ import {
 } from "@cap/database/schema";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { canUserDownloadVideo } from "@/lib/video-download-permissions";
+import { canUserDownloadVideo } from "../../../lib/video-download-permissions";
 
 let mockSharedOrgs: Array<{ organizationId: string }> = [];
 let mockOrgMembers: Array<{ id: string }> = [];
