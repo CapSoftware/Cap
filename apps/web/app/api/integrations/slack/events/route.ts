@@ -7,12 +7,13 @@ import {
 	HttpServerRequest,
 	HttpServerResponse,
 } from "@effect/platform";
-import { waitUntil } from "@vercel/functions";
 import { Effect, Layer, Option } from "effect";
+import { start } from "workflow/api";
 import { apiToHandler } from "@/lib/server";
 import { getSlackConfig } from "@/lib/slack/client";
 import { verifySlackSignature } from "@/lib/slack/signature";
-import { parseSlackEventPayload, processSlackEvent } from "@/lib/slack/unfurl";
+import { parseSlackEventPayload } from "@/lib/slack/unfurl";
+import { slackEventWorkflow } from "@/workflows/slack-event";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -71,19 +72,23 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						return jsonResponse({ challenge: payload.challenge });
 					}
 
-					yield* Effect.sync(() =>
-						waitUntil(
-							processSlackEvent({
-								payload,
-								webUrl: serverEnv().WEB_URL,
-							}).catch((error: unknown) => {
+					const queued = yield* Effect.tryPromise(() =>
+						start(slackEventWorkflow, [payload, serverEnv().WEB_URL]),
+					).pipe(
+						Effect.as(true),
+						Effect.tapError((error) =>
+							Effect.sync(() => {
 								console.error(
-									"[slack-unfurl] Failed to process event",
+									"[slack-unfurl] Failed to queue event",
 									error instanceof Error ? error.message : "Unknown error",
 								);
 							}),
 						),
+						Effect.catchAll(() => Effect.succeed(false)),
 					);
+					if (!queued) {
+						return jsonResponse({ error: "Could not queue Slack event" }, 503);
+					}
 					return jsonResponse({ ok: true });
 				}),
 			),
