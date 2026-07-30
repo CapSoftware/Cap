@@ -82,9 +82,10 @@ export class CapRecorder {
 			this.listeners.set(event, new Set());
 		}
 		const set = this.listeners.get(event);
-		if (set) set.add(handler as any);
+		const castHandler = handler as unknown as EventHandler<keyof RecorderEventMap>;
+		if (set) set.add(castHandler);
 		return () => {
-			this.listeners.get(event)?.delete(handler as any);
+			this.listeners.get(event)?.delete(castHandler);
 		};
 	}
 
