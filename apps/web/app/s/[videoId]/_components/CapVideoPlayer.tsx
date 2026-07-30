@@ -94,6 +94,7 @@ interface Props {
 	disableCommentStamps?: boolean;
 	disableReactionStamps?: boolean;
 	disablePreviewGif?: boolean;
+	disablePlaybackSpeedDial?: boolean;
 	comments?: Array<{
 		id: string;
 		timestamp: number | null;
@@ -134,6 +135,7 @@ export function CapVideoPlayer({
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	disablePreviewGif = false,
+	disablePlaybackSpeedDial = false,
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
@@ -767,7 +769,8 @@ export function CapVideoPlayer({
 				videoLoaded &&
 				!hasActiveProgress &&
 				!showUploadFailureOverlay &&
-				!showPlaybackResolutionError && (
+				!showPlaybackResolutionError &&
+				!disablePlaybackSpeedDial && (
 					<MediaPlayerPlaybackSpeedDial
 						defaultSpeed={defaultPlaybackSpeed}
 						fallbackDuration={playerDuration}
