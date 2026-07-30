@@ -7,8 +7,11 @@ import {
 	createTimelineHistory,
 	createTimelineState,
 	deleteSelectedTimelineSegment,
+	deleteTimelineRanges,
 	dragTimelineDisplaySplitPoint,
 	findNextPlayableTime,
+	findNextPlayableTimeInRanges,
+	findPlayableRangeIndex,
 	getTimelineDisplayDuration,
 	getTimelineDisplaySegments,
 	getTimelineDisplaySplitPoints,
@@ -126,6 +129,46 @@ describe("video edit specs", () => {
 });
 
 describe("timeline editing", () => {
+	it("deletes transcript ranges as one normalized timeline change", () => {
+		const nextState = deleteTimelineRanges(createTimelineState(10), [
+			{ start: 1.02, end: 1.35 },
+			{ start: 4.1, end: 4.4 },
+			{ start: 4.35, end: 4.7 },
+		]);
+
+		expect(getTimelineKeepRanges(nextState)).toEqual([
+			{ start: 0, end: 1.02 },
+			{ start: 1.35, end: 4.1 },
+			{ start: 4.7, end: 10 },
+		]);
+		expect(nextState.splitPoints).toEqual([1.02, 1.35, 4.1, 4.7]);
+	});
+
+	it("does not allow transcript deletion to remove all playable video", () => {
+		const state = createTimelineState(10);
+		expect(deleteTimelineRanges(state, [{ start: 0, end: 10 }])).toEqual(state);
+	});
+
+	it("stores a batch transcript deletion as one undoable history entry", () => {
+		const initialState = createTimelineState(10);
+		const history = createTimelineHistory(initialState);
+		const deleted = deleteTimelineRanges(initialState, [
+			{ start: 1, end: 1.3 },
+			{ start: 3, end: 3.4 },
+		]);
+		const changedHistory = pushTimelineHistory(history, deleted);
+
+		expect(changedHistory.entries).toHaveLength(2);
+		expect(
+			getTimelineKeepRanges(changedHistory.entries[1] ?? initialState),
+		).toEqual([
+			{ start: 0, end: 1 },
+			{ start: 1.3, end: 3 },
+			{ start: 3.4, end: 10 },
+		]);
+		expect(undoTimelineHistory(changedHistory).index).toBe(0);
+	});
+
 	it("splits, selects, and deletes a segment", () => {
 		const splitState = splitTimelineAt(createTimelineState(10), 4);
 		const firstSegment = getTimelineSegments(splitState)[0];
@@ -433,5 +476,19 @@ describe("timeline editing", () => {
 		expect(findNextPlayableTime(1, spec)).toBe(1);
 		expect(findNextPlayableTime(3, spec)).toBe(5);
 		expect(findNextPlayableTime(8.1, spec)).toBeNull();
+	});
+
+	it("finds preview skip targets in normalized ranges without rescanning them", () => {
+		const ranges = Array.from({ length: 1000 }, (_, index) => ({
+			start: index * 2,
+			end: index * 2 + 1,
+		}));
+
+		expect(findNextPlayableTimeInRanges(998.5, ranges)).toBe(998.5);
+		expect(findNextPlayableTimeInRanges(999, ranges)).toBe(1000);
+		expect(findNextPlayableTimeInRanges(1999, ranges)).toBeNull();
+		expect(findNextPlayableTimeInRanges(Number.NaN, ranges)).toBeNull();
+		expect(findPlayableRangeIndex(998.5, ranges)).toBe(499);
+		expect(findPlayableRangeIndex(999, ranges)).toBe(-1);
 	});
 });

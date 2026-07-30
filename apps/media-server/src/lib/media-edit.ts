@@ -23,6 +23,7 @@ const MIN_RANGE_DURATION = 0.05;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_OUTPUT_FPS = 30;
+const MAX_TRANSCODE_RANGES_PER_BATCH = 4;
 
 function roundTime(value: number) {
 	return Math.round(value * 1000) / 1000;
@@ -147,6 +148,60 @@ export function buildTranscodeSegmentArgs(
 	];
 }
 
+export function buildTranscodeEditArgs(
+	inputPath: string,
+	ranges: EditRange[],
+	outputPath: string,
+	hasAudio: boolean,
+	fps = DEFAULT_OUTPUT_FPS,
+) {
+	if (ranges.length === 0 || ranges.length > MAX_TRANSCODE_RANGES_PER_BATCH) {
+		throw new Error(
+			`Transcode batches must contain 1-${MAX_TRANSCODE_RANGES_PER_BATCH} ranges`,
+		);
+	}
+
+	const filters = ranges.flatMap((_, index) => {
+		const videoFilter = `[${index}:v:0]fps=${getOutputFps(fps)},setpts=PTS-STARTPTS[v${index}]`;
+		if (!hasAudio) return [videoFilter];
+		return [videoFilter, `[${index}:a:0]asetpts=PTS-STARTPTS[a${index}]`];
+	});
+	const inputs = ranges
+		.map((_, index) => `[v${index}]${hasAudio ? `[a${index}]` : ""}`)
+		.join("");
+	const concat = `${inputs}concat=n=${ranges.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? "[a]" : ""}`;
+
+	return [
+		"ffmpeg",
+		"-hide_banner",
+		"-y",
+		...ranges.flatMap((range) => [
+			"-ss",
+			formatTime(range.start),
+			"-t",
+			formatTime(getRangeDuration(range)),
+			"-i",
+			inputPath,
+		]),
+		"-filter_complex",
+		[...filters, concat].join(";"),
+		"-map",
+		"[v]",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"fast",
+		"-crf",
+		"18",
+		"-pix_fmt",
+		"yuv420p",
+		...(hasAudio ? ["-map", "[a]", "-c:a", "aac", "-b:a", "160k"] : ["-an"]),
+		"-movflags",
+		"+faststart",
+		outputPath,
+	];
+}
+
 function buildConcatArgs(listPath: string, outputPath: string) {
 	return [
 		"ffmpeg",
@@ -233,6 +288,8 @@ async function runFfmpegCommand(
 	timeoutMs: number,
 	abortSignal?: AbortSignal,
 ) {
+	abortSignal?.throwIfAborted();
+
 	const proc = registerSubprocess(
 		spawn({
 			cmd: args,
@@ -313,49 +370,74 @@ async function concatSegments(
 	}
 }
 
-async function renderSegments({
-	keepRanges,
-	timeoutMs,
-	buildArgs,
-	onProgress,
-	abortSignal,
-	progressStart,
-	progressEnd,
-}: {
-	keepRanges: EditRange[];
-	timeoutMs: number;
-	buildArgs: (range: EditRange, outputPath: string) => string[];
-	onProgress?: ProgressCallback;
-	abortSignal?: AbortSignal;
-	progressStart: number;
-	progressEnd: number;
-}) {
-	const segmentFiles: TempFileHandle[] = [];
+function createTranscodeBatches(ranges: EditRange[]) {
+	const batches: EditRange[][] = [];
+	for (
+		let index = 0;
+		index < ranges.length;
+		index += MAX_TRANSCODE_RANGES_PER_BATCH
+	) {
+		batches.push(ranges.slice(index, index + MAX_TRANSCODE_RANGES_PER_BATCH));
+	}
+	return batches;
+}
+
+function getRemainingTimeoutMs(startedAt: number, timeoutMs: number) {
+	const remainingMs = Math.ceil(timeoutMs - (performance.now() - startedAt));
+	if (remainingMs <= 0) {
+		throw new Error(`Operation timed out after ${timeoutMs}ms`);
+	}
+	return remainingMs;
+}
+
+async function renderTranscodedEdit(
+	inputPath: string,
+	keepRanges: EditRange[],
+	hasAudio: boolean,
+	fps: number | undefined,
+	timeoutMs: number,
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+) {
+	const batches = createTranscodeBatches(keepRanges);
+	const batchFiles: TempFileHandle[] = [];
+	const startedAt = performance.now();
 
 	try {
-		for (const [index, range] of keepRanges.entries()) {
-			const segmentFile = await createTempFile(".mp4");
-			segmentFiles.push(segmentFile);
+		onProgress?.(5, "Preparing edit...");
+		for (const [index, batch] of batches.entries()) {
+			const batchFile = await createTempFile(".mp4");
+			batchFiles.push(batchFile);
 			await runFfmpegCommand(
-				buildArgs(range, segmentFile.path),
-				timeoutMs,
+				buildTranscodeEditArgs(inputPath, batch, batchFile.path, hasAudio, fps),
+				getRemainingTimeoutMs(startedAt, timeoutMs),
 				abortSignal,
 			);
-			const progress =
-				progressStart +
-				((index + 1) / keepRanges.length) * (progressEnd - progressStart);
-			onProgress?.(progress, "Preparing edit...");
+			onProgress?.(
+				5 + ((index + 1) / batches.length) * 65,
+				"Preparing edit...",
+			);
+		}
+
+		if (batchFiles.length === 1) {
+			const outputFile = batchFiles[0];
+			if (!outputFile || (await file(outputFile.path).size) === 0) {
+				throw new Error("FFmpeg produced empty edited output");
+			}
+			batchFiles.length = 0;
+			onProgress?.(75, "Edit prepared");
+			return outputFile;
 		}
 
 		const outputFile = await concatSegments(
-			segmentFiles,
-			timeoutMs,
+			batchFiles,
+			getRemainingTimeoutMs(startedAt, timeoutMs),
 			abortSignal,
 		);
-		onProgress?.(progressEnd, "Edit prepared");
+		onProgress?.(75, "Edit prepared");
 		return outputFile;
 	} finally {
-		await Promise.all(segmentFiles.map((segment) => segment.cleanup()));
+		await Promise.all(batchFiles.map((batchFile) => batchFile.cleanup()));
 	}
 }
 
@@ -373,20 +455,13 @@ export async function renderEditedVideo({
 
 	const timeoutMs = getTimeoutMs(normalizedRanges);
 
-	return await renderSegments({
-		keepRanges: normalizedRanges,
+	return await renderTranscodedEdit(
+		inputPath,
+		normalizedRanges,
+		Boolean(metadata.audioCodec),
+		metadata.fps,
 		timeoutMs,
-		buildArgs: (range, outputPath) =>
-			buildTranscodeSegmentArgs(
-				inputPath,
-				range,
-				outputPath,
-				Boolean(metadata.audioCodec),
-				metadata.fps,
-			),
 		onProgress,
 		abortSignal,
-		progressStart: 5,
-		progressEnd: 75,
-	});
+	);
 }

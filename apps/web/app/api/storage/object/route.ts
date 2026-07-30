@@ -8,6 +8,7 @@ import {
 import { Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
+import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import { runPromise } from "@/lib/server";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
@@ -105,6 +106,9 @@ export async function GET(request: NextRequest) {
 
 	if (!videoIdParam || !key) {
 		return new Response("Missing videoId or key", { status: 400 });
+	}
+	if (isPrivateEditTranscriptObjectKey(key)) {
+		return new Response("Not found", { status: 404 });
 	}
 
 	const effect = Effect.gen(function* () {
