@@ -106,6 +106,9 @@ function createServerEnv() {
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),
+			SLACK_CLIENT_ID: z.string().optional(),
+			SLACK_CLIENT_SECRET: z.string().optional(),
+			SLACK_SIGNING_SECRET: z.string().optional(),
 
 			/// Tinybird analytics
 			TINYBIRD_HOST: z.string().optional(),
