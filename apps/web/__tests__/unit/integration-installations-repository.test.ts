@@ -5,14 +5,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const databaseMocks = vi.hoisted(() => {
 	const state = { rows: [] as unknown[] };
-	const onDuplicateKeyUpdate = vi.fn(async () => undefined);
+	const onDuplicateKeyUpdate = vi.fn(
+		async (_input: { set: Record<string, unknown> }) => undefined,
+	);
 	const values = vi.fn(() => ({ onDuplicateKeyUpdate }));
 	const insert = vi.fn(() => ({ values }));
 	const orderBy = vi.fn(async () => state.rows);
 	const limit = vi.fn(async () => state.rows);
-	const where = vi.fn(() => ({ orderBy, limit }));
+	const forUpdate = vi.fn(async () => state.rows);
+	const where = vi.fn(() => ({ orderBy, limit, for: forUpdate }));
 	const from = vi.fn(() => ({ where }));
 	const select = vi.fn(() => ({ from }));
+	const updateWhere = vi.fn(async () => undefined);
+	const set = vi.fn(() => ({ where: updateWhere }));
+	const update = vi.fn(() => ({ set }));
+	const transaction = vi.fn(
+		async (
+			callback: (tx: {
+				insert: typeof insert;
+				select: typeof select;
+				update: typeof update;
+			}) => Promise<unknown>,
+		) => callback({ insert, select, update }),
+	);
 	const deleteWhere = vi.fn(async () => undefined);
 	const deleteRows = vi.fn(() => ({ where: deleteWhere }));
 
@@ -23,9 +38,14 @@ const databaseMocks = vi.hoisted(() => {
 		insert,
 		orderBy,
 		limit,
+		forUpdate,
 		where,
 		from,
 		select,
+		updateWhere,
+		set,
+		update,
+		transaction,
 		deleteWhere,
 		deleteRows,
 	};
@@ -40,7 +60,9 @@ vi.mock("@cap/database", () => ({
 	db: () => ({
 		insert: databaseMocks.insert,
 		select: databaseMocks.select,
+		update: databaseMocks.update,
 		delete: databaseMocks.deleteRows,
+		transaction: databaseMocks.transaction,
 	}),
 }));
 
@@ -72,7 +94,14 @@ describe("integration installation repository", () => {
 		cryptoMocks.decrypt.mockResolvedValue("{}");
 	});
 
-	it("encrypts credentials and atomically upserts provider installations", async () => {
+	it("updates credentials only after locking the owning tenant installation", async () => {
+		databaseMocks.state.rows = [
+			{
+				id: "existing-installation",
+				organizationId,
+			},
+		];
+
 		await saveIntegrationInstallation({
 			provider: "slack",
 			externalId: "T123",
@@ -96,16 +125,46 @@ describe("integration installation repository", () => {
 			encryptedCredentials: "encrypted-credentials",
 			metadata: { scopes: ["links:read"] },
 		});
-		expect(databaseMocks.onDuplicateKeyUpdate).toHaveBeenCalledWith({
-			set: {
+
+		expect(databaseMocks.onDuplicateKeyUpdate).toHaveBeenCalledOnce();
+		const [upsert] = databaseMocks.onDuplicateKeyUpdate.mock.calls[0] ?? [];
+		expect(upsert?.set).toEqual({
+			externalId: expect.anything(),
+		});
+		expect(upsert?.set).not.toHaveProperty("organizationId");
+		expect(databaseMocks.forUpdate).toHaveBeenCalledWith("update");
+		expect(databaseMocks.set).toHaveBeenCalledWith({
+			displayName: "Cap",
+			installedByUserId,
+			encryptedCredentials: "encrypted-credentials",
+			metadata: { scopes: ["links:read"] },
+			updatedAt: expect.any(Date),
+		});
+		expect(databaseMocks.updateWhere).toHaveBeenCalledOnce();
+	});
+
+	it("rejects an installation already owned by another organization", async () => {
+		databaseMocks.state.rows = [
+			{
+				id: "existing-installation",
+				organizationId: Organisation.OrganisationId.make("other-org"),
+			},
+		];
+
+		await expect(
+			saveIntegrationInstallation({
+				provider: "slack",
+				externalId: "T123",
 				displayName: "Cap",
 				organizationId,
 				installedByUserId,
-				encryptedCredentials: "encrypted-credentials",
+				credentials: { accessToken: "xoxb-token" },
 				metadata: { scopes: ["links:read"] },
-				updatedAt: expect.any(Date),
-			},
-		});
+			}),
+		).rejects.toThrow(
+			"Integration is already connected to another organization",
+		);
+		expect(databaseMocks.set).not.toHaveBeenCalled();
 	});
 
 	it("ships a provider-agnostic schema with workload-matched indexes", () => {

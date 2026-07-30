@@ -3,7 +3,7 @@ import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import { integrationInstallations } from "@cap/database/schema";
 import type { Organisation, User } from "@cap/web-domain";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 
 export type IntegrationInstallationSummary = {
 	id: string;
@@ -31,28 +31,60 @@ export const saveIntegrationInstallation = async ({
 	metadata: Record<string, unknown>;
 }) => {
 	const encryptedCredentials = await encrypt(JSON.stringify(credentials));
-	await db()
-		.insert(integrationInstallations)
-		.values({
-			id: nanoId(),
-			provider,
-			externalId,
-			displayName,
-			organizationId,
-			installedByUserId,
-			encryptedCredentials,
-			metadata,
-		})
-		.onDuplicateKeyUpdate({
-			set: {
+	const candidateId = nanoId();
+	await db().transaction(async (tx) => {
+		await tx
+			.insert(integrationInstallations)
+			.values({
+				id: candidateId,
+				provider,
+				externalId,
 				displayName,
 				organizationId,
 				installedByUserId,
 				encryptedCredentials,
 				metadata,
+			})
+			.onDuplicateKeyUpdate({
+				set: {
+					externalId: sql`${integrationInstallations.externalId}`,
+				},
+			});
+
+		const [installation] = await tx
+			.select({
+				id: integrationInstallations.id,
+				organizationId: integrationInstallations.organizationId,
+			})
+			.from(integrationInstallations)
+			.where(
+				and(
+					eq(integrationInstallations.provider, provider),
+					eq(integrationInstallations.externalId, externalId),
+				),
+			)
+			.for("update");
+		if (!installation) {
+			throw new Error("Integration installation could not be saved");
+		}
+		if (installation.organizationId !== organizationId) {
+			throw new Error(
+				"Integration is already connected to another organization",
+			);
+		}
+		if (installation.id === candidateId) return;
+
+		await tx
+			.update(integrationInstallations)
+			.set({
+				displayName,
+				installedByUserId,
+				encryptedCredentials,
+				metadata,
 				updatedAt: new Date(),
-			},
-		});
+			})
+			.where(eq(integrationInstallations.id, installation.id));
+	});
 };
 
 export const listIntegrationInstallations = async ({
