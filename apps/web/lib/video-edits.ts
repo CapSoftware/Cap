@@ -763,6 +763,37 @@ export function deleteSelectedTimelineSegment(
 	});
 }
 
+export function deleteTimelineRanges(
+	state: VideoTimelineState,
+	ranges: readonly VideoEditRange[],
+): VideoTimelineState {
+	const normalized = normalizeTimelineState(state);
+	const deletionRanges = normalizeKeepRanges(
+		ranges.map((range) => ({
+			start: clampEditTime(
+				range.start,
+				normalized.trimStart,
+				normalized.trimEnd,
+			),
+			end: clampEditTime(range.end, normalized.trimStart, normalized.trimEnd),
+		})),
+		normalized.duration,
+	).keepRanges;
+	if (deletionRanges.length === 0) return normalized;
+
+	const nextState = normalizeTimelineState({
+		...normalized,
+		splitPoints: [
+			...normalized.splitPoints,
+			...deletionRanges.flatMap((range) => [range.start, range.end]),
+		],
+		deletedRanges: [...normalized.deletedRanges, ...deletionRanges],
+		selectedSegmentId: null,
+	});
+
+	return getTimelineKeepRanges(nextState).length > 0 ? nextState : normalized;
+}
+
 export function setTimelineTrim(
 	state: VideoTimelineState,
 	start: number,
@@ -967,19 +998,50 @@ export function findNextPlayableTime(
 		editSpec.keepRanges,
 		editSpec.sourceDuration,
 	);
-	if (normalized.keepRanges.length === 0) return null;
+	return findNextPlayableTimeInRanges(currentTime, normalized.keepRanges);
+}
 
-	for (const range of normalized.keepRanges) {
-		if (currentTime < range.start - EPSILON) return range.start;
-		if (
-			currentTime >= range.start - EPSILON &&
-			currentTime < range.end - EPSILON
-		) {
-			return currentTime;
+export function findNextPlayableTimeInRanges(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	const rangeIndex = findNextPlayableRangeIndex(currentTime, keepRanges);
+	if (rangeIndex < 0) return null;
+	const range = keepRanges[rangeIndex];
+	if (!range) return null;
+	return currentTime < range.start - EPSILON ? range.start : currentTime;
+}
+
+function findNextPlayableRangeIndex(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	if (!isFiniteNumber(currentTime) || keepRanges.length === 0) return -1;
+
+	let low = 0;
+	let high = keepRanges.length;
+	while (low < high) {
+		const middle = Math.floor((low + high) / 2);
+		const range = keepRanges[middle];
+		if (range && currentTime < range.end - EPSILON) {
+			high = middle;
+		} else {
+			low = middle + 1;
 		}
 	}
 
-	return null;
+	return low < keepRanges.length ? low : -1;
+}
+
+export function findPlayableRangeIndex(
+	currentTime: number,
+	keepRanges: readonly VideoEditRange[],
+) {
+	const rangeIndex = findNextPlayableRangeIndex(currentTime, keepRanges);
+	if (rangeIndex < 0) return -1;
+	const range = keepRanges[rangeIndex];
+	if (!range || currentTime < range.start - EPSILON) return -1;
+	return rangeIndex;
 }
 
 export function createTimelineHistory(
