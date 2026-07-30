@@ -100,7 +100,7 @@ describe("media edit helpers", () => {
 		expect(args).toContain("[a]");
 	});
 
-	test("builds one transcode graph for many edit ranges", () => {
+	test("builds a bounded multi-input transcode graph", () => {
 		const args = buildTranscodeEditArgs(
 			"/input.mp4",
 			[
@@ -114,14 +114,25 @@ describe("media edit helpers", () => {
 		);
 		const filter = args[args.indexOf("-filter_complex") + 1];
 
-		expect(args.filter((value) => value === "-i")).toHaveLength(1);
+		expect(args.filter((value) => value === "-i")).toHaveLength(3);
+		expect(args.filter((value) => value === "-ss")).toHaveLength(3);
 		expect(filter).toContain("concat=n=3:v=1:a=1[v][a]");
-		expect(filter).toContain(
-			"[0:v:0]fps=60,trim=start=1.200:end=2.000,setpts=PTS-STARTPTS[v1]",
-		);
-		expect(filter).toContain(
-			"[0:a:0]atrim=start=2.300:end=3.000,asetpts=PTS-STARTPTS[a2]",
-		);
+		expect(filter).toContain("[1:v:0]fps=60,setpts=PTS-STARTPTS[v1]");
+		expect(filter).toContain("[2:a:0]asetpts=PTS-STARTPTS[a2]");
+	});
+
+	test("rejects unbounded transcode graphs", () => {
+		expect(() =>
+			buildTranscodeEditArgs(
+				"/input.mp4",
+				Array.from({ length: 5 }, (_, index) => ({
+					start: index,
+					end: index + 0.5,
+				})),
+				"/output.mp4",
+				true,
+			),
+		).toThrow("Transcode batches must contain 1-4 ranges");
 	});
 });
 
@@ -133,8 +144,11 @@ describe("renderEditedVideo integration tests", () => {
 		const editedFile = await renderEditedVideo({
 			inputPath: TEST_VIDEO_WITH_AUDIO,
 			keepRanges: [
-				{ start: 0, end: 0.4 },
-				{ start: 0.55, end: 0.95 },
+				{ start: 0.08, end: 0.16 },
+				{ start: 0.24, end: 0.32 },
+				{ start: 0.4, end: 0.48 },
+				{ start: 0.56, end: 0.64 },
+				{ start: 0.72, end: 0.8 },
 			],
 			metadata,
 			onProgress: (progress) => {
