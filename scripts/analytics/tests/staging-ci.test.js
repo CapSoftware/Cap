@@ -368,4 +368,10 @@ test("the analytics workflow is statically restricted to staging", () => {
 		"utf8",
 	);
 	assert.doesNotThrow(() => assertWorkflowSafety(workflow));
+	assert.equal(
+		workflow.match(
+			/deployment create --allow-destructive-operations --(?:check|wait)/g,
+		)?.length,
+		2,
+	);
 });

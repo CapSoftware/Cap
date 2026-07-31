@@ -133,7 +133,7 @@ jobs:
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: >-
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
-          run --rm tinybird-cloud-cli --cloud deployment create --check
+          run --rm tinybird-cloud-cli --cloud deployment create --allow-destructive-operations --check
       - name: Create isolated Tinybird staging deployment
         id: create-deployment
         env:
@@ -143,7 +143,7 @@ jobs:
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: >-
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
-          run --rm tinybird-cloud-cli --cloud deployment create --wait
+          run --rm tinybird-cloud-cli --cloud deployment create --allow-destructive-operations --wait
       - name: Resolve only the deployment created by this run
         id: tinybird
         env:

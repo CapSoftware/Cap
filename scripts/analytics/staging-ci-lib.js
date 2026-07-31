@@ -499,7 +499,7 @@ export const assertWorkflowSafety = (workflow) => {
 		String(FEATURE_PULL_REQUEST),
 		"cancel-in-progress: true",
 		"pull_request.head.sha",
-		"deployment create --check",
+		"deployment create --allow-destructive-operations --check",
 		"deployment promote",
 		"deployment discard",
 		"environment: staging",
