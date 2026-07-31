@@ -12,6 +12,7 @@ import {
 	normalizeProductEventBatch,
 	ProductAnalyticsRateLimiter,
 } from "@/lib/analytics/request";
+import { getVercelDeploymentOrigins } from "@/lib/analytics/vercel-origins";
 
 const allowedOrigins = ["https://cap.so", "tauri://localhost"];
 const event: ProductEventInput = {
@@ -23,6 +24,29 @@ const event: ProductEventInput = {
 	platform: "web",
 };
 const now = Date.parse("2026-07-12T12:00:01.000Z");
+
+describe("getVercelDeploymentOrigins", () => {
+	it("allows only the current Vercel deployment and branch hosts", () => {
+		expect(
+			getVercelDeploymentOrigins({
+				VERCEL_URL: "cap-abc123.vercel.app",
+				VERCEL_BRANCH_URL: "cap-git-feature.vercel.app",
+			}),
+		).toEqual([
+			"https://cap-abc123.vercel.app",
+			"https://cap-git-feature.vercel.app",
+		]);
+	});
+
+	it("rejects malformed and non-Vercel hosts", () => {
+		expect(
+			getVercelDeploymentOrigins({
+				VERCEL_URL: "attacker.example",
+				VERCEL_BRANCH_URL: "attacker.example@cap.vercel.app",
+			}),
+		).toEqual([]);
+	});
+});
 
 describe("hasExpectedBrowserAnalyticsMetadata", () => {
 	it.each([

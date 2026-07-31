@@ -1,7 +1,9 @@
 import { buildEnv } from "@cap/env";
+import { getVercelDeploymentOrigins } from "@/lib/analytics/vercel-origins";
 
 export const allowedOrigins = [
 	buildEnv.NEXT_PUBLIC_WEB_URL,
+	...getVercelDeploymentOrigins(),
 	"http://localhost:3001",
 	"http://localhost:3000",
 	"tauri://localhost",
