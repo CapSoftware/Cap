@@ -1,0 +1,22 @@
+DESCRIPTION >
+	Query country traffic without raw identifiers or raw network addresses.
+
+TOKEN product_events_agent_read READ
+
+NODE product_traffic_countries_node
+SQL >
+	%
+	SELECT
+		country,
+		uniqExactMerge(visitors) AS visitors,
+		sum(visits) AS visits,
+		sum(pageviews) AS pageviews
+	FROM product_traffic_daily_exact
+	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+	GROUP BY country
+	ORDER BY visits DESC, country ASC
+	LIMIT 300
+
+TYPE ENDPOINT

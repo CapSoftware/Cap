@@ -3,4 +3,4 @@
   expected_http_status: 200
   parameters: start_time=2026-01-10%2000%3A00%3A00.000&end_time=2026-01-12%2000%3A00%3A00.000
   expected_result: |
-    {"received_rows":5,"unique_events":5,"duplicate_rows":0,"future_events":0,"late_events":0,"missing_identity_events":0}
+    {"received_rows":11,"unique_events":11,"unique_payloads":11,"duplicate_rows":0,"payload_conflicts":0,"future_events":0,"late_events":0,"missing_identity_events":0,"ingestion_lag_ms":[100,100,100]}

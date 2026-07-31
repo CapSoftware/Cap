@@ -1,0 +1,22 @@
+DESCRIPTION >
+	Query signup cohorts and first-share activation within seven UTC days.
+
+TOKEN product_events_agent_read READ
+
+NODE product_activation_node
+SQL >
+	%
+	SELECT
+		cohort_date,
+		uniqExactMerge(signups) AS signups,
+		uniqExactMerge(activated_creators) AS activated_creators,
+		round(if(signups = 0, 0, 100 * activated_creators / signups), 2) AS activation_rate,
+		toUInt64(if(activated_creators = 0, 0, sum(time_to_activation_ms) / activated_creators)) AS average_time_to_activation_ms
+	FROM product_activation_daily_exact
+	WHERE cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 90 DAY {% end %}
+		AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+	GROUP BY cohort_date
+	ORDER BY cohort_date ASC
+	LIMIT 400
+
+TYPE ENDPOINT

@@ -1,0 +1,37 @@
+DESCRIPTION >
+	Rebuild active-creator cohorts from exact successful creation and sharing events.
+
+NODE snapshot_product_creator_retention_exact_node
+SQL >
+	WITH activity AS (
+		SELECT DISTINCT
+			user_id,
+			organization_id,
+			toDate(occurred_at, 'UTC') AS activity_date,
+			platform
+		FROM product_events_canonical_v1
+		WHERE event_name IN ('recording_started', 'recording_completed', 'multipart_upload_complete', 'share_link_created', 'loom_import_completed')
+			AND user_id != ''
+			AND (event_name != 'recording_completed' OR JSONExtractString(properties, 'status') IN ('success', 'degraded'))
+	), cohorts AS (
+		SELECT
+			user_id,
+			min(activity_date) AS cohort_date
+		FROM activity
+		GROUP BY user_id
+	)
+	SELECT
+		now64(3) AS calculated_at,
+		cohort_date,
+		activity_date,
+		platform,
+		uniqExactState(activity.user_id) AS creator_users,
+		uniqExactStateIf(organization_id, organization_id != '') AS creator_organizations
+	FROM activity
+	INNER JOIN cohorts USING user_id
+	GROUP BY cohort_date, activity_date, platform
+
+TYPE COPY
+TARGET_DATASOURCE product_creator_retention_exact
+COPY_MODE replace
+COPY_SCHEDULE */5 * * * *

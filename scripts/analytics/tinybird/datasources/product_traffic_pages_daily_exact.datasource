@@ -1,0 +1,28 @@
+DESCRIPTION >
+	Five-year privacy-safe page, landing, exit, and foreground-engagement metrics.
+
+TOKEN product_events_agent_read READ
+
+SCHEMA >
+	calculated_at DateTime64(3),
+	date Date,
+	hostname LowCardinality(String),
+	pathname String,
+	country LowCardinality(String),
+	device LowCardinality(String),
+	browser LowCardinality(String),
+	os LowCardinality(String),
+	channel LowCardinality(String),
+	visitors AggregateFunction(uniqExact, String),
+	visits AggregateFunction(uniqExact, String),
+	pageviews UInt64,
+	landings UInt64,
+	exits UInt64,
+	engaged_ms UInt64,
+	scroll_depth_sum Float64
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY (date, hostname, pathname, country, device, browser, os, channel)
+ENGINE_TTL date + INTERVAL 5 YEAR
+ENGINE_SETTINGS index_granularity = 256

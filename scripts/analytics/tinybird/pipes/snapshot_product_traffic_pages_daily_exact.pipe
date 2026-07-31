@@ -1,0 +1,69 @@
+DESCRIPTION >
+	Rebuild exact external page, landing, exit, and foreground-engagement metrics.
+
+NODE snapshot_product_traffic_pages_daily_exact_node
+SQL >
+	WITH sessions AS (
+		SELECT
+			session_id,
+			argMin(event_id, occurred_at) AS landing_event_id,
+			argMax(event_id, occurred_at) AS exit_event_id
+		FROM product_events_canonical_v1
+		WHERE event_name = 'page_view'
+			AND traffic_class = 'external'
+			AND session_id != ''
+		GROUP BY session_id
+	), engagements AS (
+		SELECT
+			JSONExtractString(properties, 'page_view_id') AS page_view_id,
+			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS engaged_ms,
+			toFloat64(max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth'))))) AS scroll_depth
+		FROM product_events_canonical_v1
+		WHERE event_name = 'page_engagement'
+			AND traffic_class = 'external'
+		GROUP BY page_view_id
+	), page_views AS (
+		SELECT
+			event_id,
+			occurred_at,
+			session_id,
+			if(user_id != '', concat('user:', user_id), concat('anonymous:', anonymous_id)) AS visitor_id,
+			hostname,
+			pathname,
+			country,
+			device,
+			browser,
+			os,
+			channel
+		FROM product_events_canonical_v1
+		WHERE event_name = 'page_view'
+			AND traffic_class = 'external'
+			AND session_id != ''
+			AND anonymous_id != ''
+	)
+	SELECT
+		now64(3) AS calculated_at,
+		toDate(occurred_at, 'UTC') AS date,
+		hostname,
+		pathname,
+		country,
+		device,
+		browser,
+		os,
+		channel,
+		uniqExactState(visitor_id) AS visitors,
+		uniqExactState(session_id) AS visits,
+		toUInt64(count()) AS pageviews,
+		toUInt64(countIf(event_id = landing_event_id)) AS landings,
+		toUInt64(countIf(event_id = exit_event_id)) AS exits,
+		toUInt64(sum(coalesce(engaged_ms, 0))) AS engaged_ms,
+		toFloat64(sum(coalesce(scroll_depth, 0))) AS scroll_depth_sum
+	FROM page_views
+	INNER JOIN sessions USING session_id
+	LEFT JOIN engagements ON page_views.event_id = engagements.page_view_id
+	GROUP BY date, hostname, pathname, country, device, browser, os, channel
+
+TYPE COPY
+TARGET_DATASOURCE product_traffic_pages_daily_exact
+COPY_MODE replace
+COPY_SCHEDULE */5 * * * *

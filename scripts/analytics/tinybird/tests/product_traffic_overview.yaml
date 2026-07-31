@@ -1,0 +1,6 @@
+- name: product_traffic_overview_fixture_sessions
+  description: Computes exact visitors, inactivity sessions, bounce, views, and foreground duration.
+  expected_http_status: 200
+  parameters: start_date=2026-01-10&end_date=2026-01-10&hostname=cap.so
+  expected_result: |
+    {"date":"2026-01-10","visitors":2,"visits":2,"pageviews":3,"views_per_visit":1.5,"bounce_rate":50,"visit_duration_ms":11500,"engaged_ms":23000}

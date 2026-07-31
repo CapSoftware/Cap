@@ -1,0 +1,16 @@
+DESCRIPTION >
+	Expose aggregate freshness and bounded raw ingestion lag without identifiers.
+
+TOKEN product_events_agent_read READ
+
+NODE product_analytics_freshness_node
+SQL >
+	SELECT
+		max(hour) AS latest_received_hour,
+		dateDiff('millisecond', max(hour), now64(3)) AS health_freshness_ms,
+		(SELECT max(calculated_at) FROM product_events_daily_exact) AS product_calculated_at,
+		(SELECT max(calculated_at) FROM product_traffic_daily_exact) AS traffic_calculated_at,
+		(SELECT max(calculated_at) FROM product_creator_retention_exact) AS retention_calculated_at
+	FROM product_events_health_hourly
+
+TYPE ENDPOINT

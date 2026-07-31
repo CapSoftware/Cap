@@ -2,10 +2,9 @@ DESCRIPTION >
 	Provider-neutral product analytics events emitted by Cap.
 
 TOKEN product_events_ingest APPEND
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	event_id String `json:$.event_id`,
+	payload_hash FixedString(32) `json:$.payload_hash`,
 	occurred_at DateTime64(3) `json:$.occurred_at`,
 	received_at DateTime64(3) `json:$.received_at`,
 	event_name LowCardinality(String) `json:$.event_name`,
@@ -22,11 +21,17 @@ SCHEMA >
 	country LowCardinality(String) `json:$.country` DEFAULT '',
 	region LowCardinality(String) `json:$.region` DEFAULT '',
 	city LowCardinality(String) `json:$.city` DEFAULT '',
+	hostname LowCardinality(String) `json:$.hostname` DEFAULT '',
+	browser LowCardinality(String) `json:$.browser` DEFAULT '',
+	device LowCardinality(String) `json:$.device` DEFAULT '',
+	os LowCardinality(String) `json:$.os` DEFAULT '',
+	channel LowCardinality(String) `json:$.channel` DEFAULT '',
+	traffic_class LowCardinality(String) `json:$.traffic_class` DEFAULT 'external',
+	synthetic_run_id String `json:$.synthetic_run_id` DEFAULT '',
 	properties String `json:$.properties` DEFAULT '{}'
 
-ENGINE ReplacingMergeTree
-ENGINE_PARTITION_KEY toYYYYMM(occurred_at)
-ENGINE_SORTING_KEY event_id
-ENGINE_VER received_at
-ENGINE_TTL toDateTime(occurred_at) + INTERVAL 400 DAY
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(received_at)
+ENGINE_SORTING_KEY (received_at, event_id)
+ENGINE_TTL toDateTime(received_at) + INTERVAL 90 DAY
 ENGINE_SETTINGS index_granularity = 8192

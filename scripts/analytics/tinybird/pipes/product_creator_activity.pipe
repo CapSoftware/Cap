@@ -1,0 +1,24 @@
+DESCRIPTION >
+	Query active creators, organizations, new-versus-returning activity, and DAU-WAU-MAU stickiness.
+
+TOKEN product_events_agent_read READ
+
+NODE product_creator_activity_node
+SQL >
+	%
+	SELECT
+		{% if defined(as_of_date) %} {{Date(as_of_date)}} {% else %} today() {% end %} AS as_of_date,
+		uniqExactMergeIf(creator_users, activity_date = as_of_date) AS dau,
+		uniqExactMergeIf(creator_users, activity_date >= as_of_date - INTERVAL 6 DAY AND activity_date <= as_of_date) AS wau,
+		uniqExactMergeIf(creator_users, activity_date >= as_of_date - INTERVAL 29 DAY AND activity_date <= as_of_date) AS mau,
+		uniqExactMergeIf(creator_organizations, activity_date = as_of_date) AS daily_active_organizations,
+		uniqExactMergeIf(creator_users, activity_date = cohort_date AND activity_date = as_of_date) AS new_creators,
+		uniqExactMergeIf(creator_users, activity_date > cohort_date AND activity_date = as_of_date) AS returning_creators,
+		round(if(wau = 0, 0, 100 * dau / wau), 2) AS dau_wau_stickiness,
+		round(if(mau = 0, 0, 100 * dau / mau), 2) AS dau_mau_stickiness
+	FROM product_creator_retention_exact
+	WHERE activity_date >= as_of_date - INTERVAL 29 DAY
+		AND activity_date <= as_of_date
+		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
+
+TYPE ENDPOINT

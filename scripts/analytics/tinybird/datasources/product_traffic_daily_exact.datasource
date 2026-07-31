@@ -1,0 +1,29 @@
+DESCRIPTION >
+	Five-year privacy-safe daily visit metrics with exact visitor states and no raw identifiers.
+
+TOKEN product_events_agent_read READ
+
+SCHEMA >
+	calculated_at DateTime64(3),
+	date Date,
+	hostname LowCardinality(String),
+	country LowCardinality(String),
+	device LowCardinality(String),
+	browser LowCardinality(String),
+	os LowCardinality(String),
+	channel LowCardinality(String),
+	attribution_source LowCardinality(String),
+	attribution_medium LowCardinality(String),
+	campaign LowCardinality(String),
+	visitors AggregateFunction(uniqExact, String),
+	visits UInt64,
+	pageviews UInt64,
+	bounces UInt64,
+	visit_duration_ms UInt64,
+	engaged_ms UInt64
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY (date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
+ENGINE_TTL date + INTERVAL 5 YEAR
+ENGINE_SETTINGS index_granularity = 256

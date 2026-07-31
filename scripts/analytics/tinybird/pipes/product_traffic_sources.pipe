@@ -1,0 +1,26 @@
+DESCRIPTION >
+	Query source, channel, medium, and campaign traffic without raw identifiers.
+
+TOKEN product_events_agent_read READ
+
+NODE product_traffic_sources_node
+SQL >
+	%
+	SELECT
+		channel,
+		attribution_source AS source,
+		attribution_medium AS medium,
+		campaign,
+		uniqExactMerge(visitors) AS visitors,
+		sum(visits) AS visits,
+		sum(pageviews) AS pageviews,
+		round(if(sum(visits) = 0, 0, 100 * sum(bounces) / sum(visits)), 2) AS bounce_rate
+	FROM product_traffic_daily_exact
+	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+	GROUP BY channel, source, medium, campaign
+	ORDER BY visits DESC, channel ASC, source ASC, campaign ASC
+	LIMIT greatest(1, least({{Int32(limit, 100)}}, 500))
+
+TYPE ENDPOINT

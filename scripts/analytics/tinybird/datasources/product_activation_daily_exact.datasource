@@ -1,0 +1,17 @@
+DESCRIPTION >
+	Five-year signup cohorts and the defensible activation milestone of creating a first share link within seven UTC days.
+
+TOKEN product_events_agent_read READ
+
+SCHEMA >
+	calculated_at DateTime64(3),
+	cohort_date Date,
+	signups AggregateFunction(uniqExact, String),
+	activated_creators AggregateFunction(uniqExact, String),
+	time_to_activation_ms UInt64
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
+ENGINE_SORTING_KEY cohort_date
+ENGINE_TTL cohort_date + INTERVAL 5 YEAR
+ENGINE_SETTINGS index_granularity = 256

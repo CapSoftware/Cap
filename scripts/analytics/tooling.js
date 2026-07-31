@@ -23,6 +23,16 @@ const TEST_FILES = fs
 	.sort()
 	.map((fileName) => path.join(MODULE_DIR, "tests", fileName));
 const CLOUD_URL_DEFAULT = "https://api.tinybird.co";
+const STAGING_WORKSPACE_ID = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
+const PRODUCT_COPY_PIPES = [
+	"snapshot_product_events_canonical_v1",
+	"snapshot_product_events_daily_exact",
+	"snapshot_product_traffic_daily_exact",
+	"snapshot_product_traffic_pages_daily_exact",
+	"snapshot_product_activation_daily_exact",
+	"snapshot_product_creator_retention_exact",
+	"snapshot_product_events_health_hourly",
+];
 const WORKSPACE_ID_SOURCE =
 	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const WORKSPACE_ID_PATTERN = new RegExp(`^${WORKSPACE_ID_SOURCE}$`, "i");
@@ -35,6 +45,7 @@ const LOCAL_IDENTIFIERS = {
 };
 const PRODUCT_COLUMNS = [
 	["event_id", "String"],
+	["payload_hash", "FixedString(32)"],
 	["occurred_at", "DateTime64(3)"],
 	["received_at", "DateTime64(3)"],
 	["event_name", "LowCardinality(String)"],
@@ -51,19 +62,44 @@ const PRODUCT_COLUMNS = [
 	["country", "LowCardinality(String)"],
 	["region", "LowCardinality(String)"],
 	["city", "LowCardinality(String)"],
+	["hostname", "LowCardinality(String)"],
+	["browser", "LowCardinality(String)"],
+	["device", "LowCardinality(String)"],
+	["os", "LowCardinality(String)"],
+	["channel", "LowCardinality(String)"],
+	["traffic_class", "LowCardinality(String)"],
+	["synthetic_run_id", "String"],
 	["properties", "String"],
 ];
 const PRODUCT_SOURCES = new Set(["client", "server"]);
-const PRODUCT_PLATFORMS = new Set(["web", "desktop", "mobile", "server"]);
+const PRODUCT_PLATFORMS = new Set([
+	"web",
+	"desktop",
+	"mobile",
+	"cli",
+	"server",
+]);
 const SERVER_ONLY_EVENTS = new Set([
 	"user_signed_up",
 	"checkout_started",
 	"guest_checkout_started",
 	"purchase_completed",
+	"trial_started",
+	"subscription_renewed",
+	"trial_converted",
+	"subscription_changed",
+	"subscription_cancelled",
+	"subscription_refunded",
+	"subscription_payment_failed",
+	"share_link_created",
 	"organization_invite_sent",
 	"organization_member_joined",
+	"collaboration_action_created",
 	"seat_quantity_changed",
 	"first_view_received",
+	"loom_import_started",
+	"loom_import_completed",
+	"loom_import_failed",
 ]);
 
 const composeArgs = (...args) => [
@@ -111,6 +147,9 @@ const operationPlan = (operation) => {
 				localAuth: true,
 			},
 			localCliStep("--local", "build"),
+			...PRODUCT_COPY_PIPES.map((name) =>
+				localCliStep("--local", "copy", "run", name, "--wait", "--yes"),
+			),
 			localCliStep("--local", "test", "run"),
 			{ type: "write-local-env" },
 		],
@@ -129,6 +168,9 @@ const operationPlan = (operation) => {
 				),
 				localAuth: true,
 			},
+			...PRODUCT_COPY_PIPES.map((name) =>
+				localCliStep("--local", "copy", "run", name, "--wait", "--yes"),
+			),
 			localCliStep("--local", "test", "run"),
 		],
 		"local-tokens": [{ type: "write-local-env" }],
@@ -172,7 +214,7 @@ const validateFixtures = (projectDir, issues) => {
 		issues.push("Missing product_events_v1 fixture data");
 		return;
 	}
-	const ids = new Set();
+	const eventPayloads = new Map();
 	const rows = fs
 		.readFileSync(fixturePath, "utf8")
 		.split(/\r?\n/)
@@ -192,10 +234,18 @@ const validateFixtures = (projectDir, issues) => {
 		}
 		if (typeof event.event_id !== "string" || !event.event_id) {
 			issues.push(`Fixture row ${index + 1} has an invalid event_id`);
-		} else if (ids.has(event.event_id)) {
-			issues.push(`Fixture event_id ${event.event_id} is duplicated`);
+		} else if (
+			eventPayloads.has(event.event_id) &&
+			eventPayloads.get(event.event_id) !== event.payload_hash
+		) {
+			issues.push(
+				`Fixture event_id ${event.event_id} has conflicting payload hashes`,
+			);
 		} else {
-			ids.add(event.event_id);
+			eventPayloads.set(event.event_id, event.payload_hash);
+		}
+		if (!/^[0-9a-f]{32}$/.test(event.payload_hash ?? "")) {
+			issues.push(`Fixture row ${index + 1} has an invalid payload_hash`);
 		}
 		if (!/^[a-z][a-z0-9_]*$/.test(event.event_name ?? "")) {
 			issues.push(`Fixture row ${index + 1} has an invalid event_name`);
@@ -277,34 +327,59 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 				"product_events_v1 columns do not match the runtime contract",
 			);
 		}
-		if (product.engine !== "ReplacingMergeTree") {
-			issues.push("product_events_v1 must use ReplacingMergeTree");
+		if (product.engine !== "MergeTree") {
+			issues.push("product_events_v1 must use append-optimized MergeTree");
 		}
-		if (product.sortingKey !== "event_id") {
-			issues.push("product_events_v1 must deduplicate by event_id");
+		if (product.sortingKey !== "(received_at, event_id)") {
+			issues.push("product_events_v1 must sort by receipt time and event ID");
 		}
-		if (product.versionColumn !== "received_at") {
-			issues.push("product_events_v1 must version retries by received_at");
+		if (product.versionColumn !== null) {
+			issues.push("product_events_v1 must preserve every delivery attempt");
 		}
-		if (product.partitionKey !== "toYYYYMM(occurred_at)") {
-			issues.push("product_events_v1 must use monthly event-time partitions");
+		if (product.partitionKey !== "toYYYYMM(received_at)") {
+			issues.push("product_events_v1 must use monthly receipt-time partitions");
 		}
-		if (product.ttl !== "toDateTime(occurred_at) + INTERVAL 400 DAY") {
-			issues.push("product_events_v1 must retain events for 400 days");
+		if (product.ttl !== "toDateTime(received_at) + INTERVAL 90 DAY") {
+			issues.push("product_events_v1 must retain raw deliveries for 90 days");
 		}
 		if (!hasToken(product, "product_events_ingest", "APPEND")) {
 			issues.push("product_events_v1 is missing its append-only token");
 		}
-		if (!hasToken(product, "product_events_agent_read", "READ")) {
-			issues.push("product_events_v1 is missing its read-only agent token");
+		if (hasToken(product, "product_events_agent_read", "READ")) {
+			issues.push(
+				"product_events_v1 must not expose raw identity data to agents",
+			);
 		}
 	}
 
 	const daily = project.datasources.find(
-		(datasource) => datasource.name === "product_events_daily_mv",
+		(datasource) => datasource.name === "product_events_daily_exact",
 	);
 	if (!daily || daily.engine !== "AggregatingMergeTree") {
-		issues.push("Missing product_events_daily_mv aggregate datasource");
+		issues.push("Missing product_events_daily_exact snapshot datasource");
+	}
+	const canonical = project.datasources.find(
+		(datasource) => datasource.name === "product_events_canonical_v1",
+	);
+	if (!canonical || canonical.engine !== "MergeTree") {
+		issues.push("Missing product_events_canonical_v1 datasource");
+	} else if (hasToken(canonical, "product_events_agent_read", "READ")) {
+		issues.push("Canonical product events must not be readable by agents");
+	}
+	for (const name of [
+		"product_traffic_daily_exact",
+		"product_traffic_pages_daily_exact",
+		"product_activation_daily_exact",
+		"product_creator_retention_exact",
+	]) {
+		const datasource = project.datasources.find(
+			(candidate) => candidate.name === name,
+		);
+		if (!datasource || datasource.engine !== "AggregatingMergeTree") {
+			issues.push(`Missing privacy-safe aggregate datasource ${name}`);
+		} else if (!hasToken(datasource, "product_events_agent_read", "READ")) {
+			issues.push(`${name} is missing its read-only agent token`);
+		}
 	}
 	const healthHourly = project.datasources.find(
 		(datasource) => datasource.name === "product_events_health_hourly",
@@ -313,10 +388,18 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		issues.push("Missing product_events_health_hourly aggregate datasource");
 	}
 	for (const name of [
-		"materialize_product_events_daily",
-		"product_events_health_hourly_mv",
+		...PRODUCT_COPY_PIPES,
 		"product_events_daily",
 		"product_events_health",
+		"product_traffic_overview",
+		"product_traffic_pages",
+		"product_traffic_sources",
+		"product_traffic_countries",
+		"product_traffic_technology",
+		"product_activation",
+		"product_creator_retention",
+		"product_creator_activity",
+		"product_analytics_freshness",
 	]) {
 		const pipe = project.pipes.find((candidate) => candidate.name === name);
 		if (!pipe) {
@@ -325,6 +408,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		}
 		if (
 			pipe.type !== "materialized" &&
+			pipe.type !== "copy" &&
 			!hasToken(pipe, "product_events_agent_read", "READ")
 		) {
 			issues.push(`${name} is missing its read-only agent token`);
@@ -335,6 +419,8 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	for (const testName of [
 		"product_events_daily.yaml",
 		"product_events_health.yaml",
+		"product_traffic_overview.yaml",
+		"product_traffic_pages.yaml",
 	]) {
 		if (!fs.existsSync(path.join(projectDir, "tests", testName))) {
 			issues.push(`Missing Tinybird test ${testName}`);
@@ -353,7 +439,12 @@ const cloudEnvironment = (env = process.env) => {
 	const workspaceId = env.TINYBIRD_WORKSPACE_ID?.trim();
 	if (!workspaceId || !WORKSPACE_ID_PATTERN.test(workspaceId)) {
 		throw new Error(
-			"TINYBIRD_WORKSPACE_ID must be the production workspace UUID.",
+			"TINYBIRD_WORKSPACE_ID must be the staging workspace UUID.",
+		);
+	}
+	if (workspaceId.toLowerCase() !== STAGING_WORKSPACE_ID) {
+		throw new Error(
+			"Analytics automation may deploy only to the staging workspace.",
 		);
 	}
 	const host =

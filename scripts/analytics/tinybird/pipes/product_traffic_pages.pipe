@@ -1,0 +1,31 @@
+DESCRIPTION >
+	Query top, landing, exit, and engagement page metrics without raw identifiers.
+
+TOKEN product_events_agent_read READ
+
+NODE product_traffic_pages_node
+SQL >
+	%
+	SELECT
+		pathname,
+		uniqExactMerge(visitors) AS visitors,
+		uniqExactMerge(visits) AS visits,
+		sum(pageviews) AS pageviews,
+		sum(landings) AS landings,
+		sum(exits) AS exits,
+		toUInt64(if(sum(pageviews) = 0, 0, sum(engaged_ms) / sum(pageviews))) AS time_on_page_ms,
+		round(if(sum(pageviews) = 0, 0, sum(scroll_depth_sum) / sum(pageviews)), 2) AS average_scroll_depth
+	FROM product_traffic_pages_daily_exact
+	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+		{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
+		{% if defined(device) %} AND device = {{String(device)}} {% end %}
+		{% if defined(browser) %} AND browser = {{String(browser)}} {% end %}
+		{% if defined(os) %} AND os = {{String(os)}} {% end %}
+		{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
+	GROUP BY pathname
+	ORDER BY pageviews DESC, pathname ASC
+	LIMIT greatest(1, least({{Int32(limit, 100)}}, 500))
+
+TYPE ENDPOINT

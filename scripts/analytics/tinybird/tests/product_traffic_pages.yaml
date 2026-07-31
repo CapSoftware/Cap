@@ -1,0 +1,8 @@
+- name: product_traffic_pages_fixture
+  description: Returns page, landing, exit, time-on-page, and scroll metrics from pre-aggregated data.
+  expected_http_status: 200
+  parameters: start_date=2026-01-10&end_date=2026-01-10&hostname=cap.so
+  expected_result: |
+    {"pathname":"/","visitors":1,"visits":1,"pageviews":1,"landings":1,"exits":1,"time_on_page_ms":5000,"average_scroll_depth":30}
+    {"pathname":"/download","visitors":1,"visits":1,"pageviews":1,"landings":0,"exits":1,"time_on_page_ms":3000,"average_scroll_depth":20}
+    {"pathname":"/pricing","visitors":1,"visits":1,"pageviews":1,"landings":1,"exits":0,"time_on_page_ms":15000,"average_scroll_depth":80}

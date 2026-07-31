@@ -1,0 +1,36 @@
+DESCRIPTION >
+	Canonical non-conflicting product events rebuilt from append-only delivery attempts.
+
+SCHEMA >
+	event_id String,
+	payload_hash FixedString(32),
+	occurred_at DateTime64(3),
+	received_at DateTime64(3),
+	event_name LowCardinality(String),
+	schema_version UInt16,
+	source LowCardinality(String),
+	platform LowCardinality(String),
+	anonymous_id String,
+	session_id String,
+	user_id String,
+	organization_id String,
+	app_version LowCardinality(String),
+	pathname String,
+	referrer String,
+	country LowCardinality(String),
+	region LowCardinality(String),
+	city LowCardinality(String),
+	hostname LowCardinality(String),
+	browser LowCardinality(String),
+	device LowCardinality(String),
+	os LowCardinality(String),
+	channel LowCardinality(String),
+	traffic_class LowCardinality(String),
+	synthetic_run_id String,
+	properties String
+
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(received_at)
+ENGINE_SORTING_KEY (occurred_at, event_name, event_id)
+ENGINE_TTL toDateTime(received_at) + INTERVAL 90 DAY
+ENGINE_SETTINGS index_granularity = 8192

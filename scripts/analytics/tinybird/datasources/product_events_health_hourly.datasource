@@ -5,14 +5,18 @@ TOKEN product_events_agent_read READ
 
 SCHEMA >
 	hour DateTime,
+	platform LowCardinality(String),
+	app_version LowCardinality(String),
 	received_rows SimpleAggregateFunction(sum, UInt64),
-	unique_events AggregateFunction(uniq, String),
+	unique_events AggregateFunction(uniqExact, String),
+	unique_payloads AggregateFunction(uniqExact, Tuple(String, FixedString(32))),
 	future_events SimpleAggregateFunction(sum, UInt64),
 	late_events SimpleAggregateFunction(sum, UInt64),
-	missing_identity_events SimpleAggregateFunction(sum, UInt64)
+	missing_identity_events SimpleAggregateFunction(sum, UInt64),
+	ingestion_lag_ms AggregateFunction(quantilesTDigest(0.5, 0.95, 0.99), Float64)
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(hour)
-ENGINE_SORTING_KEY hour
-ENGINE_TTL hour + INTERVAL 400 DAY
+ENGINE_SORTING_KEY (hour, platform, app_version)
+ENGINE_TTL hour + INTERVAL 90 DAY
 ENGINE_SETTINGS index_granularity = 256

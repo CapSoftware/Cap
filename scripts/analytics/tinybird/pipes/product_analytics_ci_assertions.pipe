@@ -1,0 +1,31 @@
+DESCRIPTION >
+	Prove synthetic retry deduplication and payload-conflict quarantine without exposing raw event identifiers.
+
+TOKEN product_events_agent_read READ
+
+NODE product_analytics_ci_assertions_node
+SQL >
+	%
+	{% if not defined(synthetic_run_id) %}
+		{{ error('synthetic_run_id is required') }}
+	{% end %}
+	SELECT
+		sum(deliveries) AS received_rows,
+		count() AS unique_events,
+		sum(payloads) AS unique_payloads,
+		received_rows - unique_payloads AS duplicate_rows,
+		unique_payloads - unique_events AS payload_conflicts,
+		countIf(payloads = 1) AS decision_events
+	FROM
+	(
+		SELECT
+			event_id,
+			count() AS deliveries,
+			uniqExact(payload_hash) AS payloads
+		FROM product_events_v1
+		WHERE synthetic_run_id = {{String(synthetic_run_id)}}
+			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+		GROUP BY event_id
+	)
+
+TYPE ENDPOINT

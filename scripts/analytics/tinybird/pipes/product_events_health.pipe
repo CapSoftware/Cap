@@ -14,14 +14,19 @@ SQL >
 	{% end %}
 	SELECT
 		sum(received_rows) AS received_rows,
-		uniqMerge(unique_events) AS unique_events,
-		received_rows - unique_events AS duplicate_rows,
+		uniqExactMerge(unique_events) AS unique_events,
+		uniqExactMerge(unique_payloads) AS unique_payloads,
+		received_rows - unique_payloads AS duplicate_rows,
+		unique_payloads - unique_events AS payload_conflicts,
 		sum(future_events) AS future_events,
 		sum(late_events) AS late_events,
-		sum(missing_identity_events) AS missing_identity_events
+		sum(missing_identity_events) AS missing_identity_events,
+		quantilesTDigestMerge(0.5, 0.95, 0.99)(ingestion_lag_ms) AS ingestion_lag_ms
 	FROM product_events_health_hourly
 	WHERE hour >= toStartOfHour(toDateTime64({{DateTime64(start_time)}}, 3))
 		AND hour <= toDateTime64({{DateTime64(end_time)}}, 3)
+		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
+		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
 		AND throwIf(toDateTime64({{DateTime64(end_time)}}, 3) < toDateTime64({{DateTime64(start_time)}}, 3), 'end_time must not precede start_time') = 0
 		AND throwIf(toDateTime64({{DateTime64(end_time)}}, 3) > toDateTime64({{DateTime64(start_time)}}, 3) + INTERVAL 31 DAY, 'health windows cannot exceed 31 days') = 0
 

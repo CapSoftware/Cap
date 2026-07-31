@@ -1,0 +1,18 @@
+DESCRIPTION >
+	Five-year creator and organization activity cohorts using successful creation-value events.
+
+TOKEN product_events_agent_read READ
+
+SCHEMA >
+	calculated_at DateTime64(3),
+	cohort_date Date,
+	activity_date Date,
+	platform LowCardinality(String),
+	creator_users AggregateFunction(uniqExact, String),
+	creator_organizations AggregateFunction(uniqExact, String)
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
+ENGINE_SORTING_KEY (cohort_date, activity_date, platform)
+ENGINE_TTL cohort_date + INTERVAL 5 YEAR
+ENGINE_SETTINGS index_granularity = 256

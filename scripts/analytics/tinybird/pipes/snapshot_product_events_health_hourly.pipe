@@ -1,0 +1,23 @@
+DESCRIPTION >
+	Rebuild hourly delivery health so privacy erasure retracts all derived state.
+
+NODE snapshot_product_events_health_hourly_node
+SQL >
+	SELECT
+		toStartOfHour(received_at) AS hour,
+		platform,
+		app_version,
+		count() AS received_rows,
+		uniqExactState(event_id) AS unique_events,
+		uniqExactState(tuple(event_id, payload_hash)) AS unique_payloads,
+		countIf(occurred_at > received_at + INTERVAL 5 MINUTE) AS future_events,
+		countIf(occurred_at < received_at - INTERVAL 1 DAY) AS late_events,
+		countIf(user_id = '' AND anonymous_id = '' AND session_id = '') AS missing_identity_events,
+		quantilesTDigestState(0.5, 0.95, 0.99)(toFloat64(dateDiff('millisecond', occurred_at, received_at))) AS ingestion_lag_ms
+	FROM product_events_v1
+	GROUP BY hour, platform, app_version
+
+TYPE COPY
+TARGET_DATASOURCE product_events_health_hourly
+COPY_MODE replace
+COPY_SCHEDULE */5 * * * *

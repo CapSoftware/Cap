@@ -1,0 +1,25 @@
+DESCRIPTION >
+	Query device, browser, and operating-system traffic without raw user agents.
+
+TOKEN product_events_agent_read READ
+
+NODE product_traffic_technology_node
+SQL >
+	%
+	SELECT
+		device,
+		browser,
+		os,
+		uniqExactMerge(visitors) AS visitors,
+		sum(visits) AS visits,
+		sum(pageviews) AS pageviews
+	FROM product_traffic_daily_exact
+	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+		{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
+	GROUP BY device, browser, os
+	ORDER BY visits DESC, device ASC, browser ASC, os ASC
+	LIMIT 500
+
+TYPE ENDPOINT

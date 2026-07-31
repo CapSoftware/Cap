@@ -90,7 +90,9 @@ const parsePipe = (filePath) => {
 		name: path.basename(filePath, ".pipe"),
 		filePath,
 		type: (readDirective(contents, "TYPE") ?? "generic").toLowerCase(),
-		targetDatasource: readDirective(contents, "DATASOURCE"),
+		targetDatasource:
+			readDirective(contents, "DATASOURCE") ??
+			readDirective(contents, "TARGET_DATASOURCE"),
 		tokens: parseTokens(contents),
 	};
 };

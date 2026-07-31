@@ -116,7 +116,7 @@ test("cloud auth requires a dedicated deploy token", () => {
 	const environment = cloudEnvironment({
 		TINYBIRD_DEPLOY_TOKEN: "deploy-token",
 		PRODUCT_ANALYTICS_TINYBIRD_HOST: "https://example.tinybird.co",
-		TINYBIRD_WORKSPACE_ID: "12345678-1234-4234-8234-123456789abc",
+		TINYBIRD_WORKSPACE_ID: "37b8fef9-817f-4c3c-b21f-218c36a6077d",
 	});
 	assert.equal(environment.TINYBIRD_TOKEN, "deploy-token");
 	assert.equal(environment.TB_TOKEN, "deploy-token");
@@ -124,12 +124,20 @@ test("cloud auth requires a dedicated deploy token", () => {
 	assert.equal(environment.TB_HOST, "https://example.tinybird.co");
 	assert.equal(
 		environment.TINYBIRD_WORKSPACE_ID,
-		"12345678-1234-4234-8234-123456789abc",
+		"37b8fef9-817f-4c3c-b21f-218c36a6077d",
+	);
+	assert.throws(
+		() =>
+			cloudEnvironment({
+				TINYBIRD_DEPLOY_TOKEN: "deploy-token",
+				TINYBIRD_WORKSPACE_ID: "12345678-1234-4234-8234-123456789abc",
+			}),
+		/only to the staging workspace/,
 	);
 });
 
 test("cloud deploy verifies the token workspace before mutation", () => {
-	const workspaceId = "12345678-1234-4234-8234-123456789abc";
+	const workspaceId = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
 	const token = `p.${Buffer.from(
 		JSON.stringify({
 			u: workspaceId,
@@ -143,11 +151,18 @@ test("cloud deploy verifies the token workspace before mutation", () => {
 		TINYBIRD_WORKSPACE_ID: workspaceId,
 	};
 	assert.equal(verifyCloudWorkspace(env), workspaceId);
+	const wrongWorkspaceToken = `p.${Buffer.from(
+		JSON.stringify({
+			u: "87654321-4321-4321-8321-cba987654321",
+			id: "87654321-4321-4321-8321-cba987654321",
+			host: null,
+		}),
+	).toString("base64url")}.signature`;
 	assert.throws(
 		() =>
 			verifyCloudWorkspace({
 				...env,
-				TINYBIRD_WORKSPACE_ID: "87654321-4321-4321-8321-cba987654321",
+				TINYBIRD_DEPLOY_TOKEN: wrongWorkspaceToken,
 			}),
 		/does not target/,
 	);
@@ -178,7 +193,7 @@ test("local credentials are written to a private gitignored env file", () => {
 	}
 });
 
-test("fixture validation catches duplicate event IDs", () => {
+test("fixture validation allows identical duplicate deliveries", () => {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
 	const projectDir = path.join(tempRoot, "tinybird");
 	try {
@@ -190,9 +205,63 @@ test("fixture validation catches duplicate event IDs", () => {
 		);
 		const firstRow = fs.readFileSync(fixturePath, "utf8").split(/\r?\n/)[0];
 		fs.appendFileSync(fixturePath, `${firstRow}\n`);
+		assert.deepEqual(validateAnalyticsProject(projectDir), []);
+	} finally {
+		fs.rmSync(tempRoot, { force: true, recursive: true });
+	}
+});
+
+test("fixture validation rejects the same event ID with a different hash", () => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
+	const projectDir = path.join(tempRoot, "tinybird");
+	try {
+		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
+		const fixturePath = path.join(
+			projectDir,
+			"fixtures",
+			"product_events_v1.ndjson",
+		);
+		const fixtureContents = fs.readFileSync(fixturePath, "utf8");
+		const firstRow = JSON.parse(fixtureContents.split(/\r?\n/)[0]);
+		const conflictingRow = {
+			...firstRow,
+			payload_hash: "ffffffffffffffffffffffffffffffff",
+		};
+		fs.writeFileSync(
+			fixturePath,
+			`${fixtureContents.trimEnd()}\n${JSON.stringify(conflictingRow)}\n`,
+		);
 		assert.ok(
 			validateAnalyticsProject(projectDir).some((issue) =>
-				issue.includes("is duplicated"),
+				issue.includes("has conflicting payload hashes"),
+			),
+		);
+	} finally {
+		fs.rmSync(tempRoot, { force: true, recursive: true });
+	}
+});
+
+test("project validation rejects agent access to raw product events", () => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
+	const projectDir = path.join(tempRoot, "tinybird");
+	try {
+		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
+		const datasourcePath = path.join(
+			projectDir,
+			"datasources",
+			"product_events_v1.datasource",
+		);
+		const contents = fs.readFileSync(datasourcePath, "utf8");
+		fs.writeFileSync(
+			datasourcePath,
+			contents.replace(
+				"TOKEN product_events_ingest APPEND",
+				"TOKEN product_events_ingest APPEND\nTOKEN product_events_agent_read READ",
+			),
+		);
+		assert.ok(
+			validateAnalyticsProject(projectDir).some((issue) =>
+				issue.includes("must not expose raw identity data to agents"),
 			),
 		);
 	} finally {
@@ -206,12 +275,18 @@ test("project validation rejects duplicate Tinybird resource names", () => {
 	try {
 		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
 		fs.copyFileSync(
-			path.join(projectDir, "pipes", "materialize_product_events_daily.pipe"),
-			path.join(projectDir, "pipes", "product_events_daily_mv.pipe"),
+			path.join(
+				projectDir,
+				"pipes",
+				"snapshot_product_events_daily_exact.pipe",
+			),
+			path.join(projectDir, "pipes", "product_events_daily_exact.pipe"),
 		);
 		assert.ok(
 			validateAnalyticsProject(projectDir).some((issue) =>
-				issue.includes("resource name product_events_daily_mv is not unique"),
+				issue.includes(
+					"resource name product_events_daily_exact is not unique",
+				),
 			),
 		);
 	} finally {
