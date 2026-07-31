@@ -6,7 +6,7 @@
 	"display_information": {
 		"name": "Cap",
 		"description": "Use Cap directly inside Slack.",
-		"background_color": "#4785FF"
+		"background_color": "#1e60e6"
 	},
 	"features": {
 		"bot_user": {
