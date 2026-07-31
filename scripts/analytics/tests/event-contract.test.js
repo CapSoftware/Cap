@@ -37,6 +37,21 @@ test("parses EVENT_REGISTRY with TypeScript syntax", () => {
 	assert.deepEqual(registry.diagnostics, []);
 });
 
+test("requires bounded formats for every string property", () => {
+	const parsed = parseEventRegistry(
+		`export const EVENT_REGISTRY = {
+			unsafe: { properties: { error: { type: "string" } } },
+			safeEnum: { properties: { mode: { type: "string", values: ["one"] } } },
+			safeCategory: { properties: { mode: { type: "string", format: "category" } } },
+		} as const;`,
+		"event-registry.ts",
+	);
+	assert.deepEqual(
+		parsed.diagnostics.map((entry) => entry.code),
+		["unbounded-string-property"],
+	);
+});
+
 test("finds imported capture calls without matching comments or unrelated functions", () => {
 	const result = analyzeTypeScriptSource({
 		file: "caller.tsx",

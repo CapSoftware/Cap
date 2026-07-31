@@ -1,3 +1,5 @@
+import { normalizeAnalyticsPropertyString } from "./privacy";
+
 type ProductEventProperties = Record<string, string | number | boolean | null>;
 
 export const PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -58,8 +60,13 @@ export function readAnalyticsTouch(
 	const params = new URLSearchParams(search);
 	const values: Partial<Record<AttributionField, string>> = {};
 	for (const field of ATTRIBUTION_FIELDS) {
-		const value = params.get(field)?.trim();
-		if (value) values[field] = value.slice(0, 512);
+		const rawValue = params.get(field);
+		if (!rawValue) continue;
+		const value = normalizeAnalyticsPropertyString(
+			rawValue,
+			field === "gclid" || field === "fbclid" ? "identifier" : "attribution",
+		);
+		if (value) values[field] = value;
 	}
 	return Object.keys(values).length > 0
 		? { capturedAt: now, values }
@@ -156,8 +163,12 @@ function parseTouch(value: unknown): AnalyticsTouch | undefined {
 	const values: Partial<Record<AttributionField, string>> = {};
 	for (const field of ATTRIBUTION_FIELDS) {
 		const fieldValue = value.values[field];
-		if (typeof fieldValue === "string" && fieldValue) {
-			values[field] = fieldValue.slice(0, 512);
+		if (typeof fieldValue === "string") {
+			const normalized = normalizeAnalyticsPropertyString(
+				fieldValue,
+				field === "gclid" || field === "fbclid" ? "identifier" : "attribution",
+			);
+			if (normalized) values[field] = normalized;
 		}
 	}
 	return Object.keys(values).length > 0

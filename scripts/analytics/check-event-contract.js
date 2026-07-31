@@ -184,6 +184,56 @@ function propertyNameText(name) {
 	return undefined;
 }
 
+function objectProperty(node, name) {
+	return node.properties.find(
+		(property) =>
+			ts.isPropertyAssignment(property) &&
+			propertyNameText(property.name) === name,
+	);
+}
+
+function validateStringPropertyRules(sourceFile, file, diagnostics) {
+	const allowedFormats = new Set([
+		"attribution",
+		"category",
+		"hostname",
+		"identifier",
+	]);
+	const visit = (node) => {
+		if (ts.isObjectLiteralExpression(node)) {
+			const typeProperty = objectProperty(node, "type");
+			if (
+				typeProperty &&
+				ts.isStringLiteralLike(typeProperty.initializer) &&
+				typeProperty.initializer.text === "string"
+			) {
+				const valuesProperty = objectProperty(node, "values");
+				const formatProperty = objectProperty(node, "format");
+				const hasValues =
+					valuesProperty &&
+					ts.isArrayLiteralExpression(valuesProperty.initializer) &&
+					valuesProperty.initializer.elements.length > 0;
+				const hasFormat =
+					formatProperty &&
+					ts.isStringLiteralLike(formatProperty.initializer) &&
+					allowedFormats.has(formatProperty.initializer.text);
+				if (!hasValues && !hasFormat) {
+					diagnostics.push(
+						diagnostic(
+							"unbounded-string-property",
+							file,
+							"String analytics properties require a non-empty values enum or an approved format",
+							sourceLocation(sourceFile, node),
+						),
+					);
+				}
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+}
+
 export function parseEventRegistry(sourceText, file = DEFAULT_REGISTRY_PATH) {
 	const sourceFile = ts.createSourceFile(
 		file,
@@ -202,6 +252,7 @@ export function parseEventRegistry(sourceText, file = DEFAULT_REGISTRY_PATH) {
 			{ line: location.line + 1, column: location.character + 1 },
 		);
 	});
+	validateStringPropertyRules(sourceFile, file, diagnostics);
 	let registryDeclaration;
 	for (const statement of sourceFile.statements) {
 		if (!ts.isVariableStatement(statement)) continue;

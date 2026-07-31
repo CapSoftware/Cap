@@ -325,6 +325,7 @@ const probePreview = async () => {
 			dropped: 0,
 			queue_overflow: 0,
 			oversize: 0,
+			contract_rejected: 0,
 		},
 	});
 	const post = (cookieHeader = cookies) =>

@@ -86,6 +86,46 @@ describe("normalizeProductEventProperties", () => {
 		).toBeNull();
 	});
 
+	it("rejects PII, credentials, filenames, URLs, and raw errors in allowed fields", () => {
+		for (const campaign of [
+			"alice@example.com",
+			"+44 7700 900123",
+			"https://example.com/customer?email=private",
+			"authorization=private-value",
+			"customer-recording.mp4",
+		]) {
+			expect(
+				normalizeProductEventProperties("page_view", {
+					hostname: "cap.so",
+					is_session_entry: true,
+					first_touch_campaign: campaign,
+				}),
+			).toBeNull();
+		}
+		expect(
+			normalizeProductEventProperties("tool_interaction", {
+				tool: "trimmer",
+				action: "process_failed",
+				failure_class: "Network request failed for customer Alice",
+			}),
+		).toBeNull();
+	});
+
+	it("preserves bounded campaign labels and advertising click identifiers", () => {
+		expect(
+			normalizeProductEventProperties("page_view", {
+				hostname: "WWW.Cap.SO",
+				is_session_entry: true,
+				first_touch_campaign: "Summer launch 2026",
+				first_touch_gclid: "EAIaIQobChMI-safe_click_123",
+			}),
+		).toMatchObject({
+			hostname: "www.cap.so",
+			first_touch_campaign: "Summer launch 2026",
+			first_touch_gclid: "EAIaIQobChMI-safe_click_123",
+		});
+	});
+
 	it("returns undefined for an event whose schema has no properties", () => {
 		expect(normalizeProductEventProperties("user_signed_up")).toBeUndefined();
 	});
@@ -165,6 +205,32 @@ describe("normalizeProductEventInput", () => {
 			now,
 		);
 		expect(normalized?.pathname).toBe("/s/:id");
+	});
+
+	it.each([
+		"/customer/alice@example.com",
+		"/customer/alice%40example.com",
+		"/customer/0123456789abcdef0123456789abcdef",
+		"/customer/user0123456789abcdef012345",
+	])("redacts sensitive path segment in %s", (pathname) => {
+		expect(
+			normalizeProductEventInput({ ...baseEvent, pathname }, now)?.pathname,
+		).toBe("/customer/:id");
+	});
+
+	it("rejects identifiers that contain personal data or unsafe syntax", () => {
+		expect(
+			normalizeProductEventInput(
+				{ ...baseEvent, anonymousId: "alice@example.com" },
+				now,
+			),
+		).toBeNull();
+		expect(
+			normalizeProductEventInput(
+				{ ...baseEvent, eventId: "event/customer/file.mp4" },
+				now,
+			),
+		).toBeNull();
 	});
 
 	it.each([

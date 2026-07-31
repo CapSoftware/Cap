@@ -11,6 +11,11 @@ import {
 	type ProductEventPropertiesFor,
 	SERVER_ONLY_EVENT_NAMES,
 } from "./event-registry";
+import {
+	isSensitiveAnalyticsPathSegment,
+	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsPropertyString,
+} from "./privacy";
 
 export type {
 	AnalyticsTouch,
@@ -27,6 +32,13 @@ export {
 	readAnalyticsTouch,
 	resolveBrowserAnalyticsContext,
 } from "./browser-session";
+export type { AnalyticsStringFormat } from "./privacy";
+export {
+	containsSensitiveAnalyticsContent,
+	isSensitiveAnalyticsPathSegment,
+	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsPropertyString,
+} from "./privacy";
 
 export {
 	CORE_EVENT_NAMES,
@@ -247,6 +259,7 @@ export function normalizeProductEventProperties<Name extends CoreEventName>(
 			required?: true;
 			nullable?: true;
 			values?: readonly string[];
+			format?: "attribution" | "category" | "hostname" | "identifier";
 		}
 	>;
 	const entries = Object.entries(properties ?? {});
@@ -277,12 +290,20 @@ export function normalizeProductEventProperties<Name extends CoreEventName>(
 
 		if (typeof value !== rule.type) return null;
 		if (typeof value === "number" && !Number.isFinite(value)) return null;
-		if (
-			typeof value === "string" &&
-			(value.length > PRODUCT_ANALYTICS_LIMITS.propertyStringLength ||
-				(rule.values && !rule.values.includes(value)))
-		) {
-			return null;
+		if (typeof value === "string") {
+			if (value.length > PRODUCT_ANALYTICS_LIMITS.propertyStringLength) {
+				return null;
+			}
+			if (rule.values) {
+				if (!rule.values.includes(value)) return null;
+				normalized[key] = value;
+				continue;
+			}
+			if (!rule.format) return null;
+			const stringValue = normalizeAnalyticsPropertyString(value, rule.format);
+			if (!stringValue) return null;
+			normalized[key] = stringValue;
+			continue;
 		}
 		normalized[key] = value as ProductEventProperty;
 	}
@@ -305,8 +326,8 @@ export function normalizeProductEventInput(
 ): ProductEventInput | null {
 	if (!isRecord(value)) return null;
 
-	const eventId = normalizeIdentifier(value.eventId);
-	const anonymousId = normalizeIdentifier(value.anonymousId);
+	const eventId = normalizeAnalyticsIdentifier(value.eventId);
+	const anonymousId = normalizeAnalyticsIdentifier(value.anonymousId);
 	const sessionId = normalizeOptionalIdentifier(value.sessionId);
 	const eventName = value.eventName;
 	const platform = value.platform;
@@ -467,21 +488,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeIdentifier(value: unknown) {
-	if (typeof value !== "string") return null;
-	const normalized = value.trim();
-	if (
-		!normalized ||
-		normalized.length > PRODUCT_ANALYTICS_LIMITS.identifierLength
-	) {
-		return null;
-	}
-	return normalized;
-}
-
 function normalizeOptionalIdentifier(value: unknown) {
 	if (value === undefined || value === null || value === "") return undefined;
-	return normalizeIdentifier(value) ?? undefined;
+	return normalizeAnalyticsIdentifier(value) ?? undefined;
 }
 
 function normalizeOccurredAt(value: unknown, now: number) {
@@ -498,8 +507,7 @@ function normalizeOptionalStringField<Key extends "appVersion">(
 	value: unknown,
 	maxLength: number,
 ): Partial<Record<Key, string>> {
-	if (typeof value !== "string") return {};
-	const normalized = value.trim().slice(0, maxLength);
+	const normalized = normalizeAnalyticsIdentifier(value, maxLength);
 	return normalized ? ({ [key]: normalized } as Record<Key, string>) : {};
 }
 
@@ -541,7 +549,13 @@ function normalizeOptionalReferrer(value: unknown) {
 }
 
 function isHighCardinalityPathSegment(segment: string, parentSegment?: string) {
-	if (UUID_PATTERN.test(segment) || ULID_PATTERN.test(segment)) return true;
+	if (
+		UUID_PATTERN.test(segment) ||
+		ULID_PATTERN.test(segment) ||
+		isSensitiveAnalyticsPathSegment(segment)
+	) {
+		return true;
+	}
 	return Boolean(
 		parentSegment &&
 			DYNAMIC_ID_PARENT_SEGMENTS.has(parentSegment) &&

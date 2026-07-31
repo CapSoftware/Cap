@@ -67,6 +67,7 @@ class Api extends HttpApi.make("ProductAnalyticsApi").add(
 							dropped: DeliveryCount,
 							queue_overflow: DeliveryCount,
 							oversize: DeliveryCount,
+							contract_rejected: Schema.optional(DeliveryCount),
 						}),
 					),
 				}),

@@ -143,6 +143,18 @@ describe("browser analytics sessions", () => {
 		});
 	});
 
+	it("drops unsafe attribution fields without discarding valid fields", () => {
+		expect(
+			readAnalyticsTouch(
+				"?utm_source=search&utm_campaign=alice%40example.com&gclid=valid_click_123",
+				1_000,
+			),
+		).toEqual({
+			capturedAt: 1_000,
+			values: { utm_source: "search", gclid: "valid_click_123" },
+		});
+	});
+
 	it("starts a new session after the clock moves backwards", () => {
 		const storage = createStorage();
 		const createId = createIds();

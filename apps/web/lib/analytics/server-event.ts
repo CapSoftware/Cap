@@ -1,5 +1,6 @@
 import {
 	createProductEventRows,
+	normalizeAnalyticsIdentifier,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
 	type ProductEventPlatform,
@@ -70,7 +71,8 @@ function normalizeServerOccurredAt(
 }
 
 export function normalizeServerIdentifier(value?: string) {
-	const normalized = value?.trim();
-	if (!normalized) return undefined;
-	return normalized.slice(0, PRODUCT_ANALYTICS_LIMITS.identifierLength);
+	return normalizeAnalyticsIdentifier(
+		value,
+		PRODUCT_ANALYTICS_LIMITS.identifierLength,
+	);
 }

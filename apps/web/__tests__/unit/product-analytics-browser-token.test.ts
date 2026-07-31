@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
 	createProductAnalyticsBrowserToken,
@@ -57,6 +58,24 @@ describe("product analytics browser token", () => {
 		expect(verifyProductAnalyticsBrowserToken("invalid", secret, now)).toBe(
 			false,
 		);
+	});
+
+	it("refuses to create or accept a token containing a personal identifier", () => {
+		expect(() =>
+			createProductAnalyticsBrowserToken(secret, "alice@example.com", now),
+		).toThrow("Analytics anonymous ID is invalid");
+		const issuedAt = Math.floor(now / 1_000);
+		const payload = `v1.${issuedAt}.alice@example.com`;
+		const signature = createHmac("sha256", secret)
+			.update(payload)
+			.digest("base64url");
+		expect(
+			readProductAnalyticsBrowserTokenClaims(
+				`${payload}.${signature}`,
+				secret,
+				now,
+			),
+		).toBeUndefined();
 	});
 
 	it("reads only the analytics token cookie", () => {

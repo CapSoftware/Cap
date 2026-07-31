@@ -44,6 +44,19 @@ describe("ProductAnalyticsQueue", () => {
 		await vi.advanceTimersByTimeAsync(5_000);
 		expect(transport).toHaveBeenCalledTimes(1);
 		expect(transport.mock.calls[0]?.[0]).toHaveLength(2);
+		expect(transport.mock.calls[0]?.[2]).toMatchObject({
+			attempted: 2,
+			accepted: 2,
+		});
+	});
+
+	it("counts contract rejections as observable drops", () => {
+		const queue = new ProductAnalyticsQueue(vi.fn<ProductAnalyticsTransport>());
+		queue.recordContractRejection();
+		expect(queue.deliverySnapshot).toMatchObject({
+			dropped: 1,
+			contract_rejected: 1,
+		});
 	});
 
 	it("flushes immediately when a full batch is queued", async () => {
@@ -241,6 +254,17 @@ describe("browser analytics identity", () => {
 			"cap_analytics_anonymous_id_v1",
 			"signed-id",
 		);
+	});
+
+	it("regenerates a cookie identity containing personal data", () => {
+		const storage = { getItem: vi.fn(() => null), setItem: vi.fn() };
+		expect(
+			getOrCreateBrowserAnonymousId(
+				storage,
+				"alice@example.com",
+				() => "safe-id",
+			),
+		).toBe("safe-id");
 	});
 
 	it("falls back when storage is unavailable", () => {

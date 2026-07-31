@@ -1,3 +1,5 @@
+import type { AnalyticsStringFormat } from "./privacy";
+
 export type ProductEventDelivery = "critical" | "best_effort";
 export type ProductEventAuthority = "client" | "server" | "both";
 export type ProductEventPlatform =
@@ -12,7 +14,13 @@ type EventPropertyRule =
 			type: "string";
 			required?: true;
 			nullable?: true;
-			values?: readonly string[];
+			values: readonly string[];
+	  }
+	| {
+			type: "string";
+			required?: true;
+			nullable?: true;
+			format: AnalyticsStringFormat;
 	  }
 	| {
 			type: "number";
@@ -47,27 +55,27 @@ const criticalServer = {
 } as const;
 
 const optionalAttributionProperties = {
-	first_touch_source: { type: "string" },
-	first_touch_medium: { type: "string" },
-	first_touch_campaign: { type: "string" },
-	first_touch_content: { type: "string" },
-	first_touch_term: { type: "string" },
-	first_touch_gclid: { type: "string" },
-	first_touch_fbclid: { type: "string" },
-	session_touch_source: { type: "string" },
-	session_touch_medium: { type: "string" },
-	session_touch_campaign: { type: "string" },
-	session_touch_content: { type: "string" },
-	session_touch_term: { type: "string" },
-	session_touch_gclid: { type: "string" },
-	session_touch_fbclid: { type: "string" },
-	last_touch_source: { type: "string" },
-	last_touch_medium: { type: "string" },
-	last_touch_campaign: { type: "string" },
-	last_touch_content: { type: "string" },
-	last_touch_term: { type: "string" },
-	last_touch_gclid: { type: "string" },
-	last_touch_fbclid: { type: "string" },
+	first_touch_source: { type: "string", format: "attribution" },
+	first_touch_medium: { type: "string", format: "attribution" },
+	first_touch_campaign: { type: "string", format: "attribution" },
+	first_touch_content: { type: "string", format: "attribution" },
+	first_touch_term: { type: "string", format: "attribution" },
+	first_touch_gclid: { type: "string", format: "identifier" },
+	first_touch_fbclid: { type: "string", format: "identifier" },
+	session_touch_source: { type: "string", format: "attribution" },
+	session_touch_medium: { type: "string", format: "attribution" },
+	session_touch_campaign: { type: "string", format: "attribution" },
+	session_touch_content: { type: "string", format: "attribution" },
+	session_touch_term: { type: "string", format: "attribution" },
+	session_touch_gclid: { type: "string", format: "identifier" },
+	session_touch_fbclid: { type: "string", format: "identifier" },
+	last_touch_source: { type: "string", format: "attribution" },
+	last_touch_medium: { type: "string", format: "attribution" },
+	last_touch_campaign: { type: "string", format: "attribution" },
+	last_touch_content: { type: "string", format: "attribution" },
+	last_touch_term: { type: "string", format: "attribution" },
+	last_touch_gclid: { type: "string", format: "identifier" },
+	last_touch_fbclid: { type: "string", format: "identifier" },
 } as const satisfies Record<string, EventPropertyRule>;
 
 export const EVENT_REGISTRY = {
@@ -78,7 +86,7 @@ export const EVENT_REGISTRY = {
 			"A permitted browser route became the active document or SPA location. Reloads count as another view; synthetic, preview, internal, and known bot traffic is excluded before decision queries.",
 		properties: {
 			...optionalAttributionProperties,
-			hostname: { type: "string", required: true },
+			hostname: { type: "string", required: true, format: "hostname" },
 			is_session_entry: { type: "boolean", required: true },
 		},
 	},
@@ -88,7 +96,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A bounded summary of foreground engagement for one page view, emitted on route change, hide, or page exit.",
 		properties: {
-			page_view_id: { type: "string", required: true },
+			page_view_id: { type: "string", required: true, format: "identifier" },
 			engaged_ms: { type: "number", required: true },
 			max_scroll_depth: { type: "number", required: true },
 		},
@@ -98,10 +106,10 @@ export const EVENT_REGISTRY = {
 		platforms: ["web"],
 		semantic: "A visitor activated a Cap download call to action.",
 		properties: {
-			source_page: { type: "string", required: true },
-			cta_location: { type: "string", required: true },
-			target: { type: "string" },
-			detected_platform: { type: "string" },
+			source_page: { type: "string", required: true, format: "category" },
+			cta_location: { type: "string", required: true, format: "category" },
+			target: { type: "string", format: "category" },
+			detected_platform: { type: "string", format: "category" },
 			is_intel: { type: "boolean" },
 		},
 	},
@@ -110,13 +118,17 @@ export const EVENT_REGISTRY = {
 		platforms: ["web"],
 		semantic: "A visitor activated a pricing or plan-selection call to action.",
 		properties: {
-			source_page: { type: "string", required: true },
-			cta_location: { type: "string" },
-			plan_name: { type: "string" },
+			source_page: { type: "string", required: true, format: "category" },
+			cta_location: { type: "string", format: "category" },
+			plan_name: { type: "string", format: "category" },
 			authenticated: { type: "boolean" },
 			is_pro: { type: "boolean" },
-			cta_action: { type: "string" },
-			target_billing_period: { type: "string", nullable: true },
+			cta_action: { type: "string", format: "category" },
+			target_billing_period: {
+				type: "string",
+				nullable: true,
+				format: "category",
+			},
 		},
 	},
 	cli_install_command_copied: {
@@ -124,8 +136,12 @@ export const EVENT_REGISTRY = {
 		platforms: ["web"],
 		semantic: "A visitor copied the published CLI installation command.",
 		properties: {
-			source_page: { type: "string", required: true },
-			detected_platform: { type: "string", required: true },
+			source_page: { type: "string", required: true, format: "category" },
+			detected_platform: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
 		},
 	},
 	auth_started: {
@@ -195,8 +211,8 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"The recorder successfully crossed its start boundary and began producing a recording.",
 		properties: {
-			mode: { type: "string", required: true },
-			target_kind: { type: "string", required: true },
+			mode: { type: "string", required: true, format: "category" },
+			target_kind: { type: "string", required: true, format: "category" },
 			has_camera: { type: "boolean", required: true },
 			has_mic: { type: "boolean", required: true },
 			has_system_audio: { type: "boolean", required: true },
@@ -215,12 +231,12 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A started recording reached a terminal success, degraded, or failed state.",
 		properties: {
-			mode: { type: "string", required: true },
-			status: { type: "string", required: true },
+			mode: { type: "string", required: true, format: "category" },
+			status: { type: "string", required: true, format: "category" },
 			duration_secs: { type: "number", required: true },
 			segment_count: { type: "number", required: true },
 			track_failure_count: { type: "number", required: true },
-			error_class: { type: "string" },
+			error_class: { type: "string", format: "category" },
 			video_frames_captured: { type: "number", required: true },
 			video_frames_dropped: { type: "number", required: true },
 			drop_rate_pct: { type: "number", required: true },
@@ -263,7 +279,11 @@ export const EVENT_REGISTRY = {
 			"A recording upload reached a terminal failure after its recovery policy.",
 		properties: {
 			duration: { type: "number", required: true },
-			failure_class: { type: "string", required: true },
+			failure_class: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
 		},
 	},
 	recording_recovery_failed: {
@@ -274,8 +294,12 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A bounded recording recovery attempt reached a terminal failure.",
 		properties: {
-			trigger: { type: "string", required: true },
-			failure_class: { type: "string", required: true },
+			trigger: { type: "string", required: true, format: "category" },
+			failure_class: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
 		},
 	},
 	onboarding_milestone_completed: {
@@ -324,8 +348,8 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["clipboard", "file", "share_link"],
 			},
-			format: { type: "string", required: true },
-			resolution: { type: "string", required: true },
+			format: { type: "string", required: true, format: "category" },
+			resolution: { type: "string", required: true, format: "category" },
 			fps: { type: "number", required: true },
 		},
 	},
@@ -341,8 +365,8 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["clipboard", "file", "share_link"],
 			},
-			format: { type: "string", required: true },
-			resolution: { type: "string", required: true },
+			format: { type: "string", required: true, format: "category" },
+			resolution: { type: "string", required: true, format: "category" },
 			fps: { type: "number", required: true },
 		},
 	},
@@ -359,8 +383,8 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["clipboard", "file", "share_link"],
 			},
-			format: { type: "string", required: true },
-			resolution: { type: "string", required: true },
+			format: { type: "string", required: true, format: "category" },
+			resolution: { type: "string", required: true, format: "category" },
 			fps: { type: "number", required: true },
 			failure_class: {
 				type: "string",
@@ -382,7 +406,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A creator requested a shareable link; this is intent and is not a successfully created share.",
 		properties: {
-			resolution: { type: "string", required: true },
+			resolution: { type: "string", required: true, format: "category" },
 			fps: { type: "number", required: true },
 			has_existing_auth: { type: "boolean", required: true },
 		},
@@ -398,7 +422,7 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["recording", "screenshot"],
 			},
-			recording_mode: { type: "string", nullable: true },
+			recording_mode: { type: "string", nullable: true, format: "category" },
 		},
 	},
 	checkout_started: {
@@ -407,7 +431,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"Stripe returned a usable hosted checkout URL for an authenticated Cap account.",
 		properties: {
-			price_id: { type: "string", required: true },
+			price_id: { type: "string", required: true, format: "identifier" },
 			quantity: { type: "number", required: true },
 			is_onboarding: { type: "boolean" },
 		},
@@ -418,7 +442,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"Stripe returned a usable hosted checkout URL for an anonymous guest checkout.",
 		properties: {
-			price_id: { type: "string", required: true },
+			price_id: { type: "string", required: true, format: "identifier" },
 			quantity: { type: "number", required: true },
 		},
 	},
@@ -429,16 +453,20 @@ export const EVENT_REGISTRY = {
 			"Stripe reports a paid checkout and the associated subscription is active or trialing. Trials without a settled payment are not purchases.",
 		properties: {
 			payment_status: { type: "string", required: true, values: ["paid"] },
-			subscription_status: { type: "string", required: true },
+			subscription_status: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
 			amount_total_minor: { type: "number", nullable: true },
 			amount_subtotal_minor: { type: "number", nullable: true },
 			discount_amount_minor: { type: "number", nullable: true },
-			currency: { type: "string", nullable: true },
+			currency: { type: "string", nullable: true, format: "category" },
 			unit_amount_minor: { type: "number", nullable: true },
-			billing_interval: { type: "string", nullable: true },
+			billing_interval: { type: "string", nullable: true, format: "category" },
 			billing_interval_count: { type: "number", nullable: true },
 			invite_quota: { type: "number", nullable: true },
-			price_id: { type: "string", nullable: true },
+			price_id: { type: "string", nullable: true, format: "identifier" },
 			quantity: { type: "number", nullable: true },
 			is_first_purchase: { type: "boolean", required: true },
 			is_guest_checkout: { type: "boolean", required: true },
@@ -457,11 +485,11 @@ export const EVENT_REGISTRY = {
 				values: ["trialing"],
 			},
 			trial_end_at: { type: "number", nullable: true },
-			price_id: { type: "string", nullable: true },
+			price_id: { type: "string", nullable: true, format: "identifier" },
 			quantity: { type: "number", nullable: true },
-			currency: { type: "string", nullable: true },
+			currency: { type: "string", nullable: true, format: "category" },
 			unit_amount_minor: { type: "number", nullable: true },
-			billing_interval: { type: "string", nullable: true },
+			billing_interval: { type: "string", nullable: true, format: "category" },
 			billing_interval_count: { type: "number", nullable: true },
 			is_guest_checkout: { type: "boolean", required: true },
 			is_onboarding: { type: "boolean", required: true },
@@ -474,7 +502,7 @@ export const EVENT_REGISTRY = {
 			"Stripe reports a paid subscription-cycle invoice. Revenue is recorded in minor units and never mixed across currencies.",
 		properties: {
 			amount_paid_minor: { type: "number", required: true },
-			currency: { type: "string", required: true },
+			currency: { type: "string", required: true, format: "category" },
 			billing_reason: {
 				type: "string",
 				required: true,
@@ -517,10 +545,18 @@ export const EVENT_REGISTRY = {
 					"cancellation_reversed",
 				],
 			},
-			previous_status: { type: "string", nullable: true },
-			new_status: { type: "string", nullable: true },
-			previous_price_id: { type: "string", nullable: true },
-			new_price_id: { type: "string", nullable: true },
+			previous_status: { type: "string", nullable: true, format: "category" },
+			new_status: { type: "string", nullable: true, format: "category" },
+			previous_price_id: {
+				type: "string",
+				nullable: true,
+				format: "identifier",
+			},
+			new_price_id: {
+				type: "string",
+				nullable: true,
+				format: "identifier",
+			},
 			previous_quantity: { type: "number", nullable: true },
 			new_quantity: { type: "number", nullable: true },
 		},
@@ -531,7 +567,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"Stripe reports that a subscription has terminated. This is the churn boundary, distinct from scheduling cancellation.",
 		properties: {
-			status: { type: "string", required: true },
+			status: { type: "string", required: true, format: "category" },
 			ended_at: { type: "number", nullable: true },
 			cancel_at_period_end: { type: "boolean", required: true },
 		},
@@ -543,7 +579,7 @@ export const EVENT_REGISTRY = {
 			"Stripe reports an incremental increase in money refunded against a settled charge. Each event contributes only the delta since the previous charge state.",
 		properties: {
 			amount_refunded_minor: { type: "number", required: true },
-			currency: { type: "string", required: true },
+			currency: { type: "string", required: true, format: "category" },
 			fully_refunded: { type: "boolean", required: true },
 		},
 	},
@@ -554,7 +590,7 @@ export const EVENT_REGISTRY = {
 			"Stripe reports that collection failed for a subscription invoice. Attempt count is provider-authoritative.",
 		properties: {
 			amount_due_minor: { type: "number", required: true },
-			currency: { type: "string", required: true },
+			currency: { type: "string", required: true, format: "category" },
 			attempt_count: { type: "number", required: true },
 		},
 	},
@@ -607,10 +643,10 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["increase", "decrease"],
 			},
-			price_id: { type: "string", required: true },
+			price_id: { type: "string", required: true, format: "identifier" },
 			unit_amount_minor: { type: "number", nullable: true },
-			currency: { type: "string", required: true },
-			billing_interval: { type: "string", nullable: true },
+			currency: { type: "string", required: true, format: "category" },
+			billing_interval: { type: "string", nullable: true, format: "category" },
 		},
 	},
 	loom_import_started: {
@@ -618,7 +654,9 @@ export const EVENT_REGISTRY = {
 		platforms: ["server"],
 		semantic:
 			"A claimed Loom import entered the durable media import workflow.",
-		properties: { import_mode: { type: "string", required: true } },
+		properties: {
+			import_mode: { type: "string", required: true, format: "category" },
+		},
 	},
 	loom_import_completed: {
 		...criticalServer,
@@ -626,7 +664,7 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A Loom import completed with its media and metadata committed to Cap storage.",
 		properties: {
-			import_mode: { type: "string", required: true },
+			import_mode: { type: "string", required: true, format: "category" },
 			duration_ms: { type: "number", required: true },
 		},
 	},
@@ -636,8 +674,12 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A Loom import reached a terminal failure after workflow retries.",
 		properties: {
-			import_mode: { type: "string", required: true },
-			failure_class: { type: "string", required: true },
+			import_mode: { type: "string", required: true, format: "category" },
+			failure_class: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
 		},
 	},
 	first_view_received: {
@@ -739,15 +781,15 @@ export const EVENT_REGISTRY = {
 					"reset",
 				],
 			},
-			source_format: { type: "string" },
-			target_format: { type: "string" },
-			operation: { type: "string" },
-			mime_category: { type: "string" },
-			input_size_bucket: { type: "string" },
-			output_size_bucket: { type: "string" },
+			source_format: { type: "string", format: "category" },
+			target_format: { type: "string", format: "category" },
+			operation: { type: "string", format: "category" },
+			mime_category: { type: "string", format: "category" },
+			input_size_bucket: { type: "string", format: "category" },
+			output_size_bucket: { type: "string", format: "category" },
 			duration_ms: { type: "number" },
 			speed_factor: { type: "number" },
-			failure_class: { type: "string" },
+			failure_class: { type: "string", format: "category" },
 		},
 	},
 	experiment_exposed: {
@@ -756,9 +798,17 @@ export const EVENT_REGISTRY = {
 		semantic:
 			"A stable experiment assignment was rendered to an actor; conversions never infer exposure.",
 		properties: {
-			experiment_id: { type: "string", required: true },
-			variant: { type: "string", required: true },
-			assignment_version: { type: "string", required: true },
+			experiment_id: {
+				type: "string",
+				required: true,
+				format: "identifier",
+			},
+			variant: { type: "string", required: true, format: "identifier" },
+			assignment_version: {
+				type: "string",
+				required: true,
+				format: "identifier",
+			},
 		},
 	},
 } as const satisfies Record<string, EventDefinition>;

@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { normalizeAnalyticsIdentifier } from "@cap/analytics";
 
 export const PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE =
 	"cap_analytics_browser_token";
@@ -13,7 +14,11 @@ export function createProductAnalyticsBrowserToken(
 	anonymousId = createProductAnalyticsAnonymousId(),
 	now = Date.now(),
 ) {
-	const payload = `v1.${Math.floor(now / 1000)}.${anonymousId}`;
+	const normalizedAnonymousId = normalizeAnalyticsIdentifier(anonymousId);
+	if (!normalizedAnonymousId) {
+		throw new Error("Analytics anonymous ID is invalid");
+	}
+	const payload = `v1.${Math.floor(now / 1000)}.${normalizedAnonymousId}`;
 	return `${payload}.${sign(payload, secret)}`;
 }
 
@@ -27,8 +32,8 @@ export function readProductAnalyticsBrowserTokenClaims(
 	if (parts.length !== 4 || parts[0] !== "v1") return undefined;
 	const issuedAt = Number(parts[1]);
 	if (!Number.isSafeInteger(issuedAt)) return undefined;
-	const anonymousId = parts[2];
-	if (!anonymousId || anonymousId.length > 128) return undefined;
+	const anonymousId = normalizeAnalyticsIdentifier(parts[2]);
+	if (!anonymousId) return undefined;
 	const nowSeconds = Math.floor(now / 1000);
 	if (
 		issuedAt > nowSeconds + 60 ||

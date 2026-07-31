@@ -3,6 +3,7 @@ import {
 	type ClientProductEventName,
 	isCoreEventName,
 	isServerOnlyEventName,
+	normalizeAnalyticsIdentifier,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
 	PRODUCT_ANALYTICS_LIMITS,
@@ -40,6 +41,7 @@ export interface ProductAnalyticsDeliverySnapshot {
 	dropped: number;
 	queue_overflow: number;
 	oversize: number;
+	contract_rejected: number;
 }
 
 export class ProductAnalyticsQueue {
@@ -53,6 +55,7 @@ export class ProductAnalyticsQueue {
 		dropped: 0,
 		queue_overflow: 0,
 		oversize: 0,
+		contract_rejected: 0,
 	};
 
 	constructor(
@@ -109,6 +112,11 @@ export class ProductAnalyticsQueue {
 		return { ...this.delivery };
 	}
 
+	recordContractRejection() {
+		this.delivery.dropped += 1;
+		this.delivery.contract_rejected += 1;
+	}
+
 	private async send(batch: QueuedEvent[], mode: TransportMode) {
 		let result: TransportResult;
 		this.delivery.attempted += batch.length;
@@ -116,7 +124,10 @@ export class ProductAnalyticsQueue {
 			result = await this.transport(
 				batch.map(({ event }) => event),
 				mode,
-				this.deliverySnapshot,
+				{
+					...this.deliverySnapshot,
+					accepted: this.delivery.accepted + batch.length,
+				},
 			);
 		} catch {
 			result = "retry";
@@ -218,11 +229,11 @@ function enqueueBrowserProductEvent<Name extends ClientProductEventName>(
 	pathname = window.location.pathname,
 ) {
 	try {
-		if (
-			typeof window === "undefined" ||
-			!isCoreEventName(eventName) ||
-			isServerOnlyEventName(eventName)
-		) {
+		if (typeof window === "undefined") {
+			return undefined;
+		}
+		if (!isCoreEventName(eventName) || isServerOnlyEventName(eventName)) {
+			getBrowserQueue().recordContractRejection();
 			return undefined;
 		}
 
@@ -230,7 +241,10 @@ function enqueueBrowserProductEvent<Name extends ClientProductEventName>(
 			eventName,
 			args[0] as Record<string, unknown> | undefined,
 		);
-		if (normalizedProperties === null) return undefined;
+		if (normalizedProperties === null) {
+			getBrowserQueue().recordContractRejection();
+			return undefined;
+		}
 		const eventId = createProductEventId();
 		getBrowserQueue().enqueue({
 			eventId,
@@ -307,7 +321,7 @@ export function getOrCreateStorageId(
 	createId: () => string,
 ) {
 	try {
-		const existing = storage?.getItem(key);
+		const existing = normalizeAnalyticsIdentifier(storage?.getItem(key));
 		if (existing) return existing;
 	} catch {
 		return createId();
@@ -325,12 +339,13 @@ export function getOrCreateBrowserAnonymousId(
 	cookieId: string | undefined,
 	createId: () => string,
 ) {
-	if (!cookieId)
+	const normalizedCookieId = normalizeAnalyticsIdentifier(cookieId);
+	if (!normalizedCookieId)
 		return getOrCreateStorageId(storage, ANONYMOUS_ID_KEY, createId);
 	try {
-		storage?.setItem(ANONYMOUS_ID_KEY, cookieId);
+		storage?.setItem(ANONYMOUS_ID_KEY, normalizedCookieId);
 	} catch {}
-	return cookieId;
+	return normalizedCookieId;
 }
 
 export function createProductEventId(

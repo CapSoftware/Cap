@@ -1,4 +1,7 @@
-import { PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE } from "@cap/analytics";
+import {
+	normalizeAnalyticsIdentifier,
+	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
+} from "@cap/analytics";
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -38,13 +41,13 @@ const nextWithAnalyticsToken = (
 		PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE,
 	)?.value;
 	const claims = readProductAnalyticsBrowserTokenClaims(token, secret);
-	const existingAnonymousId = request.cookies.get(
-		PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
-	)?.value;
+	const existingAnonymousId = normalizeAnalyticsIdentifier(
+		request.cookies.get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
+	);
 	const anonymousId =
-		existingAnonymousId && existingAnonymousId.length <= 128
-			? existingAnonymousId
-			: (claims?.anonymousId ?? createProductAnalyticsAnonymousId());
+		existingAnonymousId ??
+		claims?.anonymousId ??
+		createProductAnalyticsAnonymousId();
 	if (!claims || claims.anonymousId !== anonymousId) {
 		response.cookies.set(
 			PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE,
@@ -58,7 +61,10 @@ const nextWithAnalyticsToken = (
 			},
 		);
 	}
-	if (existingAnonymousId !== anonymousId) {
+	if (
+		request.cookies.get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value !==
+		anonymousId
+	) {
 		response.cookies.set(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE, anonymousId, {
 			maxAge: 365 * 24 * 60 * 60,
 			path: "/",

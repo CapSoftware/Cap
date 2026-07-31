@@ -91,6 +91,36 @@ describe("server product analytics", () => {
 		).toEqual([]);
 	});
 
+	it("rejects personal data and raw errors in declared server fields", () => {
+		const unsafeCreate = createServerProductEventRows as unknown as (
+			event: Record<string, unknown>,
+		) => unknown[];
+		expect(
+			unsafeCreate({
+				eventId: "stripe:evt_123:purchase_completed",
+				eventName: "purchase_completed",
+				platform: "server",
+				userId: "user-1",
+				properties: {
+					...purchaseProperties,
+					subscription_status: "alice@example.com",
+				},
+			}),
+		).toEqual([]);
+		expect(
+			unsafeCreate({
+				eventId: "loom_import:video-1:failed",
+				eventName: "loom_import_failed",
+				platform: "server",
+				userId: "user-1",
+				properties: {
+					import_mode: "video",
+					failure_class: "Failed reading /Users/alice/private.mp4",
+				},
+			}),
+		).toEqual([]);
+	});
+
 	it("builds reconciliation-compatible authoritative business facts", () => {
 		const facts = [
 			userSignedUpEvent({
