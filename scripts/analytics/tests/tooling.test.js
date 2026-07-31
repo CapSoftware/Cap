@@ -54,12 +54,14 @@ test("cloud deploy checks before deploying and waits for completion", () => {
 	]);
 });
 
-test("local setup builds, tests and writes its deterministic environment", () => {
+test("local setup builds, verifies copied endpoints and writes its deterministic environment", () => {
 	const commands = operationPlan("local")
 		.filter((step) => step.command)
 		.map((step) => step.args.join(" "));
 	assert.ok(commands.some((command) => command.endsWith("--local build")));
-	assert.ok(commands.some((command) => command.endsWith("--local test run")));
+	assert.ok(
+		operationPlan("local").some((step) => step.type === "verify-local"),
+	);
 	assert.ok(
 		operationPlan("local").some((step) => step.type === "write-local-env"),
 	);

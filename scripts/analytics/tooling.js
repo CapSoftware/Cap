@@ -10,6 +10,7 @@ import { loadTinybirdProject } from "./datafiles.js";
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(MODULE_DIR, "..", "..");
 const TINYBIRD_PROJECT_DIR = path.join(MODULE_DIR, "tinybird");
+const LOCAL_VERIFY_SCRIPT = path.join(MODULE_DIR, "verify-local.js");
 const LOCAL_ENV_FILE = path.join(PROJECT_ROOT, ".env.analytics.local");
 const COMPOSE_FILE = path.join(
 	PROJECT_ROOT,
@@ -150,7 +151,7 @@ const operationPlan = (operation) => {
 			...PRODUCT_COPY_PIPES.map((name) =>
 				localCliStep("--local", "copy", "run", name, "--wait"),
 			),
-			localCliStep("--local", "test", "run"),
+			{ type: "verify-local" },
 			{ type: "write-local-env" },
 		],
 		"local-test": [
@@ -171,7 +172,7 @@ const operationPlan = (operation) => {
 			...PRODUCT_COPY_PIPES.map((name) =>
 				localCliStep("--local", "copy", "run", name, "--wait"),
 			),
-			localCliStep("--local", "test", "run"),
+			{ type: "verify-local" },
 		],
 		"local-tokens": [{ type: "write-local-env" }],
 		"local-stop": [
@@ -588,6 +589,12 @@ const runAnalyticsCommand = async (operation) => {
 			console.log(
 				`Wrote local analytics environment to ${writeLocalEnvironmentFile()}`,
 			);
+			continue;
+		}
+		if (step.type === "verify-local") {
+			runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
+				env: localEnvironment(),
+			});
 			continue;
 		}
 		assertSafeStep(step);
