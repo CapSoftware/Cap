@@ -126,9 +126,7 @@ test("local fixtures use bounded current dates", () => {
 	assert.match(fixture, /2026-07-31/);
 	assert.ok(rows.every((row) => row.event_id.endsWith("_20260731")));
 	assert.ok(rows.every((row) => /^[0-9a-f]{32}$/.test(row.payload_hash)));
-	const engagement = rows.find(
-		(row) => row.event_name === "page_engagement",
-	);
+	const engagement = rows.find((row) => row.event_name === "page_engagement");
 	assert.match(JSON.parse(engagement.properties).page_view_id, /_20260731$/);
 });
 

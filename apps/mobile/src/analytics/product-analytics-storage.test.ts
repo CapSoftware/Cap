@@ -39,7 +39,8 @@ const createHarness = () => {
 		}),
 		getInfoAsync: vi.fn(async (uri: string) => ({ exists: files.has(uri) })),
 		moveAsync: vi.fn(async ({ from, to }: { from: string; to: string }) => {
-			if (failFinalMove && from.endsWith(".next")) throw new Error("interrupted");
+			if (failFinalMove && from.endsWith(".next"))
+				throw new Error("interrupted");
 			const contents = files.get(from);
 			if (contents === undefined) throw new Error("missing");
 			files.set(to, contents);
