@@ -50,11 +50,13 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
+import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import {
+	isIframelyCrawlerUserAgent,
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
@@ -226,6 +228,9 @@ export async function generateMetadata(
 	);
 	const canRenderSocialPreview =
 		isAllowedReferrer || isSocialCrawlerUserAgent(requestUserAgent);
+	const shouldAdvertiseIframelyPlayer =
+		isIframelyCrawlerUserAgent(requestUserAgent) &&
+		(await getPublicShareVideo(videoId).catch(() => null)) !== null;
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
@@ -245,6 +250,7 @@ export async function generateMetadata(
 							name: video.name,
 							sourceType: video.source.type,
 							webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
 						}),
 						robots: canRenderSocialPreview
 							? "index, follow"
