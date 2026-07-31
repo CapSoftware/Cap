@@ -21,6 +21,71 @@ export interface ProductAnalyticsActor {
 	organizationId: string;
 }
 
+type VercelEnvironment = "production" | "preview" | "development";
+
+interface ProductAnalyticsServiceOptions {
+	host?: string;
+	token?: string;
+	required: boolean;
+	sendRows?: typeof sendProductAnalyticsRows;
+}
+
+export function isOfficialProductAnalyticsDeployment({
+	isCap,
+	vercelEnvironment,
+}: {
+	isCap?: string;
+	vercelEnvironment?: VercelEnvironment;
+}) {
+	return (
+		isCap === "true" &&
+		(vercelEnvironment === "production" || vercelEnvironment === "preview")
+	);
+}
+
+export function createProductAnalyticsService({
+	host: rawHost,
+	token: rawToken,
+	required,
+	sendRows = sendProductAnalyticsRows,
+}: ProductAnalyticsServiceOptions) {
+	const host = rawHost?.trim() || undefined;
+	const token = rawToken?.trim() || undefined;
+	const enabled = Boolean(host && token);
+
+	const append = (rows: readonly ProductEventRow[], wait = false) => {
+		if (rows.length === 0) return Effect.void;
+		if (!enabled || !host || !token) {
+			return required
+				? Effect.fail(
+						new ProductAnalyticsError({
+							cause: "Product analytics Tinybird configuration is incomplete",
+							retryable: true,
+							status: 503,
+						}),
+					)
+				: Effect.void;
+		}
+
+		return Effect.tryPromise({
+			try: () =>
+				sendRows({
+					host,
+					token,
+					rows,
+					wait,
+					maxAttempts: 1,
+				}),
+			catch: (cause) =>
+				cause instanceof ProductAnalyticsError
+					? cause
+					: new ProductAnalyticsError({ cause, retryable: false }),
+		});
+	};
+
+	return { enabled, append } as const;
+}
+
 export function hasAnalyticsSessionCookie(cookie?: string) {
 	return /(?:^|;\s*)next-auth\.session-token(?:\.\d+)?=/.test(cookie ?? "");
 }
@@ -82,32 +147,14 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 	{
 		effect: Effect.sync(() => {
 			const env = serverEnv();
-			const host = env.PRODUCT_ANALYTICS_TINYBIRD_HOST;
-			const token = env.PRODUCT_ANALYTICS_TINYBIRD_TOKEN;
-			const enabled = Boolean(host && token);
-
-			const append = (rows: readonly ProductEventRow[], wait = false) => {
-				if (!enabled || !host || !token || rows.length === 0) {
-					return Effect.void;
-				}
-
-				return Effect.tryPromise({
-					try: () =>
-						sendProductAnalyticsRows({
-							host,
-							token,
-							rows,
-							wait,
-							maxAttempts: 1,
-						}),
-					catch: (cause) =>
-						cause instanceof ProductAnalyticsError
-							? cause
-							: new ProductAnalyticsError({ cause, retryable: false }),
-				});
-			};
-
-			return { enabled, append } as const;
+			return createProductAnalyticsService({
+				host: env.PRODUCT_ANALYTICS_TINYBIRD_HOST,
+				token: env.PRODUCT_ANALYTICS_TINYBIRD_TOKEN,
+				required: isOfficialProductAnalyticsDeployment({
+					isCap: process.env.NEXT_PUBLIC_IS_CAP,
+					vercelEnvironment: env.VERCEL_ENV,
+				}),
+			});
 		}),
 	},
 ) {}

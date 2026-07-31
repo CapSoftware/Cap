@@ -22,6 +22,10 @@ const event: ProductEventInput = {
 	anonymousId: "anonymous-1",
 	sessionId: "session-1",
 	platform: "web",
+	properties: {
+		hostname: "cap.so",
+		is_session_entry: true,
+	},
 };
 const now = Date.parse("2026-07-12T12:00:01.000Z");
 

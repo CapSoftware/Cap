@@ -153,6 +153,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 					(datasource) => tinybird.deleteData(datasource, deleteCondition),
 					{ concurrency: 1 },
 				);
+				yield* tinybird.eraseProductAnalytics({ organizationId: id });
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {

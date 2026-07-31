@@ -6,10 +6,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { sql } from "drizzle-orm";
 import { cookies } from "next/headers";
-import {
-	captureServerProductEvent,
-	scheduleAfterResponse,
-} from "@/lib/analytics/server";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { normalizeServerIdentifier } from "@/lib/analytics/server-event";
 
 const SIGNUP_TRACKING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -78,31 +75,28 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 			const analyticsAnonymousId = normalizeServerIdentifier(
 				(await cookies()).get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
 			);
-			scheduleAfterResponse(async () => {
-				try {
-					const captured = await captureServerProductEvent({
-						eventId: `signup:${currentUser.id}`,
-						eventName: "user_signed_up",
-						occurredAt: new Date(createdAtTime).toISOString(),
-						anonymousId: analyticsAnonymousId,
-						platform: "web",
-						userId: currentUser.id,
-						organizationId: currentUser.activeOrganizationId,
-					});
-					if (!captured) return;
+			try {
+				await queueServerProductEvent({
+					eventId: `signup:${currentUser.id}`,
+					eventName: "user_signed_up",
+					occurredAt: new Date(createdAtTime).toISOString(),
+					anonymousId: analyticsAnonymousId,
+					platform: "web",
+					userId: currentUser.id,
+					organizationId: currentUser.activeOrganizationId,
+				});
 
-					await db()
-						.update(users)
-						.set({
-							preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.product_user_signed_up', true)`,
-						})
-						.where(
-							sql`(${users.id} = ${currentUser.id}) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.product_user_signed_up') = 0`,
-						);
-				} catch (error) {
-					console.error("Failed to capture user_signed_up", error);
-				}
-			});
+				await db()
+					.update(users)
+					.set({
+						preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.product_user_signed_up', true)`,
+					})
+					.where(
+						sql`(${users.id} = ${currentUser.id}) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.product_user_signed_up') = 0`,
+					);
+			} catch (error) {
+				console.error("Failed to enqueue user_signed_up", error);
+			}
 		}
 
 		if (alreadyTracked) {

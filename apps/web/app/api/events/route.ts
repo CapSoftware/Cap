@@ -17,17 +17,21 @@ import {
 	HttpServerRequest,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
+import UAParser from "ua-parser-js";
 import {
 	readProductAnalyticsBrowserToken,
 	readProductAnalyticsBrowserTokenClaims,
 } from "@/lib/analytics/browser-token";
 import {
+	classifyAnalyticsTraffic,
 	getProductAnalyticsRateLimitKey,
 	hasExpectedBrowserAnalyticsMetadata,
 	isAllowedAnonymousBrowserProductEvent,
 	isAuthenticatedAnalyticsRequestCandidate,
+	normalizeAnalyticsHostname,
 	normalizeGeoHeader,
 	normalizeProductEventBatch,
+	normalizeSyntheticRunId,
 	ProductAnalyticsRateLimiter,
 } from "@/lib/analytics/request";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
@@ -40,6 +44,12 @@ class RateLimited extends Schema.TaggedError<RateLimited>()(
 	HttpApiSchema.annotations({ status: 429 }),
 ) {}
 
+const DeliveryCount = Schema.Number.pipe(
+	Schema.int(),
+	Schema.greaterThanOrEqualTo(0),
+	Schema.lessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+);
+
 class Api extends HttpApi.make("ProductAnalyticsApi").add(
 	HttpApiGroup.make("events").add(
 		HttpApiEndpoint.post("capture", "/api/events")
@@ -48,6 +58,16 @@ class Api extends HttpApi.make("ProductAnalyticsApi").add(
 					events: Schema.Array(Schema.Unknown).pipe(
 						Schema.minItems(1),
 						Schema.maxItems(PRODUCT_ANALYTICS_LIMITS.batchSize),
+					),
+					delivery: Schema.optional(
+						Schema.Struct({
+							attempted: DeliveryCount,
+							accepted: DeliveryCount,
+							retried: DeliveryCount,
+							dropped: DeliveryCount,
+							queue_overflow: DeliveryCount,
+							oversize: DeliveryCount,
+						}),
 					),
 				}),
 			)
@@ -68,6 +88,8 @@ const RequestHeaders = Schema.Struct({
 	"x-vercel-ip-country-region": Schema.optional(Schema.String),
 	"x-vercel-ip-city": Schema.optional(Schema.String),
 	"x-vercel-forwarded-for": Schema.optional(Schema.String),
+	"user-agent": Schema.optional(Schema.String),
+	"x-cap-analytics-test-run": Schema.optional(Schema.String),
 });
 
 const fallbackRateLimiter = new ProductAnalyticsRateLimiter();
@@ -77,6 +99,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 		HttpApiBuilder.group(Api, "events", (handlers) =>
 			Effect.gen(function* () {
 				const analytics = yield* ProductAnalytics;
+				const environment = serverEnv();
 
 				return handlers.handle("capture", ({ payload }) =>
 					Effect.gen(function* () {
@@ -96,7 +119,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							) &&
 							readProductAnalyticsBrowserTokenClaims(
 								readProductAnalyticsBrowserToken(headers.cookie),
-								serverEnv().NEXTAUTH_SECRET,
+								environment.NEXTAUTH_SECRET,
 							);
 						if (
 							!browserClaims &&
@@ -105,22 +128,27 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							return yield* Effect.fail(new HttpApiError.BadRequest());
 						}
 
-						if (
-							fallbackRateLimiter.isRateLimited(
-								getProductAnalyticsRateLimitKey({
-									trustedVercelProxy: process.env.VERCEL === "1",
-									xVercelForwardedFor: headers["x-vercel-forwarded-for"],
-								}),
-							)
-						) {
+						const rateLimitKey = getProductAnalyticsRateLimitKey({
+							trustedVercelProxy: process.env.VERCEL === "1",
+							xVercelForwardedFor: headers["x-vercel-forwarded-for"],
+						});
+						if (fallbackRateLimiter.isRateLimited(rateLimitKey)) {
 							return yield* Effect.fail(new RateLimited());
 						}
 
-						if (
-							yield* Effect.promise(() =>
+						const firewallLimited = yield* Effect.promise(() =>
+							Promise.all([
 								isRateLimited(RATE_LIMIT_IDS.PRODUCT_ANALYTICS_EVENTS),
-							)
-						) {
+								...(browserClaims
+									? [
+											isRateLimited(RATE_LIMIT_IDS.PRODUCT_ANALYTICS_EVENTS, {
+												key: `browser:${browserClaims.anonymousId}`,
+											}),
+										]
+									: []),
+							]),
+						);
+						if (firewallLimited.some(Boolean)) {
 							return yield* Effect.fail(new RateLimited());
 						}
 
@@ -142,6 +170,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						) {
 							return yield* Effect.fail(new HttpApiError.BadRequest());
 						}
+						const syntheticRunId = normalizeSyntheticRunId(
+							headers["x-cap-analytics-test-run"],
+							environment.VERCEL_ENV,
+						);
+						const userAgent = headers["user-agent"] ?? "";
+						const parsedUserAgent = new UAParser(userAgent);
 						const rows = createProductEventRows(events, {
 							receivedAt: new Date().toISOString(),
 							source: "client",
@@ -150,6 +184,19 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							country: normalizeGeoHeader(headers["x-vercel-ip-country"]),
 							region: normalizeGeoHeader(headers["x-vercel-ip-country-region"]),
 							city: normalizeGeoHeader(headers["x-vercel-ip-city"], true),
+							hostname: normalizeAnalyticsHostname(headers.origin),
+							browser: parsedUserAgent.getBrowser().name ?? "unknown",
+							device: parsedUserAgent.getDevice().type ?? "desktop",
+							os: parsedUserAgent.getOS().name ?? "unknown",
+							trafficClass: classifyAnalyticsTraffic({
+								userAgent,
+								vercelEnvironment: environment.VERCEL_ENV,
+								syntheticRunId,
+								rateLimitKey,
+								internalIpHashes:
+									process.env.PRODUCT_ANALYTICS_INTERNAL_IP_HASHES,
+							}),
+							syntheticRunId,
 						});
 
 						yield* analytics
@@ -166,6 +213,13 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									),
 								),
 							);
+						if (payload.delivery) {
+							yield* Effect.logInfo("Product analytics client delivery", {
+								platform: rows[0]?.platform ?? "unknown",
+								appVersion: rows[0]?.app_version ?? "",
+								...payload.delivery,
+							});
+						}
 
 						return { accepted: rows.length };
 					}),

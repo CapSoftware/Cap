@@ -26,7 +26,7 @@ vi.mock("@cap/utils", () => ({
 
 vi.mock("@/lib/analytics/server", () => ({
 	readAnalyticsAnonymousId: checkoutMocks.readAnonymousId,
-	scheduleServerProductEvent: checkoutMocks.product,
+	queueServerProductEvent: checkoutMocks.product,
 }));
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>

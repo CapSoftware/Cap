@@ -11,7 +11,7 @@ import { stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { scheduleServerProductEvent } from "@/lib/analytics/server";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { calculateProSeats } from "@/utils/organization";
 
 async function getOwnerSubscription(
@@ -210,7 +210,7 @@ export async function updateSeatQuantity(
 		typeof updatedSubscription.latest_invoice === "string"
 			? updatedSubscription.latest_invoice
 			: updatedSubscription.latest_invoice?.id;
-	scheduleServerProductEvent({
+	await queueServerProductEvent({
 		eventId: `seat_quantity:${subscription.id}:${latestInvoice ?? updatedSubscription.current_period_start}:${newQuantity}`,
 		eventName: "seat_quantity_changed",
 		platform: "web",

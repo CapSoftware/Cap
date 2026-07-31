@@ -1,22 +1,28 @@
 import {
-	type CoreEventName,
 	createProductEventRows,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
 	type ProductEventPlatform,
+	type ProductEventPropertyField,
+	type ServerProductEventName,
 } from "@cap/analytics";
 
-export interface ServerProductEvent {
+type ServerProductEventBase<Name extends ServerProductEventName> = {
 	eventId: string;
-	eventName: CoreEventName;
+	eventName: Name;
 	occurredAt?: string;
 	anonymousId?: string;
 	platform: ProductEventPlatform;
 	userId?: string;
 	organizationId?: string;
 	pathname?: string;
-	properties?: Record<string, unknown>;
-}
+};
+
+export type ServerProductEvent<
+	Name extends ServerProductEventName = ServerProductEventName,
+> = Name extends ServerProductEventName
+	? ServerProductEventBase<Name> & ProductEventPropertyField<Name>
+	: never;
 
 export function createServerProductEventRows(event: ServerProductEvent) {
 	const anonymousId = normalizeServerIdentifier(
@@ -26,7 +32,11 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 	if (!anonymousId || !eventId) return [];
 
 	const receivedAt = new Date().toISOString();
-	const properties = normalizeProductEventProperties(event.properties);
+	const properties = normalizeProductEventProperties(
+		event.eventName,
+		event.properties as Record<string, unknown> | undefined,
+	);
+	if (properties === null) return [];
 	return createProductEventRows(
 		[
 			{

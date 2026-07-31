@@ -20,6 +20,7 @@ import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -271,6 +272,18 @@ app.get(
 					fps,
 					...(metadata ? { metadata } : {}),
 				});
+
+			await queueServerProductEvent({
+				eventId: `share_link_created:${idToUse}`,
+				eventName: "share_link_created",
+				platform: "desktop",
+				userId: user.id,
+				organizationId: videoOrgId,
+				properties: {
+					asset_type: isScreenshot ? "screenshot" : "recording",
+					recording_mode: recordingMode ?? null,
+				},
+			});
 
 			const clientSupportsUploadProgress = isFromDesktopSemver(
 				c.req,

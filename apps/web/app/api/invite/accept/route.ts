@@ -10,8 +10,8 @@ import {
 import { and, eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import {
+	queueServerProductEvent,
 	readAnalyticsAnonymousId,
-	scheduleServerProductEvent,
 } from "@/lib/analytics/server";
 import { normalizeAssignableOrganizationRole } from "@/lib/permissions/roles";
 import {
@@ -165,8 +165,12 @@ export async function POST(request: NextRequest) {
 				.where(eq(organizationInvites.id, inviteId));
 		});
 
-		if (joinedMemberId && joinedOrganizationId) {
-			scheduleServerProductEvent({
+		if (
+			joinedMemberId &&
+			joinedOrganizationId &&
+			(joinedRole === "admin" || joinedRole === "member")
+		) {
+			await queueServerProductEvent({
 				eventId: `organization_member:${joinedMemberId}:joined`,
 				eventName: "organization_member_joined",
 				anonymousId: readAnalyticsAnonymousId(request),

@@ -7,12 +7,15 @@ import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { scheduleServerProductEvent } from "@/lib/analytics/server";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",
 	"checkout.session.async_payment_succeeded",
+	"charge.refunded",
+	"invoice.paid",
+	"invoice.payment_failed",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
 ]);
@@ -27,13 +30,22 @@ function isSettledSubscriptionPurchase(
 	subscription: Stripe.Subscription,
 ) {
 	return (
-		(session.payment_status === "paid" ||
-			session.payment_status === "no_payment_required") &&
+		session.payment_status === "paid" &&
 		(subscription.status === "active" || subscription.status === "trialing")
 	);
 }
 
-function scheduleSubscriptionPurchaseEvents({
+function isStartedSubscriptionTrial(
+	session: Stripe.Checkout.Session,
+	subscription: Stripe.Subscription,
+) {
+	return (
+		session.payment_status === "no_payment_required" &&
+		subscription.status === "trialing"
+	);
+}
+
+async function queueSubscriptionPurchaseEvents({
 	eventId,
 	occurredAt,
 	session,
@@ -61,8 +73,33 @@ function scheduleSubscriptionPurchaseEvents({
 					: "server";
 	const anonymousId = session.metadata?.analyticsAnonymousId;
 	const price = subscription.items.data[0]?.price;
+	if (isStartedSubscriptionTrial(session, subscription)) {
+		await queueServerProductEvent({
+			eventId: `stripe:${eventId}:trial_started`,
+			eventName: "trial_started",
+			occurredAt,
+			anonymousId,
+			platform,
+			userId: user?.id,
+			organizationId: user?.activeOrganizationId,
+			properties: {
+				subscription_status: "trialing",
+				trial_end_at: subscription.trial_end ?? null,
+				price_id: price?.id ?? null,
+				quantity: inviteQuota,
+				currency: price?.currency ?? null,
+				unit_amount_minor: price?.unit_amount ?? null,
+				billing_interval: price?.recurring?.interval ?? null,
+				billing_interval_count: price?.recurring?.interval_count ?? null,
+				is_guest_checkout: isGuestCheckout,
+				is_onboarding: session.metadata?.isOnBoarding === "true",
+			},
+		});
+		return;
+	}
+
 	const revenueProperties = {
-		payment_status: session.payment_status,
+		payment_status: "paid" as const,
 		subscription_status: subscription.status,
 		amount_total_minor: session.amount_total,
 		amount_subtotal_minor: session.amount_subtotal,
@@ -73,7 +110,7 @@ function scheduleSubscriptionPurchaseEvents({
 		billing_interval_count: price?.recurring?.interval_count,
 	};
 
-	scheduleServerProductEvent({
+	await queueServerProductEvent({
 		eventId: `stripe:${eventId}:purchase_completed`,
 		eventName: "purchase_completed",
 		occurredAt,
@@ -257,6 +294,21 @@ async function findUserWithRetry(
 	return null;
 }
 
+async function findAnalyticsUserForCustomer(
+	customerId: string | Stripe.Customer | Stripe.DeletedCustomer | null,
+) {
+	if (!customerId) return null;
+	const customer =
+		typeof customerId === "string"
+			? await stripe().customers.retrieve(customerId)
+			: customerId;
+	if (customer.deleted) return null;
+	const userId = customer.metadata.userId
+		? User.UserId.make(customer.metadata.userId)
+		: undefined;
+	return findUserWithRetry(customer.email ?? "", userId, 1);
+}
+
 export const POST = async (req: Request) => {
 	console.log("Webhook received");
 	const buf = await req.text();
@@ -281,6 +333,69 @@ export const POST = async (req: Request) => {
 
 	if (relevantEvents.has(event.type)) {
 		try {
+			if (event.type === "invoice.paid") {
+				const invoice = event.data.object as Stripe.Invoice;
+				if (
+					invoice.subscription &&
+					invoice.billing_reason === "subscription_cycle"
+				) {
+					const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_renewed`,
+						eventName: "subscription_renewed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser?.id,
+						organizationId: dbUser?.activeOrganizationId,
+						properties: {
+							amount_paid_minor: invoice.amount_paid,
+							currency: invoice.currency,
+							billing_reason: "subscription_cycle",
+						},
+					});
+				}
+			}
+
+			if (event.type === "invoice.payment_failed") {
+				const invoice = event.data.object as Stripe.Invoice;
+				if (invoice.subscription) {
+					const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_payment_failed`,
+						eventName: "subscription_payment_failed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser?.id,
+						organizationId: dbUser?.activeOrganizationId,
+						properties: {
+							amount_due_minor: invoice.amount_due,
+							currency: invoice.currency,
+							attempt_count: invoice.attempt_count,
+						},
+					});
+				}
+			}
+
+			if (event.type === "charge.refunded") {
+				const charge = event.data.object as Stripe.Charge;
+				if (charge.invoice) {
+					const dbUser = await findAnalyticsUserForCustomer(charge.customer);
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_refunded`,
+						eventName: "subscription_refunded",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser?.id,
+						organizationId: dbUser?.activeOrganizationId,
+						properties: {
+							amount_refunded_minor: charge.amount_refunded,
+							currency: charge.currency,
+							fully_refunded: charge.refunded,
+						},
+					});
+				}
+			}
+
 			if (event.type === "checkout.session.completed") {
 				console.log("Processing checkout.session.completed event");
 				const session = event.data.object as Stripe.Checkout.Session;
@@ -405,8 +520,11 @@ export const POST = async (req: Request) => {
 
 				console.log("Successfully updated user in database");
 
-				if (isSettledSubscriptionPurchase(session, subscription)) {
-					scheduleSubscriptionPurchaseEvents({
+				if (
+					isSettledSubscriptionPurchase(session, subscription) ||
+					isStartedSubscriptionTrial(session, subscription)
+				) {
+					await queueSubscriptionPurchaseEvents({
 						eventId: event.id,
 						occurredAt: new Date(event.created * 1000).toISOString(),
 						session,
@@ -433,7 +551,10 @@ export const POST = async (req: Request) => {
 					const subscription = await stripe().subscriptions.retrieve(
 						session.subscription,
 					);
-					if (isSettledSubscriptionPurchase(session, subscription)) {
+					if (
+						isSettledSubscriptionPurchase(session, subscription) ||
+						isStartedSubscriptionTrial(session, subscription)
+					) {
 						const inviteQuota = subscription.items.data.reduce(
 							(total, item) => total + (item.quantity || 1),
 							0,
@@ -455,7 +576,7 @@ export const POST = async (req: Request) => {
 							}
 						}
 
-						scheduleSubscriptionPurchaseEvents({
+						await queueSubscriptionPurchaseEvents({
 							eventId: event.id,
 							occurredAt: new Date(event.created * 1000).toISOString(),
 							session,
@@ -472,6 +593,9 @@ export const POST = async (req: Request) => {
 			if (event.type === "customer.subscription.updated") {
 				console.log("Processing customer.subscription.updated event");
 				const subscription = event.data.object as Stripe.Subscription;
+				const previous = event.data.previous_attributes as
+					| Partial<Stripe.Subscription>
+					| undefined;
 				console.log("Subscription data:", {
 					id: subscription.id,
 					status: subscription.status,
@@ -560,6 +684,117 @@ export const POST = async (req: Request) => {
 					})
 					.where(eq(users.id, dbUser.id));
 
+				if (
+					previous?.status === "trialing" &&
+					subscription.status === "active"
+				) {
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:trial_converted`,
+						eventName: "trial_converted",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser.id,
+						organizationId: dbUser.activeOrganizationId,
+						properties: {
+							previous_status: "trialing",
+							new_status: "active",
+						},
+					});
+				}
+
+				if (
+					previous?.cancel_at_period_end !== undefined &&
+					previous.cancel_at_period_end !== subscription.cancel_at_period_end
+				) {
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_changed:cancellation`,
+						eventName: "subscription_changed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser.id,
+						organizationId: dbUser.activeOrganizationId,
+						properties: {
+							change_kind: subscription.cancel_at_period_end
+								? "cancellation_scheduled"
+								: "cancellation_reversed",
+							previous_status: previous.status ?? null,
+							new_status: subscription.status,
+							previous_price_id: null,
+							new_price_id: null,
+							previous_quantity: null,
+							new_quantity: null,
+						},
+					});
+				}
+
+				if (previous?.status && previous.status !== subscription.status) {
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_changed:status`,
+						eventName: "subscription_changed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser.id,
+						organizationId: dbUser.activeOrganizationId,
+						properties: {
+							change_kind: "status",
+							previous_status: previous.status,
+							new_status: subscription.status,
+							previous_price_id: null,
+							new_price_id: null,
+							previous_quantity: null,
+							new_quantity: null,
+						},
+					});
+				}
+
+				const previousItem = previous?.items?.data[0];
+				const currentItem = subscription.items.data[0];
+				if (
+					previousItem &&
+					currentItem &&
+					previousItem.price.id !== currentItem.price.id
+				) {
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_changed:plan`,
+						eventName: "subscription_changed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser.id,
+						organizationId: dbUser.activeOrganizationId,
+						properties: {
+							change_kind: "plan",
+							previous_status: null,
+							new_status: null,
+							previous_price_id: previousItem.price.id,
+							new_price_id: currentItem.price.id,
+							previous_quantity: previousItem.quantity,
+							new_quantity: currentItem.quantity,
+						},
+					});
+				} else if (
+					previousItem &&
+					currentItem &&
+					previousItem.quantity !== currentItem.quantity
+				) {
+					await queueServerProductEvent({
+						eventId: `stripe:${event.id}:subscription_changed:seats`,
+						eventName: "subscription_changed",
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						platform: "server",
+						userId: dbUser.id,
+						organizationId: dbUser.activeOrganizationId,
+						properties: {
+							change_kind: "seats",
+							previous_status: null,
+							new_status: null,
+							previous_price_id: previousItem.price.id,
+							new_price_id: currentItem.price.id,
+							previous_quantity: previousItem.quantity,
+							new_quantity: currentItem.quantity,
+						},
+					});
+				}
+
 				console.log(
 					"Successfully updated user in database with new invite quota:",
 					inviteQuota,
@@ -624,6 +859,20 @@ export const POST = async (req: Request) => {
 						inviteQuota: 1,
 					})
 					.where(eq(users.id, foundUserId));
+
+				await queueServerProductEvent({
+					eventId: `stripe:${event.id}:subscription_cancelled`,
+					eventName: "subscription_cancelled",
+					occurredAt: new Date(event.created * 1000).toISOString(),
+					platform: "server",
+					userId: foundUserId,
+					organizationId: userResult[0]?.activeOrganizationId,
+					properties: {
+						status: subscription.status,
+						ended_at: subscription.ended_at,
+						cancel_at_period_end: subscription.cancel_at_period_end,
+					},
+				});
 
 				console.log("User updated successfully", {
 					foundUserId,

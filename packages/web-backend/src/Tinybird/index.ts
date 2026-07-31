@@ -2,6 +2,18 @@ import { serverEnv } from "@cap/env";
 import { Effect } from "effect";
 
 const DEFAULT_DATASOURCE = "analytics_events";
+const PRODUCT_ANALYTICS_REBUILD_PIPES = [
+	"snapshot_product_events_canonical_v1",
+	"snapshot_product_events_daily_exact",
+	"snapshot_product_traffic_daily_exact",
+	"snapshot_product_traffic_pages_daily_exact",
+	"snapshot_product_activation_daily_exact",
+	"snapshot_product_creator_retention_exact",
+	"snapshot_product_events_health_hourly",
+] as const;
+
+const escapeTinybirdString = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 
 interface TinybirdResponse<T> {
 	data: T[];
@@ -30,6 +42,9 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		const env = serverEnv();
 		const token = env.TINYBIRD_TOKEN;
 		const host = env.TINYBIRD_HOST;
+		const productAnalyticsHost = env.PRODUCT_ANALYTICS_TINYBIRD_HOST;
+		const productAnalyticsErasureToken =
+			process.env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN;
 
 		const enabled = Boolean(token && host);
 
@@ -50,7 +65,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 
 			return Effect.tryPromise({
 				try: async () => {
-					const url = `${host}/v0${path}`;
+					const url = `${host}${path.startsWith("/v1/") ? "" : "/v0"}${path}`;
 					const response = await fetch(url, {
 						...init,
 						headers: {
@@ -282,6 +297,143 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			}).pipe(Effect.asVoid);
 		};
 
-		return { enabled, appendEvents, queryPipe, querySql, deleteData } as const;
+		const runCopyPipe = (name: string) => {
+			if (!enabled) return Effect.void;
+			return request(`/pipes/${encodeURIComponent(name)}/run?wait=true`, {
+				method: "POST",
+			}).pipe(Effect.asVoid);
+		};
+
+		const productAnalyticsRequest = <T>(path: string, init?: RequestInit) => {
+			if (!productAnalyticsHost) return Effect.succeed({} as T);
+			if (!productAnalyticsErasureToken) {
+				return Effect.fail(
+					new Error("Product analytics erasure is not configured"),
+				);
+			}
+			return Effect.tryPromise({
+				try: async () => {
+					const response = await fetch(`${productAnalyticsHost}${path}`, {
+						...init,
+						headers: {
+							Authorization: `Bearer ${productAnalyticsErasureToken}`,
+							...(init?.headers ?? {}),
+						},
+						signal: AbortSignal.timeout(65_000),
+					});
+					const body = await response.text();
+					if (!response.ok) {
+						throw new Error(
+							`Product analytics erasure request failed (${response.status})`,
+						);
+					}
+					return body ? (JSON.parse(body) as T) : ({} as T);
+				},
+				catch: (cause) =>
+					cause instanceof Error ? cause : new Error(String(cause)),
+			});
+		};
+
+		const deleteProductAnalyticsData = (
+			name: string,
+			deleteCondition: string,
+		) =>
+			productAnalyticsRequest<{ mutation?: { is_done?: boolean } }>(
+				`/v1/datasources/${encodeURIComponent(name)}/delete?wait=true&wait_max_seconds=60`,
+				{
+					method: "POST",
+					body: new URLSearchParams({ delete_condition: deleteCondition }),
+					headers: {
+						"Content-Type": "application/x-www-form-urlencoded",
+					},
+				},
+			).pipe(
+				Effect.flatMap((result) =>
+					result.mutation?.is_done === false
+						? Effect.fail(
+								new Error("Product analytics deletion did not finish"),
+							)
+						: Effect.void,
+				),
+			);
+
+		const runProductAnalyticsCopyPipe = (name: string) =>
+			productAnalyticsRequest(
+				`/v0/pipes/${encodeURIComponent(name)}/run?wait=true`,
+				{ method: "POST" },
+			).pipe(Effect.asVoid);
+
+		const queryProductAnalyticsSql = <T>(sql: string) =>
+			productAnalyticsRequest<{ data: T[] }>(
+				`/v0/sql?q=${encodeURIComponent(sql)}&format=JSON`,
+			).pipe(Effect.map((result) => result.data ?? []));
+
+		const eraseProductAnalytics = ({
+			userId,
+			organizationId,
+		}: {
+			userId?: string;
+			organizationId?: string;
+		}) =>
+			Effect.gen(function* () {
+				const conditions: string[] = [];
+				if (organizationId) {
+					conditions.push(
+						`organization_id = '${escapeTinybirdString(organizationId)}'`,
+					);
+				}
+				if (userId) {
+					const escapedUserId = escapeTinybirdString(userId);
+					const anonymousRows = yield* queryProductAnalyticsSql<{
+						anonymous_id: string;
+					}>(
+						`SELECT DISTINCT anonymous_id FROM product_events_v1 WHERE user_id = '${escapedUserId}' AND anonymous_id != '' LIMIT 1001`,
+					);
+					if (anonymousRows.length > 1000) {
+						return yield* Effect.fail(
+							new Error(
+								"Product analytics identity fanout exceeded the erasure bound",
+							),
+						);
+					}
+					conditions.push(`user_id = '${escapedUserId}'`);
+					const anonymousIds = anonymousRows
+						.map(({ anonymous_id: anonymousId }) => anonymousId)
+						.filter(Boolean);
+					if (anonymousIds.length > 0) {
+						conditions.push(
+							`anonymous_id IN (${anonymousIds
+								.map((anonymousId) => `'${escapeTinybirdString(anonymousId)}'`)
+								.join(", ")})`,
+						);
+					}
+				}
+				if (conditions.length === 0) {
+					return yield* Effect.fail(
+						new Error("Product analytics erasure requires an identity"),
+					);
+				}
+				yield* deleteProductAnalyticsData(
+					"product_events_v1",
+					`(${conditions.join(" OR ")})`,
+				);
+				yield* Effect.forEach(
+					PRODUCT_ANALYTICS_REBUILD_PIPES,
+					runProductAnalyticsCopyPipe,
+					{ concurrency: 1 },
+				);
+			});
+
+		return {
+			enabled,
+			appendEvents,
+			queryPipe,
+			querySql,
+			deleteData,
+			runCopyPipe,
+			deleteProductAnalyticsData,
+			runProductAnalyticsCopyPipe,
+			eraseProductAnalytics,
+		} as const;
 	}),
 }) {}

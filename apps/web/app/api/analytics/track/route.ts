@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
-
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { getAnonymousName } from "@/lib/anonymous-names";
 import {
 	createAnonymousViewNotification,
@@ -108,6 +108,7 @@ export async function POST(request: NextRequest) {
 				db()
 					.select({
 						ownerId: videos.ownerId,
+						organizationId: videos.orgId,
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
 						createdAt: videos.createdAt,
@@ -123,6 +124,7 @@ export async function POST(request: NextRequest) {
 					() =>
 						[] as {
 							ownerId: string;
+							organizationId: string;
 							firstViewEmailSentAt: Date | null;
 							videoName: string;
 							createdAt: Date;
@@ -174,6 +176,17 @@ export async function POST(request: NextRequest) {
 				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 			const shouldSendFirstViewEmail =
 				isNewVideo && !videoRecord.firstViewEmailSentAt;
+			if (shouldSendFirstViewEmail) {
+				yield* Effect.tryPromise(() =>
+					queueServerProductEvent({
+						eventId: `first_view:${body.videoId}`,
+						eventName: "first_view_received",
+						platform: "server",
+						userId: videoRecord.ownerId,
+						organizationId: videoRecord.organizationId,
+					}),
+				);
+			}
 
 			if (userId) {
 				if (shouldSendFirstViewEmail) {

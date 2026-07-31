@@ -19,7 +19,7 @@ import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
-import { scheduleServerProductEvent } from "@/lib/analytics/server";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { runPromise } from "@/lib/server";
 import { withAuth, withOptionalAuth } from "../../utils";
@@ -791,7 +791,7 @@ app.post(
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");
-			scheduleServerProductEvent({
+			await queueServerProductEvent({
 				eventId: `checkout:${checkoutSession.id}`,
 				eventName: "checkout_started",
 				platform: checkoutPlatform,

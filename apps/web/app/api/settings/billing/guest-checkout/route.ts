@@ -3,8 +3,8 @@ import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import {
+	queueServerProductEvent,
 	readAnalyticsAnonymousId,
-	scheduleServerProductEvent,
 } from "@/lib/analytics/server";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
 		if (checkoutSession.url) {
 			console.log("Successfully created guest checkout session");
-			scheduleServerProductEvent({
+			await queueServerProductEvent({
 				eventId: `checkout:${checkoutSession.id}`,
 				eventName: "guest_checkout_started",
 				anonymousId: checkoutAnonymousId,

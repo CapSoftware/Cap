@@ -8,7 +8,8 @@
 		"main": "./dist/index.js"
 	},
 	"scripts": {
-		"build": "tsdown"
+		"build": "tsdown",
+		"test": "vitest run src/ProductAnalytics/index.test.ts"
 	},
 	"dependencies": {
 		"@cap/env": "workspace:*",
@@ -31,5 +32,8 @@
 		"effect": "^3.18.4",
 		"next": "15.5.9",
 		"server-only": "^0.0.1"
+	},
+	"devDependencies": {
+		"vitest": "^3.2.0"
 	}
 }

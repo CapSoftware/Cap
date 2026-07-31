@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createServerProductEventRows } from "@/lib/analytics/server-event";
 
 describe("server product analytics", () => {
+	const purchaseProperties = {
+		payment_status: "paid",
+		subscription_status: "active",
+		quantity: 3,
+		is_first_purchase: true,
+		is_guest_checkout: false,
+		is_onboarding: false,
+	} as const;
+
 	it("builds a deterministic trusted server event", () => {
 		const [row] = createServerProductEventRows({
 			eventId: "stripe:evt_123:purchase_completed",
@@ -11,11 +20,7 @@ describe("server product analytics", () => {
 			platform: "web",
 			userId: "user-1",
 			organizationId: "org-1",
-			properties: {
-				quantity: 3,
-				email: "private@example.com",
-				nested: { private: true },
-			},
+			properties: purchaseProperties,
 		});
 
 		expect(row).toMatchObject({
@@ -26,7 +31,8 @@ describe("server product analytics", () => {
 			anonymous_id: "anonymous-1",
 			user_id: "user-1",
 			organization_id: "org-1",
-			properties: '{"quantity":3}',
+			properties:
+				'{"payment_status":"paid","subscription_status":"active","quantity":3,"is_first_purchase":true,"is_guest_checkout":false,"is_onboarding":false}',
 		});
 	});
 
@@ -44,7 +50,7 @@ describe("server product analytics", () => {
 		expect(
 			createServerProductEventRows({
 				eventId: "event-1",
-				eventName: "page_view",
+				eventName: "user_signed_up",
 				platform: "server",
 			}),
 		).toEqual([]);
@@ -57,9 +63,25 @@ describe("server product analytics", () => {
 			occurredAt: "invalid",
 			platform: "server",
 			userId: "user-1",
+			properties: purchaseProperties,
 		});
 
 		expect(row?.occurred_at).toBe(row?.received_at);
 		expect(Number.isFinite(Date.parse(row?.occurred_at ?? ""))).toBe(true);
+	});
+
+	it("rejects a property payload containing undeclared customer data", () => {
+		const unsafeCreate = createServerProductEventRows as unknown as (
+			event: Record<string, unknown>,
+		) => unknown[];
+		expect(
+			unsafeCreate({
+				eventId: "event-1",
+				eventName: "user_signed_up",
+				platform: "server",
+				userId: "user-1",
+				properties: { email: "private@example.com" },
+			}),
+		).toEqual([]);
 	});
 });

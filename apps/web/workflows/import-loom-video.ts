@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
+import { enqueueProductAnalyticsEventStep } from "@/workflows/deliver-product-analytics-event";
 
 interface ImportLoomPayload {
 	videoId: string;
@@ -217,6 +218,18 @@ export async function importLoomVideoWorkflow(
 	if (!(await claimAgentImport(payload.agentOperationId))) {
 		return { success: true, message: "Loom import is already running" };
 	}
+	const startedAt = new Date().toISOString();
+	const analyticsContext = await getLoomAnalyticsContext(payload.videoId);
+	const importMode = payload.agentOperationId ? "agent" : "direct";
+	await enqueueProductAnalyticsEventStep({
+		eventId: `loom_import:${payload.videoId}:started`,
+		eventName: "loom_import_started",
+		occurredAt: startedAt,
+		platform: "server",
+		userId: analyticsContext?.ownerId ?? payload.userId,
+		organizationId: analyticsContext?.organizationId,
+		properties: { import_mode: importMode },
+	});
 	try {
 		const processingInput = await downloadLoomToS3(payload);
 
@@ -224,6 +237,17 @@ export async function importLoomVideoWorkflow(
 
 		await saveMetadataAndComplete(payload.videoId, result.metadata);
 		await completeAgentImport(payload.agentOperationId, payload.videoId);
+		await enqueueProductAnalyticsEventStep({
+			eventId: `loom_import:${payload.videoId}:completed`,
+			eventName: "loom_import_completed",
+			platform: "server",
+			userId: analyticsContext?.ownerId ?? payload.userId,
+			organizationId: analyticsContext?.organizationId,
+			properties: {
+				import_mode: importMode,
+				duration_ms: Date.now() - Date.parse(startedAt),
+			},
+		});
 
 		return {
 			success: true,
@@ -234,8 +258,39 @@ export async function importLoomVideoWorkflow(
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(payload.videoId, errorMessage);
 		await failAgentImport(payload.agentOperationId, errorMessage);
+		await enqueueProductAnalyticsEventStep({
+			eventId: `loom_import:${payload.videoId}:failed`,
+			eventName: "loom_import_failed",
+			platform: "server",
+			userId: analyticsContext?.ownerId ?? payload.userId,
+			organizationId: analyticsContext?.organizationId,
+			properties: {
+				import_mode: importMode,
+				failure_class: classifyLoomImportFailure(error),
+			},
+		});
 		throw new FatalError(errorMessage);
 	}
+}
+
+async function getLoomAnalyticsContext(videoId: string) {
+	"use step";
+
+	const [video] = await db()
+		.select({ ownerId: videos.ownerId, organizationId: videos.orgId })
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId))
+		.limit(1);
+	return video;
+}
+
+function classifyLoomImportFailure(error: unknown) {
+	const message = error instanceof Error ? error.message.toLowerCase() : "";
+	if (message.includes("timed out") || message.includes("timeout")) {
+		return "timeout";
+	}
+	if (error instanceof FatalError) return "permanent_source_error";
+	return "processing_error";
 }
 
 function getInputExtension(url: string): string | undefined {

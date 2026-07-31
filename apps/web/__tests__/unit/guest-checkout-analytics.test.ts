@@ -17,7 +17,7 @@ vi.mock("@cap/utils", () => ({
 }));
 vi.mock("@/lib/analytics/server", () => ({
 	readAnalyticsAnonymousId: mocks.readAnonymousId,
-	scheduleServerProductEvent: mocks.product,
+	queueServerProductEvent: mocks.product,
 }));
 
 describe("guest checkout analytics", () => {

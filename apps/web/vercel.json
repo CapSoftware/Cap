@@ -12,6 +12,10 @@
 		{
 			"path": "/api/cron/recover-failed-video-processing",
 			"schedule": "7,22,37,52 * * * *"
+		},
+		{
+			"path": "/api/cron/reconcile-product-analytics",
+			"schedule": "43 4 * * *"
 		}
 	],
 	"functions": {

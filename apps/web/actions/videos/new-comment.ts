@@ -7,6 +7,7 @@ import { comments } from "@cap/database/schema";
 import type { ImageUpload } from "@cap/web-domain";
 import { Comment, type Video } from "@cap/web-domain";
 import { revalidatePath } from "next/cache";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { createNotification } from "@/lib/Notification";
 
 export async function newComment(data: {
@@ -52,6 +53,16 @@ export async function newComment(data: {
 	};
 
 	await db().insert(comments).values(newComment);
+	await queueServerProductEvent({
+		eventId: `collaboration:${id}`,
+		eventName: "collaboration_action_created",
+		occurredAt: newComment.createdAt.toISOString(),
+		platform: "server",
+		userId: user.id,
+		properties: { action: conditionalType },
+	}).catch(() => {
+		console.error("Failed to enqueue product analytics collaboration event");
+	});
 
 	try {
 		await createNotification({

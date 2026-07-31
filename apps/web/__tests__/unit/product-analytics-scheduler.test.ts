@@ -1,37 +1,40 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	after: vi.fn(() => {
-		throw new Error("after unavailable");
-	}),
+	start: vi.fn(async () => ({ runId: "run-1" })),
 }));
 
-vi.mock("next/server", () => ({ after: mocks.after }));
-vi.mock("@cap/env", () => ({
-	serverEnv: () => ({
-		PRODUCT_ANALYTICS_TINYBIRD_HOST: undefined,
-		PRODUCT_ANALYTICS_TINYBIRD_TOKEN: undefined,
-	}),
-}));
+vi.mock("workflow/api", () => ({ start: mocks.start }));
 
-describe("analytics scheduling", () => {
-	afterEach(() => vi.restoreAllMocks());
+describe("analytics durable enqueue", () => {
+	afterEach(() => {
+		mocks.start.mockClear();
+	});
 
-	it("cannot make a business route fail when after is unavailable", async () => {
-		vi.spyOn(console, "error").mockImplementation(() => {});
-		const { scheduleServerProductEvent } = await import(
-			"@/lib/analytics/server"
-		);
-
-		expect(() =>
-			scheduleServerProductEvent({
+	it("returns only after the workflow run is durably enqueued", async () => {
+		const { queueServerProductEvent } = await import("@/lib/analytics/server");
+		await expect(
+			queueServerProductEvent({
 				eventId: "checkout:cs_1",
 				eventName: "checkout_started",
 				anonymousId: "anonymous-1",
 				platform: "web",
+				properties: { price_id: "price_1", quantity: 1 },
 			}),
-		).not.toThrow();
-		await Promise.resolve();
-		expect(mocks.after).toHaveBeenCalledOnce();
+		).resolves.toEqual({ eventId: "checkout:cs_1", runId: "run-1" });
+		expect(mocks.start).toHaveBeenCalledOnce();
+	});
+
+	it("surfaces enqueue failure so a critical business request can retry", async () => {
+		mocks.start.mockRejectedValueOnce(new Error("queue unavailable"));
+		const { queueServerProductEvent } = await import("@/lib/analytics/server");
+		await expect(
+			queueServerProductEvent({
+				eventId: "signup:user-1",
+				eventName: "user_signed_up",
+				platform: "server",
+				userId: "user-1",
+			}),
+		).rejects.toThrow("queue unavailable");
 	});
 });

@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
 	isServerOnlyEventName,
 	normalizeProductEventInput,
 	PRODUCT_ANALYTICS_LIMITS,
 	type ProductEventInput,
 } from "@cap/analytics";
+import { isSocialCrawlerUserAgent } from "@/lib/social-crawlers";
 
 interface AnalyticsRequestHeaders {
 	authorization?: string;
@@ -22,11 +24,14 @@ interface ProductAnalyticsRateLimiterOptions {
 const ALLOWED_FETCH_SITES = new Set(["same-origin", "same-site"]);
 const ANONYMOUS_BROWSER_EVENT_NAMES = new Set([
 	"page_view",
+	"page_engagement",
 	"download_cta_clicked",
 	"pricing_cta_clicked",
 	"cli_install_command_copied",
 	"auth_started",
 	"auth_email_sent",
+	"tool_interaction",
+	"experiment_exposed",
 ]);
 
 export class ProductAnalyticsRateLimiter {
@@ -170,4 +175,58 @@ export function normalizeGeoHeader(value?: string, decode = false) {
 	}
 	const trimmed = normalized.trim().slice(0, 128);
 	return trimmed && trimmed !== "unknown" ? trimmed : undefined;
+}
+
+export function normalizeAnalyticsHostname(origin?: string) {
+	if (!origin) return undefined;
+	try {
+		return new URL(origin).hostname.toLowerCase().slice(0, 253);
+	} catch {
+		return undefined;
+	}
+}
+
+export function isKnownAnalyticsBot(userAgent?: string) {
+	if (!userAgent) return true;
+	return (
+		isSocialCrawlerUserAgent(userAgent) ||
+		/(?:bot\b|crawler|spider|headless|lighthouse|pagespeed|pingdom|uptimerobot|synthetic|preview)/i.test(
+			userAgent,
+		)
+	);
+}
+
+export function normalizeSyntheticRunId(
+	value: string | undefined,
+	vercelEnvironment: "production" | "preview" | "development" | undefined,
+) {
+	if (vercelEnvironment !== "preview" || !value) return undefined;
+	return /^[A-Za-z0-9_-]{8,128}$/.test(value) ? value : undefined;
+}
+
+export function classifyAnalyticsTraffic({
+	userAgent,
+	vercelEnvironment,
+	syntheticRunId,
+	rateLimitKey,
+	internalIpHashes,
+}: {
+	userAgent?: string;
+	vercelEnvironment?: "production" | "preview" | "development";
+	syntheticRunId?: string;
+	rateLimitKey: string;
+	internalIpHashes?: string;
+}) {
+	if (syntheticRunId) return "synthetic" as const;
+	if (vercelEnvironment === "preview") return "preview" as const;
+	if (isKnownAnalyticsBot(userAgent)) return "bot" as const;
+	const hashes = new Set(
+		internalIpHashes
+			?.split(",")
+			.map((value) => value.trim().toLowerCase())
+			.filter((value) => /^[0-9a-f]{64}$/.test(value)) ?? [],
+	);
+	const requestHash = createHash("sha256").update(rateLimitKey).digest("hex");
+	if (hashes.has(requestHash)) return "internal" as const;
+	return "external" as const;
 }

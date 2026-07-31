@@ -17,7 +17,7 @@ const dbChain = {
 };
 
 vi.mock("@/lib/analytics/server", () => ({
-	scheduleServerProductEvent: mocks.product,
+	queueServerProductEvent: mocks.product,
 }));
 vi.mock("@/lib/developer-credits", () => ({ addCreditsToAccount: vi.fn() }));
 vi.mock("@cap/database", () => ({ db: () => dbChain }));
@@ -207,7 +207,7 @@ describe("Stripe subscription analytics", () => {
 		);
 	});
 
-	it("counts a no-payment trial while exposing its zero revenue", async () => {
+	it("records a no-payment trial without counting a purchase", async () => {
 		mocks.retrieveSubscription.mockResolvedValue({
 			...subscription,
 			status: "trialing",
@@ -224,12 +224,15 @@ describe("Stripe subscription analytics", () => {
 		expect((await POST(request())).status).toBe(200);
 		expect(mocks.product).toHaveBeenCalledWith(
 			expect.objectContaining({
+				eventId: "stripe:evt_checkout.session.completed:trial_started",
+				eventName: "trial_started",
 				properties: expect.objectContaining({
-					payment_status: "no_payment_required",
-					amount_total_minor: 0,
 					subscription_status: "trialing",
 				}),
 			}),
+		);
+		expect(mocks.product).not.toHaveBeenCalledWith(
+			expect.objectContaining({ eventName: "purchase_completed" }),
 		);
 	});
 });

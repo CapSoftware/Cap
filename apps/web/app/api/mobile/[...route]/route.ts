@@ -14,6 +14,7 @@ import {
 	getCurrentUser,
 	ImageUploads,
 	Storage,
+	Tinybird,
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
@@ -55,6 +56,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
 	resolveMobileRequestOrigin,
@@ -575,6 +577,7 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* ({
 const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 	function* () {
 		const user = yield* CurrentUser;
+		const tinybird = yield* Tinybird;
 		yield* Effect.tryPromise({
 			try: () =>
 				createAccountDeletionRequest({
@@ -585,6 +588,9 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 				}),
 			catch: () => new HttpApiError.InternalServerError(),
 		});
+		yield* tinybird
+			.eraseProductAnalytics({ userId: user.id })
+			.pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
 
 		const database = yield* Database;
 		yield* database.use((db) =>
@@ -2491,6 +2497,21 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 			"x-amz-meta-source": "cap-mobile-ios",
 		},
 	});
+	yield* Effect.tryPromise({
+		try: () =>
+			queueServerProductEvent({
+				eventId: `share_link_created:${videoId}`,
+				eventName: "share_link_created",
+				platform: "mobile",
+				userId: user.id,
+				organizationId,
+				properties: {
+					asset_type: "recording",
+					recording_mode: "mobile_upload",
+				},
+			}),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
 	return {
 		id: videoId,
 		shareUrl: `${publicOrigin}/s/${videoId}`,
@@ -2575,6 +2596,21 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 			mode: "singlepart",
 		}),
 	);
+	yield* Effect.tryPromise({
+		try: () =>
+			queueServerProductEvent({
+				eventId: `share_link_created:${videoId}`,
+				eventName: "share_link_created",
+				platform: "mobile",
+				userId: user.id,
+				organizationId,
+				properties: {
+					asset_type: "recording",
+					recording_mode: "mobile_camera",
+				},
+			}),
+		catch: () => new HttpApiError.InternalServerError(),
+	});
 
 	return {
 		id: videoId,

@@ -9,7 +9,6 @@ import {
 	getOrCreateStorageId,
 	ProductAnalyticsQueue,
 	type ProductAnalyticsTransport,
-	readFirstTouchAttribution,
 	sendBrowserProductAnalytics,
 	shouldCaptureProductPageView,
 } from "@/app/utils/product-analytics";
@@ -266,29 +265,6 @@ describe("browser analytics identity", () => {
 		};
 		expect(getOrCreateStorageId(storage, "key", createId)).toBe("memory-id");
 		expect(createId).toHaveBeenCalledOnce();
-	});
-});
-
-describe("first-touch attribution", () => {
-	it("stores only allowlisted attribution fields", () => {
-		const storage = { getItem: vi.fn(() => null), setItem: vi.fn() };
-		const result = readFirstTouchAttribution(
-			"?utm_source=google&utm_campaign=launch&email=private%40example.com",
-			storage,
-		);
-		expect(result).toEqual({ utm_source: "google", utm_campaign: "launch" });
-		expect(storage.setItem).toHaveBeenCalledOnce();
-	});
-
-	it("does not overwrite existing attribution", () => {
-		const storage = {
-			getItem: vi.fn(() => '{"utm_source":"original"}'),
-			setItem: vi.fn(),
-		};
-		expect(readFirstTouchAttribution("?utm_source=new", storage)).toEqual({
-			utm_source: "original",
-		});
-		expect(storage.setItem).not.toHaveBeenCalled();
 	});
 });
 

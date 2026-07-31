@@ -15,7 +15,7 @@ import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { scheduleServerProductEvent } from "@/lib/analytics/server";
+import { queueServerProductEvent } from "@/lib/analytics/server";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	type AssignableOrganizationRole,
@@ -218,7 +218,7 @@ export async function sendOrganizationInvites(
 	);
 	const firstSuccessfulInvite = successfulInvites[0];
 	if (firstSuccessfulInvite) {
-		scheduleServerProductEvent({
+		await queueServerProductEvent({
 			eventId: `organization_invites:${firstSuccessfulInvite.id}`,
 			eventName: "organization_invite_sent",
 			platform: "web",

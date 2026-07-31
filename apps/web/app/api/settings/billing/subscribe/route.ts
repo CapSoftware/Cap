@@ -7,8 +7,8 @@ import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
 import {
+	queueServerProductEvent,
 	readAnalyticsAnonymousId,
-	scheduleServerProductEvent,
 } from "@/lib/analytics/server";
 
 export async function POST(request: NextRequest) {
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
 		});
 
 		if (checkoutSession.url) {
-			scheduleServerProductEvent({
+			await queueServerProductEvent({
 				eventId: `checkout:${checkoutSession.id}`,
 				eventName: "checkout_started",
 				anonymousId: analyticsAnonymousId,
