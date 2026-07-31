@@ -26,10 +26,6 @@ const CLOUD_URL_DEFAULT = "https://api.tinybird.co";
 const WORKSPACE_ID_SOURCE =
 	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const WORKSPACE_ID_PATTERN = new RegExp(`^${WORKSPACE_ID_SOURCE}$`, "i");
-const WORKSPACE_ID_OUTPUT_PATTERN = new RegExp(
-	`\\b${WORKSPACE_ID_SOURCE}\\b`,
-	"gi",
-);
 const LOCAL_TOKEN_SIGNING_KEY = "tinybird-local";
 const LOCAL_IDENTIFIERS = {
 	workspaceId: "00000000-0000-4000-8000-000000000001",
@@ -427,48 +423,28 @@ const runProcess = (command, args, options = {}) => {
 	}
 };
 
-const runProcessCapture = (command, args, options = {}, spawn = spawnSync) => {
-	const result = spawn(command, args, {
-		cwd: PROJECT_ROOT,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "pipe"],
-		...options,
-	});
-	if (result.error || result.status !== 0) {
-		const detail =
-			result.error?.message?.trim() ||
-			[result.stderr, result.stdout]
-				.map((output) => output?.toString().trim())
-				.filter(Boolean)
-				.join("\n")
-				.slice(0, 2_000);
-		throw new Error(
-			detail
-				? `Unable to verify Tinybird workspace identity: ${detail}`
-				: "Unable to verify Tinybird workspace identity.",
-		);
-	}
-	return result.stdout ?? "";
-};
-
-const verifyCloudWorkspace = (env = process.env, run = runProcessCapture) => {
+const verifyCloudWorkspace = (env = process.env) => {
 	const environment = cloudEnvironment(env);
-	const step = cloudCliStep(
-		"--no-version-warning",
-		"--cloud",
-		"workspace",
-		"current",
-	);
-	assertSafeStep(step);
-	const output = run(step.command, step.args, { env: environment });
-	const workspaceIds = output.match(WORKSPACE_ID_OUTPUT_PATTERN) ?? [];
-	if (workspaceIds.length === 0) {
-		throw new Error("Unable to parse Tinybird workspace identity.");
+	const tokenParts = environment.TINYBIRD_DEPLOY_TOKEN.split(".");
+	let tokenWorkspaceId;
+	try {
+		const tokenPayload = JSON.parse(
+			Buffer.from(tokenParts[1] ?? "", "base64url").toString("utf8"),
+		);
+		tokenWorkspaceId = tokenPayload.u;
+	} catch {
+		throw new Error("Unable to parse Tinybird deploy token identity.");
 	}
 	if (
-		workspaceIds.length !== 1 ||
-		workspaceIds[0]?.toLowerCase() !==
-			environment.TINYBIRD_WORKSPACE_ID.toLowerCase()
+		tokenParts.length !== 3 ||
+		typeof tokenWorkspaceId !== "string" ||
+		!WORKSPACE_ID_PATTERN.test(tokenWorkspaceId)
+	) {
+		throw new Error("Unable to parse Tinybird deploy token identity.");
+	}
+	if (
+		tokenWorkspaceId.toLowerCase() !==
+		environment.TINYBIRD_WORKSPACE_ID.toLowerCase()
 	) {
 		throw new Error(
 			"Tinybird deploy token does not target TINYBIRD_WORKSPACE_ID.",
@@ -541,7 +517,6 @@ export {
 	localEnvironment,
 	operationPlan,
 	runAnalyticsCommand,
-	runProcessCapture,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
 	writeLocalEnvironmentFile,

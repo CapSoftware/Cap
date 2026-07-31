@@ -11,7 +11,6 @@ import {
 	LOCAL_ENV_FILE,
 	localEnvironment,
 	operationPlan,
-	runProcessCapture,
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
@@ -131,59 +130,34 @@ test("cloud auth requires a dedicated deploy token", () => {
 
 test("cloud deploy verifies the token workspace before mutation", () => {
 	const workspaceId = "12345678-1234-4234-8234-123456789abc";
+	const token = `p.${Buffer.from(
+		JSON.stringify({
+			u: workspaceId,
+			id: "87654321-4321-4321-8321-cba987654321",
+			host: null,
+		}),
+	).toString("base64url")}.signature`;
 	const env = {
-		TINYBIRD_DEPLOY_TOKEN: "deploy-token",
+		TINYBIRD_DEPLOY_TOKEN: token,
 		TINYBIRD_URL: "https://api.tinybird.co",
 		TINYBIRD_WORKSPACE_ID: workspaceId,
 	};
-	assert.equal(
-		verifyCloudWorkspace(env, (_command, args) => {
-			assert.deepEqual(args.slice(-4), [
-				"--no-version-warning",
-				"--cloud",
-				"workspace",
-				"current",
-			]);
-			return [
-				"Current workspace:",
-				"Name       Id                                    Role   Plan       Current",
-				`production ${workspaceId} admin  enterprise true`,
-			].join("\n");
-		}),
-		workspaceId,
-	);
+	assert.equal(verifyCloudWorkspace(env), workspaceId);
 	assert.throws(
 		() =>
-			verifyCloudWorkspace(
-				env,
-				() =>
-					`staging 87654321-4321-4321-8321-cba987654321 admin enterprise true`,
-			),
+			verifyCloudWorkspace({
+				...env,
+				TINYBIRD_WORKSPACE_ID: "87654321-4321-4321-8321-cba987654321",
+			}),
 		/does not target/,
 	);
 	assert.throws(
 		() =>
-			verifyCloudWorkspace(
-				env,
-				() => `${workspaceId} 87654321-4321-4321-8321-cba987654321`,
-			),
-		/does not target/,
-	);
-	assert.throws(
-		() => verifyCloudWorkspace(env, () => "warning: invalid token"),
-		/Unable to parse/,
-	);
-});
-
-test("cloud workspace command failures retain bounded diagnostics", () => {
-	assert.throws(
-		() =>
-			runProcessCapture("tb", [], {}, () => ({
-				status: 1,
-				stderr: "workspace lookup failed",
-				stdout: "",
-			})),
-		/Unable to verify Tinybird workspace identity: workspace lookup failed/,
+			verifyCloudWorkspace({
+				...env,
+				TINYBIRD_DEPLOY_TOKEN: "invalid-token",
+			}),
+		/Unable to parse Tinybird deploy token identity/,
 	);
 });
 
