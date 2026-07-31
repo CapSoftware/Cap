@@ -592,8 +592,12 @@ const runAnalyticsCommand = async (operation) => {
 			continue;
 		}
 		if (step.type === "verify-local") {
+			const environment = localEnvironment();
 			runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
-				env: localEnvironment(),
+				env: {
+					...environment,
+					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: environment.TB_LOCAL_USER_TOKEN,
+				},
 			});
 			continue;
 		}

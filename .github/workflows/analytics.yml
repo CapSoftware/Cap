@@ -98,16 +98,6 @@ jobs:
       EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
       HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
       ANALYTICS_TEST_RUN_ID: run_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.event.pull_request.head.sha || github.sha }}
-      TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-      TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-      TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
-      TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-      TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-      TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-      TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-      TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
     steps:
       - name: Check out exact requested SHA
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -120,6 +110,12 @@ jobs:
       - name: Refuse an out-of-scope event, branch, PR, or checkout
         run: node scripts/analytics/staging-ci.js verify-scope --actual-sha "$(git rev-parse HEAD)"
       - name: Refuse missing, non-staging, or wrong-workspace credentials
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
         run: node scripts/analytics/staging-ci.js verify-credentials
       - name: Wait for successful exact-SHA Vercel preview
         id: vercel
@@ -130,16 +126,31 @@ jobs:
         run: echo "TINYBIRD_DEPLOYMENT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$GITHUB_ENV"
       - name: Check Tinybird cloud deployment plan
         id: deployment-check
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: >-
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
           run --rm tinybird-cloud-cli --cloud deployment create --check
       - name: Create isolated Tinybird staging deployment
         id: create-deployment
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: >-
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
           run --rm tinybird-cloud-cli --cloud deployment create --wait
       - name: Resolve only the deployment created by this run
         id: tinybird
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --output json deployment ls > "$RUNNER_TEMP/tinybird-deployments.json"
           node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
@@ -148,12 +159,19 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
       - name: Re-run fixture assertions after staging creation
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: node scripts/analytics/analytics-cli.js test
       - name: Seed bounded duplicate and conflict probes
         id: seed
         env:
           VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
           VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js seed
           --run-id "$ANALYTICS_TEST_RUN_ID"
@@ -162,18 +180,31 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Rebuild staged decision and health copies
         id: staging-copies
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
             docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --staging copy run "$pipe" --wait --mode replace
           done
       - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
         id: verify
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Promote the verified staging deployment
         id: promote
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --exit-code
@@ -181,25 +212,38 @@ jobs:
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote
       - name: Probe the exact-SHA Vercel browser collector and staging rate limit
         id: preview-api
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js probe-preview
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Rebuild promoted decision and health copies
         id: promoted-copies
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
             docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
           done
       - name: Prove promoted preview delivery and decision deduplication
         id: verify-promoted
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-promoted
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows
         id: cleanup
-        if: always() && steps.seed.outcome == 'success' && steps.promote.outcome == 'success'
+        if: always() && steps.seed.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js cleanup
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -207,6 +251,11 @@ jobs:
       - name: Retract synthetic rows from every derived copy
         id: cleanup-copies
         if: always() && steps.cleanup.outcome == 'success'
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
             docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
@@ -214,12 +263,20 @@ jobs:
       - name: Prove synthetic cleanup no longer affects queries
         id: verify-cleanup
         if: always() && steps.cleanup-copies.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-cleanup
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Discard an unpromoted staging deployment
         if: always() && steps.create-deployment.outcome != 'skipped' && steps.promote.outcome != 'success'
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: >-
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
           run --rm tinybird-cloud-cli --cloud deployment discard --wait

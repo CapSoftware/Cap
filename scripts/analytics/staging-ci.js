@@ -63,20 +63,22 @@ const writeJson = (filePath, value, mode = 0o644) => {
 	});
 };
 
-const tinybirdEnvironment = () => {
+const TINYBIRD_TOKEN_NAMES = [
+	"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	"TINYBIRD_STAGING_INGEST_TOKEN",
+	"TINYBIRD_STAGING_READ_TOKEN",
+	"TINYBIRD_STAGING_CLEANUP_TOKEN",
+];
+
+const tinybirdEnvironment = (requiredTokenNames = TINYBIRD_TOKEN_NAMES) => {
 	if (environment("TINYBIRD_WORKSPACE_ID") !== STAGING_WORKSPACE_ID) {
 		throw new Error(
 			"TINYBIRD_WORKSPACE_ID must be the fixed staging workspace",
 		);
 	}
-	const tokens = {
-		TINYBIRD_STAGING_DEPLOY_TOKEN: environment("TINYBIRD_STAGING_DEPLOY_TOKEN"),
-		TINYBIRD_STAGING_INGEST_TOKEN: environment("TINYBIRD_STAGING_INGEST_TOKEN"),
-		TINYBIRD_STAGING_READ_TOKEN: environment("TINYBIRD_STAGING_READ_TOKEN"),
-		TINYBIRD_STAGING_CLEANUP_TOKEN: environment(
-			"TINYBIRD_STAGING_CLEANUP_TOKEN",
-		),
-	};
+	const tokens = Object.fromEntries(
+		requiredTokenNames.map((name) => [name, environment(name)]),
+	);
 	const origin = validateTinybirdCredentials({
 		url: environment("TINYBIRD_STAGING_URL"),
 		tokens,
@@ -144,7 +146,9 @@ const tinybirdUrl = (origin, pathname, parameters = {}) => {
 };
 
 const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
-	const { origin, tokens } = tinybirdEnvironment();
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
 	return request(
 		tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
 			start_time: state.startTime,
@@ -158,7 +162,9 @@ const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
 };
 
 const ciAssertionsQuery = async ({ state, deploymentId = "" }) => {
-	const { origin, tokens } = tinybirdEnvironment();
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
 	return request(
 		tinybirdUrl(origin, "/v0/pipes/product_analytics_ci_assertions.json", {
 			synthetic_run_id: state.runId,
@@ -403,7 +409,9 @@ const seed = async () => {
 	const statePath = option("state");
 	const artifactPath = option("artifact");
 	const sha = environment("EXPECTED_SHA");
-	const { origin, tokens } = tinybirdEnvironment();
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_INGEST_TOKEN",
+	]);
 	const startedAt = new Date();
 	const fixture = createSyntheticEvents({ runId, now: startedAt });
 	const loadFixture = createSyntheticLoadEvents({
@@ -596,7 +604,9 @@ const cleanup = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	validateSyntheticRunId(state.runId);
-	const { origin, tokens } = tinybirdEnvironment();
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+	]);
 	validateSyntheticRunId(state.loadRunId);
 	const body = new URLSearchParams({
 		delete_condition: `synthetic_run_id IN ('${state.runId}', '${state.loadRunId}')`,
