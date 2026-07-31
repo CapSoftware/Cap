@@ -7,8 +7,6 @@ import { runPromise } from "@/lib/server";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./AuthContext";
 import { resolveCurrentUser } from "./current-user";
-import { GTag } from "./GTag";
-import { MetaPixel } from "./MetaPixel";
 import { PurchaseTracker } from "./PurchaseTracker";
 import { ReactQueryProvider, SessionProvider } from "./providers";
 import { SignupAnalytics } from "./SignupAnalytics";
@@ -36,8 +34,6 @@ export async function AppProviders({ children }: PropsWithChildren) {
 								<SonnerToaster />
 								{children}
 								<SignupAnalytics />
-								<MetaPixel />
-								<GTag />
 								<Suspense fallback={null}>
 									<PurchaseTracker />
 								</Suspense>

@@ -11,8 +11,8 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
@@ -283,13 +283,6 @@ app.get(
 					mode: "singlepart",
 				});
 
-			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
-				await dub().links.create({
-					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
-					domain: "cap.link",
-					key: idToUse,
-				});
-
 			try {
 				const videoCount = await db()
 					.select({ count: count() })
@@ -301,9 +294,7 @@ app.get(
 						"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay",
 					);
 
-					const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-						? `https://cap.link/${idToUse}`
-						: `${serverEnv().WEB_URL}/s/${idToUse}`;
+					const videoUrl = `${serverEnv().WEB_URL}/s/${idToUse}`;
 
 					await sendEmail({
 						email: user.email,

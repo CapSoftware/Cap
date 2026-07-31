@@ -1,25 +1,37 @@
 import { promises as fs } from "node:fs";
 import { db } from "@cap/database";
-import { organizations, videos, videoUploads } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
+import {
+	organizations,
+	videoEdits,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
+import type { VideoEditSpec, VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
-	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
-	type AiGenerationLanguageCode,
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
-import { createClient } from "@deepgram/sdk";
-import { and, eq } from "drizzle-orm";
+import { AssemblyAI } from "assemblyai";
+import { and, eq, sql } from "drizzle-orm";
 import { FatalError } from "workflow";
+import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
 	ENHANCED_AUDIO_EXTENSION,
 	enhanceAudioFromUrl,
 } from "@/lib/audio-enhance";
 import { checkHasAudioTrack, extractAudioFromUrl } from "@/lib/audio-extract";
+import {
+	createEditTranscript,
+	editTranscriptWordsToCaptionVtt,
+	getEditTranscriptBackfillStatus,
+	getEditTranscriptObjectKey,
+	serializeEditTranscript,
+} from "@/lib/edit-transcript";
+import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
 import {
 	checkHasAudioTrackViaMediaServer,
@@ -27,7 +39,6 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
-import { type DeepgramResult, formatToWebVTT } from "@/lib/transcribe-utils";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -41,6 +52,19 @@ interface VideoData {
 	video: typeof videos.$inferSelect;
 	transcriptionDisabled: boolean;
 	aiGenerationLanguage: AiGenerationLanguage;
+}
+
+interface BackfillEditTranscriptPayload {
+	videoId: string;
+	userId: string;
+	requestId: string;
+}
+
+const EDIT_TRANSCRIPT_TEMP_AUDIO_FILENAME = "audio-edit-transcript-v3-temp.mp3";
+
+interface TranscriptionArtifacts {
+	vtt: string;
+	editTranscript: string;
 }
 
 export async function transcribeVideoWorkflow(
@@ -74,9 +98,11 @@ export async function transcribeVideoWorkflow(
 			};
 		}
 
-		const [transcription] = await Promise.all([
-			transcribeWithDeepgram(audioUrl, videoData.aiGenerationLanguage),
-		]);
+		const transcription = await transcribeWithAssemblyAI(
+			audioUrl,
+			videoData.aiGenerationLanguage,
+			Math.max(0, (videoData.video.duration ?? 0) * 1000),
+		);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
 	} catch (error) {
@@ -94,11 +120,73 @@ export async function transcribeVideoWorkflow(
 	return { success: true, message: "Transcription completed successfully" };
 }
 
+export async function backfillEditTranscriptWorkflow(
+	payload: BackfillEditTranscriptPayload,
+) {
+	"use workflow";
+
+	const { videoId, userId, requestId } = payload;
+	let video: typeof videos.$inferSelect;
+
+	try {
+		video = await validateEditTranscriptBackfill(videoId, userId, requestId);
+		// Legacy videos only: the transcript must describe the ORIGINAL media, so
+		// edited videos are transcribed from their preserved source mp4.
+		const videoEdit = await loadVideoEditForBackfill(videoId);
+		const audioUrl = await extractAudio(
+			videoId,
+			userId,
+			video,
+			EDIT_TRANSCRIPT_TEMP_AUDIO_FILENAME,
+			videoEdit?.sourceKey,
+		);
+		if (!audioUrl) {
+			await saveEditTranscriptBackfillError(videoId, requestId, video);
+			return { success: false };
+		}
+
+		const editTranscript = await transcribeEditTranscriptWithAssemblyAI(
+			audioUrl,
+			videoEdit ? videoEdit.editSpec.sourceDuration : (video.duration ?? 0),
+		);
+		await saveEditTranscriptBackfill(
+			videoId,
+			userId,
+			requestId,
+			video,
+			editTranscript,
+		);
+		await cleanupTempAudio(
+			videoId,
+			userId,
+			video,
+			EDIT_TRANSCRIPT_TEMP_AUDIO_FILENAME,
+		);
+		return { success: true };
+	} catch (error) {
+		console.error(
+			`[transcribe] Editable transcript backfill failed for ${videoId}`,
+			error,
+		);
+		const loadedVideo = await loadVideoForEditTranscriptBackfill(videoId);
+		if (loadedVideo?.ownerId === userId) {
+			await saveEditTranscriptBackfillError(videoId, requestId, loadedVideo);
+			await cleanupTempAudio(
+				videoId,
+				userId,
+				loadedVideo,
+				EDIT_TRANSCRIPT_TEMP_AUDIO_FILENAME,
+			);
+		}
+		return { success: false };
+	}
+}
+
 async function validateVideo(videoId: string): Promise<VideoData> {
 	"use step";
 
-	if (!serverEnv().DEEPGRAM_API_KEY) {
-		throw new FatalError("Missing DEEPGRAM_API_KEY");
+	if (!serverEnv().ASSEMBLY_API_KEY) {
+		throw new FatalError("Missing ASSEMBLY_API_KEY");
 	}
 
 	const query = await db()
@@ -139,6 +227,67 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 	};
 }
 
+async function loadVideoForEditTranscriptBackfill(videoId: string) {
+	"use step";
+
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+	return video ?? null;
+}
+
+async function loadVideoEditForBackfill(
+	videoId: string,
+): Promise<{ sourceKey: string; editSpec: VideoEditSpec } | null> {
+	"use step";
+
+	const [edit] = await db()
+		.select({
+			sourceKey: videoEdits.sourceKey,
+			editSpec: videoEdits.editSpec,
+		})
+		.from(videoEdits)
+		.where(eq(videoEdits.videoId, videoId as Video.VideoId));
+
+	return edit ?? null;
+}
+
+async function validateEditTranscriptBackfill(
+	videoId: string,
+	userId: string,
+	requestId: string,
+) {
+	"use step";
+
+	if (!serverEnv().ASSEMBLY_API_KEY) {
+		throw new FatalError("Missing ASSEMBLY_API_KEY");
+	}
+
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+	if (!video || video.ownerId !== userId) {
+		throw new FatalError("Video does not exist");
+	}
+	if (
+		video.transcriptionStatus !== "COMPLETE" ||
+		video.isScreenshot ||
+		(video.source.type !== "desktopMP4" && video.source.type !== "webMP4") ||
+		!video.duration ||
+		video.duration <= 0
+	) {
+		throw new FatalError("Transcript editing is not available");
+	}
+	const status = getEditTranscriptBackfillStatus(video.metadata);
+	if (status?.status !== "processing" || status.requestId !== requestId) {
+		throw new FatalError("Transcript request expired");
+	}
+
+	return video;
+}
+
 async function markSkipped(videoId: string): Promise<void> {
 	"use step";
 
@@ -175,6 +324,8 @@ async function extractAudio(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
+	tempAudioFilename = "audio-temp.mp3",
+	sourceKeyOverride?: string,
 ): Promise<string | null> {
 	"use step";
 
@@ -182,7 +333,12 @@ async function extractAudio(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
 
-	const videoUrl = await resolveVideoSourceUrl(videoId, userId, video);
+	const videoUrl = await resolveVideoSourceUrl(
+		videoId,
+		userId,
+		video,
+		sourceKeyOverride,
+	);
 
 	const useMediaServer = isMediaServerConfigured();
 	console.log(
@@ -240,7 +396,7 @@ async function extractAudio(
 		`[transcribe] Extracted audio for ${videoId}: ${audioBuffer.length} bytes`,
 	);
 
-	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
+	const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
 
 	await bucket
 		.putObject(audioKey, audioBuffer, {
@@ -259,6 +415,7 @@ async function resolveVideoSourceUrl(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
+	sourceKeyOverride?: string,
 ): Promise<string> {
 	const [resolvedBucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
@@ -271,6 +428,7 @@ async function resolveVideoSourceUrl(
 		.limit(1);
 
 	const candidateKeys = [
+		sourceKeyOverride,
 		`${userId}/${videoId}/result.mp4`,
 		upload[0]?.rawFileKey,
 	].filter(
@@ -296,32 +454,58 @@ async function resolveVideoSourceUrl(
 	throw new Error("Video file not accessible");
 }
 
-export function getDeepgramTranscriptionOptions(
+async function transcribeWithAssemblyAI(
+	audioUrl: string,
 	language: AiGenerationLanguage,
-) {
-	const baseOptions = {
-		model: "nova-3",
-		smart_format: true,
-		utterances: true,
-		mime_type: "audio/mpeg",
-	} as const;
+	videoDurationMs: number,
+): Promise<TranscriptionArtifacts> {
+	"use step";
 
-	if (language === AI_GENERATION_LANGUAGE_AUTO) {
-		return {
-			...baseOptions,
-			detect_language: [...DEEPGRAM_DETECTABLE_LANGUAGES],
-		};
+	const audioResponse = await fetch(audioUrl);
+	if (!audioResponse.ok) {
+		throw new Error(
+			`Audio URL not accessible: ${audioResponse.status} ${audioResponse.statusText}`,
+		);
 	}
 
+	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+	const client = new AssemblyAI({
+		apiKey: serverEnv().ASSEMBLY_API_KEY as string,
+	});
+
+	const transcript = await client.transcripts.transcribe({
+		audio: audioBuffer,
+		...getAssemblyAITranscriptionOptions(language),
+		disfluencies: true,
+	});
+
+	console.log(
+		`[transcribe] AssemblyAI transcript ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
+	);
+
+	if (transcript.status === "error") {
+		throw new Error(
+			`AssemblyAI transcription failed (id=${transcript.id}, language=${language}): ${transcript.error ?? "Unknown error"}`,
+		);
+	}
+
+	// One paid pass produces both artifacts: the immutable word transcript (in
+	// the original media timeline) and the caption VTT derived from those words.
+	const durationMs =
+		videoDurationMs > 0
+			? videoDurationMs
+			: (transcript.audio_duration ?? 0) * 1000;
+	const editTranscript = createEditTranscript(transcript, durationMs);
+
 	return {
-		...baseOptions,
-		language,
+		vtt: editTranscriptWordsToCaptionVtt(editTranscript.words),
+		editTranscript: serializeEditTranscript(editTranscript),
 	};
 }
 
-async function transcribeWithDeepgram(
+async function transcribeEditTranscriptWithAssemblyAI(
 	audioUrl: string,
-	language: AiGenerationLanguage,
+	videoDurationSeconds: number,
 ): Promise<string> {
 	"use step";
 
@@ -333,47 +517,37 @@ async function transcribeWithDeepgram(
 	}
 
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+	const client = new AssemblyAI({
+		apiKey: serverEnv().ASSEMBLY_API_KEY as string,
+	});
+	const transcript = await client.transcripts.transcribe({
+		audio: audioBuffer,
+		...getAssemblyAITranscriptionOptions("auto"),
+		disfluencies: true,
+	});
 
-	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
-
-	const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
-		audioBuffer,
-		getDeepgramTranscriptionOptions(language),
+	console.log(
+		`[transcribe] AssemblyAI editable transcript ${transcript.id} finished with status=${transcript.status}, model=${transcript.speech_model_used ?? "unknown"}`,
 	);
 
-	if (error) {
+	if (transcript.status === "error") {
 		throw new Error(
-			`Deepgram transcription failed (language=${language}): ${error.message}`,
+			`AssemblyAI editable transcription failed (id=${transcript.id}): ${transcript.error ?? "Unknown error"}`,
 		);
 	}
 
-	return formatToWebVTT(result as unknown as DeepgramResult);
+	const durationMs =
+		videoDurationSeconds > 0
+			? videoDurationSeconds * 1000
+			: (transcript.audio_duration ?? 0) * 1000;
+	return serializeEditTranscript(createEditTranscript(transcript, durationMs));
 }
-
-const DEEPGRAM_DETECTABLE_LANGUAGES = [
-	"en",
-	"es",
-	"fr",
-	"de",
-	"pt",
-	"it",
-	"nl",
-	"pl",
-	"ro",
-	"sk",
-	"ru",
-	"tr",
-	"ja",
-	"ko",
-	"zh",
-	"hi",
-] as const satisfies readonly AiGenerationLanguageCode[];
 
 async function saveTranscription(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
-	transcription: string,
+	transcription: TranscriptionArtifacts,
 ): Promise<void> {
 	"use step";
 
@@ -382,10 +556,36 @@ async function saveTranscription(
 	).pipe(runWorkflowPromise);
 
 	await bucket
-		.putObject(`${userId}/${videoId}/transcription.vtt`, transcription, {
+		.putObject(`${userId}/${videoId}/transcription.vtt`, transcription.vtt, {
 			contentType: "text/vtt",
 		})
 		.pipe(runWorkflowPromise);
+
+	// The word transcript must always describe the ORIGINAL media. This pass ran
+	// against whatever media is current, so it may only be persisted while the
+	// video is un-edited; edited videos keep (or backfill) their own transcript.
+	const [edit] = await db()
+		.select({ videoId: videoEdits.videoId })
+		.from(videoEdits)
+		.where(eq(videoEdits.videoId, videoId as Video.VideoId));
+
+	if (edit) {
+		console.log(
+			`[transcribe] Skipping edit transcript write for edited video ${videoId}`,
+		);
+	} else {
+		await bucket
+			.putObject(
+				getEditTranscriptObjectKey(userId, videoId),
+				encryptEditTranscriptObject(
+					transcription.editTranscript,
+					userId,
+					videoId,
+				),
+				{ contentType: "application/octet-stream" },
+			)
+			.pipe(runWorkflowPromise);
+	}
 
 	await db()
 		.update(videos)
@@ -393,14 +593,114 @@ async function saveTranscription(
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
 
+async function saveEditTranscriptBackfill(
+	videoId: string,
+	userId: string,
+	requestId: string,
+	video: typeof videos.$inferSelect,
+	editTranscript: string,
+) {
+	"use step";
+
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runWorkflowPromise);
+
+	if (!(await canPersistEditTranscriptBackfill(videoId, requestId, video)))
+		return;
+
+	await bucket
+		.putObject(
+			getEditTranscriptObjectKey(userId, videoId),
+			encryptEditTranscriptObject(editTranscript, userId, videoId),
+			{
+				contentType: "application/octet-stream",
+			},
+		)
+		.pipe(runWorkflowPromise);
+	await clearEditTranscriptBackfill(videoId, requestId);
+}
+
+async function saveEditTranscriptBackfillError(
+	videoId: string,
+	requestId: string,
+	video: typeof videos.$inferSelect,
+) {
+	"use step";
+
+	if (!(await canPersistEditTranscriptBackfill(videoId, requestId, video)))
+		return;
+
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill.status', 'error')`,
+			updatedAt: sql`${videos.updatedAt}`,
+		})
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+			),
+		);
+}
+
+async function canPersistEditTranscriptBackfill(
+	videoId: string,
+	requestId: string,
+	video: typeof videos.$inferSelect,
+) {
+	const [[currentVideo], [activeUpload]] = await Promise.all([
+		db()
+			.select({
+				duration: videos.duration,
+				metadata: videos.metadata,
+				transcriptionStatus: videos.transcriptionStatus,
+				updatedAt: videos.updatedAt,
+			})
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId)),
+		db()
+			.select({ phase: videoUploads.phase })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId))
+			.limit(1),
+	]);
+
+	return (
+		currentVideo?.transcriptionStatus === "COMPLETE" &&
+		currentVideo.duration === video.duration &&
+		currentVideo.updatedAt.getTime() === video.updatedAt.getTime() &&
+		getEditTranscriptBackfillStatus(currentVideo.metadata)?.requestId ===
+			requestId &&
+		!activeUpload
+	);
+}
+
+async function clearEditTranscriptBackfill(videoId: string, requestId: string) {
+	await db()
+		.update(videos)
+		.set({
+			metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.editTranscriptBackfill')`,
+			updatedAt: sql`${videos.updatedAt}`,
+		})
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.editTranscriptBackfill.requestId')) = ${requestId}`,
+			),
+		);
+}
+
 async function cleanupTempAudio(
 	videoId: string,
 	userId: string,
 	video: typeof videos.$inferSelect,
+	tempAudioFilename = "audio-temp.mp3",
 ): Promise<void> {
 	"use step";
 
-	const audioKey = `${userId}/${videoId}/audio-temp.mp3`;
+	const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
 
 	try {
 		const [bucket] = await Storage.getAccessForVideo(

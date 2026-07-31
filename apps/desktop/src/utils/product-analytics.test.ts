@@ -245,4 +245,23 @@ describe("ProductAnalyticsQueue", () => {
 		expect(queue.dropped).toBe(2);
 		expect(sendBatch).not.toHaveBeenCalled();
 	});
+
+	it("reports incremental drops while retaining the cumulative total", () => {
+		const onDrop = vi.fn();
+		const queue = new ProductAnalyticsQueue({
+			sendBatch: sendBatchMock(),
+			isEnabled: () => true,
+			batchSize: 10,
+			capacity: 2,
+			onDrop,
+		});
+
+		queue.enqueue(productEvent(1));
+		queue.enqueue(productEvent(2));
+		queue.enqueue(productEvent(3));
+		queue.clear();
+
+		expect(onDrop.mock.calls).toEqual([[1], [2]]);
+		expect(queue.dropped).toBe(3);
+	});
 });

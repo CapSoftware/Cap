@@ -50,11 +50,13 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
+import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { getSharePlayerUrl } from "@/lib/share-player-url";
+import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import {
+	isIframelyCrawlerUserAgent,
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
@@ -226,6 +228,9 @@ export async function generateMetadata(
 	);
 	const canRenderSocialPreview =
 		isAllowedReferrer || isSocialCrawlerUserAgent(requestUserAgent);
+	const shouldAdvertiseIframelyPlayer =
+		isIframelyCrawlerUserAgent(requestUserAgent) &&
+		(await getPublicShareVideo(videoId).catch(() => null)) !== null;
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
@@ -239,69 +244,14 @@ export async function generateMetadata(
 							}
 						: notFound(),
 				onSome: ([video]) => {
-					const previewImageUrl = new URL(
-						`/api/video/preview?videoId=${videoId}&fallback=og`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString();
-					const ogImageUrl = new URL(
-						`/api/video/og?videoId=${videoId}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString();
-					const playlistUrl = new URL(
-						`/api/playlist?videoId=${video.id}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString();
-
 					return {
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
-						openGraph: {
-							images: [
-								{
-									url: previewImageUrl,
-									width: 480,
-									height: 270,
-									type: "image/gif",
-								},
-								{
-									url: ogImageUrl,
-									width: 1200,
-									height: 630,
-								},
-							],
-							videos: [
-								{
-									url: playlistUrl,
-									width: 1280,
-									height: 720,
-									type: "video/mp4",
-								},
-							],
-						},
-						twitter: {
-							card: "player",
-							title: `${video.name} | Cap Recording`,
-							description: "Watch this video on Cap",
-							images: [
-								{
-									url: previewImageUrl,
-									width: 480,
-									height: 270,
-									type: "image/gif",
-								},
-								{
-									url: ogImageUrl,
-									width: 1200,
-									height: 630,
-								},
-							],
-							players: {
-								playerUrl: getSharePlayerUrl(videoId),
-								streamUrl: playlistUrl,
-								width: 1280,
-								height: 720,
-							},
-						},
+						...buildShareVideoMetadata({
+							videoId,
+							name: video.name,
+							sourceType: video.source.type,
+							webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
+						}),
 						robots: canRenderSocialPreview
 							? "index, follow"
 							: "noindex, nofollow",
@@ -323,17 +273,6 @@ export async function generateMetadata(
 								).toString(),
 								width: 1200,
 								height: 630,
-							},
-						],
-						videos: [
-							{
-								url: new URL(
-									`/api/playlist?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1280,
-								height: 720,
-								type: "video/mp4",
 							},
 						],
 					},
@@ -557,7 +496,7 @@ async function AuthorizedContent({
 	const env = serverEnv();
 	const transcriptionGenerationAvailable =
 		!video.isScreenshot &&
-		Boolean(env.DEEPGRAM_API_KEY) &&
+		Boolean(env.ASSEMBLY_API_KEY) &&
 		!rules.settings.disableTranscript;
 	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
 

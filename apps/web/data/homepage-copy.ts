@@ -332,6 +332,7 @@ export const homepageCopy: HomePageCopy = {
 				"Everything in Desktop License",
 				"Unlimited cloud storage & bandwidth",
 				"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording",
+				"ISO 27001 compliant",
 				"Custom domain (cap.yourdomain.com)",
 				"Password protected shares",
 				"Viewer analytics & engagement",
@@ -406,9 +407,9 @@ export const homepageCopy: HomePageCopy = {
 					"Security is core to Cap. As an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
 			},
 			{
-				question: "What about GDPR/HIPAA compliance?",
+				question: "What about ISO 27001, GDPR, and HIPAA compliance?",
 				answer:
-					"Cap Pro lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"ISO 27001 compliance is included with Cap Pro. Cap Pro also lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
 			},
 		],
 	},

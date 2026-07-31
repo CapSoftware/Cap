@@ -10,8 +10,8 @@ import {
 	Download,
 	Edit3,
 	Globe,
+	LoaderCircle,
 	MessageSquare,
-	X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
@@ -20,6 +20,7 @@ import {
 	SUPPORTED_LANGUAGES,
 } from "@/actions/videos/translation-languages";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { formatTranscriptAsParagraphs } from "@/lib/transcript-text";
 import { normalizeTranscriptCueText } from "@/lib/transcript-vtt";
 import type { VideoData } from "../../types";
 import { type CaptionLanguage, useCaptionContext } from "../CaptionContext";
@@ -35,6 +36,7 @@ interface TranscriptEntry {
 	timestamp: string;
 	text: string;
 	startTime: number;
+	endTime: number;
 }
 
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
@@ -77,9 +79,12 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 		);
 		if (totalSeconds === null) return null;
 
+		const fractionPart = secondsWithMs.split(".")[1];
+		const fraction = fractionPart ? Number(`0.${fractionPart}`) : 0;
+
 		return {
 			mm_ss: `${minutesStr}:${secondsPart}`,
-			totalSeconds,
+			totalSeconds: totalSeconds + (Number.isFinite(fraction) ? fraction : 0),
 		};
 	};
 
@@ -101,11 +106,13 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 			if (!startTimeStr || !endTimeStr) continue;
 
 			const startTimestamp = parseTimestamp(startTimeStr);
+			const endTimestamp = parseTimestamp(endTimeStr);
 			if (startTimestamp) {
 				currentEntry = {
 					id: currentId,
 					timestamp: startTimestamp.mm_ss,
 					startTime: startTimestamp.totalSeconds,
+					endTime: endTimestamp?.totalSeconds ?? startTimestamp.totalSeconds,
 				};
 			}
 			continue;
@@ -148,7 +155,11 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [downloadPressed, setDownloadPressed] = useState(false);
 	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+	const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+	const [showCopyMenu, setShowCopyMenu] = useState(false);
 	const languageMenuRef = useRef<HTMLDivElement>(null);
+	const downloadMenuRef = useRef<HTMLDivElement>(null);
+	const copyMenuRef = useRef<HTMLDivElement>(null);
 
 	const selectedLanguage =
 		captionContext.selectedLanguage === "off"
@@ -175,6 +186,44 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			document.removeEventListener("mousedown", handleClickOutside);
 		};
 	}, [showLanguageMenu]);
+
+	useEffect(() => {
+		const handleClickOutside = (event: MouseEvent) => {
+			if (
+				downloadMenuRef.current &&
+				!downloadMenuRef.current.contains(event.target as Node)
+			) {
+				setShowDownloadMenu(false);
+			}
+		};
+
+		if (showDownloadMenu) {
+			document.addEventListener("mousedown", handleClickOutside);
+		}
+
+		return () => {
+			document.removeEventListener("mousedown", handleClickOutside);
+		};
+	}, [showDownloadMenu]);
+
+	useEffect(() => {
+		const handleClickOutside = (event: MouseEvent) => {
+			if (
+				copyMenuRef.current &&
+				!copyMenuRef.current.contains(event.target as Node)
+			) {
+				setShowCopyMenu(false);
+			}
+		};
+
+		if (showCopyMenu) {
+			document.addEventListener("mousedown", handleClickOutside);
+		}
+
+		return () => {
+			document.removeEventListener("mousedown", handleClickOutside);
+		};
+	}, [showCopyMenu]);
 
 	const {
 		data: transcriptContent,
@@ -361,13 +410,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		return vttHeader + vttEntries.join("\n");
 	};
 
-	const copyTranscriptToClipboard = async () => {
-		if (transcriptData.length === 0) return;
+	const copyTranscriptText = async (content: string) => {
+		if (!content) return;
 
 		setIsCopying(true);
 		try {
-			const formattedTranscript = formatTranscriptForClipboard(transcriptData);
-			await navigator.clipboard.writeText(formattedTranscript);
+			await navigator.clipboard.writeText(content);
 			setCopyPressed(true);
 			setTimeout(() => {
 				setCopyPressed(false);
@@ -379,18 +427,29 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		}
 	};
 
-	const downloadTranscriptFile = () => {
+	const copyFormattedTranscript = () => {
 		if (transcriptData.length === 0) return;
+		void copyTranscriptText(formatTranscriptAsParagraphs(transcriptData));
+	};
 
-		const vttContent = formatTranscriptAsVTT(transcriptData);
-		const blob = new Blob([vttContent], { type: "text/vtt" });
+	const copyTimestampedTranscript = () => {
+		if (transcriptData.length === 0) return;
+		void copyTranscriptText(formatTranscriptForClipboard(transcriptData));
+	};
+
+	const triggerTranscriptDownload = (
+		extension: string,
+		content: string,
+		mimeType: string,
+	) => {
+		const blob = new Blob([content], { type: mimeType });
 		const url = URL.createObjectURL(blob);
 
 		const langSuffix =
 			selectedLanguage === "original" ? "" : `.${selectedLanguage}`;
 		const link = document.createElement("a");
 		link.href = url;
-		link.download = `transcript-${data.id}${langSuffix}.vtt`;
+		link.download = `transcript-${data.id}${langSuffix}.${extension}`;
 		document.body.appendChild(link);
 		link.click();
 		document.body.removeChild(link);
@@ -403,38 +462,35 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		}, 2000);
 	};
 
+	const downloadTranscriptFile = () => {
+		if (transcriptData.length === 0) return;
+		triggerTranscriptDownload(
+			"vtt",
+			formatTranscriptAsVTT(transcriptData),
+			"text/vtt",
+		);
+	};
+
+	const downloadFormattedTranscript = () => {
+		if (transcriptData.length === 0) return;
+		const content = formatTranscriptAsParagraphs(transcriptData);
+		if (!content) return;
+		triggerTranscriptDownload("txt", `${content}\n`, "text/plain");
+	};
+
 	const canEdit = user?.id === data.owner.id && selectedLanguage === "original";
 
 	if (isTranscriptionProcessing && !hasTimedOut) {
 		return (
-			<div className="flex justify-center items-center h-full text-gray-1">
+			<div className="flex h-full items-center justify-center p-7">
 				<div className="text-center">
-					<div className="mb-3">
-						<svg
-							aria-hidden="true"
-							xmlns="http://www.w3.org/2000/svg"
-							className="mx-auto w-8 h-8"
-							viewBox="0 0 24 24"
-						>
-							<style>
-								{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
-							</style>
-							<path
-								fill="#9CA3AF"
-								d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
-								opacity={0.25}
-							/>
-							<path
-								fill="#9CA3AF"
-								d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
-								style={{
-									transformOrigin: "center",
-									animation: "spinner_AtaB .75s infinite linear",
-								}}
-							/>
-						</svg>
-					</div>
-					<p>Transcription in progress...</p>
+					<LoaderCircle className="mx-auto size-5 animate-spin text-gray-9" />
+					<p className="mt-4 text-[13px] font-semibold text-gray-12">
+						Transcribing audio
+					</p>
+					<p className="mt-1.5 text-[11px] leading-[18px] text-gray-9">
+						The transcript will appear here shortly.
+					</p>
 				</div>
 			</div>
 		);
@@ -442,43 +498,23 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	if (isQueryLoading) {
 		return (
-			<div className="flex justify-center items-center h-full">
-				<svg
-					aria-hidden="true"
-					xmlns="http://www.w3.org/2000/svg"
-					className="w-8 h-8"
-					viewBox="0 0 24 24"
-				>
-					<style>
-						{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
-					</style>
-					<path
-						fill="#4B5563"
-						d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
-						opacity={0.25}
-					/>
-					<path
-						fill="#4B5563"
-						d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
-						style={{
-							transformOrigin: "center",
-							animation: "spinner_AtaB .75s infinite linear",
-						}}
-					/>
-				</svg>
+			<div className="flex h-full items-center justify-center">
+				<LoaderCircle className="size-5 animate-spin text-gray-9" />
 			</div>
 		);
 	}
 
 	if (data.transcriptionStatus === "NO_AUDIO") {
 		return (
-			<div className="flex justify-center items-center h-full text-gray-1">
+			<div className="flex h-full items-center justify-center p-7">
 				<div className="text-center">
-					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="text-sm font-medium text-gray-12">
+					<div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-gray-3 text-gray-9">
+						<MessageSquare className="size-[18px]" />
+					</div>
+					<p className="text-[13px] font-semibold text-gray-12">
 						No audio track detected
 					</p>
-					<p className="mt-1 text-xs text-gray-9">
+					<p className="mt-1.5 text-[11px] leading-[18px] text-gray-9">
 						This video doesn't contain audio for transcription
 					</p>
 					{canEdit && (
@@ -512,13 +548,15 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	if (data.transcriptionStatus === "SKIPPED") {
 		return (
-			<div className="flex justify-center items-center h-full text-gray-1">
+			<div className="flex h-full items-center justify-center p-7">
 				<div className="text-center">
-					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="text-sm font-medium text-gray-12">
+					<div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-gray-3 text-gray-9">
+						<MessageSquare className="size-[18px]" />
+					</div>
+					<p className="text-[13px] font-semibold text-gray-12">
 						Transcription disabled
 					</p>
-					<p className="mt-1 text-xs text-gray-9">
+					<p className="mt-1.5 text-[11px] leading-[18px] text-gray-9">
 						Transcription has been disabled for this video
 					</p>
 				</div>
@@ -536,10 +574,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	if (showRetryButton) {
 		return (
-			<div className="flex justify-center items-center h-full text-gray-1">
+			<div className="flex h-full items-center justify-center p-7">
 				<div className="text-center">
-					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="mb-4 text-sm font-medium text-gray-12">
+					<div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-full bg-gray-3 text-gray-9">
+						<MessageSquare className="size-[18px]" />
+					</div>
+					<p className="mb-4 text-[13px] font-semibold text-gray-12">
 						{data.transcriptionStatus === "ERROR"
 							? "Transcript not available"
 							: "No transcript available"}
@@ -573,118 +613,165 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	return (
 		<div className="flex flex-col h-full">
-			<div className="p-4 border-b border-gray-3">
-				<div className="flex flex-col gap-3">
-					<div className="flex gap-2 justify-end">
-						<Button
-							onClick={copyTranscriptToClipboard}
-							disabled={isCopying || transcriptData.length === 0}
-							variant="white"
-							size="xs"
-							spinner={isCopying}
-						>
-							{!copyPressed ? (
-								<Copy className="mr-1 w-3 h-3" />
-							) : (
-								<svg
-									aria-hidden="true"
-									xmlns="http://www.w3.org/2000/svg"
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="mr-1 w-3 h-3 svgpathanimation"
-								>
-									<path d="M20 6 9 17l-5-5" />
-								</svg>
-							)}
-							{copyPressed ? "Copied" : "Copy Transcript"}
-						</Button>
-						<Button
-							onClick={downloadTranscriptFile}
-							disabled={transcriptData.length === 0}
-							variant="white"
-							size="xs"
-						>
-							{!downloadPressed ? (
-								<Download className="mr-1 w-3 h-3" />
-							) : (
-								<svg
-									aria-hidden="true"
-									xmlns="http://www.w3.org/2000/svg"
-									width="12"
-									height="12"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="mr-1 w-3 h-3 svgpathanimation"
-								>
-									<path d="M20 6 9 17l-5-5" />
-								</svg>
-							)}
-							{downloadPressed ? "Downloaded" : "Download"}
-						</Button>
-					</div>
-					<div className="relative" ref={languageMenuRef}>
-						<button
-							onClick={() => setShowLanguageMenu(!showLanguageMenu)}
-							disabled={isTranslating || transcriptData.length === 0}
-							className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-							type="button"
-						>
-							<Globe className="w-3 h-3 text-gray-9" />
-							<span className="text-gray-12">
-								{isTranslating
-									? "Translating..."
-									: selectedLanguage === "original"
-										? "Original"
-										: SUPPORTED_LANGUAGES[selectedLanguage]}
-							</span>
-							<ChevronDown className="w-3 h-3 text-gray-9" />
-						</button>
-						{showLanguageMenu && (
-							<div className="absolute left-0 top-full mt-1 z-50 w-48 py-1 bg-gray-1 border border-gray-3 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+			<div className="flex flex-none items-center justify-between gap-2 border-b border-gray-3 px-4 py-3">
+				<div className="relative" ref={languageMenuRef}>
+					<button
+						onClick={() => setShowLanguageMenu(!showLanguageMenu)}
+						disabled={isTranslating || transcriptData.length === 0}
+						className="inline-flex h-7 items-center gap-1.5 rounded-full border border-gray-4 bg-gray-1 pl-2.5 pr-2 text-[11px] font-medium text-gray-11 transition hover:bg-gray-2 hover:text-gray-12 disabled:cursor-not-allowed disabled:opacity-50"
+						type="button"
+					>
+						{isTranslating ? (
+							<LoaderCircle className="size-3 animate-spin text-gray-9" />
+						) : (
+							<Globe className="size-3 text-gray-9" />
+						)}
+						<span>
+							{isTranslating
+								? "Translating…"
+								: selectedLanguage === "original"
+									? "Original"
+									: SUPPORTED_LANGUAGES[selectedLanguage]}
+						</span>
+						<ChevronDown className="size-3 text-gray-9" />
+					</button>
+					{showLanguageMenu && (
+						<div className="absolute left-0 top-full z-50 mt-1 max-h-64 w-48 overflow-y-auto rounded-xl border border-gray-4 bg-gray-1 py-1 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.25)]">
+							<button
+								onClick={() => handleLanguageChange("original")}
+								className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-gray-2 ${
+									selectedLanguage === "original"
+										? "font-medium text-blue-500"
+										: "text-gray-12"
+								}`}
+								type="button"
+							>
+								Original
+							</button>
+							<div className="my-1 border-t border-gray-3" />
+							{(
+								Object.entries(SUPPORTED_LANGUAGES) as [LanguageCode, string][]
+							).map(([code, name]) => (
 								<button
-									onClick={() => handleLanguageChange("original")}
-									className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
-										selectedLanguage === "original"
-											? "text-blue-500 font-medium"
+									key={code}
+									onClick={() => handleLanguageChange(code)}
+									className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-gray-2 ${
+										selectedLanguage === code
+											? "font-medium text-blue-500"
 											: "text-gray-12"
 									}`}
 									type="button"
 								>
-									Original
+									{name}
+									{captionContext.translatedVttContent.has(code) && (
+										<span className="ml-1.5 text-gray-9">(cached)</span>
+									)}
 								</button>
-								<div className="my-1 border-t border-gray-3" />
-								{(
-									Object.entries(SUPPORTED_LANGUAGES) as [
-										LanguageCode,
-										string,
-									][]
-								).map(([code, name]) => (
-									<button
-										key={code}
-										onClick={() => handleLanguageChange(code)}
-										className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
-											selectedLanguage === code
-												? "text-blue-500 font-medium"
-												: "text-gray-12"
-										}`}
-										type="button"
-									>
-										{name}
-										{captionContext.translatedVttContent.has(code) && (
-											<span className="ml-1.5 text-gray-9">(cached)</span>
-										)}
-									</button>
-								))}
+							))}
+						</div>
+					)}
+				</div>
+
+				<div className="flex items-center gap-1">
+					<div className="relative" ref={copyMenuRef}>
+						<button
+							type="button"
+							aria-label="Copy transcript"
+							title="Copy transcript"
+							onClick={() => setShowCopyMenu((value) => !value)}
+							disabled={isCopying || transcriptData.length === 0}
+							className="inline-flex size-7 items-center justify-center rounded-full text-gray-9 transition hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-40"
+						>
+							{isCopying ? (
+								<LoaderCircle className="size-3.5 animate-spin" />
+							) : copyPressed ? (
+								<Check className="size-3.5 text-blue-500" />
+							) : (
+								<Copy className="size-3.5" />
+							)}
+						</button>
+						{showCopyMenu && (
+							<div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-xl border border-gray-4 bg-gray-1 py-1 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.25)]">
+								<button
+									type="button"
+									onClick={() => {
+										setShowCopyMenu(false);
+										copyFormattedTranscript();
+									}}
+									className="block w-full px-3 py-2 text-left transition-colors hover:bg-gray-2"
+								>
+									<span className="block text-xs font-medium text-gray-12">
+										Formatted text
+									</span>
+									<span className="mt-0.5 block text-[10px] text-gray-9">
+										Clean paragraphs for docs
+									</span>
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										setShowCopyMenu(false);
+										copyTimestampedTranscript();
+									}}
+									className="block w-full px-3 py-2 text-left transition-colors hover:bg-gray-2"
+								>
+									<span className="block text-xs font-medium text-gray-12">
+										With timestamps
+									</span>
+									<span className="mt-0.5 block text-[10px] text-gray-9">
+										[0:12] caption lines
+									</span>
+								</button>
+							</div>
+						)}
+					</div>
+					<div className="relative" ref={downloadMenuRef}>
+						<button
+							type="button"
+							aria-label="Download transcript"
+							title="Download transcript"
+							onClick={() => setShowDownloadMenu((value) => !value)}
+							disabled={transcriptData.length === 0}
+							className="inline-flex size-7 items-center justify-center rounded-full text-gray-9 transition hover:bg-gray-3 hover:text-gray-12 disabled:pointer-events-none disabled:opacity-40"
+						>
+							{downloadPressed ? (
+								<Check className="size-3.5 text-blue-500" />
+							) : (
+								<Download className="size-3.5" />
+							)}
+						</button>
+						{showDownloadMenu && (
+							<div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-xl border border-gray-4 bg-gray-1 py-1 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.25)]">
+								<button
+									type="button"
+									onClick={() => {
+										setShowDownloadMenu(false);
+										downloadFormattedTranscript();
+									}}
+									className="block w-full px-3 py-2 text-left transition-colors hover:bg-gray-2"
+								>
+									<span className="block text-xs font-medium text-gray-12">
+										Formatted text
+									</span>
+									<span className="mt-0.5 block text-[10px] text-gray-9">
+										Clean paragraphs for docs — .txt
+									</span>
+								</button>
+								<button
+									type="button"
+									onClick={() => {
+										setShowDownloadMenu(false);
+										downloadTranscriptFile();
+									}}
+									className="block w-full px-3 py-2 text-left transition-colors hover:bg-gray-2"
+								>
+									<span className="block text-xs font-medium text-gray-12">
+										Captions file
+									</span>
+									<span className="mt-0.5 block text-[10px] text-gray-9">
+										Timestamped subtitles — .vtt
+									</span>
+								</button>
 							</div>
 						)}
 					</div>
@@ -693,118 +780,94 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 			<div className="overflow-y-auto flex-1 relative">
 				{isTranslating && (
-					<div className="absolute inset-0 bg-gray-1/80 flex items-center justify-center z-10">
+					<div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-1/80 backdrop-blur-[2px]">
 						<div className="text-center">
-							<svg
-								aria-hidden="true"
-								xmlns="http://www.w3.org/2000/svg"
-								className="mx-auto w-8 h-8"
-								viewBox="0 0 24 24"
-							>
-								<style>
-									{"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
-								</style>
-								<path
-									fill="#9CA3AF"
-									d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
-									opacity={0.25}
-								/>
-								<path
-									fill="#9CA3AF"
-									d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
-									style={{
-										transformOrigin: "center",
-										animation: "spinner_AtaB .75s infinite linear",
-									}}
-								/>
-							</svg>
-							<p className="mt-2 text-sm text-gray-11">
-								Translating transcript...
+							<LoaderCircle className="mx-auto size-5 animate-spin text-gray-9" />
+							<p className="mt-3 text-[11px] text-gray-9">
+								Translating transcript…
 							</p>
 						</div>
 					</div>
 				)}
-				<div className="p-4 space-y-3">
+				<div className="px-3 py-3">
 					{transcriptData.map((entry) => (
 						<div
 							key={entry.id}
-							className={`group rounded-lg transition-colors ${
+							className={`group flex items-start gap-1 rounded-lg px-2 transition-colors ${
 								editingEntry === entry.id
-									? "bg-gray-1 border border-gray-4 p-3"
+									? "bg-gray-2"
 									: selectedEntry === entry.id
-										? "bg-gray-2 p-3"
-										: "hover:bg-gray-2 p-3"
+										? "bg-gray-3"
+										: "hover:bg-gray-2"
 							}`}
 						>
-							<div className="flex justify-between items-start mb-2">
-								<div className="text-xs font-medium text-gray-8">
-									{entry.timestamp}
-								</div>
-								{canEdit && editingEntry !== entry.id && (
-									<button
-										onClick={(e) => {
-											e.stopPropagation();
-											startEditing(entry);
-										}}
-										type="button"
-										className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-gray-3 rounded-md transition-all duration-200"
-										title="Edit transcript"
-									>
-										<Edit3 className="w-3.5 h-3.5 text-gray-9" />
-									</button>
-								)}
-							</div>
-
 							{editingEntry === entry.id ? (
-								<div className="space-y-3">
-									<div className="p-3 rounded-lg border bg-gray-1 border-gray-4">
-										<textarea
-											value={editText}
-											onChange={(e) => setEditText(e.target.value)}
-											className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
-											rows={Math.max(2, Math.ceil(editText.length / 60))}
-											onClick={(e) => e.stopPropagation()}
-											placeholder="Edit transcript text..."
-										/>
-									</div>
-									<div className="flex gap-2 justify-end">
-										<Button
+								<div className="min-w-0 flex-1 py-2">
+									<textarea
+										value={editText}
+										onChange={(e) => setEditText(e.target.value)}
+										className="w-full resize-none rounded-lg border border-gray-4 bg-gray-1 p-2.5 text-[13px] leading-[22px] text-gray-12 outline-none transition placeholder:text-gray-8 focus:border-blue-500/60 focus:ring-2 focus:ring-blue-500/20"
+										rows={Math.max(2, Math.ceil(editText.length / 60))}
+										onClick={(e) => e.stopPropagation()}
+										placeholder="Edit transcript text..."
+									/>
+									<div className="mt-2 flex justify-end gap-1.5">
+										<button
+											type="button"
 											onClick={(e) => {
 												e.stopPropagation();
 												cancelEditing();
 											}}
 											disabled={isSaving}
-											variant="white"
-											size="xs"
-											className="min-w-[70px]"
+											className="inline-flex h-7 items-center rounded-full px-3 text-[11px] font-medium text-gray-11 transition hover:bg-gray-3 hover:text-gray-12 disabled:opacity-50"
 										>
-											<X className="mr-1 w-3 h-3" />
 											Cancel
-										</Button>
-										<Button
+										</button>
+										<button
+											type="button"
 											onClick={(e) => {
 												e.stopPropagation();
 												saveEdit();
 											}}
 											disabled={isSaving || !editText.trim()}
-											variant="primary"
-											size="xs"
-											className="min-w-[70px]"
-											spinner={isSaving}
+											className="inline-flex h-7 items-center gap-1.5 rounded-full bg-gray-12 px-3 text-[11px] font-semibold text-white transition hover:bg-gray-11 disabled:pointer-events-none disabled:opacity-50"
 										>
-											<Check className="mr-1 w-3 h-3" />
+											{isSaving && (
+												<LoaderCircle className="size-3 animate-spin" />
+											)}
 											Save
-										</Button>
+										</button>
 									</div>
 								</div>
 							) : (
-								<button
-									className="block w-full text-sm leading-relaxed text-left text-gray-12"
-									onClick={() => handleTranscriptClick(entry)}
-									type="button"
-								>
-									{entry.text}
-								</button>
+								<>
+									<button
+										className="flex min-w-0 flex-1 items-baseline gap-2.5 py-1.5 text-left"
+										onClick={() => handleTranscriptClick(entry)}
+										type="button"
+									>
+										<span className="w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
+											{entry.timestamp}
+										</span>
+										<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
+											{entry.text}
+										</span>
+									</button>
+									{canEdit && (
+										<button
+											onClick={(e) => {
+												e.stopPropagation();
+												startEditing(entry);
+											}}
+											type="button"
+											aria-label="Edit transcript entry"
+											title="Edit transcript entry"
+											className="mt-1.5 flex size-6 shrink-0 items-center justify-center rounded-md text-gray-9 opacity-0 transition-all hover:bg-gray-4 hover:text-gray-12 focus-visible:opacity-100 group-hover:opacity-100"
+										>
+											<Edit3 className="size-3" />
+										</button>
+									)}
+								</>
 							)}
 						</div>
 					))}

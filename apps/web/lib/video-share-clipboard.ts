@@ -9,6 +9,14 @@ const escapeHtml = (value: string) =>
 		.replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;");
 
+export const canonicalVideoShareUrl = (url: string) => {
+	const match = url.match(
+		/^https?:\/\/(?:www\.)?cap\.link\/([^/?#]+)([?#].*)?$/,
+	);
+	if (!match) return url;
+	return `https://cap.so/s/${match[1]}${match[2] ?? ""}`;
+};
+
 export type RichVideoLink = {
 	/** The share URL to copy (may include ?t= timestamp). */
 	url: string;
@@ -28,7 +36,7 @@ export const richVideoLinkHtml = ({
 	title,
 	previewImageUrl,
 }: RichVideoLink) => {
-	const safeUrl = escapeHtml(url);
+	const safeUrl = escapeHtml(canonicalVideoShareUrl(url));
 	const safeTitle = escapeHtml(title);
 	const safeImage = escapeHtml(previewImageUrl);
 	// Keep the markup minimal and inline-styled — email clients strip most
@@ -50,6 +58,11 @@ export const richVideoLinkHtml = ({
  * falling back to plain text. Must be called from a user gesture.
  */
 export const copyRichVideoLink = async (link: RichVideoLink) => {
+	const canonicalLink = {
+		...link,
+		url: canonicalVideoShareUrl(link.url),
+	};
+
 	try {
 		if (
 			typeof ClipboardItem !== "undefined" &&
@@ -57,8 +70,10 @@ export const copyRichVideoLink = async (link: RichVideoLink) => {
 		) {
 			await navigator.clipboard.write([
 				new ClipboardItem({
-					"text/plain": new Blob([link.url], { type: "text/plain" }),
-					"text/html": new Blob([richVideoLinkHtml(link)], {
+					"text/plain": new Blob([canonicalLink.url], {
+						type: "text/plain",
+					}),
+					"text/html": new Blob([richVideoLinkHtml(canonicalLink)], {
 						type: "text/html",
 					}),
 				}),
@@ -68,5 +83,5 @@ export const copyRichVideoLink = async (link: RichVideoLink) => {
 	} catch {
 		// Rich copy denied or unsupported — fall through to plain text.
 	}
-	await navigator.clipboard.writeText(link.url);
+	await navigator.clipboard.writeText(canonicalLink.url);
 };

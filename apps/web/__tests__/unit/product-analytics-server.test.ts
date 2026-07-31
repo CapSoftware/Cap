@@ -49,4 +49,17 @@ describe("server product analytics", () => {
 			}),
 		).toEqual([]);
 	});
+
+	it("replaces an invalid timestamp with the receive time", () => {
+		const [row] = createServerProductEventRows({
+			eventId: "event-1",
+			eventName: "purchase_completed",
+			occurredAt: "invalid",
+			platform: "server",
+			userId: "user-1",
+		});
+
+		expect(row?.occurred_at).toBe(row?.received_at);
+		expect(Number.isFinite(Date.parse(row?.occurred_at ?? ""))).toBe(true);
+	});
 });

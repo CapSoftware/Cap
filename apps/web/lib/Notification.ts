@@ -4,7 +4,7 @@ import { FirstView } from "@cap/database/emails/first-view";
 import { NewComment } from "@cap/database/emails/new-comment";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
 import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
@@ -307,9 +307,7 @@ async function sendNewCommentEmail(params: {
 
 		const commenterName = commenter?.name || "Someone";
 
-		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-			? `https://cap.link/${params.videoId}`
-			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
+		const videoUrl = `${serverEnv().WEB_URL}/s/${params.videoId}`;
 
 		await sendEmail({
 			email: recipient.email,
@@ -464,9 +462,7 @@ export async function sendFirstViewEmail(
 			viewerName = viewer?.name || viewer?.email || "Someone";
 		}
 
-		const videoUrl = buildEnv.NEXT_PUBLIC_IS_CAP
-			? `https://cap.link/${params.videoId}`
-			: `${serverEnv().WEB_URL}/s/${params.videoId}`;
+		const videoUrl = `${serverEnv().WEB_URL}/s/${params.videoId}`;
 
 		const displayName = videoWithOwner.videoName || "Untitled Video";
 

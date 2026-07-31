@@ -370,7 +370,7 @@ const cloudEnvironment = (env = process.env) => {
 };
 
 const encodeLocalToken = (userId, tokenId) => {
-	const payload = `{"u": "${userId}", "id": "${tokenId}", "host": null}`;
+	const payload = JSON.stringify({ u: userId, id: tokenId, host: null });
 	const encodedPayload = Buffer.from(payload).toString("base64url");
 	const signature = createHmac("sha256", LOCAL_TOKEN_SIGNING_KEY)
 		.update(encodedPayload)
@@ -422,15 +422,26 @@ const runProcess = (command, args, options = {}) => {
 	}
 };
 
-const runProcessCapture = (command, args, options = {}) => {
-	const result = spawnSync(command, args, {
+const runProcessCapture = (command, args, options = {}, spawn = spawnSync) => {
+	const result = spawn(command, args, {
 		cwd: PROJECT_ROOT,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 		...options,
 	});
 	if (result.error || result.status !== 0) {
-		throw new Error("Unable to verify Tinybird workspace identity.");
+		const detail =
+			result.error?.message?.trim() ||
+			[result.stderr, result.stdout]
+				.map((output) => output?.toString().trim())
+				.filter(Boolean)
+				.join("\n")
+				.slice(0, 2_000);
+		throw new Error(
+			detail
+				? `Unable to verify Tinybird workspace identity: ${detail}`
+				: "Unable to verify Tinybird workspace identity.",
+		);
 	}
 	return result.stdout ?? "";
 };
@@ -531,6 +542,7 @@ export {
 	localEnvironment,
 	operationPlan,
 	runAnalyticsCommand,
+	runProcessCapture,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
 	writeLocalEnvironmentFile,

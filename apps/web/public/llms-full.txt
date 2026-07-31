@@ -71,7 +71,7 @@ Core principles:
 
 - Auto-generated titles, summaries, and clickable chapters for every recording.
 - Automatic transcriptions and a fully searchable transcript; editable captions with translation support.
-- Providers: Deepgram (cloud transcription), Groq with model `openai/gpt-oss-120b` and OpenAI fallback (titles/summaries/chapters), Whisper + Parakeet (on-device desktop captions).
+- Providers: AssemblyAI (cloud transcription), Groq with model `openai/gpt-oss-120b` and OpenAI fallback (titles/summaries/chapters), Whisper + Parakeet (on-device desktop captions).
 - Marketed as "coming soon": Auto-Edit, Noise Reduction, AI Video Search.
 
 ## Sharing & Collaboration
@@ -198,7 +198,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - Desktop: Tauri 2.5 (Rust) + SolidJS / SolidStart; WGPU rendering; FFmpeg; ScreenCaptureKit (macOS) and Direct3D / Media Foundation (Windows); whisper-rs and Parakeet for local captions; `@ts-rest/core` API client; Effect.
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
-- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, Tinybird, Resend; Deepgram + Groq/OpenAI for AI.
+- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, Tinybird, Resend; AssemblyAI + Groq/OpenAI for AI.
 - Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools

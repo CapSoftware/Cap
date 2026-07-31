@@ -178,7 +178,7 @@ AI FEATURES (CAP PRO):
 - Auto-generated titles: AI creates descriptive titles from video content
 - Auto-generated summaries: markdown summaries of video content
 - Auto-generated chapters: clickable timestamped chapters for easy navigation
-- Transcription: automatic speech-to-text via Deepgram, generates VTT captions, editable, downloadable, supports translation to other languages
+- Transcription: automatic speech-to-text via AssemblyAI, generates VTT captions, editable, downloadable, supports translation to other languages
 - All AI processing happens server-side, never on the users device
 
 LOOM IMPORT (CAP PRO):
@@ -215,7 +215,7 @@ SELF-HOSTING:
 - Docs at https://cap.so/self-hosting
 - Desktop app can point to a self-hosted server via Settings > General > Self Host
 - Required: WEB_URL, DATABASE_ENCRYPTION_KEY, NEXTAUTH_SECRET, MYSQL_PASSWORD, S3 configuration
-- Optional: email sending (Resend), AI features (Deepgram, Groq/OpenAI), Google OAuth, SSO
+- Optional: email sending (Resend), AI features (AssemblyAI, Groq/OpenAI), Google OAuth, SSO
 
 REFERRAL PROGRAM:
 - Earn rewards by referring others to Cap

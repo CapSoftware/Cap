@@ -25,13 +25,14 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 	const eventId = normalizeServerIdentifier(event.eventId);
 	if (!anonymousId || !eventId) return [];
 
+	const receivedAt = new Date().toISOString();
 	const properties = normalizeProductEventProperties(event.properties);
 	return createProductEventRows(
 		[
 			{
 				eventId,
 				eventName: event.eventName,
-				occurredAt: event.occurredAt ?? new Date().toISOString(),
+				occurredAt: normalizeServerOccurredAt(event.occurredAt, receivedAt),
 				anonymousId,
 				platform: event.platform,
 				...(event.pathname ? { pathname: event.pathname } : {}),
@@ -39,12 +40,23 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 			},
 		],
 		{
-			receivedAt: new Date().toISOString(),
+			receivedAt,
 			source: "server",
 			userId: event.userId,
 			organizationId: event.organizationId,
 		},
 	);
+}
+
+function normalizeServerOccurredAt(
+	value: string | undefined,
+	fallback: string,
+) {
+	if (!value) return fallback;
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp)
+		? new Date(timestamp).toISOString()
+		: fallback;
 }
 
 export function normalizeServerIdentifier(value?: string) {

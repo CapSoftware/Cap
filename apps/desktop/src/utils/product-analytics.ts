@@ -141,7 +141,7 @@ export class ProductAnalyticsQueue {
 	#recordDrop(count: number) {
 		if (count === 0) return;
 		this.#dropped += count;
-		this.#onDrop?.(this.#dropped);
+		this.#onDrop?.(count);
 	}
 
 	#takeBatch() {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@cap/env", () => ({
 	serverEnv: vi.fn(() => ({
-		DEEPGRAM_API_KEY: "test-deepgram-api-key",
+		ASSEMBLY_API_KEY: "test-assembly-api-key",
 		DATABASE_URL: "mysql://test@localhost/test",
 	})),
 }));
@@ -86,10 +86,10 @@ describe("transcribeVideo", () => {
 	});
 
 	describe("input validation", () => {
-		it("requires DEEPGRAM_API_KEY environment variable", async () => {
+		it("requires ASSEMBLY_API_KEY environment variable", async () => {
 			const { serverEnv } = await import("@cap/env");
 			vi.mocked(serverEnv).mockReturnValueOnce({
-				DEEPGRAM_API_KEY: undefined,
+				ASSEMBLY_API_KEY: undefined,
 			} as ReturnType<typeof serverEnv>);
 
 			const result = await transcribeVideo(

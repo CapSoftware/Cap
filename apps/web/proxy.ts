@@ -12,6 +12,7 @@ import {
 	PRODUCT_ANALYTICS_BROWSER_TOKEN_TTL_SECONDS,
 	readProductAnalyticsBrowserTokenClaims,
 } from "@/lib/analytics/browser-token";
+import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
 	if (!s) return s;
@@ -84,6 +85,18 @@ export async function proxy(request: NextRequest) {
 			"frame-ancestors https://cap.so",
 		);
 		return response;
+	}
+
+	const shareIframeRedirectUrl = getShareIframeRedirectUrl({
+		method: request.method,
+		requestUrl: request.url,
+		fetchDestination: request.headers.get("sec-fetch-dest"),
+	});
+	if (shareIframeRedirectUrl) {
+		const response = NextResponse.redirect(shareIframeRedirectUrl);
+		response.headers.set("Cache-Control", "private, no-store");
+		response.headers.set("Vary", "Sec-Fetch-Dest");
+		return nextWithAnalyticsToken(request, response);
 	}
 
 	const hostname = url.hostname;

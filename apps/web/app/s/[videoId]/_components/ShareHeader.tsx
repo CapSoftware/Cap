@@ -269,39 +269,25 @@ export const ShareHeader = ({
 	};
 
 	const getVideoLink = () => {
-		if (NODE_ENV === "development" && customDomain && domainVerified) {
-			return `https://${customDomain}/s/${data.id}`;
-		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
-			return `${webUrl}/s/${data.id}`;
-		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-			return `https://${customDomain}/s/${data.id}`;
-		} else if (
-			buildEnv.NEXT_PUBLIC_IS_CAP &&
-			!customDomain &&
-			!domainVerified
+		if (
+			(NODE_ENV === "development" || buildEnv.NEXT_PUBLIC_IS_CAP) &&
+			customDomain &&
+			domainVerified
 		) {
-			return `https://cap.link/${data.id}`;
-		} else {
-			return `${webUrl}/s/${data.id}`;
+			return `https://${customDomain}/s/${data.id}`;
 		}
+		return `${webUrl}/s/${data.id}`;
 	};
 
 	const getDisplayLink = () => {
-		if (NODE_ENV === "development" && customDomain && domainVerified) {
-			return `${customDomain}/s/${data.id}`;
-		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
-			return `${webUrl}/s/${data.id}`;
-		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
-			return `${customDomain}/s/${data.id}`;
-		} else if (
-			buildEnv.NEXT_PUBLIC_IS_CAP &&
-			!customDomain &&
-			!domainVerified
+		if (
+			(NODE_ENV === "development" || buildEnv.NEXT_PUBLIC_IS_CAP) &&
+			customDomain &&
+			domainVerified
 		) {
-			return `cap.link/${data.id}`;
-		} else {
-			return `${webUrl}/s/${data.id}`;
+			return `${customDomain}/s/${data.id}`;
 		}
+		return `${webUrl}/s/${data.id}`;
 	};
 
 	const formatTimestamp = (seconds: number): string => {

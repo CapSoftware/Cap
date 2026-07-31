@@ -36,6 +36,7 @@ export default defineConfig({
 			"@/data": join(process.cwd(), "data"),
 			"@/services": join(process.cwd(), "services"),
 			"@/workflows": join(process.cwd(), "workflows"),
+			hooks: join(process.cwd(), "hooks"),
 		},
 	},
 });

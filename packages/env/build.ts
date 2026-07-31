@@ -9,15 +9,11 @@ const create = () =>
 	createEnv({
 		client: {
 			NEXT_PUBLIC_IS_CAP: z.string().optional(),
-			NEXT_PUBLIC_META_PIXEL_ID: z.string().optional(),
-			NEXT_PUBLIC_GOOGLE_AW_ID: z.string().optional(),
 			NEXT_PUBLIC_WEB_URL: z.string(),
 			NEXT_PUBLIC_DOCKER_BUILD: z.string().optional(),
 		},
 		runtimeEnv: {
 			NEXT_PUBLIC_IS_CAP: process.env.NEXT_PUBLIC_IS_CAP,
-			NEXT_PUBLIC_META_PIXEL_ID: process.env.NEXT_PUBLIC_META_PIXEL_ID,
-			NEXT_PUBLIC_GOOGLE_AW_ID: process.env.NEXT_PUBLIC_GOOGLE_AW_ID,
 			NEXT_PUBLIC_WEB_URL:
 				process.env.WEB_URL ?? process.env.NEXT_PUBLIC_WEB_URL,
 			NEXT_PUBLIC_DOCKER_BUILD: process.env.NEXT_PUBLIC_DOCKER_BUILD,

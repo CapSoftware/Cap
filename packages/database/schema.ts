@@ -256,6 +256,35 @@ export const organizationMembers = mysqlTable(
 	}),
 );
 
+export const integrationInstallations = mysqlTable(
+	"integration_installations",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		provider: varchar("provider", { length: 64 }).notNull(),
+		externalId: varchar("externalId", { length: 255 }).notNull(),
+		displayName: varchar("displayName", { length: 255 }).notNull(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		installedByUserId: nanoId("installedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		encryptedCredentials: encryptedText("encryptedCredentials").notNull(),
+		metadata: json("metadata").notNull().$type<Record<string, unknown>>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		providerExternalIdIndex: uniqueIndex("provider_external_id_idx").on(
+			table.provider,
+			table.externalId,
+		),
+		organizationProviderDisplayNameIndex: index(
+			"organization_provider_display_name_idx",
+		).on(table.organizationId, table.provider, table.displayName),
+	}),
+);
+
 export const organizationInvites = mysqlTable(
 	"organization_invites",
 	{
@@ -964,6 +993,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
 	messengerConversations: many(messengerConversations),
 	messengerMessages: many(messengerMessages),
 	messengerSupportEmails: many(messengerSupportEmails),
+	integrationInstallations: many(integrationInstallations),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -1023,6 +1053,7 @@ export const organizationsRelations = relations(
 		spaces: many(spaces),
 		s3Buckets: many(s3Buckets),
 		storageIntegrations: many(storageIntegrations),
+		integrationInstallations: many(integrationInstallations),
 	}),
 );
 
@@ -1050,6 +1081,20 @@ export const organizationMembersRelations = relations(
 		organization: one(organizations, {
 			fields: [organizationMembers.organizationId],
 			references: [organizations.id],
+		}),
+	}),
+);
+
+export const integrationInstallationsRelations = relations(
+	integrationInstallations,
+	({ one }) => ({
+		organization: one(organizations, {
+			fields: [integrationInstallations.organizationId],
+			references: [organizations.id],
+		}),
+		installedByUser: one(users, {
+			fields: [integrationInstallations.installedByUserId],
+			references: [users.id],
 		}),
 	}),
 );

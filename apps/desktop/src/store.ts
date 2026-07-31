@@ -2,7 +2,11 @@ import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
 import type { AutomationsStore } from "~/utils/automations";
-import type { GeneralSettingsStore } from "~/utils/general-settings";
+import {
+	type GeneralSettingsStore,
+	RECORDING_START_SAFETY_DEFAULTS,
+	type RecordingStartSafetySettings,
+} from "~/utils/general-settings";
 import type {
 	AuthStore,
 	HotkeysStore,
@@ -107,6 +111,11 @@ export const mainWindowUIStore = declareStore<MainWindowUIStore>(
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
+export const recordingStartSafetyStore =
+	declareStore<RecordingStartSafetySettings>(
+		"recording_start_safety",
+		RECORDING_START_SAFETY_DEFAULTS,
+	);
 export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
 	"recording_settings",
 	{

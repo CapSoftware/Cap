@@ -11,6 +11,7 @@ import {
 	LOCAL_ENV_FILE,
 	localEnvironment,
 	operationPlan,
+	runProcessCapture,
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
@@ -162,6 +163,18 @@ test("cloud deploy verifies the token workspace before mutation", () => {
 	assert.throws(
 		() => verifyCloudWorkspace(env, () => "warning: invalid token"),
 		/Unable to parse/,
+	);
+});
+
+test("cloud workspace command failures retain bounded diagnostics", () => {
+	assert.throws(
+		() =>
+			runProcessCapture("tb", [], {}, () => ({
+				status: 1,
+				stderr: "workspace lookup failed",
+				stdout: "",
+			})),
+		/Unable to verify Tinybird workspace identity: workspace lookup failed/,
 	);
 });
 

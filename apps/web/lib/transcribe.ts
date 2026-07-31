@@ -29,7 +29,7 @@ export async function transcribeVideo(
 	userId: string,
 	aiGenerationEnabled = false,
 ): Promise<TranscribeResult> {
-	if (!serverEnv().DEEPGRAM_API_KEY) {
+	if (!serverEnv().ASSEMBLY_API_KEY) {
 		return {
 			success: false,
 			message: "Missing necessary environment variables",
