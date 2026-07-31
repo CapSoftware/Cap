@@ -32,7 +32,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				Effect.gen(function* () {
 					const user = yield* Effect.tryPromise(getCurrentUser);
 					if (!user) {
-						const signInUrl = new URL("/auth/signin", serverEnv().WEB_URL);
+						const signInUrl = new URL("/login", serverEnv().WEB_URL);
 						signInUrl.searchParams.set("next", settingsPath);
 						return HttpServerResponse.redirect(signInUrl, { status: 302 });
 					}
