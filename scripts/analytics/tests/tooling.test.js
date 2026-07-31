@@ -59,7 +59,8 @@ test("cloud deploy checks before deploying and waits for completion", () => {
 });
 
 test("local setup builds, verifies copied endpoints and writes its deterministic environment", () => {
-	const commands = operationPlan("local")
+	const steps = operationPlan("local");
+	const commands = steps
 		.filter((step) => step.command)
 		.map((step) => step.args.join(" "));
 	assert.ok(commands.some((command) => command.endsWith("--local build")));
@@ -70,15 +71,20 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 			),
 		),
 	);
-	assert.ok(
-		operationPlan("local").some((step) => step.type === "verify-local"),
+	const appendIndex = steps.findIndex((step) =>
+		step.args?.join(" ").includes("datasource append product_events_v1"),
 	);
-	assert.ok(
-		operationPlan("local").some((step) => step.type === "write-local-env"),
-	);
+	const pauseIndexes = steps
+		.map((step, index) => ({ index, command: step.args?.join(" ") ?? "" }))
+		.filter(({ command }) => command.includes("--local copy pause"))
+		.map(({ index }) => index);
+	assert.equal(pauseIndexes.length, 7);
+	assert.ok(pauseIndexes.every((index) => index < appendIndex));
+	assert.ok(steps.some((step) => step.type === "verify-local"));
+	assert.ok(steps.some((step) => step.type === "write-local-env"));
 	assert.ok(
 		commands.some((command) =>
-			command.includes("up -d --wait --wait-timeout 60 tinybird-local"),
+			command.includes("up -d --wait --wait-timeout 120 tinybird-local"),
 		),
 	);
 	const first = localEnvironment({});
@@ -125,6 +131,25 @@ test("local fixtures use bounded current dates", () => {
 	assert.doesNotMatch(fixture, /2099-01-/);
 	assert.match(fixture, /2026-07-31/);
 	assert.ok(rows.every((row) => row.event_id.endsWith("_20260731")));
+	assert.ok(
+		rows.every(
+			(row) => !row.anonymous_id || row.anonymous_id.endsWith("_20260731"),
+		),
+	);
+	assert.ok(
+		rows.every(
+			(row) => !row.session_id || row.session_id.endsWith("_20260731"),
+		),
+	);
+	assert.ok(
+		rows.every((row) => !row.user_id || row.user_id.endsWith("_20260731")),
+	);
+	assert.ok(
+		rows.every(
+			(row) =>
+				!row.organization_id || row.organization_id.endsWith("_20260731"),
+		),
+	);
 	assert.ok(rows.every((row) => /^[0-9a-f]{32}$/.test(row.payload_hash)));
 	const engagement = rows.find((row) => row.event_name === "page_engagement");
 	assert.match(JSON.parse(engagement.properties).page_view_id, /_20260731$/);

@@ -153,12 +153,15 @@ const operationPlan = (operation) => {
 					"-d",
 					"--wait",
 					"--wait-timeout",
-					"60",
+					"120",
 					"tinybird-local",
 				),
 				localAuth: true,
 			},
 			localCliStep("--local", "build"),
+			...PRODUCT_COPY_PIPES.map((name) =>
+				localCliStep("--local", "copy", "pause", name),
+			),
 			localCliStep(
 				"--local",
 				"datasource",
@@ -186,11 +189,14 @@ const operationPlan = (operation) => {
 					"-d",
 					"--wait",
 					"--wait-timeout",
-					"60",
+					"120",
 					"tinybird-local",
 				),
 				localAuth: true,
 			},
+			...PRODUCT_COPY_PIPES.map((name) =>
+				localCliStep("--local", "copy", "pause", name),
+			),
 			localCliStep(
 				"--local",
 				"datasource",
@@ -730,6 +736,20 @@ const prepareLocalFixture = (now = new Date()) => {
 			`${row.event_id}_${fixtureSuffix}`,
 		]),
 	);
+	const identityFields = [
+		"anonymous_id",
+		"session_id",
+		"user_id",
+		"organization_id",
+	];
+	const identityIds = new Map(
+		templateRows.flatMap((row) =>
+			identityFields
+				.map((field) => row[field])
+				.filter(Boolean)
+				.map((value) => [value, `${value}_${fixtureSuffix}`]),
+		),
+	);
 	const fixtureRows = templateRows.map((templateRow) => {
 		const row = structuredClone(templateRow);
 		for (const [template, replacement] of Object.entries(dates)) {
@@ -737,9 +757,18 @@ const prepareLocalFixture = (now = new Date()) => {
 			row.received_at = row.received_at.replace(template, replacement);
 		}
 		row.event_id = eventIds.get(row.event_id);
+		for (const field of identityFields) {
+			if (identityIds.has(row[field])) {
+				row[field] = identityIds.get(row[field]);
+			}
+		}
 		const properties = JSON.parse(row.properties);
-		if (eventIds.has(properties.page_view_id)) {
-			properties.page_view_id = eventIds.get(properties.page_view_id);
+		for (const [key, value] of Object.entries(properties)) {
+			if (typeof value === "string" && eventIds.has(value)) {
+				properties[key] = eventIds.get(value);
+			} else if (typeof value === "string" && identityIds.has(value)) {
+				properties[key] = identityIds.get(value);
+			}
 		}
 		row.properties = JSON.stringify(properties);
 		const hashPayload = { ...row };
