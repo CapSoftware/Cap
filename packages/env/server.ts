@@ -75,6 +75,29 @@ function createServerEnv() {
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
 
+			/// Reverse-proxy (trusted header) auth
+			// Sign in via an authenticating reverse proxy (e.g. OpenHost). Set BOTH
+			// to enable. SECURITY: only use behind a proxy that strips any client-sent
+			// copy of the header — otherwise it is a login bypass.
+			TRUSTED_PROXY_AUTH_HEADER: z
+				.string()
+				.optional()
+				.describe(
+					"Header an authenticating reverse proxy sets to 'true' on owner-authenticated requests (e.g. 'x-openhost-is-owner'). Unset disables the provider.",
+				),
+			TRUSTED_PROXY_AUTH_EMAIL: z
+				.string()
+				.optional()
+				.describe(
+					"Email of the Cap account to sign in when the trusted header is present.",
+				),
+			TRUSTED_PROXY_AUTH_SECRET: z
+				.string()
+				.optional()
+				.describe(
+					"Optional defense-in-depth: if set, the proxy must also send this value as the 'x-trusted-proxy-secret' header, so a request that reaches Cap outside the proxy can't spoof the trust header.",
+				),
+
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(
 				"Should videos be public or private by default",
