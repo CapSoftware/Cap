@@ -6,8 +6,8 @@ SQL >
 	WITH session_engagement AS (
 		SELECT
 			session_id,
-			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS engaged_ms,
-			max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth')))) AS max_scroll_depth
+			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS session_engaged_ms,
+			max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth')))) AS session_max_scroll_depth
 		FROM product_events_canonical_v1
 		WHERE event_name = 'page_engagement'
 			AND traffic_class = 'external'
@@ -50,9 +50,9 @@ SQL >
 		uniqExactState(visitor_id) AS visitors,
 		toUInt64(count()) AS visits,
 		toUInt64(sum(session_pageviews)) AS pageviews,
-		toUInt64(sum(if(session_pageviews = 1 AND coalesce(engaged_ms, 0) < 10000 AND coalesce(max_scroll_depth, 0) < 50, 1, 0))) AS bounces,
-		toUInt64(sum(coalesce(engaged_ms, 0))) AS visit_duration_ms,
-		toUInt64(sum(coalesce(engaged_ms, 0))) AS engaged_ms
+		toUInt64(sum(if(session_pageviews = 1 AND coalesce(session_engaged_ms, 0) < 10000 AND coalesce(session_max_scroll_depth, 0) < 50, 1, 0))) AS bounces,
+		toUInt64(sum(coalesce(session_engaged_ms, 0))) AS visit_duration_ms,
+		toUInt64(sum(coalesce(session_engaged_ms, 0))) AS engaged_ms
 	FROM sessions
 	LEFT JOIN session_engagement USING session_id
 	GROUP BY date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign
