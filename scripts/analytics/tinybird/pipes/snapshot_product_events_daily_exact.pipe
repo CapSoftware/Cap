@@ -39,4 +39,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_events_daily_exact
 COPY_MODE replace
-COPY_SCHEDULE */5 * * * *
+COPY_SCHEDULE 2-59/8 * * * *

@@ -64,7 +64,7 @@ test("product datasource matches the runtime event contract", () => {
 	assert.equal(datasource.sortingKey, "(received_at, event_id)");
 	assert.equal(datasource.versionColumn, null);
 	assert.equal(datasource.partitionKey, "toYYYYMM(received_at)");
-	assert.equal(datasource.ttl, "toDateTime(received_at) + INTERVAL 90 DAY");
+	assert.equal(datasource.ttl, "toDateTime(received_at) + INTERVAL 400 DAY");
 	assert.deepEqual(datasource.tokens, [
 		{ name: "product_events_ingest", scope: "APPEND" },
 	]);
@@ -117,6 +117,33 @@ test("daily product queries read the exact snapshot instead of raw deliveries", 
 	assert.doesNotMatch(contents, /FROM product_events_daily_mv/);
 });
 
+test("feature adoption merges daily identities after applying filters", () => {
+	const contents = fs.readFileSync(
+		path.join(TINYBIRD_PROJECT_DIR, "pipes", "product_feature_adoption.pipe"),
+		"utf8",
+	);
+	assert.match(contents, /FROM product_events_daily_exact/);
+	assert.match(contents, /GROUP BY date, event_name/);
+	assert.match(contents, /uniqExactMerge\(actors\) AS actors/);
+	assert.match(contents, /toUInt64\(sum\(actors\)\) AS actor_days/);
+	assert.match(contents, /platform = \{\{String\(platform\)\}\}/);
+	assert.doesNotMatch(contents, /FROM product_events_v1/);
+});
+
+test("retention merges identities across activity platforms", () => {
+	const contents = fs.readFileSync(
+		path.join(TINYBIRD_PROJECT_DIR, "pipes", "product_creator_retention.pipe"),
+		"utf8",
+	);
+	assert.match(contents, /'all' \{% end %\} AS platform/);
+	assert.match(
+		contents,
+		/activity_date = cohort_date OR platform = \{\{String\(platform\)\}\}/,
+	);
+	assert.match(contents, /GROUP BY cohort_date, activity_date/);
+	assert.match(contents, /uniqExactMerge\(creator_users\) AS creators/);
+});
+
 test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", () => {
 	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
 	const canonical = project.pipes.find(
@@ -162,6 +189,26 @@ test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", 
 	);
 	assert.match(contents, /revenue_minor/);
 	assert.doesNotMatch(contents, /uniqState\(/);
+});
+
+test("copy schedules serialize canonical and derived rebuilds", () => {
+	const schedules = new Map([
+		["snapshot_product_events_canonical_v1", "0-59/8 * * * *"],
+		["snapshot_product_events_health_hourly", "1-59/8 * * * *"],
+		["snapshot_product_events_daily_exact", "2-59/8 * * * *"],
+		["snapshot_product_traffic_daily_exact", "3-59/8 * * * *"],
+		["snapshot_product_traffic_pages_daily_exact", "4-59/8 * * * *"],
+		["snapshot_product_activation_daily_exact", "5-59/8 * * * *"],
+		["snapshot_product_creator_retention_exact", "6-59/8 * * * *"],
+	]);
+	for (const [name, schedule] of schedules) {
+		const contents = fs.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
+			"utf8",
+		);
+		assert.ok(contents.split("\n").includes(`COPY_SCHEDULE ${schedule}`));
+	}
+	assert.equal(new Set(schedules.values()).size, schedules.size);
 });
 
 test("health queries use stable hourly aggregates and a bounded window", () => {

@@ -12,6 +12,8 @@ import {
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
+	parseLocalStaticToken,
+	prepareLocalFixture,
 	redactProcessOutput,
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
@@ -62,6 +64,13 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		.map((step) => step.args.join(" "));
 	assert.ok(commands.some((command) => command.endsWith("--local build")));
 	assert.ok(
+		commands.some((command) =>
+			command.endsWith(
+				"--local datasource append product_events_v1 --file fixtures/product_events_v1.local.ndjson",
+			),
+		),
+	);
+	assert.ok(
 		operationPlan("local").some((step) => step.type === "verify-local"),
 	);
 	assert.ok(
@@ -94,6 +103,33 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		compose,
 		/tinybird:\/workspace\/tinybird:ro[\s\S]*tinybird-local-workspace\.json:\/workspace\/\.tinyb:ro/,
 	);
+});
+
+test("local fixtures use bounded current dates", () => {
+	const { dates, rows } = prepareLocalFixture(
+		new Date("2026-07-31T12:00:00.000Z"),
+	);
+	assert.deepEqual(dates, {
+		"2099-01-10": "2026-07-29",
+		"2099-01-11": "2026-07-30",
+		"2099-01-12": "2026-07-31",
+	});
+	const fixture = fs.readFileSync(
+		path.join(
+			TINYBIRD_PROJECT_DIR,
+			"fixtures",
+			"product_events_v1.local.ndjson",
+		),
+		"utf8",
+	);
+	assert.doesNotMatch(fixture, /2099-01-/);
+	assert.match(fixture, /2026-07-31/);
+	assert.ok(rows.every((row) => row.event_id.endsWith("_20260731")));
+	assert.ok(rows.every((row) => /^[0-9a-f]{32}$/.test(row.payload_hash)));
+	const engagement = rows.find(
+		(row) => row.event_name === "page_engagement",
+	);
+	assert.match(JSON.parse(engagement.properties).page_view_id, /_20260731$/);
 });
 
 test("local resource discovery returns only the named scoped token", async () => {
@@ -141,6 +177,34 @@ test("local resource discovery falls back to the local user token", async () => 
 	);
 	assert.equal(token, "p.resource-token-value");
 	assert.equal(authorizations.length, 2);
+});
+
+test("local resource discovery uses the CLI when the token API is unsupported", async () => {
+	const environment = localEnvironment({});
+	const token = await localResourceToken(
+		environment,
+		"product_events_agent_read",
+		async () => new Response(null, { status: 403 }),
+		async (_environment, tokenName) => `p.${tokenName}.scoped`,
+	);
+	assert.equal(token, "p.product_events_agent_read.scoped");
+});
+
+test("local CLI token parsing returns only the exact named token", () => {
+	const output = `
+--------------------
+name: product_events_ingest
+token: p.ingest.secret
+--------------------
+name: product_events_agent_read
+token: p.read.secret
+--------------------
+`;
+	assert.equal(
+		parseLocalStaticToken(output, "product_events_agent_read"),
+		"p.read.secret",
+	);
+	assert.equal(parseLocalStaticToken(output, "missing"), undefined);
 });
 
 test("child process output redacts static and query-string tokens", () => {

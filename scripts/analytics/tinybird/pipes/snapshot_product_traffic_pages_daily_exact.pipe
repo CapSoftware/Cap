@@ -66,4 +66,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_traffic_pages_daily_exact
 COPY_MODE replace
-COPY_SCHEDULE */5 * * * *
+COPY_SCHEDULE 4-59/8 * * * *

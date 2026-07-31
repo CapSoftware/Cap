@@ -20,4 +20,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_events_health_hourly
 COPY_MODE replace
-COPY_SCHEDULE */5 * * * *
+COPY_SCHEDULE 1-59/8 * * * *

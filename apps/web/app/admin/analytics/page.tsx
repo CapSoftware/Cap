@@ -151,6 +151,9 @@ function parseFilters(params: SearchParams): AdminAnalyticsFilters {
 		source: optionalFilter(firstParam(params, "source")),
 		country: optionalFilter(firstParam(params, "country"))?.toUpperCase(),
 		plan: optionalFilter(firstParam(params, "plan")),
+		organizationCohort: isDate(firstParam(params, "organizationCohort"))
+			? firstParam(params, "organizationCohort")
+			: undefined,
 	};
 }
 
@@ -208,6 +211,7 @@ function retentionRate(
 	data: AdminAnalyticsDashboard,
 	cohortDay: number,
 	endDate: string,
+	metric: "creators" | "organizations" = "creators",
 ): number | undefined {
 	const end = new Date(`${endDate}T00:00:00.000Z`);
 	const eligibleCohorts = new Set(
@@ -224,7 +228,7 @@ function retentionRate(
 				row.cohortDay === 0 &&
 				eligibleCohorts.has(`${row.cohortDate}:${row.platform}`),
 		),
-		(row) => row.creators,
+		(row) => row[metric],
 	);
 	if (dayZero === 0) return undefined;
 	const retained = sumBy(
@@ -233,7 +237,7 @@ function retentionRate(
 				row.cohortDay === cohortDay &&
 				eligibleCohorts.has(`${row.cohortDate}:${row.platform}`),
 		),
-		(row) => row.creators,
+		(row) => row[metric],
 	);
 	return (100 * retained) / dayZero;
 }
@@ -253,31 +257,7 @@ function revenueTotals(data: AdminAnalyticsDashboard): Array<[string, number]> {
 }
 
 function featureAdoptionRows(data: AdminAnalyticsDashboard) {
-	const rows = new Map<
-		string,
-		{
-			events: number;
-			actorDays: number;
-			userDays: number;
-			organizationDays: number;
-		}
-	>();
-	for (const row of data.productEvents) {
-		const current = rows.get(row.eventName) ?? {
-			events: 0,
-			actorDays: 0,
-			userDays: 0,
-			organizationDays: 0,
-		};
-		current.events += row.events;
-		current.actorDays += row.actors;
-		current.userDays += row.users;
-		current.organizationDays += row.organizations;
-		rows.set(row.eventName, current);
-	}
-	return [...rows.entries()]
-		.map(([eventName, totals]) => ({ eventName, ...totals }))
-		.sort((left, right) => right.events - left.events);
+	return data.featureAdoption;
 }
 
 function qualityStatus(data: AdminAnalyticsDashboard) {
@@ -380,12 +360,13 @@ function AnalyticsFilters({ filters }: { filters: AdminAnalyticsFilters }) {
 					placeholder="All plans"
 				/>
 			</label>
-			<label className="text-xs font-medium text-gray-400">
+			<label className="text-xs font-medium text-gray-600">
 				Organization cohort
 				<input
-					className={`${fieldClassName} cursor-not-allowed bg-gray-100 text-gray-400`}
-					disabled
-					placeholder="Endpoint unavailable"
+					className={fieldClassName}
+					defaultValue={filters.organizationCohort ?? ""}
+					name="organizationCohort"
+					type="date"
 				/>
 			</label>
 			<div className="flex items-end gap-2 sm:col-span-2 lg:col-span-4 xl:col-span-6">
@@ -404,7 +385,9 @@ function AnalyticsFilters({ filters }: { filters: AdminAnalyticsFilters }) {
 			</div>
 			<p className="self-end text-xs text-gray-500">
 				Platform and app version affect product, retention, and health. Source,
-				plan, and country affect endpoints that currently expose those filters.
+				plan, and country affect endpoints that expose those dimensions.
+				Organization cohort selects one first-value UTC date for the retention
+				view.
 			</p>
 		</form>
 	);
@@ -616,6 +599,24 @@ function ProductSection({
 	const d1 = retentionRate(data, 1, filters.endDate);
 	const d7 = retentionRate(data, 7, filters.endDate);
 	const d30 = retentionRate(data, 30, filters.endDate);
+	const organizationD1 = retentionRate(
+		data,
+		1,
+		filters.endDate,
+		"organizations",
+	);
+	const organizationD7 = retentionRate(
+		data,
+		7,
+		filters.endDate,
+		"organizations",
+	);
+	const organizationD30 = retentionRate(
+		data,
+		30,
+		filters.endDate,
+		"organizations",
+	);
 	const features = featureAdoptionRows(data);
 	return (
 		<Section
@@ -670,6 +671,30 @@ function ProductSection({
 				<MetricCard
 					label="D30 retention"
 					value={d30 === undefined ? "Unavailable" : formatPercent(d30)}
+				/>
+				<MetricCard
+					label="Organization D1 retention"
+					value={
+						organizationD1 === undefined
+							? "Unavailable"
+							: formatPercent(organizationD1)
+					}
+				/>
+				<MetricCard
+					label="Organization D7 retention"
+					value={
+						organizationD7 === undefined
+							? "Unavailable"
+							: formatPercent(organizationD7)
+					}
+				/>
+				<MetricCard
+					label="Organization D30 retention"
+					value={
+						organizationD30 === undefined
+							? "Unavailable"
+							: formatPercent(organizationD30)
+					}
 				/>
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -905,7 +930,7 @@ function Definitions() {
 		],
 		[
 			"Retention",
-			"Creator activity on a cohort-relative day divided by eligible day-zero creators; immature cohorts are excluded.",
+			"Creator or organization activity on a cohort-relative day divided by its eligible day-zero cohort; immature cohorts are excluded.",
 		],
 		[
 			"Revenue",
@@ -921,7 +946,7 @@ function Definitions() {
 		],
 		[
 			"Filter coverage",
-			"Date applies throughout. Platform applies to product, creator, retention, and health aggregates. App version, source, and plan apply to product aggregates; app version also applies to health. Country applies to product and supported traffic aggregates.",
+			"Date applies throughout. Platform applies to product, creator, retention, and health aggregates. App version, source, and plan apply to product aggregates; app version also applies to health. Country applies to product and supported traffic aggregates. Organization cohort selects a first-value UTC date for creator and organization retention.",
 		],
 	];
 	return (

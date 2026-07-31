@@ -59,6 +59,8 @@ tauri.linux.conf.json
 # Cursor
 .cursor
 .env*.local
+scripts/analytics/tinybird/fixtures/product_events_v1.local.ndjson
+scripts/analytics/tinybird/fixtures/local-dates.json
 .docs/
 .claude/
 .claude/settings.local.json

@@ -1,6 +1,6 @@
 - name: product_events_health_fixture_window
   description: Reports retry and delivery quality for the fixture window.
   expected_http_status: 200
-  parameters: start_time=2026-01-10%2000%3A00%3A00.000&end_time=2026-01-12%2000%3A00%3A00.000
+  parameters: start_time=2099-01-10%2000%3A00%3A00.000&end_time=2099-01-12%2000%3A00%3A00.000
   expected_result: |
-    {"received_rows":11,"unique_events":11,"unique_payloads":11,"duplicate_rows":0,"payload_conflicts":0,"future_events":0,"late_events":0,"missing_identity_events":0,"ingestion_lag_ms":[100,100,100]}
+    {"received_rows":13,"unique_events":13,"unique_payloads":13,"duplicate_rows":0,"payload_conflicts":0,"future_events":0,"late_events":0,"missing_identity_events":0,"ingestion_lag_ms":[100,100,100]}

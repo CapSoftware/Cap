@@ -1,0 +1,6 @@
+- name: product_feature_adoption_cross_platform
+  description: Counts one user and organization once per day across web and desktop.
+  expected_http_status: 200
+  parameters: start_date=2099-01-12&end_date=2099-01-12&event_name=checkout_started
+  expected_result: |
+    {"event_name":"checkout_started","events":2,"actor_days":1,"user_days":1,"organization_days":1}

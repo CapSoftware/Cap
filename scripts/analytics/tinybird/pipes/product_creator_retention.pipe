@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Query exact creator and organization retention cohorts by UTC activity date and platform.
+	Query exact creator and organization retention cohorts with an optional activity-platform filter and an all-platform cohort baseline.
 
 TOKEN product_events_agent_read READ
 
@@ -10,14 +10,14 @@ SQL >
 		cohort_date,
 		activity_date,
 		dateDiff('day', cohort_date, activity_date) AS cohort_day,
-		platform,
+		{% if defined(platform) %} {{String(platform)}} {% else %} 'all' {% end %} AS platform,
 		uniqExactMerge(creator_users) AS creators,
 		uniqExactMerge(creator_organizations) AS organizations
 	FROM product_creator_retention_exact
 	WHERE cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 180 DAY {% end %}
 		AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
-		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
-	GROUP BY cohort_date, activity_date, platform
+		{% if defined(platform) %} AND (activity_date = cohort_date OR platform = {{String(platform)}}) {% end %}
+	GROUP BY cohort_date, activity_date
 	ORDER BY cohort_date ASC, activity_date ASC, platform ASC
 	LIMIT 5000
 

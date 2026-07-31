@@ -32,5 +32,5 @@ SCHEMA >
 ENGINE MergeTree
 ENGINE_PARTITION_KEY toYYYYMM(received_at)
 ENGINE_SORTING_KEY (occurred_at, event_name, event_id)
-ENGINE_TTL toDateTime(received_at) + INTERVAL 90 DAY
+ENGINE_TTL toDateTime(received_at) + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 8192

@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Five-year exact daily product decision metrics rebuilt from canonical event IDs.
+	Four-hundred-day exact daily product decision metrics rebuilt from canonical event IDs.
 
 SCHEMA >
 	calculated_at DateTime64(3),
@@ -30,5 +30,5 @@ SCHEMA >
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
 ENGINE_SORTING_KEY (date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval)
-ENGINE_TTL date + INTERVAL 5 YEAR
+ENGINE_TTL date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256

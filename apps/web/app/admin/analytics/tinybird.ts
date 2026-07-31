@@ -10,6 +10,7 @@ const ADMIN_ANALYTICS_ENDPOINTS = [
 	"product_creator_activity",
 	"product_creator_retention",
 	"product_events_daily",
+	"product_feature_adoption",
 	"product_events_health",
 	"product_analytics_freshness",
 ] as const;
@@ -27,6 +28,7 @@ export type AdminAnalyticsFilters = {
 	source?: string;
 	country?: string;
 	plan?: string;
+	organizationCohort?: string;
 };
 
 export type TrafficOverviewRow = {
@@ -131,6 +133,14 @@ export type ProductEventRow = {
 	revenueMinor: number;
 };
 
+export type FeatureAdoptionRow = {
+	eventName: string;
+	events: number;
+	actorDays: number;
+	userDays: number;
+	organizationDays: number;
+};
+
 export type ProductEventsHealthRow = {
 	receivedRows: number;
 	uniqueEvents: number;
@@ -161,6 +171,7 @@ export type AdminAnalyticsDashboard = {
 	creatorActivity: CreatorActivityRow[];
 	creatorRetention: CreatorRetentionRow[];
 	productEvents: ProductEventRow[];
+	featureAdoption: FeatureAdoptionRow[];
 	health: ProductEventsHealthRow[];
 	freshness: AnalyticsFreshnessRow[];
 	healthWindowStart: string;
@@ -391,6 +402,16 @@ function decodeProductEventRow(row: UnknownRecord): ProductEventRow {
 	};
 }
 
+function decodeFeatureAdoptionRow(row: UnknownRecord): FeatureAdoptionRow {
+	return {
+		eventName: readString(row, "event_name"),
+		events: readNumber(row, "events"),
+		actorDays: readNumber(row, "actor_days"),
+		userDays: readNumber(row, "user_days"),
+		organizationDays: readNumber(row, "organization_days"),
+	};
+}
+
 function decodeProductEventsHealthRow(
 	row: UnknownRecord,
 ): ProductEventsHealthRow {
@@ -520,6 +541,7 @@ export async function fetchAdminAnalyticsDashboard(
 		creatorActivity,
 		creatorRetention,
 		productEvents,
+		featureAdoption,
 		health,
 		freshness,
 	] = await Promise.all([
@@ -556,7 +578,11 @@ export async function fetchAdminAnalyticsDashboard(
 		),
 		fetchEndpoint(
 			"product_creator_retention",
-			{ ...dateParams, platform: filters.platform },
+			{
+				start_date: filters.organizationCohort ?? filters.startDate,
+				end_date: filters.organizationCohort ?? filters.endDate,
+				platform: filters.platform,
+			},
 			decodeCreatorRetentionRow,
 		),
 		fetchEndpoint(
@@ -571,6 +597,18 @@ export async function fetchAdminAnalyticsDashboard(
 				limit: 1000,
 			},
 			decodeProductEventRow,
+		),
+		fetchEndpoint(
+			"product_feature_adoption",
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				source: filters.source,
+				country: filters.country,
+				plan_id: filters.plan,
+			},
+			decodeFeatureAdoptionRow,
 		),
 		fetchEndpoint(
 			"product_events_health",
@@ -610,6 +648,7 @@ export async function fetchAdminAnalyticsDashboard(
 		creatorActivity,
 		creatorRetention,
 		productEvents,
+		featureAdoption,
 		health,
 		freshness,
 		healthWindowStart,

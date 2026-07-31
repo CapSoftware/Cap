@@ -1,0 +1,49 @@
+DESCRIPTION >
+	Query feature event volume and daily unique adopters after applying decision filters.
+
+TOKEN product_events_agent_read READ
+
+NODE product_feature_adoption_node
+SQL >
+	%
+	WITH daily AS (
+		SELECT
+			date,
+			event_name,
+			toUInt64(sum(events)) AS events,
+			uniqExactMerge(actors) AS actors,
+			uniqExactMerge(users) AS users,
+			uniqExactMerge(organizations) AS organizations
+		FROM product_events_daily_exact
+		WHERE traffic_class = 'external'
+			AND synthetic_run_id = ''
+			AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+			AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+			{% if defined(event_name) %} AND event_name = {{String(event_name)}} {% end %}
+			{% if defined(source) %} AND source = {{String(source)}} {% end %}
+			{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
+			{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
+			{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+			{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
+			{% if defined(device) %} AND device = {{String(device)}} {% end %}
+			{% if defined(browser) %} AND browser = {{String(browser)}} {% end %}
+			{% if defined(os) %} AND os = {{String(os)}} {% end %}
+			{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
+			{% if defined(plan_id) %} AND plan_id = {{String(plan_id)}} {% end %}
+			{% if defined(payment_status) %} AND payment_status = {{String(payment_status)}} {% end %}
+			{% if defined(subscription_status) %} AND subscription_status = {{String(subscription_status)}} {% end %}
+			{% if defined(currency) %} AND currency = upper({{String(currency)}}) {% end %}
+		GROUP BY date, event_name
+	)
+	SELECT
+		event_name,
+		toUInt64(sum(events)) AS events,
+		toUInt64(sum(actors)) AS actor_days,
+		toUInt64(sum(users)) AS user_days,
+		toUInt64(sum(organizations)) AS organization_days
+	FROM daily
+	GROUP BY event_name
+	ORDER BY events DESC, event_name ASC
+	LIMIT 200
+
+TYPE ENDPOINT

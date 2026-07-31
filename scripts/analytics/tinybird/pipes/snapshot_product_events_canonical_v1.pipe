@@ -67,4 +67,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_events_canonical_v1
 COPY_MODE replace
-COPY_SCHEDULE */5 * * * *
+COPY_SCHEDULE 0-59/8 * * * *

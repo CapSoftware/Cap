@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Five-year creator and organization activity cohorts using successful creation-value events.
+	Four-hundred-day creator and organization activity cohorts using successful creation-value events.
 
 SCHEMA >
 	calculated_at DateTime64(3),
@@ -12,5 +12,5 @@ SCHEMA >
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
 ENGINE_SORTING_KEY (cohort_date, activity_date, platform)
-ENGINE_TTL cohort_date + INTERVAL 5 YEAR
+ENGINE_TTL cohort_date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256

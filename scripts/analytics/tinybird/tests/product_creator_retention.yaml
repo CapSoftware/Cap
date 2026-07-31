@@ -1,0 +1,15 @@
+- name: product_creator_retention_cross_platform
+  description: Merges the same creator across desktop and mobile before calculating retention.
+  expected_http_status: 200
+  parameters: start_date=2099-01-10&end_date=2099-01-10
+  expected_result: |
+    {"cohort_date":"2099-01-10","activity_date":"2099-01-10","cohort_day":0,"platform":"all","creators":1,"organizations":1}
+    {"cohort_date":"2099-01-10","activity_date":"2099-01-11","cohort_day":1,"platform":"all","creators":1,"organizations":1}
+
+- name: product_creator_retention_activity_platform
+  description: Keeps the all-platform cohort baseline when filtering retained activity by platform.
+  expected_http_status: 200
+  parameters: start_date=2099-01-10&end_date=2099-01-10&platform=mobile
+  expected_result: |
+    {"cohort_date":"2099-01-10","activity_date":"2099-01-10","cohort_day":0,"platform":"mobile","creators":1,"organizations":1}
+    {"cohort_date":"2099-01-10","activity_date":"2099-01-11","cohort_day":1,"platform":"mobile","creators":1,"organizations":1}

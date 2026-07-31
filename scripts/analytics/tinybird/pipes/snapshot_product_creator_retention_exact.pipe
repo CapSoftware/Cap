@@ -58,4 +58,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_creator_retention_exact
 COPY_MODE replace
-COPY_SCHEDULE */5 * * * *
+COPY_SCHEDULE 6-59/8 * * * *

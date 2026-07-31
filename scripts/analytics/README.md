@@ -6,7 +6,7 @@ Run the complete local analytics setup with:
 pnpm analytics:local
 ```
 
-This starts only the optional Tinybird Local Docker profile, waits for readiness, builds every checked-in datafile, runs the Tinybird fixture suites, and writes the two `PRODUCT_ANALYTICS_TINYBIRD_*` values used by Cap to the gitignored `.env.analytics.local` file. Re-running the command is safe.
+This starts only the optional Tinybird Local Docker profile, waits for readiness, builds every checked-in datafile, shifts deterministic fixtures into the current three-day window, rebuilds each copy-backed aggregate, verifies the typed endpoints, and writes the two `PRODUCT_ANALYTICS_TINYBIRD_*` values used by Cap to the gitignored `.env.analytics.local` file. Re-running the command is safe because decision aggregates deduplicate repeated fixture deliveries and local raw rows remain inside the bounded retention window.
 
 Tinybird Local persists ClickHouse and metadata in named Docker volumes. Normal `pnpm docker:up` and the public self-hosted Compose setup do not start analytics.
 
@@ -53,9 +53,9 @@ The Analytics GitHub workflow runs static tests, Docker Compose validation, a co
 
 ## Performance boundaries
 
-- `product_events_v1` deduplicates retries by deterministic `event_id` and keeps the latest `received_at` version.
-- Monthly partitions and a 400-day TTL bound storage.
-- Common event trends use `product_events_daily_mv`; they do not scan raw events.
+- `product_events_v1` appends every delivery attempt; the canonical copy deduplicates stable `event_id` values and quarantines conflicting payload hashes.
+- Monthly partitions and a 400-day raw, canonical, and decision horizon keep erasure rebuilds complete for every supported dashboard range.
+- Common event trends use `product_events_daily_exact`; they do not scan raw events.
 - Daily counts use unique event states, so retried deliveries cannot inflate the rollup.
 - Raw health queries require explicit start and end times.
 - Event properties are stored as JSON strings and fixtures enforce a 16 KiB ceiling.

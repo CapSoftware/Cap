@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Five-year privacy-safe daily visit metrics with exact visitor states and no raw identifiers.
+	Four-hundred-day privacy-safe daily visit metrics with exact visitor states and no raw identifiers.
 
 SCHEMA >
 	calculated_at DateTime64(3),
@@ -23,5 +23,5 @@ SCHEMA >
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
 ENGINE_SORTING_KEY (date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
-ENGINE_TTL date + INTERVAL 5 YEAR
+ENGINE_TTL date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256

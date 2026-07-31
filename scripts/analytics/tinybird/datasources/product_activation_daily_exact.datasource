@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Five-year signup cohorts and the defensible activation milestone of creating a first share link within seven UTC days.
+	Four-hundred-day signup cohorts and the defensible activation milestone of creating a first share link within seven UTC days.
 
 SCHEMA >
 	calculated_at DateTime64(3),
@@ -11,5 +11,5 @@ SCHEMA >
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
 ENGINE_SORTING_KEY cohort_date
-ENGINE_TTL cohort_date + INTERVAL 5 YEAR
+ENGINE_TTL cohort_date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256

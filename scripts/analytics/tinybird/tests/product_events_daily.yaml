@@ -1,27 +1,27 @@
 - name: product_events_daily_recording_started
   description: Counts unique recording starts by day, source and platform.
   expected_http_status: 200
-  parameters: start_date=2026-01-10&end_date=2026-01-10&event_name=recording_started&country=US
+  parameters: start_date=2099-01-10&end_date=2099-01-10&event_name=recording_started&country=US
   expected_result: |
-    {"date":"2026-01-10","event_name":"recording_started","source":"client","platform":"desktop","app_version":"1.0.0","hostname":"","country":"US","device":"desktop","browser":"","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"","currency":"","billing_interval":"","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}
+    {"date":"2099-01-10","event_name":"recording_started","source":"client","platform":"desktop","app_version":"1.0.0","hostname":"","country":"US","device":"desktop","browser":"","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"","currency":"","billing_interval":"","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}
 
 - name: product_events_daily_web_signup
   description: Filters the daily rollup by source and platform.
   expected_http_status: 200
-  parameters: start_date=2026-01-10&end_date=2026-01-10&source=server&platform=web
+  parameters: start_date=2099-01-10&end_date=2099-01-10&source=server&platform=web
   expected_result: |
-    {"date":"2026-01-10","event_name":"user_signed_up","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"","currency":"","billing_interval":"","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}
+    {"date":"2099-01-10","event_name":"user_signed_up","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"","currency":"","billing_interval":"","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}
 
 - name: product_events_daily_paid_purchase
   description: Separates paid purchases from no-payment trials without scanning raw events.
   expected_http_status: 200
-  parameters: start_date=2026-01-11&end_date=2026-01-11&event_name=purchase_completed&payment_status=paid&subscription_status=active
+  parameters: start_date=2099-01-11&end_date=2099-01-11&event_name=purchase_completed&payment_status=paid&subscription_status=active
   expected_result: |
-    {"date":"2026-01-11","event_name":"purchase_completed","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"paid","subscription_status":"active","currency":"USD","billing_interval":"month","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":2500}
+    {"date":"2099-01-11","event_name":"purchase_completed","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"paid","subscription_status":"active","currency":"USD","billing_interval":"month","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":2500}
 
 - name: product_events_daily_trial
   description: Keeps no-payment trials in their own purchase-status group.
   expected_http_status: 200
-  parameters: start_date=2026-01-11&end_date=2026-01-11&event_name=trial_started&subscription_status=trialing
+  parameters: start_date=2099-01-11&end_date=2099-01-11&event_name=trial_started&subscription_status=trialing
   expected_result: |
-    {"date":"2026-01-11","event_name":"trial_started","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"trialing","currency":"USD","billing_interval":"month","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}
+    {"date":"2099-01-11","event_name":"trial_started","source":"server","platform":"web","app_version":"web","hostname":"cap.so","country":"US","device":"desktop","browser":"Chrome","os":"macOS","channel":"direct","plan_id":"","payment_status":"","subscription_status":"trialing","currency":"USD","billing_interval":"month","events":1,"actors":1,"users":1,"organizations":1,"revenue_minor":0}

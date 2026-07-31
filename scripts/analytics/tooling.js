@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +11,16 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(MODULE_DIR, "..", "..");
 const TINYBIRD_PROJECT_DIR = path.join(MODULE_DIR, "tinybird");
 const LOCAL_VERIFY_SCRIPT = path.join(MODULE_DIR, "verify-local.js");
+const LOCAL_FIXTURE_FILE = path.join(
+	TINYBIRD_PROJECT_DIR,
+	"fixtures",
+	"product_events_v1.local.ndjson",
+);
+const LOCAL_FIXTURE_DATES_FILE = path.join(
+	TINYBIRD_PROJECT_DIR,
+	"fixtures",
+	"local-dates.json",
+);
 const LOCAL_ENV_FILE = path.join(PROJECT_ROOT, ".env.analytics.local");
 const COMPOSE_FILE = path.join(
 	PROJECT_ROOT,
@@ -134,6 +144,7 @@ const operationPlan = (operation) => {
 		],
 		local: [
 			{ type: "validate" },
+			{ type: "prepare-local-fixture" },
 			{ command: "docker", args: composeArgs("config", "--quiet") },
 			{
 				command: "docker",
@@ -148,14 +159,25 @@ const operationPlan = (operation) => {
 				localAuth: true,
 			},
 			localCliStep("--local", "build"),
-			...PRODUCT_COPY_PIPES.map((name) =>
-				localCliStep("--local", "copy", "run", name, "--wait"),
+			localCliStep(
+				"--local",
+				"datasource",
+				"append",
+				"product_events_v1",
+				"--file",
+				"fixtures/product_events_v1.local.ndjson",
 			),
+			...PRODUCT_COPY_PIPES.map((name) => ({
+				...localCliStep("--local", "copy", "run", name, "--wait"),
+				attempts: 5,
+				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
+			})),
 			{ type: "verify-local" },
 			{ type: "write-local-env" },
 		],
 		"local-test": [
 			{ type: "validate" },
+			{ type: "prepare-local-fixture" },
 			{ command: "docker", args: composeArgs("config", "--quiet") },
 			{
 				command: "docker",
@@ -169,9 +191,19 @@ const operationPlan = (operation) => {
 				),
 				localAuth: true,
 			},
-			...PRODUCT_COPY_PIPES.map((name) =>
-				localCliStep("--local", "copy", "run", name, "--wait"),
+			localCliStep(
+				"--local",
+				"datasource",
+				"append",
+				"product_events_v1",
+				"--file",
+				"fixtures/product_events_v1.local.ndjson",
 			),
+			...PRODUCT_COPY_PIPES.map((name) => ({
+				...localCliStep("--local", "copy", "run", name, "--wait"),
+				attempts: 5,
+				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
+			})),
 			{ type: "verify-local" },
 		],
 		"local-tokens": [{ type: "write-local-env" }],
@@ -340,8 +372,8 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		if (product.partitionKey !== "toYYYYMM(received_at)") {
 			issues.push("product_events_v1 must use monthly receipt-time partitions");
 		}
-		if (product.ttl !== "toDateTime(received_at) + INTERVAL 90 DAY") {
-			issues.push("product_events_v1 must retain raw deliveries for 90 days");
+		if (product.ttl !== "toDateTime(received_at) + INTERVAL 400 DAY") {
+			issues.push("product_events_v1 must retain raw deliveries for 400 days");
 		}
 		if (!hasToken(product, "product_events_ingest", "APPEND")) {
 			issues.push("product_events_v1 is missing its append-only token");
@@ -404,6 +436,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		"product_activation",
 		"product_creator_retention",
 		"product_creator_activity",
+		"product_feature_adoption",
 		"product_analytics_freshness",
 	]) {
 		const pipe = project.pipes.find((candidate) => candidate.name === name);
@@ -422,8 +455,10 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 
 	validateFixtures(projectDir, issues);
 	for (const testName of [
+		"product_creator_retention.yaml",
 		"product_events_daily.yaml",
 		"product_events_health.yaml",
+		"product_feature_adoption.yaml",
 		"product_traffic_overview.yaml",
 		"product_traffic_pages.yaml",
 	]) {
@@ -494,7 +529,54 @@ const localEnvironment = (env = process.env) => {
 	};
 };
 
-const localResourceToken = async (environment, tokenName, fetcher = fetch) => {
+const parseLocalStaticToken = (output, tokenName) => {
+	const blocks = output.split(/^-{20,}\s*$/m);
+	for (const block of blocks) {
+		const name = block.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+		const token = block.match(
+			/^token:\s*(p\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/m,
+		)?.[1];
+		if (name === tokenName && token) return token;
+	}
+	return undefined;
+};
+
+const listLocalStaticToken = (environment, tokenName) => {
+	const result = spawnSync(
+		"docker",
+		composeArgs(
+			"run",
+			"--rm",
+			"tinybird-cli",
+			"--local",
+			"token",
+			"ls",
+			"--match",
+			tokenName,
+		),
+		{
+			cwd: PROJECT_ROOT,
+			encoding: "utf8",
+			env: environment,
+			maxBuffer: 1024 * 1024,
+		},
+	);
+	if (result.error || result.status !== 0) {
+		throw new Error(`Tinybird Local could not list static token ${tokenName}`);
+	}
+	const token = parseLocalStaticToken(result.stdout, tokenName);
+	if (!token) {
+		throw new Error(`Tinybird Local did not create static token ${tokenName}`);
+	}
+	return token;
+};
+
+const localResourceToken = async (
+	environment,
+	tokenName,
+	fetcher = fetch,
+	tokenLister = listLocalStaticToken,
+) => {
 	const statuses = [];
 	for (const token of [
 		environment.TB_LOCAL_WORKSPACE_TOKEN,
@@ -517,6 +599,9 @@ const localResourceToken = async (environment, tokenName, fetcher = fetch) => {
 			return resourceToken;
 		}
 	}
+	if (statuses.every((status) => status === 403)) {
+		return tokenLister(environment, tokenName);
+	}
 	throw new Error(
 		`Tinybird Local could not resolve ${tokenName}; token API statuses: ${statuses.join(", ")}`,
 	);
@@ -538,16 +623,27 @@ const redactProcessOutput = (value) =>
 		.replace(/p\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[REDACTED]")
 		.replace(/([?&]token=)[^&\s]+/gi, "$1[REDACTED]");
 
-const runProcess = (command, args, options = {}) => {
-	const result = spawnSync(command, args, {
-		cwd: PROJECT_ROOT,
-		encoding: "utf8",
-		maxBuffer: 32 * 1024 * 1024,
-		...options,
-	});
-	if (result.stdout) process.stdout.write(redactProcessOutput(result.stdout));
-	if (result.stderr) process.stderr.write(redactProcessOutput(result.stderr));
-	if (result.error || result.status !== 0) {
+const runProcess = async (command, args, options = {}) => {
+	const { attempts = 1, retryPattern, ...spawnOptions } = options;
+	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+		const result = spawnSync(command, args, {
+			cwd: PROJECT_ROOT,
+			encoding: "utf8",
+			maxBuffer: 32 * 1024 * 1024,
+			...spawnOptions,
+		});
+		if (result.stdout) process.stdout.write(redactProcessOutput(result.stdout));
+		if (result.stderr) process.stderr.write(redactProcessOutput(result.stderr));
+		if (!result.error && result.status === 0) return;
+		const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+		if (
+			attempt < attempts &&
+			retryPattern instanceof RegExp &&
+			retryPattern.test(output)
+		) {
+			await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+			continue;
+		}
 		throw new Error(
 			result.error?.message ??
 				`Command failed with exit code ${result.status}: ${command} ${args.join(" ")}`,
@@ -605,6 +701,63 @@ const writeLocalEnvironmentFile = (
 	return filePath;
 };
 
+const prepareLocalFixture = (now = new Date()) => {
+	const currentDay = Date.UTC(
+		now.getUTCFullYear(),
+		now.getUTCMonth(),
+		now.getUTCDate(),
+	);
+	const dates = Object.fromEntries(
+		["2099-01-10", "2099-01-11", "2099-01-12"].map((template, index) => [
+			template,
+			new Date(currentDay - (2 - index) * 86_400_000)
+				.toISOString()
+				.slice(0, 10),
+		]),
+	);
+	const templateRows = fs
+		.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "fixtures", "product_events_v1.ndjson"),
+			"utf8",
+		)
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+	const fixtureSuffix = dates["2099-01-12"].replaceAll("-", "");
+	const eventIds = new Map(
+		templateRows.map((row) => [
+			row.event_id,
+			`${row.event_id}_${fixtureSuffix}`,
+		]),
+	);
+	const fixtureRows = templateRows.map((templateRow) => {
+		const row = structuredClone(templateRow);
+		for (const [template, replacement] of Object.entries(dates)) {
+			row.occurred_at = row.occurred_at.replace(template, replacement);
+			row.received_at = row.received_at.replace(template, replacement);
+		}
+		row.event_id = eventIds.get(row.event_id);
+		const properties = JSON.parse(row.properties);
+		if (eventIds.has(properties.page_view_id)) {
+			properties.page_view_id = eventIds.get(properties.page_view_id);
+		}
+		row.properties = JSON.stringify(properties);
+		const hashPayload = { ...row };
+		delete hashPayload.payload_hash;
+		row.payload_hash = createHash("sha256")
+			.update(JSON.stringify(hashPayload))
+			.digest("hex")
+			.slice(0, 32);
+		return row;
+	});
+	fs.writeFileSync(
+		LOCAL_FIXTURE_FILE,
+		`${fixtureRows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+	);
+	fs.writeFileSync(LOCAL_FIXTURE_DATES_FILE, `${JSON.stringify(dates)}\n`);
+	return { dates, rows: fixtureRows };
+};
+
 const runAnalyticsCommand = async (operation) => {
 	for (const step of operationPlan(operation)) {
 		if (step.type === "validate") {
@@ -618,7 +771,11 @@ const runAnalyticsCommand = async (operation) => {
 			continue;
 		}
 		if (step.type === "node-test") {
-			runProcess(process.execPath, ["--test", ...TEST_FILES]);
+			await runProcess(process.execPath, ["--test", ...TEST_FILES]);
+			continue;
+		}
+		if (step.type === "prepare-local-fixture") {
+			prepareLocalFixture();
 			continue;
 		}
 		if (step.type === "verify-cloud-workspace") {
@@ -646,7 +803,7 @@ const runAnalyticsCommand = async (operation) => {
 				environment,
 				"product_events_agent_read",
 			);
-			runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
+			await runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
 					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: readToken,
@@ -655,7 +812,9 @@ const runAnalyticsCommand = async (operation) => {
 			continue;
 		}
 		assertSafeStep(step);
-		runProcess(step.command, step.args, {
+		await runProcess(step.command, step.args, {
+			attempts: step.attempts,
+			retryPattern: step.retryPattern,
 			env: step.cloudAuth
 				? cloudEnvironment()
 				: step.localAuth
@@ -676,6 +835,8 @@ export {
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
+	parseLocalStaticToken,
+	prepareLocalFixture,
 	redactProcessOutput,
 	runAnalyticsCommand,
 	validateAnalyticsProject,
