@@ -218,14 +218,7 @@ export const EmbedVideo = forwardRef<
 				player.addEventListener("loadedmetadata", handleLoadedMetadata);
 			}
 
-			const listener = (arg: boolean) => {
-				setIsPlaying(arg);
-			};
-			player.addEventListener("play", () => listener(true));
-			player.addEventListener("pause", () => listener(false));
 			return () => {
-				player.removeEventListener("play", () => listener(true));
-				player.removeEventListener("pause", () => listener(false));
 				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
 			};
 		}, []);
@@ -235,6 +228,9 @@ export const EmbedVideo = forwardRef<
 				<div
 					ref={playerContainerRef}
 					className="relative w-screen h-screen rounded-xl"
+					onPlayCapture={() => setIsPlaying(true)}
+					onPauseCapture={() => setIsPlaying(false)}
+					onEndedCapture={() => setIsPlaying(false)}
 				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
