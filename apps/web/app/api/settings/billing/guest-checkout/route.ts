@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
+import { guestCheckoutStartedEvent } from "@/lib/analytics/business-events";
 import {
 	queueServerProductEvent,
 	readAnalyticsAnonymousId,
 } from "@/lib/analytics/server";
+import { subscriptionCheckoutAnalyticsMetadata } from "@/lib/analytics/stripe-business-events";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 
 export async function POST(request: NextRequest) {
@@ -24,6 +26,14 @@ export async function POST(request: NextRequest) {
 
 	try {
 		console.log("Creating guest checkout session");
+		const analyticsMetadata = subscriptionCheckoutAnalyticsMetadata({
+			platform: checkoutPlatform,
+			priceId,
+			quantity: quantity || 1,
+			anonymousId: checkoutAnonymousId,
+			isFirstPurchase: true,
+			isGuestCheckout: true,
+		});
 		const redirects = getCheckoutRedirectUrls(
 			checkoutPlatform,
 			serverEnv().WEB_URL,
@@ -34,25 +44,25 @@ export async function POST(request: NextRequest) {
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
-			metadata: {
-				platform: checkoutPlatform,
-				guestCheckout: "true",
-				analyticsIsFirstPurchase: "true",
-				analyticsAnonymousId: checkoutAnonymousId,
-			},
+			metadata: analyticsMetadata,
+			subscription_data: { metadata: analyticsMetadata },
 		});
 
 		if (checkoutSession.url) {
 			console.log("Successfully created guest checkout session");
-			await queueServerProductEvent({
-				eventId: `checkout:${checkoutSession.id}`,
-				eventName: "guest_checkout_started",
-				anonymousId: checkoutAnonymousId,
-				platform: checkoutPlatform,
-				properties: {
-					price_id: priceId,
+			await queueServerProductEvent(
+				guestCheckoutStartedEvent({
+					checkoutId: checkoutSession.id,
+					createdAt: new Date(checkoutSession.created * 1_000),
+					anonymousId: checkoutAnonymousId,
+					platform: checkoutPlatform,
+					priceId,
 					quantity: quantity || 1,
-				},
+				}),
+			).catch(() => {
+				console.warn(
+					"Guest checkout analytics enqueue failed; reconciliation pending",
+				);
 			});
 
 			return Response.json({ url: checkoutSession.url }, { status: 200 });

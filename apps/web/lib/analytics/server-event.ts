@@ -26,8 +26,16 @@ export type ServerProductEvent<
 	: never;
 
 export function createServerProductEventRows(event: ServerProductEvent) {
+	const userId = normalizeServerIdentifier(event.userId);
+	const organizationId = normalizeServerIdentifier(event.organizationId);
+	if (
+		(event.userId !== undefined && !userId) ||
+		(event.organizationId !== undefined && !organizationId)
+	) {
+		return [];
+	}
 	const anonymousId = normalizeServerIdentifier(
-		event.anonymousId ?? (event.userId ? `user:${event.userId}` : undefined),
+		event.anonymousId ?? (userId ? `user:${userId}` : undefined),
 	);
 	const eventId = normalizeServerIdentifier(event.eventId);
 	if (!anonymousId || !eventId) return [];
@@ -53,8 +61,8 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 		{
 			receivedAt,
 			source: "server",
-			userId: event.userId,
-			organizationId: event.organizationId,
+			userId,
+			organizationId,
 		},
 	);
 }

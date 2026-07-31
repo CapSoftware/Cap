@@ -99,6 +99,10 @@ function session(overrides: Record<string, unknown> = {}) {
 		metadata: {
 			platform: "web",
 			analyticsAnonymousId: "anonymous-1",
+			analyticsSchemaVersion: "1",
+			analyticsPriceId: "price_team",
+			analyticsQuantity: "3",
+			analyticsOrganizationId: "org-1",
 			analyticsIsFirstPurchase: "true",
 		},
 		...overrides,
@@ -158,10 +162,10 @@ describe("Stripe subscription analytics", () => {
 				organizationId: "org-1",
 				properties: expect.objectContaining({
 					payment_status: "paid",
+					subscription_status: "paid_checkout",
 					amount_total_minor: 2700,
 					currency: "usd",
-					unit_amount_minor: 900,
-					billing_interval: "month",
+					price_id: "price_team",
 					quantity: 3,
 				}),
 			}),
@@ -184,6 +188,38 @@ describe("Stripe subscription analytics", () => {
 				}),
 			}),
 		);
+	});
+
+	it("does not substitute a mutable organization into immutable checkout metadata", async () => {
+		const metadata = session().metadata;
+		mocks.constructEvent.mockReturnValue(
+			event(
+				"checkout.session.completed",
+				session({
+					metadata: {
+						...metadata,
+						analyticsOrganizationId: undefined,
+					},
+				}),
+			),
+		);
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({ organizationId: undefined }),
+		);
+	});
+
+	it("skips legacy checkouts without immutable analytics metadata", async () => {
+		mocks.constructEvent.mockReturnValue(
+			event(
+				"checkout.session.completed",
+				session({ metadata: { platform: "web" } }),
+			),
+		);
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).not.toHaveBeenCalled();
 	});
 
 	it("does not count an unpaid checkout as a purchase", async () => {
@@ -276,23 +312,19 @@ describe("Stripe subscription analytics", () => {
 	});
 
 	it("records a no-payment trial without counting a purchase", async () => {
-		mocks.retrieveSubscription.mockResolvedValue({
-			...subscription,
-			status: "trialing",
-		});
 		mocks.constructEvent.mockReturnValue(
-			event(
-				"checkout.session.completed",
-				session({
-					payment_status: "no_payment_required",
-					amount_total: 0,
-				}),
-			),
+			event("customer.subscription.created", {
+				...subscription,
+				customer: "cus_1",
+				status: "trialing",
+				trial_end: 1_753_142_400,
+				metadata: session().metadata,
+			}),
 		);
 		expect((await POST(request())).status).toBe(200);
 		expect(mocks.product).toHaveBeenCalledWith(
 			expect.objectContaining({
-				eventId: "stripe:evt_checkout.session.completed:trial_started",
+				eventId: "stripe:evt_customer.subscription.created:trial_started",
 				eventName: "trial_started",
 				properties: expect.objectContaining({
 					subscription_status: "trialing",

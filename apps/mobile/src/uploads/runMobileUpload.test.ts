@@ -1,5 +1,5 @@
 import { Video } from "@cap/web-domain";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileApiClient, UploadFile } from "@/api/mobile";
 import { runMobileUpload } from "./runMobileUpload";
 
@@ -15,11 +15,24 @@ const uploadMock = vi.hoisted(() => ({
 	),
 }));
 
+const analyticsMock = vi.hoisted(() => ({
+	track: vi.fn(() => Promise.resolve("event_1")),
+}));
+
 vi.mock("@/api/mobile", () => ({
 	uploadToTarget: uploadMock.uploadToTarget,
 }));
 
+vi.mock("@/analytics/product-analytics", () => ({
+	classifyMobileAnalyticsFailure: vi.fn(() => "network"),
+	trackMobileProductEventWithId: analyticsMock.track,
+}));
+
 describe("runMobileUpload", () => {
+	beforeEach(() => {
+		analyticsMock.track.mockClear();
+	});
+
 	it("passes native video metadata through upload creation and retry-safe progress", async () => {
 		const createUpload = vi.fn(async () => ({
 			id: Video.VideoId.make("video_123"),
@@ -80,6 +93,12 @@ describe("runMobileUpload", () => {
 			contentLength: 80,
 		});
 		expect(onProgress).toHaveBeenCalledWith(0.5);
+		expect(analyticsMock.track).toHaveBeenCalledWith(
+			"mobile:upload:video_123:completed",
+			expect.any(String),
+			"multipart_upload_complete",
+			expect.objectContaining({ length: 12.5, size: 80 }),
+		);
 	});
 
 	it("normalizes non-finite native upload progress", async () => {
@@ -199,5 +218,38 @@ describe("runMobileUpload", () => {
 			uploaded: 100,
 			total: 100,
 		});
+	});
+
+	it("does not turn a completed upload into a user-visible failure when analytics persistence fails", async () => {
+		analyticsMock.track.mockRejectedValueOnce(new Error("disk unavailable"));
+		const created = {
+			id: Video.VideoId.make("video_123"),
+			shareUrl: "https://cap.so/s/video_123",
+			rawFileKey: "user_123/video_123/raw-upload.mov",
+			upload: {
+				type: "put" as const,
+				url: "https://uploads.example/video",
+				headers: { "Content-Type": "video/quicktime" },
+			},
+		};
+		const completeUpload = vi.fn(async () => ({ success: true as const }));
+		const client = {
+			createUpload: vi.fn(async () => created),
+			updateUploadProgress: vi.fn(async () => ({ success: true as const })),
+			completeUpload,
+		} as unknown as MobileApiClient;
+		const file: UploadFile = {
+			uri: "file:///tmp/video.mov",
+			name: "video.mov",
+			type: "video/quicktime",
+			size: 80,
+			durationSeconds: 12.5,
+			width: 1920,
+			height: 1080,
+		};
+
+		await expect(runMobileUpload({ client, file })).resolves.toBe(created);
+		expect(completeUpload).toHaveBeenCalledTimes(1);
+		expect(analyticsMock.track).toHaveBeenCalledTimes(1);
 	});
 });

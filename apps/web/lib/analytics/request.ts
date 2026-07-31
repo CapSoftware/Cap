@@ -105,6 +105,18 @@ export function isAuthenticatedAnalyticsRequestCandidate(
 	return token?.length === 36;
 }
 
+export function shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+	actorResolved,
+	authorizationCandidate,
+	hasSessionCookie,
+}: {
+	actorResolved: boolean;
+	authorizationCandidate: boolean;
+	hasSessionCookie: boolean;
+}) {
+	return !actorResolved && (authorizationCandidate || hasSessionCookie);
+}
+
 export function isAllowedAnonymousBrowserProductEvent(
 	event: ProductEventInput,
 	anonymousId: string,

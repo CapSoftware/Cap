@@ -12,11 +12,11 @@ import {
 
 const registrySource = `
 export const EVENT_REGISTRY = {
-	page_view: { properties: {} },
-	page_engagement: { properties: {} },
-	tool_interaction: { properties: {} },
-	purchase_completed: { properties: {} },
-	recording_started: { properties: {} },
+	page_view: { platforms: ["web"], properties: {} },
+	page_engagement: { platforms: ["web"], properties: {} },
+	tool_interaction: { platforms: ["web"], properties: {} },
+	purchase_completed: { platforms: ["web", "server"], properties: {} },
+	recording_started: { platforms: ["desktop", "mobile"], properties: {} },
 } as const satisfies Record<string, unknown>;
 `;
 
@@ -35,14 +35,32 @@ test("parses EVENT_REGISTRY with TypeScript syntax", () => {
 		],
 	);
 	assert.deepEqual(registry.diagnostics, []);
+	assert.deepEqual(registry.events.get("recording_started")?.platforms, [
+		"desktop",
+		"mobile",
+	]);
+});
+
+test("rejects missing or dynamic registry platform declarations", () => {
+	const parsed = parseEventRegistry(
+		`export const EVENT_REGISTRY = {
+			missing: { properties: {} },
+			dynamic: { platforms: supportedPlatforms, properties: {} },
+		} as const;`,
+		"event-registry.ts",
+	);
+	assert.deepEqual(
+		parsed.diagnostics.map((entry) => entry.code),
+		["registry-platforms-not-static", "registry-platforms-not-static"],
+	);
 });
 
 test("requires bounded formats for every string property", () => {
 	const parsed = parseEventRegistry(
 		`export const EVENT_REGISTRY = {
-			unsafe: { properties: { error: { type: "string" } } },
-			safeEnum: { properties: { mode: { type: "string", values: ["one"] } } },
-			safeCategory: { properties: { mode: { type: "string", format: "category" } } },
+			unsafe: { platforms: ["web"], properties: { error: { type: "string" } } },
+			safeEnum: { platforms: ["web"], properties: { mode: { type: "string", values: ["one"] } } },
+			safeCategory: { platforms: ["web"], properties: { mode: { type: "string", format: "category" } } },
 		} as const;`,
 		"event-registry.ts",
 	);
@@ -65,8 +83,11 @@ trackEvent("not_analytics");
 `,
 	});
 	assert.deepEqual(
-		result.emissions.map((emission) => emission.eventName),
-		["page_view"],
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[{ eventName: "page_view", platforms: [] }],
 	);
 	assert.deepEqual(result.diagnostics, []);
 });
@@ -90,11 +111,55 @@ trackEvent("user_signed_in");
 	});
 	assert.deepEqual(
 		[...web.emissions, ...desktop.emissions].map(
-			(emission) => emission.eventName,
+			({ eventName, platforms }) => ({ eventName, platforms }),
 		),
-		["page_view", "user_signed_in"],
+		[
+			{ eventName: "page_view", platforms: ["web"] },
+			{ eventName: "user_signed_in", platforms: ["desktop"] },
+		],
 	);
 	assert.deepEqual([...web.diagnostics, ...desktop.diagnostics], []);
+});
+
+test("infers mobile emitters from the typed mobile wrapper path", () => {
+	const result = analyzeTypeScriptSource({
+		file: "apps/mobile/src/auth/AuthContext.tsx",
+		registeredEvents: new Set([...registeredEvents, "user_signed_in"]),
+		sourceText: `
+			import { trackMobileProductEvent } from "@/analytics/product-analytics";
+			trackMobileProductEvent("user_signed_in");
+		`,
+	});
+	assert.deepEqual(
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[{ eventName: "user_signed_in", platforms: ["mobile"] }],
+	);
+	assert.deepEqual(result.diagnostics, []);
+});
+
+test("reads deterministic mobile event names from the typed argument", () => {
+	const result = analyzeTypeScriptSource({
+		file: "apps/mobile/src/uploads/runMobileUpload.ts",
+		registeredEvents: new Set([
+			...registeredEvents,
+			"multipart_upload_complete",
+		]),
+		sourceText: `
+			import { trackMobileProductEventWithId } from "@/analytics/product-analytics";
+			trackMobileProductEventWithId("event-1", "2026-07-31T12:00:00Z", "multipart_upload_complete", {});
+		`,
+	});
+	assert.deepEqual(
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[{ eventName: "multipart_upload_complete", platforms: ["mobile"] }],
+	);
+	assert.deepEqual(result.diagnostics, []);
 });
 
 test("rejects unregistered strings and dynamic templates", () => {
@@ -115,11 +180,11 @@ trackEvent(\`tool_\${action}\`);
 
 test("finds inline server event objects and helper-backed emitters", () => {
 	const server = analyzeTypeScriptSource({
-		file: "server.ts",
+		file: "apps/web/app/api/webhooks/route.ts",
 		registeredEvents,
 		sourceText: `
 import { queueServerProductEvent as queue } from "@/lib/analytics/server";
-queue({ eventId: "evt", eventName: "purchase_completed" });
+queue({ eventId: "evt", eventName: "purchase_completed", platform: "server" });
 `,
 	});
 	const browser = analyzeTypeScriptSource({
@@ -138,11 +203,32 @@ trackToolInteraction({ tool: "trimmer", action: "loaded" });
 	});
 	assert.deepEqual(
 		[...server.emissions, ...browser.emissions].map(
-			(emission) => emission.eventName,
+			({ eventName, platforms }) => ({ eventName, platforms }),
 		),
-		["purchase_completed", "page_view", "page_engagement", "tool_interaction"],
+		[
+			{ eventName: "purchase_completed", platforms: ["server"] },
+			{ eventName: "page_view", platforms: [] },
+			{ eventName: "page_engagement", platforms: [] },
+			{ eventName: "tool_interaction", platforms: [] },
+		],
 	);
 	assert.deepEqual([...server.diagnostics, ...browser.diagnostics], []);
+});
+
+test("does not infer a platform from the file when an inline platform is dynamic", () => {
+	const result = analyzeTypeScriptSource({
+		file: "apps/web/app/api/checkout/route.ts",
+		registeredEvents,
+		sourceText: `
+			import { queueServerProductEvent } from "@/lib/analytics/server";
+			queueServerProductEvent({
+				eventId: "evt",
+				eventName: "purchase_completed",
+				platform: checkoutPlatform,
+			});
+		`,
+	});
+	assert.deepEqual(result.emissions[0]?.platforms, []);
 });
 
 test("accepts registered typed business-event factories", () => {
@@ -158,9 +244,42 @@ test("accepts registered typed business-event factories", () => {
 	assert.deepEqual(result.diagnostics, []);
 	assert.ok(
 		result.emissions.every(
-			(emission) => emission.eventName === "user_signed_up",
+			(emission) =>
+				emission.eventName === "user_signed_up" &&
+				emission.platforms.includes("web"),
 		),
 	);
+});
+
+test("credits only the literal platform passed to routed business factories", () => {
+	const literal = analyzeTypeScriptSource({
+		sourceText: `
+			import { shareLinkCreatedEvent } from "@/lib/analytics/business-events";
+			shareLinkCreatedEvent({ platform: "mobile" });
+		`,
+		file: "apps/web/app/api/mobile/share.ts",
+		registeredEvents: new Set(["share_link_created"]),
+	});
+	const dynamic = analyzeTypeScriptSource({
+		sourceText: `
+			import { shareLinkCreatedEvent } from "@/lib/analytics/business-events";
+			shareLinkCreatedEvent({ platform });
+		`,
+		file: "apps/web/workflows/reconcile.ts",
+		registeredEvents: new Set(["share_link_created"]),
+	});
+	const bounded = analyzeTypeScriptSource({
+		sourceText: `
+			import { checkoutStartedEvent } from "@/lib/analytics/business-events";
+			const checkoutPlatform = platform === "mobile" ? "mobile" : "desktop";
+			checkoutStartedEvent({ platform: checkoutPlatform });
+		`,
+		file: "apps/web/app/api/desktop/subscribe.ts",
+		registeredEvents: new Set(["checkout_started"]),
+	});
+	assert.deepEqual(literal.emissions[0]?.platforms, ["mobile"]);
+	assert.deepEqual(dynamic.emissions[0]?.platforms, []);
+	assert.deepEqual(bounded.emissions[0]?.platforms, ["mobile", "desktop"]);
 });
 
 test("accepts a bounded helper that emits one of a declared event set", () => {
@@ -174,8 +293,20 @@ test("accepts a bounded helper that emits one of a declared event set", () => {
 	});
 	assert.deepEqual(result.diagnostics, []);
 	assert.deepEqual(
-		result.emissions.map((emission) => emission.eventName),
-		["purchase_completed", "trial_started"],
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[
+			{
+				eventName: "purchase_completed",
+				platforms: ["web", "desktop", "mobile", "cli", "server"],
+			},
+			{
+				eventName: "trial_started",
+				platforms: ["web", "desktop", "mobile", "cli", "server"],
+			},
+		],
 	);
 });
 
@@ -260,13 +391,35 @@ fn is_core_product_event(name: &str) -> bool {
 
 test("registry entries without production emitters fail", () => {
 	const diagnostics = findMissingEmitters(registry.events, [
-		{ eventName: "page_view" },
-		{ eventName: "page_engagement" },
-		{ eventName: "tool_interaction" },
-		{ eventName: "purchase_completed" },
+		{ eventName: "page_view", platforms: ["web"] },
+		{ eventName: "page_engagement", platforms: ["web"] },
+		{ eventName: "tool_interaction", platforms: ["web"] },
+		{ eventName: "purchase_completed", platforms: ["web", "server"] },
 	]);
 	assert.deepEqual(
 		diagnostics.map((entry) => entry.message),
-		["Registry event recording_started has no production emitter"],
+		[
+			"Registry event recording_started has no production emitter",
+			"Registry event recording_started declares platform desktop without a production emitter",
+			"Registry event recording_started declares platform mobile without a production emitter",
+		],
+	);
+});
+
+test("fails each declared platform without a matching production emitter", () => {
+	const diagnostics = findMissingEmitters(registry.events, [
+		{ eventName: "recording_started", platforms: ["desktop"] },
+	]);
+	assert.deepEqual(
+		diagnostics
+			.filter(
+				(entry) =>
+					entry.code === "registry-event-platform-without-emitter" &&
+					entry.message.includes("recording_started"),
+			)
+			.map((entry) => entry.message),
+		[
+			"Registry event recording_started declares platform mobile without a production emitter",
+		],
 	);
 });

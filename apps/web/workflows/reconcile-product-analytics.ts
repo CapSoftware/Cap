@@ -1,3 +1,4 @@
+import { PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT } from "@cap/analytics";
 import { db } from "@cap/database";
 import {
 	comments,
@@ -8,24 +9,56 @@ import {
 import { stripe } from "@cap/utils";
 import { and, eq, gte, inArray, isNotNull, lte, notInArray } from "drizzle-orm";
 import type Stripe from "stripe";
-import { ACCOUNT_DELETION_PENDING_SUBJECT } from "@/lib/account-deletion-request";
 import {
+	checkoutStartedEvent,
 	collaborationActionCreatedEvent,
+	guestCheckoutStartedEvent,
 	shareLinkCreatedEvent,
 	userSignedUpEvent,
 } from "@/lib/analytics/business-events";
 import {
 	isSettledSubscriptionPurchase,
-	isStartedSubscriptionTrial,
 	subscriptionCheckoutProductEvent,
+	subscriptionTrialStartedProductEvent,
 } from "@/lib/analytics/stripe-business-events";
 import { enqueueReconciledProductAnalyticsEventStep } from "./deliver-product-analytics-event";
 
 const RECONCILIATION_ROW_LIMIT = 5_000;
-const STRIPE_CHECKOUT_EVENT_TYPES = [
+const STRIPE_ANALYTICS_EVENT_TYPES = [
+	"checkout.session.created",
 	"checkout.session.completed",
 	"checkout.session.async_payment_succeeded",
+	"customer.subscription.created",
 ] as const;
+
+const checkoutQuantity = (session: Stripe.Checkout.Session) => {
+	const quantity = Number(session.metadata?.analyticsQuantity);
+	return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : undefined;
+};
+
+const videoAnalyticsPlatform = (video: {
+	metadata: unknown;
+	source: { type: string };
+}) => {
+	const metadata =
+		typeof video.metadata === "object" && video.metadata !== null
+			? (video.metadata as Record<string, unknown>)
+			: {};
+	if (
+		metadata.source === "mobileUpload" ||
+		metadata.source === "mobileCamera"
+	) {
+		return "mobile" as const;
+	}
+	if (
+		video.source.type === "desktopMP4" ||
+		video.source.type === "desktopSegments" ||
+		video.source.type === "local"
+	) {
+		return "desktop" as const;
+	}
+	return "server" as const;
+};
 
 function reconciliationWindow(scheduledAt: string, lookbackHours: number) {
 	const end = new Date(scheduledAt);
@@ -58,7 +91,10 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 		.from(messengerSupportEmails)
 		.where(
 			and(
-				eq(messengerSupportEmails.subject, ACCOUNT_DELETION_PENDING_SUBJECT),
+				eq(
+					messengerSupportEmails.subject,
+					PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT,
+				),
 				isNotNull(messengerSupportEmails.userId),
 			),
 		);
@@ -86,6 +122,7 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 				createdAt: videos.createdAt,
 				isScreenshot: videos.isScreenshot,
 				source: videos.source,
+				metadata: videos.metadata,
 			})
 			.from(videos)
 			.where(
@@ -128,13 +165,13 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 		...recentUsers.map((user) =>
 			userSignedUpEvent({
 				userId: user.id,
-				organizationId: user.organizationId,
 				createdAt: user.createdAt,
 			}),
 		),
 		...recentVideos.map((video) =>
 			shareLinkCreatedEvent({
 				videoId: video.id,
+				platform: videoAnalyticsPlatform(video),
 				userId: video.userId,
 				organizationId: video.organizationId,
 				createdAt: video.createdAt,
@@ -169,8 +206,8 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 	"use step";
 
 	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
-	const checkoutEvents: Stripe.Event[] = [];
-	for (const type of STRIPE_CHECKOUT_EVENT_TYPES) {
+	const stripeEvents: Stripe.Event[] = [];
+	for (const type of STRIPE_ANALYTICS_EVENT_TYPES) {
 		let startingAfter: string | undefined;
 		for (;;) {
 			const page = await stripe().events.list({
@@ -182,8 +219,8 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 				limit: 100,
 				...(startingAfter ? { starting_after: startingAfter } : {}),
 			});
-			checkoutEvents.push(...page.data);
-			if (checkoutEvents.length > RECONCILIATION_ROW_LIMIT) {
+			stripeEvents.push(...page.data);
+			if (stripeEvents.length > RECONCILIATION_ROW_LIMIT) {
 				throw new Error("Stripe analytics reconciliation row limit exceeded");
 			}
 			if (!page.has_more || page.data.length === 0) break;
@@ -194,19 +231,28 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 		}
 	}
 
-	const sessions = checkoutEvents
+	const sessions = stripeEvents
+		.filter(({ type }) => type.startsWith("checkout.session."))
 		.map((event) => ({
 			event,
 			session: event.data.object as Stripe.Checkout.Session,
 		}))
-		.filter(
-			({ session }) =>
-				session.metadata?.type !== "developer_credits" &&
-				typeof session.customer === "string" &&
-				typeof session.subscription === "string",
-		);
+		.filter(({ session }) => session.metadata?.type !== "developer_credits");
+	const createdSubscriptions = stripeEvents
+		.filter(({ type }) => type === "customer.subscription.created")
+		.map((event) => ({
+			event,
+			subscription: event.data.object as Stripe.Subscription,
+		}));
 	const customerIds = [
-		...new Set(sessions.map(({ session }) => session.customer as string)),
+		...new Set(
+			[
+				...sessions.map(({ session }) => session.customer),
+				...createdSubscriptions.map(
+					({ subscription }) => subscription.customer,
+				),
+			].flatMap((customer) => (typeof customer === "string" ? [customer] : [])),
+		),
 	];
 	const analyticsUsers =
 		customerIds.length === 0
@@ -214,7 +260,6 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 			: await db()
 					.select({
 						id: users.id,
-						activeOrganizationId: users.activeOrganizationId,
 						stripeCustomerId: users.stripeCustomerId,
 					})
 					.from(users)
@@ -225,35 +270,122 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 		),
 	);
 	const reconciled = [];
-	for (const { event, session } of sessions) {
-		const user = usersByCustomerId.get(session.customer as string);
-		if (!user) {
-			throw new Error("Stripe checkout has no matching analytics user");
-		}
-		const subscription = await stripe().subscriptions.retrieve(
-			session.subscription as string,
-		);
-		if (
-			!isSettledSubscriptionPurchase(session, subscription) &&
-			!isStartedSubscriptionTrial(session, subscription)
-		) {
+	let legacyStripeEventsSkipped = 0;
+	for (const { event, subscription } of createdSubscriptions) {
+		const analyticsSchemaVersion = subscription.metadata.analyticsSchemaVersion;
+		if (!analyticsSchemaVersion) {
+			legacyStripeEventsSkipped += 1;
 			continue;
 		}
-		const inviteQuota = subscription.items.data.reduce(
-			(total, item) => total + (item.quantity || 1),
-			0,
-		);
-		const productEvent = subscriptionCheckoutProductEvent({
+		if (analyticsSchemaVersion !== "1") {
+			throw new Error(
+				"Stripe subscription has an unsupported analytics schema",
+			);
+		}
+		if (subscription.status !== "trialing") continue;
+		if (typeof subscription.customer !== "string") {
+			throw new Error("Stripe subscription is missing a customer");
+		}
+		const user = usersByCustomerId.get(subscription.customer);
+		if (!user) {
+			throw new Error("Stripe subscription has no matching analytics user");
+		}
+		const productEvent = subscriptionTrialStartedProductEvent({
 			eventId: event.id,
 			occurredAt: new Date(event.created * 1_000).toISOString(),
-			session,
 			subscription,
-			inviteQuota,
 			user,
 		});
 		if (productEvent) reconciled.push(productEvent);
 	}
-	return reconciled;
+	for (const { event, session } of sessions) {
+		if (String(event.type) === "checkout.session.created") {
+			const analyticsSchemaVersion = session.metadata?.analyticsSchemaVersion;
+			if (!analyticsSchemaVersion) {
+				legacyStripeEventsSkipped += 1;
+				continue;
+			}
+			if (analyticsSchemaVersion !== "1") {
+				throw new Error("Stripe checkout has an unsupported analytics schema");
+			}
+			const priceId = session.metadata?.analyticsPriceId;
+			const quantity = checkoutQuantity(session);
+			const anonymousId = session.metadata?.analyticsAnonymousId;
+			if (!priceId || !quantity) {
+				throw new Error("Stripe checkout is missing analytics metadata");
+			}
+			const createdAt = new Date(session.created * 1_000);
+			if (session.metadata?.guestCheckout === "true") {
+				if (!anonymousId) {
+					throw new Error("Guest checkout is missing analytics identity");
+				}
+				reconciled.push(
+					guestCheckoutStartedEvent({
+						checkoutId: session.id,
+						createdAt,
+						platform:
+							session.metadata?.platform === "mobile" ? "mobile" : "web",
+						anonymousId,
+						priceId,
+						quantity,
+					}),
+				);
+				continue;
+			}
+			if (typeof session.customer !== "string") {
+				throw new Error("Authenticated checkout is missing a customer");
+			}
+			const user = usersByCustomerId.get(session.customer);
+			if (!user) {
+				throw new Error("Stripe checkout has no matching analytics user");
+			}
+			reconciled.push(
+				checkoutStartedEvent({
+					checkoutId: session.id,
+					createdAt,
+					platform:
+						session.metadata?.platform === "desktop"
+							? "desktop"
+							: session.metadata?.platform === "mobile"
+								? "mobile"
+								: "web",
+					userId: user.id,
+					organizationId: session.metadata?.analyticsOrganizationId,
+					anonymousId,
+					priceId,
+					quantity,
+					isOnboarding: session.metadata?.isOnBoarding === "true",
+				}),
+			);
+			continue;
+		}
+		const analyticsSchemaVersion = session.metadata?.analyticsSchemaVersion;
+		if (!analyticsSchemaVersion) {
+			legacyStripeEventsSkipped += 1;
+			continue;
+		}
+		if (analyticsSchemaVersion !== "1") {
+			throw new Error("Stripe checkout has an unsupported analytics schema");
+		}
+		if (
+			typeof session.customer !== "string" ||
+			typeof session.subscription !== "string"
+		) {
+			continue;
+		}
+		const user = usersByCustomerId.get(session.customer);
+		if (!user)
+			throw new Error("Stripe checkout has no matching analytics user");
+		if (!isSettledSubscriptionPurchase(session)) continue;
+		const productEvent = subscriptionCheckoutProductEvent({
+			eventId: event.id,
+			occurredAt: new Date(event.created * 1_000).toISOString(),
+			session,
+			user,
+		});
+		if (productEvent) reconciled.push(productEvent);
+	}
+	return { events: reconciled, legacyStripeEventsSkipped };
 }
 loadStripeAnalyticsReconciliationEventsStep.maxRetries = 4;
 
@@ -264,12 +396,14 @@ export async function reconcileProductAnalyticsWorkflow(input: {
 	"use workflow";
 
 	const events = await loadProductAnalyticsReconciliationEventsStep(input);
-	const stripeEvents = await loadStripeAnalyticsReconciliationEventsStep(input);
-	for (const event of [...events, ...stripeEvents]) {
+	const stripeReconciliation =
+		await loadStripeAnalyticsReconciliationEventsStep(input);
+	for (const event of [...events, ...stripeReconciliation.events]) {
 		await enqueueReconciledProductAnalyticsEventStep(event);
 	}
 	return {
 		databaseReconciled: events.length,
-		stripeReconciled: stripeEvents.length,
+		stripeReconciled: stripeReconciliation.events.length,
+		legacyStripeEventsSkipped: stripeReconciliation.legacyStripeEventsSkipped,
 	};
 }

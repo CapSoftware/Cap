@@ -1,3 +1,4 @@
+import { PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS } from "@cap/analytics";
 import * as Db from "@cap/database/schema";
 import { CurrentUser, Organisation, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -80,6 +81,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.select({
 								id: Db.organizations.id,
 								ownerId: Db.organizations.ownerId,
+								tombstoneAt: Db.organizations.tombstoneAt,
 							})
 							.from(Db.organizations)
 							.where(Dz.eq(Db.organizations.id, id)),
@@ -90,6 +92,21 @@ export class Organisations extends Effect.Service<Organisations>()(
 							Effect.fail(new Organisation.NotFoundError()),
 						),
 					);
+
+				if (!organisation.tombstoneAt) {
+					yield* db.use((db) =>
+						db
+							.update(Db.organizations)
+							.set({ tombstoneAt: new Date() })
+							.where(
+								Dz.and(
+									Dz.eq(Db.organizations.id, id),
+									Dz.isNull(Db.organizations.tombstoneAt),
+								),
+							),
+					);
+				}
+				yield* Effect.sleep(PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS);
 
 				const videos = yield* db.use((db) =>
 					db

@@ -37,6 +37,7 @@ export default function DeleteAccountScreen() {
 		setError(null);
 		try {
 			await auth.client.requestAccountDeletion();
+			await auth.purgeAnalytics();
 			await auth.signOut();
 			router.replace("/(tabs)/account");
 			Alert.alert(

@@ -11,6 +11,7 @@ import {
 	normalizeGeoHeader,
 	normalizeProductEventBatch,
 	ProductAnalyticsRateLimiter,
+	shouldRejectUnresolvedAuthenticatedAnalyticsRequest,
 } from "@/lib/analytics/request";
 import { getVercelDeploymentOrigins } from "@/lib/analytics/vercel-origins";
 
@@ -138,6 +139,37 @@ describe("hasExpectedBrowserAnalyticsMetadata", () => {
 				{ ...event, platform: "desktop" },
 				"anonymous-1",
 			),
+		).toBe(false);
+	});
+
+	it("fails closed when a supplied authenticated identity no longer resolves", () => {
+		expect(
+			shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+				actorResolved: false,
+				authorizationCandidate: true,
+				hasSessionCookie: false,
+			}),
+		).toBe(true);
+		expect(
+			shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+				actorResolved: false,
+				authorizationCandidate: false,
+				hasSessionCookie: true,
+			}),
+		).toBe(true);
+		expect(
+			shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+				actorResolved: true,
+				authorizationCandidate: true,
+				hasSessionCookie: true,
+			}),
+		).toBe(false);
+		expect(
+			shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+				actorResolved: false,
+				authorizationCandidate: false,
+				hasSessionCookie: false,
+			}),
 		).toBe(false);
 	});
 

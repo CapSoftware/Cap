@@ -1,5 +1,6 @@
 import "server-only";
 
+import { PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT } from "@cap/analytics";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { MessengerSupportEmail } from "@cap/database/emails/messenger-support-email";
@@ -16,7 +17,7 @@ import { and, eq, or } from "drizzle-orm";
 const ACCOUNT_DELETION_EMAIL_TO = "hello@cap.so";
 const ACCOUNT_DELETION_EMAIL_FROM = "Cap Support <richie@send.cap.so>";
 export const ACCOUNT_DELETION_PENDING_SUBJECT =
-	"[PENDING] Account deletion request";
+	PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT;
 export const MOBILE_CONTENT_REPORT_PENDING_SUBJECT =
 	"[PENDING] Mobile content report";
 

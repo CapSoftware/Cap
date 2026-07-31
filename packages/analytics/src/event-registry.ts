@@ -178,7 +178,7 @@ export const EVENT_REGISTRY = {
 	},
 	user_signed_up: {
 		...criticalServer,
-		platforms: ["web", "server"],
+		platforms: ["web"],
 		semantic:
 			"The authoritative users table contains a newly created account within the signup tracking window.",
 		properties: {},
@@ -192,15 +192,14 @@ export const EVENT_REGISTRY = {
 	},
 	user_signed_in: {
 		...bestEffortClient,
-		platforms: ["desktop", "mobile", "cli"],
-		semantic: "A native or CLI client persisted a valid authenticated session.",
+		platforms: ["desktop", "mobile"],
+		semantic: "A native client persisted a valid authenticated session.",
 		properties: {},
 	},
 	user_signed_out: {
 		...bestEffortClient,
-		platforms: ["desktop", "mobile", "cli"],
-		semantic:
-			"A native or CLI client deliberately cleared its authenticated session.",
+		platforms: ["desktop", "mobile"],
+		semantic: "A native client deliberately cleared its authenticated session.",
 		properties: {},
 	},
 	recording_started: {
@@ -237,24 +236,24 @@ export const EVENT_REGISTRY = {
 			segment_count: { type: "number", required: true },
 			track_failure_count: { type: "number", required: true },
 			error_class: { type: "string", format: "category" },
-			video_frames_captured: { type: "number", required: true },
-			video_frames_dropped: { type: "number", required: true },
-			drop_rate_pct: { type: "number", required: true },
-			capture_stalls_count: { type: "number", required: true },
-			capture_stalls_max_ms: { type: "number", required: true },
-			mixer_stalls_count: { type: "number", required: true },
-			mixer_stalls_max_ms: { type: "number", required: true },
-			audio_gaps_count: { type: "number", required: true },
-			audio_gaps_total_ms: { type: "number", required: true },
-			queue_saturation_count: { type: "number", required: true },
-			queue_max_depth: { type: "number", required: true },
-			queue_capacity: { type: "number", required: true },
-			frame_drop_count: { type: "number", required: true },
-			frame_drop_rate_high_count: { type: "number", required: true },
-			source_restarts_count: { type: "number", required: true },
-			muxer_crash_count: { type: "number", required: true },
-			audio_degraded_count: { type: "number", required: true },
-			dropped_mic_messages: { type: "number", required: true },
+			video_frames_captured: { type: "number" },
+			video_frames_dropped: { type: "number" },
+			drop_rate_pct: { type: "number" },
+			capture_stalls_count: { type: "number" },
+			capture_stalls_max_ms: { type: "number" },
+			mixer_stalls_count: { type: "number" },
+			mixer_stalls_max_ms: { type: "number" },
+			audio_gaps_count: { type: "number" },
+			audio_gaps_total_ms: { type: "number" },
+			queue_saturation_count: { type: "number" },
+			queue_max_depth: { type: "number" },
+			queue_capacity: { type: "number" },
+			frame_drop_count: { type: "number" },
+			frame_drop_rate_high_count: { type: "number" },
+			source_restarts_count: { type: "number" },
+			muxer_crash_count: { type: "number" },
+			audio_degraded_count: { type: "number" },
+			dropped_mic_messages: { type: "number" },
 		},
 	},
 	multipart_upload_complete: {
@@ -415,7 +414,7 @@ export const EVENT_REGISTRY = {
 		...criticalServer,
 		platforms: ["desktop", "mobile", "server"],
 		semantic:
-			"The authoritative database committed a new shareable video or screenshot owned by the authenticated creator.",
+			"The authoritative database committed a new shareable video or screenshot owned by the authenticated creator; platform identifies the initiating client when durably known.",
 		properties: {
 			asset_type: {
 				type: "string",
@@ -427,7 +426,7 @@ export const EVENT_REGISTRY = {
 	},
 	checkout_started: {
 		...criticalServer,
-		platforms: ["web", "desktop", "mobile"],
+		platforms: ["web", "desktop", "mobile", "cli"],
 		semantic:
 			"Stripe returned a usable hosted checkout URL for an authenticated Cap account.",
 		properties: {
@@ -438,7 +437,7 @@ export const EVENT_REGISTRY = {
 	},
 	guest_checkout_started: {
 		...criticalServer,
-		platforms: ["web", "desktop", "mobile"],
+		platforms: ["web", "mobile"],
 		semantic:
 			"Stripe returned a usable hosted checkout URL for an anonymous guest checkout.",
 		properties: {
@@ -448,9 +447,9 @@ export const EVENT_REGISTRY = {
 	},
 	purchase_completed: {
 		...criticalServer,
-		platforms: ["web", "desktop", "mobile", "server"],
+		platforms: ["web", "desktop", "mobile", "cli", "server"],
 		semantic:
-			"Stripe reports a paid checkout and the associated subscription is active or trialing. Trials without a settled payment are not purchases.",
+			"Stripe reports a checkout whose immutable payment status is paid. Trials without a settled payment are not purchases.",
 		properties: {
 			payment_status: { type: "string", required: true, values: ["paid"] },
 			subscription_status: {
@@ -475,9 +474,9 @@ export const EVENT_REGISTRY = {
 	},
 	trial_started: {
 		...criticalServer,
-		platforms: ["web", "desktop", "mobile", "server"],
+		platforms: ["web", "desktop", "mobile", "cli", "server"],
 		semantic:
-			"Stripe reports a no-payment-required checkout whose subscription is trialing. This is never counted as purchase revenue.",
+			"Stripe emits an immutable subscription-created event whose initial status is trialing. This is never counted as purchase revenue.",
 		properties: {
 			subscription_status: {
 				type: "string",
@@ -596,7 +595,7 @@ export const EVENT_REGISTRY = {
 	},
 	organization_invite_sent: {
 		...criticalServer,
-		platforms: ["web", "server"],
+		platforms: ["web"],
 		semantic:
 			"One or more organization invitations were durably created and sent.",
 		properties: {
@@ -608,7 +607,7 @@ export const EVENT_REGISTRY = {
 	},
 	organization_member_joined: {
 		...criticalServer,
-		platforms: ["web", "server"],
+		platforms: ["web"],
 		semantic:
 			"An invited user became an organization member in the authoritative database.",
 		properties: {
@@ -631,7 +630,7 @@ export const EVENT_REGISTRY = {
 	},
 	seat_quantity_changed: {
 		...criticalServer,
-		platforms: ["web", "server"],
+		platforms: ["web"],
 		semantic:
 			"Stripe accepted an organization subscription quantity change and the local database was updated.",
 		properties: {
@@ -794,7 +793,7 @@ export const EVENT_REGISTRY = {
 	},
 	experiment_exposed: {
 		...bestEffortClient,
-		platforms: ["web", "desktop", "mobile"],
+		platforms: ["web"],
 		semantic:
 			"A stable experiment assignment was rendered to an actor; conversions never infer exposure.",
 		properties: {
@@ -863,6 +862,16 @@ export type ClientProductEventName = {
 	[Name in CoreEventName]: (typeof EVENT_REGISTRY)[Name]["authority"] extends "server"
 		? never
 		: Name;
+}[CoreEventName];
+
+export type ClientProductEventNameForPlatform<
+	Platform extends ProductEventPlatform,
+> = {
+	[Name in CoreEventName]: (typeof EVENT_REGISTRY)[Name]["authority"] extends "server"
+		? never
+		: Platform extends (typeof EVENT_REGISTRY)[Name]["platforms"][number]
+			? Name
+			: never;
 }[CoreEventName];
 
 export type ServerProductEventName = {

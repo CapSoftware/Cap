@@ -38,6 +38,10 @@ import {
 	SafeAreaView,
 	useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import {
+	classifyMobileAnalyticsFailure,
+	trackMobileProductEventWithId,
+} from "@/analytics/product-analytics";
 import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
 import { getProPlan } from "@/billing/pro";
 import { TeleprompterOverlay } from "@/recording/TeleprompterOverlay";
@@ -387,6 +391,7 @@ export default function RecordScreen() {
 	const discardRecording = useRef(false);
 	const activeRecordingId = useRef<string | null>(null);
 	const recordingStartedAt = useRef<number | null>(null);
+	const recordingTerminalTracked = useRef(false);
 	const automaticStopStarted = useRef(false);
 	const screenCompletionStarted = useRef(false);
 	const screenPreparationAttempted = useRef(false);
@@ -529,6 +534,7 @@ export default function RecordScreen() {
 		if (!cameraRef.current || !cameraReady || phase !== "ready") return;
 		discardRecording.current = false;
 		automaticStopStarted.current = false;
+		recordingTerminalTracked.current = false;
 		setError(null);
 		setPhase("starting");
 		let createdId: string | null = null;
@@ -548,6 +554,23 @@ export default function RecordScreen() {
 				segmentDurationSeconds: recordingSegmentDurationSeconds,
 			});
 			recordingStartedAt.current = Date.now();
+			await trackMobileProductEventWithId(
+				`mobile:recording:${created.id}:started`,
+				new Date(recordingStartedAt.current).toISOString(),
+				"recording_started",
+				{
+					mode: "camera",
+					target_kind: "camera",
+					has_camera: true,
+					has_mic: microphonePermission?.granted === true,
+					has_system_audio: false,
+					target_fps: 30,
+					target_width: 720,
+					target_height: 1280,
+					fragmented: true,
+					custom_cursor_capture: false,
+				},
+			).catch(() => undefined);
 			setPhase("recording");
 			void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 			setTeleprompterRestartKey((current) => current + 1);
@@ -570,6 +593,7 @@ export default function RecordScreen() {
 		cameraReady,
 		hasScript,
 		loadRecordingDurationLimit,
+		microphonePermission?.granted,
 		phase,
 		recordingUploads,
 	]);
@@ -664,6 +688,23 @@ export default function RecordScreen() {
 				if (recordingStartedAt.current === null) {
 					recordingStartedAt.current = Date.now();
 				}
+				await trackMobileProductEventWithId(
+					`mobile:recording:${id}:started`,
+					new Date(recordingStartedAt.current).toISOString(),
+					"recording_started",
+					{
+						mode: "screen",
+						target_kind: "display",
+						has_camera: false,
+						has_mic: microphonePermission?.granted === true,
+						has_system_audio: false,
+						target_fps: 30,
+						target_width: 720,
+						target_height: 1280,
+						fragmented: true,
+						custom_cursor_capture: false,
+					},
+				).catch(() => undefined);
 				screenCompletionStarted.current = true;
 				void Haptics.notificationAsync(
 					Haptics.NotificationFeedbackType.Success,
@@ -730,7 +771,7 @@ export default function RecordScreen() {
 		} finally {
 			screenUpdateInFlight.current = false;
 		}
-	}, [finishScreenCaptureUI, recordingUploads]);
+	}, [finishScreenCaptureUI, microphonePermission?.granted, recordingUploads]);
 
 	useEffect(() => {
 		if (mode !== "screen" || !screenPrepared || !activeRecordingId.current) {
@@ -806,11 +847,47 @@ export default function RecordScreen() {
 			if (!id || !result)
 				throw new Error("The camera did not finish recording.");
 			if (discardRecording.current) {
+				if (!recordingTerminalTracked.current) {
+					recordingTerminalTracked.current = true;
+					await trackMobileProductEventWithId(
+						`mobile:recording:${id}:completed`,
+						new Date(
+							(recordingStartedAt.current ?? Date.now()) +
+								result.durationSeconds * 1000,
+						).toISOString(),
+						"recording_completed",
+						{
+							mode: "camera",
+							status: "cancelled",
+							duration_secs: result.durationSeconds,
+							segment_count: result.segmentCount,
+							track_failure_count: 0,
+						},
+					).catch(() => undefined);
+				}
 				await recordingUploads.discardRecording(id);
 				activeRecordingId.current = null;
 				recordingStartedAt.current = null;
 				router.back();
 				return;
+			}
+			if (!recordingTerminalTracked.current) {
+				recordingTerminalTracked.current = true;
+				await trackMobileProductEventWithId(
+					`mobile:recording:${id}:completed`,
+					new Date(
+						(recordingStartedAt.current ?? Date.now()) +
+							result.durationSeconds * 1000,
+					).toISOString(),
+					"recording_completed",
+					{
+						mode: "camera",
+						status: "success",
+						duration_secs: result.durationSeconds,
+						segment_count: result.segmentCount,
+						track_failure_count: 0,
+					},
+				).catch(() => undefined);
 			}
 			recordingUploads.finishRecording(id, result);
 			activeRecordingId.current = null;
@@ -821,6 +898,31 @@ export default function RecordScreen() {
 			router.replace("/(tabs)");
 			return;
 		} catch (recordingError) {
+			const durationSeconds = recordingStartedAt.current
+				? Math.max(0, (Date.now() - recordingStartedAt.current) / 1000)
+				: 0;
+			if (
+				id &&
+				recordingStartedAt.current !== null &&
+				!recordingTerminalTracked.current
+			) {
+				recordingTerminalTracked.current = true;
+				await trackMobileProductEventWithId(
+					`mobile:recording:${id}:completed`,
+					new Date(
+						recordingStartedAt.current + durationSeconds * 1000,
+					).toISOString(),
+					"recording_completed",
+					{
+						mode: "camera",
+						status: "failed",
+						duration_secs: durationSeconds,
+						segment_count: 0,
+						track_failure_count: 1,
+						error_class: classifyMobileAnalyticsFailure(recordingError),
+					},
+				).catch(() => undefined);
+			}
 			if (id) {
 				await recordingUploads.discardRecording(id);
 			}
@@ -943,6 +1045,29 @@ export default function RecordScreen() {
 			if (!id) {
 				setCameraReady(false);
 				return;
+			}
+			const durationSeconds = recordingStartedAt.current
+				? Math.max(0, (Date.now() - recordingStartedAt.current) / 1000)
+				: 0;
+			if (!recordingTerminalTracked.current) {
+				recordingTerminalTracked.current = true;
+				void trackMobileProductEventWithId(
+					`mobile:recording:${id}:completed`,
+					new Date(
+						(recordingStartedAt.current ?? Date.now()) + durationSeconds * 1000,
+					).toISOString(),
+					"recording_completed",
+					{
+						mode: "camera",
+						status: "failed",
+						duration_secs: durationSeconds,
+						segment_count: 0,
+						track_failure_count: 1,
+						error_class: classifyMobileAnalyticsFailure(
+							new Error(nativeEvent.message),
+						),
+					},
+				).catch(() => undefined);
 			}
 			activeRecordingId.current = null;
 			recordingStartedAt.current = null;

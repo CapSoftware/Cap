@@ -203,6 +203,29 @@ describe("ProductAnalyticsQueue", () => {
 		expect(transport).not.toHaveBeenCalled();
 		expect(queue.size).toBe(0);
 	});
+
+	it("keeps the browser enqueue path within its CPU budget", () => {
+		vi.useRealTimers();
+		const samples: number[] = [];
+		for (let sample = 0; sample < 10; sample += 1) {
+			const queue = new ProductAnalyticsQueue(
+				() => new Promise(() => {}),
+				() => 0 as unknown as ReturnType<typeof setTimeout>,
+				() => {},
+			);
+			const startedAt = performance.now();
+			for (let index = 0; index < 1_000; index += 1) {
+				queue.enqueue(makeEvent(index));
+			}
+			samples.push(performance.now() - startedAt);
+		}
+		const sorted = [...samples].sort((left, right) => left - right);
+		const p95Ms = sorted[Math.ceil(sorted.length * 0.95) - 1] ?? Infinity;
+		console.info(
+			`Browser analytics enqueue p95: ${p95Ms.toFixed(2)}ms for 1,000 events`,
+		);
+		expect(p95Ms).toBeLessThan(250);
+	});
 });
 
 describe("browser analytics identity", () => {

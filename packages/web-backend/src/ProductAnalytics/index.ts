@@ -1,4 +1,5 @@
 import {
+	PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT,
 	ProductAnalyticsError,
 	type ProductEventRow,
 	sendProductAnalyticsRows,
@@ -133,13 +134,37 @@ export const resolveProductAnalyticsActor = Effect.gen(function* () {
 					)
 				: Option.none();
 
-	return Option.match(user, {
-		onNone: () => undefined,
-		onSome: (entry): ProductAnalyticsActor => ({
-			userId: entry.id,
-			organizationId: entry.activeOrganizationId,
-		}),
+	if (Option.isNone(user)) return undefined;
+	const [actor] = yield* database.use((db) => {
+		const pendingDeletionUserIds = db
+			.select({ userId: Db.messengerSupportEmails.userId })
+			.from(Db.messengerSupportEmails)
+			.where(
+				Dz.eq(
+					Db.messengerSupportEmails.subject,
+					PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT,
+				),
+			);
+		return db
+			.select({
+				userId: Db.users.id,
+				organizationId: Db.organizations.id,
+			})
+			.from(Db.users)
+			.innerJoin(
+				Db.organizations,
+				Dz.eq(Db.users.activeOrganizationId, Db.organizations.id),
+			)
+			.where(
+				Dz.and(
+					Dz.eq(Db.users.id, user.value.id),
+					Dz.isNull(Db.organizations.tombstoneAt),
+					Dz.notInArray(Db.users.id, pendingDeletionUserIds),
+				),
+			)
+			.limit(1);
 	});
+	return actor satisfies ProductAnalyticsActor | undefined;
 }).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
 
 export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(

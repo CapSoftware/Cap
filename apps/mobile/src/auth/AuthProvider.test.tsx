@@ -41,10 +41,20 @@ const webBrowserMock = vi.hoisted(() => ({
 	openAuthSessionAsync: vi.fn(),
 }));
 
+const analyticsMock = vi.hoisted(() => ({
+	configure: vi.fn(() => Promise.resolve()),
+	flush: vi.fn(() => Promise.resolve()),
+	purge: vi.fn(() => Promise.resolve()),
+	track: vi.fn(() => Promise.resolve("event_1")),
+}));
+
 vi.mock("react-native", async () => {
 	const React = await import("react");
 
 	return {
+		AppState: {
+			addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+		},
 		View: ({ children }: HostProps) =>
 			React.createElement("View", null, children),
 	};
@@ -74,6 +84,13 @@ vi.mock("@/api/mobile", () => ({
 		setActiveOrganization: vi.fn(),
 	})),
 	createSessionRequestUrl: apiMock.createSessionRequestUrl,
+}));
+
+vi.mock("@/analytics/product-analytics", () => ({
+	configureMobileProductAnalytics: analyticsMock.configure,
+	flushMobileProductAnalytics: analyticsMock.flush,
+	purgeMobileProductAnalytics: analyticsMock.purge,
+	trackMobileProductEvent: analyticsMock.track,
 }));
 
 (
@@ -130,6 +147,10 @@ describe("AuthProvider", () => {
 		});
 		apiMock.createSessionRequestUrl.mockClear();
 		webBrowserMock.openAuthSessionAsync.mockReset();
+		analyticsMock.configure.mockClear();
+		analyticsMock.flush.mockClear();
+		analyticsMock.purge.mockClear();
+		analyticsMock.track.mockClear();
 	});
 
 	it("stores a mobile session returned by Sign in with Apple", async () => {
@@ -177,6 +198,7 @@ describe("AuthProvider", () => {
 			status: "signedIn",
 			userId: "apple_user",
 		});
+		expect(analyticsMock.track).toHaveBeenCalledWith("user_signed_in");
 	});
 
 	it("leaves the user signed out when Apple authentication is cancelled", async () => {

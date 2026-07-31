@@ -38,6 +38,7 @@ export {
 	isSensitiveAnalyticsPathSegment,
 	normalizeAnalyticsIdentifier,
 	normalizeAnalyticsPropertyString,
+	PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT,
 } from "./privacy";
 
 export {
@@ -50,6 +51,7 @@ export {
 };
 export type {
 	ClientProductEventName,
+	ClientProductEventNameForPlatform,
 	CoreEventName,
 	ProductEventArguments,
 	ProductEventAuthority,
@@ -61,6 +63,9 @@ export type {
 } from "./event-registry";
 
 export type ProductEventProperty = string | number | boolean | null;
+export const PRODUCT_ANALYTICS_DELIVERY_ATTEMPT_TIMEOUT_MS = 10_000;
+export const PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS =
+	PRODUCT_ANALYTICS_DELIVERY_ATTEMPT_TIMEOUT_MS + 2_000;
 export type ProductEventProperties = Record<string, ProductEventProperty>;
 
 export const PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE =
@@ -193,7 +198,9 @@ export async function sendProductAnalyticsRows({
 					"Content-Type": "application/x-ndjson",
 				},
 				body,
-				signal: AbortSignal.timeout(wait ? 10_000 : 2_000),
+				signal: AbortSignal.timeout(
+					wait ? PRODUCT_ANALYTICS_DELIVERY_ATTEMPT_TIMEOUT_MS : 2_000,
+				),
 			});
 
 			if (response.ok) return;
@@ -537,12 +544,15 @@ function normalizeOptionalPathname(value: unknown) {
 function normalizeOptionalReferrer(value: unknown) {
 	if (typeof value !== "string" || !value.trim()) return {};
 	try {
-		return {
-			referrer: new URL(value).hostname.slice(
-				0,
-				PRODUCT_ANALYTICS_LIMITS.referrerLength,
-			),
-		};
+		const hostname = normalizeAnalyticsPropertyString(
+			new URL(value).hostname,
+			"hostname",
+		);
+		return hostname
+			? {
+					referrer: hostname.slice(0, PRODUCT_ANALYTICS_LIMITS.referrerLength),
+				}
+			: {};
 	} catch {
 		return {};
 	}

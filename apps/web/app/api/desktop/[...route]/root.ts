@@ -19,7 +19,9 @@ import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { checkoutStartedEvent } from "@/lib/analytics/business-events";
 import { queueServerProductEvent } from "@/lib/analytics/server";
+import { subscriptionCheckoutAnalyticsMetadata } from "@/lib/analytics/stripe-business-events";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { runPromise } from "@/lib/server";
 import { withAuth, withOptionalAuth } from "../../utils";
@@ -707,7 +709,7 @@ app.post(
 	async (c) => {
 		const { priceId, platform } = c.req.valid("json");
 		const user = c.get("user");
-		const checkoutPlatform = platform ?? "desktop";
+		const checkoutPlatform = platform === "mobile" ? "mobile" : "desktop";
 
 		if (userIsPro(user)) {
 			console.log("[POST] Error: User already on Pro plan");
@@ -775,6 +777,13 @@ app.post(
 			checkoutPlatform,
 			serverEnv().WEB_URL,
 		);
+		const analyticsMetadata = subscriptionCheckoutAnalyticsMetadata({
+			platform: checkoutPlatform,
+			priceId,
+			quantity: 1,
+			organizationId: user.activeOrganizationId,
+			isFirstPurchase: !user.stripeSubscriptionId,
+		});
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: 1 }],
@@ -783,24 +792,28 @@ app.post(
 			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
 			metadata: {
-				platform: checkoutPlatform,
 				dubCustomerId: user.id,
-				analyticsIsFirstPurchase: user.stripeSubscriptionId ? "false" : "true",
+				...analyticsMetadata,
 			},
+			subscription_data: { metadata: analyticsMetadata },
 		});
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");
-			await queueServerProductEvent({
-				eventId: `checkout:${checkoutSession.id}`,
-				eventName: "checkout_started",
-				platform: checkoutPlatform,
-				userId: user.id,
-				organizationId: user.activeOrganizationId,
-				properties: {
-					price_id: priceId,
+			await queueServerProductEvent(
+				checkoutStartedEvent({
+					checkoutId: checkoutSession.id,
+					createdAt: new Date(checkoutSession.created * 1_000),
+					platform: checkoutPlatform,
+					userId: user.id,
+					organizationId: user.activeOrganizationId,
+					priceId,
 					quantity: 1,
-				},
+				}),
+			).catch(() => {
+				console.warn(
+					"Desktop checkout analytics enqueue failed; reconciliation pending",
+				);
 			});
 
 			return c.json({ url: checkoutSession.url });

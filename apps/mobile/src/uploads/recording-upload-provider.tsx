@@ -10,10 +10,15 @@ import {
 	useState,
 } from "react";
 import { AppState } from "react-native";
+import {
+	classifyMobileAnalyticsFailure,
+	trackMobileProductEventWithId,
+} from "@/analytics/product-analytics";
 import { uploadToTarget } from "@/api/mobile";
 import { useAuth } from "@/auth/AuthContext";
 import type { CapRecorderSegmentEvent } from "../../modules/cap-recorder";
 import {
+	type CapScreenRecorderUpdates,
 	cancelScreenRecording,
 	getScreenRecordingUpdates,
 } from "../../modules/cap-screen-recorder";
@@ -98,6 +103,49 @@ const errorMessage = (error: unknown) =>
 		? error.message
 		: "The recording upload was interrupted.";
 
+const trackExternalRecordingTerminal = async (
+	job: RecordingUploadJob,
+	updates: CapScreenRecorderUpdates,
+) => {
+	if (
+		!["finished", "cancelled", "failed", "missing"].includes(updates.status)
+	) {
+		return;
+	}
+	const durationSeconds = Math.max(0, updates.durationSeconds ?? 0);
+	const occurredAt = new Date(
+		Date.parse(job.createdAt) + durationSeconds * 1000,
+	).toISOString();
+	await trackMobileProductEventWithId(
+		`mobile:recording:${job.id}:completed`,
+		occurredAt,
+		"recording_completed",
+		{
+			mode: "screen",
+			status:
+				updates.status === "cancelled"
+					? "cancelled"
+					: updates.status === "failed" || updates.status === "missing"
+						? "failed"
+						: "success",
+			duration_secs: durationSeconds,
+			segment_count: 0,
+			track_failure_count:
+				updates.status === "failed" || updates.status === "missing" ? 1 : 0,
+			...(updates.status === "failed" || updates.status === "missing"
+				? {
+						error_class:
+							updates.status === "missing"
+								? "missing"
+								: classifyMobileAnalyticsFailure(
+										updates.error ? new Error(updates.error) : null,
+									),
+					}
+				: {}),
+		},
+	).catch(() => undefined);
+};
+
 const displayQueueFrom = (
 	queue: RecordingUploadQueue,
 	current: RecordingUploadQueue = emptyRecordingUploadQueue,
@@ -123,6 +171,7 @@ const reconcileExternalRecordings = async (queue: RecordingUploadQueue) => {
 		if (job.uploadOwner !== "external") continue;
 		try {
 			const updates = await getScreenRecordingUpdates(job.id);
+			await trackExternalRecordingTerminal(job, updates);
 			if (updates.status === "uploaded") {
 				nextQueue = recordingUploadQueueReducer(nextQueue, {
 					type: "externalProcessing",
@@ -401,6 +450,7 @@ export function RecordingUploadProvider({ children }: { children: ReactNode }) {
 					if (!job || job.uploadOwner !== "external") continue;
 					const updates = result.updates;
 					if (!updates) continue;
+					await trackExternalRecordingTerminal(job, updates);
 					if (updates.status === "cancelled") {
 						removedJobs.current.add(job.id);
 						apply({ type: "remove", id: job.id });

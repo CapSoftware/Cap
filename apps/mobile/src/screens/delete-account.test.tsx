@@ -22,6 +22,7 @@ const auth = vi.hoisted(() => ({
 				Promise.resolve({ success: true as const }),
 			),
 		},
+		purgeAnalytics: vi.fn(() => Promise.resolve()),
 		signOut: vi.fn(() => Promise.resolve()),
 	},
 }));
@@ -225,6 +226,7 @@ describe("DeleteAccountScreen", () => {
 		});
 
 		expect(auth.value.client.requestAccountDeletion).toHaveBeenCalledTimes(1);
+		expect(auth.value.purgeAnalytics).toHaveBeenCalledTimes(1);
 		expect(auth.value.signOut).toHaveBeenCalledTimes(1);
 		expect(router.replace).toHaveBeenCalledWith("/(tabs)/account");
 		const { Alert } = await import("react-native");

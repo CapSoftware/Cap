@@ -78,6 +78,11 @@ const uploadState = vi.hoisted(() => ({
 	queue: { jobs: [] },
 }));
 
+vi.mock("@/analytics/product-analytics", () => ({
+	classifyMobileAnalyticsFailure: vi.fn(() => "unknown"),
+	trackMobileProductEventWithId: vi.fn(() => Promise.resolve("event_1")),
+}));
+
 (
 	globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;

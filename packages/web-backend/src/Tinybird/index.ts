@@ -20,6 +20,32 @@ interface TinybirdResponse<T> {
 	error?: string;
 }
 
+interface TinybirdJobResponse {
+	id?: unknown;
+	job_id?: unknown;
+	status?: unknown;
+	state?: unknown;
+	job?: {
+		id?: unknown;
+		status?: unknown;
+		state?: unknown;
+	};
+}
+
+const tinybirdJobId = (response: TinybirdJobResponse) => {
+	const id = response.job_id ?? response.job?.id ?? response.id;
+	return typeof id === "string" && id ? id : undefined;
+};
+
+const tinybirdJobStatus = (response: TinybirdJobResponse) => {
+	const status =
+		response.status ??
+		response.state ??
+		response.job?.status ??
+		response.job?.state;
+	return typeof status === "string" ? status.toLowerCase() : "";
+};
+
 export interface TinybirdEventRow {
 	timestamp: string;
 	session_id?: string | null;
@@ -362,10 +388,38 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			);
 
 		const runProductAnalyticsCopyPipe = (name: string) =>
-			productAnalyticsRequest(
-				`/v0/pipes/${encodeURIComponent(name)}/run?wait=true`,
-				{ method: "POST" },
-			).pipe(Effect.asVoid);
+			Effect.gen(function* () {
+				const copy = yield* productAnalyticsRequest<TinybirdJobResponse>(
+					`/v0/pipes/${encodeURIComponent(name)}/copy?_mode=replace`,
+					{ method: "POST" },
+				);
+				const jobId = tinybirdJobId(copy);
+				if (!jobId) {
+					return yield* Effect.fail(
+						new Error("Product analytics copy did not return a job ID"),
+					);
+				}
+
+				for (let attempt = 0; attempt < 90; attempt += 1) {
+					const job = yield* productAnalyticsRequest<TinybirdJobResponse>(
+						`/v0/jobs/${encodeURIComponent(jobId)}`,
+					);
+					const status = tinybirdJobStatus(job);
+					if (["done", "success", "finished", "completed"].includes(status)) {
+						return;
+					}
+					if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+						return yield* Effect.fail(
+							new Error(`Product analytics copy job ended in ${status}`),
+						);
+					}
+					yield* Effect.sleep(2_000);
+				}
+
+				return yield* Effect.fail(
+					new Error("Product analytics copy job timed out"),
+				);
+			});
 
 		const queryProductAnalyticsSql = <T>(sql: string) =>
 			productAnalyticsRequest<{ data: T[] }>(
@@ -391,7 +445,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					const anonymousRows = yield* queryProductAnalyticsSql<{
 						anonymous_id: string;
 					}>(
-						`SELECT DISTINCT anonymous_id FROM product_events_v1 WHERE user_id = '${escapedUserId}' AND anonymous_id != '' LIMIT 1001`,
+						`SELECT anonymous_id FROM product_events_v1 WHERE anonymous_id != '' GROUP BY anonymous_id HAVING countIf(user_id = '${escapedUserId}') > 0 AND countIf(user_id != '' AND user_id != '${escapedUserId}') = 0 LIMIT 1001`,
 					);
 					if (anonymousRows.length > 1000) {
 						return yield* Effect.fail(
@@ -406,9 +460,11 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						.filter(Boolean);
 					if (anonymousIds.length > 0) {
 						conditions.push(
-							`anonymous_id IN (${anonymousIds
+							`(anonymous_id IN (${anonymousIds
 								.map((anonymousId) => `'${escapeTinybirdString(anonymousId)}'`)
-								.join(", ")})`,
+								.join(
+									", ",
+								)}) AND (user_id = '' OR user_id = '${escapedUserId}'))`,
 						);
 					}
 				}

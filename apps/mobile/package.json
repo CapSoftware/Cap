@@ -21,6 +21,7 @@
 		"update:production": "pnpm dlx eas-cli@21.0.2 update --channel production --environment production"
 	},
 	"dependencies": {
+		"@cap/analytics": "workspace:*",
 		"@cap/web-domain": "workspace:*",
 		"@expo/metro-runtime": "~55.0.12",
 		"@shopify/flash-list": "2.0.2",
@@ -31,6 +32,7 @@
 		"expo-camera": "~55.0.21",
 		"expo-clipboard": "~55.0.15",
 		"expo-constants": "~55.0.17",
+		"expo-crypto": "~55.0.17",
 		"expo-dev-client": "~55.0.37",
 		"expo-device": "~55.0.19",
 		"expo-document-picker": "~55.0.15",

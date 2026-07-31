@@ -84,7 +84,6 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 				await queueServerProductEvent(
 					userSignedUpEvent({
 						userId: currentUser.id,
-						organizationId: currentUser.activeOrganizationId,
 						createdAt,
 					}),
 				);

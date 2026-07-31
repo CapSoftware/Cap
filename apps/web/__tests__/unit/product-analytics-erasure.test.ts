@@ -47,6 +47,13 @@ describe.sequential("product analytics erasure", () => {
 				if (url.pathname.includes("/delete")) {
 					return Response.json({ mutation: { is_done: true } });
 				}
+				if (url.pathname.includes("/copy")) {
+					const pipe = url.pathname.split("/").at(-2);
+					return Response.json({ job_id: `${pipe}-job` });
+				}
+				if (url.pathname.includes("/jobs/")) {
+					return Response.json({ status: "done" });
+				}
 				return Response.json({});
 			}),
 		);
@@ -61,24 +68,37 @@ describe.sequential("product analytics erasure", () => {
 			}).pipe(Effect.provide(Tinybird.Default)),
 		);
 
-		expect(requests).toHaveLength(9);
+		expect(requests).toHaveLength(16);
 		expect(requests[0]?.url.pathname).toBe("/v0/sql");
+		expect(requests[0]?.url.searchParams.get("q")).toContain(
+			"countIf(user_id != '' AND user_id != 'user-1') = 0",
+		);
 		expect(requests[1]?.url.pathname).toBe(
 			"/v1/datasources/product_events_v1/delete",
 		);
-		const deleteBody = String(requests[1]?.init.body);
+		const deleteBody = new URLSearchParams(String(requests[1]?.init.body)).get(
+			"delete_condition",
+		);
 		expect(deleteBody).toContain("organization_id");
 		expect(deleteBody).toContain("user_id");
 		expect(deleteBody).toContain("anonymous_id");
-		expect(requests.slice(2).map(({ url }) => url.pathname)).toEqual([
-			"/v0/pipes/snapshot_product_events_canonical_v1/run",
-			"/v0/pipes/snapshot_product_events_daily_exact/run",
-			"/v0/pipes/snapshot_product_traffic_daily_exact/run",
-			"/v0/pipes/snapshot_product_traffic_pages_daily_exact/run",
-			"/v0/pipes/snapshot_product_activation_daily_exact/run",
-			"/v0/pipes/snapshot_product_creator_retention_exact/run",
-			"/v0/pipes/snapshot_product_events_health_hourly/run",
-		]);
+		expect(deleteBody).toContain("AND (user_id = '' OR user_id = 'user-1')");
+		expect(requests.slice(2).map(({ url }) => url.pathname)).toEqual(
+			[
+				"snapshot_product_events_canonical_v1",
+				"snapshot_product_events_daily_exact",
+				"snapshot_product_traffic_daily_exact",
+				"snapshot_product_traffic_pages_daily_exact",
+				"snapshot_product_activation_daily_exact",
+				"snapshot_product_creator_retention_exact",
+				"snapshot_product_events_health_hourly",
+			].flatMap((pipe) => [`/v0/pipes/${pipe}/copy`, `/v0/jobs/${pipe}-job`]),
+		);
+		for (const request of requests.filter(({ url }) =>
+			url.pathname.endsWith("/copy"),
+		)) {
+			expect(request.url.searchParams.get("_mode")).toBe("replace");
+		}
 		for (const request of requests) {
 			expect(new Headers(request.init.headers).get("Authorization")).toBe(
 				"Bearer erasure-token",

@@ -4,6 +4,7 @@ import {
 } from "@cap/analytics";
 import { serverEnv } from "@cap/env";
 import {
+	hasAnalyticsSessionCookie,
 	ProductAnalytics,
 	resolveProductAnalyticsActor,
 } from "@cap/web-backend";
@@ -33,6 +34,7 @@ import {
 	normalizeProductEventBatch,
 	normalizeSyntheticRunId,
 	ProductAnalyticsRateLimiter,
+	shouldRejectUnresolvedAuthenticatedAnalyticsRequest,
 } from "@/lib/analytics/request";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
@@ -68,6 +70,7 @@ class Api extends HttpApi.make("ProductAnalyticsApi").add(
 							queue_overflow: DeliveryCount,
 							oversize: DeliveryCount,
 							contract_rejected: Schema.optional(DeliveryCount),
+							persistence_failed: Schema.optional(DeliveryCount),
 						}),
 					),
 				}),
@@ -162,6 +165,16 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						}
 
 						const actor = yield* resolveProductAnalyticsActor;
+						if (
+							shouldRejectUnresolvedAuthenticatedAnalyticsRequest({
+								actorResolved: Boolean(actor),
+								authorizationCandidate:
+									isAuthenticatedAnalyticsRequestCandidate(requestMetadata),
+								hasSessionCookie: hasAnalyticsSessionCookie(headers.cookie),
+							})
+						) {
+							return yield* Effect.fail(new HttpApiError.BadRequest());
+						}
 						if (
 							!actor &&
 							(!browserClaims ||

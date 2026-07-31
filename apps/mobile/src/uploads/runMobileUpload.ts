@@ -1,3 +1,7 @@
+import {
+	classifyMobileAnalyticsFailure,
+	trackMobileProductEventWithId,
+} from "@/analytics/product-analytics";
 import type { MobileApiClient, UploadFile } from "@/api/mobile";
 import { uploadToTarget } from "@/api/mobile";
 
@@ -47,85 +51,118 @@ export const runMobileUpload = async ({
 	onCreated,
 	onProgress,
 }: RunMobileUploadInput) => {
-	const created = await client.createUpload({
-		organizationId: organizationId ?? undefined,
-		folderId: folderId ?? undefined,
-		fileName: file.name,
-		contentType: file.type,
-		contentLength: file.size,
-		durationSeconds: file.durationSeconds,
-		width: file.width,
-		height: file.height,
-	});
-	onCreated?.(created.id, created.rawFileKey);
+	const startedAt = Date.now();
+	let createdId: string | null = null;
+	try {
+		const created = await client.createUpload({
+			organizationId: organizationId ?? undefined,
+			folderId: folderId ?? undefined,
+			fileName: file.name,
+			contentType: file.type,
+			contentLength: file.size,
+			durationSeconds: file.durationSeconds,
+			width: file.width,
+			height: file.height,
+		});
+		createdId = created.id;
+		onCreated?.(created.id, created.rawFileKey);
 
-	let lastSyncedProgress: number | null = null;
-	let lastSyncedAt = 0;
-	let lastUiPercent = -1;
-	let lastUiAt = 0;
-	let pendingProgress: { uploaded: number; total: number } | null = null;
-	let progressSync: Promise<void> | null = null;
-	const syncProgress = async (initial: { uploaded: number; total: number }) => {
-		let next: { uploaded: number; total: number } | null = initial;
-		while (next) {
-			try {
-				await client.updateUploadProgress(created.id, next);
-			} catch {}
-			next = pendingProgress;
-			pendingProgress = null;
-		}
-		progressSync = null;
-	};
-	const enqueueProgressSync = (progress: {
-		uploaded: number;
-		total: number;
-	}) => {
-		if (progressSync) {
-			pendingProgress = progress;
-			return;
-		}
-		progressSync = syncProgress(progress);
-	};
+		let lastSyncedProgress: number | null = null;
+		let lastSyncedAt = 0;
+		let lastUiPercent = -1;
+		let lastUiAt = 0;
+		let pendingProgress: { uploaded: number; total: number } | null = null;
+		let progressSync: Promise<void> | null = null;
+		const syncProgress = async (initial: {
+			uploaded: number;
+			total: number;
+		}) => {
+			let next: { uploaded: number; total: number } | null = initial;
+			while (next) {
+				try {
+					await client.updateUploadProgress(created.id, next);
+				} catch {}
+				next = pendingProgress;
+				pendingProgress = null;
+			}
+			progressSync = null;
+		};
+		const enqueueProgressSync = (progress: {
+			uploaded: number;
+			total: number;
+		}) => {
+			if (progressSync) {
+				pendingProgress = progress;
+				return;
+			}
+			progressSync = syncProgress(progress);
+		};
 
-	await uploadToTarget(created.upload, file, ({ loaded, total }) => {
-		const safeLoaded = nonNegativeFiniteNumber(loaded);
-		const safeTotal =
-			positiveFiniteNumber(total) ??
-			positiveFiniteNumber(file.size) ??
-			safeLoaded;
-		const progress = safeTotal > 0 ? safeLoaded / safeTotal : 0;
-		const clampedProgress = clampProgress(progress);
-		const now = Date.now();
-		const uiPercent = Math.floor(clampedProgress * 100);
-		if (
-			lastUiPercent < 0 ||
-			uiPercent >= 100 ||
-			uiPercent - lastUiPercent >= uploadProgressUiMinPercentDelta ||
-			now - lastUiAt >= uploadProgressUiIntervalMs
-		) {
-			lastUiPercent = uiPercent;
-			lastUiAt = now;
-			onProgress?.(clampedProgress);
-		}
-		if (
-			shouldSyncUploadProgress(
-				clampedProgress,
-				now,
-				lastSyncedProgress,
-				lastSyncedAt,
-			)
-		) {
-			lastSyncedProgress = clampedProgress;
-			lastSyncedAt = now;
-			enqueueProgressSync({ uploaded: safeLoaded, total: safeTotal });
-		}
-	});
-	await progressSync;
+		await uploadToTarget(created.upload, file, ({ loaded, total }) => {
+			const safeLoaded = nonNegativeFiniteNumber(loaded);
+			const safeTotal =
+				positiveFiniteNumber(total) ??
+				positiveFiniteNumber(file.size) ??
+				safeLoaded;
+			const progress = safeTotal > 0 ? safeLoaded / safeTotal : 0;
+			const clampedProgress = clampProgress(progress);
+			const now = Date.now();
+			const uiPercent = Math.floor(clampedProgress * 100);
+			if (
+				lastUiPercent < 0 ||
+				uiPercent >= 100 ||
+				uiPercent - lastUiPercent >= uploadProgressUiMinPercentDelta ||
+				now - lastUiAt >= uploadProgressUiIntervalMs
+			) {
+				lastUiPercent = uiPercent;
+				lastUiAt = now;
+				onProgress?.(clampedProgress);
+			}
+			if (
+				shouldSyncUploadProgress(
+					clampedProgress,
+					now,
+					lastSyncedProgress,
+					lastSyncedAt,
+				)
+			) {
+				lastSyncedProgress = clampedProgress;
+				lastSyncedAt = now;
+				enqueueProgressSync({ uploaded: safeLoaded, total: safeTotal });
+			}
+		});
+		await progressSync;
 
-	await client.completeUpload(created.id, {
-		rawFileKey: created.rawFileKey,
-		contentLength: file.size,
-	});
+		await client.completeUpload(created.id, {
+			rawFileKey: created.rawFileKey,
+			contentLength: file.size,
+		});
+		const completedAt = Date.now();
+		await trackMobileProductEventWithId(
+			`mobile:upload:${created.id}:completed`,
+			new Date(completedAt).toISOString(),
+			"multipart_upload_complete",
+			{
+				duration: Math.max(0, (completedAt - startedAt) / 1000),
+				length: nonNegativeFiniteNumber(file.durationSeconds),
+				size: nonNegativeFiniteNumber(file.size),
+			},
+		).catch(() => undefined);
 
-	return created;
+		return created;
+	} catch (error) {
+		const failedAt = Date.now();
+		await trackMobileProductEventWithId(
+			createdId
+				? `mobile:upload:${createdId}:failed`
+				: `mobile:upload-attempt:${startedAt}:failed`,
+			new Date(failedAt).toISOString(),
+			"multipart_upload_failed",
+			{
+				duration: Math.max(0, (failedAt - startedAt) / 1000),
+				failure_class: classifyMobileAnalyticsFailure(error),
+			},
+		).catch(() => undefined);
+		throw error;
+	}
 };

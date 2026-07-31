@@ -29,6 +29,10 @@ const screenRecordingState = vi.hoisted(() => ({
 	getUpdates: vi.fn(),
 }));
 
+const analyticsState = vi.hoisted(() => ({
+	track: vi.fn(() => Promise.resolve("event_1")),
+}));
+
 const authState = vi.hoisted(() => ({
 	createRecording: vi.fn(),
 	createRecordingUploadTargets: vi.fn(),
@@ -46,6 +50,10 @@ vi.mock("react-native", () => ({
 	},
 }));
 vi.mock("@/api/mobile", () => ({ uploadToTarget }));
+vi.mock("@/analytics/product-analytics", () => ({
+	classifyMobileAnalyticsFailure: vi.fn(() => "unknown"),
+	trackMobileProductEventWithId: analyticsState.track,
+}));
 vi.mock("../../modules/cap-screen-recorder", () => ({
 	cancelScreenRecording: screenRecordingState.cancel,
 	getScreenRecordingUpdates: screenRecordingState.getUpdates,
@@ -108,6 +116,8 @@ describe("RecordingUploadProvider", () => {
 		uploadToTarget.mockClear();
 		screenRecordingState.cancel.mockClear();
 		screenRecordingState.getUpdates.mockReset();
+		analyticsState.track.mockReset();
+		analyticsState.track.mockResolvedValue("event_1");
 		authState.createRecording.mockReset();
 		authState.createRecording.mockResolvedValue({
 			id: "cap_123",

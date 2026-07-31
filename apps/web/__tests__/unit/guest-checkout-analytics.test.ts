@@ -25,8 +25,10 @@ describe("guest checkout analytics", () => {
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
+		mocks.product.mockResolvedValue(undefined);
 		mocks.createSession.mockResolvedValue({
 			id: "cs_guest_1",
+			created: 1_754_000_000,
 			url: "https://checkout.stripe.com/session",
 		});
 		POST = (await import("@/app/api/settings/billing/guest-checkout/route"))

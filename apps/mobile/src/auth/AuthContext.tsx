@@ -11,6 +11,13 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { AppState } from "react-native";
+import {
+	configureMobileProductAnalytics,
+	flushMobileProductAnalytics,
+	purgeMobileProductAnalytics,
+	trackMobileProductEvent,
+} from "@/analytics/product-analytics";
 import {
 	createMobileApiClient,
 	createSessionRequestUrl,
@@ -41,6 +48,7 @@ type AuthState = {
 	signInWithGoogle: () => Promise<void>;
 	signInWithSso: (organizationId: string) => Promise<void>;
 	signOut: () => Promise<void>;
+	purgeAnalytics: () => Promise<void>;
 	refresh: () => Promise<void>;
 	setActiveOrganization: (organizationId: string) => Promise<void>;
 };
@@ -153,6 +161,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			}
 			setApiKey(session.apiKey);
 			setUserId(session.userId);
+			await configureMobileProductAnalytics({
+				apiKey: session.apiKey,
+				userId: session.userId,
+				baseUrl: apiBaseUrl,
+			});
+			if (session.userId) await trackMobileProductEvent("user_signed_in");
 		},
 		[],
 	);
@@ -219,6 +233,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	);
 
 	const signOut = useCallback(async () => {
+		if (apiKey && userId) {
+			await trackMobileProductEvent("user_signed_out").catch(() => undefined);
+		}
 		if (apiKey) {
 			await client.revokeSession().catch(() => {});
 		}
@@ -229,7 +246,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		setApiKey(null);
 		setUserId(null);
 		setBootstrap(null);
-	}, [apiKey, client]);
+		await configureMobileProductAnalytics({
+			apiKey: null,
+			userId: null,
+			baseUrl: apiBaseUrl,
+		});
+	}, [apiKey, client, userId]);
+
+	const purgeAnalytics = useCallback(async () => {
+		if (userId) await purgeMobileProductAnalytics(userId);
+	}, [userId]);
+
+	useEffect(() => {
+		void configureMobileProductAnalytics({
+			apiKey,
+			userId,
+			baseUrl: apiBaseUrl,
+		});
+	}, [apiKey, userId]);
+
+	useEffect(() => {
+		const subscription = AppState.addEventListener("change", (state) => {
+			if (state === "active") void flushMobileProductAnalytics();
+		});
+		return () => subscription.remove();
+	}, []);
 
 	const setActiveOrganization = useCallback(
 		async (organizationId: string) => {
@@ -253,6 +294,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			signInWithGoogle,
 			signInWithSso,
 			signOut,
+			purgeAnalytics,
 			refresh,
 			setActiveOrganization,
 		}),
@@ -269,6 +311,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			signInWithGoogle,
 			signInWithSso,
 			signOut,
+			purgeAnalytics,
 			refresh,
 			setActiveOrganization,
 		],

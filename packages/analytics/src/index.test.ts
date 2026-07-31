@@ -90,8 +90,17 @@ describe("normalizeProductEventProperties", () => {
 		for (const campaign of [
 			"alice@example.com",
 			"+44 7700 900123",
+			"campaign for +44 7700 900123",
 			"https://example.com/customer?email=private",
+			"campaign at https://example.com/customer",
+			"landing=https://example.com/customer",
 			"authorization=private-value",
+			"failed with authorization=private-value",
+			"customer path /Users/alice/private.mp4",
+			"path=/Users/alice/private-data",
+			"file=C:\\Users\\alice\\private-data",
+			"address 2001:db8::1",
+			"address 192.0.2.1",
 			"customer-recording.mp4",
 		]) {
 			expect(
@@ -205,6 +214,17 @@ describe("normalizeProductEventInput", () => {
 			now,
 		);
 		expect(normalized?.pathname).toBe("/s/:id");
+	});
+
+	it("rejects IP-address referrers", () => {
+		for (const referrer of [
+			"https://192.0.2.1/path",
+			"https://[2001:db8::1]/",
+		]) {
+			expect(
+				normalizeProductEventInput({ ...baseEvent, referrer }, now)?.referrer,
+			).toBeUndefined();
+		}
 	});
 
 	it.each([

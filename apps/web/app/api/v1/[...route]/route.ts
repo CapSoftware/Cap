@@ -114,6 +114,9 @@ import {
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
+import { checkoutStartedEvent } from "@/lib/analytics/business-events";
+import { queueServerProductEvent } from "@/lib/analytics/server";
+import { subscriptionCheckoutAnalyticsMetadata } from "@/lib/analytics/stripe-business-events";
 import { hashKey } from "@/lib/developer-key-hash";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
@@ -4340,6 +4343,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const [account] = yield* database.use((db) =>
 							db
 								.select({
+									stripeSubscriptionId: Db.users.stripeSubscriptionId,
 									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
 									thirdPartyStripeSubscriptionId:
 										Db.users.thirdPartyStripeSubscriptionId,
@@ -4398,14 +4402,23 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										serverEnv().VERCEL_ENV === "production"
 											? "production"
 											: "development";
+									const priceId =
+										STRIPE_PLAN_IDS[environment][payload.interval];
+									const analyticsMetadata =
+										subscriptionCheckoutAnalyticsMetadata({
+											platform: "cli",
+											priceId,
+											quantity,
+											organizationId: path.organizationId,
+											isFirstPurchase: !account.stripeSubscriptionId,
+										});
 									const session = yield* Effect.tryPromise(() =>
 										stripe().checkout.sessions.create(
 											{
 												customer: customerId,
 												line_items: [
 													{
-														price:
-															STRIPE_PLAN_IDS[environment][payload.interval],
+														price: priceId,
 														quantity,
 													},
 												],
@@ -4414,9 +4427,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												cancel_url: `${serverEnv().WEB_URL}/cli/complete?subscription=cancelled`,
 												allow_promotion_codes: true,
 												metadata: {
-													platform: "agent",
 													organizationId: path.organizationId,
 													userId: principal.id,
+													...analyticsMetadata,
+												},
+												subscription_data: {
+													metadata: analyticsMetadata,
 												},
 											},
 											{
@@ -4430,6 +4446,19 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											"Subscription checkout is unavailable",
 										);
 									}
+									yield* Effect.promise(() =>
+										queueServerProductEvent(
+											checkoutStartedEvent({
+												checkoutId: session.id,
+												createdAt: new Date(session.created * 1_000),
+												platform: "cli",
+												userId: principal.id,
+												organizationId: path.organizationId,
+												priceId,
+												quantity,
+											}),
+										).catch(() => undefined),
+									);
 									return {
 										action: "subscription_checkout",
 										url: session.url,

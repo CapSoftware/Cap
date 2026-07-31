@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS } from "@cap/analytics";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { isEmailAllowedForSignup } from "@cap/database/auth/domain-utils";
 import { hashPassword } from "@cap/database/crypto";
@@ -589,6 +590,7 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 				}),
 			catch: () => new HttpApiError.InternalServerError(),
 		});
+		yield* Effect.sleep(PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS);
 		yield* tinybird
 			.eraseProductAnalytics({ userId: user.id })
 			.pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
@@ -2476,7 +2478,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		width: Option.fromNullable(input.width),
 		height: Option.fromNullable(input.height),
 		duration: Option.fromNullable(input.durationSeconds),
-		metadata: Option.none(),
+		metadata: Option.some({ source: "mobileUpload" }),
 		transcriptionStatus: Option.none(),
 	});
 	const [createdVideo] = yield* database.use((db) =>
@@ -2513,13 +2515,18 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 			queueServerProductEvent(
 				shareLinkCreatedEvent({
 					videoId,
+					platform: "mobile",
 					userId: user.id,
 					organizationId,
 					createdAt: createdVideo.createdAt,
 					isScreenshot: false,
 					sourceType: createdVideo.source.type,
 				}),
-			),
+			).catch(() => {
+				console.warn(
+					"Mobile share analytics enqueue failed; reconciliation pending",
+				);
+			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 	return {
@@ -2621,13 +2628,18 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 			queueServerProductEvent(
 				shareLinkCreatedEvent({
 					videoId,
+					platform: "mobile",
 					userId: user.id,
 					organizationId,
 					createdAt: createdVideo.createdAt,
 					isScreenshot: false,
 					sourceType: createdVideo.source.type,
 				}),
-			),
+			).catch(() => {
+				console.warn(
+					"Mobile share analytics enqueue failed; reconciliation pending",
+				);
+			}),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 

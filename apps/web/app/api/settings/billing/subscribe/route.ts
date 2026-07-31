@@ -6,10 +6,12 @@ import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import { checkoutStartedEvent } from "@/lib/analytics/business-events";
 import {
 	queueServerProductEvent,
 	readAnalyticsAnonymousId,
 } from "@/lib/analytics/server";
+import { subscriptionCheckoutAnalyticsMetadata } from "@/lib/analytics/stripe-business-events";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
@@ -67,6 +69,15 @@ export async function POST(request: NextRequest) {
 			customerId = customer.id;
 		}
 
+		const analyticsMetadata = subscriptionCheckoutAnalyticsMetadata({
+			platform: "web",
+			priceId,
+			quantity: quantity ?? 1,
+			organizationId: user.activeOrganizationId,
+			anonymousId: analyticsAnonymousId,
+			isFirstPurchase: !user.stripeSubscriptionId,
+			isOnboarding: Boolean(isOnBoarding),
+		});
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
@@ -79,27 +90,29 @@ export async function POST(request: NextRequest) {
 				: `${serverEnv().WEB_URL}/pricing`,
 			allow_promotion_codes: true,
 			metadata: {
-				platform: "web",
 				dubCustomerId: user.id,
-				isOnBoarding: isOnBoarding ? "true" : "false",
-				analyticsIsFirstPurchase: user.stripeSubscriptionId ? "false" : "true",
-				...(analyticsAnonymousId ? { analyticsAnonymousId } : {}),
+				...analyticsMetadata,
 			},
+			subscription_data: { metadata: analyticsMetadata },
 		});
 
 		if (checkoutSession.url) {
-			await queueServerProductEvent({
-				eventId: `checkout:${checkoutSession.id}`,
-				eventName: "checkout_started",
-				anonymousId: analyticsAnonymousId,
-				platform: "web",
-				userId: user.id,
-				organizationId: user.activeOrganizationId,
-				properties: {
-					price_id: priceId,
+			await queueServerProductEvent(
+				checkoutStartedEvent({
+					checkoutId: checkoutSession.id,
+					createdAt: new Date(checkoutSession.created * 1_000),
+					anonymousId: analyticsAnonymousId,
+					platform: "web",
+					userId: user.id,
+					organizationId: user.activeOrganizationId,
+					priceId,
 					quantity: quantity ?? 1,
-					is_onboarding: Boolean(isOnBoarding),
-				},
+					isOnboarding: Boolean(isOnBoarding),
+				}),
+			).catch(() => {
+				console.warn(
+					"Checkout analytics enqueue failed; reconciliation pending",
+				);
 			});
 
 			return Response.json({ url: checkoutSession.url }, { status: 200 });

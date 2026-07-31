@@ -39,8 +39,10 @@ const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>
 describe("checkout redirects", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		checkoutMocks.product.mockResolvedValue(undefined);
 		checkoutMocks.create.mockResolvedValue({
 			id: "cs_test",
+			created: 1_754_000_000,
 			url: "https://pay.cap.so/session",
 		});
 	});
@@ -66,7 +68,8 @@ describe("checkout redirects", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(checkoutMocks.create).toHaveBeenCalledWith({
+		const checkout = checkoutMocks.create.mock.calls[0]?.[0];
+		expect(checkout).toMatchObject({
 			line_items: [{ price: "price_pro", quantity: 1 }],
 			mode: "subscription",
 			success_url:
@@ -76,10 +79,14 @@ describe("checkout redirects", () => {
 			metadata: {
 				platform: "web",
 				guestCheckout: "true",
+				analyticsSchemaVersion: "1",
+				analyticsPriceId: "price_pro",
+				analyticsQuantity: "1",
 				analyticsIsFirstPurchase: "true",
 				analyticsAnonymousId: expect.stringMatching(/^guest:/),
 			},
 		});
+		expect(checkout.subscription_data.metadata).toEqual(checkout.metadata);
 	});
 
 	it("sends mobile checkout results through the HTTPS completion route", () => {
@@ -107,6 +114,9 @@ describe("checkout redirects", () => {
 				metadata: {
 					platform: "mobile",
 					guestCheckout: "true",
+					analyticsSchemaVersion: "1",
+					analyticsPriceId: "price_pro",
+					analyticsQuantity: "1",
 					analyticsIsFirstPurchase: "true",
 					analyticsAnonymousId: expect.stringMatching(/^guest:/),
 				},

@@ -10,8 +10,8 @@ import type Stripe from "stripe";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import {
 	isSettledSubscriptionPurchase,
-	isStartedSubscriptionTrial,
 	queueSubscriptionCheckoutProductEvent,
+	queueSubscriptionTrialStartedProductEvent,
 } from "@/lib/analytics/stripe-business-events";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
@@ -21,6 +21,7 @@ const relevantEvents = new Set([
 	"charge.refunded",
 	"invoice.paid",
 	"invoice.payment_failed",
+	"customer.subscription.created",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
 ]);
@@ -405,16 +406,11 @@ export const POST = async (req: Request) => {
 
 				console.log("Successfully updated user in database");
 
-				if (
-					isSettledSubscriptionPurchase(session, subscription) ||
-					isStartedSubscriptionTrial(session, subscription)
-				) {
+				if (isSettledSubscriptionPurchase(session)) {
 					await queueSubscriptionCheckoutProductEvent({
 						eventId: event.id,
 						occurredAt: new Date(event.created * 1000).toISOString(),
 						session,
-						subscription,
-						inviteQuota,
 						user: dbUser,
 					});
 				}
@@ -431,17 +427,7 @@ export const POST = async (req: Request) => {
 				}
 
 				if (typeof session.subscription === "string") {
-					const subscription = await stripe().subscriptions.retrieve(
-						session.subscription,
-					);
-					if (
-						isSettledSubscriptionPurchase(session, subscription) ||
-						isStartedSubscriptionTrial(session, subscription)
-					) {
-						const inviteQuota = subscription.items.data.reduce(
-							(total, item) => total + (item.quantity || 1),
-							0,
-						);
+					if (isSettledSubscriptionPurchase(session)) {
 						let dbUser: typeof users.$inferSelect | null = null;
 						if (typeof session.customer === "string") {
 							const customer = await stripe().customers.retrieve(
@@ -467,11 +453,37 @@ export const POST = async (req: Request) => {
 							eventId: event.id,
 							occurredAt: new Date(event.created * 1000).toISOString(),
 							session,
-							subscription,
-							inviteQuota,
 							user: dbUser,
 						});
 					}
+				}
+			}
+
+			if (event.type === "customer.subscription.created") {
+				const subscription = event.data.object as Stripe.Subscription;
+				if (
+					subscription.status === "trialing" &&
+					subscription.metadata.analyticsSchemaVersion
+				) {
+					const customer = await stripe().customers.retrieve(
+						subscription.customer as string,
+					);
+					if (customer.deleted) return retryableUserResolutionFailure();
+					const userId = customer.metadata.userId
+						? User.UserId.make(customer.metadata.userId)
+						: undefined;
+					const dbUser = await findUserWithRetry(
+						customer.email ?? "",
+						userId,
+						1,
+					);
+					if (!dbUser) return retryableUserResolutionFailure();
+					await queueSubscriptionTrialStartedProductEvent({
+						eventId: event.id,
+						occurredAt: new Date(event.created * 1_000).toISOString(),
+						subscription,
+						user: dbUser,
+					});
 				}
 			}
 

@@ -42,6 +42,7 @@ const SKIPPED_DIRECTORIES = new Set([
 ]);
 const WRAPPER_PATHS = new Set([
 	"apps/desktop/src/utils/analytics.ts",
+	"apps/mobile/src/analytics/product-analytics.ts",
 	"apps/web/app/utils/analytics.ts",
 	"apps/web/app/utils/product-analytics.ts",
 	"apps/web/lib/analytics/server-event.ts",
@@ -62,6 +63,13 @@ const CAPTURE_MODULES = new Map([
 	],
 	["~/utils/analytics", new Map([["trackEvent", { kind: "name" }]])],
 	[
+		"@/analytics/product-analytics",
+		new Map([
+			["trackMobileProductEvent", { kind: "name" }],
+			["trackMobileProductEventWithId", { kind: "name", argumentIndex: 2 }],
+		]),
+	],
+	[
 		"@/app/utils/product-analytics",
 		new Map([
 			["captureProductPageView", { kind: "helper", eventName: "page_view" }],
@@ -78,15 +86,45 @@ const CAPTURE_MODULES = new Map([
 	[
 		"@/lib/analytics/business-events",
 		new Map([
-			["userSignedUpEvent", { kind: "helper", eventName: "user_signed_up" }],
-			["identityLinkedEvent", { kind: "helper", eventName: "identity_linked" }],
+			[
+				"userSignedUpEvent",
+				{ kind: "helper", eventName: "user_signed_up", platforms: ["web"] },
+			],
+			[
+				"checkoutStartedEvent",
+				{
+					kind: "helper",
+					eventName: "checkout_started",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"guestCheckoutStartedEvent",
+				{
+					kind: "helper",
+					eventName: "guest_checkout_started",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"identityLinkedEvent",
+				{ kind: "helper", eventName: "identity_linked", platforms: ["server"] },
+			],
 			[
 				"shareLinkCreatedEvent",
-				{ kind: "helper", eventName: "share_link_created" },
+				{
+					kind: "helper",
+					eventName: "share_link_created",
+					platformProperty: "platform",
+				},
 			],
 			[
 				"collaborationActionCreatedEvent",
-				{ kind: "helper", eventName: "collaboration_action_created" },
+				{
+					kind: "helper",
+					eventName: "collaboration_action_created",
+					platforms: ["server"],
+				},
 			],
 		]),
 	],
@@ -98,6 +136,7 @@ const CAPTURE_MODULES = new Map([
 				{
 					kind: "helper-set",
 					eventNames: ["purchase_completed", "trial_started"],
+					platforms: ["web", "desktop", "mobile", "cli", "server"],
 				},
 			],
 		]),
@@ -121,6 +160,13 @@ const CAPTURE_MODULES = new Map([
 		new Map([["trackEvent", { kind: "name" }]]),
 	],
 	[
+		"apps/mobile/src/analytics/product-analytics",
+		new Map([
+			["trackMobileProductEvent", { kind: "name" }],
+			["trackMobileProductEventWithId", { kind: "name", argumentIndex: 2 }],
+		]),
+	],
+	[
 		"apps/web/app/utils/product-analytics",
 		new Map([
 			["captureProductPageView", { kind: "helper", eventName: "page_view" }],
@@ -137,15 +183,45 @@ const CAPTURE_MODULES = new Map([
 	[
 		"apps/web/lib/analytics/business-events",
 		new Map([
-			["userSignedUpEvent", { kind: "helper", eventName: "user_signed_up" }],
-			["identityLinkedEvent", { kind: "helper", eventName: "identity_linked" }],
+			[
+				"userSignedUpEvent",
+				{ kind: "helper", eventName: "user_signed_up", platforms: ["web"] },
+			],
+			[
+				"checkoutStartedEvent",
+				{
+					kind: "helper",
+					eventName: "checkout_started",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"guestCheckoutStartedEvent",
+				{
+					kind: "helper",
+					eventName: "guest_checkout_started",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"identityLinkedEvent",
+				{ kind: "helper", eventName: "identity_linked", platforms: ["server"] },
+			],
 			[
 				"shareLinkCreatedEvent",
-				{ kind: "helper", eventName: "share_link_created" },
+				{
+					kind: "helper",
+					eventName: "share_link_created",
+					platformProperty: "platform",
+				},
 			],
 			[
 				"collaborationActionCreatedEvent",
-				{ kind: "helper", eventName: "collaboration_action_created" },
+				{
+					kind: "helper",
+					eventName: "collaboration_action_created",
+					platforms: ["server"],
+				},
 			],
 		]),
 	],
@@ -157,6 +233,7 @@ const CAPTURE_MODULES = new Map([
 				{
 					kind: "helper-set",
 					eventNames: ["purchase_completed", "trial_started"],
+					platforms: ["web", "desktop", "mobile", "cli", "server"],
 				},
 			],
 		]),
@@ -215,6 +292,60 @@ function objectProperty(node, name) {
 			ts.isPropertyAssignment(property) &&
 			propertyNameText(property.name) === name,
 	);
+}
+
+function staticStringArray(expression) {
+	const value = unwrapExpression(expression);
+	if (!ts.isArrayLiteralExpression(value) || value.elements.length === 0) {
+		return undefined;
+	}
+	const strings = [];
+	for (const element of value.elements) {
+		const item = unwrapExpression(element);
+		if (!ts.isStringLiteralLike(item)) return undefined;
+		strings.push(item.text);
+	}
+	return [...new Set(strings)];
+}
+
+function valueInitializers(sourceFile) {
+	const initializers = new Map();
+	const duplicates = new Set();
+	const visit = (node) => {
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.initializer
+		) {
+			if (initializers.has(node.name.text)) duplicates.add(node.name.text);
+			else initializers.set(node.name.text, node.initializer);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(sourceFile);
+	for (const name of duplicates) initializers.delete(name);
+	return initializers;
+}
+
+function staticStringUnion(expression, initializers, seen = new Set()) {
+	const value = unwrapExpression(expression);
+	if (ts.isStringLiteralLike(value)) return [value.text];
+	if (ts.isConditionalExpression(value)) {
+		const whenTrue = staticStringUnion(value.whenTrue, initializers, seen);
+		const whenFalse = staticStringUnion(value.whenFalse, initializers, seen);
+		if (!whenTrue || !whenFalse) return undefined;
+		return [...new Set([...whenTrue, ...whenFalse])];
+	}
+	if (ts.isIdentifier(value) && !seen.has(value.text)) {
+		const initializer = initializers.get(value.text);
+		if (!initializer) return undefined;
+		return staticStringUnion(
+			initializer,
+			initializers,
+			new Set([...seen, value.text]),
+		);
+	}
+	return undefined;
 }
 
 function validateStringPropertyRules(sourceFile, file, diagnostics) {
@@ -348,9 +479,49 @@ export function parseEventRegistry(sourceText, file = DEFAULT_REGISTRY_PATH) {
 			);
 			continue;
 		}
+		if (!ts.isPropertyAssignment(property)) {
+			diagnostics.push(
+				diagnostic(
+					"registry-event-not-object",
+					file,
+					`EVENT_REGISTRY event ${name} must be an object literal`,
+					sourceLocation(sourceFile, property),
+				),
+			);
+			continue;
+		}
+		const definition = unwrapExpression(property.initializer);
+		if (!ts.isObjectLiteralExpression(definition)) {
+			diagnostics.push(
+				diagnostic(
+					"registry-event-not-object",
+					file,
+					`EVENT_REGISTRY event ${name} must be an object literal`,
+					sourceLocation(sourceFile, property),
+				),
+			);
+			continue;
+		}
+		const platformsProperty = objectProperty(definition, "platforms");
+		const platforms = platformsProperty
+			? staticStringArray(platformsProperty.initializer)
+			: undefined;
+		if (!platforms) {
+			diagnostics.push(
+				diagnostic(
+					"registry-platforms-not-static",
+					file,
+					`EVENT_REGISTRY event ${name} requires a non-empty static platforms array`,
+					platformsProperty
+						? sourceLocation(sourceFile, platformsProperty)
+						: sourceLocation(sourceFile, property),
+				),
+			);
+		}
 		events.set(name, {
 			name,
 			file: normalizePath(file),
+			platforms: platforms ?? [],
 			...sourceLocation(sourceFile, property),
 		});
 	}
@@ -419,7 +590,43 @@ function staticEventName(expression) {
 	return { kind: "dynamic" };
 }
 
-function eventNameProperty(expression, bindings) {
+function sourcePlatforms(file) {
+	const normalized = normalizePath(file);
+	if (normalized.startsWith("apps/web/app/api/desktop/")) return ["desktop"];
+	if (normalized.startsWith("apps/web/app/api/mobile/")) return ["mobile"];
+	if (normalized.startsWith("apps/desktop/")) return ["desktop"];
+	if (normalized.startsWith("apps/mobile/")) return ["mobile"];
+	if (normalized.startsWith("apps/cli/")) return ["cli"];
+	if (normalized.startsWith("apps/web/")) return ["web"];
+	return [];
+}
+
+function eventPlatforms(expression, bindings, initializers) {
+	const value = unwrapExpression(expression);
+	if (ts.isCallExpression(value)) {
+		const descriptor = callDescriptor(value.expression, bindings);
+		if (descriptor?.kind === "helper") {
+			return helperPlatforms(descriptor, value, initializers);
+		}
+	}
+	if (!ts.isObjectLiteralExpression(value)) return undefined;
+	const property = objectProperty(value, "platform");
+	if (!property) return undefined;
+	return staticStringUnion(property.initializer, initializers) ?? [];
+}
+
+function helperPlatforms(descriptor, call, initializers) {
+	if (descriptor.platforms) return descriptor.platforms;
+	if (!descriptor.platformProperty) return undefined;
+	const argument = call.arguments[descriptor.argumentIndex ?? 0];
+	const value = argument ? unwrapExpression(argument) : undefined;
+	if (!value || !ts.isObjectLiteralExpression(value)) return [];
+	const property = objectProperty(value, descriptor.platformProperty);
+	if (!property) return [];
+	return staticStringUnion(property.initializer, initializers) ?? [];
+}
+
+function eventNameProperty(expression, bindings, initializers) {
 	const value = unwrapExpression(expression);
 	if (ts.isCallExpression(value)) {
 		const descriptor = callDescriptor(value.expression, bindings);
@@ -428,6 +635,7 @@ function eventNameProperty(expression, bindings) {
 				eventName: descriptor.eventName,
 				kind: "static",
 				node: value,
+				platforms: helperPlatforms(descriptor, value, initializers),
 			};
 		}
 	}
@@ -474,9 +682,15 @@ export function analyzeTypeScriptSource({
 	});
 	const emissions = [];
 	const bindings = captureBindings(sourceFile, file);
-	const registerEmission = (eventName, node) => {
+	const initializers = valueInitializers(sourceFile);
+	const registerEmission = (eventName, node, platforms) => {
 		const location = sourceLocation(sourceFile, node);
-		emissions.push({ eventName, file: normalizePath(file), ...location });
+		emissions.push({
+			eventName,
+			file: normalizePath(file),
+			platforms: platforms ?? sourcePlatforms(file),
+			...location,
+		});
 		if (!registeredEvents.has(eventName)) {
 			diagnostics.push(
 				diagnostic(
@@ -492,13 +706,17 @@ export function analyzeTypeScriptSource({
 		if (ts.isCallExpression(node)) {
 			const descriptor = callDescriptor(node.expression, bindings);
 			if (descriptor?.kind === "helper") {
-				registerEmission(descriptor.eventName, node);
+				registerEmission(
+					descriptor.eventName,
+					node,
+					helperPlatforms(descriptor, node, initializers),
+				);
 			} else if (descriptor?.kind === "helper-set") {
 				for (const eventName of descriptor.eventNames) {
-					registerEmission(eventName, node);
+					registerEmission(eventName, node, descriptor.platforms);
 				}
 			} else if (descriptor?.kind === "name") {
-				const argument = node.arguments[0];
+				const argument = node.arguments[descriptor.argumentIndex ?? 0];
 				if (!argument) {
 					diagnostics.push(
 						diagnostic(
@@ -537,9 +755,14 @@ export function analyzeTypeScriptSource({
 						),
 					);
 				} else {
-					const result = eventNameProperty(argument, bindings);
+					const result = eventNameProperty(argument, bindings, initializers);
 					if (result.kind === "static") {
-						registerEmission(result.eventName, result.node);
+						registerEmission(
+							result.eventName,
+							result.node,
+							result.platforms ??
+								eventPlatforms(argument, bindings, initializers),
+						);
 					} else {
 						const messages = {
 							"non-object":
@@ -994,18 +1217,35 @@ function sourceFiles(projectRoot) {
 }
 
 export function findMissingEmitters(registryEvents, emissions) {
-	const emittedNames = new Set(emissions.map((emission) => emission.eventName));
 	const diagnostics = [];
 	for (const event of registryEvents.values()) {
-		if (emittedNames.has(event.name)) continue;
-		diagnostics.push(
-			diagnostic(
-				"registry-event-without-emitter",
-				event.file,
-				`Registry event ${event.name} has no production emitter`,
-				event,
-			),
+		const eventEmissions = emissions.filter(
+			(emission) => emission.eventName === event.name,
 		);
+		if (eventEmissions.length === 0) {
+			diagnostics.push(
+				diagnostic(
+					"registry-event-without-emitter",
+					event.file,
+					`Registry event ${event.name} has no production emitter`,
+					event,
+				),
+			);
+		}
+		const emittedPlatforms = new Set(
+			eventEmissions.flatMap((emission) => emission.platforms ?? []),
+		);
+		for (const platform of event.platforms) {
+			if (emittedPlatforms.has(platform)) continue;
+			diagnostics.push(
+				diagnostic(
+					"registry-event-platform-without-emitter",
+					event.file,
+					`Registry event ${event.name} declares platform ${platform} without a production emitter`,
+					event,
+				),
+			);
+		}
 	}
 	return diagnostics;
 }
@@ -1062,7 +1302,7 @@ export function runEventContractCheck({
 		registeredEvents,
 	});
 	diagnostics.push(...native.diagnostics);
-	const usedNativeVariants = new Set();
+	const usedNativeVariants = new Map();
 	for (const relativePath of files) {
 		if (
 			!relativePath.endsWith(".rs") ||
@@ -1075,13 +1315,18 @@ export function runEventContractCheck({
 			"utf8",
 		);
 		if (!sourceText.includes("ProductAnalyticsEvent")) continue;
-		for (const variant of rustProductionVariantUses(sourceText))
-			usedNativeVariants.add(variant);
+		for (const variant of rustProductionVariantUses(sourceText)) {
+			const platforms = usedNativeVariants.get(variant) ?? new Set();
+			for (const platform of sourcePlatforms(relativePath)) {
+				platforms.add(platform);
+			}
+			usedNativeVariants.set(variant, platforms);
+		}
 	}
-	for (const variant of usedNativeVariants) {
+	for (const [variant, platforms] of usedNativeVariants) {
 		const mapping = native.mappings.get(variant);
 		if (mapping) {
-			emissions.push(mapping);
+			emissions.push({ ...mapping, platforms: [...platforms] });
 		} else {
 			diagnostics.push(
 				diagnostic(

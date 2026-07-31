@@ -280,13 +280,18 @@ app.get(
 			await queueServerProductEvent(
 				shareLinkCreatedEvent({
 					videoId: idToUse,
+					platform: "desktop",
 					userId: user.id,
 					organizationId: videoOrgId,
 					createdAt,
 					isScreenshot,
 					sourceType: videoSource.type,
 				}),
-			);
+			).catch(() => {
+				console.warn(
+					"Desktop share analytics enqueue failed; reconciliation pending",
+				);
+			});
 
 			const clientSupportsUploadProgress = isFromDesktopSemver(
 				c.req,

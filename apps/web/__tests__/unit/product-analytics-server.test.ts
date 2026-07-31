@@ -46,7 +46,7 @@ describe("server product analytics", () => {
 		const [row] = createServerProductEventRows({
 			eventId: "signup:user-1",
 			eventName: "user_signed_up",
-			platform: "server",
+			platform: "web",
 			userId: "user-1",
 		});
 		expect(row?.anonymous_id).toBe("user:user-1");
@@ -57,7 +57,7 @@ describe("server product analytics", () => {
 			createServerProductEventRows({
 				eventId: "event-1",
 				eventName: "user_signed_up",
-				platform: "server",
+				platform: "web",
 			}),
 		).toEqual([]);
 	});
@@ -84,7 +84,7 @@ describe("server product analytics", () => {
 			unsafeCreate({
 				eventId: "event-1",
 				eventName: "user_signed_up",
-				platform: "server",
+				platform: "web",
 				userId: "user-1",
 				properties: { email: "private@example.com" },
 			}),
@@ -119,17 +119,25 @@ describe("server product analytics", () => {
 				},
 			}),
 		).toEqual([]);
+		expect(
+			unsafeCreate({
+				eventId: "signup:user-1",
+				eventName: "user_signed_up",
+				platform: "web",
+				userId: "person@example.com",
+			}),
+		).toEqual([]);
 	});
 
 	it("builds reconciliation-compatible authoritative business facts", () => {
 		const facts = [
 			userSignedUpEvent({
 				userId: "user-1",
-				organizationId: "org-1",
 				createdAt: "2026-07-31T10:00:00.000Z",
 			}),
 			shareLinkCreatedEvent({
 				videoId: "video-1",
+				platform: "server",
 				userId: "user-1",
 				organizationId: "org-1",
 				createdAt: "2026-07-31T10:01:00.000Z",
@@ -157,7 +165,6 @@ describe("server product analytics", () => {
 		const signup = createServerProductEventRows(
 			userSignedUpEvent({
 				userId: "user-1",
-				organizationId: "org-1",
 				createdAt: "2026-07-31T10:00:00.000Z",
 			}),
 		)[0];
