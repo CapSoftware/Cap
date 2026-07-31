@@ -222,8 +222,11 @@ export const createSyntheticLoadEvents = ({
 	const fixture = createSyntheticEvents({ runId, now });
 	const runHash = hashIdentifier(runId);
 	const appVersion = `staging-load-${runHash.slice(0, 12)}`;
+	const loadRunId = `${runId}_load`;
+	validateSyntheticRunId(loadRunId);
 	return {
 		appVersion,
+		runId: loadRunId,
 		rows: Array.from({ length: count }, (_, index) => {
 			const eventId = `synthetic_load_${hashIdentifier(`${runId}:${index}`).slice(0, 24)}`;
 			return {
@@ -231,6 +234,7 @@ export const createSyntheticLoadEvents = ({
 				event_id: eventId,
 				payload_hash: hashIdentifier(eventId).slice(0, 32),
 				app_version: appVersion,
+				synthetic_run_id: loadRunId,
 				properties: JSON.stringify({ test_case: "staging_load" }),
 			};
 		}),
@@ -258,6 +262,7 @@ export const normalizeCiAssertions = (payload) => {
 		uniquePayloads: number(row.unique_payloads),
 		duplicateRows: number(row.duplicate_rows),
 		payloadConflicts: number(row.payload_conflicts),
+		canonicalEvents: number(row.canonical_events),
 		decisionEvents: number(row.decision_events),
 	};
 };
@@ -269,6 +274,11 @@ export const assertSyntheticDecisions = (assertions) => {
 			`Synthetic decision events were ${assertions.decisionEvents}, expected 1`,
 		);
 	}
+	if (assertions.canonicalEvents !== 1) {
+		throw new Error(
+			`Synthetic canonical events were ${assertions.canonicalEvents}, expected 1`,
+		);
+	}
 };
 
 export const assertPromotedSyntheticDecisions = (assertions) => {
@@ -276,6 +286,7 @@ export const assertPromotedSyntheticDecisions = (assertions) => {
 		uniqueEvents: 3,
 		uniquePayloads: 4,
 		payloadConflicts: 1,
+		canonicalEvents: 2,
 		decisionEvents: 2,
 	};
 	for (const [name, value] of Object.entries(expected)) {

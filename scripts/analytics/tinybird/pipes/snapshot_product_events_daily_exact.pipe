@@ -16,6 +16,8 @@ SQL >
 		browser,
 		os,
 		channel,
+		traffic_class,
+		synthetic_run_id,
 		JSONExtractString(properties, 'price_id') AS plan_id,
 		if(event_name = 'purchase_completed', JSONExtractString(properties, 'payment_status'), '') AS payment_status,
 		if(event_name IN ('purchase_completed', 'trial_started'), JSONExtractString(properties, 'subscription_status'), '') AS subscription_status,
@@ -32,8 +34,7 @@ SQL >
 			0
 		))) AS revenue_minor
 	FROM product_events_canonical_v1
-	WHERE traffic_class = 'external'
-	GROUP BY date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, plan_id, payment_status, subscription_status, currency, billing_interval
+	GROUP BY date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval
 
 TYPE COPY
 TARGET_DATASOURCE product_events_daily_exact

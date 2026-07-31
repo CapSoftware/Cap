@@ -416,6 +416,7 @@ const seed = async () => {
 		deploymentId,
 		appVersion: fixture.appVersion,
 		loadAppVersion: loadFixture.appVersion,
+		loadRunId: loadFixture.runId,
 		loadEventCount: loadFixture.rows.length,
 		startedAt: startedAt.toISOString(),
 		startTime: new Date(startedAt.getTime() - 120_000).toISOString(),
@@ -596,8 +597,9 @@ const cleanup = async () => {
 	const artifactPath = option("artifact");
 	validateSyntheticRunId(state.runId);
 	const { origin, tokens } = tinybirdEnvironment();
+	validateSyntheticRunId(state.loadRunId);
 	const body = new URLSearchParams({
-		delete_condition: `synthetic_run_id = '${state.runId}'`,
+		delete_condition: `synthetic_run_id IN ('${state.runId}', '${state.loadRunId}')`,
 	});
 	const deletion = await request(
 		tinybirdUrl(origin, "/v0/datasources/product_events_v1/delete"),
@@ -689,6 +691,16 @@ const verifyCleanup = async () => {
 	if (Object.values(decisionAssertions).some((value) => value !== 0)) {
 		throw new Error(
 			"Synthetic rows still affect Tinybird decision assertions after cleanup",
+		);
+	}
+	const loadResult = await healthQuery({
+		state,
+		appVersion: state.loadAppVersion,
+	});
+	const loadHealth = normalizeHealth(loadResult.data);
+	if (Object.values(loadHealth).some((value) => value !== 0)) {
+		throw new Error(
+			"Synthetic load rows still affect Tinybird health after cleanup",
 		);
 	}
 	artifact.cleanup = {

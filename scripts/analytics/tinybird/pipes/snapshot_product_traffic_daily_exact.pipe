@@ -16,7 +16,7 @@ SQL >
 	), sessions AS (
 		SELECT
 			session_id,
-			if(user_id != '', concat('user:', user_id), concat('anonymous:', anonymous_id)) AS visitor_id,
+			concat('anonymous:', argMin(anonymous_id, occurred_at)) AS visitor_id,
 			min(occurred_at) AS started_at,
 			argMin(hostname, occurred_at) AS hostname,
 			argMin(country, occurred_at) AS country,
@@ -33,7 +33,7 @@ SQL >
 			AND traffic_class = 'external'
 			AND session_id != ''
 			AND anonymous_id != ''
-		GROUP BY session_id, visitor_id
+		GROUP BY session_id
 	)
 	SELECT
 		now64(3) AS calculated_at,

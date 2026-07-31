@@ -27,7 +27,7 @@ SQL >
 			event_id,
 			occurred_at,
 			session_id,
-			if(user_id != '', concat('user:', user_id), concat('anonymous:', anonymous_id)) AS visitor_id,
+			concat('anonymous:', anonymous_id) AS visitor_id,
 			hostname,
 			pathname,
 			country,

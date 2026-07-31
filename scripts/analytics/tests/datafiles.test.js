@@ -197,7 +197,10 @@ test("staging assertions prove canonical decisions without returning raw IDs", (
 	);
 	assert.match(contents, /synthetic_run_id is required/);
 	assert.match(contents, /uniqExact\(payload_hash\) AS payloads/);
-	assert.match(contents, /countIf\(payloads = 1\) AS decision_events/);
+	assert.match(contents, /FROM product_events_canonical_v1/);
+	assert.match(contents, /FROM product_events_daily_exact/);
+	assert.match(contents, /canonical_events/);
+	assert.match(contents, /decision_events/);
 	assert.match(contents, /FROM product_events_v1/);
 	assert.doesNotMatch(contents, /event_id AS/);
 	assert.doesNotMatch(contents, /TOKEN product_events_ingest READ/);

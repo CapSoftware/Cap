@@ -29,7 +29,9 @@ SQL >
 		uniqExactMerge(organizations) AS organizations,
 		revenue_minor
 	FROM product_events_daily_exact
-	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+	WHERE traffic_class = 'external'
+		AND synthetic_run_id = ''
+		AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 		{% if defined(event_name) %} AND event_name = {{String(event_name)}} {% end %}
 		{% if defined(source) %} AND source = {{String(source)}} {% end %}

@@ -16,6 +16,8 @@ SCHEMA >
 	browser LowCardinality(String),
 	os LowCardinality(String),
 	channel LowCardinality(String),
+	traffic_class LowCardinality(String),
+	synthetic_run_id String,
 	plan_id LowCardinality(String),
 	payment_status LowCardinality(String),
 	subscription_status LowCardinality(String),
@@ -29,6 +31,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, plan_id, payment_status, subscription_status, currency, billing_interval)
+ENGINE_SORTING_KEY (date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval)
 ENGINE_TTL date + INTERVAL 5 YEAR
 ENGINE_SETTINGS index_granularity = 256

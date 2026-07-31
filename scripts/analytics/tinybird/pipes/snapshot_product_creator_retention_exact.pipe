@@ -13,22 +13,46 @@ SQL >
 		WHERE event_name IN ('recording_started', 'recording_completed', 'multipart_upload_complete', 'share_link_created', 'loom_import_completed')
 			AND user_id != ''
 			AND (event_name != 'recording_completed' OR JSONExtractString(properties, 'status') IN ('success', 'degraded'))
-	), cohorts AS (
+	), user_cohorts AS (
 		SELECT
 			user_id,
 			min(activity_date) AS cohort_date
 		FROM activity
 		GROUP BY user_id
+	), organization_cohorts AS (
+		SELECT
+			organization_id,
+			min(activity_date) AS cohort_date
+		FROM activity
+		WHERE organization_id != ''
+		GROUP BY organization_id
+	), cohort_activity AS (
+		SELECT
+			cohort_date,
+			activity_date,
+			platform,
+			user_id,
+			'' AS organization_id
+		FROM activity
+		INNER JOIN user_cohorts USING user_id
+		UNION ALL
+		SELECT
+			cohort_date,
+			activity_date,
+			platform,
+			'' AS user_id,
+			organization_id
+		FROM activity
+		INNER JOIN organization_cohorts USING organization_id
 	)
 	SELECT
 		now64(3) AS calculated_at,
 		cohort_date,
 		activity_date,
 		platform,
-		uniqExactState(activity.user_id) AS creator_users,
+		uniqExactStateIf(user_id, user_id != '') AS creator_users,
 		uniqExactStateIf(organization_id, organization_id != '') AS creator_organizations
-	FROM activity
-	INNER JOIN cohorts USING user_id
+	FROM cohort_activity
 	GROUP BY cohort_date, activity_date, platform
 
 TYPE COPY

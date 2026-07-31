@@ -183,8 +183,10 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 		now: new Date("2026-07-31T10:00:00.000Z"),
 	});
 	assert.equal(load.rows.length, 100);
+	assert.equal(load.runId, `${runId}_load`);
 	assert.equal(new Set(load.rows.map((row) => row.event_id)).size, 100);
 	assert.ok(load.rows.every((row) => row.app_version === load.appVersion));
+	assert.ok(load.rows.every((row) => row.synthetic_run_id === load.runId));
 	assert.throws(() => createSyntheticLoadEvents({ runId, count: 99 }));
 });
 
@@ -224,6 +226,7 @@ test("CI assertion normalization proves decision deduplication and conflict quar
 				unique_payloads: "3",
 				duplicate_rows: "1",
 				payload_conflicts: "1",
+				canonical_events: "1",
 				decision_events: "1",
 			},
 		],
@@ -241,6 +244,7 @@ test("promoted assertions combine direct and exact-SHA preview duplicate paths",
 		uniquePayloads: 4,
 		duplicateRows: 22,
 		payloadConflicts: 1,
+		canonicalEvents: 2,
 		decisionEvents: 2,
 	};
 	assert.doesNotThrow(() => assertPromotedSyntheticDecisions(assertions));
