@@ -34,5 +34,8 @@ describe("Slack Events route contract", () => {
 		expect(workflow).toContain('"use workflow"');
 		expect(workflow).toContain('"use step"');
 		expect(workflow).toContain("processSlackEvent({");
+		expect(workflow).toContain("while (!processed)");
+		expect(workflow).toContain('await sleep("5m")');
+		expect(workflow).toContain("processSlackEventStep.maxRetries = 5");
 	});
 });

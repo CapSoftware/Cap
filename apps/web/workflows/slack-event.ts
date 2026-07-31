@@ -1,3 +1,5 @@
+import { sleep } from "workflow";
+import { SlackUnfurlError } from "@/lib/slack/client";
 import type { SlackEventPayload } from "@/lib/slack/unfurl";
 import { processSlackEvent } from "@/lib/slack/unfurl";
 
@@ -12,7 +14,18 @@ async function processSlackEventStep(
 ) {
 	"use step";
 
-	await processSlackEvent({ payload, webUrl });
+	try {
+		await processSlackEvent({ payload, webUrl });
+	} catch (error) {
+		if (error instanceof SlackUnfurlError && !error.retryable) {
+			console.error(
+				"[slack-unfurl] Permanent Slack API failure",
+				error.message,
+			);
+			return;
+		}
+		throw error;
+	}
 }
 processSlackEventStep.maxRetries = 5;
 
@@ -22,5 +35,13 @@ export async function slackEventWorkflow(
 ) {
 	"use workflow";
 
-	await processSlackEventStep(payload, webUrl);
+	let processed = false;
+	while (!processed) {
+		try {
+			await processSlackEventStep(payload, webUrl);
+			processed = true;
+		} catch {
+			await sleep("5m");
+		}
+	}
 }
