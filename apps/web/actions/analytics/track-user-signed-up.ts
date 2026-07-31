@@ -6,6 +6,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { sql } from "drizzle-orm";
 import { cookies } from "next/headers";
+import {
+	identityLinkedEvent,
+	userSignedUpEvent,
+} from "@/lib/analytics/business-events";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { normalizeServerIdentifier } from "@/lib/analytics/server-event";
 
@@ -76,15 +80,24 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 				(await cookies()).get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
 			);
 			try {
-				await queueServerProductEvent({
-					eventId: `signup:${currentUser.id}`,
-					eventName: "user_signed_up",
-					occurredAt: new Date(createdAtTime).toISOString(),
-					anonymousId: analyticsAnonymousId,
-					platform: "web",
-					userId: currentUser.id,
-					organizationId: currentUser.activeOrganizationId,
-				});
+				const createdAt = new Date(createdAtTime);
+				await queueServerProductEvent(
+					userSignedUpEvent({
+						userId: currentUser.id,
+						organizationId: currentUser.activeOrganizationId,
+						createdAt,
+					}),
+				);
+				if (analyticsAnonymousId) {
+					await queueServerProductEvent(
+						identityLinkedEvent({
+							userId: currentUser.id,
+							organizationId: currentUser.activeOrganizationId,
+							anonymousId: analyticsAnonymousId,
+							createdAt,
+						}),
+					);
+				}
 
 				await db()
 					.update(users)

@@ -75,6 +75,21 @@ const CAPTURE_MODULES = new Map([
 		new Map([["queueServerProductEvent", { kind: "object" }]]),
 	],
 	[
+		"@/lib/analytics/business-events",
+		new Map([
+			["userSignedUpEvent", { kind: "helper", eventName: "user_signed_up" }],
+			["identityLinkedEvent", { kind: "helper", eventName: "identity_linked" }],
+			[
+				"shareLinkCreatedEvent",
+				{ kind: "helper", eventName: "share_link_created" },
+			],
+			[
+				"collaborationActionCreatedEvent",
+				{ kind: "helper", eventName: "collaboration_action_created" },
+			],
+		]),
+	],
+	[
 		"@/workflows/deliver-product-analytics-event",
 		new Map([["enqueueProductAnalyticsEventStep", { kind: "object" }]]),
 	],
@@ -105,6 +120,21 @@ const CAPTURE_MODULES = new Map([
 	[
 		"apps/web/lib/analytics/server",
 		new Map([["queueServerProductEvent", { kind: "object" }]]),
+	],
+	[
+		"apps/web/lib/analytics/business-events",
+		new Map([
+			["userSignedUpEvent", { kind: "helper", eventName: "user_signed_up" }],
+			["identityLinkedEvent", { kind: "helper", eventName: "identity_linked" }],
+			[
+				"shareLinkCreatedEvent",
+				{ kind: "helper", eventName: "share_link_created" },
+			],
+			[
+				"collaborationActionCreatedEvent",
+				{ kind: "helper", eventName: "collaboration_action_created" },
+			],
+		]),
 	],
 	[
 		"apps/web/workflows/deliver-product-analytics-event",
@@ -313,8 +343,18 @@ function staticEventName(expression) {
 	return { kind: "dynamic" };
 }
 
-function eventNameProperty(expression) {
+function eventNameProperty(expression, bindings) {
 	const value = unwrapExpression(expression);
+	if (ts.isCallExpression(value)) {
+		const descriptor = callDescriptor(value.expression, bindings);
+		if (descriptor?.kind === "helper") {
+			return {
+				eventName: descriptor.eventName,
+				kind: "static",
+				node: value,
+			};
+		}
+	}
 	if (!ts.isObjectLiteralExpression(value))
 		return { kind: "non-object", node: value };
 	for (const property of value.properties) {
@@ -417,7 +457,7 @@ export function analyzeTypeScriptSource({
 						),
 					);
 				} else {
-					const result = eventNameProperty(argument);
+					const result = eventNameProperty(argument, bindings);
 					if (result.kind === "static") {
 						registerEmission(result.eventName, result.node);
 					} else {

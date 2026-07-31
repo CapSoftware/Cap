@@ -20,6 +20,7 @@ import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { shareLinkCreatedEvent } from "@/lib/analytics/business-events";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
@@ -216,6 +217,15 @@ app.get(
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
+			const createdAt = new Date();
+			const videoSource =
+				recordingMode === "hls"
+					? ({ type: "local" } as const)
+					: recordingMode === "desktopMP4"
+						? ({ type: "desktopMP4" } as const)
+						: recordingMode === "desktopSegments"
+							? ({ type: "desktopSegments" } as const)
+							: ({ type: "MediaConvert" } as const);
 
 			const videoName =
 				name ??
@@ -254,15 +264,9 @@ app.get(
 					name: videoName,
 					ownerId: user.id,
 					orgId: videoOrgId,
-					source:
-						recordingMode === "hls"
-							? { type: "local" as const }
-							: recordingMode === "desktopMP4"
-								? { type: "desktopMP4" as const }
-								: recordingMode === "desktopSegments"
-									? { type: "desktopSegments" as const }
-									: undefined,
+					source: videoSource,
 					isScreenshot,
+					createdAt,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
@@ -273,17 +277,16 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			await queueServerProductEvent({
-				eventId: `share_link_created:${idToUse}`,
-				eventName: "share_link_created",
-				platform: "desktop",
-				userId: user.id,
-				organizationId: videoOrgId,
-				properties: {
-					asset_type: isScreenshot ? "screenshot" : "recording",
-					recording_mode: recordingMode ?? null,
-				},
-			});
+			await queueServerProductEvent(
+				shareLinkCreatedEvent({
+					videoId: idToUse,
+					userId: user.id,
+					organizationId: videoOrgId,
+					createdAt,
+					isScreenshot,
+					sourceType: videoSource.type,
+				}),
+			);
 
 			const clientSupportsUploadProgress = isFromDesktopSemver(
 				c.req,

@@ -1,7 +1,17 @@
 import { db } from "@cap/database";
-import { comments, users, videos } from "@cap/database/schema";
-import { and, eq, gte, lte } from "drizzle-orm";
-import type { ServerProductEvent } from "@/lib/analytics/server-event";
+import {
+	comments,
+	messengerSupportEmails,
+	users,
+	videos,
+} from "@cap/database/schema";
+import { and, eq, gte, isNotNull, lte, notInArray } from "drizzle-orm";
+import { ACCOUNT_DELETION_PENDING_SUBJECT } from "@/lib/account-deletion-request";
+import {
+	collaborationActionCreatedEvent,
+	shareLinkCreatedEvent,
+	userSignedUpEvent,
+} from "@/lib/analytics/business-events";
 import { enqueueReconciledProductAnalyticsEventStep } from "./deliver-product-analytics-event";
 
 const RECONCILIATION_ROW_LIMIT = 5_000;
@@ -25,6 +35,15 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 		throw new Error("Invalid product analytics reconciliation window");
 	}
 	const start = new Date(end.getTime() - lookbackHours * 60 * 60 * 1_000);
+	const pendingDeletionUserIds = db()
+		.select({ userId: messengerSupportEmails.userId })
+		.from(messengerSupportEmails)
+		.where(
+			and(
+				eq(messengerSupportEmails.subject, ACCOUNT_DELETION_PENDING_SUBJECT),
+				isNotNull(messengerSupportEmails.userId),
+			),
+		);
 	const [recentUsers, recentVideos, recentComments] = await Promise.all([
 		db()
 			.select({
@@ -33,7 +52,13 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 				createdAt: users.created_at,
 			})
 			.from(users)
-			.where(and(gte(users.created_at, start), lte(users.created_at, end)))
+			.where(
+				and(
+					gte(users.created_at, start),
+					lte(users.created_at, end),
+					notInArray(users.id, pendingDeletionUserIds),
+				),
+			)
 			.limit(RECONCILIATION_ROW_LIMIT + 1),
 		db()
 			.select({
@@ -45,7 +70,13 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 				source: videos.source,
 			})
 			.from(videos)
-			.where(and(gte(videos.createdAt, start), lte(videos.createdAt, end)))
+			.where(
+				and(
+					gte(videos.createdAt, start),
+					lte(videos.createdAt, end),
+					notInArray(videos.ownerId, pendingDeletionUserIds),
+				),
+			)
 			.limit(RECONCILIATION_ROW_LIMIT + 1),
 		db()
 			.select({
@@ -58,7 +89,13 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 			})
 			.from(comments)
 			.leftJoin(videos, eq(comments.videoId, videos.id))
-			.where(and(gte(comments.createdAt, start), lte(comments.createdAt, end)))
+			.where(
+				and(
+					gte(comments.createdAt, start),
+					lte(comments.createdAt, end),
+					notInArray(comments.authorId, pendingDeletionUserIds),
+				),
+			)
 			.limit(RECONCILIATION_ROW_LIMIT + 1),
 	]);
 	if (
@@ -70,49 +107,35 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 	}
 
 	return [
-		...recentUsers.map(
-			(user) =>
-				({
-					eventId: `signup:${user.id}`,
-					eventName: "user_signed_up",
-					occurredAt: user.createdAt.toISOString(),
-					platform: "server",
-					userId: user.id,
-					organizationId: user.organizationId ?? undefined,
-				}) satisfies ServerProductEvent,
+		...recentUsers.map((user) =>
+			userSignedUpEvent({
+				userId: user.id,
+				organizationId: user.organizationId,
+				createdAt: user.createdAt,
+			}),
 		),
-		...recentVideos.map(
-			(video) =>
-				({
-					eventId: `share_link_created:${video.id}`,
-					eventName: "share_link_created",
-					occurredAt: video.createdAt.toISOString(),
-					platform: "server",
-					userId: video.userId,
-					organizationId: video.organizationId,
-					properties: {
-						asset_type: video.isScreenshot ? "screenshot" : "recording",
-						recording_mode: video.source.type,
-					},
-				}) satisfies ServerProductEvent,
+		...recentVideos.map((video) =>
+			shareLinkCreatedEvent({
+				videoId: video.id,
+				userId: video.userId,
+				organizationId: video.organizationId,
+				createdAt: video.createdAt,
+				isScreenshot: video.isScreenshot,
+				sourceType: video.source.type,
+			}),
 		),
-		...recentComments.map(
-			(comment) =>
-				({
-					eventId: `collaboration:${comment.id}`,
-					eventName: "collaboration_action_created",
-					occurredAt: comment.createdAt.toISOString(),
-					platform: "server",
-					userId: comment.authorId,
-					organizationId: comment.organizationId ?? undefined,
-					properties: {
-						action: comment.parentCommentId
-							? "reply"
-							: comment.type === "emoji"
-								? "reaction"
-								: "comment",
-					},
-				}) satisfies ServerProductEvent,
+		...recentComments.map((comment) =>
+			collaborationActionCreatedEvent({
+				commentId: comment.id,
+				userId: comment.authorId,
+				organizationId: comment.organizationId,
+				createdAt: comment.createdAt,
+				action: comment.parentCommentId
+					? "reply"
+					: comment.type === "emoji"
+						? "reaction"
+						: "comment",
+			}),
 		),
 	];
 }

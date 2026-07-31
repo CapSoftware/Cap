@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+	collaborationActionCreatedEvent,
+	identityLinkedEvent,
+	shareLinkCreatedEvent,
+	userSignedUpEvent,
+} from "@/lib/analytics/business-events";
 import { createServerProductEventRows } from "@/lib/analytics/server-event";
 
 describe("server product analytics", () => {
@@ -83,5 +89,63 @@ describe("server product analytics", () => {
 				properties: { email: "private@example.com" },
 			}),
 		).toEqual([]);
+	});
+
+	it("builds reconciliation-compatible authoritative business facts", () => {
+		const facts = [
+			userSignedUpEvent({
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:00:00.000Z",
+			}),
+			shareLinkCreatedEvent({
+				videoId: "video-1",
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:01:00.000Z",
+				isScreenshot: false,
+				sourceType: "desktopSegments",
+			}),
+			collaborationActionCreatedEvent({
+				commentId: "comment-1",
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:02:00.000Z",
+				action: "comment",
+			}),
+		] as const;
+
+		for (const fact of facts) {
+			const first = createServerProductEventRows(fact)[0];
+			const reconciled = createServerProductEventRows({ ...fact })[0];
+			expect(reconciled?.event_id).toBe(first?.event_id);
+			expect(reconciled?.payload_hash).toBe(first?.payload_hash);
+		}
+	});
+
+	it("links signup attribution without changing the signup fact", () => {
+		const signup = createServerProductEventRows(
+			userSignedUpEvent({
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:00:00.000Z",
+			}),
+		)[0];
+		const link = createServerProductEventRows(
+			identityLinkedEvent({
+				userId: "user-1",
+				organizationId: "org-1",
+				anonymousId: "anonymous-1",
+				createdAt: "2026-07-31T10:00:00.000Z",
+			}),
+		)[0];
+
+		expect(signup?.anonymous_id).toBe("user:user-1");
+		expect(link).toMatchObject({
+			event_id: "identity_linked:user-1",
+			event_name: "identity_linked",
+			anonymous_id: "anonymous-1",
+			user_id: "user-1",
+		});
 	});
 });

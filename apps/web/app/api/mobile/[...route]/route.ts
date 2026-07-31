@@ -56,6 +56,7 @@ import {
 	createMobileContentReport,
 	hasPendingAccountDeletion,
 } from "@/lib/account-deletion-request";
+import { shareLinkCreatedEvent } from "@/lib/analytics/business-events";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import {
@@ -2478,6 +2479,16 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		metadata: Option.none(),
 		transcriptionStatus: Option.none(),
 	});
+	const [createdVideo] = yield* database.use((db) =>
+		db
+			.select({ createdAt: Db.videos.createdAt, source: Db.videos.source })
+			.from(Db.videos)
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!createdVideo) {
+		return yield* Effect.fail(new HttpApiError.InternalServerError());
+	}
 
 	yield* database.use((db) =>
 		db.insert(Db.videoUploads).values({
@@ -2499,17 +2510,16 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	});
 	yield* Effect.tryPromise({
 		try: () =>
-			queueServerProductEvent({
-				eventId: `share_link_created:${videoId}`,
-				eventName: "share_link_created",
-				platform: "mobile",
-				userId: user.id,
-				organizationId,
-				properties: {
-					asset_type: "recording",
-					recording_mode: "mobile_upload",
-				},
-			}),
+			queueServerProductEvent(
+				shareLinkCreatedEvent({
+					videoId,
+					userId: user.id,
+					organizationId,
+					createdAt: createdVideo.createdAt,
+					isScreenshot: false,
+					sourceType: createdVideo.source.type,
+				}),
+			),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 	return {
@@ -2588,6 +2598,16 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		metadata: Option.some({ source: "mobileCamera", fps: input.fps }),
 		transcriptionStatus: Option.none(),
 	});
+	const [createdVideo] = yield* database.use((db) =>
+		db
+			.select({ createdAt: Db.videos.createdAt, source: Db.videos.source })
+			.from(Db.videos)
+			.where(eq(Db.videos.id, videoId))
+			.limit(1),
+	);
+	if (!createdVideo) {
+		return yield* Effect.fail(new HttpApiError.InternalServerError());
+	}
 
 	yield* database.use((db) =>
 		db.insert(Db.videoUploads).values({
@@ -2598,17 +2618,16 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 	);
 	yield* Effect.tryPromise({
 		try: () =>
-			queueServerProductEvent({
-				eventId: `share_link_created:${videoId}`,
-				eventName: "share_link_created",
-				platform: "mobile",
-				userId: user.id,
-				organizationId,
-				properties: {
-					asset_type: "recording",
-					recording_mode: "mobile_camera",
-				},
-			}),
+			queueServerProductEvent(
+				shareLinkCreatedEvent({
+					videoId,
+					userId: user.id,
+					organizationId,
+					createdAt: createdVideo.createdAt,
+					isScreenshot: false,
+					sourceType: createdVideo.source.type,
+				}),
+			),
 		catch: () => new HttpApiError.InternalServerError(),
 	});
 

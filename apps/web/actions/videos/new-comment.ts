@@ -3,10 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { comments } from "@cap/database/schema";
+import { comments, videos } from "@cap/database/schema";
 import type { ImageUpload } from "@cap/web-domain";
 import { Comment, type Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { collaborationActionCreatedEvent } from "@/lib/analytics/business-events";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { createNotification } from "@/lib/Notification";
 
@@ -38,6 +40,14 @@ export async function newComment(data: {
 	if (!content || !videoId) {
 		throw new Error("Content and videoId are required");
 	}
+	const [commentVideo] = await db()
+		.select({ organizationId: videos.orgId })
+		.from(videos)
+		.where(eq(videos.id, videoId))
+		.limit(1);
+	if (!commentVideo) {
+		throw new Error("Video not found");
+	}
 	const id = Comment.CommentId.make(nanoId());
 
 	const newComment = {
@@ -53,14 +63,15 @@ export async function newComment(data: {
 	};
 
 	await db().insert(comments).values(newComment);
-	await queueServerProductEvent({
-		eventId: `collaboration:${id}`,
-		eventName: "collaboration_action_created",
-		occurredAt: newComment.createdAt.toISOString(),
-		platform: "server",
-		userId: user.id,
-		properties: { action: conditionalType },
-	}).catch(() => {
+	await queueServerProductEvent(
+		collaborationActionCreatedEvent({
+			commentId: id,
+			userId: user.id,
+			organizationId: commentVideo.organizationId,
+			createdAt: newComment.createdAt,
+			action: conditionalType,
+		}),
+	).catch(() => {
 		console.error("Failed to enqueue product analytics collaboration event");
 	});
 

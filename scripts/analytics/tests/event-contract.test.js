@@ -130,6 +130,24 @@ trackToolInteraction({ tool: "trimmer", action: "loaded" });
 	assert.deepEqual([...server.diagnostics, ...browser.diagnostics], []);
 });
 
+test("accepts registered typed business-event factories", () => {
+	const result = analyzeTypeScriptSource({
+		sourceText: `
+			import { userSignedUpEvent } from "@/lib/analytics/business-events";
+			import { queueServerProductEvent } from "@/lib/analytics/server";
+			queueServerProductEvent(userSignedUpEvent({ userId: "user-1", createdAt: new Date() }));
+		`,
+		file: "apps/web/actions/signup.ts",
+		registeredEvents: new Set(["user_signed_up"]),
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.ok(
+		result.emissions.every(
+			(emission) => emission.eventName === "user_signed_up",
+		),
+	);
+});
+
 test("Rust tokenization excludes comments", () => {
 	const tokens = tokenizeRust(`
 // EventData::new("comment_event")

@@ -167,6 +167,13 @@ export const EVENT_REGISTRY = {
 			"The authoritative users table contains a newly created account within the signup tracking window.",
 		properties: {},
 	},
+	identity_linked: {
+		...criticalServer,
+		platforms: ["server"],
+		semantic:
+			"A newly authenticated user was linked to the first-party anonymous browser identity present during signup. Decision metrics use user_id; this event preserves acquisition stitching without changing the authoritative signup fact.",
+		properties: {},
+	},
 	user_signed_in: {
 		...bestEffortClient,
 		platforms: ["desktop", "mobile", "cli"],
