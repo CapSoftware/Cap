@@ -210,7 +210,10 @@ describe("ProductAnalyticsQueue", () => {
 		for (let sample = 0; sample < 10; sample += 1) {
 			const queue = new ProductAnalyticsQueue(
 				() => new Promise(() => {}),
-				() => 0 as unknown as ReturnType<typeof setTimeout>,
+				(() =>
+					0 as unknown as ReturnType<
+						typeof setTimeout
+					>) as unknown as typeof setTimeout,
 				() => {},
 			);
 			const startedAt = performance.now();
