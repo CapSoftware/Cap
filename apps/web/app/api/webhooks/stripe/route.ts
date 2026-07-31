@@ -8,6 +8,11 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { queueServerProductEvent } from "@/lib/analytics/server";
+import {
+	isSettledSubscriptionPurchase,
+	isStartedSubscriptionTrial,
+	subscriptionCheckoutProductEvent,
+} from "@/lib/analytics/stripe-business-events";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
 const relevantEvents = new Set([
@@ -20,113 +25,10 @@ const relevantEvents = new Set([
 	"customer.subscription.deleted",
 ]);
 
-type PurchaseAnalyticsUser = Pick<
-	typeof users.$inferSelect,
-	"id" | "activeOrganizationId"
->;
-
-function isSettledSubscriptionPurchase(
-	session: Stripe.Checkout.Session,
-	subscription: Stripe.Subscription,
-) {
-	return (
-		session.payment_status === "paid" &&
-		(subscription.status === "active" || subscription.status === "trialing")
-	);
-}
-
-function isStartedSubscriptionTrial(
-	session: Stripe.Checkout.Session,
-	subscription: Stripe.Subscription,
-) {
-	return (
-		session.payment_status === "no_payment_required" &&
-		subscription.status === "trialing"
-	);
-}
-
-async function queueSubscriptionPurchaseEvents({
-	eventId,
-	occurredAt,
-	session,
-	subscription,
-	inviteQuota,
-	user,
-	isFirstPurchase,
-}: {
-	eventId: string;
-	occurredAt: string;
-	session: Stripe.Checkout.Session;
-	subscription: Stripe.Subscription;
-	inviteQuota: number;
-	user?: PurchaseAnalyticsUser;
-	isFirstPurchase: boolean;
-}) {
-	const isGuestCheckout = session.metadata?.guestCheckout === "true";
-	const platform =
-		session.metadata?.platform === "desktop"
-			? "desktop"
-			: session.metadata?.platform === "mobile"
-				? "mobile"
-				: session.metadata?.platform === "web"
-					? "web"
-					: "server";
-	const anonymousId = session.metadata?.analyticsAnonymousId;
-	const price = subscription.items.data[0]?.price;
-	if (isStartedSubscriptionTrial(session, subscription)) {
-		await queueServerProductEvent({
-			eventId: `stripe:${eventId}:trial_started`,
-			eventName: "trial_started",
-			occurredAt,
-			anonymousId,
-			platform,
-			userId: user?.id,
-			organizationId: user?.activeOrganizationId,
-			properties: {
-				subscription_status: "trialing",
-				trial_end_at: subscription.trial_end ?? null,
-				price_id: price?.id ?? null,
-				quantity: inviteQuota,
-				currency: price?.currency ?? null,
-				unit_amount_minor: price?.unit_amount ?? null,
-				billing_interval: price?.recurring?.interval ?? null,
-				billing_interval_count: price?.recurring?.interval_count ?? null,
-				is_guest_checkout: isGuestCheckout,
-				is_onboarding: session.metadata?.isOnBoarding === "true",
-			},
-		});
-		return;
-	}
-
-	const revenueProperties = {
-		payment_status: "paid" as const,
-		subscription_status: subscription.status,
-		amount_total_minor: session.amount_total,
-		amount_subtotal_minor: session.amount_subtotal,
-		discount_amount_minor: session.total_details?.amount_discount,
-		currency: session.currency,
-		unit_amount_minor: price?.unit_amount,
-		billing_interval: price?.recurring?.interval,
-		billing_interval_count: price?.recurring?.interval_count,
-	};
-
-	await queueServerProductEvent({
-		eventId: `stripe:${eventId}:purchase_completed`,
-		eventName: "purchase_completed",
-		occurredAt,
-		anonymousId,
-		platform,
-		userId: user?.id,
-		organizationId: user?.activeOrganizationId,
-		properties: {
-			...revenueProperties,
-			invite_quota: inviteQuota,
-			price_id: price?.id,
-			quantity: inviteQuota,
-			is_onboarding: session.metadata?.isOnBoarding === "true",
-			is_first_purchase: isFirstPurchase,
-			is_guest_checkout: isGuestCheckout,
-		},
+function retryableUserResolutionFailure() {
+	return new Response("User identity is not available yet", {
+		status: 503,
+		headers: { "Retry-After": "60" },
 	});
 }
 
@@ -234,14 +136,11 @@ async function findUserWithRetry(
 	maxRetries = 3,
 ): Promise<typeof users.$inferSelect | null> {
 	for (let i = 0; i < maxRetries; i++) {
-		console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for user:`, {
-			email,
-			userId,
-		});
+		console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for Stripe user`);
 
 		try {
 			if (userId) {
-				console.log(`Attempting to find user by ID: ${userId}`);
+				console.log("Attempting to find Stripe user by ID");
 				const userById = await db()
 					.select()
 					.from(users)
@@ -250,14 +149,14 @@ async function findUserWithRetry(
 					.then((rows) => rows[0] ?? null);
 
 				if (userById) {
-					console.log(`Found user by ID: ${userId}`);
+					console.log("Found Stripe user by ID");
 					return userById;
 				}
-				console.log(`No user found by ID: ${userId}`);
+				console.log("No Stripe user found by ID");
 			}
 
 			if (email) {
-				console.log(`Attempting to find user by email: ${email}`);
+				console.log("Attempting to find Stripe user by email");
 				const userByEmail = await db()
 					.select()
 					.from(users)
@@ -266,10 +165,10 @@ async function findUserWithRetry(
 					.then((rows) => rows[0] ?? null);
 
 				if (userByEmail) {
-					console.log(`Found user by email: ${email}`);
+					console.log("Found Stripe user by email");
 					return userByEmail;
 				}
-				console.log(`No user found by email: ${email}`);
+				console.log("No Stripe user found by email");
 			}
 
 			if (i < maxRetries - 1) {
@@ -417,11 +316,7 @@ export const POST = async (req: Request) => {
 				const customer = await stripe().customers.retrieve(
 					session.customer as string,
 				);
-				console.log("Retrieved customer:", {
-					id: customer.id,
-					email: "email" in customer ? customer.email : undefined,
-					metadata: "metadata" in customer ? customer.metadata : undefined,
-				});
+				console.log("Retrieved Stripe customer");
 
 				let foundUserId: User.UserId | undefined;
 				let customerEmail: string | null | undefined;
@@ -435,10 +330,7 @@ export const POST = async (req: Request) => {
 					customerEmail = customer.email;
 				}
 
-				console.log("Starting user lookup with:", {
-					foundUserId,
-					customerEmail,
-				});
+				console.log("Starting Stripe user lookup");
 
 				let dbUser = await findUserWithRetry(
 					customerEmail as string,
@@ -455,10 +347,7 @@ export const POST = async (req: Request) => {
 						});
 					}
 
-					console.log(
-						"Guest checkout detected, creating new user with email:",
-						guestEmail,
-					);
+					console.log("Guest checkout detected, creating new user");
 					try {
 						dbUser = await createGuestUser(guestEmail);
 
@@ -475,19 +364,11 @@ export const POST = async (req: Request) => {
 				}
 
 				if (!dbUser) {
-					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
-					);
-					return new Response("User not found, webhook will be retried", {
-						status: 202,
-					});
+					console.error("No user found after all checkout retries");
+					return retryableUserResolutionFailure();
 				}
 
-				console.log("Successfully found user:", {
-					userId: dbUser.id,
-					email: dbUser.email,
-					name: dbUser.name,
-				});
+				console.log("Successfully found Stripe user");
 
 				const subscription = await stripe().subscriptions.retrieve(
 					session.subscription as string,
@@ -509,7 +390,6 @@ export const POST = async (req: Request) => {
 					customerId: customer.id,
 					inviteQuota,
 				});
-				console.log("Session metadata:", session.metadata);
 				console.log("Is onboarding:", isOnBoarding);
 
 				await db()
@@ -529,16 +409,15 @@ export const POST = async (req: Request) => {
 					isSettledSubscriptionPurchase(session, subscription) ||
 					isStartedSubscriptionTrial(session, subscription)
 				) {
-					await queueSubscriptionPurchaseEvents({
+					const productEvent = subscriptionCheckoutProductEvent({
 						eventId: event.id,
 						occurredAt: new Date(event.created * 1000).toISOString(),
 						session,
 						subscription,
 						inviteQuota,
 						user: dbUser,
-						isFirstPurchase:
-							session.metadata?.analyticsIsFirstPurchase === "true",
 					});
+					if (productEvent) await queueServerProductEvent(productEvent);
 				}
 			}
 
@@ -580,17 +459,20 @@ export const POST = async (req: Request) => {
 								);
 							}
 						}
+						if (!dbUser) {
+							console.error("No user found for settled asynchronous checkout");
+							return retryableUserResolutionFailure();
+						}
 
-						await queueSubscriptionPurchaseEvents({
+						const productEvent = subscriptionCheckoutProductEvent({
 							eventId: event.id,
 							occurredAt: new Date(event.created * 1000).toISOString(),
 							session,
 							subscription,
 							inviteQuota,
-							...(dbUser ? { user: dbUser } : {}),
-							isFirstPurchase:
-								session.metadata?.analyticsIsFirstPurchase === "true",
+							user: dbUser,
 						});
+						if (productEvent) await queueServerProductEvent(productEvent);
 					}
 				}
 			}
@@ -610,11 +492,7 @@ export const POST = async (req: Request) => {
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
-				console.log("Retrieved customer:", {
-					id: customer.id,
-					email: "email" in customer ? customer.email : undefined,
-					metadata: "metadata" in customer ? customer.metadata : undefined,
-				});
+				console.log("Retrieved Stripe customer");
 
 				let foundUserId: User.UserId | undefined;
 				let customerEmail: string | null | undefined;
@@ -628,10 +506,7 @@ export const POST = async (req: Request) => {
 					customerEmail = customer.email;
 				}
 
-				console.log("Starting user lookup with:", {
-					foundUserId,
-					customerEmail,
-				});
+				console.log("Starting Stripe user lookup");
 
 				const dbUser = await findUserWithRetry(
 					customerEmail as string,
@@ -639,19 +514,11 @@ export const POST = async (req: Request) => {
 				);
 
 				if (!dbUser) {
-					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
-					);
-					return new Response("User not found, webhook will be retried", {
-						status: 202,
-					});
+					console.error("No user found after all subscription retries");
+					return retryableUserResolutionFailure();
 				}
 
-				console.log("Successfully found user:", {
-					userId: dbUser.id,
-					email: dbUser.email,
-					name: dbUser.name,
-				});
+				console.log("Successfully found Stripe user");
 
 				const subscriptions = await stripe().subscriptions.list({
 					customer: customer.id,
@@ -828,7 +695,7 @@ export const POST = async (req: Request) => {
 
 						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
 							foundUserId = userByEmail[0].id;
-							console.log(`User found by email: ${foundUserId}`);
+							console.log("Stripe user found by email");
 							await stripe().customers.update(customer.id, {
 								metadata: { userId: foundUserId },
 							});

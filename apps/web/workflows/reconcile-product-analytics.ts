@@ -5,16 +5,43 @@ import {
 	users,
 	videos,
 } from "@cap/database/schema";
-import { and, eq, gte, isNotNull, lte, notInArray } from "drizzle-orm";
+import { stripe } from "@cap/utils";
+import { and, eq, gte, inArray, isNotNull, lte, notInArray } from "drizzle-orm";
+import type Stripe from "stripe";
 import { ACCOUNT_DELETION_PENDING_SUBJECT } from "@/lib/account-deletion-request";
 import {
 	collaborationActionCreatedEvent,
 	shareLinkCreatedEvent,
 	userSignedUpEvent,
 } from "@/lib/analytics/business-events";
+import {
+	isSettledSubscriptionPurchase,
+	isStartedSubscriptionTrial,
+	subscriptionCheckoutProductEvent,
+} from "@/lib/analytics/stripe-business-events";
 import { enqueueReconciledProductAnalyticsEventStep } from "./deliver-product-analytics-event";
 
 const RECONCILIATION_ROW_LIMIT = 5_000;
+const STRIPE_CHECKOUT_EVENT_TYPES = [
+	"checkout.session.completed",
+	"checkout.session.async_payment_succeeded",
+] as const;
+
+function reconciliationWindow(scheduledAt: string, lookbackHours: number) {
+	const end = new Date(scheduledAt);
+	if (
+		!Number.isFinite(end.getTime()) ||
+		!Number.isInteger(lookbackHours) ||
+		lookbackHours < 1 ||
+		lookbackHours > 24 * 30
+	) {
+		throw new Error("Invalid product analytics reconciliation window");
+	}
+	return {
+		end,
+		start: new Date(end.getTime() - lookbackHours * 60 * 60 * 1_000),
+	};
+}
 
 export async function loadProductAnalyticsReconciliationEventsStep({
 	scheduledAt,
@@ -25,16 +52,7 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 }) {
 	"use step";
 
-	const end = new Date(scheduledAt);
-	if (
-		!Number.isFinite(end.getTime()) ||
-		!Number.isInteger(lookbackHours) ||
-		lookbackHours < 1 ||
-		lookbackHours > 24 * 30
-	) {
-		throw new Error("Invalid product analytics reconciliation window");
-	}
-	const start = new Date(end.getTime() - lookbackHours * 60 * 60 * 1_000);
+	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
 	const pendingDeletionUserIds = db()
 		.select({ userId: messengerSupportEmails.userId })
 		.from(messengerSupportEmails)
@@ -141,6 +159,104 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 }
 loadProductAnalyticsReconciliationEventsStep.maxRetries = 4;
 
+export async function loadStripeAnalyticsReconciliationEventsStep({
+	scheduledAt,
+	lookbackHours,
+}: {
+	scheduledAt: string;
+	lookbackHours: number;
+}) {
+	"use step";
+
+	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
+	const checkoutEvents: Stripe.Event[] = [];
+	for (const type of STRIPE_CHECKOUT_EVENT_TYPES) {
+		let startingAfter: string | undefined;
+		for (;;) {
+			const page = await stripe().events.list({
+				type,
+				created: {
+					gte: Math.floor(start.getTime() / 1_000),
+					lte: Math.floor(end.getTime() / 1_000),
+				},
+				limit: 100,
+				...(startingAfter ? { starting_after: startingAfter } : {}),
+			});
+			checkoutEvents.push(...page.data);
+			if (checkoutEvents.length > RECONCILIATION_ROW_LIMIT) {
+				throw new Error("Stripe analytics reconciliation row limit exceeded");
+			}
+			if (!page.has_more || page.data.length === 0) break;
+			startingAfter = page.data.at(-1)?.id;
+			if (!startingAfter) {
+				throw new Error("Stripe analytics reconciliation pagination failed");
+			}
+		}
+	}
+
+	const sessions = checkoutEvents
+		.map((event) => ({
+			event,
+			session: event.data.object as Stripe.Checkout.Session,
+		}))
+		.filter(
+			({ session }) =>
+				session.metadata?.type !== "developer_credits" &&
+				typeof session.customer === "string" &&
+				typeof session.subscription === "string",
+		);
+	const customerIds = [
+		...new Set(sessions.map(({ session }) => session.customer as string)),
+	];
+	const analyticsUsers =
+		customerIds.length === 0
+			? []
+			: await db()
+					.select({
+						id: users.id,
+						activeOrganizationId: users.activeOrganizationId,
+						stripeCustomerId: users.stripeCustomerId,
+					})
+					.from(users)
+					.where(inArray(users.stripeCustomerId, customerIds));
+	const usersByCustomerId = new Map(
+		analyticsUsers.flatMap((user) =>
+			user.stripeCustomerId ? [[user.stripeCustomerId, user] as const] : [],
+		),
+	);
+	const reconciled = [];
+	for (const { event, session } of sessions) {
+		const user = usersByCustomerId.get(session.customer as string);
+		if (!user) {
+			throw new Error("Stripe checkout has no matching analytics user");
+		}
+		const subscription = await stripe().subscriptions.retrieve(
+			session.subscription as string,
+		);
+		if (
+			!isSettledSubscriptionPurchase(session, subscription) &&
+			!isStartedSubscriptionTrial(session, subscription)
+		) {
+			continue;
+		}
+		const inviteQuota = subscription.items.data.reduce(
+			(total, item) => total + (item.quantity || 1),
+			0,
+		);
+		const productEvent = subscriptionCheckoutProductEvent({
+			eventId: event.id,
+			occurredAt: new Date(event.created * 1_000).toISOString(),
+			session,
+			subscription,
+			inviteQuota,
+			user,
+		});
+		if (productEvent) reconciled.push(productEvent);
+	}
+	return reconciled;
+}
+loadStripeAnalyticsReconciliationEventsStep.maxRetries = 4;
+
 export async function reconcileProductAnalyticsWorkflow(input: {
 	scheduledAt: string;
 	lookbackHours: number;
@@ -148,8 +264,12 @@ export async function reconcileProductAnalyticsWorkflow(input: {
 	"use workflow";
 
 	const events = await loadProductAnalyticsReconciliationEventsStep(input);
-	for (const event of events) {
+	const stripeEvents = await loadStripeAnalyticsReconciliationEventsStep(input);
+	for (const event of [...events, ...stripeEvents]) {
 		await enqueueReconciledProductAnalyticsEventStep(event);
 	}
-	return { reconciled: events.length };
+	return {
+		databaseReconciled: events.length,
+		stripeReconciled: stripeEvents.length,
+	};
 }

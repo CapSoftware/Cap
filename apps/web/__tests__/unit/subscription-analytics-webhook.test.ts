@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	product: vi.fn(),
@@ -113,12 +113,12 @@ function request() {
 	});
 }
 
-function event(type: string, checkoutSession: ReturnType<typeof session>) {
+function event(type: string, object: unknown) {
 	return {
 		id: `evt_${type}`,
 		created: 1_752_537_600,
 		type,
-		data: { object: checkoutSession },
+		data: { object },
 	};
 }
 
@@ -136,6 +136,10 @@ describe("Stripe subscription analytics", () => {
 		mocks.retrieveCustomer.mockResolvedValue(customer);
 		mocks.retrieveSubscription.mockResolvedValue(subscription);
 		POST = (await import("@/app/api/webhooks/stripe/route")).POST;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("emits a paid purchase with revenue dimensions and deterministic IDs", async () => {
@@ -205,6 +209,70 @@ describe("Stripe subscription analytics", () => {
 				userId: "user-1",
 			}),
 		);
+	});
+
+	it("replays the same Stripe event as the same decision event", async () => {
+		mocks.constructEvent.mockReturnValue(
+			event("checkout.session.completed", session()),
+		);
+		await POST(request());
+		await POST(request());
+
+		expect(mocks.product).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				eventId: "stripe:evt_checkout.session.completed:purchase_completed",
+			}),
+		);
+		expect(mocks.product).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				eventId: "stripe:evt_checkout.session.completed:purchase_completed",
+			}),
+		);
+	});
+
+	it("returns a retryable failure when checkout identity is not available", async () => {
+		vi.useFakeTimers();
+		dbChain.limit.mockResolvedValue([]);
+		mocks.constructEvent.mockReturnValue(
+			event("checkout.session.completed", session()),
+		);
+
+		const responsePromise = POST(request());
+		await vi.runAllTimersAsync();
+		const response = await responsePromise;
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("60");
+		expect(mocks.product).not.toHaveBeenCalled();
+	});
+
+	it("does not emit an unattributed asynchronous purchase", async () => {
+		dbChain.limit.mockResolvedValue([]);
+		mocks.constructEvent.mockReturnValue(
+			event("checkout.session.async_payment_succeeded", session()),
+		);
+
+		expect((await POST(request())).status).toBe(503);
+		expect(mocks.product).not.toHaveBeenCalled();
+	});
+
+	it("retries subscription changes until identity is available", async () => {
+		vi.useFakeTimers();
+		dbChain.limit.mockResolvedValue([]);
+		mocks.constructEvent.mockReturnValue(
+			event("customer.subscription.updated", {
+				...subscription,
+				customer: "cus_1",
+			}),
+		);
+
+		const responsePromise = POST(request());
+		await vi.runAllTimersAsync();
+
+		expect((await responsePromise).status).toBe(503);
+		expect(mocks.product).not.toHaveBeenCalled();
 	});
 
 	it("records a no-payment trial without counting a purchase", async () => {
