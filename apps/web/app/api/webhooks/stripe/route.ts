@@ -11,7 +11,7 @@ import { queueServerProductEvent } from "@/lib/analytics/server";
 import {
 	isSettledSubscriptionPurchase,
 	isStartedSubscriptionTrial,
-	subscriptionCheckoutProductEvent,
+	queueSubscriptionCheckoutProductEvent,
 } from "@/lib/analytics/stripe-business-events";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
@@ -409,7 +409,7 @@ export const POST = async (req: Request) => {
 					isSettledSubscriptionPurchase(session, subscription) ||
 					isStartedSubscriptionTrial(session, subscription)
 				) {
-					const productEvent = subscriptionCheckoutProductEvent({
+					await queueSubscriptionCheckoutProductEvent({
 						eventId: event.id,
 						occurredAt: new Date(event.created * 1000).toISOString(),
 						session,
@@ -417,7 +417,6 @@ export const POST = async (req: Request) => {
 						inviteQuota,
 						user: dbUser,
 					});
-					if (productEvent) await queueServerProductEvent(productEvent);
 				}
 			}
 
@@ -464,7 +463,7 @@ export const POST = async (req: Request) => {
 							return retryableUserResolutionFailure();
 						}
 
-						const productEvent = subscriptionCheckoutProductEvent({
+						await queueSubscriptionCheckoutProductEvent({
 							eventId: event.id,
 							occurredAt: new Date(event.created * 1000).toISOString(),
 							session,
@@ -472,7 +471,6 @@ export const POST = async (req: Request) => {
 							inviteQuota,
 							user: dbUser,
 						});
-						if (productEvent) await queueServerProductEvent(productEvent);
 					}
 				}
 			}

@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { queueServerProductEvent } from "./server";
 import type { ServerProductEvent } from "./server-event";
 
 type AnalyticsUser = {
@@ -104,4 +105,11 @@ export function subscriptionCheckoutProductEvent({
 			is_guest_checkout: isGuestCheckout,
 		},
 	};
+}
+
+export async function queueSubscriptionCheckoutProductEvent(
+	input: Parameters<typeof subscriptionCheckoutProductEvent>[0],
+) {
+	const event = subscriptionCheckoutProductEvent(input);
+	if (event) await queueServerProductEvent(event);
 }

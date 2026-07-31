@@ -163,6 +163,22 @@ test("accepts registered typed business-event factories", () => {
 	);
 });
 
+test("accepts a bounded helper that emits one of a declared event set", () => {
+	const result = analyzeTypeScriptSource({
+		sourceText: `
+			import { queueSubscriptionCheckoutProductEvent } from "@/lib/analytics/stripe-business-events";
+			queueSubscriptionCheckoutProductEvent({ eventId: "evt_1" });
+		`,
+		file: "apps/web/app/api/webhooks/stripe/route.ts",
+		registeredEvents: new Set(["purchase_completed", "trial_started"]),
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.deepEqual(
+		result.emissions.map((emission) => emission.eventName),
+		["purchase_completed", "trial_started"],
+	);
+});
+
 test("Rust tokenization excludes comments", () => {
 	const tokens = tokenizeRust(`
 // EventData::new("comment_event")

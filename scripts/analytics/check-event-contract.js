@@ -46,6 +46,7 @@ const WRAPPER_PATHS = new Set([
 	"apps/web/app/utils/product-analytics.ts",
 	"apps/web/lib/analytics/server-event.ts",
 	"apps/web/lib/analytics/server.ts",
+	"apps/web/lib/analytics/stripe-business-events.ts",
 	"apps/web/workflows/deliver-product-analytics-event.ts",
 ]);
 const CAPTURE_MODULES = new Map([
@@ -86,6 +87,18 @@ const CAPTURE_MODULES = new Map([
 			[
 				"collaborationActionCreatedEvent",
 				{ kind: "helper", eventName: "collaboration_action_created" },
+			],
+		]),
+	],
+	[
+		"@/lib/analytics/stripe-business-events",
+		new Map([
+			[
+				"queueSubscriptionCheckoutProductEvent",
+				{
+					kind: "helper-set",
+					eventNames: ["purchase_completed", "trial_started"],
+				},
 			],
 		]),
 	],
@@ -133,6 +146,18 @@ const CAPTURE_MODULES = new Map([
 			[
 				"collaborationActionCreatedEvent",
 				{ kind: "helper", eventName: "collaboration_action_created" },
+			],
+		]),
+	],
+	[
+		"apps/web/lib/analytics/stripe-business-events",
+		new Map([
+			[
+				"queueSubscriptionCheckoutProductEvent",
+				{
+					kind: "helper-set",
+					eventNames: ["purchase_completed", "trial_started"],
+				},
 			],
 		]),
 	],
@@ -468,6 +493,10 @@ export function analyzeTypeScriptSource({
 			const descriptor = callDescriptor(node.expression, bindings);
 			if (descriptor?.kind === "helper") {
 				registerEmission(descriptor.eventName, node);
+			} else if (descriptor?.kind === "helper-set") {
+				for (const eventName of descriptor.eventNames) {
+					registerEmission(eventName, node);
+				}
 			} else if (descriptor?.kind === "name") {
 				const argument = node.arguments[0];
 				if (!argument) {
