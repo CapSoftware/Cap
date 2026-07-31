@@ -1,111 +1,233 @@
-name: Analytics
+name: Analytics staging
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/analytics.yml"
       - "package.json"
       - "pnpm-lock.yaml"
       - "packages/local-docker/**"
       - "packages/analytics/**"
+      - "packages/database/**"
       - "packages/env/server.ts"
       - "packages/web-backend/src/ProductAnalytics/**"
+      - "apps/cli/src/analytics.rs"
+      - "apps/mobile/**"
       - "apps/web/actions/analytics/**"
       - "apps/web/actions/organization/**"
       - "apps/web/__tests__/unit/*analytics*.test.ts"
       - "apps/web/__tests__/unit/developer-credits-webhook.test.ts"
       - "apps/web/app/Layout/*Analytics*.tsx"
+      - "apps/web/app/admin/analytics/**"
+      - "apps/web/app/api/analytics/**"
+      - "apps/web/app/api/cron/reconcile-product-analytics/**"
       - "apps/web/app/api/events/**"
       - "apps/web/app/api/invite/accept/route.ts"
       - "apps/web/app/api/settings/billing/**"
       - "apps/web/app/api/webhooks/stripe/route.ts"
+      - "apps/web/app/mobile/checkout/**"
       - "apps/web/app/utils/analytics.ts"
       - "apps/web/app/utils/product-analytics.ts"
       - "apps/web/lib/analytics/**"
       - "apps/web/lib/rate-limit.ts"
+      - "apps/web/workflows/*product-analytics*"
       - "apps/desktop/src-tauri/src/lib.rs"
+      - "apps/desktop/src-tauri/src/product_analytics.rs"
       - "apps/desktop/src/utils/analytics.ts"
       - "apps/desktop/src/utils/product-analytics.ts"
       - "apps/desktop/src/utils/*analytics*.test.ts"
-      - "apps/desktop/src-tauri/src/product_analytics.rs"
-      - "scripts/analytics/**"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/analytics.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "packages/local-docker/**"
-      - "packages/analytics/**"
-      - "packages/env/server.ts"
-      - "packages/web-backend/src/ProductAnalytics/**"
-      - "apps/web/actions/analytics/**"
-      - "apps/web/actions/organization/**"
-      - "apps/web/__tests__/unit/*analytics*.test.ts"
-      - "apps/web/__tests__/unit/developer-credits-webhook.test.ts"
-      - "apps/web/app/Layout/*Analytics*.tsx"
-      - "apps/web/app/api/events/**"
-      - "apps/web/app/api/invite/accept/route.ts"
-      - "apps/web/app/api/settings/billing/**"
-      - "apps/web/app/api/webhooks/stripe/route.ts"
-      - "apps/web/app/utils/analytics.ts"
-      - "apps/web/app/utils/product-analytics.ts"
-      - "apps/web/lib/analytics/**"
-      - "apps/web/lib/rate-limit.ts"
-      - "apps/desktop/src-tauri/src/lib.rs"
-      - "apps/desktop/src/utils/analytics.ts"
-      - "apps/desktop/src/utils/product-analytics.ts"
-      - "apps/desktop/src/utils/*analytics*.test.ts"
-      - "apps/desktop/src-tauri/src/product_analytics.rs"
       - "scripts/analytics/**"
   workflow_dispatch:
-    inputs:
-      deploy:
-        description: Deploy the checked Tinybird project to production
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
+  deployments: read
+  statuses: read
+
+concurrency:
+  group: analytics-staging-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TINYBIRD_WORKSPACE_ID: 37b8fef9-817f-4c3c-b21f-218c36a6077d
 
 jobs:
   validate:
-    name: Validate and test analytics
+    name: Validate exact analytics SHA
+    if: >-
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 2003 &&
+      github.event.pull_request.head.ref == 'codex/first-party-analytics') ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/codex/first-party-analytics')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Check out exact requested SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
       - uses: ./.github/actions/setup-js
-      - name: Run analytics regression suites
+      - name: Refuse an out-of-scope event, branch, PR, or checkout
+        run: node scripts/analytics/staging-ci.js verify-scope --actual-sha "$(git rev-parse HEAD)"
+      - name: Run analytics contract and regression suites
         run: pnpm analytics:test
       - name: Validate Docker Compose
         run: node scripts/analytics/analytics-cli.js compose-check
-      - name: Build and test with Tinybird Local
+      - name: Build and test Tinybird datafiles with fixtures
         run: node scripts/analytics/analytics-cli.js local
       - name: Stop Tinybird Local
         if: always()
         run: node scripts/analytics/analytics-cli.js local-stop
 
-  deploy:
-    name: Deploy analytics
+  deploy-staging:
+    name: Deploy and prove analytics staging
     needs: validate
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy == true)
+    if: needs.validate.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: analytics-production
-      cancel-in-progress: false
-    environment: production
+    timeout-minutes: 45
+    environment: staging
     env:
-      TINYBIRD_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_DEPLOY_TOKEN }}
-      TINYBIRD_URL: ${{ secrets.TINYBIRD_URL }}
-      TINYBIRD_WORKSPACE_ID: ${{ secrets.TINYBIRD_WORKSPACE_ID }}
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+      ANALYTICS_TEST_RUN_ID: run_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.event.pull_request.head.sha || github.sha }}
+      TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+      TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+      TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+      TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+      TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+      TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+      TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+      TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Check out exact requested SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
-      - name: Check and deploy Tinybird project
-        run: node scripts/analytics/analytics-cli.js cloud-deploy
+      - name: Refuse an out-of-scope event, branch, PR, or checkout
+        run: node scripts/analytics/staging-ci.js verify-scope --actual-sha "$(git rev-parse HEAD)"
+      - name: Refuse missing, non-staging, or wrong-workspace credentials
+        run: node scripts/analytics/staging-ci.js verify-credentials
+      - name: Wait for successful exact-SHA Vercel preview
+        id: vercel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/analytics/staging-ci.js wait-vercel
+      - name: Record Tinybird deployment boundary
+        run: echo "TINYBIRD_DEPLOYMENT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$GITHUB_ENV"
+      - name: Check Tinybird cloud deployment plan
+        id: deployment-check
+        run: >-
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
+          run --rm tinybird-cloud-cli --cloud deployment create --check
+      - name: Create isolated Tinybird staging deployment
+        id: create-deployment
+        run: >-
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
+          run --rm tinybird-cloud-cli --cloud deployment create --wait
+      - name: Resolve only the deployment created by this run
+        id: tinybird
+        run: |
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --output json deployment ls > "$RUNNER_TEMP/tinybird-deployments.json"
+          node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
+      - name: Refuse source mutations after exact-SHA checkout
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: Re-run fixture assertions after staging creation
+        run: node scripts/analytics/analytics-cli.js test
+      - name: Seed bounded duplicate and conflict probes
+        id: seed
+        env:
+          VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+        run: >-
+          node scripts/analytics/staging-ci.js seed
+          --run-id "$ANALYTICS_TEST_RUN_ID"
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Rebuild staged decision and health copies
+        id: staging-copies
+        run: |
+          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --staging copy run "$pipe" --wait --mode replace --yes
+          done
+      - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
+        id: verify
+        run: >-
+          node scripts/analytics/staging-ci.js verify
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Promote the verified staging deployment
+        id: promote
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=no)"
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote
+      - name: Probe the exact-SHA Vercel browser collector and staging rate limit
+        id: preview-api
+        run: >-
+          node scripts/analytics/staging-ci.js probe-preview
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Rebuild promoted decision and health copies
+        id: promoted-copies
+        run: |
+          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace --yes
+          done
+      - name: Prove promoted preview delivery and decision deduplication
+        id: verify-promoted
+        run: >-
+          node scripts/analytics/staging-ci.js verify-promoted
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Delete strictly scoped synthetic raw rows
+        id: cleanup
+        if: always() && steps.seed.outcome == 'success' && steps.promote.outcome == 'success'
+        run: >-
+          node scripts/analytics/staging-ci.js cleanup
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Retract synthetic rows from every derived copy
+        id: cleanup-copies
+        if: always() && steps.cleanup.outcome == 'success'
+        run: |
+          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace --yes
+          done
+      - name: Prove synthetic cleanup no longer affects queries
+        id: verify-cleanup
+        if: always() && steps.cleanup-copies.outcome == 'success'
+        run: >-
+          node scripts/analytics/staging-ci.js verify-cleanup
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Discard an unpromoted staging deployment
+        if: always() && steps.create-deployment.outcome != 'skipped' && steps.promote.outcome != 'success'
+        run: >-
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
+          run --rm tinybird-cloud-cli --cloud deployment discard --wait
+      - name: Upload redacted staging evidence
+        if: always() && steps.seed.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-staging-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
