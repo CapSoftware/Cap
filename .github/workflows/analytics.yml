@@ -164,7 +164,7 @@ jobs:
         id: staging-copies
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --staging copy run "$pipe" --wait --mode replace --yes
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --staging copy run "$pipe" --wait --mode replace
           done
       - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
         id: verify
@@ -189,7 +189,7 @@ jobs:
         id: promoted-copies
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace --yes
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
           done
       - name: Prove promoted preview delivery and decision deduplication
         id: verify-promoted
@@ -209,7 +209,7 @@ jobs:
         if: always() && steps.cleanup.outcome == 'success'
         run: |
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace --yes
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
           done
       - name: Prove synthetic cleanup no longer affects queries
         id: verify-cleanup

@@ -148,7 +148,7 @@ const operationPlan = (operation) => {
 			},
 			localCliStep("--local", "build"),
 			...PRODUCT_COPY_PIPES.map((name) =>
-				localCliStep("--local", "copy", "run", name, "--wait", "--yes"),
+				localCliStep("--local", "copy", "run", name, "--wait"),
 			),
 			localCliStep("--local", "test", "run"),
 			{ type: "write-local-env" },
@@ -169,7 +169,7 @@ const operationPlan = (operation) => {
 				localAuth: true,
 			},
 			...PRODUCT_COPY_PIPES.map((name) =>
-				localCliStep("--local", "copy", "run", name, "--wait", "--yes"),
+				localCliStep("--local", "copy", "run", name, "--wait"),
 			),
 			localCliStep("--local", "test", "run"),
 		],
