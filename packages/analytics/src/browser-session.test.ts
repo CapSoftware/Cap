@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	boundedForegroundEngagementMs,
+	PRODUCT_ANALYTICS_ENGAGEMENT_IDLE_MS,
 	PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS,
 	readAnalyticsTouch,
 	resolveBrowserAnalyticsContext,
@@ -19,6 +21,23 @@ function createIds() {
 }
 
 describe("browser analytics sessions", () => {
+	it("caps visible engagement after inactivity", () => {
+		expect(
+			boundedForegroundEngagementMs({
+				activeSince: 1_000,
+				lastInteractionAt: 11_000,
+				now: 21_000,
+			}),
+		).toBe(20_000);
+		expect(
+			boundedForegroundEngagementMs({
+				activeSince: 1_000,
+				lastInteractionAt: 11_000,
+				now: PRODUCT_ANALYTICS_ENGAGEMENT_IDLE_MS + 21_000,
+			}),
+		).toBe(40_000);
+	});
+
 	it("shares a session across reloads and tabs", () => {
 		const storage = createStorage();
 		const createId = createIds();

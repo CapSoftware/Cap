@@ -2,7 +2,7 @@ import "@/app/globals.css";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import Script from "next/script";
-import type { PropsWithChildren } from "react";
+import { type PropsWithChildren, Suspense } from "react";
 import { ProductAnalyticsPageView } from "./Layout/ProductAnalyticsPageView";
 
 const defaultFont = localFont({
@@ -100,7 +100,9 @@ export default function RootLayout({ children }: PropsWithChildren) {
 			</head>
 			<body suppressHydrationWarning>
 				<Script src="/theme-script.js" strategy="beforeInteractive" />
-				<ProductAnalyticsPageView />
+				<Suspense fallback={null}>
+					<ProductAnalyticsPageView />
+				</Suspense>
 				<main className="w-full">{children}</main>
 			</body>
 		</html>

@@ -1,6 +1,7 @@
 type ProductEventProperties = Record<string, string | number | boolean | null>;
 
 export const PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+export const PRODUCT_ANALYTICS_ENGAGEMENT_IDLE_MS = 30 * 1000;
 export const PRODUCT_ANALYTICS_SESSION_STORAGE_KEY = "cap_analytics_session_v2";
 export const PRODUCT_ANALYTICS_FIRST_TOUCH_STORAGE_KEY =
 	"cap_analytics_first_touch_v2";
@@ -36,6 +37,18 @@ export interface BrowserAnalyticsContext {
 	sessionId: string;
 	isSessionEntry: boolean;
 	attribution: ProductEventProperties;
+}
+
+export function boundedForegroundEngagementMs(options: {
+	activeSince: number;
+	lastInteractionAt: number;
+	now: number;
+}) {
+	const engagementEnd = Math.min(
+		options.now,
+		options.lastInteractionAt + PRODUCT_ANALYTICS_ENGAGEMENT_IDLE_MS,
+	);
+	return Math.max(0, engagementEnd - options.activeSince);
 }
 
 export function readAnalyticsTouch(

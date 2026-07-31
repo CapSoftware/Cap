@@ -18,6 +18,8 @@ export type {
 	BrowserAnalyticsSession,
 } from "./browser-session";
 export {
+	boundedForegroundEngagementMs,
+	PRODUCT_ANALYTICS_ENGAGEMENT_IDLE_MS,
 	PRODUCT_ANALYTICS_FIRST_TOUCH_STORAGE_KEY,
 	PRODUCT_ANALYTICS_LAST_TOUCH_STORAGE_KEY,
 	PRODUCT_ANALYTICS_SESSION_STORAGE_KEY,
