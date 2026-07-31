@@ -540,7 +540,7 @@ export const EVENT_REGISTRY = {
 		...criticalServer,
 		platforms: ["server"],
 		semantic:
-			"Stripe reports money refunded against a settled charge. Amounts are cumulative refunded minor units for the charge.",
+			"Stripe reports an incremental increase in money refunded against a settled charge. Each event contributes only the delta since the previous charge state.",
 		properties: {
 			amount_refunded_minor: { type: "number", required: true },
 			currency: { type: "string", required: true },

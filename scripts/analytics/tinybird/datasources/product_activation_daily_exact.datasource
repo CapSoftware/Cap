@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Five-year signup cohorts and the defensible activation milestone of creating a first share link within seven UTC days.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	calculated_at DateTime64(3),
 	cohort_date Date,

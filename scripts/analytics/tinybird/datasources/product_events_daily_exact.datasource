@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Five-year exact daily product decision metrics rebuilt from canonical event IDs.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	calculated_at DateTime64(3),
 	date Date,

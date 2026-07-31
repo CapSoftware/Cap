@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Hourly delivery aggregates for stable, bounded product analytics health checks.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	hour DateTime,
 	platform LowCardinality(String),

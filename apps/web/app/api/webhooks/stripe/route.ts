@@ -378,7 +378,12 @@ export const POST = async (req: Request) => {
 
 			if (event.type === "charge.refunded") {
 				const charge = event.data.object as Stripe.Charge;
-				if (charge.invoice) {
+				const previousCharge = event.data.previous_attributes as
+					| Partial<Stripe.Charge>
+					| undefined;
+				const previousAmountRefunded = previousCharge?.amount_refunded ?? 0;
+				const refundedAmount = charge.amount_refunded - previousAmountRefunded;
+				if (charge.invoice && refundedAmount > 0) {
 					const dbUser = await findAnalyticsUserForCustomer(charge.customer);
 					await queueServerProductEvent({
 						eventId: `stripe:${event.id}:subscription_refunded`,
@@ -388,7 +393,7 @@ export const POST = async (req: Request) => {
 						userId: dbUser?.id,
 						organizationId: dbUser?.activeOrganizationId,
 						properties: {
-							amount_refunded_minor: charge.amount_refunded,
+							amount_refunded_minor: refundedAmount,
 							currency: charge.currency,
 							fully_refunded: charge.refunded,
 						},

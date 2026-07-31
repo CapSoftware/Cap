@@ -305,7 +305,11 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		};
 
 		const productAnalyticsRequest = <T>(path: string, init?: RequestInit) => {
-			if (!productAnalyticsHost) return Effect.succeed({} as T);
+			if (!productAnalyticsHost) {
+				return Effect.fail(
+					new Error("Product analytics erasure host is not configured"),
+				);
+			}
 			if (!productAnalyticsErasureToken) {
 				return Effect.fail(
 					new Error("Product analytics erasure is not configured"),
@@ -349,11 +353,11 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				},
 			).pipe(
 				Effect.flatMap((result) =>
-					result.mutation?.is_done === false
-						? Effect.fail(
+					result.mutation?.is_done === true
+						? Effect.void
+						: Effect.fail(
 								new Error("Product analytics deletion did not finish"),
-							)
-						: Effect.void,
+							),
 				),
 			);
 

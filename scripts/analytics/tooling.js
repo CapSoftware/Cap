@@ -357,6 +357,8 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	);
 	if (!daily || daily.engine !== "AggregatingMergeTree") {
 		issues.push("Missing product_events_daily_exact snapshot datasource");
+	} else if (hasToken(daily, "product_events_agent_read", "READ")) {
+		issues.push("Product event aggregate states must be endpoint-only");
 	}
 	const canonical = project.datasources.find(
 		(datasource) => datasource.name === "product_events_canonical_v1",
@@ -377,8 +379,8 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		);
 		if (!datasource || datasource.engine !== "AggregatingMergeTree") {
 			issues.push(`Missing privacy-safe aggregate datasource ${name}`);
-		} else if (!hasToken(datasource, "product_events_agent_read", "READ")) {
-			issues.push(`${name} is missing its read-only agent token`);
+		} else if (hasToken(datasource, "product_events_agent_read", "READ")) {
+			issues.push(`${name} aggregate states must be endpoint-only`);
 		}
 	}
 	const healthHourly = project.datasources.find(
@@ -386,6 +388,8 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	);
 	if (!healthHourly || healthHourly.engine !== "AggregatingMergeTree") {
 		issues.push("Missing product_events_health_hourly aggregate datasource");
+	} else if (hasToken(healthHourly, "product_events_agent_read", "READ")) {
+		issues.push("Product event health states must be endpoint-only");
 	}
 	for (const name of [
 		...PRODUCT_COPY_PIPES,

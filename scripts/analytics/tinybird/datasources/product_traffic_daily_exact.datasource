@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Five-year privacy-safe daily visit metrics with exact visitor states and no raw identifiers.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	calculated_at DateTime64(3),
 	date Date,

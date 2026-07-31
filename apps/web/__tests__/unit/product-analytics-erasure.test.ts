@@ -2,11 +2,17 @@ import { Tinybird } from "@cap/web-backend";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const serviceEnvironment = vi.hoisted(() => ({
-	PRODUCT_ANALYTICS_TINYBIRD_HOST: "https://staging.tinybird.test",
-	TINYBIRD_HOST: undefined,
-	TINYBIRD_TOKEN: undefined,
-}));
+const serviceEnvironment = vi.hoisted(
+	(): {
+		PRODUCT_ANALYTICS_TINYBIRD_HOST: string | undefined;
+		TINYBIRD_HOST: undefined;
+		TINYBIRD_TOKEN: undefined;
+	} => ({
+		PRODUCT_ANALYTICS_TINYBIRD_HOST: "https://staging.tinybird.test",
+		TINYBIRD_HOST: undefined,
+		TINYBIRD_TOKEN: undefined,
+	}),
+);
 
 vi.mock("@cap/env", () => ({ serverEnv: () => serviceEnvironment }));
 
@@ -16,6 +22,8 @@ const originalEnvironment = {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	serviceEnvironment.PRODUCT_ANALYTICS_TINYBIRD_HOST =
+		"https://staging.tinybird.test";
 	if (originalEnvironment.erasureToken === undefined) {
 		delete process.env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN;
 	} else {
@@ -90,5 +98,46 @@ describe.sequential("product analytics erasure", () => {
 
 		expect(error).toBeInstanceOf(Error);
 		expect(error.message).toBe("Product analytics erasure is not configured");
+	});
+
+	it("fails closed when the erasure host is missing", async () => {
+		process.env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN = "erasure-token";
+		serviceEnvironment.PRODUCT_ANALYTICS_TINYBIRD_HOST = undefined;
+
+		const error = await Effect.runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
+				yield* tinybird.eraseProductAnalytics({ organizationId: "org-1" });
+			}).pipe(Effect.provide(Tinybird.Default), Effect.flip),
+		);
+
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toBe(
+			"Product analytics erasure host is not configured",
+		);
+	});
+
+	it("fails closed when Tinybird does not confirm deletion", async () => {
+		process.env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN = "erasure-token";
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = new URL(String(input));
+				if (url.pathname === "/v0/sql") {
+					return Response.json({ data: [] });
+				}
+				return Response.json({});
+			}),
+		);
+
+		const error = await Effect.runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
+				yield* tinybird.eraseProductAnalytics({ organizationId: "org-1" });
+			}).pipe(Effect.provide(Tinybird.Default), Effect.flip),
+		);
+
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toBe("Product analytics deletion did not finish");
 	});
 });

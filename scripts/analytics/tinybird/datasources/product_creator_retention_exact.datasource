@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Five-year creator and organization activity cohorts using successful creation-value events.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	calculated_at DateTime64(3),
 	cohort_date Date,

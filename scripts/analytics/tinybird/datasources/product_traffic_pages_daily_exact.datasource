@@ -1,8 +1,6 @@
 DESCRIPTION >
 	Five-year privacy-safe page, landing, exit, and foreground-engagement metrics.
 
-TOKEN product_events_agent_read READ
-
 SCHEMA >
 	calculated_at DateTime64(3),
 	date Date,

@@ -235,4 +235,36 @@ describe("Stripe subscription analytics", () => {
 			expect.objectContaining({ eventName: "purchase_completed" }),
 		);
 	});
+
+	it("records only the incremental amount for partial refunds", async () => {
+		mocks.constructEvent.mockReturnValue({
+			id: "evt_refund_2",
+			created: 1_752_537_600,
+			type: "charge.refunded",
+			data: {
+				object: {
+					id: "ch_1",
+					customer: "cus_1",
+					invoice: "in_1",
+					amount_refunded: 500,
+					currency: "usd",
+					refunded: false,
+				},
+				previous_attributes: { amount_refunded: 200 },
+			},
+		});
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId: "stripe:evt_refund_2:subscription_refunded",
+				eventName: "subscription_refunded",
+				properties: {
+					amount_refunded_minor: 300,
+					currency: "usd",
+					fully_refunded: false,
+				},
+			}),
+		);
+	});
 });
