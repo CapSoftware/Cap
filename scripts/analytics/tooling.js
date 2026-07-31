@@ -23,8 +23,13 @@ const TEST_FILES = fs
 	.sort()
 	.map((fileName) => path.join(MODULE_DIR, "tests", fileName));
 const CLOUD_URL_DEFAULT = "https://api.tinybird.co";
-const WORKSPACE_ID_PATTERN =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const WORKSPACE_ID_SOURCE =
+	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const WORKSPACE_ID_PATTERN = new RegExp(`^${WORKSPACE_ID_SOURCE}$`, "i");
+const WORKSPACE_ID_OUTPUT_PATTERN = new RegExp(
+	`\\b${WORKSPACE_ID_SOURCE}\\b`,
+	"gi",
+);
 const LOCAL_TOKEN_SIGNING_KEY = "tinybird-local";
 const LOCAL_IDENTIFIERS = {
 	workspaceId: "00000000-0000-4000-8000-000000000001",
@@ -449,26 +454,20 @@ const runProcessCapture = (command, args, options = {}, spawn = spawnSync) => {
 const verifyCloudWorkspace = (env = process.env, run = runProcessCapture) => {
 	const environment = cloudEnvironment(env);
 	const step = cloudCliStep(
+		"--no-version-warning",
 		"--cloud",
-		"--output",
-		"json",
 		"workspace",
 		"current",
 	);
 	assertSafeStep(step);
 	const output = run(step.command, step.args, { env: environment });
-	let workspace;
-	try {
-		workspace = JSON.parse(output);
-	} catch {
+	const workspaceIds = output.match(WORKSPACE_ID_OUTPUT_PATTERN) ?? [];
+	if (workspaceIds.length === 0) {
 		throw new Error("Unable to parse Tinybird workspace identity.");
 	}
 	if (
-		!workspace ||
-		typeof workspace !== "object" ||
-		Array.isArray(workspace) ||
-		typeof workspace.id !== "string" ||
-		workspace.id.toLowerCase() !==
+		workspaceIds.length !== 1 ||
+		workspaceIds[0]?.toLowerCase() !==
 			environment.TINYBIRD_WORKSPACE_ID.toLowerCase()
 	) {
 		throw new Error(

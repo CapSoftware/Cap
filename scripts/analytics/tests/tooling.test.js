@@ -138,25 +138,34 @@ test("cloud deploy verifies the token workspace before mutation", () => {
 	};
 	assert.equal(
 		verifyCloudWorkspace(env, (_command, args) => {
-			assert.deepEqual(args.slice(-5), [
+			assert.deepEqual(args.slice(-4), [
+				"--no-version-warning",
 				"--cloud",
-				"--output",
-				"json",
 				"workspace",
 				"current",
 			]);
-			return JSON.stringify({ id: workspaceId, name: "production" });
+			return [
+				"Current workspace:",
+				"Name       Id                                    Role   Plan       Current",
+				`production ${workspaceId} admin  enterprise true`,
+			].join("\n");
 		}),
 		workspaceId,
 	);
 	assert.throws(
 		() =>
-			verifyCloudWorkspace(env, () =>
-				JSON.stringify({
-					id: "87654321-4321-4321-8321-cba987654321",
-					metadata: workspaceId,
-					name: "staging",
-				}),
+			verifyCloudWorkspace(
+				env,
+				() =>
+					`staging 87654321-4321-4321-8321-cba987654321 admin enterprise true`,
+			),
+		/does not target/,
+	);
+	assert.throws(
+		() =>
+			verifyCloudWorkspace(
+				env,
+				() => `${workspaceId} 87654321-4321-4321-8321-cba987654321`,
 			),
 		/does not target/,
 	);
