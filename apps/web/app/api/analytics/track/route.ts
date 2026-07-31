@@ -6,12 +6,17 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
+import {
+	getProductAnalyticsRateLimitKey,
+	ProductAnalyticsRateLimiter,
+} from "@/lib/analytics/request";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { getAnonymousName } from "@/lib/anonymous-names";
 import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -26,6 +31,9 @@ interface TrackPayload {
 }
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
+const fallbackRateLimiter = new ProductAnalyticsRateLimiter({
+	perKeyLimit: 60,
+});
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -59,6 +67,32 @@ export async function POST(request: NextRequest) {
 			: null;
 	const sessionId =
 		parsedSessionId && parsedSessionId !== "anonymous" ? parsedSessionId : null;
+	const origin = request.headers.get("origin");
+	if (origin) {
+		try {
+			if (new URL(origin).hostname !== request.nextUrl.hostname) {
+				return Response.json({ error: "Invalid origin" }, { status: 403 });
+			}
+		} catch {
+			return Response.json({ error: "Invalid origin" }, { status: 403 });
+		}
+	}
+	const rateLimitKey = getProductAnalyticsRateLimitKey({
+		trustedVercelProxy: process.env.VERCEL === "1",
+		xVercelForwardedFor:
+			request.headers.get("x-vercel-forwarded-for") ?? undefined,
+		fallbackIdentity:
+			sessionId ?? request.headers.get("user-agent") ?? undefined,
+	});
+	if (
+		fallbackRateLimiter.isRateLimited(rateLimitKey) ||
+		(await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
+			key: rateLimitKey,
+			headers: request.headers,
+		}))
+	) {
+		return Response.json({ error: "Rate limited" }, { status: 429 });
+	}
 	const userAgent =
 		sanitizeString(request.headers.get("user-agent")) ||
 		sanitizeString(body.userAgent) ||
@@ -78,11 +112,6 @@ export async function POST(request: NextRequest) {
 		sanitizeString(
 			decodeUrlEncodedHeaderValue(request.headers.get("x-vercel-ip-city")),
 		) || "";
-
-	const hostname =
-		sanitizeString(body.hostname) ||
-		sanitizeString(request.nextUrl.hostname) ||
-		"";
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
 
@@ -134,7 +163,7 @@ export async function POST(request: NextRequest) {
 				),
 			);
 
-			if (videoRecord && userId === videoRecord.ownerId) {
+			if (!videoRecord || userId === videoRecord.ownerId) {
 				return;
 			}
 
@@ -146,11 +175,7 @@ export async function POST(request: NextRequest) {
 				return;
 			}
 
-			const tenantId =
-				body.orgId ||
-				videoRecord?.ownerId ||
-				body.ownerId ||
-				(hostname ? `domain:${hostname}` : "public");
+			const tenantId = videoRecord.organizationId;
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([

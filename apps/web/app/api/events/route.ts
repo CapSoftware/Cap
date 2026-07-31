@@ -131,6 +131,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						const rateLimitKey = getProductAnalyticsRateLimitKey({
 							trustedVercelProxy: process.env.VERCEL === "1",
 							xVercelForwardedFor: headers["x-vercel-forwarded-for"],
+							fallbackIdentity:
+								(browserClaims ? browserClaims.anonymousId : undefined) ??
+								headers.authorization,
 						});
 						if (fallbackRateLimiter.isRateLimited(rateLimitKey)) {
 							return yield* Effect.fail(new RateLimited());

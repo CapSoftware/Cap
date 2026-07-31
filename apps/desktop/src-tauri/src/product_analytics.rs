@@ -30,6 +30,8 @@ const PRODUCT_EVENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
 const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
+const PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY: &str =
+    "product_analytics_outbox_fallback_key_v1";
 const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
 const PRODUCT_EVENT_OUTBOX_KEYRING_USER: &str = "product-analytics-outbox-v1";
 const PRODUCT_EVENT_OUTBOX_CAPACITY: usize = 500;
@@ -423,35 +425,65 @@ fn should_retry_product_status(status: u16) -> bool {
     status == 429 || status >= 500
 }
 
-fn outbox_encryption_key() -> Result<&'static [u8; 32], String> {
+fn fallback_outbox_encryption_key(app: &AppHandle) -> Result<[u8; 32], String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "fallback_key_store_unavailable".to_string())?;
+    if let Some(encoded) = store
+        .get(PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY)
+        .and_then(|value| value.as_str().map(str::to_owned))
+    {
+        return BASE64
+            .decode(encoded)
+            .map_err(|_| "invalid_fallback_key".to_string())?
+            .try_into()
+            .map_err(|_| "invalid_fallback_key".to_string());
+    }
+    let mut generated = [0_u8; 32];
+    SystemRandom::new()
+        .fill(&mut generated)
+        .map_err(|_| "key_generation_failed".to_string())?;
+    store.set(
+        PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY,
+        BASE64.encode(generated),
+    );
+    store
+        .save()
+        .map_err(|_| "fallback_key_store_write_failed".to_string())?;
+    Ok(generated)
+}
+
+fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
     if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get() {
         return Ok(key);
     }
 
-    let entry = keyring::Entry::new(
+    let key = match keyring::Entry::new(
         PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE,
         PRODUCT_EVENT_OUTBOX_KEYRING_USER,
-    )
-    .map_err(|_| "keyring_unavailable".to_string())?;
-    let key = match entry.get_password() {
-        Ok(encoded) => {
-            let decoded = BASE64
-                .decode(encoded)
-                .map_err(|_| "invalid_keyring_value".to_string())?;
-            decoded
-                .try_into()
-                .map_err(|_| "invalid_keyring_value".to_string())?
-        }
-        Err(_) => {
-            let mut generated = [0_u8; 32];
-            SystemRandom::new()
-                .fill(&mut generated)
-                .map_err(|_| "key_generation_failed".to_string())?;
-            entry
-                .set_password(&BASE64.encode(generated))
-                .map_err(|_| "keyring_write_failed".to_string())?;
-            generated
-        }
+    ) {
+        Ok(entry) => match entry.get_password() {
+            Ok(encoded) => {
+                let decoded = BASE64
+                    .decode(encoded)
+                    .map_err(|_| "invalid_keyring_value".to_string())?;
+                decoded
+                    .try_into()
+                    .map_err(|_| "invalid_keyring_value".to_string())?
+            }
+            Err(_) => {
+                let mut generated = [0_u8; 32];
+                SystemRandom::new()
+                    .fill(&mut generated)
+                    .map_err(|_| "key_generation_failed".to_string())?;
+                if entry.set_password(&BASE64.encode(generated)).is_ok() {
+                    generated
+                } else {
+                    fallback_outbox_encryption_key(app)?
+                }
+            }
+        },
+        Err(_) => fallback_outbox_encryption_key(app)?,
     };
     let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
     PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY
@@ -459,8 +491,8 @@ fn outbox_encryption_key() -> Result<&'static [u8; 32], String> {
         .ok_or_else(|| "key_cache_failed".to_string())
 }
 
-fn encrypt_outbox(outbox: &ProductEventOutbox) -> Result<String, String> {
-    encrypt_outbox_with_key(outbox, outbox_encryption_key()?)
+fn encrypt_outbox(app: &AppHandle, outbox: &ProductEventOutbox) -> Result<String, String> {
+    encrypt_outbox_with_key(outbox, outbox_encryption_key(app)?)
 }
 
 fn encrypt_outbox_with_key(
@@ -488,8 +520,8 @@ fn encrypt_outbox_with_key(
     Ok(BASE64.encode(stored))
 }
 
-fn decrypt_outbox(value: &str) -> Result<ProductEventOutbox, String> {
-    decrypt_outbox_with_key(value, outbox_encryption_key()?)
+fn decrypt_outbox(app: &AppHandle, value: &str) -> Result<ProductEventOutbox, String> {
+    decrypt_outbox_with_key(value, outbox_encryption_key(app)?)
 }
 
 fn decrypt_outbox_with_key(
@@ -522,7 +554,7 @@ fn decrypt_outbox_with_key(
 }
 
 fn persist_outbox(app: &AppHandle, outbox: &ProductEventOutbox) -> Result<(), String> {
-    let encrypted = encrypt_outbox(outbox)?;
+    let encrypted = encrypt_outbox(app, outbox)?;
     let store = app
         .store("store")
         .map_err(|_| "store_unavailable".to_string())?;
@@ -540,7 +572,7 @@ fn load_outbox(app: &AppHandle) -> Result<ProductEventOutbox, String> {
     let Some(encrypted) = value.as_str() else {
         return Err("invalid_stored_outbox".to_string());
     };
-    decrypt_outbox(encrypted)
+    decrypt_outbox(app, encrypted)
 }
 
 fn outbox_guard() -> std::sync::MutexGuard<'static, ProductEventOutbox> {

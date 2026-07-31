@@ -233,7 +233,7 @@ describe("ProductAnalyticsRateLimiter", () => {
 		expect(limiter.isRateLimited("a", 1_000)).toBe(false);
 	});
 
-	it("uses only a platform-owned Vercel request identity", () => {
+	it("uses a platform-owned proxy identity or hashed self-hosted identity", () => {
 		expect(
 			getProductAnalyticsRateLimitKey({
 				trustedVercelProxy: true,
@@ -244,8 +244,20 @@ describe("ProductAnalyticsRateLimiter", () => {
 			getProductAnalyticsRateLimitKey({
 				trustedVercelProxy: false,
 				xVercelForwardedFor: "attacker-controlled",
+				fallbackIdentity: "browser-1",
 			}),
-		).toBe("self-hosted");
+		).toMatch(/^self-hosted:[0-9a-f]{64}$/);
+		expect(
+			getProductAnalyticsRateLimitKey({
+				trustedVercelProxy: false,
+				fallbackIdentity: "browser-1",
+			}),
+		).not.toBe(
+			getProductAnalyticsRateLimitKey({
+				trustedVercelProxy: false,
+				fallbackIdentity: "browser-2",
+			}),
+		);
 		expect(getProductAnalyticsRateLimitKey({ trustedVercelProxy: true })).toBe(
 			"vercel-unknown",
 		);

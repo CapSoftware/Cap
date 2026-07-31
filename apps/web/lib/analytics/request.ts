@@ -156,8 +156,12 @@ export function normalizeProductEventBatch(
 export function getProductAnalyticsRateLimitKey(headers: {
 	trustedVercelProxy: boolean;
 	xVercelForwardedFor?: string;
+	fallbackIdentity?: string;
 }) {
-	if (!headers.trustedVercelProxy) return "self-hosted";
+	if (!headers.trustedVercelProxy) {
+		const identity = headers.fallbackIdentity?.trim() || "unknown";
+		return `self-hosted:${createHash("sha256").update(identity).digest("hex")}`;
+	}
 	return (
 		headers.xVercelForwardedFor?.split(",")[0]?.trim() || "vercel-unknown"
 	).slice(0, PRODUCT_ANALYTICS_LIMITS.identifierLength);
