@@ -139,7 +139,7 @@ test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", 
 		"utf8",
 	);
 	assert.match(canonicalContents, /GROUP BY event_id/);
-	assert.match(canonicalContents, /HAVING uniqExact\(payload_hash\) = 1/);
+	assert.match(canonicalContents, /HAVING uniqExact\(raw_payload_hash\) = 1/);
 	assert.match(canonicalContents, /^COPY_MODE replace$/m);
 
 	const contents = fs.readFileSync(

@@ -6,25 +6,36 @@ TOKEN product_events_agent_read READ
 NODE product_traffic_overview_node
 SQL >
 	%
+	WITH daily AS (
+		SELECT
+			date,
+			uniqExactMerge(visitors) AS visitor_count,
+			sum(visits) AS visit_count,
+			sum(pageviews) AS pageview_count,
+			sum(bounces) AS bounce_count,
+			sum(visit_duration_ms) AS duration_total_ms,
+			sum(engaged_ms) AS engagement_total_ms
+		FROM product_traffic_daily_exact
+		WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+			AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+			{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
+			{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
+			{% if defined(device) %} AND device = {{String(device)}} {% end %}
+			{% if defined(browser) %} AND browser = {{String(browser)}} {% end %}
+			{% if defined(os) %} AND os = {{String(os)}} {% end %}
+			{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
+		GROUP BY date
+	)
 	SELECT
 		date,
-		uniqExactMerge(visitors) AS visitors,
-		sum(visits) AS visits,
-		sum(pageviews) AS pageviews,
-		round(if(sum(visits) = 0, 0, sum(pageviews) / sum(visits)), 2) AS views_per_visit,
-		round(if(sum(visits) = 0, 0, 100 * sum(bounces) / sum(visits)), 2) AS bounce_rate,
-		toUInt64(if(sum(visits) = 0, 0, sum(visit_duration_ms) / sum(visits))) AS visit_duration_ms,
-		sum(engaged_ms) AS engaged_ms
-	FROM product_traffic_daily_exact
-	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
-		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
-		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
-		{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
-		{% if defined(device) %} AND device = {{String(device)}} {% end %}
-		{% if defined(browser) %} AND browser = {{String(browser)}} {% end %}
-		{% if defined(os) %} AND os = {{String(os)}} {% end %}
-		{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
-	GROUP BY date
+		visitor_count AS visitors,
+		visit_count AS visits,
+		pageview_count AS pageviews,
+		round(if(visit_count = 0, 0, pageview_count / visit_count), 2) AS views_per_visit,
+		round(if(visit_count = 0, 0, 100 * bounce_count / visit_count), 2) AS bounce_rate,
+		toUInt64(if(visit_count = 0, 0, duration_total_ms / visit_count)) AS visit_duration_ms,
+		engagement_total_ms AS engaged_ms
+	FROM daily
 	ORDER BY date ASC
 	LIMIT 400
 
