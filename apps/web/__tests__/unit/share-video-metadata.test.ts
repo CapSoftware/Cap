@@ -28,6 +28,7 @@ describe("share video metadata", () => {
 			name: "Product demo",
 			sourceType: "desktopMP4",
 			webUrl: "https://cap.so",
+			advertiseIframelyPlayer: true,
 		});
 
 		expect(metadata.openGraph).toMatchObject({
@@ -57,9 +58,30 @@ describe("share video metadata", () => {
 				url: expect.any(String),
 			},
 		]);
+		expect(metadata.icons).toEqual({
+			other: [
+				{
+					rel: "iframely player",
+					url: "https://cap.so/embed/video123",
+					type: "text/html",
+					media: "(aspect-ratio: 16/9)",
+				},
+			],
+		});
 		expect(metadata.other).toEqual({
 			"twitter:player:stream:content_type": "video/mp4",
 		});
+	});
+
+	it("does not advertise a direct Iframely player by default", () => {
+		const metadata = buildShareVideoMetadata({
+			videoId: "video123",
+			name: "Product demo",
+			sourceType: "desktopMP4",
+			webUrl: "https://cap.so",
+		});
+
+		expect(metadata.icons).toBeUndefined();
 	});
 
 	it.each([
