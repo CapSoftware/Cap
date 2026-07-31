@@ -3,6 +3,7 @@ import {
 	buildSlackInstallUrl,
 	exchangeSlackOAuthCode,
 	SLACK_BOT_SCOPES,
+	type SlackUnfurlError,
 	sendSlackUnfurl,
 } from "@/lib/slack/client";
 
@@ -123,5 +124,67 @@ describe("Slack API client", () => {
 			unfurl_id: "U123",
 			source: "conversations_history",
 		});
+	});
+
+	it("marks exhausted transient failures for durable recovery", async () => {
+		const fetchImpl = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ ok: false, error: "server_error" }), {
+					status: 503,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+
+		await expect(
+			sendSlackUnfurl({
+				token: "xoxb-token",
+				event: {
+					channel: "C123",
+					messageTs: "123.456",
+				},
+				unfurls: {
+					"https://cap.so/s/abc123": {
+						blocks: [{ type: "video" }],
+					},
+				},
+				fetchImpl: fetchImpl as unknown as typeof fetch,
+				sleepImpl: vi.fn(async () => undefined),
+			}),
+		).rejects.toMatchObject({
+			name: "SlackUnfurlError",
+			retryable: true,
+		} satisfies Partial<SlackUnfurlError>);
+		expect(fetchImpl).toHaveBeenCalledTimes(3);
+	});
+
+	it("marks permanent Slack failures as non-retryable", async () => {
+		const fetchImpl = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+
+		await expect(
+			sendSlackUnfurl({
+				token: "xoxb-token",
+				event: {
+					channel: "C123",
+					messageTs: "123.456",
+				},
+				unfurls: {
+					"https://cap.so/s/abc123": {
+						blocks: [{ type: "video" }],
+					},
+				},
+				fetchImpl: fetchImpl as unknown as typeof fetch,
+				sleepImpl: vi.fn(async () => undefined),
+			}),
+		).rejects.toMatchObject({
+			name: "SlackUnfurlError",
+			retryable: false,
+		} satisfies Partial<SlackUnfurlError>);
+		expect(fetchImpl).toHaveBeenCalledOnce();
 	});
 });

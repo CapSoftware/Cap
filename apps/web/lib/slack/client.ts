@@ -27,6 +27,16 @@ type SlackApiResponse = {
 	error?: string;
 };
 
+export class SlackUnfurlError extends Error {
+	readonly retryable: boolean;
+
+	constructor(message: string, retryable: boolean) {
+		super(message);
+		this.name = "SlackUnfurlError";
+		this.retryable = retryable;
+	}
+}
+
 const sleep = (durationMs: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, durationMs));
 
@@ -191,8 +201,9 @@ export const sendSlackUnfurl = async ({
 
 			const retryable = response.status === 429 || response.status >= 500;
 			if (!retryable || attempt === 3) {
-				throw new Error(
+				throw new SlackUnfurlError(
 					`Slack unfurl failed: ${typeof body.error === "string" ? body.error : response.status}`,
+					retryable,
 				);
 			}
 			const retryAfterSeconds = Number(response.headers.get("Retry-After"));
@@ -202,10 +213,7 @@ export const sendSlackUnfurl = async ({
 					: attempt * 250;
 			await sleepImpl(Math.min(retryAfterMs, 2000));
 		} catch (error) {
-			if (
-				attempt === 3 ||
-				(error instanceof Error && error.message.startsWith("Slack unfurl"))
-			) {
+			if (attempt === 3 || error instanceof SlackUnfurlError) {
 				throw error;
 			}
 			await sleepImpl(attempt * 250);
