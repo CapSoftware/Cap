@@ -18,7 +18,7 @@ Tinybird Local persists ClickHouse and metadata in named Docker volumes. Normal 
 | `pnpm analytics:test` | Run the shared contract, web, desktop, billing regression, infrastructure, and static validation suites |
 | `pnpm analytics:local` | Start, build, test, and write the local runtime environment |
 | `pnpm analytics:local:test` | Run Tinybird fixture tests against Tinybird Local |
-| `pnpm analytics:local:tokens` | Write the deterministic local runtime host and workspace token to `.env.analytics.local` |
+| `pnpm analytics:local:tokens` | Discover the deployed append-only token and write it with the local runtime host to `.env.analytics.local` |
 | `pnpm analytics:local:stop` | Stop Tinybird Local while preserving its volumes |
 | `pnpm analytics:deploy:check` | Validate a cloud deployment without promoting it |
 | `pnpm analytics:deploy` | Run the cloud deployment check, deploy, and wait for completion |

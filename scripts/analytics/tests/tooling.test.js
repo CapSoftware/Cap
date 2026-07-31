@@ -10,6 +10,7 @@ import {
 	cloudEnvironment,
 	LOCAL_ENV_FILE,
 	localEnvironment,
+	localResourceToken,
 	operationPlan,
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
@@ -92,6 +93,27 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		compose,
 		/tinybird:\/workspace\/tinybird:ro[\s\S]*tinybird-local-workspace\.json:\/workspace\/\.tinyb:ro/,
 	);
+});
+
+test("local resource discovery returns only the named scoped token", async () => {
+	const token = await localResourceToken(
+		localEnvironment({}),
+		"product_events_agent_read",
+		async () =>
+			new Response(
+				JSON.stringify({
+					tokens: [
+						{ name: "workspace", token: "p.workspace-token-value" },
+						{
+							name: "product_events_agent_read",
+							token: "p.resource-token-value",
+						},
+					],
+				}),
+				{ status: 200 },
+			),
+	);
+	assert.equal(token, "p.resource-token-value");
 });
 
 test("unsafe analytics operations are blocked", () => {
@@ -182,7 +204,11 @@ test("local credentials are written to a private gitignored env file", () => {
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-env-"));
 	const filePath = path.join(tempRoot, ".env.analytics.local");
 	try {
-		writeLocalEnvironmentFile(filePath, localEnvironment({}));
+		writeLocalEnvironmentFile(
+			filePath,
+			localEnvironment({}),
+			"p.scoped-runtime-token",
+		);
 		const contents = fs.readFileSync(filePath, "utf8");
 		assert.match(contents, /^PRODUCT_ANALYTICS_TINYBIRD_HOST=/m);
 		assert.match(contents, /^PRODUCT_ANALYTICS_TINYBIRD_TOKEN=/m);

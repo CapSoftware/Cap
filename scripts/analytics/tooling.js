@@ -494,6 +494,31 @@ const localEnvironment = (env = process.env) => {
 	};
 };
 
+const localResourceToken = async (environment, tokenName, fetcher = fetch) => {
+	const response = await fetcher(
+		new URL("/v0/tokens", environment.PRODUCT_ANALYTICS_TINYBIRD_HOST),
+		{
+			headers: {
+				Authorization: `Bearer ${environment.TB_LOCAL_WORKSPACE_TOKEN}`,
+			},
+			signal: AbortSignal.timeout(15_000),
+		},
+	);
+	if (!response.ok) {
+		throw new Error(
+			`Tinybird Local token discovery returned HTTP ${response.status}`,
+		);
+	}
+	const payload = await response.json();
+	const resourceToken = Array.isArray(payload.tokens)
+		? payload.tokens.find((token) => token.name === tokenName)?.token
+		: undefined;
+	if (typeof resourceToken !== "string" || resourceToken.length < 16) {
+		throw new Error(`Tinybird Local did not create the ${tokenName} token`);
+	}
+	return resourceToken;
+};
+
 const assertSafeStep = (step) => {
 	const command = [step.command, ...(step.args ?? [])].join(" ");
 	if (
@@ -552,12 +577,16 @@ const verifyCloudWorkspace = (env = process.env) => {
 const writeLocalEnvironmentFile = (
 	filePath = LOCAL_ENV_FILE,
 	environment = localEnvironment(),
+	runtimeToken,
 ) => {
+	if (typeof runtimeToken !== "string" || runtimeToken.length < 16) {
+		throw new Error("A scoped Tinybird Local runtime token is required");
+	}
 	fs.writeFileSync(
 		filePath,
 		[
 			`PRODUCT_ANALYTICS_TINYBIRD_HOST=${environment.PRODUCT_ANALYTICS_TINYBIRD_HOST}`,
-			`PRODUCT_ANALYTICS_TINYBIRD_TOKEN=${environment.PRODUCT_ANALYTICS_TINYBIRD_TOKEN}`,
+			`PRODUCT_ANALYTICS_TINYBIRD_TOKEN=${runtimeToken}`,
 			"",
 		].join("\n"),
 		{ mode: 0o600 },
@@ -586,17 +615,30 @@ const runAnalyticsCommand = async (operation) => {
 			continue;
 		}
 		if (step.type === "write-local-env") {
+			const environment = localEnvironment();
+			const runtimeToken = await localResourceToken(
+				environment,
+				"product_events_ingest",
+			);
 			console.log(
-				`Wrote local analytics environment to ${writeLocalEnvironmentFile()}`,
+				`Wrote local analytics environment to ${writeLocalEnvironmentFile(
+					LOCAL_ENV_FILE,
+					environment,
+					runtimeToken,
+				)}`,
 			);
 			continue;
 		}
 		if (step.type === "verify-local") {
 			const environment = localEnvironment();
+			const readToken = await localResourceToken(
+				environment,
+				"product_events_agent_read",
+			);
 			runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
-					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: environment.TB_LOCAL_USER_TOKEN,
+					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: readToken,
 				},
 			});
 			continue;
@@ -621,6 +663,7 @@ export {
 	cloudEnvironment,
 	composeArgs,
 	localEnvironment,
+	localResourceToken,
 	operationPlan,
 	runAnalyticsCommand,
 	validateAnalyticsProject,
