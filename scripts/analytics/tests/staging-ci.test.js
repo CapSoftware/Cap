@@ -8,8 +8,13 @@ import {
 	assertSyntheticDecisions,
 	assertSyntheticHealth,
 	assertWorkflowSafety,
+	createSyntheticErasureControl,
 	createSyntheticEvents,
 	createSyntheticLoadEvents,
+	decisionEndpointQueries,
+	evaluateBundleBudget,
+	evaluateLatencyBudget,
+	extractSameOriginNextScriptUrls,
 	FEATURE_BRANCH,
 	FEATURE_PULL_REQUEST,
 	latencySummary,
@@ -176,6 +181,10 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	assert.notEqual(fixture.rows[2].payload_hash, fixture.rows[3].payload_hash);
 	assert.ok(fixture.rows.every((row) => row.traffic_class === "synthetic"));
 	assert.ok(fixture.rows.every((row) => row.synthetic_run_id === runId));
+	assert.ok(fixture.rows.every((row) => row.user_id === fixture.userId));
+	assert.ok(
+		fixture.rows.every((row) => row.organization_id === fixture.organizationId),
+	);
 	assert.throws(() => validateSyntheticRunId("' OR 1 = 1"));
 	const load = createSyntheticLoadEvents({
 		runId,
@@ -187,6 +196,14 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	assert.equal(new Set(load.rows.map((row) => row.event_id)).size, 100);
 	assert.ok(load.rows.every((row) => row.app_version === load.appVersion));
 	assert.ok(load.rows.every((row) => row.synthetic_run_id === load.runId));
+	const control = createSyntheticErasureControl({
+		runId,
+		now: new Date("2026-07-31T10:00:00.000Z"),
+	});
+	assert.equal(control.row.anonymous_id, fixture.anonymousId);
+	assert.notEqual(control.row.user_id, fixture.userId);
+	assert.notEqual(control.row.organization_id, fixture.organizationId);
+	assert.equal(control.row.synthetic_run_id, control.runId);
 	assert.throws(() => createSyntheticLoadEvents({ runId, count: 99 }));
 });
 
@@ -215,6 +232,98 @@ test("health normalization and latency percentiles use decision-facing assertion
 		p95Ms: 5,
 		p99Ms: 5,
 	});
+});
+
+test("staging performance covers every typed decision endpoint", () => {
+	const queries = decisionEndpointQueries({
+		startDate: "2026-07-01",
+		endDate: "2026-07-31",
+		deploymentId: "deployment-1",
+	});
+	assert.equal(queries.length, 11);
+	assert.equal(new Set(queries.map(({ name }) => name)).size, queries.length);
+	assert.ok(
+		queries.every(
+			({ parameters }) => parameters.__tb__deployment === "deployment-1",
+		),
+	);
+	assert.deepEqual(
+		queries.find(({ name }) => name === "product_creator_activity")?.parameters,
+		{ as_of_date: "2026-07-31", __tb__deployment: "deployment-1" },
+	);
+	assert.deepEqual(
+		queries.find(({ name }) => name === "product_analytics_freshness")
+			?.parameters,
+		{ __tb__deployment: "deployment-1" },
+	);
+});
+
+test("bundle measurement includes only unique same-origin Next.js scripts", () => {
+	assert.deepEqual(
+		extractSameOriginNextScriptUrls(
+			'<script src="/_next/static/a.js"></script><script src="https://preview.vercel.app/_next/static/a.js"></script><script src="https://third-party.example/tracker.js"></script><script src="/other.js"></script>',
+			"https://preview.vercel.app",
+		),
+		["https://preview.vercel.app/_next/static/a.js"],
+	);
+});
+
+test("bundle budgets require absolute and live-baseline gates", () => {
+	assert.deepEqual(
+		evaluateBundleBudget({
+			baselineBytes: 1_000_000,
+			measuredBytes: 1_040_000,
+			absoluteMaximumBytes: 5_000_000,
+			regressionFactor: 1.05,
+			regressionFloorBytes: 25_000,
+		}),
+		{
+			absoluteMaximumBytes: 5_000_000,
+			regressionLimitBytes: 1_050_000,
+			deltaBytes: 40_000,
+			regressionRatio: 1.04,
+			passed: true,
+		},
+	);
+	assert.equal(
+		evaluateBundleBudget({
+			baselineBytes: 1_000_000,
+			measuredBytes: 1_200_000,
+			absoluteMaximumBytes: 5_000_000,
+			regressionFactor: 1.05,
+			regressionFloorBytes: 25_000,
+		}).passed,
+		false,
+	);
+});
+
+test("latency budgets require both absolute and measured-baseline gates", () => {
+	const baseline = latencySummary([80, 90, 100, 110, 120]);
+	assert.deepEqual(
+		evaluateLatencyBudget({
+			baseline,
+			measured: latencySummary([90, 100, 110, 120, 130]),
+			absoluteP95Ms: 2_500,
+			regressionFactor: 2.5,
+			regressionFloorMs: 250,
+		}),
+		{
+			absoluteP95Ms: 2_500,
+			regressionLimitMs: 370,
+			regressionRatio: 130 / 120,
+			passed: true,
+		},
+	);
+	assert.equal(
+		evaluateLatencyBudget({
+			baseline,
+			measured: latencySummary([500]),
+			absoluteP95Ms: 2_500,
+			regressionFactor: 2.5,
+			regressionFloorMs: 250,
+		}).passed,
+		false,
+	);
 });
 
 test("CI assertion normalization proves decision deduplication and conflict quarantine", () => {

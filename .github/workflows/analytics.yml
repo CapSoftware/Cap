@@ -210,6 +210,17 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote
+      - name: Prove least-privilege staging token scopes
+        id: token-scopes
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js verify-token-scopes
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Probe the exact-SHA Vercel browser collector and staging rate limit
         id: preview-api
         env:
@@ -236,6 +247,37 @@ jobs:
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-promoted
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Delete the scoped synthetic user and organization identity
+        id: erase-identity
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js erase-synthetic-identity
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Retract the erased identity from every derived copy
+        id: erasure-copies
+        if: steps.erase-identity.outcome == 'success'
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
+        run: |
+          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
+          done
+      - name: Prove identity erasure and out-of-scope control preservation
+        id: verify-erasure
+        if: steps.erasure-copies.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js verify-synthetic-identity-erasure
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows

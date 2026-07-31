@@ -8,7 +8,7 @@ The central registry is `packages/analytics/src/event-registry.ts`. It defines t
 
 Critical server facts start a durable Vercel Workflow before the request succeeds. Each delivery step retries transient network, `429`, and `5xx` failures with the original ID. Permanent contract failures become visible failed workflow runs. Signup, share, and collaboration facts are also reconciled from authoritative database rows every day with deterministic event IDs, closing the database-commit to workflow-start gap. Stripe remains authoritative for purchases, trials, renewals, plan and seat changes, cancellation, churn, refunds, and payment failures; Stripe webhook retries close its enqueue gap.
 
-Desktop critical events enter a bounded encrypted local outbox before network delivery. The encryption key is stored in the operating-system keyring, events survive restart and offline periods, retryable failures back off, permanent failures enter a bounded dead-letter queue, and counters expose accepted, retried, dropped, overflowed, and dead-lettered events. Browser events are intentionally best effort: attempted, accepted, retried, dropped, overflowed, and oversize counts accompany later batches without recursively creating analytics events.
+Desktop critical events enter a bounded encrypted local outbox before network delivery. The encryption key is stored in the operating-system keyring, events survive restart and offline periods, retryable failures back off, permanent failures enter a bounded dead-letter queue, and counters expose accepted, retried, dropped, overflowed, and dead-lettered events. Mobile critical events enter a bounded atomic AsyncStorage outbox before capture returns; interrupted rotations recover the last valid backup, account-scoped queues are isolated, offline and restart delivery resumes with the original event ID, and terminal failures enter a bounded dead-letter ledger. Browser events are intentionally best effort: attempted, accepted, retried, dropped, overflowed, and oversize counts accompany later batches without recursively creating analytics events.
 
 ## Identity, sessions, attribution, and time
 
@@ -30,13 +30,13 @@ The collector rejects unregistered events, unknown properties, raw error fields,
 
 Known bots, crawlers, previews, internal IP hashes, and synthetic runs are visible to health monitoring but excluded from decision snapshots. Anonymous write tokens are rate-limited by both source IP and anonymous ID. Replay and automation can be made expensive and observable, but public traffic analytics cannot cryptographically guarantee a human browser. Signup, organization, billing, and other business outcomes therefore remain server-authoritative.
 
-Account and organization deletion synchronously removes matching raw rows using a dedicated erasure token, then rebuilds every replace-mode canonical, traffic, activation, retention, and health snapshot. Deletion fails closed if the erasure credential or any rebuild is unavailable. A staging synthetic erasure test must prove that the scoped rows no longer affect raw-health or decision assertions before production rollout.
+Account and organization deletion writes its durable pending marker or tombstone before erasure begins. Delivery and reconciliation reject marked identities, then deletion waits longer than the bounded in-flight delivery attempt before removing matching raw rows with a dedicated erasure token and rebuilding every replace-mode canonical, traffic, activation, retention, and health snapshot. This closes the race where a workflow that passed its identity check could otherwise append after a completed erasure. Deletion fails closed if the erasure credential or any rebuild is unavailable. The staging suite deletes a synthetic user and organization, proves their raw-health and decision state is gone, and proves an out-of-scope row sharing the anonymous ID remains until final test cleanup.
 
 ## Data quality and performance gates
 
 The staging workflow is restricted to PR 2003 and `codex/first-party-analytics`, hard-codes the staging Tinybird workspace ID, checks the exact Git SHA, waits for the exact-SHA Vercel preview, creates an isolated Tinybird staging deployment, runs fixture and synthetic tests, promotes only a verified deployment inside that staging workspace, and discards an unpromoted deployment on failure. It has no push trigger, production environment, production token, or production deployment command.
 
-The redacted evidence artifact records the Git SHA, GitHub run, Vercel and Tinybird deployment IDs, hashed synthetic-run identity, delivery attempts, ingestion throughput, endpoint p50/p95/p99, visibility time, health totals, decision-dedup assertions, conflict quarantine, and cleanup. Synthetic rows are excluded from normal metrics and cleanup is verified after every promoted run.
+The redacted evidence artifact records the Git SHA, GitHub run, Vercel and Tinybird deployment IDs, hashed synthetic-run identity, delivery attempts, ingestion throughput, endpoint and full-dashboard p50/p95/p99, measured-baseline regressions, visibility time, health totals, decision-dedup assertions, conflict quarantine, least-privilege token checks, scoped identity erasure, and cleanup. Synthetic rows are excluded from normal metrics and cleanup is verified after every promoted run.
 
 Required live gates are:
 
@@ -46,7 +46,11 @@ Required live gates are:
 - ingestion visibility is within the measured SLO;
 - representative endpoint p95 is within the measured baseline budget;
 - raw and all derived synthetic state is removed successfully;
+- an erased identity disappears from raw and derived results while an out-of-scope control remains;
+- aggregate read tokens cannot query raw identifiers or append, and append/cleanup tokens cannot read aggregate endpoints;
 - wrong workspace, stale SHA, missing credentials, partial execution, failed promotion, and failed cleanup all fail closed.
+
+Copy-backed decision tables rebuild on serialized eight-minute schedules to avoid competing for the same Tinybird worker pool. Exact-SHA staging runs invoke the seven copies in dependency order immediately after seeding, promotion, identity erasure, and final cleanup, so the staging visibility SLO measures the deployed data path rather than waiting for the periodic schedule. Dashboard freshness exposes the most recent aggregate timestamps; scheduled production freshness is therefore bounded by the documented copy cadence plus provider execution time.
 
 The first staging run establishes absolute ingestion and endpoint baselines on the exact deployed code. The final branch must then commit regression budgets derived from those measurements and rerun at representative and larger bounded volumes. A green static/unit run alone is not rollout evidence.
 

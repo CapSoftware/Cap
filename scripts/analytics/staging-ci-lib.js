@@ -165,10 +165,67 @@ export const validateSyntheticRunId = (runId) => {
 export const hashIdentifier = (value) =>
 	createHash("sha256").update(value).digest("hex");
 
+export const extractSameOriginNextScriptUrls = (html, origin) => {
+	const urls = new Set();
+	const pattern = /<script\b[^>]*\bsrc=(['"])(.*?)\1/gi;
+	for (const match of html.matchAll(pattern)) {
+		try {
+			const url = new URL(match[2], origin);
+			if (url.origin === origin && url.pathname.startsWith("/_next/static/")) {
+				urls.add(url.href);
+			}
+		} catch {}
+	}
+	return [...urls].sort();
+};
+
+export const evaluateBundleBudget = ({
+	baselineBytes,
+	measuredBytes,
+	absoluteMaximumBytes,
+	regressionFactor,
+	regressionFloorBytes,
+}) => {
+	if (
+		![
+			baselineBytes,
+			measuredBytes,
+			absoluteMaximumBytes,
+			regressionFactor,
+			regressionFloorBytes,
+		].every(Number.isFinite) ||
+		baselineBytes <= 0 ||
+		measuredBytes <= 0 ||
+		absoluteMaximumBytes <= 0 ||
+		regressionFactor < 1 ||
+		regressionFloorBytes < 0
+	) {
+		throw new Error("Bundle budget inputs must be finite and positive");
+	}
+	const regressionLimitBytes = Math.ceil(
+		Math.max(
+			baselineBytes * regressionFactor,
+			baselineBytes + regressionFloorBytes,
+		),
+	);
+	return {
+		absoluteMaximumBytes,
+		regressionLimitBytes,
+		deltaBytes: measuredBytes - baselineBytes,
+		regressionRatio: measuredBytes / baselineBytes,
+		passed:
+			measuredBytes <= absoluteMaximumBytes &&
+			measuredBytes <= regressionLimitBytes,
+	};
+};
+
 export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 	validateSyntheticRunId(runId);
 	const runHash = hashIdentifier(runId);
 	const timestamp = now.toISOString().replace("T", " ").replace("Z", "");
+	const userId = `synthetic_user_${runHash.slice(0, 24)}`;
+	const organizationId = `synthetic_org_${runHash.slice(24, 48)}`;
+	const anonymousId = `synthetic_${runHash.slice(0, 24)}`;
 	const shared = {
 		occurred_at: timestamp,
 		received_at: timestamp,
@@ -176,10 +233,10 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 		schema_version: 1,
 		source: "client",
 		platform: "web",
-		anonymous_id: `synthetic_${runHash.slice(0, 24)}`,
+		anonymous_id: anonymousId,
 		session_id: `synthetic_${runHash.slice(24, 48)}`,
-		user_id: "",
-		organization_id: "",
+		user_id: userId,
+		organization_id: organizationId,
 		app_version: `staging-e2e-${runHash.slice(0, 12)}`,
 		pathname: "/analytics-synthetic",
 		referrer: "",
@@ -202,12 +259,37 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 	const conflictHashB = hashIdentifier(`${runId}:conflict:b`).slice(0, 32);
 	return {
 		appVersion: shared.app_version,
+		anonymousId,
+		organizationId,
+		userId,
 		rows: [
 			{ ...shared, event_id: duplicateId, payload_hash: duplicateHash },
 			{ ...shared, event_id: duplicateId, payload_hash: duplicateHash },
 			{ ...shared, event_id: conflictId, payload_hash: conflictHashA },
 			{ ...shared, event_id: conflictId, payload_hash: conflictHashB },
 		],
+	};
+};
+
+export const createSyntheticErasureControl = ({ runId, now = new Date() }) => {
+	const fixture = createSyntheticEvents({ runId, now });
+	const controlRunId = `${runId}_erasure_control`;
+	validateSyntheticRunId(controlRunId);
+	const controlHash = hashIdentifier(controlRunId);
+	const eventId = `synthetic_erasure_control_${controlHash.slice(0, 24)}`;
+	return {
+		appVersion: `staging-erasure-control-${controlHash.slice(0, 12)}`,
+		runId: controlRunId,
+		row: {
+			...fixture.rows[0],
+			event_id: eventId,
+			payload_hash: hashIdentifier(eventId).slice(0, 32),
+			user_id: `synthetic_control_user_${controlHash.slice(0, 16)}`,
+			organization_id: `synthetic_control_org_${controlHash.slice(16, 32)}`,
+			app_version: `staging-erasure-control-${controlHash.slice(0, 12)}`,
+			synthetic_run_id: controlRunId,
+			properties: JSON.stringify({ test_case: "staging_erasure_control" }),
+		},
 	};
 };
 
@@ -344,6 +426,58 @@ export const latencySummary = (samples) => ({
 	p95Ms: percentile(samples, 0.95),
 	p99Ms: percentile(samples, 0.99),
 });
+
+const DECISION_ENDPOINT_NAMES = [
+	"product_traffic_overview",
+	"product_traffic_pages",
+	"product_traffic_sources",
+	"product_traffic_countries",
+	"product_traffic_technology",
+	"product_activation",
+	"product_creator_activity",
+	"product_creator_retention",
+	"product_events_daily",
+	"product_feature_adoption",
+	"product_analytics_freshness",
+];
+
+export const decisionEndpointQueries = ({
+	startDate,
+	endDate,
+	deploymentId = "",
+}) =>
+	DECISION_ENDPOINT_NAMES.map((name) => ({
+		name,
+		parameters: {
+			...(name === "product_analytics_freshness"
+				? {}
+				: name === "product_creator_activity"
+					? { as_of_date: endDate }
+					: { start_date: startDate, end_date: endDate }),
+			__tb__deployment: deploymentId,
+		},
+	}));
+
+export const evaluateLatencyBudget = ({
+	baseline,
+	measured,
+	absoluteP95Ms,
+	regressionFactor,
+	regressionFloorMs,
+}) => {
+	const regressionLimitMs = Math.max(
+		baseline.p95Ms * regressionFactor,
+		baseline.p95Ms + regressionFloorMs,
+	);
+	return {
+		absoluteP95Ms,
+		regressionLimitMs,
+		regressionRatio:
+			baseline.p95Ms === 0 ? null : measured.p95Ms / baseline.p95Ms,
+		passed:
+			measured.p95Ms <= absoluteP95Ms && measured.p95Ms <= regressionLimitMs,
+	};
+};
 
 export const assertWorkflowSafety = (workflow) => {
 	const forbidden = [
