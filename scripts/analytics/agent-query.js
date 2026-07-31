@@ -23,6 +23,19 @@ const ENDPOINTS = {
 	},
 };
 
+function parseHealthTimestamp(value) {
+	const input = /^\d{4}-\d{2}-\d{2}$/.test(value)
+		? `${value}T00:00:00Z`
+		: /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+			? value
+			: `${value.replace(" ", "T")}Z`;
+	return Date.parse(input);
+}
+
+function formatHealthTimestamp(timestamp) {
+	return new Date(timestamp).toISOString().replace("T", " ").replace("Z", "");
+}
+
 export function buildAgentQuery(endpointName, args, env = process.env) {
 	const endpoint = ENDPOINTS[endpointName];
 	if (!endpoint) {
@@ -52,14 +65,16 @@ export function buildAgentQuery(endpointName, args, env = process.env) {
 		throw new Error("Health queries require start_time and end_time.");
 	}
 	if (endpointName === "health") {
-		const start = Date.parse(url.searchParams.get("start_time"));
-		const end = Date.parse(url.searchParams.get("end_time"));
+		const start = parseHealthTimestamp(url.searchParams.get("start_time"));
+		const end = parseHealthTimestamp(url.searchParams.get("end_time"));
 		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
 			throw new Error("Health query timestamps are invalid or reversed.");
 		}
 		if (end - start > 31 * 24 * 60 * 60 * 1000) {
 			throw new Error("Health query windows cannot exceed 31 days.");
 		}
+		url.searchParams.set("start_time", formatHealthTimestamp(start));
+		url.searchParams.set("end_time", formatHealthTimestamp(end));
 	}
 
 	return { url, token };

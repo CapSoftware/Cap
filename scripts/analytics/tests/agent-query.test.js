@@ -53,6 +53,16 @@ test("agent health queries require an explicit window", () => {
 	);
 });
 
+test("agent health queries normalize ISO timestamps for Tinybird", () => {
+	const { url } = buildAgentQuery(
+		"health",
+		["start_time=2026-07-01T00:00:00", "end_time=2026-07-02T01:30:00+01:00"],
+		env,
+	);
+	assert.equal(url.searchParams.get("start_time"), "2026-07-01 00:00:00.000");
+	assert.equal(url.searchParams.get("end_time"), "2026-07-02 00:30:00.000");
+});
+
 test("agent query sends only the read token", async () => {
 	let authorization;
 	const output = await runAgentQuery("daily", [], env, async (_url, init) => {
