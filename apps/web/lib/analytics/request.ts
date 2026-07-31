@@ -171,12 +171,14 @@ export function getProductAnalyticsRateLimitKey(headers: {
 	fallbackIdentity?: string;
 }) {
 	if (!headers.trustedVercelProxy) {
-		const identity = headers.fallbackIdentity?.trim() || "unknown";
+		const identity = headers.fallbackIdentity?.trim();
+		if (!identity) return null;
 		return `self-hosted:${createHash("sha256").update(identity).digest("hex")}`;
 	}
-	return (
-		headers.xVercelForwardedFor?.split(",")[0]?.trim() || "vercel-unknown"
-	).slice(0, PRODUCT_ANALYTICS_LIMITS.identifierLength);
+	const identity = headers.xVercelForwardedFor?.split(",")[0]?.trim();
+	return identity
+		? identity.slice(0, PRODUCT_ANALYTICS_LIMITS.identifierLength)
+		: null;
 }
 
 export function normalizeGeoHeader(value?: string, decode = false) {

@@ -290,9 +290,12 @@ describe("ProductAnalyticsRateLimiter", () => {
 				fallbackIdentity: "browser-2",
 			}),
 		);
-		expect(getProductAnalyticsRateLimitKey({ trustedVercelProxy: true })).toBe(
-			"vercel-unknown",
-		);
+		expect(
+			getProductAnalyticsRateLimitKey({ trustedVercelProxy: true }),
+		).toBeNull();
+		expect(
+			getProductAnalyticsRateLimitKey({ trustedVercelProxy: false }),
+		).toBeNull();
 	});
 });
 

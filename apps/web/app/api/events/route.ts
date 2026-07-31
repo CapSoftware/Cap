@@ -139,6 +139,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								(browserClaims ? browserClaims.anonymousId : undefined) ??
 								headers.authorization,
 						});
+						if (!rateLimitKey) {
+							return yield* Effect.fail(new HttpApiError.BadRequest());
+						}
 						if (fallbackRateLimiter.isRateLimited(rateLimitKey)) {
 							return yield* Effect.fail(new RateLimited());
 						}

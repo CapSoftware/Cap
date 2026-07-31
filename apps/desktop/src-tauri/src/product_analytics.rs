@@ -426,19 +426,12 @@ fn should_retry_product_status(status: u16) -> bool {
 }
 
 fn fallback_outbox_encryption_key(app: &AppHandle) -> Result<[u8; 32], String> {
+    if let Some(existing) = existing_fallback_outbox_encryption_key(app)? {
+        return Ok(existing);
+    }
     let store = app
         .store("store")
         .map_err(|_| "fallback_key_store_unavailable".to_string())?;
-    if let Some(encoded) = store
-        .get(PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY)
-        .and_then(|value| value.as_str().map(str::to_owned))
-    {
-        return BASE64
-            .decode(encoded)
-            .map_err(|_| "invalid_fallback_key".to_string())?
-            .try_into()
-            .map_err(|_| "invalid_fallback_key".to_string());
-    }
     let mut generated = [0_u8; 32];
     SystemRandom::new()
         .fill(&mut generated)
@@ -451,6 +444,24 @@ fn fallback_outbox_encryption_key(app: &AppHandle) -> Result<[u8; 32], String> {
         .save()
         .map_err(|_| "fallback_key_store_write_failed".to_string())?;
     Ok(generated)
+}
+
+fn existing_fallback_outbox_encryption_key(app: &AppHandle) -> Result<Option<[u8; 32]>, String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "fallback_key_store_unavailable".to_string())?;
+    let Some(encoded) = store
+        .get(PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY)
+        .and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return Ok(None);
+    };
+    let key = BASE64
+        .decode(encoded)
+        .map_err(|_| "invalid_fallback_key".to_string())?
+        .try_into()
+        .map_err(|_| "invalid_fallback_key".to_string())?;
+    Ok(Some(key))
 }
 
 fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
@@ -521,7 +532,45 @@ fn encrypt_outbox_with_key(
 }
 
 fn decrypt_outbox(app: &AppHandle, value: &str) -> Result<ProductEventOutbox, String> {
-    decrypt_outbox_with_key(value, outbox_encryption_key(app)?)
+    if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get()
+        && let Ok(outbox) = decrypt_outbox_with_key(value, key)
+    {
+        return Ok(outbox);
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(entry) = keyring::Entry::new(
+        PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE,
+        PRODUCT_EVENT_OUTBOX_KEYRING_USER,
+    ) && let Ok(encoded) = entry.get_password()
+        && let Ok(decoded) = BASE64.decode(encoded)
+        && let Ok(key) = decoded.try_into()
+    {
+        candidates.push(key);
+    }
+    if let Some(key) = existing_fallback_outbox_encryption_key(app)?
+        && !candidates.contains(&key)
+    {
+        candidates.push(key);
+    }
+    let (outbox, key) = decrypt_outbox_with_keys(value, &candidates)?;
+    let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
+    Ok(outbox)
+}
+
+fn decrypt_outbox_with_keys(
+    value: &str,
+    candidates: &[[u8; 32]],
+) -> Result<(ProductEventOutbox, [u8; 32]), String> {
+    if candidates.is_empty() {
+        return Err("outbox_key_unavailable".to_string());
+    }
+    for key in candidates {
+        if let Ok(outbox) = decrypt_outbox_with_key(value, key) {
+            return Ok((outbox, *key));
+        }
+    }
+    Err("outbox_decryption_failed".to_string())
 }
 
 fn decrypt_outbox_with_key(
@@ -554,12 +603,23 @@ fn decrypt_outbox_with_key(
 }
 
 fn persist_outbox(app: &AppHandle, outbox: &ProductEventOutbox) -> Result<(), String> {
+    ensure_outbox_persistence_allowed(
+        PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.load(Ordering::Acquire),
+    )?;
     let encrypted = encrypt_outbox(app, outbox)?;
     let store = app
         .store("store")
         .map_err(|_| "store_unavailable".to_string())?;
     store.set(PRODUCT_EVENT_OUTBOX_STORE_KEY, encrypted);
     store.save().map_err(|_| "store_write_failed".to_string())
+}
+
+fn ensure_outbox_persistence_allowed(restore_blocked: bool) -> Result<(), String> {
+    if restore_blocked {
+        Err("outbox_restore_blocked".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 fn load_outbox(app: &AppHandle) -> Result<ProductEventOutbox, String> {
@@ -750,6 +810,7 @@ pub fn init_product_session(app: &AppHandle) {
 
     match load_outbox(app) {
         Ok(loaded) => {
+            PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
             let has_pending = !loaded.pending.is_empty();
             *outbox_guard() = loaded;
             if has_pending {
@@ -757,6 +818,7 @@ pub fn init_product_session(app: &AppHandle) {
             }
         }
         Err(failure_class) => {
+            PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
             PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
             warn!(
                 failure_class,
@@ -771,6 +833,7 @@ static PRODUCT_EVENT_SESSION_ID: OnceLock<Uuid> = OnceLock::new();
 static PRODUCT_EVENT_SENDER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
 static PRODUCT_EVENT_OUTBOX: OnceLock<Mutex<ProductEventOutbox>> = OnceLock::new();
 static PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+static PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED: AtomicBool = AtomicBool::new(false);
 static PRODUCT_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
 static PRODUCT_EVENT_RETRIES: AtomicU64 = AtomicU64::new(0);
 static PRODUCT_EVENT_DEAD_LETTERS: AtomicU64 = AtomicU64::new(0);
@@ -982,6 +1045,29 @@ mod tests {
         let decrypted = decrypt_outbox_with_key(&encrypted, &key).unwrap();
         assert_eq!(decrypted.pending.len(), 1);
         assert_eq!(decrypted.pending[0].event_id, event_id);
+    }
+
+    #[test]
+    fn encrypted_outbox_tries_every_persisted_key_without_replacing_it() {
+        let data = event_data(recording_started());
+        let event = product_event(&data, "install-id".to_string()).unwrap();
+        let event_id = event.event_id.clone();
+        let outbox = ProductEventOutbox {
+            pending: vec![event],
+            dead_letters: Vec::new(),
+        };
+        let valid_key = [7_u8; 32];
+        let encrypted = encrypt_outbox_with_key(&outbox, &valid_key).unwrap();
+
+        let (decrypted, selected_key) =
+            decrypt_outbox_with_keys(&encrypted, &[[8_u8; 32], valid_key]).unwrap();
+
+        assert_eq!(selected_key, valid_key);
+        assert_eq!(decrypted.pending[0].event_id, event_id);
+        assert_eq!(
+            ensure_outbox_persistence_allowed(true),
+            Err("outbox_restore_blocked".to_string())
+        );
     }
 
     #[test]

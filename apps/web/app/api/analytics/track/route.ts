@@ -84,6 +84,12 @@ export async function POST(request: NextRequest) {
 		fallbackIdentity:
 			sessionId ?? request.headers.get("user-agent") ?? undefined,
 	});
+	if (!rateLimitKey) {
+		return Response.json(
+			{ error: "Missing request identity" },
+			{ status: 400 },
+		);
+	}
 	if (
 		fallbackRateLimiter.isRateLimited(rateLimitKey) ||
 		(await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
