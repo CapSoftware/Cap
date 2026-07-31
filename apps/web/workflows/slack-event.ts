@@ -40,7 +40,11 @@ export async function slackEventWorkflow(
 		try {
 			await processSlackEventStep(payload, webUrl);
 			processed = true;
-		} catch {
+		} catch (error) {
+			console.error(
+				"[slack-unfurl] Retrying after step failure",
+				error instanceof Error ? error.message : "Unknown error",
+			);
 			await sleep("5m");
 		}
 	}

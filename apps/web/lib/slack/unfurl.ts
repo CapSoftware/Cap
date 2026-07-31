@@ -1,4 +1,4 @@
-import type { Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { parseCapShareUrl } from "@/lib/oembed";
 import {
 	getPublicShareVideo,
@@ -187,7 +187,7 @@ export const processSlackEvent = async ({
 		uniqueLinks.map(async (link) => {
 			const videoId = parseCapShareUrl(link.url);
 			if (!videoId) return null;
-			const video = await dependencies.getVideo(videoId as Video.VideoId);
+			const video = await dependencies.getVideo(Video.VideoId.make(videoId));
 			if (!video) return null;
 			const shareUrl = new URL(`/s/${video.id}`, webUrl).toString();
 			const blocks: unknown[] = [

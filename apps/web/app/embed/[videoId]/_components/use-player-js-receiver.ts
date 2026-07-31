@@ -245,10 +245,16 @@ export const createPlayerJsReceiver = ({
 	};
 };
 
-export const usePlayerJsReceiver = (
-	videoRef: RefObject<HTMLVideoElement | null>,
-) => {
+export const usePlayerJsReceiver = ({
+	playerContainerRef,
+	videoRef,
+}: {
+	playerContainerRef: RefObject<HTMLDivElement | null>;
+	videoRef: RefObject<HTMLVideoElement | null>;
+}) => {
 	useEffect(() => {
+		const playerContainer = playerContainerRef.current;
+		if (!playerContainer) return;
 		let currentVideo: HTMLVideoElement | null = null;
 		let dispose: (() => void) | null = null;
 		const bind = () => {
@@ -263,12 +269,12 @@ export const usePlayerJsReceiver = (
 				: null;
 		};
 		const observer = new MutationObserver(bind);
-		observer.observe(document.body, { childList: true, subtree: true });
+		observer.observe(playerContainer, { childList: true, subtree: true });
 		bind();
 
 		return () => {
 			observer.disconnect();
 			dispose?.();
 		};
-	}, [videoRef]);
+	}, [playerContainerRef, videoRef]);
 };

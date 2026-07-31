@@ -78,8 +78,9 @@ export const EmbedVideo = forwardRef<
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
+		const playerContainerRef = useRef<HTMLDivElement>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
-		usePlayerJsReceiver(videoRef);
+		usePlayerJsReceiver({ playerContainerRef, videoRef });
 
 		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 		const [longestDuration, setLongestDuration] = useState<number>(
@@ -231,7 +232,10 @@ export const EmbedVideo = forwardRef<
 
 		return (
 			<>
-				<div className="relative w-screen h-screen rounded-xl">
+				<div
+					ref={playerContainerRef}
+					className="relative w-screen h-screen rounded-xl"
+				>
 					{isActivelyRecording ? (
 						<RecordingInProgressOverlay
 							onConfirmStopped={() => setUserConfirmedStopped(true)}
