@@ -12,6 +12,7 @@ import {
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
+	redactProcessOutput,
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
@@ -114,6 +115,41 @@ test("local resource discovery returns only the named scoped token", async () =>
 			),
 	);
 	assert.equal(token, "p.resource-token-value");
+});
+
+test("local resource discovery falls back to the local user token", async () => {
+	const authorizations = [];
+	const token = await localResourceToken(
+		localEnvironment({}),
+		"product_events_ingest",
+		async (_url, options) => {
+			authorizations.push(options.headers.Authorization);
+			if (authorizations.length === 1)
+				return new Response(null, { status: 403 });
+			return new Response(
+				JSON.stringify({
+					tokens: [
+						{
+							name: "product_events_ingest",
+							token: "p.resource-token-value",
+						},
+					],
+				}),
+				{ status: 200 },
+			);
+		},
+	);
+	assert.equal(token, "p.resource-token-value");
+	assert.equal(authorizations.length, 2);
+});
+
+test("child process output redacts static and query-string tokens", () => {
+	assert.equal(
+		redactProcessOutput(
+			"token=p.payload.signature Authorization: p.another.signature",
+		),
+		"token=[REDACTED] Authorization: [REDACTED]",
+	);
 });
 
 test("unsafe analytics operations are blocked", () => {

@@ -495,28 +495,31 @@ const localEnvironment = (env = process.env) => {
 };
 
 const localResourceToken = async (environment, tokenName, fetcher = fetch) => {
-	const response = await fetcher(
-		new URL("/v0/tokens", environment.PRODUCT_ANALYTICS_TINYBIRD_HOST),
-		{
-			headers: {
-				Authorization: `Bearer ${environment.TB_LOCAL_WORKSPACE_TOKEN}`,
+	const statuses = [];
+	for (const token of [
+		environment.TB_LOCAL_WORKSPACE_TOKEN,
+		environment.TB_LOCAL_USER_TOKEN,
+	]) {
+		const response = await fetcher(
+			new URL("/v0/tokens", environment.PRODUCT_ANALYTICS_TINYBIRD_HOST),
+			{
+				headers: { Authorization: `Bearer ${token}` },
+				signal: AbortSignal.timeout(15_000),
 			},
-			signal: AbortSignal.timeout(15_000),
-		},
-	);
-	if (!response.ok) {
-		throw new Error(
-			`Tinybird Local token discovery returned HTTP ${response.status}`,
 		);
+		statuses.push(response.status);
+		if (!response.ok) continue;
+		const payload = await response.json();
+		const resourceToken = Array.isArray(payload.tokens)
+			? payload.tokens.find((candidate) => candidate.name === tokenName)?.token
+			: undefined;
+		if (typeof resourceToken === "string" && resourceToken.length >= 16) {
+			return resourceToken;
+		}
 	}
-	const payload = await response.json();
-	const resourceToken = Array.isArray(payload.tokens)
-		? payload.tokens.find((token) => token.name === tokenName)?.token
-		: undefined;
-	if (typeof resourceToken !== "string" || resourceToken.length < 16) {
-		throw new Error(`Tinybird Local did not create the ${tokenName} token`);
-	}
-	return resourceToken;
+	throw new Error(
+		`Tinybird Local could not resolve ${tokenName}; token API statuses: ${statuses.join(", ")}`,
+	);
 };
 
 const assertSafeStep = (step) => {
@@ -530,12 +533,20 @@ const assertSafeStep = (step) => {
 	}
 };
 
+const redactProcessOutput = (value) =>
+	value
+		.replace(/p\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[REDACTED]")
+		.replace(/([?&]token=)[^&\s]+/gi, "$1[REDACTED]");
+
 const runProcess = (command, args, options = {}) => {
 	const result = spawnSync(command, args, {
 		cwd: PROJECT_ROOT,
-		stdio: "inherit",
+		encoding: "utf8",
+		maxBuffer: 32 * 1024 * 1024,
 		...options,
 	});
+	if (result.stdout) process.stdout.write(redactProcessOutput(result.stdout));
+	if (result.stderr) process.stderr.write(redactProcessOutput(result.stderr));
 	if (result.error || result.status !== 0) {
 		throw new Error(
 			result.error?.message ??
@@ -665,6 +676,7 @@ export {
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
+	redactProcessOutput,
 	runAnalyticsCommand,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
