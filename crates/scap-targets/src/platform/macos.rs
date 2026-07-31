@@ -378,6 +378,33 @@ impl WindowImpl {
         })
     }
 
+    pub fn is_accessory_application(&self) -> bool {
+        let Some(pid) = self.owner_pid() else {
+            return false;
+        };
+
+        use objc::rc::autoreleasepool;
+
+        autoreleasepool(|| unsafe {
+            use cocoa::appkit::{
+                NSApplicationActivationPolicy, NSApplicationActivationPolicyAccessory,
+            };
+            use cocoa::base::id;
+            use objc::{class, msg_send, sel, sel_impl};
+
+            let app: id = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            if app.is_null() {
+                return false;
+            }
+
+            let activation_policy: NSApplicationActivationPolicy = msg_send![app, activationPolicy];
+            activation_policy == NSApplicationActivationPolicyAccessory
+        })
+    }
+
     pub fn name(&self) -> Option<String> {
         let windows =
             core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
