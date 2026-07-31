@@ -15,6 +15,7 @@ export type ShareVideoMetadataInput = {
 	name: string;
 	sourceType: ShareVideoSourceType;
 	webUrl: string;
+	advertiseIframelyPlayer?: boolean;
 };
 
 export const getShareVideoUrls = ({
@@ -61,6 +62,7 @@ export const buildShareVideoMetadata = ({
 	name,
 	sourceType,
 	webUrl,
+	advertiseIframelyPlayer = false,
 }: ShareVideoMetadataInput): Metadata => {
 	const urls = getShareVideoUrls({ videoId, sourceType, webUrl });
 	const title = `${name} | Cap Recording`;
@@ -69,6 +71,20 @@ export const buildShareVideoMetadata = ({
 	return {
 		title,
 		description,
+		...(advertiseIframelyPlayer
+			? {
+					icons: {
+						other: [
+							{
+								rel: "iframely player",
+								url: urls.playerUrl,
+								type: "text/html",
+								media: "(aspect-ratio: 16/9)",
+							},
+						],
+					},
+				}
+			: {}),
 		alternates: {
 			canonical: urls.shareUrl,
 			types: {
