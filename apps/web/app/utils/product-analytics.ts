@@ -1,11 +1,15 @@
 import {
+	type BrowserAnalyticsContext,
+	type ClientProductEventName,
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
 	PRODUCT_ANALYTICS_LIMITS,
+	type ProductEventArguments,
 	type ProductEventInput,
-	type ProductEventProperties,
+	readAnalyticsTouch,
+	resolveBrowserAnalyticsContext,
 } from "@cap/analytics";
 import Cookies from "js-cookie";
 
@@ -13,17 +17,6 @@ const FLUSH_INTERVAL_MS = 5_000;
 const RETRY_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const ANONYMOUS_ID_KEY = "cap_analytics_anonymous_id_v1";
-const SESSION_ID_KEY = "cap_analytics_session_id_v1";
-const ATTRIBUTION_KEY = "cap_analytics_attribution_v1";
-const ATTRIBUTION_FIELDS = [
-	"utm_source",
-	"utm_medium",
-	"utm_campaign",
-	"utm_content",
-	"utm_term",
-	"gclid",
-	"fbclid",
-] as const;
 
 type TransportResult = "success" | "retry" | "drop";
 type TransportMode = "normal" | "unload";
@@ -37,12 +30,30 @@ interface BrowserTransportDependencies {
 export type ProductAnalyticsTransport = (
 	events: readonly ProductEventInput[],
 	mode: TransportMode,
+	delivery: ProductAnalyticsDeliverySnapshot,
 ) => Promise<TransportResult>;
+
+export interface ProductAnalyticsDeliverySnapshot {
+	attempted: number;
+	accepted: number;
+	retried: number;
+	dropped: number;
+	queue_overflow: number;
+	oversize: number;
+}
 
 export class ProductAnalyticsQueue {
 	private queue: QueuedEvent[] = [];
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private inFlight: Promise<void> | undefined;
+	private delivery: ProductAnalyticsDeliverySnapshot = {
+		attempted: 0,
+		accepted: 0,
+		retried: 0,
+		dropped: 0,
+		queue_overflow: 0,
+		oversize: 0,
+	};
 
 	constructor(
 		private readonly transport: ProductAnalyticsTransport,
@@ -53,6 +64,8 @@ export class ProductAnalyticsQueue {
 	enqueue(event: ProductEventInput) {
 		if (this.queue.length >= PRODUCT_ANALYTICS_LIMITS.queueSize) {
 			this.queue.shift();
+			this.delivery.dropped += 1;
+			this.delivery.queue_overflow += 1;
 		}
 		this.queue.push({ event, attempts: 0 });
 
@@ -92,23 +105,40 @@ export class ProductAnalyticsQueue {
 		return this.queue.length;
 	}
 
+	get deliverySnapshot() {
+		return { ...this.delivery };
+	}
+
 	private async send(batch: QueuedEvent[], mode: TransportMode) {
 		let result: TransportResult;
+		this.delivery.attempted += batch.length;
 		try {
 			result = await this.transport(
 				batch.map(({ event }) => event),
 				mode,
+				this.deliverySnapshot,
 			);
 		} catch {
 			result = "retry";
 		}
 
-		if (result !== "retry") return false;
+		if (result === "success") {
+			this.delivery.accepted += batch.length;
+			return false;
+		}
+		if (result === "drop") {
+			this.delivery.dropped += batch.length;
+			return false;
+		}
+		this.delivery.retried += batch.length;
 
 		const retryable = batch
 			.filter(({ attempts }) => attempts === 0)
 			.map(({ event }) => ({ event, attempts: 1 }));
-		if (retryable.length === 0) return false;
+		if (retryable.length === 0) {
+			this.delivery.dropped += batch.length;
+			return false;
+		}
 
 		this.queue = [...retryable, ...this.queue].slice(
 			0,
@@ -149,6 +179,8 @@ export class ProductAnalyticsQueue {
 			if (bytes > PRODUCT_ANALYTICS_LIMITS.requestBytes) {
 				if (batch.length > 0) break;
 				this.queue.shift();
+				this.delivery.dropped += 1;
+				this.delivery.oversize += 1;
 				continue;
 			}
 
@@ -162,39 +194,105 @@ export class ProductAnalyticsQueue {
 
 let browserQueue: ProductAnalyticsQueue | undefined;
 let anonymousId: string | undefined;
-let sessionId: string | undefined;
 let listenersRegistered = false;
 let fallbackEventIdCounter = 0;
 
-export function captureProductEvent(
-	eventName: string,
-	properties?: Record<string, unknown>,
+export function captureProductEvent<Name extends ClientProductEventName>(
+	eventName: Name,
+	...args: ProductEventArguments<Name>
+) {
+	return enqueueBrowserProductEvent(
+		eventName,
+		args,
+		resolveBrowserAnalyticsContext({
+			storage: getBrowserStorage("localStorage"),
+			createId: createProductEventId,
+		}),
+	);
+}
+
+function enqueueBrowserProductEvent<Name extends ClientProductEventName>(
+	eventName: Name,
+	args: ProductEventArguments<Name>,
+	context: ReturnType<typeof resolveBrowserAnalyticsContext>,
+	pathname = window.location.pathname,
 ) {
 	try {
-		if (typeof window === "undefined" || !isCoreEventName(eventName))
-			return false;
-		if (isServerOnlyEventName(eventName)) return false;
+		if (
+			typeof window === "undefined" ||
+			!isCoreEventName(eventName) ||
+			isServerOnlyEventName(eventName)
+		) {
+			return undefined;
+		}
 
-		const normalizedProperties = normalizeProductEventProperties(properties);
+		const normalizedProperties = normalizeProductEventProperties(
+			eventName,
+			args[0] as Record<string, unknown> | undefined,
+		);
+		if (normalizedProperties === null) return undefined;
+		const eventId = createProductEventId();
 		getBrowserQueue().enqueue({
-			eventId: createProductEventId(),
+			eventId,
 			eventName,
 			occurredAt: new Date().toISOString(),
 			anonymousId: getProductAnalyticsAnonymousId(),
-			sessionId: getSessionId(),
+			sessionId: context.sessionId,
 			platform: "web",
-			pathname: window.location.pathname,
+			pathname,
 			...(document.referrer ? { referrer: document.referrer } : {}),
 			...(normalizedProperties ? { properties: normalizedProperties } : {}),
 		});
-		return true;
+		return eventId;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 
-export function captureProductPageView() {
-	return captureProductEvent("page_view", getFirstTouchAttribution());
+export function captureProductPageEngagement(
+	pageViewId: string,
+	sessionId: string,
+	pathname: string,
+	engagedMs: number,
+	maxScrollDepth: number,
+) {
+	return enqueueBrowserProductEvent(
+		"page_engagement",
+		[
+			{
+				page_view_id: pageViewId,
+				engaged_ms: Math.max(0, Math.round(engagedMs)),
+				max_scroll_depth: Math.max(0, Math.min(100, maxScrollDepth)),
+			},
+		],
+		{ sessionId, isSessionEntry: false, attribution: {} },
+		pathname,
+	);
+}
+
+export function captureProductPageView(
+	context: BrowserAnalyticsContext = touchProductAnalyticsSession(),
+) {
+	const eventId = enqueueBrowserProductEvent(
+		"page_view",
+		[
+			{
+				...context.attribution,
+				hostname: window.location.hostname,
+				is_session_entry: context.isSessionEntry,
+			},
+		],
+		context,
+	);
+	return eventId ? { eventId, sessionId: context.sessionId } : undefined;
+}
+
+export function touchProductAnalyticsSession() {
+	return resolveBrowserAnalyticsContext({
+		storage: getBrowserStorage("localStorage"),
+		createId: createProductEventId,
+		touch: readAnalyticsTouch(window.location.search),
+	});
 }
 
 export function shouldCaptureProductPageView(pathname: string) {
@@ -258,31 +356,6 @@ export function createProductEventId(
 	return `fallback-${now.toString(36)}-counter-${fallbackEventIdCounter.toString(36)}`;
 }
 
-export function readFirstTouchAttribution(
-	search: string,
-	storage?: Pick<Storage, "getItem" | "setItem">,
-): ProductEventProperties | undefined {
-	try {
-		const existing = storage?.getItem(ATTRIBUTION_KEY);
-		if (existing) {
-			return normalizeProductEventProperties(JSON.parse(existing));
-		}
-
-		const params = new URLSearchParams(search);
-		const properties: Record<string, string> = {};
-		for (const key of ATTRIBUTION_FIELDS) {
-			const value = params.get(key)?.trim();
-			if (value) properties[key] = value;
-		}
-		const normalized = normalizeProductEventProperties(properties);
-		if (normalized)
-			storage?.setItem(ATTRIBUTION_KEY, JSON.stringify(normalized));
-		return normalized;
-	} catch {
-		return undefined;
-	}
-}
-
 function getBrowserQueue() {
 	if (!browserQueue) browserQueue = new ProductAnalyticsQueue(browserTransport);
 	registerLifecycleListeners();
@@ -314,25 +387,7 @@ function persistAnonymousIdCookie(value: string) {
 	} catch {}
 }
 
-function getSessionId() {
-	if (!sessionId) {
-		sessionId = getOrCreateStorageId(
-			getBrowserStorage("sessionStorage"),
-			SESSION_ID_KEY,
-			() => createProductEventId(),
-		);
-	}
-	return sessionId;
-}
-
-function getFirstTouchAttribution() {
-	return readFirstTouchAttribution(
-		window.location.search,
-		getBrowserStorage("localStorage"),
-	);
-}
-
-function getBrowserStorage(name: "localStorage" | "sessionStorage") {
+function getBrowserStorage(name: "localStorage") {
 	try {
 		return window[name];
 	} catch {
@@ -371,8 +426,9 @@ export const sendBrowserProductAnalytics = async (
 	events: readonly ProductEventInput[],
 	mode: TransportMode,
 	dependencies: BrowserTransportDependencies = {},
+	delivery?: ProductAnalyticsDeliverySnapshot,
 ): Promise<TransportResult> => {
-	const body = JSON.stringify({ events });
+	const body = JSON.stringify({ events, ...(delivery ? { delivery } : {}) });
 	const sendBeacon =
 		dependencies.sendBeacon ??
 		(typeof navigator !== "undefined" &&
@@ -410,5 +466,13 @@ export const sendBrowserProductAnalytics = async (
 	}
 };
 
-const browserTransport: ProductAnalyticsTransport = (events, mode) =>
-	sendBrowserProductAnalytics(events, mode);
+const browserTransport: ProductAnalyticsTransport = (events, mode, delivery) =>
+	sendBrowserProductAnalytics(events, mode, {}, delivery);
+
+export function getProductAnalyticsDeliverySnapshot() {
+	return getBrowserQueue().deliverySnapshot;
+}
+
+export function flushBrowserProductAnalytics(mode: TransportMode = "normal") {
+	return browserQueue?.flush(mode) ?? Promise.resolve();
+}

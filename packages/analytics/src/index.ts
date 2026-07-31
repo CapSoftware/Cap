@@ -1,52 +1,60 @@
-export const CORE_EVENT_NAMES = [
-	"page_view",
-	"download_cta_clicked",
-	"pricing_cta_clicked",
-	"cli_install_command_copied",
-	"auth_started",
-	"auth_email_sent",
-	"user_signed_up",
-	"recording_started",
-	"recording_completed",
-	"multipart_upload_complete",
-	"multipart_upload_failed",
-	"export_button_clicked",
-	"create_shareable_link_clicked",
-	"checkout_started",
-	"guest_checkout_started",
-	"purchase_completed",
-	"organization_invite_sent",
-	"organization_member_joined",
-	"seat_quantity_changed",
-	"loom_import_started",
-	"loom_import_completed",
-	"loom_import_failed",
-	"first_view_received",
-	"recording_recovery_failed",
-] as const;
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
+import {
+	CORE_EVENT_NAMES,
+	type CoreEventName,
+	EVENT_REGISTRY,
+	getProductEventDefinition,
+	isCoreEventName,
+	isServerOnlyEventName,
+	type ProductEventPlatform,
+	type ProductEventPropertiesFor,
+	SERVER_ONLY_EVENT_NAMES,
+} from "./event-registry";
 
-export const SERVER_ONLY_EVENT_NAMES = [
-	"user_signed_up",
-	"checkout_started",
-	"guest_checkout_started",
-	"purchase_completed",
-	"organization_invite_sent",
-	"organization_member_joined",
-	"seat_quantity_changed",
-	"first_view_received",
-] as const satisfies readonly CoreEventName[];
+export type {
+	AnalyticsTouch,
+	BrowserAnalyticsContext,
+	BrowserAnalyticsSession,
+} from "./browser-session";
+export {
+	PRODUCT_ANALYTICS_FIRST_TOUCH_STORAGE_KEY,
+	PRODUCT_ANALYTICS_LAST_TOUCH_STORAGE_KEY,
+	PRODUCT_ANALYTICS_SESSION_STORAGE_KEY,
+	PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS,
+	readAnalyticsTouch,
+	resolveBrowserAnalyticsContext,
+} from "./browser-session";
 
-export type CoreEventName = (typeof CORE_EVENT_NAMES)[number];
-export type ProductEventPlatform = "web" | "desktop" | "mobile" | "server";
+export {
+	CORE_EVENT_NAMES,
+	EVENT_REGISTRY,
+	getProductEventDefinition,
+	isCoreEventName,
+	isServerOnlyEventName,
+	SERVER_ONLY_EVENT_NAMES,
+};
+export type {
+	ClientProductEventName,
+	CoreEventName,
+	ProductEventArguments,
+	ProductEventAuthority,
+	ProductEventDelivery,
+	ProductEventPlatform,
+	ProductEventPropertiesFor,
+	ProductEventPropertyField,
+	ServerProductEventName,
+} from "./event-registry";
+
 export type ProductEventProperty = string | number | boolean | null;
 export type ProductEventProperties = Record<string, ProductEventProperty>;
 
 export const PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE =
 	"cap_analytics_anonymous_id";
 
-export interface ProductEventInput {
+export interface ProductEventInput<Name extends CoreEventName = CoreEventName> {
 	eventId: string;
-	eventName: CoreEventName;
+	eventName: Name;
 	occurredAt: string;
 	anonymousId: string;
 	sessionId?: string;
@@ -54,7 +62,7 @@ export interface ProductEventInput {
 	appVersion?: string;
 	pathname?: string;
 	referrer?: string;
-	properties?: ProductEventProperties;
+	properties?: ProductEventPropertiesFor<Name>;
 }
 
 export interface ProductEventContext {
@@ -65,14 +73,21 @@ export interface ProductEventContext {
 	country?: string;
 	region?: string;
 	city?: string;
+	hostname?: string;
+	browser?: string;
+	device?: string;
+	os?: string;
+	trafficClass?: "external" | "bot" | "internal" | "preview" | "synthetic";
+	syntheticRunId?: string;
 }
 
 export interface ProductEventRow {
 	event_id: string;
+	payload_hash: string;
 	occurred_at: string;
 	received_at: string;
 	event_name: CoreEventName;
-	schema_version: 1;
+	schema_version: number;
 	source: "client" | "server";
 	platform: ProductEventPlatform;
 	anonymous_id: string;
@@ -85,6 +100,13 @@ export interface ProductEventRow {
 	country: string;
 	region: string;
 	city: string;
+	hostname: string;
+	browser: string;
+	device: string;
+	os: string;
+	channel: string;
+	traffic_class: string;
+	synthetic_run_id: string;
 	properties: string;
 }
 
@@ -188,32 +210,12 @@ export async function sendProductAnalyticsRows({
 	);
 }
 
-const CORE_EVENT_NAME_SET = new Set<string>(CORE_EVENT_NAMES);
-const SERVER_ONLY_EVENT_NAME_SET = new Set<string>(SERVER_ONLY_EVENT_NAMES);
 const PROPERTY_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
-const FORBIDDEN_PROPERTY_KEYS = new Set([
-	"comment",
-	"content",
-	"email",
-	"error",
-	"error_message",
-	"file_name",
-	"file_path",
-	"raw_error",
-	"reason",
-	"recording_name",
-	"organization_id",
-	"session_id",
-	"subscription_id",
-	"title",
-	"transcript",
-	"user_email",
-	"user_id",
-	"video_id",
-]);
 const CLIENT_PRODUCT_EVENT_PLATFORMS = new Set<ProductEventPlatform>([
 	"web",
 	"desktop",
+	"mobile",
+	"cli",
 ]);
 const DYNAMIC_ID_PARENT_SEGMENTS = new Set([
 	"apps",
@@ -232,59 +234,67 @@ const UUID_PATTERN =
 const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const CAP_NANOID_PATTERN = /^(?:[0-9abcdefghjkmnpqrstvwxyz]{15}){1,2}$/;
 
-export function isCoreEventName(value: string): value is CoreEventName {
-	return CORE_EVENT_NAME_SET.has(value);
-}
-
-export function isServerOnlyEventName(value: CoreEventName) {
-	return SERVER_ONLY_EVENT_NAME_SET.has(value);
-}
-
-export function normalizeProductEventProperties(
+export function normalizeProductEventProperties<Name extends CoreEventName>(
+	eventName: Name,
 	properties?: Record<string, unknown>,
-): ProductEventProperties | undefined {
-	if (!properties) return undefined;
-
+): ProductEventPropertiesFor<Name> | undefined | null {
+	const schema = EVENT_REGISTRY[eventName].properties as Record<
+		string,
+		{
+			type: "string" | "number" | "boolean";
+			required?: true;
+			nullable?: true;
+			values?: readonly string[];
+		}
+	>;
+	const entries = Object.entries(properties ?? {});
+	if (
+		entries.length > PRODUCT_ANALYTICS_LIMITS.propertyCount ||
+		entries.some(
+			([key]) =>
+				key.length > PRODUCT_ANALYTICS_LIMITS.propertyKeyLength ||
+				!PROPERTY_KEY_PATTERN.test(key) ||
+				!Object.hasOwn(schema, key),
+		)
+	) {
+		return null;
+	}
 	const normalized: ProductEventProperties = {};
-	let count = 0;
+	for (const [key, rule] of Object.entries(schema)) {
+		if (!Object.hasOwn(properties ?? {}, key)) {
+			if (rule.required) return null;
+			continue;
+		}
 
-	for (const [key, value] of Object.entries(properties)) {
-		if (count >= PRODUCT_ANALYTICS_LIMITS.propertyCount) break;
+		const value = properties?.[key];
+		if (value === null) {
+			if (!rule.nullable) return null;
+			normalized[key] = null;
+			continue;
+		}
+
+		if (typeof value !== rule.type) return null;
+		if (typeof value === "number" && !Number.isFinite(value)) return null;
 		if (
-			key.length > PRODUCT_ANALYTICS_LIMITS.propertyKeyLength ||
-			!PROPERTY_KEY_PATTERN.test(key) ||
-			FORBIDDEN_PROPERTY_KEYS.has(key)
+			typeof value === "string" &&
+			(value.length > PRODUCT_ANALYTICS_LIMITS.propertyStringLength ||
+				(rule.values && !rule.values.includes(value)))
 		) {
-			continue;
+			return null;
 		}
-
-		let normalizedValue: ProductEventProperty;
-		if (typeof value === "string") {
-			normalizedValue = value.slice(
-				0,
-				PRODUCT_ANALYTICS_LIMITS.propertyStringLength,
-			);
-		} else if (typeof value === "number" && Number.isFinite(value)) {
-			normalizedValue = value;
-		} else if (typeof value === "boolean" || value === null) {
-			normalizedValue = value;
-		} else {
-			continue;
-		}
-
-		normalized[key] = normalizedValue;
-		if (
-			new TextEncoder().encode(JSON.stringify(normalized)).byteLength >
-			PRODUCT_ANALYTICS_LIMITS.propertiesBytes
-		) {
-			delete normalized[key];
-			continue;
-		}
-
-		count += 1;
+		normalized[key] = value as ProductEventProperty;
 	}
 
-	return count > 0 ? normalized : undefined;
+	if (
+		new TextEncoder().encode(JSON.stringify(normalized)).byteLength >
+		PRODUCT_ANALYTICS_LIMITS.propertiesBytes
+	) {
+		return null;
+	}
+
+	return Object.keys(normalized).length > 0
+		? (normalized as ProductEventPropertiesFor<Name>)
+		: undefined;
 }
 
 export function normalizeProductEventInput(
@@ -311,11 +321,22 @@ export function normalizeProductEventInput(
 	) {
 		return null;
 	}
+	const definition = getProductEventDefinition(eventName);
+	if (
+		definition.authority === "server" ||
+		!(definition.platforms as readonly ProductEventPlatform[]).includes(
+			platform as ProductEventPlatform,
+		)
+	) {
+		return null;
+	}
 
-	const properties =
-		"properties" in value && isRecord(value.properties)
-			? normalizeProductEventProperties(value.properties)
-			: undefined;
+	const hasProperties = "properties" in value;
+	if (hasProperties && !isRecord(value.properties)) return null;
+	const rawProperties =
+		hasProperties && isRecord(value.properties) ? value.properties : undefined;
+	const properties = normalizeProductEventProperties(eventName, rawProperties);
+	if (properties === null) return null;
 
 	return {
 		eventId,
@@ -339,26 +360,105 @@ export function createProductEventRows(
 	events: readonly ProductEventInput[],
 	context: ProductEventContext,
 ): ProductEventRow[] {
-	return events.map((event) => ({
-		event_id: event.eventId,
-		occurred_at: event.occurredAt,
-		received_at: context.receivedAt,
-		event_name: event.eventName,
-		schema_version: 1,
-		source: context.source,
-		platform: event.platform,
-		anonymous_id: event.anonymousId,
-		session_id: event.sessionId ?? "",
-		user_id: context.userId ?? "",
-		organization_id: context.organizationId ?? "",
-		app_version: event.appVersion ?? "",
-		pathname: event.pathname ?? "",
-		referrer: event.referrer ?? "",
-		country: context.country ?? "",
-		region: context.region ?? "",
-		city: context.city ?? "",
-		properties: event.properties ? JSON.stringify(event.properties) : "{}",
-	}));
+	return events.map((event) => {
+		const payload = {
+			event_name: event.eventName,
+			schema_version: getProductEventDefinition(event.eventName).version,
+			source: context.source,
+			platform: event.platform,
+			occurred_at: event.occurredAt,
+			anonymous_id: event.anonymousId,
+			session_id: event.sessionId ?? "",
+			user_id: context.userId ?? "",
+			organization_id: context.organizationId ?? "",
+			app_version: event.appVersion ?? "",
+			pathname: event.pathname ?? "",
+			referrer: event.referrer ?? "",
+			properties: event.properties ? JSON.stringify(event.properties) : "{}",
+		};
+		return {
+			event_id: event.eventId,
+			payload_hash: createProductEventPayloadHash(payload),
+			received_at: context.receivedAt,
+			...payload,
+			country: context.country ?? "",
+			region: context.region ?? "",
+			city: context.city ?? "",
+			hostname: context.hostname ?? "",
+			browser: context.browser ?? "",
+			device: context.device ?? "",
+			os: context.os ?? "",
+			channel: normalizeAcquisitionChannel(
+				event.properties as ProductEventProperties | undefined,
+				event.referrer,
+			),
+			traffic_class: context.trafficClass ?? "external",
+			synthetic_run_id: context.syntheticRunId ?? "",
+		};
+	});
+}
+
+export function normalizeAcquisitionChannel(
+	properties: ProductEventProperties | undefined,
+	referrer?: string,
+) {
+	if (properties?.first_touch_gclid || properties?.session_touch_gclid) {
+		return "paid_search";
+	}
+	if (properties?.first_touch_fbclid || properties?.session_touch_fbclid) {
+		return "paid_social";
+	}
+	const medium = String(
+		properties?.session_touch_medium ?? properties?.first_touch_medium ?? "",
+	).toLowerCase();
+	if (medium.includes("email")) return "email";
+	if (medium.includes("affiliate")) return "affiliate";
+	if (
+		medium.includes("cpc") ||
+		medium.includes("ppc") ||
+		medium.includes("paid")
+	) {
+		return "paid_other";
+	}
+	const source = String(
+		properties?.session_touch_source ?? properties?.first_touch_source ?? "",
+	).toLowerCase();
+	const hostname = referrer?.toLowerCase() ?? "";
+	if (!source && !hostname) return "direct";
+	if (
+		/(google|bing|duckduckgo|yahoo|baidu|yandex)/.test(source) ||
+		/(google\.|bing\.|duckduckgo\.|search\.yahoo\.|baidu\.|yandex\.)/.test(
+			hostname,
+		)
+	) {
+		return "organic_search";
+	}
+	if (
+		/(facebook|instagram|linkedin|reddit|twitter|youtube|tiktok|x\.com)/.test(
+			source || hostname,
+		)
+	) {
+		return "organic_social";
+	}
+	return "referral";
+}
+
+export function createProductEventPayloadHash(value: unknown) {
+	return bytesToHex(sha256(new TextEncoder().encode(stableJson(value)))).slice(
+		0,
+		32,
+	);
+}
+
+function stableJson(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+	if (isRecord(value)) {
+		return `{${Object.keys(value)
+			.sort()
+			.map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+			.join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

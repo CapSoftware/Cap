@@ -250,7 +250,6 @@ export function CameraSelectBase(props: {
 		props.onChange(cameraLabel);
 
 		trackEvent("camera_selected", {
-			camera_name: cameraLabel?.display_name ?? null,
 			enabled: !!cameraLabel,
 		});
 	};

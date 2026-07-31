@@ -4,6 +4,7 @@ import { Button, LogoBadge } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { trackEvent } from "@/app/utils/analytics";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -71,6 +72,12 @@ export function DownloadPage() {
 					size="lg"
 					href={getDownloadUrl(platform, isIntel)}
 					className="hidden justify-center items-center py-6 font-medium text-white lg:flex"
+					onClick={() =>
+						trackEvent("onboarding_milestone_completed", {
+							milestone: "download",
+							skipped: false,
+						})
+					}
 				>
 					{!loading && getPlatformIcon(platform)}
 					{getDownloadButtonText(platform, loading, isIntel)}

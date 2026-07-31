@@ -49,7 +49,6 @@ export default function MicrophoneSelect(props: {
 		if (!name) setDbs();
 
 		trackEvent("microphone_selected", {
-			microphone_name: name ?? null,
 			enabled: !!name,
 		});
 	};
@@ -167,7 +166,6 @@ export function MicrophoneSelectBase(props: {
 		if (!item) setDbs();
 
 		trackEvent("microphone_selected", {
-			microphone_name: item?.name ?? null,
 			enabled: !!item,
 		});
 	};

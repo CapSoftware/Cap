@@ -102,7 +102,6 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 							source_page: source,
 							cta_location: "platform_icons",
 							target: "apple-silicon",
-							target_url: "/download/apple-silicon",
 						});
 						window.location.href = "/download/apple-silicon";
 					}}
@@ -130,7 +129,6 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 							source_page: source,
 							cta_location: "platform_icons",
 							target: "windows",
-							target_url: "/download/windows",
 						})
 					}
 					className="inline-flex size-6 items-center justify-center focus:outline-none"
@@ -159,7 +157,6 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 							source_page: source,
 							cta_location: "platform_icons",
 							target: "linux",
-							target_url: "/download/linux-deb",
 						})
 					}
 					className="inline-flex size-6 items-center justify-center focus:outline-none"

@@ -1,6 +1,10 @@
 // million-ignore
 "use client";
 
+import type {
+	ClientProductEventName,
+	ProductEventArguments,
+} from "@cap/analytics";
 import { Button } from "@cap/ui";
 import { faArrowRight, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -15,10 +19,7 @@ import { sendDownloadLink } from "@/actions/send-download-link";
 import { ChromeExtensionButton } from "@/components/ChromeExtensionButton";
 import { LoomMark } from "@/components/icons/LoomMark";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
-import {
-	CAP_CHROME_EXTENSION_URL,
-	CHROME_EXTENSION_BUTTON_CLASS,
-} from "@/lib/chrome-extension";
+import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -46,12 +47,12 @@ const HERO_MODE_COLORS = {
 
 const TITLE_LEADING = "leading-[2.25rem] md:leading-[3.5rem]";
 
-const trackHomepageEvent = (
-	eventName: string,
-	properties?: Record<string, unknown>,
+const trackHomepageEvent = <Name extends ClientProductEventName>(
+	eventName: Name,
+	...args: ProductEventArguments<Name>
 ) => {
 	void import("@/app/utils/analytics").then(({ trackEvent }) => {
-		trackEvent(eventName, properties);
+		trackEvent(eventName, ...args);
 	});
 };
 
@@ -137,7 +138,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			source_page: "home_header",
 			cta_location: "mobile_email_link",
 			target: "email_download_link",
-			target_url: "/download",
 			detected_platform: platform ?? "unknown",
 			is_intel: Boolean(isIntel),
 		});
@@ -192,7 +192,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 				trackHomepageEvent("download_cta_clicked", {
 					source_page: "home_header",
 					cta_location: "primary",
-					target_url: primaryDownloadUrl,
 					detected_platform: platform ?? "unknown",
 					is_intel: Boolean(isIntel),
 				})
@@ -212,7 +211,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 				trackHomepageEvent("pricing_cta_clicked", {
 					source_page: "home_header",
 					cta_location: "secondary",
-					target_url: "/pricing",
 				})
 			}
 		/>
@@ -328,7 +326,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 											source_page: "home_header",
 											cta_location: "chrome_extension_secondary",
 											target: "chrome_extension",
-											target_url: CAP_CHROME_EXTENSION_URL,
 											detected_platform: platform ?? "unknown",
 											is_intel: Boolean(isIntel),
 										})
@@ -394,7 +391,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 									trackHomepageEvent("pricing_cta_clicked", {
 										source_page: "home_header",
 										cta_location: "mobile_secondary",
-										target_url: "/pricing",
 									})
 								}
 							/>
@@ -432,7 +428,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 								trackHomepageEvent("download_cta_clicked", {
 									source_page: "home_header",
 									cta_location: "see_other_options",
-									target_url: "/download",
 									detected_platform: platform ?? "unknown",
 									is_intel: Boolean(isIntel),
 								})

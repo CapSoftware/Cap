@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect } from "react";
 import { checkAndMarkUserSignedUpTracked } from "@/actions/analytics/track-user-signed-up";
-import { trackEvent } from "../utils/analytics";
 import { useCurrentUser } from "./AuthContext";
 
 export function SignupAnalytics() {
@@ -19,9 +18,7 @@ function Inner() {
 	useEffect(() => {
 		if (!user) return;
 
-		void checkAndMarkUserSignedUpTracked().then(({ shouldTrack }) => {
-			if (shouldTrack) trackEvent("user_signed_up");
-		});
+		void checkAndMarkUserSignedUpTracked();
 	}, [user]);
 
 	return null;

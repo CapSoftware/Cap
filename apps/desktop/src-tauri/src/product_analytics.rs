@@ -1,9 +1,13 @@
-use serde::Serialize;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use ring::{
+    aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey},
+    rand::{SecureRandom, SystemRandom},
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    future::Future,
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -11,7 +15,7 @@ use std::{
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -22,10 +26,15 @@ use crate::{
 
 const PRODUCT_EVENT_QUEUE_CAPACITY: usize = 100;
 const PRODUCT_EVENT_BATCH_SIZE: usize = 20;
-const PRODUCT_EVENT_BATCH_DELAY: Duration = Duration::from_millis(250);
 const PRODUCT_EVENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
+const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
+const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
+const PRODUCT_EVENT_OUTBOX_KEYRING_USER: &str = "product-analytics-outbox-v1";
+const PRODUCT_EVENT_OUTBOX_CAPACITY: usize = 500;
+const PRODUCT_EVENT_DEAD_LETTER_CAPACITY: usize = 100;
+const PRODUCT_EVENT_MAX_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]
 pub enum ProductAnalyticsEvent {
@@ -91,6 +100,26 @@ fn truncate_reason(mut s: String) -> String {
     s
 }
 
+fn classify_failure(error: &str) -> &'static str {
+    let normalized = error.to_lowercase();
+    if normalized.contains("timeout") || normalized.contains("timed out") {
+        "timeout"
+    } else if normalized.contains("permission") || normalized.contains("denied") {
+        "permission"
+    } else if normalized.contains("network") || normalized.contains("connect") {
+        "network"
+    } else if normalized.contains("disk") || normalized.contains("storage") {
+        "storage"
+    } else if normalized.contains("codec")
+        || normalized.contains("format")
+        || normalized.contains("media")
+    {
+        "invalid_media"
+    } else {
+        "unknown"
+    }
+}
+
 #[derive(Clone, Debug)]
 struct EventData {
     name: &'static str,
@@ -131,7 +160,7 @@ fn event_data(event: ProductAnalyticsEvent) -> EventData {
         ProductAnalyticsEvent::MultipartUploadFailed { duration, error } => {
             let mut data = EventData::new("multipart_upload_failed");
             data.set("duration", duration.as_secs());
-            data.set("error", truncate_reason(error));
+            data.set("failure_class", classify_failure(&error));
             data
         }
         ProductAnalyticsEvent::RecordingStarted {
@@ -209,7 +238,7 @@ fn event_data(event: ProductAnalyticsEvent) -> EventData {
         ProductAnalyticsEvent::RecordingRecoveryFailed { trigger, reason } => {
             let mut data = EventData::new("recording_recovery_failed");
             data.set("trigger", trigger);
-            data.set("reason", truncate_reason(reason));
+            data.set("failure_class", classify_failure(&reason));
             data
         }
     }
@@ -226,16 +255,47 @@ fn is_core_product_event(name: &str) -> bool {
     )
 }
 
-#[derive(Clone, Debug, Serialize)]
+fn desktop_client_product_event_name(name: &str) -> Option<&'static str> {
+    match name {
+        "user_signed_in" => Some("user_signed_in"),
+        "user_signed_out" => Some("user_signed_out"),
+        "recording_started" => Some("recording_started"),
+        "recording_completed" => Some("recording_completed"),
+        "multipart_upload_complete" => Some("multipart_upload_complete"),
+        "multipart_upload_failed" => Some("multipart_upload_failed"),
+        "recording_recovery_failed" => Some("recording_recovery_failed"),
+        "export_button_clicked" => Some("export_button_clicked"),
+        "export_fps_changed" => Some("export_fps_changed"),
+        "export_started" => Some("export_started"),
+        "export_completed" => Some("export_completed"),
+        "export_failed" => Some("export_failed"),
+        "create_shareable_link_clicked" => Some("create_shareable_link_clicked"),
+        "camera_selected" => Some("camera_selected"),
+        "microphone_selected" => Some("microphone_selected"),
+        "screenshot_view_clicked" => Some("screenshot_view_clicked"),
+        "screenshot_editor_clicked" => Some("screenshot_editor_clicked"),
+        "screenshot_folder_clicked" => Some("screenshot_folder_clicked"),
+        "screenshot_copy_clicked" => Some("screenshot_copy_clicked"),
+        "screenshot_share_clicked" => Some("screenshot_share_clicked"),
+        "recording_view_clicked" => Some("recording_view_clicked"),
+        "recording_folder_clicked" => Some("recording_folder_clicked"),
+        "recording_copy_clicked" => Some("recording_copy_clicked"),
+        "recording_editor_clicked" => Some("recording_editor_clicked"),
+        "experiment_exposed" => Some("experiment_exposed"),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProductEvent {
     event_id: String,
-    event_name: &'static str,
+    event_name: String,
     occurred_at: String,
     anonymous_id: String,
     session_id: String,
-    platform: &'static str,
-    app_version: &'static str,
+    platform: String,
+    app_version: String,
     properties: Map<String, Value>,
 }
 
@@ -251,14 +311,14 @@ fn product_event(data: &EventData, anonymous_id: String) -> Option<ProductEvent>
 
     Some(ProductEvent {
         event_id: Uuid::new_v4().to_string(),
-        event_name: data.name,
+        event_name: data.name.to_string(),
         occurred_at: chrono::Utc::now().to_rfc3339(),
         anonymous_id,
         session_id: PRODUCT_EVENT_SESSION_ID
             .get_or_init(Uuid::new_v4)
             .to_string(),
-        platform: "desktop",
-        app_version: env!("CARGO_PKG_VERSION"),
+        platform: "desktop".to_string(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
         properties: product_event_properties(data),
     })
 }
@@ -302,7 +362,30 @@ fn product_auth_token(app: &AppHandle) -> Option<String> {
         })
 }
 
-async fn send_product_batch_once(app: &AppHandle, events: &[ProductEvent]) -> Result<(), String> {
+#[derive(Debug)]
+struct DeliveryError {
+    retryable: bool,
+    status: Option<u16>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ProductEventDeadLetter {
+    event: ProductEvent,
+    failure_class: String,
+    status: Option<u16>,
+    failed_at: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ProductEventOutbox {
+    pending: Vec<ProductEvent>,
+    dead_letters: Vec<ProductEventDeadLetter>,
+}
+
+async fn send_product_batch_once(
+    app: &AppHandle,
+    events: &[ProductEvent],
+) -> Result<(), DeliveryError> {
     if !live_telemetry_enabled(app) {
         return Ok(());
     }
@@ -320,15 +403,19 @@ async fn send_product_batch_once(app: &AppHandle, events: &[ProductEvent]) -> Re
             }
         })
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|_| DeliveryError {
+            retryable: true,
+            status: None,
+        })?;
 
-    if response.status().is_success() || !should_retry_product_status(response.status().as_u16()) {
+    if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!(
-            "product analytics endpoint returned {}",
-            response.status()
-        ))
+        let status = response.status().as_u16();
+        Err(DeliveryError {
+            retryable: should_retry_product_status(status),
+            status: Some(status),
+        })
     }
 }
 
@@ -336,67 +423,283 @@ fn should_retry_product_status(status: u16) -> bool {
     status == 429 || status >= 500
 }
 
-async fn retry_once<F, Fut, E>(mut operation: F, retry_delay: Duration) -> Result<(), E>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<(), E>>,
-{
-    if operation().await.is_ok() {
-        return Ok(());
+fn outbox_encryption_key() -> Result<&'static [u8; 32], String> {
+    if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get() {
+        return Ok(key);
     }
 
-    tokio::time::sleep(retry_delay).await;
-    operation().await
+    let entry = keyring::Entry::new(
+        PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE,
+        PRODUCT_EVENT_OUTBOX_KEYRING_USER,
+    )
+    .map_err(|_| "keyring_unavailable".to_string())?;
+    let key = match entry.get_password() {
+        Ok(encoded) => {
+            let decoded = BASE64
+                .decode(encoded)
+                .map_err(|_| "invalid_keyring_value".to_string())?;
+            decoded
+                .try_into()
+                .map_err(|_| "invalid_keyring_value".to_string())?
+        }
+        Err(_) => {
+            let mut generated = [0_u8; 32];
+            SystemRandom::new()
+                .fill(&mut generated)
+                .map_err(|_| "key_generation_failed".to_string())?;
+            entry
+                .set_password(&BASE64.encode(generated))
+                .map_err(|_| "keyring_write_failed".to_string())?;
+            generated
+        }
+    };
+    let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
+    PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY
+        .get()
+        .ok_or_else(|| "key_cache_failed".to_string())
 }
 
-async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<ProductEvent>) {
-    while let Some(first) = receiver.recv().await {
-        let mut events = Vec::with_capacity(PRODUCT_EVENT_BATCH_SIZE);
-        events.push(first);
-        let deadline = tokio::time::Instant::now() + PRODUCT_EVENT_BATCH_DELAY;
+fn encrypt_outbox(outbox: &ProductEventOutbox) -> Result<String, String> {
+    encrypt_outbox_with_key(outbox, outbox_encryption_key()?)
+}
 
-        while events.len() < PRODUCT_EVENT_BATCH_SIZE {
-            match tokio::time::timeout_at(deadline, receiver.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                Ok(None) | Err(_) => break,
-            }
-        }
+fn encrypt_outbox_with_key(
+    outbox: &ProductEventOutbox,
+    encryption_key: &[u8; 32],
+) -> Result<String, String> {
+    let key = LessSafeKey::new(
+        UnboundKey::new(&AES_256_GCM, encryption_key)
+            .map_err(|_| "encryption_key_failed".to_string())?,
+    );
+    let mut nonce_bytes = [0_u8; 12];
+    SystemRandom::new()
+        .fill(&mut nonce_bytes)
+        .map_err(|_| "nonce_generation_failed".to_string())?;
+    let mut encrypted =
+        serde_json::to_vec(outbox).map_err(|_| "outbox_serialization_failed".to_string())?;
+    key.seal_in_place_append_tag(
+        Nonce::assume_unique_for_key(nonce_bytes),
+        Aad::from(b"cap-product-analytics-outbox-v1".as_slice()),
+        &mut encrypted,
+    )
+    .map_err(|_| "outbox_encryption_failed".to_string())?;
+    let mut stored = nonce_bytes.to_vec();
+    stored.extend(encrypted);
+    Ok(BASE64.encode(stored))
+}
 
-        if !live_telemetry_enabled(&app) {
-            continue;
-        }
+fn decrypt_outbox(value: &str) -> Result<ProductEventOutbox, String> {
+    decrypt_outbox_with_key(value, outbox_encryption_key()?)
+}
 
-        if let Err(err) = retry_once(
-            || send_product_batch_once(&app, &events),
-            PRODUCT_EVENT_RETRY_DELAY,
+fn decrypt_outbox_with_key(
+    value: &str,
+    encryption_key: &[u8; 32],
+) -> Result<ProductEventOutbox, String> {
+    let stored = BASE64
+        .decode(value)
+        .map_err(|_| "outbox_decode_failed".to_string())?;
+    if stored.len() <= 12 {
+        return Err("outbox_decode_failed".to_string());
+    }
+    let (nonce, encrypted) = stored.split_at(12);
+    let nonce_bytes: [u8; 12] = nonce
+        .try_into()
+        .map_err(|_| "outbox_decode_failed".to_string())?;
+    let key = LessSafeKey::new(
+        UnboundKey::new(&AES_256_GCM, encryption_key)
+            .map_err(|_| "encryption_key_failed".to_string())?,
+    );
+    let mut decrypted = encrypted.to_vec();
+    let plaintext = key
+        .open_in_place(
+            Nonce::assume_unique_for_key(nonce_bytes),
+            Aad::from(b"cap-product-analytics-outbox-v1".as_slice()),
+            &mut decrypted,
         )
-        .await
-        {
-            warn!(
-                event_count = events.len(),
-                "Dropping product analytics batch after one retry: {err}"
-            );
+        .map_err(|_| "outbox_decryption_failed".to_string())?;
+    serde_json::from_slice(plaintext).map_err(|_| "outbox_deserialization_failed".to_string())
+}
+
+fn persist_outbox(app: &AppHandle, outbox: &ProductEventOutbox) -> Result<(), String> {
+    let encrypted = encrypt_outbox(outbox)?;
+    let store = app
+        .store("store")
+        .map_err(|_| "store_unavailable".to_string())?;
+    store.set(PRODUCT_EVENT_OUTBOX_STORE_KEY, encrypted);
+    store.save().map_err(|_| "store_write_failed".to_string())
+}
+
+fn load_outbox(app: &AppHandle) -> Result<ProductEventOutbox, String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "store_unavailable".to_string())?;
+    let Some(value) = store.get(PRODUCT_EVENT_OUTBOX_STORE_KEY) else {
+        return Ok(ProductEventOutbox::default());
+    };
+    let Some(encrypted) = value.as_str() else {
+        return Err("invalid_stored_outbox".to_string());
+    };
+    decrypt_outbox(encrypted)
+}
+
+fn outbox_guard() -> std::sync::MutexGuard<'static, ProductEventOutbox> {
+    PRODUCT_EVENT_OUTBOX
+        .get_or_init(|| Mutex::new(ProductEventOutbox::default()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn persist_current_outbox(app: &AppHandle) {
+    let outbox = outbox_guard();
+    if let Err(failure_class) = persist_outbox(app, &outbox) {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            failure_class,
+            "Failed to persist encrypted product analytics outbox"
+        );
+    }
+}
+
+fn remove_delivered_events(app: &AppHandle, delivered: &[ProductEvent]) {
+    let delivered_ids = delivered
+        .iter()
+        .map(|event| event.event_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut outbox = outbox_guard();
+    outbox
+        .pending
+        .retain(|event| !delivered_ids.contains(event.event_id.as_str()));
+    if let Err(failure_class) = persist_outbox(app, &outbox) {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            failure_class,
+            "Failed to persist delivered product analytics state"
+        );
+    }
+}
+
+fn move_to_dead_letters(app: &AppHandle, events: &[ProductEvent], error: &DeliveryError) {
+    let failed_ids = events
+        .iter()
+        .map(|event| event.event_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut outbox = outbox_guard();
+    outbox
+        .pending
+        .retain(|event| !failed_ids.contains(event.event_id.as_str()));
+    for event in events {
+        if outbox.dead_letters.len() >= PRODUCT_EVENT_DEAD_LETTER_CAPACITY {
+            outbox.dead_letters.remove(0);
+            PRODUCT_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        outbox.dead_letters.push(ProductEventDeadLetter {
+            event: event.clone(),
+            failure_class: "contract_rejected".to_string(),
+            status: error.status,
+            failed_at: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+    PRODUCT_EVENT_DEAD_LETTERS.fetch_add(events.len() as u64, Ordering::Relaxed);
+    if let Err(failure_class) = persist_outbox(app, &outbox) {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            failure_class,
+            "Failed to persist product analytics dead letter"
+        );
+    }
+}
+
+async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<()>) {
+    while receiver.recv().await.is_some() {
+        let mut retry_attempt = 0_u32;
+        loop {
+            if !live_telemetry_enabled(&app) {
+                break;
+            }
+            let events = {
+                let outbox = outbox_guard();
+                outbox
+                    .pending
+                    .iter()
+                    .take(PRODUCT_EVENT_BATCH_SIZE)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            if events.is_empty() {
+                break;
+            }
+
+            match send_product_batch_once(&app, &events).await {
+                Ok(()) => {
+                    remove_delivered_events(&app, &events);
+                    retry_attempt = 0;
+                }
+                Err(error) if error.retryable => {
+                    PRODUCT_EVENT_RETRIES.fetch_add(events.len() as u64, Ordering::Relaxed);
+                    let multiplier = 2_u32.saturating_pow(retry_attempt.min(9));
+                    let delay = PRODUCT_EVENT_RETRY_DELAY
+                        .saturating_mul(multiplier)
+                        .min(PRODUCT_EVENT_MAX_RETRY_DELAY);
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    warn!(
+                        event_count = events.len(),
+                        status = error.status,
+                        retry_attempt,
+                        "Product analytics delivery will retry"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => {
+                    warn!(
+                        event_count = events.len(),
+                        status = error.status,
+                        "Product analytics delivery entered the encrypted dead letter queue"
+                    );
+                    move_to_dead_letters(&app, &events, &error);
+                    retry_attempt = 0;
+                }
+            }
         }
     }
 }
 
 fn enqueue_product_event(app: &AppHandle, event: ProductEvent) {
-    let sender = PRODUCT_EVENT_SENDER.get_or_init(|| {
+    let should_wake = {
+        let mut outbox = outbox_guard();
+        if outbox.pending.len() >= PRODUCT_EVENT_OUTBOX_CAPACITY {
+            if outbox.dead_letters.len() >= PRODUCT_EVENT_DEAD_LETTER_CAPACITY {
+                outbox.dead_letters.remove(0);
+                PRODUCT_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
+            }
+            outbox.dead_letters.push(ProductEventDeadLetter {
+                event,
+                failure_class: "queue_overflow".to_string(),
+                status: None,
+                failed_at: chrono::Utc::now().to_rfc3339(),
+            });
+            PRODUCT_EVENT_DEAD_LETTERS.fetch_add(1, Ordering::Relaxed);
+            false
+        } else {
+            outbox.pending.push(event);
+            true
+        }
+    };
+    persist_current_outbox(app);
+
+    let sender = product_event_sender(app);
+
+    if should_wake && let Err(mpsc::error::TrySendError::Closed(_)) = sender.try_send(()) {
+        warn!("Product analytics worker is unavailable; event remains in the encrypted outbox");
+    }
+}
+
+fn product_event_sender(app: &AppHandle) -> &'static mpsc::Sender<()> {
+    PRODUCT_EVENT_SENDER.get_or_init(|| {
         let (sender, receiver) = mpsc::channel(PRODUCT_EVENT_QUEUE_CAPACITY);
         tokio::spawn(run_product_event_worker(app.clone(), receiver));
         sender
-    });
-
-    if let Err(err) = sender.try_send(event) {
-        let dropped = PRODUCT_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
-        if dropped.is_power_of_two() {
-            debug!(
-                dropped,
-                reason = %err,
-                "Product analytics queue is unavailable; event dropped"
-            );
-        }
-    }
+    })
 }
 
 pub fn init_product_session(app: &AppHandle) {
@@ -412,12 +715,34 @@ pub fn init_product_session(app: &AppHandle) {
         }
         Err(err) => warn!("Failed to access store for product analytics session: {err}"),
     }
+
+    match load_outbox(app) {
+        Ok(loaded) => {
+            let has_pending = !loaded.pending.is_empty();
+            *outbox_guard() = loaded;
+            if has_pending {
+                let _ = product_event_sender(app).try_send(());
+            }
+        }
+        Err(failure_class) => {
+            PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                failure_class,
+                "Failed to restore encrypted product analytics outbox"
+            );
+        }
+    }
 }
 
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(true);
 static PRODUCT_EVENT_SESSION_ID: OnceLock<Uuid> = OnceLock::new();
-static PRODUCT_EVENT_SENDER: OnceLock<mpsc::Sender<ProductEvent>> = OnceLock::new();
+static PRODUCT_EVENT_SENDER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
+static PRODUCT_EVENT_OUTBOX: OnceLock<Mutex<ProductEventOutbox>> = OnceLock::new();
+static PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY: OnceLock<[u8; 32]> = OnceLock::new();
 static PRODUCT_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
+static PRODUCT_EVENT_RETRIES: AtomicU64 = AtomicU64::new(0);
+static PRODUCT_EVENT_DEAD_LETTERS: AtomicU64 = AtomicU64::new(0);
+static PRODUCT_EVENT_PERSISTENCE_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_telemetry_enabled(enabled: bool) {
     TELEMETRY_ENABLED.store(enabled, Ordering::Release);
@@ -441,20 +766,65 @@ pub fn capture_event(app: &AppHandle, event: ProductAnalyticsEvent) {
                 .get_or_init(Uuid::new_v4)
                 .to_string()
         });
-    let mut data = event_data(event);
-    data.set("cap_version", env!("CARGO_PKG_VERSION"));
-    data.set("os", std::env::consts::OS);
-    data.set("arch", std::env::consts::ARCH);
+    let data = event_data(event);
 
     if let Some(event) = product_event(&data, anonymous_id) {
         enqueue_product_event(app, event);
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn capture_client_product_analytics_event(
+    app: AppHandle,
+    event_id: String,
+    event_name: String,
+    occurred_at: String,
+    properties: String,
+) -> Result<(), String> {
+    if !live_telemetry_enabled(&app) {
+        return Ok(());
+    }
+    let event_name = desktop_client_product_event_name(&event_name)
+        .ok_or_else(|| "unregistered_product_event".to_string())?;
+    Uuid::parse_str(&event_id).map_err(|_| "invalid_product_event_id".to_string())?;
+    chrono::DateTime::parse_from_rfc3339(&occurred_at)
+        .map_err(|_| "invalid_product_event_timestamp".to_string())?;
+    let properties = serde_json::from_str::<Map<String, Value>>(&properties)
+        .map_err(|_| "invalid_product_event_properties".to_string())?;
+    let data = EventData {
+        name: event_name,
+        properties,
+    };
+    let anonymous_id = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.instance_id.to_string())
+        .unwrap_or_else(|| {
+            PRODUCT_EVENT_SESSION_ID
+                .get_or_init(Uuid::new_v4)
+                .to_string()
+        });
+    enqueue_product_event(
+        &app,
+        ProductEvent {
+            event_id,
+            event_name: event_name.to_string(),
+            occurred_at,
+            anonymous_id,
+            session_id: PRODUCT_EVENT_SESSION_ID
+                .get_or_init(Uuid::new_v4)
+                .to_string(),
+            platform: "desktop".to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            properties: product_event_properties(&data),
+        },
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
     fn recording_started() -> ProductAnalyticsEvent {
@@ -533,6 +903,7 @@ mod tests {
 
         assert!(!event.properties.contains_key("error"));
         assert_eq!(event.properties["duration"], 2);
+        assert_eq!(event.properties["failure_class"], "unknown");
     }
 
     #[test]
@@ -561,44 +932,24 @@ mod tests {
         assert!(serialized.get("appVersion").is_some());
     }
 
-    #[tokio::test]
-    async fn retry_once_stops_after_success() {
-        let attempts = AtomicUsize::new(0);
+    #[test]
+    fn encrypted_outbox_round_trips_without_plaintext_event_data() {
+        let data = event_data(recording_started());
+        let event = product_event(&data, "install-id".to_string()).unwrap();
+        let event_id = event.event_id.clone();
+        let outbox = ProductEventOutbox {
+            pending: vec![event],
+            dead_letters: Vec::new(),
+        };
+        let key = [7_u8; 32];
 
-        let result = retry_once(
-            || {
-                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
-                async move {
-                    if attempt == 0 {
-                        Err("temporary")
-                    } else {
-                        Ok(())
-                    }
-                }
-            },
-            Duration::ZERO,
-        )
-        .await;
+        let encrypted = encrypt_outbox_with_key(&outbox, &key).unwrap();
+        assert!(!encrypted.contains("recording_started"));
+        assert!(!encrypted.contains(&event_id));
 
-        assert_eq!(result, Ok(()));
-        assert_eq!(attempts.load(Ordering::Relaxed), 2);
-    }
-
-    #[tokio::test]
-    async fn retry_once_never_attempts_more_than_twice() {
-        let attempts = AtomicUsize::new(0);
-
-        let result = retry_once(
-            || {
-                attempts.fetch_add(1, Ordering::Relaxed);
-                async { Err::<(), _>("offline") }
-            },
-            Duration::ZERO,
-        )
-        .await;
-
-        assert_eq!(result, Err("offline"));
-        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        let decrypted = decrypt_outbox_with_key(&encrypted, &key).unwrap();
+        assert_eq!(decrypted.pending.len(), 1);
+        assert_eq!(decrypted.pending[0].event_id, event_id);
     }
 
     #[test]

@@ -1,10 +1,25 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { useEffect, useRef, useState } from "react";
-import { trackEvent } from "@/app/utils/analytics";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+	analyticsByteSizeBucket,
+	analyticsMimeCategory,
+	trackToolInteraction,
+} from "@/app/utils/analytics";
 
 const SUPPORTED_VIDEO_FORMATS = ["mp4", "webm", "mov", "avi", "mkv"];
+const EMPTY_CAPTIONS_TRACK = "data:text/vtt;charset=utf-8,WEBVTT%0A%0A";
+
+type AudioAwareVideoElement = HTMLVideoElement & {
+	mozHasAudio?: boolean;
+	webkitAudioDecodedByteCount?: number;
+	audioTracks?: { length: number };
+};
+
+type WindowWithWebkitAudioContext = Window & {
+	webkitAudioContext?: typeof AudioContext;
+};
 
 export const TrimmingTool = () => {
 	const [fileState, setFileState] = useState<{
@@ -56,6 +71,9 @@ export const TrimmingTool = () => {
 	const outputVideoRef = useRef<HTMLVideoElement | null>(null);
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
+	const fileInputId = useId();
+	const startTimeInputId = useId();
+	const endTimeInputId = useId();
 
 	const isVideoFile = (file: File): boolean => {
 		return (
@@ -111,8 +129,10 @@ export const TrimmingTool = () => {
 				isLoading: false,
 				error: "Please select a valid video file.",
 			}));
-			trackEvent("trimming_tool_invalid_file_type", {
-				fileType: selectedFile.type,
+			trackToolInteraction({
+				tool: "trimmer",
+				action: "invalid_file_type",
+				mime_category: analyticsMimeCategory(selectedFile.type),
 			});
 			return;
 		}
@@ -123,8 +143,10 @@ export const TrimmingTool = () => {
 				isLoading: false,
 				error: "File size exceeds 500MB limit.",
 			}));
-			trackEvent("trimming_tool_file_too_large", {
-				fileSize: selectedFile.size,
+			trackToolInteraction({
+				tool: "trimmer",
+				action: "file_too_large",
+				input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
 			});
 			return;
 		}
@@ -143,9 +165,11 @@ export const TrimmingTool = () => {
 					videoSrc: objectUrl,
 				}));
 
-				trackEvent("trimming_tool_file_selected", {
-					fileSize: selectedFile.size,
-					fileType: selectedFile.type,
+				trackToolInteraction({
+					tool: "trimmer",
+					action: "file_selected",
+					input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
+					mime_category: analyticsMimeCategory(selectedFile.type),
 				});
 			}, 10);
 		} catch (err) {
@@ -282,21 +306,21 @@ export const TrimmingTool = () => {
 			error: null,
 		}));
 
-		trackEvent("trimming_tool_trim_started", {
-			fileSize: fileState.file.size,
-			fileName: fileState.file.name,
-			startTime: trimState.startTime,
-			endTime: trimState.endTime,
-			duration: trimState.endTime - trimState.startTime,
+		trackToolInteraction({
+			tool: "trimmer",
+			action: "process_started",
+			operation: "trim",
+			input_size_bucket: analyticsByteSizeBucket(fileState.file.size),
+			duration_ms: (trimState.endTime - trimState.startTime) * 1000,
 		});
 
 		try {
 			await processTrim();
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Detailed processing error:", err);
 
 			let errorMessage = "Trimming failed: ";
-			if (err.message) {
+			if (err instanceof Error) {
 				errorMessage += err.message;
 			} else if (typeof err === "string") {
 				errorMessage += err;
@@ -309,12 +333,13 @@ export const TrimmingTool = () => {
 				error: errorMessage,
 			}));
 
-			trackEvent("trimming_tool_trim_failed", {
-				fileSize: fileState.file.size,
-				fileName: fileState.file.name,
-				error: err.message || "Unknown error",
-				startTime: trimState.startTime,
-				endTime: trimState.endTime,
+			trackToolInteraction({
+				tool: "trimmer",
+				action: "process_failed",
+				operation: "trim",
+				input_size_bucket: analyticsByteSizeBucket(fileState.file.size),
+				duration_ms: (trimState.endTime - trimState.startTime) * 1000,
+				failure_class: "processing_error",
 			});
 		} finally {
 			setProcessingState((prev) => ({
@@ -410,14 +435,21 @@ export const TrimmingTool = () => {
 				video.muted = false;
 				if (includeAudio) {
 					try {
+						const audioAwareVideo = video as AudioAwareVideoElement;
 						if (
-							(video as any).mozHasAudio ||
-							Boolean((video as any).webkitAudioDecodedByteCount) ||
-							Boolean((video as any).audioTracks?.length)
+							audioAwareVideo.mozHasAudio ||
+							Boolean(audioAwareVideo.webkitAudioDecodedByteCount) ||
+							Boolean(audioAwareVideo.audioTracks?.length)
 						) {
-							const audioContext = new (
-								window.AudioContext || (window as any).webkitAudioContext
-							)();
+							const AudioContextConstructor =
+								window.AudioContext ||
+								(window as WindowWithWebkitAudioContext).webkitAudioContext;
+							if (!AudioContextConstructor) {
+								throw new Error(
+									"AudioContext is not supported by this browser",
+								);
+							}
+							const audioContext = new AudioContextConstructor();
 							const source = audioContext.createMediaElementSource(video);
 							const destination = audioContext.createMediaStreamDestination();
 
@@ -467,13 +499,13 @@ export const TrimmingTool = () => {
 							outputUrl: url,
 						}));
 
-						trackEvent("trimming_tool_trim_completed", {
-							fileSize: fileState.file?.size,
-							fileName: fileState.file?.name,
-							outputSize: blob.size,
-							startTime: trimState.startTime,
-							endTime: trimState.endTime,
-							duration: trimState.endTime - trimState.startTime,
+						trackToolInteraction({
+							tool: "trimmer",
+							action: "process_completed",
+							operation: "trim",
+							input_size_bucket: analyticsByteSizeBucket(fileState.file?.size),
+							output_size_bucket: analyticsByteSizeBucket(blob.size),
+							duration_ms: (trimState.endTime - trimState.startTime) * 1000,
 						});
 
 						resolve();
@@ -585,11 +617,11 @@ export const TrimmingTool = () => {
 
 		const downloadFileName = `${baseName}_trimmed.${extension}`;
 
-		trackEvent("trimming_tool_download_clicked", {
-			fileName: downloadFileName,
-			startTime: trimState.startTime,
-			endTime: trimState.endTime,
-			duration: trimState.endTime - trimState.startTime,
+		trackToolInteraction({
+			tool: "trimmer",
+			action: "download",
+			operation: "trim",
+			duration_ms: (trimState.endTime - trimState.startTime) * 1000,
 		});
 
 		const link = document.createElement("a");
@@ -636,7 +668,7 @@ export const TrimmingTool = () => {
 			}
 		}
 
-		trackEvent("trimming_tool_reset");
+		trackToolInteraction({ tool: "trimmer", action: "reset" });
 	};
 
 	const handleStartTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -715,14 +747,19 @@ export const TrimmingTool = () => {
 		window.addEventListener("drop", preventDefaults);
 
 		return () => {
-			cleanupResources();
-			if (processingState.outputUrl) {
-				URL.revokeObjectURL(processingState.outputUrl);
-			}
 			window.removeEventListener("dragover", preventDefaults);
 			window.removeEventListener("drop", preventDefaults);
 		};
-	}, [cleanupResources, processingState.outputUrl]);
+	}, []);
+
+	useEffect(() => {
+		const videoSrc = fileState.videoSrc;
+		const outputUrl = processingState.outputUrl;
+		return () => {
+			if (videoSrc) URL.revokeObjectURL(videoSrc);
+			if (outputUrl) URL.revokeObjectURL(outputUrl);
+		};
+	}, [fileState.videoSrc, processingState.outputUrl]);
 
 	return (
 		<div className="w-full">
@@ -747,11 +784,19 @@ export const TrimmingTool = () => {
 					onError={handleVideoError}
 					playsInline
 					preload="metadata"
-				></video>
+				>
+					<track
+						kind="captions"
+						src={EMPTY_CAPTIONS_TRACK}
+						srcLang="en"
+						label="No captions available"
+					/>
+				</video>
 			</div>
 
 			{!fileState.file && (
-				<div
+				<label
+					htmlFor={fileInputId}
 					className={`border-2 border-dashed rounded-lg p-8 mb-6 flex flex-col items-center justify-center cursor-pointer transition-colors ${
 						isDragging
 							? "border-blue-500 bg-blue-50"
@@ -761,13 +806,11 @@ export const TrimmingTool = () => {
 					onDragLeave={handleDragLeave}
 					onDrop={handleDrop}
 					onDragEnter={handleDragOver}
-					onClick={() => fileInputRef.current?.click()}
 					style={{ minHeight: "200px" }}
-					role="button"
-					tabIndex={0}
 					aria-label="Drop video here or click to select"
 				>
 					<input
+						id={fileInputId}
 						type="file"
 						accept="video/*"
 						className="hidden"
@@ -777,6 +820,8 @@ export const TrimmingTool = () => {
 
 					<div className="text-center">
 						<svg
+							aria-hidden="true"
+							focusable="false"
 							className="mx-auto h-12 w-12 text-gray-400 mb-3"
 							fill="none"
 							viewBox="0 0 24 24"
@@ -799,7 +844,7 @@ export const TrimmingTool = () => {
 							Supported formats: {SUPPORTED_VIDEO_FORMATS.join(", ")}
 						</p>
 					</div>
-				</div>
+				</label>
 			)}
 
 			{fileState.isLoading && (
@@ -836,11 +881,15 @@ export const TrimmingTool = () => {
 
 							<div className="flex items-center space-x-4 mb-4">
 								<div className="flex-1">
-									<label className="block text-sm font-medium text-gray-700 mb-1">
+									<label
+										htmlFor={startTimeInputId}
+										className="block text-sm font-medium text-gray-700 mb-1"
+									>
 										Start Time: {formatTime(trimState.startTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
+											id={startTimeInputId}
 											type="range"
 											min="0"
 											max={videoState.info ? videoState.info.duration : 0}
@@ -850,11 +899,15 @@ export const TrimmingTool = () => {
 											className="flex-1"
 										/>
 										<button
+											type="button"
 											onClick={seekToStartTime}
 											className="p-1 bg-gray-200 rounded hover:bg-gray-300"
 											title="Seek to start time"
+											aria-label="Seek to start time"
 										>
 											<svg
+												aria-hidden="true"
+												focusable="false"
 												xmlns="http://www.w3.org/2000/svg"
 												className="h-4 w-4"
 												fill="none"
@@ -870,6 +923,7 @@ export const TrimmingTool = () => {
 											</svg>
 										</button>
 										<button
+											type="button"
 											onClick={setCurrentPositionAsStart}
 											className="p-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
 											title="Set current position as start"
@@ -880,11 +934,15 @@ export const TrimmingTool = () => {
 								</div>
 
 								<div className="flex-1">
-									<label className="block text-sm font-medium text-gray-700 mb-1">
+									<label
+										htmlFor={endTimeInputId}
+										className="block text-sm font-medium text-gray-700 mb-1"
+									>
 										End Time: {formatTime(trimState.endTime)}
 									</label>
 									<div className="flex items-center space-x-2">
 										<input
+											id={endTimeInputId}
 											type="range"
 											min={trimState.startTime}
 											max={videoState.info ? videoState.info.duration : 0}
@@ -894,11 +952,15 @@ export const TrimmingTool = () => {
 											className="flex-1"
 										/>
 										<button
+											type="button"
 											onClick={seekToEndTime}
 											className="p-1 bg-gray-200 rounded hover:bg-gray-300"
 											title="Seek to end time"
+											aria-label="Seek to end time"
 										>
 											<svg
+												aria-hidden="true"
+												focusable="false"
 												xmlns="http://www.w3.org/2000/svg"
 												className="h-4 w-4"
 												fill="none"
@@ -914,6 +976,7 @@ export const TrimmingTool = () => {
 											</svg>
 										</button>
 										<button
+											type="button"
 											onClick={setCurrentPositionAsEnd}
 											className="p-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
 											title="Set current position as end"
@@ -989,7 +1052,14 @@ export const TrimmingTool = () => {
 						className="w-full rounded-lg mb-4 bg-black"
 						style={{ maxHeight: "400px" }}
 						playsInline
-					></video>
+					>
+						<track
+							kind="captions"
+							src={EMPTY_CAPTIONS_TRACK}
+							srcLang="en"
+							label="No captions available"
+						/>
+					</video>
 					<div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
 						<Button
 							variant="primary"

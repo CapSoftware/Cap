@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
@@ -20,6 +21,10 @@ export function CustomDomainPage() {
 				data: undefined,
 			}),
 		onSuccess: (_, redirect) => {
+			trackEvent("onboarding_milestone_completed", {
+				milestone: "custom_domain",
+				skipped: !redirect,
+			});
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/invite-team");

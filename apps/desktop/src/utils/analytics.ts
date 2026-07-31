@@ -1,10 +1,13 @@
 import {
+	type ClientProductEventName,
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeProductEventProperties,
+	type ProductEventArguments,
 	type ProductEventInput,
 } from "@cap/analytics";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { Store } from "@tauri-apps/plugin-store";
 import { v4 as uuid } from "uuid";
@@ -162,7 +165,7 @@ async function sendProductEventBatch(events: ProductEventInput[]) {
 
 async function enqueueProductEvent(
 	eventId: string,
-	eventName: string,
+	eventName: ClientProductEventName,
 	occurredAt: string,
 	properties?: Record<string, unknown>,
 ) {
@@ -175,7 +178,11 @@ async function enqueueProductEvent(
 	]);
 	if (!telemetryEnabledCache) return;
 
-	const normalizedProperties = normalizeProductEventProperties(properties);
+	const normalizedProperties = normalizeProductEventProperties(
+		eventName,
+		properties,
+	);
+	if (normalizedProperties === null) return;
 	productAnalyticsQueue.enqueue({
 		eventId,
 		eventName,
@@ -188,17 +195,34 @@ async function enqueueProductEvent(
 	});
 }
 
-export function trackEvent(
-	eventName: string,
-	properties?: Record<string, unknown>,
+export function trackEvent<Name extends ClientProductEventName>(
+	eventName: Name,
+	...args: ProductEventArguments<Name>
 ) {
 	const eventId = uuid();
 	const occurredAt = new Date().toISOString();
+	if (!isCoreEventName(eventName) || isServerOnlyEventName(eventName)) return;
+	const normalizedProperties = normalizeProductEventProperties(
+		eventName,
+		args[0] as Record<string, unknown> | undefined,
+	);
+	if (normalizedProperties === null) return;
 
 	void isTelemetryEnabled().then((enabled) => {
 		if (!enabled) return;
-
-		void enqueueProductEvent(eventId, eventName, occurredAt, properties);
+		void invoke("capture_client_product_analytics_event", {
+			eventId,
+			eventName,
+			occurredAt,
+			properties: JSON.stringify(normalizedProperties ?? {}),
+		}).catch(() =>
+			enqueueProductEvent(
+				eventId,
+				eventName,
+				occurredAt,
+				normalizedProperties as Record<string, unknown> | undefined,
+			),
+		);
 	});
 }
 

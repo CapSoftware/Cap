@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { Base } from "./Base";
@@ -45,6 +46,10 @@ export function InviteTeamPage() {
 				data: undefined,
 			}),
 		onSuccess: (_, redirect: boolean) => {
+			trackEvent("onboarding_milestone_completed", {
+				milestone: "invite_team",
+				skipped: !redirect,
+			});
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/download");

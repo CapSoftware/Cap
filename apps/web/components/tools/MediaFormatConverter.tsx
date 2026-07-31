@@ -2,11 +2,20 @@
 
 import { Button } from "@cap/ui";
 import * as MediaParser from "@remotion/media-parser";
-import type { WebCodecsController } from "@remotion/webcodecs";
+import type {
+	ConvertMediaContainer,
+	ConvertMediaVideoCodec,
+	WebCodecsController,
+} from "@remotion/webcodecs";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { trackEvent } from "@/app/utils/analytics";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+	analyticsByteSizeBucket,
+	analyticsMimeCategory,
+	trackToolInteraction,
+} from "@/app/utils/analytics";
 
 export const SUPPORTED_FORMATS = {
 	video: ["mp4", "webm", "mov", "avi", "mkv"],
@@ -19,6 +28,8 @@ export const FORMAT_GROUPS = {
 	audio: ["mp3"],
 	image: ["gif"],
 };
+
+const EMPTY_CAPTIONS_TRACK = "data:text/vtt;charset=utf-8,WEBVTT%0A%0A";
 
 export const CONVERSION_CONFIGS: Record<
 	string,
@@ -180,6 +191,10 @@ export const MediaFormatConverter = ({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
 	const parserControllerRef = useRef<{ abort: () => void } | null>(null);
+	const fileInputId = useId();
+	const gifQualityId = useId();
+	const gifFpsId = useId();
+	const gifMaxWidthId = useId();
 
 	useEffect(() => {
 		if (
@@ -209,11 +224,16 @@ export const MediaFormatConverter = ({
 				setSupportedFormats((prev) => [...prev, "webm"]);
 			}
 
-			trackEvent(`${conversionPath}_tool_loaded`);
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "loaded",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+			});
 		};
 
 		checkSupport();
-	}, [conversionPath]);
+	}, [currentSourceFormat, currentTargetFormat]);
 
 	useEffect(() => {
 		const isSafariBrowser = /^((?!chrome|android).)*safari/i.test(
@@ -280,23 +300,35 @@ export const MediaFormatConverter = ({
 
 		if (!isValidType) {
 			setError(`Please select a ${currentSourceFormat.toUpperCase()} file.`);
-			trackEvent(`${conversionPath}_invalid_file_type`, {
-				fileType: selectedFile.type,
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "invalid_file_type",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+				mime_category: analyticsMimeCategory(selectedFile.type),
 			});
 			return;
 		}
 
 		if (selectedFile.size > 500 * 1024 * 1024) {
 			setError("File size exceeds 500MB limit.");
-			trackEvent(`${conversionPath}_file_too_large`, {
-				fileSize: selectedFile.size,
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "file_too_large",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+				input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
 			});
 			return;
 		}
 
 		setFile(selectedFile);
-		trackEvent(`${conversionPath}_file_selected`, {
-			fileSize: selectedFile.size,
+		trackToolInteraction({
+			tool: "media_converter",
+			action: "file_selected",
+			source_format: currentSourceFormat,
+			target_format: currentTargetFormat,
+			input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
 		});
 	};
 
@@ -332,9 +364,12 @@ export const MediaFormatConverter = ({
 		}
 		parserControllerRef.current = { abort: () => {} };
 
-		trackEvent(`${conversionPath}_conversion_started`, {
-			fileSize: file.size,
-			fileName: file.name,
+		trackToolInteraction({
+			tool: "media_converter",
+			action: "process_started",
+			source_format: currentSourceFormat,
+			target_format: currentTargetFormat,
+			input_size_bucket: analyticsByteSizeBucket(file.size),
 		});
 
 		try {
@@ -351,14 +386,14 @@ export const MediaFormatConverter = ({
 			} else {
 				await convertVideoFormat(file);
 			}
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Detailed conversion error:", err);
 
 			if (MediaParser.hasBeenAborted?.(err)) {
 				setError("Conversion was cancelled");
 			} else {
 				let errorMessage = "Conversion failed: ";
-				if (err.message) {
+				if (err instanceof Error) {
 					errorMessage += err.message;
 				} else if (typeof err === "string") {
 					errorMessage += err;
@@ -368,10 +403,13 @@ export const MediaFormatConverter = ({
 
 				setError(errorMessage);
 
-				trackEvent(`${conversionPath}_conversion_failed`, {
-					fileSize: file.size,
-					fileName: file.name,
-					error: err.message || "Unknown error",
+				trackToolInteraction({
+					tool: "media_converter",
+					action: "process_failed",
+					source_format: currentSourceFormat,
+					target_format: currentTargetFormat,
+					input_size_bucket: analyticsByteSizeBucket(file.size),
+					failure_class: "processing_error",
 				});
 			}
 		} finally {
@@ -410,10 +448,13 @@ export const MediaFormatConverter = ({
 			setOutputUrl(url);
 			setProgress(100);
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file?.size,
-				fileName: file?.name,
-				outputSize: blob.size,
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "process_completed",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+				input_size_bucket: analyticsByteSizeBucket(file?.size),
+				output_size_bucket: analyticsByteSizeBucket(blob.size),
 			});
 		} catch (error) {
 			console.error("Error extracting audio:", error);
@@ -554,10 +595,13 @@ export const MediaFormatConverter = ({
 
 			recordedChunksRef.current = [gifBlob];
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file?.size,
-				fileName: file?.name,
-				outputSize: gifBlob.size,
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "process_completed",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+				input_size_bucket: analyticsByteSizeBucket(file?.size),
+				output_size_bucket: analyticsByteSizeBucket(gifBlob.size),
 			});
 		} catch (error) {
 			console.error("Error converting video to GIF:", error);
@@ -629,19 +673,15 @@ export const MediaFormatConverter = ({
 
 			console.log("Video metadata:", metadata);
 
-			const outputContainer = currentTargetFormat === "webm" ? "webm" : "mp4";
-
-			let videoCodec;
-			if (outputContainer === "webm") {
-				videoCodec = "vp8";
-			} else {
-				videoCodec = "h264";
-			}
+			const outputContainer: ConvertMediaContainer =
+				currentTargetFormat === "webm" ? "webm" : "mp4";
+			const videoCodec: ConvertMediaVideoCodec =
+				outputContainer === "webm" ? "vp8" : "h264";
 
 			const result = await webcodecs.convertMedia({
 				src: inputFile,
-				container: outputContainer as any,
-				videoCodec: videoCodec as any,
+				container: outputContainer,
+				videoCodec,
 				onProgress,
 				controller: controller as unknown as WebCodecsController,
 				expectedDurationInSeconds: metadata.durationInSeconds || undefined,
@@ -655,10 +695,13 @@ export const MediaFormatConverter = ({
 
 			recordedChunksRef.current = [blob];
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file?.size,
-				fileName: file?.name,
-				outputSize: blob.size,
+			trackToolInteraction({
+				tool: "media_converter",
+				action: "process_completed",
+				source_format: currentSourceFormat,
+				target_format: currentTargetFormat,
+				input_size_bucket: analyticsByteSizeBucket(file?.size),
+				output_size_bucket: analyticsByteSizeBucket(blob.size),
 			});
 		} catch (error) {
 			console.error("Error converting video format:", error);
@@ -712,8 +755,11 @@ export const MediaFormatConverter = ({
 			newExtension,
 		);
 
-		trackEvent(`${conversionPath}_download_clicked`, {
-			fileName: downloadFileName,
+		trackToolInteraction({
+			tool: "media_converter",
+			action: "download",
+			source_format: currentSourceFormat,
+			target_format: currentTargetFormat,
 		});
 
 		const link = document.createElement("a");
@@ -738,7 +784,12 @@ export const MediaFormatConverter = ({
 		setError(null);
 		recordedChunksRef.current = [];
 
-		trackEvent(`${conversionPath}_reset`);
+		trackToolInteraction({
+			tool: "media_converter",
+			action: "reset",
+			source_format: currentSourceFormat,
+			target_format: currentTargetFormat,
+		});
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -875,11 +926,15 @@ export const MediaFormatConverter = ({
 					<h3 className="text-lg font-medium mb-3">GIF Settings</h3>
 					<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label className="block text-sm font-medium text-gray-700 mb-1">
+							<label
+								htmlFor={gifQualityId}
+								className="block text-sm font-medium text-gray-700 mb-1"
+							>
 								Quality (Lower is better)
 							</label>
 							<div className="flex items-center">
 								<input
+									id={gifQualityId}
 									type="range"
 									min="1"
 									max="20"
@@ -896,11 +951,15 @@ export const MediaFormatConverter = ({
 							</p>
 						</div>
 						<div>
-							<label className="block text-sm font-medium text-gray-700 mb-1">
+							<label
+								htmlFor={gifFpsId}
+								className="block text-sm font-medium text-gray-700 mb-1"
+							>
 								Frames Per Second
 							</label>
 							<div className="flex items-center">
 								<input
+									id={gifFpsId}
 									type="range"
 									min="5"
 									max="30"
@@ -915,11 +974,15 @@ export const MediaFormatConverter = ({
 							</p>
 						</div>
 						<div>
-							<label className="block text-sm font-medium text-gray-700 mb-1">
+							<label
+								htmlFor={gifMaxWidthId}
+								className="block text-sm font-medium text-gray-700 mb-1"
+							>
 								Max Width (px)
 							</label>
 							<div className="flex items-center">
 								<input
+									id={gifMaxWidthId}
 									type="range"
 									min="240"
 									max="1280"
@@ -954,7 +1017,8 @@ export const MediaFormatConverter = ({
 				</div>
 			)}
 
-			<div
+			<label
+				htmlFor={fileInputId}
 				className={`border-2 border-dashed rounded-lg p-8 mb-6 flex flex-col items-center justify-center cursor-pointer transition-colors ${
 					isDragging
 						? "border-blue-500 bg-blue-50"
@@ -963,10 +1027,10 @@ export const MediaFormatConverter = ({
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
-				onClick={() => fileInputRef.current?.click()}
 				style={{ minHeight: "200px" }}
 			>
 				<input
+					id={fileInputId}
 					type="file"
 					accept={getAcceptAttribute(currentSourceFormat)}
 					className="hidden"
@@ -978,6 +1042,8 @@ export const MediaFormatConverter = ({
 					{!file ? (
 						<>
 							<svg
+								aria-hidden="true"
+								focusable="false"
 								className="mx-auto h-12 w-12 text-gray-400 mb-3"
 								fill="none"
 								viewBox="0 0 24 24"
@@ -1000,6 +1066,8 @@ export const MediaFormatConverter = ({
 					) : (
 						<>
 							<svg
+								aria-hidden="true"
+								focusable="false"
 								className="mx-auto h-12 w-12 text-green-500 mb-3"
 								fill="none"
 								viewBox="0 0 24 24"
@@ -1019,7 +1087,7 @@ export const MediaFormatConverter = ({
 						</>
 					)}
 				</div>
-			</div>
+			</label>
 
 			{error && (
 				<div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600">
@@ -1052,21 +1120,34 @@ export const MediaFormatConverter = ({
 							controls
 							className="w-full rounded-lg mb-4 bg-black"
 							style={{ maxHeight: "300px" }}
-						></video>
+						>
+							<track
+								kind="captions"
+								src={EMPTY_CAPTIONS_TRACK}
+								srcLang="en"
+								label="No captions available"
+							/>
+						</video>
 					)}
 					{config.outputType.startsWith("audio/") && (
-						<audio
-							src={outputUrl}
-							controls
-							className="w-full rounded-lg mb-4"
-						></audio>
+						<audio src={outputUrl} controls className="w-full rounded-lg mb-4">
+							<track
+								kind="captions"
+								src={EMPTY_CAPTIONS_TRACK}
+								srcLang="en"
+								label="No captions available"
+							/>
+						</audio>
 					)}
 					{config.outputType.startsWith("image/") && (
-						<img
+						<Image
 							src={outputUrl}
 							alt="Converted GIF"
+							width={600}
+							height={300}
+							unoptimized
 							className="max-w-full rounded-lg mb-4 mx-auto"
-							style={{ maxHeight: "300px" }}
+							style={{ maxHeight: "300px", height: "auto", width: "auto" }}
 						/>
 					)}
 					<div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">

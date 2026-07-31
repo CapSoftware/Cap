@@ -1,8 +1,12 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { useEffect, useRef, useState } from "react";
-import { trackEvent } from "@/app/utils/analytics";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+	analyticsByteSizeBucket,
+	analyticsMimeCategory,
+	trackToolInteraction,
+} from "@/app/utils/analytics";
 
 const SPEED_OPTIONS = [
 	{ value: 0.25, label: "0.25x (Very Slow)" },
@@ -15,6 +19,7 @@ const SPEED_OPTIONS = [
 ];
 
 const SUPPORTED_VIDEO_FORMATS = ["mp4", "webm", "mov", "avi", "mkv"];
+const EMPTY_CAPTIONS_TRACK = "data:text/vtt;charset=utf-8,WEBVTT%0A%0A";
 
 export const SpeedController = () => {
 	const [file, setFile] = useState<File | null>(null);
@@ -36,6 +41,7 @@ export const SpeedController = () => {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
+	const fileInputId = useId();
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const selectedFile = e.target.files?.[0];
@@ -57,24 +63,30 @@ export const SpeedController = () => {
 
 		if (!isVideoFile) {
 			setError("Please select a valid video file.");
-			trackEvent("speed_controller_invalid_file_type", {
-				fileType: selectedFile.type,
+			trackToolInteraction({
+				tool: "speed_controller",
+				action: "invalid_file_type",
+				mime_category: analyticsMimeCategory(selectedFile.type),
 			});
 			return;
 		}
 
 		if (selectedFile.size > 500 * 1024 * 1024) {
 			setError("File size exceeds 500MB limit.");
-			trackEvent("speed_controller_file_too_large", {
-				fileSize: selectedFile.size,
+			trackToolInteraction({
+				tool: "speed_controller",
+				action: "file_too_large",
+				input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
 			});
 			return;
 		}
 
 		setFile(selectedFile);
-		trackEvent("speed_controller_file_selected", {
-			fileSize: selectedFile.size,
-			fileType: selectedFile.type,
+		trackToolInteraction({
+			tool: "speed_controller",
+			action: "file_selected",
+			input_size_bucket: analyticsByteSizeBucket(selectedFile.size),
+			mime_category: analyticsMimeCategory(selectedFile.type),
 		});
 
 		const videoElement = document.createElement("video");
@@ -118,10 +130,12 @@ export const SpeedController = () => {
 		setProgress(0);
 
 		const action = selectedSpeed < 1 ? "slowing_down" : "speeding_up";
-		trackEvent(`speed_controller_${action}_started`, {
-			fileSize: file.size,
-			fileName: file.name,
-			speedFactor: selectedSpeed,
+		trackToolInteraction({
+			tool: "speed_controller",
+			action: "process_started",
+			operation: action,
+			input_size_bucket: analyticsByteSizeBucket(file.size),
+			speed_factor: selectedSpeed,
 		});
 
 		try {
@@ -131,11 +145,11 @@ export const SpeedController = () => {
 			const fileUrl = URL.createObjectURL(file);
 			await adjustVideoSpeed(fileUrl);
 			URL.revokeObjectURL(fileUrl);
-		} catch (err: any) {
+		} catch (err: unknown) {
 			console.error("Detailed processing error:", err);
 
 			let errorMessage = "Processing failed: ";
-			if (err.message) {
+			if (err instanceof Error) {
 				errorMessage += err.message;
 			} else if (typeof err === "string") {
 				errorMessage += err;
@@ -145,11 +159,13 @@ export const SpeedController = () => {
 
 			setError(errorMessage);
 
-			trackEvent(`speed_controller_${action}_failed`, {
-				fileSize: file.size,
-				fileName: file.name,
-				error: err.message || "Unknown error",
-				speedFactor: selectedSpeed,
+			trackToolInteraction({
+				tool: "speed_controller",
+				action: "process_failed",
+				operation: action,
+				input_size_bucket: analyticsByteSizeBucket(file.size),
+				speed_factor: selectedSpeed,
+				failure_class: "processing_error",
 			});
 		} finally {
 			setIsProcessing(false);
@@ -278,17 +294,14 @@ export const SpeedController = () => {
 
 						setOutputUrl(url);
 
-						trackEvent(
-							`speed_controller_${
-								selectedSpeed < 1 ? "slowing_down" : "speeding_up"
-							}_completed`,
-							{
-								fileSize: file?.size,
-								fileName: file?.name,
-								outputSize: blob.size,
-								speedFactor: selectedSpeed,
-							},
-						);
+						trackToolInteraction({
+							tool: "speed_controller",
+							action: "process_completed",
+							operation: selectedSpeed < 1 ? "slowing_down" : "speeding_up",
+							input_size_bucket: analyticsByteSizeBucket(file?.size),
+							output_size_bucket: analyticsByteSizeBucket(blob.size),
+							speed_factor: selectedSpeed,
+						});
 
 						videoRef.current = null;
 						mediaRecorderRef.current = null;
@@ -425,9 +438,10 @@ export const SpeedController = () => {
 
 		const downloadFileName = `${baseName}_${selectedSpeed}x.${extension}`;
 
-		trackEvent(`speed_controller_download_clicked`, {
-			fileName: downloadFileName,
-			speedFactor: selectedSpeed,
+		trackToolInteraction({
+			tool: "speed_controller",
+			action: "download",
+			speed_factor: selectedSpeed,
 		});
 
 		const link = document.createElement("a");
@@ -460,7 +474,7 @@ export const SpeedController = () => {
 		setVideoInfo(null);
 		recordedChunksRef.current = [];
 
-		trackEvent(`speed_controller_reset`);
+		trackToolInteraction({ tool: "speed_controller", action: "reset" });
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -492,13 +506,14 @@ export const SpeedController = () => {
 				{selectedSpeed < 1 ? "Slow Down" : "Speed Up"} Your Video
 			</h2>
 
-			<div className="mb-6">
-				<label className="block text-sm font-medium text-gray-700 mb-2">
+			<fieldset className="mb-6">
+				<legend className="block text-sm font-medium text-gray-700 mb-2">
 					Select Speed
-				</label>
+				</legend>
 				<div className="flex flex-wrap gap-2 justify-center">
 					{SPEED_OPTIONS.map((option) => (
 						<button
+							type="button"
 							key={option.value}
 							onClick={() => setSelectedSpeed(option.value)}
 							className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -511,9 +526,10 @@ export const SpeedController = () => {
 						</button>
 					))}
 				</div>
-			</div>
+			</fieldset>
 
-			<div
+			<label
+				htmlFor={fileInputId}
 				className={`border-2 border-dashed rounded-lg p-8 mb-6 flex flex-col items-center justify-center cursor-pointer transition-colors ${
 					isDragging
 						? "border-blue-500 bg-blue-50"
@@ -522,10 +538,10 @@ export const SpeedController = () => {
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
-				onClick={() => fileInputRef.current?.click()}
 				style={{ minHeight: "200px" }}
 			>
 				<input
+					id={fileInputId}
 					type="file"
 					accept="video/*"
 					className="hidden"
@@ -537,6 +553,8 @@ export const SpeedController = () => {
 					{!file ? (
 						<>
 							<svg
+								aria-hidden="true"
+								focusable="false"
 								className="mx-auto h-12 w-12 text-gray-400 mb-3"
 								fill="none"
 								viewBox="0 0 24 24"
@@ -559,6 +577,8 @@ export const SpeedController = () => {
 					) : (
 						<>
 							<svg
+								aria-hidden="true"
+								focusable="false"
 								className="mx-auto h-12 w-12 text-green-500 mb-3"
 								fill="none"
 								viewBox="0 0 24 24"
@@ -587,7 +607,7 @@ export const SpeedController = () => {
 						</>
 					)}
 				</div>
-			</div>
+			</label>
 
 			{error && (
 				<div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600">
@@ -620,7 +640,14 @@ export const SpeedController = () => {
 						controls
 						className="w-full rounded-lg mb-4 bg-black"
 						style={{ maxHeight: "400px" }}
-					></video>
+					>
+						<track
+							kind="captions"
+							src={EMPTY_CAPTIONS_TRACK}
+							srcLang="en"
+							label="No captions available"
+						/>
+					</video>
 					<div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
 						<Button
 							variant="primary"

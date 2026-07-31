@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { startTransition } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 export const Bottom = () => {
@@ -19,6 +20,10 @@ export const Bottom = () => {
 				data: undefined,
 			}),
 		onSuccess: () => {
+			trackEvent("onboarding_milestone_completed", {
+				milestone: "skip_all",
+				skipped: true,
+			});
 			startTransition(() => {
 				router.push("/dashboard/caps");
 				router.refresh();

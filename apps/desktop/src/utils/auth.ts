@@ -216,7 +216,7 @@ function parseAuthParams(url: URL) {
 }
 
 async function processAuthData(data: AuthParams) {
-	trackEvent("user_signed_in", { platform: "desktop" });
+	trackEvent("user_signed_in");
 
 	await authStore.set({
 		secret:

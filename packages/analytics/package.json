@@ -4,6 +4,9 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"type": "module",
+	"dependencies": {
+		"@noble/hashes": "1.8.0"
+	},
 	"scripts": {
 		"test": "vitest run"
 	},

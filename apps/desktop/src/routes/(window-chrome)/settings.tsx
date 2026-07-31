@@ -403,7 +403,7 @@ export default function Settings(props: RouteSectionProps) {
 
 	const handleAuth = async () => {
 		if (auth()) {
-			trackEvent("user_signed_out", { platform: "desktop" });
+			trackEvent("user_signed_out");
 			await clearLocalAuth();
 		}
 	};

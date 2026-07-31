@@ -4832,6 +4832,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             cli::get_cli_install_status,
             cli::install_cli,
             cli::uninstall_cli,
+            product_analytics::capture_client_product_analytics_event,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,

@@ -8,6 +8,17 @@ const mocks = vi.hoisted(() => {
 
 	return {
 		state,
+		invoke: vi.fn(
+			async (
+				_command: string,
+				_input?: {
+					eventId?: string;
+					eventName?: string;
+					occurredAt?: string;
+					properties?: string;
+				},
+			) => undefined,
+		),
 		fetch: vi.fn(async (_url: string, _request?: RequestInit) => ({
 			ok: true,
 			status: 202,
@@ -16,6 +27,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.5.6" }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mocks.fetch }));
 vi.mock("@tauri-apps/plugin-store", () => ({
 	Store: {
@@ -60,6 +72,8 @@ describe("desktop analytics", () => {
 		vi.useFakeTimers();
 		mocks.state.enableTelemetry = true;
 		mocks.state.settingsListener = undefined;
+		mocks.invoke.mockReset();
+		mocks.invoke.mockResolvedValue(undefined);
 		mocks.fetch.mockClear();
 	});
 
@@ -67,57 +81,56 @@ describe("desktop analytics", () => {
 		vi.useRealTimers();
 	});
 
-	it("sends a normalized core event through the first-party endpoint", async () => {
+	it("persists a normalized core event through the native outbox", async () => {
 		const { trackEvent } = await loadAnalytics();
 		trackEvent("create_shareable_link_clicked", {
+			resolution: "1080p",
 			fps: 60,
 			has_existing_auth: true,
-			ignored: { nested: true },
 		});
+		await flushMicrotasks();
+
+		expect(mocks.invoke).toHaveBeenCalledOnce();
+		const [command, input] = mocks.invoke.mock.calls[0] ?? [];
+		expect(command).toBe("capture_client_product_analytics_event");
+		expect(input).toMatchObject({
+			eventName: "create_shareable_link_clicked",
+			properties: JSON.stringify({
+				resolution: "1080p",
+				fps: 60,
+				has_existing_auth: true,
+			}),
+		});
+		expect(input?.eventId).toMatch(/^[0-9a-f-]{36}$/);
+		expect(input?.occurredAt).toEqual(expect.any(String));
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("sends registered finite desktop interactions", async () => {
+		const { trackEvent } = await loadAnalytics();
+		trackEvent("camera_selected", { enabled: true });
 		await flushMicrotasks();
 		await vi.advanceTimersByTimeAsync(250);
 
-		expect(mocks.fetch).toHaveBeenCalledOnce();
-		const [url, request] = mocks.fetch.mock.calls[0] ?? [];
-		expect(url).toBe("https://cap.so/api/events");
-		expect(request).toMatchObject({
-			method: "POST",
-			headers: {
-				authorization: "Bearer token",
-				"content-type": "application/json",
-			},
-		});
-		const body = JSON.parse(String(request?.body));
-		expect(body.events).toHaveLength(1);
-		expect(body.events[0]).toMatchObject({
-			eventName: "create_shareable_link_clicked",
-			anonymousId: "install-id",
-			sessionId: "process-session-id",
-			platform: "desktop",
-			appVersion: "0.5.6",
-			properties: { fps: 60, has_existing_auth: true },
-		});
-	});
-
-	it("drops events outside the bounded product catalog", async () => {
-		const { trackEvent } = await loadAnalytics();
-		trackEvent("camera_selected", { source: "dropdown" });
-		await flushMicrotasks();
-		await vi.runAllTimersAsync();
-
-		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.invoke).toHaveBeenCalledOnce();
 	});
 
 	it("never accepts a client-authored revenue event", async () => {
 		const { trackEvent } = await loadAnalytics();
-		trackEvent("purchase_completed", { quantity: 10 });
+		const unsafeTrackEvent = trackEvent as unknown as (
+			eventName: string,
+			properties?: Record<string, unknown>,
+		) => void;
+		unsafeTrackEvent("purchase_completed", { quantity: 10 });
 		await flushMicrotasks();
 		await vi.runAllTimersAsync();
 
 		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
 
 	it("drops permanent collector errors without retrying", async () => {
+		mocks.invoke.mockRejectedValue(new Error("native bridge unavailable"));
 		mocks.fetch.mockResolvedValue({ ok: false, status: 400 });
 		const { trackEvent } = await loadAnalytics();
 		trackEvent("export_button_clicked");
@@ -128,6 +141,7 @@ describe("desktop analytics", () => {
 	});
 
 	it("retries transient collector errors once", async () => {
+		mocks.invoke.mockRejectedValue(new Error("native bridge unavailable"));
 		mocks.fetch.mockResolvedValue({ ok: false, status: 503 });
 		const { trackEvent } = await loadAnalytics();
 		trackEvent("export_button_clicked");
@@ -139,6 +153,7 @@ describe("desktop analytics", () => {
 	});
 
 	it("clears queued events as soon as telemetry is disabled", async () => {
+		mocks.invoke.mockRejectedValue(new Error("native bridge unavailable"));
 		const { trackEvent } = await loadAnalytics();
 		trackEvent("export_button_clicked");
 		await flushMicrotasks();
@@ -146,6 +161,7 @@ describe("desktop analytics", () => {
 		await vi.runAllTimersAsync();
 
 		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.invoke).toHaveBeenCalledOnce();
 	});
 
 	it("does not send events when telemetry starts disabled", async () => {
@@ -155,5 +171,6 @@ describe("desktop analytics", () => {
 		await vi.runAllTimersAsync();
 
 		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
 });

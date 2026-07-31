@@ -8,6 +8,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
@@ -61,6 +62,10 @@ export function OrganizationSetupPage({
 				});
 			}),
 		onSuccess: () => {
+			trackEvent("onboarding_milestone_completed", {
+				milestone: "organization_setup",
+				skipped: false,
+			});
 			startTransition(() => {
 				router.push("/onboarding/custom-domain");
 				router.refresh();

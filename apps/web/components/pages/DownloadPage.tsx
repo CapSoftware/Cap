@@ -30,14 +30,13 @@ export const DownloadPage = () => {
 
 	const trackDownloadClick = (
 		ctaLocation: string,
-		targetUrl: string,
+		_targetUrl: string,
 		target?: string,
 	) => {
 		trackEvent("download_cta_clicked", {
 			source_page: "download_page",
 			cta_location: ctaLocation,
 			...(target ? { target } : {}),
-			target_url: targetUrl,
 			detected_platform: platform ?? "unknown",
 			is_intel: Boolean(isIntel),
 		});

@@ -57,7 +57,6 @@ export async function requestEmailCode({
 			method: "email",
 			is_signup: isSignup,
 			auth_surface: authSurface,
-			email_domain: normalizedEmail.split("@").at(1),
 		});
 
 		return normalizedEmail;

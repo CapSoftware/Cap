@@ -519,6 +519,28 @@ export function ExportPage() {
 			: settings.format === "Gif"
 				? "GIF"
 				: "video";
+	const exportAnalyticsProperties = (
+		destination: "clipboard" | "file" | "share_link",
+	) => ({
+		destination,
+		format: exportFileExtension(),
+		resolution: settings.resolution.value,
+		fps: settings.fps,
+	});
+	const exportFailureClass = (error: unknown) => {
+		if (isCancelled() || isCancellationError(error))
+			return "cancelled" as const;
+		const message = error instanceof Error ? error.message.toLowerCase() : "";
+		if (message.includes("sign in") || message.includes("auth"))
+			return "authentication" as const;
+		if (message.includes("plan") || message.includes("upgrade"))
+			return "plan" as const;
+		if (message.includes("network") || message.includes("upload"))
+			return "network" as const;
+		if (message.includes("render") || message.includes("export"))
+			return "render" as const;
+		return "unknown" as const;
+	};
 
 	const handleCancel = async () => {
 		if (
@@ -548,6 +570,7 @@ export function ExportPage() {
 			if (exportState.type !== "idle") return;
 			const releaseExportSession = await beginExportSessionGuard();
 			try {
+				trackEvent("export_started", exportAnalyticsProperties("clipboard"));
 				setExportState(reconcile({ action: "copy", type: "starting" }));
 
 				const outputPath = await exportWithSettings((progress) => {
@@ -565,6 +588,10 @@ export function ExportPage() {
 			}
 		},
 		onError: (error) => {
+			trackEvent("export_failed", {
+				...exportAnalyticsProperties("clipboard"),
+				failure_class: exportFailureClass(error),
+			});
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;
@@ -575,6 +602,7 @@ export function ExportPage() {
 			setExportState(reconcile({ type: "idle" }));
 		},
 		onSuccess() {
+			trackEvent("export_completed", exportAnalyticsProperties("clipboard"));
 			setExportState({ type: "done" });
 			toast.success(`${exportedAssetLabel()} exported to clipboard`);
 		},
@@ -584,6 +612,7 @@ export function ExportPage() {
 		mutationFn: async () => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
+			trackEvent("export_started", exportAnalyticsProperties("file"));
 			const extension = exportFileExtension();
 			const customBpp =
 				advancedMode() && isCustomBpp() ? compressionBpp() : null;
@@ -620,6 +649,10 @@ export function ExportPage() {
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			trackEvent("export_failed", {
+				...exportAnalyticsProperties("file"),
+				failure_class: exportFailureClass(error),
+			});
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState({ type: "idle" });
 				return;
@@ -632,6 +665,7 @@ export function ExportPage() {
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
+			trackEvent("export_completed", exportAnalyticsProperties("file"));
 			toast.success(`${exportedAssetLabel()} exported to file`);
 		},
 	}));
@@ -642,12 +676,13 @@ export function ExportPage() {
 			if (exportState.type !== "idle") return;
 			const releaseExportSession = await beginExportSessionGuard();
 			try {
+				trackEvent("export_started", exportAnalyticsProperties("share_link"));
 				setExportState(reconcile({ action: "upload", type: "starting" }));
 
 				const existingAuth = await authStore.get();
 				if (!existingAuth) createSignInMutation();
 				trackEvent("create_shareable_link_clicked", {
-					resolution: settings.resolution,
+					resolution: settings.resolution.value,
 					fps: settings.fps,
 					has_existing_auth: !!existingAuth,
 				});
@@ -714,10 +749,15 @@ export function ExportPage() {
 			}
 		},
 		onSuccess: async () => {
+			trackEvent("export_completed", exportAnalyticsProperties("share_link"));
 			await refetchMeta();
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			trackEvent("export_failed", {
+				...exportAnalyticsProperties("share_link"),
+				failure_class: exportFailureClass(error),
+			});
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	CORE_EVENT_NAMES,
+	createProductEventPayloadHash,
 	createProductEventRows,
 	isCoreEventName,
 	isServerOnlyEventName,
@@ -32,82 +33,69 @@ describe("product analytics contract", () => {
 });
 
 describe("normalizeProductEventProperties", () => {
-	it("retains only finite scalar values", () => {
+	it("accepts only the declared schema and value types", () => {
 		expect(
-			normalizeProductEventProperties({
-				valid_string: "value",
-				valid_number: 42,
-				valid_boolean: false,
-				valid_null: null,
-				not_finite: Number.POSITIVE_INFINITY,
-				object_value: { nested: true },
-				array_value: ["nope"],
+			normalizeProductEventProperties("auth_started", {
+				method: "email",
+				is_signup: true,
+				auth_surface: "signup",
 			}),
 		).toEqual({
-			valid_string: "value",
-			valid_number: 42,
-			valid_boolean: false,
-			valid_null: null,
+			method: "email",
+			is_signup: true,
+			auth_surface: "signup",
 		});
 	});
 
-	it("drops invalid keys and truncates strings", () => {
+	it("rejects unknown property keys instead of silently dropping them", () => {
+		expect(
+			normalizeProductEventProperties("auth_started", {
+				method: "email",
+				is_signup: true,
+				auth_surface: "signup",
+				email: "private@example.com",
+			}),
+		).toBeNull();
+	});
+
+	it("rejects missing required fields, invalid enums and non-finite numbers", () => {
+		expect(
+			normalizeProductEventProperties("auth_started", {
+				method: "sms",
+				is_signup: true,
+			}),
+		).toBeNull();
+		expect(
+			normalizeProductEventProperties("page_engagement", {
+				engaged_ms: Number.POSITIVE_INFINITY,
+				max_scroll_depth: 50,
+			}),
+		).toBeNull();
+	});
+
+	it("rejects overlong string values", () => {
 		const longValue = "x".repeat(
 			PRODUCT_ANALYTICS_LIMITS.propertyStringLength + 20,
 		);
 		expect(
-			normalizeProductEventProperties({
-				valid_key: longValue,
-				"Invalid-Key": "drop",
-				["x".repeat(PRODUCT_ANALYTICS_LIMITS.propertyKeyLength + 1)]: "drop",
+			normalizeProductEventProperties("tool_interaction", {
+				tool: "trimmer",
+				action: "process_failed",
+				failure_class: longValue,
 			}),
-		).toEqual({
-			valid_key: "x".repeat(PRODUCT_ANALYTICS_LIMITS.propertyStringLength),
-		});
+		).toBeNull();
 	});
 
-	it("caps the number of retained properties", () => {
-		const properties = Object.fromEntries(
-			Array.from(
-				{ length: PRODUCT_ANALYTICS_LIMITS.propertyCount + 10 },
-				(_, i) => [`property_${i}`, i],
-			),
-		);
-		const normalized = normalizeProductEventProperties(properties);
-		expect(Object.keys(normalized ?? {})).toHaveLength(
-			PRODUCT_ANALYTICS_LIMITS.propertyCount,
-		);
+	it("returns undefined for an event whose schema has no properties", () => {
+		expect(normalizeProductEventProperties("user_signed_up")).toBeUndefined();
 	});
 
-	it("caps the serialized property payload", () => {
-		const properties = Object.fromEntries(
-			Array.from({ length: PRODUCT_ANALYTICS_LIMITS.propertyCount }, (_, i) => [
-				`property_${i}`,
-				"🙂".repeat(PRODUCT_ANALYTICS_LIMITS.propertyStringLength),
-			]),
-		);
-		const normalized = normalizeProductEventProperties(properties);
+	it("rejects customer content aliases", () => {
 		expect(
-			new TextEncoder().encode(JSON.stringify(normalized)).byteLength,
-		).toBeLessThanOrEqual(PRODUCT_ANALYTICS_LIMITS.propertiesBytes);
-	});
-
-	it("returns undefined when nothing is safe to retain", () => {
-		expect(normalizeProductEventProperties()).toBeUndefined();
-		expect(normalizeProductEventProperties({ nested: {} })).toBeUndefined();
-	});
-
-	it("drops property keys that could contain customer content", () => {
-		expect(
-			normalizeProductEventProperties({
+			normalizeProductEventProperties("recording_completed", {
 				transcript: "private",
-				file_path: "/Users/private/recording.cap",
-				error: "upload failed at /Users/private/recording.cap",
-				reason: "raw operating system error",
-				video_id: "private-recording-id",
-				status: "completed",
 			}),
-		).toEqual({ status: "completed" });
+		).toBeNull();
 	});
 });
 
@@ -115,7 +103,7 @@ describe("normalizeProductEventInput", () => {
 	const now = Date.parse("2026-07-12T12:00:00.000Z");
 	const baseEvent = {
 		eventId: "event-1",
-		eventName: "recording_started",
+		eventName: "export_button_clicked",
 		occurredAt: "2026-07-12T11:59:59.000Z",
 		anonymousId: "anonymous-1",
 		sessionId: "session-1",
@@ -144,23 +132,27 @@ describe("normalizeProductEventInput", () => {
 		expect(normalizeProductEventInput(event, now)).toBeNull();
 	});
 
-	it("truncates bounded context and sanitizes properties", () => {
+	it("truncates bounded context", () => {
 		const normalized = normalizeProductEventInput(
 			{
 				...baseEvent,
 				pathname: `/${"short/".repeat(PRODUCT_ANALYTICS_LIMITS.pathnameLength)}`,
-				properties: {
-					status: "completed",
-					content: "private",
-					nested: { invalid: true },
-				},
 			},
 			now,
 		);
 		expect(normalized?.pathname).toHaveLength(
 			PRODUCT_ANALYTICS_LIMITS.pathnameLength,
 		);
-		expect(normalized?.properties).toEqual({ status: "completed" });
+		expect(normalized?.properties).toBeUndefined();
+	});
+
+	it("rejects an invalid property payload as a whole", () => {
+		expect(
+			normalizeProductEventInput(
+				{ ...baseEvent, properties: { content: "private" } },
+				now,
+			),
+		).toBeNull();
 	});
 
 	it("removes query strings and high-cardinality path segments", () => {
@@ -207,6 +199,15 @@ describe("normalizeProductEventInput", () => {
 });
 
 describe("createProductEventRows", () => {
+	it("fingerprints canonical payloads independent of object key order", () => {
+		expect(createProductEventPayloadHash({ a: 1, b: 2 })).toBe(
+			createProductEventPayloadHash({ b: 2, a: 1 }),
+		);
+		expect(createProductEventPayloadHash({ a: 1, b: 2 })).not.toBe(
+			createProductEventPayloadHash({ a: 1, b: 3 }),
+		);
+	});
+
 	it("adds trusted server context without accepting client identity", () => {
 		const [row] = createProductEventRows(
 			[
@@ -216,7 +217,13 @@ describe("createProductEventRows", () => {
 					occurredAt: "2026-07-12T12:00:00.000Z",
 					anonymousId: "guest-checkout",
 					platform: "server",
-					properties: { plan: "monthly" },
+					properties: {
+						payment_status: "paid",
+						subscription_status: "active",
+						is_first_purchase: true,
+						is_guest_checkout: true,
+						is_onboarding: false,
+					},
 				},
 			],
 			{
@@ -230,12 +237,14 @@ describe("createProductEventRows", () => {
 
 		expect(row).toMatchObject({
 			event_id: "event-1",
+			payload_hash: expect.stringMatching(/^[0-9a-f]{32}$/),
 			event_name: "purchase_completed",
 			source: "server",
 			user_id: "user-1",
 			organization_id: "org-1",
 			country: "CY",
-			properties: '{"plan":"monthly"}',
+			properties:
+				'{"payment_status":"paid","subscription_status":"active","is_first_purchase":true,"is_guest_checkout":true,"is_onboarding":false}',
 		});
 	});
 });

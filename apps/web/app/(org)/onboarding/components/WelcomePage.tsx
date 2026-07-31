@@ -4,6 +4,7 @@ import { Button, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
@@ -20,6 +21,10 @@ export function WelcomePage() {
 				data,
 			}),
 		onSuccess: () => {
+			trackEvent("onboarding_milestone_completed", {
+				milestone: "welcome",
+				skipped: false,
+			});
 			startTransition(() => {
 				router.push("/onboarding/organization-setup");
 				router.refresh();
