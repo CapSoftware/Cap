@@ -9,12 +9,11 @@ SQL >
 	{% if not defined(copy_run_id) %}
 		{{ error('copy_run_id is required') }}
 	{% end %}
-	WITH {{String(copy_run_id)}} AS requested_copy_run_id
 	SELECT
-		(SELECT count() FROM product_traffic_daily_exact WHERE copy_run_id = requested_copy_run_id) AS traffic_markers,
-		(SELECT count() FROM product_traffic_pages_daily_exact WHERE copy_run_id = requested_copy_run_id) AS traffic_page_markers,
-		(SELECT count() FROM product_activation_daily_exact WHERE copy_run_id = requested_copy_run_id) AS activation_markers,
-		(SELECT count() FROM product_creator_retention_exact WHERE copy_run_id = requested_copy_run_id) AS retention_markers
-	WHERE throwIf(length(requested_copy_run_id) < 8 OR length(requested_copy_run_id) > 128, 'copy_run_id has an invalid length') = 0
+		(SELECT count() FROM product_traffic_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS traffic_markers,
+		(SELECT count() FROM product_traffic_pages_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS traffic_page_markers,
+		(SELECT count() FROM product_activation_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS activation_markers,
+		(SELECT count() FROM product_creator_retention_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS retention_markers
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
 
 TYPE ENDPOINT

@@ -251,6 +251,7 @@ test("staging copy markers are excluded from every decision endpoint", () => {
 	);
 	assert.match(assertions, /copy_run_id is required/);
 	assert.match(assertions, /traffic_markers/);
+	assert.doesNotMatch(assertions, /requested_copy_run_id/);
 	assert.match(assertions, /retention_markers/);
 });
 
