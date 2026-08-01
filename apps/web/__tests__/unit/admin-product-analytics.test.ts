@@ -5,9 +5,13 @@ vi.mock("server-only", () => ({}));
 import {
 	AdminAnalyticsConfigurationError,
 	AdminAnalyticsRequestError,
+	assertAdminAnalyticsDateRange,
 	buildAdminAnalyticsEndpointUrl,
 	calculateHealthWindowStart,
+	decodeAnalyticsFreshnessResponse,
+	decodeProductEventsResponse,
 	decodeTrafficOverviewResponse,
+	fetchOptionalRollbackEndpoint,
 } from "@/app/admin/analytics/tinybird";
 
 describe("admin analytics Tinybird client", () => {
@@ -52,6 +56,86 @@ describe("admin analytics Tinybird client", () => {
 		expect(calculateHealthWindowStart("2026-07-20", "2026-07-31")).toBe(
 			"2026-07-20",
 		);
+	});
+
+	it("allows two year-over-year windows but rejects dates beyond retention", () => {
+		expect(() =>
+			assertAdminAnalyticsDateRange("2024-06-01", "2026-07-31"),
+		).not.toThrow();
+		expect(() =>
+			assertAdminAnalyticsDateRange("2024-05-01", "2026-07-31"),
+		).toThrow("no longer than 800 UTC days");
+	});
+
+	it("degrades only a missing rollback-era optional endpoint", async () => {
+		const missing = async () => {
+			throw new AdminAnalyticsRequestError("missing", 404);
+		};
+		await expect(
+			fetchOptionalRollbackEndpoint(
+				missing,
+				"product_identity_funnel",
+				{},
+				() => ({ linkedUsers: 1 }),
+			),
+		).resolves.toEqual({ available: false, rows: [] });
+
+		const unavailable = async () => {
+			throw new AdminAnalyticsRequestError("unavailable", 503);
+		};
+		await expect(
+			fetchOptionalRollbackEndpoint(
+				unavailable,
+				"product_identity_funnel",
+				{},
+				() => ({ linkedUsers: 1 }),
+			),
+		).rejects.toMatchObject({ status: 503 });
+	});
+
+	it("decodes the retained aggregate schema during rollback", () => {
+		expect(
+			decodeProductEventsResponse({
+				data: [
+					{
+						date: "2026-07-31",
+						event_name: "purchase_completed",
+						source: "server",
+						platform: "web",
+						app_version: "web",
+						hostname: "cap.so",
+						country: "GB",
+						device: "desktop",
+						browser: "Chrome",
+						os: "macOS",
+						channel: "direct",
+						plan_id: "price_pro",
+						payment_status: "paid",
+						subscription_status: "active",
+						currency: "GBP",
+						billing_interval: "month",
+						events: 1,
+						actors: 1,
+						users: 1,
+						organizations: 1,
+						revenue_minor: 2_500,
+					},
+				],
+			}),
+		).toMatchObject([{ changeKind: "", revenueMinor: 2_500 }]);
+		expect(
+			decodeAnalyticsFreshnessResponse({
+				data: [
+					{
+						latest_received_hour: "2026-07-31 10:00:00",
+						health_freshness_ms: 1_000,
+						product_calculated_at: "2026-07-31 10:01:00",
+						traffic_calculated_at: "2026-07-31 10:01:00",
+						retention_calculated_at: "2026-07-31 10:01:00",
+					},
+				],
+			}),
+		).toMatchObject([{ identityCalculatedAt: "" }]);
 	});
 
 	it("decodes numeric Tinybird values without accepting malformed rows", () => {

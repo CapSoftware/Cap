@@ -1,7 +1,7 @@
 DESCRIPTION >
 	Rebuild exact decision metrics from one non-conflicting canonical payload per event ID.
 
-TOKEN product_events_agent_read READ
+TOKEN product_events_copy_runner READ
 
 NODE snapshot_product_events_daily_exact_node
 SQL >
@@ -11,8 +11,10 @@ SQL >
 	{% end %}
 	SELECT
 		now64(3) AS calculated_at,
+		'' AS copy_run_id,
 		toDate(occurred_at, 'UTC') AS date,
 		event_name,
+		schema_version,
 		source,
 		platform,
 		app_version,
@@ -24,11 +26,38 @@ SQL >
 		channel,
 		traffic_class,
 		synthetic_run_id,
-		JSONExtractString(properties, 'price_id') AS plan_id,
+		if(event_name = 'subscription_changed', JSONExtractString(properties, 'new_price_id'), JSONExtractString(properties, 'price_id')) AS plan_id,
 		if(event_name = 'purchase_completed', JSONExtractString(properties, 'payment_status'), '') AS payment_status,
-		if(event_name IN ('purchase_completed', 'trial_started'), JSONExtractString(properties, 'subscription_status'), '') AS subscription_status,
-		if(event_name IN ('purchase_completed', 'trial_started', 'subscription_renewed', 'subscription_refunded'), upper(JSONExtractString(properties, 'currency')), '') AS currency,
+		multiIf(
+			event_name IN ('purchase_completed', 'trial_started'), JSONExtractString(properties, 'subscription_status'),
+			event_name = 'trial_converted', JSONExtractString(properties, 'new_status'),
+			event_name = 'subscription_changed', JSONExtractString(properties, 'new_status'),
+			event_name = 'subscription_cancelled', JSONExtractString(properties, 'status'),
+			''
+		) AS subscription_status,
+		if(event_name IN ('purchase_completed', 'trial_started', 'subscription_renewed', 'subscription_refunded', 'subscription_payment_failed'), upper(JSONExtractString(properties, 'currency')), '') AS currency,
 		if(event_name IN ('purchase_completed', 'trial_started'), JSONExtractString(properties, 'billing_interval'), '') AS billing_interval,
+		if(event_name = 'subscription_changed', JSONExtractString(properties, 'change_kind'), '') AS change_kind,
+		if(event_name IN ('trial_converted', 'subscription_changed'), JSONExtractString(properties, 'previous_status'), '') AS previous_status,
+		if(event_name IN ('trial_converted', 'subscription_changed'), JSONExtractString(properties, 'new_status'), '') AS new_status,
+		if(event_name = 'subscription_changed', JSONExtractString(properties, 'previous_price_id'), '') AS previous_plan_id,
+		if(event_name IN ('checkout_started', 'guest_checkout_started', 'purchase_completed', 'trial_started'), JSONExtractInt(properties, 'quantity'), 0) AS quantity,
+		if(event_name = 'subscription_changed', JSONExtractInt(properties, 'previous_quantity'), 0) AS previous_quantity,
+		if(event_name = 'subscription_changed', JSONExtractInt(properties, 'new_quantity'), 0) AS new_quantity,
+		if(event_name = 'subscription_changed' AND JSONExtractString(properties, 'change_kind') = 'seats', JSONExtractInt(properties, 'new_quantity') - JSONExtractInt(properties, 'previous_quantity'), 0) AS seat_delta,
+		if(event_name = 'purchase_completed', if(JSONExtractBool(properties, 'is_first_purchase'), 'true', 'false'), '') AS first_purchase,
+		if(event_name IN ('purchase_completed', 'trial_started'), if(JSONExtractBool(properties, 'is_guest_checkout'), 'true', 'false'), '') AS guest_checkout,
+		if(event_name IN ('checkout_started', 'purchase_completed', 'trial_started'), if(JSONExtractBool(properties, 'is_onboarding'), 'true', 'false'), '') AS onboarding,
+		if(event_name = 'subscription_cancelled', if(JSONExtractBool(properties, 'cancel_at_period_end'), 'true', 'false'), '') AS cancel_at_period_end,
+		if(event_name = 'subscription_refunded', if(JSONExtractBool(properties, 'fully_refunded'), 'true', 'false'), '') AS fully_refunded,
+		if(event_name = 'subscription_cancelled', JSONExtractInt(properties, 'ended_at'), 0) AS ended_at,
+		if(event_name = 'trial_started', JSONExtractInt(properties, 'trial_end_at'), 0) AS trial_end_at,
+		if(event_name = 'subscription_payment_failed', JSONExtractInt(properties, 'amount_due_minor'), 0) AS amount_due_minor,
+		if(event_name = 'subscription_payment_failed', JSONExtractInt(properties, 'attempt_count'), 0) AS attempt_count,
+		if(event_name = 'experiment_exposed', JSONExtractString(properties, 'experiment_id'), '') AS experiment_id,
+		if(event_name = 'experiment_exposed', JSONExtractString(properties, 'variant'), '') AS experiment_variant,
+		if(event_name = 'experiment_exposed', JSONExtractString(properties, 'assignment_version'), '') AS assignment_version,
+		toUInt64(sum(if(event_name = 'analytics_delivery_loss', greatest(JSONExtractInt(properties, 'count'), 0), 0))) AS delivery_loss_count,
 		toUInt64(count()) AS events,
 		uniqExactState(if(user_id != '', concat('user:', user_id), if(anonymous_id != '', concat('anonymous:', anonymous_id), concat('session:', session_id)))) AS actors,
 		uniqExactStateIf(user_id, user_id != '') AS users,
@@ -40,7 +69,29 @@ SQL >
 			0
 		))) AS revenue_minor
 	FROM product_events_canonical_v1
-	GROUP BY date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval
+	GROUP BY date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3),
+		{{String(copy_run_id)}},
+		today(),
+		'',
+		toUInt16(0),
+		'', '', '', '', '', '', '', '', '', '',
+		'', '', '', '', '', '', '', '', '', '',
+		toInt64(0), toInt64(0), toInt64(0), toInt64(0),
+		'', '', '', '', '',
+		toInt64(0), toInt64(0), toInt64(0), toInt64(0),
+		'', '', '',
+		toUInt64(0),
+		toUInt64(0),
+		uniqExactStateIf('', 0),
+		uniqExactStateIf('', 0),
+		uniqExactStateIf('', 0),
+		toInt64(0)
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
 
 TYPE COPY
 TARGET_DATASOURCE product_events_daily_exact

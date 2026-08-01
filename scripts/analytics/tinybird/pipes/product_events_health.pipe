@@ -23,7 +23,8 @@ SQL >
 		sum(missing_identity_events) AS missing_identity_events,
 		quantilesTDigestMerge(0.5, 0.95, 0.99)(ingestion_lag_ms) AS ingestion_lag_ms
 	FROM product_events_health_hourly_exact
-	WHERE hour >= toStartOfHour(toDateTime64({{DateTime64(start_time)}}, 3))
+	WHERE copy_run_id = ''
+		AND hour >= toStartOfHour(toDateTime64({{DateTime64(start_time)}}, 3))
 		AND hour <= toDateTime64({{DateTime64(end_time)}}, 3)
 		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
 		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}

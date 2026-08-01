@@ -207,6 +207,43 @@ function eventCount(data: AdminAnalyticsDashboard, eventName: string): number {
 	);
 }
 
+function eventValue(
+	data: AdminAnalyticsDashboard,
+	eventName: string,
+	field: "attemptCount" | "seatDelta",
+): number {
+	return sumBy(
+		data.productEvents.filter((row) => row.eventName === eventName),
+		(row) => row[field] * row.events,
+	);
+}
+
+function eventMaxValue(
+	data: AdminAnalyticsDashboard,
+	eventName: string,
+	field: "attemptCount",
+): number {
+	return Math.max(
+		0,
+		...data.productEvents
+			.filter((row) => row.eventName === eventName)
+			.map((row) => row[field]),
+	);
+}
+
+function eventCountWhere(
+	data: AdminAnalyticsDashboard,
+	eventName: string,
+	predicate: (row: AdminAnalyticsDashboard["productEvents"][number]) => boolean,
+): number {
+	return sumBy(
+		data.productEvents.filter(
+			(row) => row.eventName === eventName && predicate(row),
+		),
+		(row) => row.events,
+	);
+}
+
 function retentionRate(
 	data: AdminAnalyticsDashboard,
 	cohortDay: number,
@@ -788,6 +825,16 @@ function RevenueSection({ data }: { data: AdminAnalyticsDashboard }) {
 					value={formatInteger(eventCount(data, "purchase_completed"))}
 				/>
 				<MetricCard
+					label="First purchases"
+					value={formatInteger(
+						eventCountWhere(
+							data,
+							"purchase_completed",
+							(row) => row.firstPurchase === "true",
+						),
+					)}
+				/>
+				<MetricCard
 					label="Renewals"
 					value={formatInteger(eventCount(data, "subscription_renewed"))}
 				/>
@@ -797,7 +844,29 @@ function RevenueSection({ data }: { data: AdminAnalyticsDashboard }) {
 				/>
 				<MetricCard
 					label="Plan or seat changes"
-					value={formatInteger(eventCount(data, "subscription_changed"))}
+					value={formatInteger(
+						eventCountWhere(
+							data,
+							"subscription_changed",
+							(row) => row.changeKind === "plan" || row.changeKind === "seats",
+						),
+					)}
+				/>
+				<MetricCard
+					label="Net seat change"
+					value={formatInteger(
+						eventValue(data, "subscription_changed", "seatDelta"),
+					)}
+				/>
+				<MetricCard
+					label="Scheduled cancellations"
+					value={formatInteger(
+						eventCountWhere(
+							data,
+							"subscription_changed",
+							(row) => row.changeKind === "cancellation_scheduled",
+						),
+					)}
 				/>
 				<MetricCard
 					label="Cancellations"
@@ -808,8 +877,24 @@ function RevenueSection({ data }: { data: AdminAnalyticsDashboard }) {
 					value={formatInteger(eventCount(data, "subscription_refunded"))}
 				/>
 				<MetricCard
+					label="Full refunds"
+					value={formatInteger(
+						eventCountWhere(
+							data,
+							"subscription_refunded",
+							(row) => row.fullyRefunded === "true",
+						),
+					)}
+				/>
+				<MetricCard
 					label="Payment failures"
 					value={formatInteger(eventCount(data, "subscription_payment_failed"))}
+				/>
+				<MetricCard
+					label="Highest collection attempt"
+					value={formatInteger(
+						eventMaxValue(data, "subscription_payment_failed", "attemptCount"),
+					)}
 				/>
 				{revenue.map(([currency, minorUnits]) => (
 					<MetricCard
@@ -824,11 +909,176 @@ function RevenueSection({ data }: { data: AdminAnalyticsDashboard }) {
 	);
 }
 
+function ExperimentationSection({ data }: { data: AdminAnalyticsDashboard }) {
+	const exposures = new Map<
+		string,
+		{
+			experimentId: string;
+			variant: string;
+			assignmentVersion: string;
+			exposures: number;
+			actorDays: number;
+			userDays: number;
+		}
+	>();
+	for (const row of data.productEvents) {
+		if (row.eventName !== "experiment_exposed" || !row.experimentId) continue;
+		const key = [
+			row.experimentId,
+			row.experimentVariant,
+			row.assignmentVersion,
+		].join("\u0000");
+		const current = exposures.get(key) ?? {
+			experimentId: row.experimentId,
+			variant: row.experimentVariant,
+			assignmentVersion: row.assignmentVersion,
+			exposures: 0,
+			actorDays: 0,
+			userDays: 0,
+		};
+		current.exposures += row.events;
+		current.actorDays += row.actors;
+		current.userDays += row.users;
+		exposures.set(key, current);
+	}
+	const rows = [...exposures.values()].sort(
+		(left, right) =>
+			left.experimentId.localeCompare(right.experimentId) ||
+			left.assignmentVersion.localeCompare(right.assignmentVersion) ||
+			left.variant.localeCompare(right.variant),
+	);
+
+	return (
+		<Section
+			description="Exposure is recorded when a stable assignment is rendered. Counts never infer assignment from a later conversion; actor-day and user-day totals are additive daily uniques, not selected-range unique people."
+			title="Experiments"
+		>
+			{rows.length === 0 ? (
+				<EmptyState>No experiment exposures in this period.</EmptyState>
+			) : (
+				<div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+					<table className="min-w-full divide-y divide-gray-200 text-sm">
+						<thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+							<tr>
+								<th className="px-4 py-3 font-medium">Experiment</th>
+								<th className="px-4 py-3 font-medium">Version</th>
+								<th className="px-4 py-3 font-medium">Variant</th>
+								<th className="px-4 py-3 text-right font-medium">Exposures</th>
+								<th className="px-4 py-3 text-right font-medium">Actor-days</th>
+								<th className="px-4 py-3 text-right font-medium">User-days</th>
+							</tr>
+						</thead>
+						<tbody className="divide-y divide-gray-100">
+							{rows.map((row) => (
+								<tr
+									key={`${row.experimentId}:${row.assignmentVersion}:${row.variant}`}
+								>
+									<td className="px-4 py-3 font-medium text-gray-950">
+										{row.experimentId}
+									</td>
+									<td className="px-4 py-3 text-gray-600">
+										{row.assignmentVersion}
+									</td>
+									<td className="px-4 py-3 text-gray-600">{row.variant}</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.exposures)}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.actorDays)}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.userDays)}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</Section>
+	);
+}
+
+function IdentityFunnelSection({ data }: { data: AdminAnalyticsDashboard }) {
+	if (!data.identityFunnelAvailable) {
+		return (
+			<Section
+				description="The current Tinybird rollback target predates privacy-safe identity cohorts. Traffic and product metrics remain available."
+				title="Acquisition to paid conversion"
+			>
+				<EmptyState>
+					Identity funnel metrics are unavailable on this deployment.
+				</EmptyState>
+			</Section>
+		);
+	}
+	if (data.identityFunnel.length === 0) {
+		return (
+			<Section
+				description="No privacy-safe identity cohorts match the selected filters."
+				title="Acquisition to paid conversion"
+			>
+				<EmptyState>No identity funnel activity in this period.</EmptyState>
+			</Section>
+		);
+	}
+	const total = (field: keyof (typeof data.identityFunnel)[number]) =>
+		data.identityFunnel.reduce((sum, row) => {
+			const value = row[field];
+			return sum + (typeof value === "number" ? value : 0);
+		}, 0);
+	return (
+		<Section
+			description="Privacy-safe cohorts join the pre-auth anonymous acquisition touch to authoritative user outcomes. No identity mapping is returned to this page."
+			title="Acquisition to paid conversion"
+		>
+			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<MetricCard
+					label="Linked visitors"
+					value={formatInteger(total("linkedVisitors"))}
+				/>
+				<MetricCard
+					label="Linked users"
+					value={formatInteger(total("linkedUsers"))}
+				/>
+				<MetricCard
+					label="Signed-up users"
+					value={formatInteger(total("signupUsers"))}
+				/>
+				<MetricCard
+					label="Authenticated checkout users"
+					value={formatInteger(total("authenticatedCheckoutUsers"))}
+				/>
+				<MetricCard
+					label="Guest checkout visitors"
+					value={formatInteger(total("guestCheckoutVisitors"))}
+				/>
+				<MetricCard
+					label="Guest purchasers"
+					value={formatInteger(total("guestPurchasers"))}
+				/>
+				<MetricCard
+					label="Cross-device checkout users"
+					value={formatInteger(total("crossDeviceCheckoutUsers"))}
+				/>
+				<MetricCard
+					label="Purchasers"
+					value={formatInteger(total("purchasers"))}
+				/>
+			</div>
+		</Section>
+	);
+}
+
 function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
 	const freshness = data.freshness[0];
 	const health = data.health[0];
 	const status = qualityStatus(data);
 	const lag = health?.ingestionLagMs ?? [];
+	const reportedDeliveryLosses = sumBy(
+		data.productEvents,
+		(row) => row.deliveryLossCount,
+	);
 	return (
 		<Section
 			description={`Delivery quality covers ${data.healthWindowStart} through the selected end date and is capped at 31 days.`}
@@ -873,6 +1123,11 @@ function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
 					label="Future-clock events"
 					value={formatInteger(health?.futureEvents ?? 0)}
 				/>
+				<MetricCard
+					detail="Deduplicated durable client loss summaries"
+					label="Reported delivery losses"
+					value={formatInteger(reportedDeliveryLosses)}
+				/>
 				<MetricCard label="Ingestion p50" value={formatDuration(lag[0] ?? 0)} />
 				<MetricCard label="Ingestion p95" value={formatDuration(lag[1] ?? 0)} />
 				<MetricCard label="Ingestion p99" value={formatDuration(lag[2] ?? 0)} />
@@ -899,6 +1154,11 @@ function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
 					detail="UTC"
 					label="Retention calculated"
 					value={formatTimestamp(freshness?.retentionCalculatedAt ?? "")}
+				/>
+				<MetricCard
+					detail="UTC"
+					label="Identity funnel calculated"
+					value={formatTimestamp(freshness?.identityCalculatedAt ?? "")}
 				/>
 			</div>
 		</Section>
@@ -937,8 +1197,16 @@ function Definitions() {
 			"Server-authoritative tracked revenue in original-currency minor units. No FX or decimal conversion is applied here.",
 		],
 		[
+			"Identity stitching",
+			"A server-authoritative link or settled guest purchase connects one anonymous acquisition identity to an authenticated user. The endpoint returns cohort counts only, never the mapping.",
+		],
+		[
 			"Deduplication",
 			"Decision-facing endpoints are built from stable event IDs. Duplicate deliveries remain visible in health but count once in metrics.",
+		],
+		[
+			"Experiment exposure",
+			"A typed, stable assignment rendered to an actor. Variants are read only from exposure events and are never inferred from conversion behavior.",
 		],
 		[
 			"Privacy",
@@ -1026,8 +1294,10 @@ export default async function AdminAnalyticsPage({
 				<TrafficSection data={data} />
 				<PagesSection data={data} />
 				<AcquisitionSection data={data} />
+				<IdentityFunnelSection data={data} />
 				<ProductSection data={data} filters={filters} />
 				<RevenueSection data={data} />
+				<ExperimentationSection data={data} />
 				<Definitions />
 			</div>
 		</main>

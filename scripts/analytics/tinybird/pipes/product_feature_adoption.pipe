@@ -15,8 +15,13 @@ SQL >
 			uniqExactMerge(users) AS users,
 			uniqExactMerge(organizations) AS organizations
 		FROM product_events_daily_exact
-		WHERE traffic_class = 'external'
-			AND synthetic_run_id = ''
+		WHERE {% if defined(synthetic_run_id) %}
+				synthetic_run_id = {{String(synthetic_run_id)}}
+				AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+			{% else %}
+				traffic_class = 'external'
+				AND synthetic_run_id = ''
+			{% end %}
 			AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 			AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 			{% if defined(event_name) %} AND event_name = {{String(event_name)}} {% end %}
@@ -33,6 +38,7 @@ SQL >
 			{% if defined(payment_status) %} AND payment_status = {{String(payment_status)}} {% end %}
 			{% if defined(subscription_status) %} AND subscription_status = {{String(subscription_status)}} {% end %}
 			{% if defined(currency) %} AND currency = upper({{String(currency)}}) {% end %}
+			{% if defined(change_kind) %} AND change_kind = {{String(change_kind)}} {% end %}
 		GROUP BY date, event_name
 	)
 	SELECT

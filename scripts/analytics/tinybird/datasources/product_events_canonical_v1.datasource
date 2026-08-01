@@ -1,6 +1,9 @@
 DESCRIPTION >
 	Canonical non-conflicting product events rebuilt from append-only delivery attempts.
 
+TOKEN product_events_copy_runner APPEND
+TOKEN product_events_erasure_lookup READ
+
 SCHEMA >
 	event_id String,
 	payload_hash FixedString(32),
@@ -32,5 +35,5 @@ SCHEMA >
 ENGINE MergeTree
 ENGINE_PARTITION_KEY toYYYYMM(received_at)
 ENGINE_SORTING_KEY (occurred_at, event_name, event_id)
-ENGINE_TTL toDateTime(received_at) + INTERVAL 400 DAY
+ENGINE_TTL toDateTime(received_at) + INTERVAL 800 DAY
 ENGINE_SETTINGS index_granularity = 8192

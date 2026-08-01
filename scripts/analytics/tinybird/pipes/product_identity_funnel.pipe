@@ -1,0 +1,58 @@
+DESCRIPTION >
+	Query complete privacy-safe anonymous acquisition to authenticated conversion totals without raw identifiers.
+
+TOKEN product_events_agent_read READ
+
+NODE product_identity_funnel_node
+SQL >
+	%
+	WITH totals AS (
+		SELECT
+			sum(linked_visitors) AS linked_visitors,
+			sum(linked_users) AS linked_users,
+			sum(signup_users) AS signup_users,
+			sum(organizations) AS organizations,
+			sum(guest_checkout_visitors) AS guest_checkout_visitors,
+			sum(guest_purchasers) AS guest_purchasers,
+			sum(authenticated_checkout_users) AS authenticated_checkout_users,
+			sum(web_checkout_users) AS web_checkout_users,
+			sum(desktop_checkout_users) AS desktop_checkout_users,
+			sum(mobile_checkout_users) AS mobile_checkout_users,
+			sum(cross_device_checkout_users) AS cross_device_checkout_users,
+			sum(trial_users) AS trial_users,
+			sum(purchasers) AS purchasers
+		FROM product_identity_funnel_exact
+		WHERE copy_run_id = ''
+			AND {% if defined(synthetic_run_id) %}
+				synthetic_run_id = {{String(synthetic_run_id)}}
+				AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+			{% else %}
+				synthetic_run_id = ''
+			{% end %}
+			AND cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+			AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+			{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
+			{% if defined(source) %} AND attribution_source = {{String(source)}} {% end %}
+			{% if defined(medium) %} AND attribution_medium = {{String(medium)}} {% end %}
+			{% if defined(campaign) %} AND campaign = {{String(campaign)}} {% end %}
+			{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
+	)
+	SELECT
+		toUInt64(linked_visitors) AS linked_visitors,
+		toUInt64(linked_users) AS linked_users,
+		toUInt64(signup_users) AS signup_users,
+		toUInt64(organizations) AS organizations,
+		toUInt64(guest_checkout_visitors) AS guest_checkout_visitors,
+		toUInt64(guest_purchasers) AS guest_purchasers,
+		toUInt64(authenticated_checkout_users) AS authenticated_checkout_users,
+		toUInt64(web_checkout_users) AS web_checkout_users,
+		toUInt64(desktop_checkout_users) AS desktop_checkout_users,
+		toUInt64(mobile_checkout_users) AS mobile_checkout_users,
+		toUInt64(cross_device_checkout_users) AS cross_device_checkout_users,
+		toUInt64(trial_users) AS trial_users,
+		toUInt64(purchasers) AS purchasers,
+		round(if(linked_users = 0, 0, signup_users * 100.0 / linked_users), 2) AS signup_rate,
+		round(if(linked_users = 0, 0, purchasers * 100.0 / linked_users), 2) AS purchase_rate
+	FROM totals
+
+TYPE ENDPOINT

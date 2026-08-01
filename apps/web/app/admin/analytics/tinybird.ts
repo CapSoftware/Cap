@@ -9,6 +9,7 @@ const ADMIN_ANALYTICS_ENDPOINTS = [
 	"product_activation",
 	"product_creator_activity",
 	"product_creator_retention",
+	"product_identity_funnel",
 	"product_events_daily",
 	"product_feature_adoption",
 	"product_events_health",
@@ -112,6 +113,7 @@ export type CreatorRetentionRow = {
 export type ProductEventRow = {
 	date: string;
 	eventName: string;
+	schemaVersion: number;
 	source: string;
 	platform: string;
 	appVersion: string;
@@ -126,11 +128,50 @@ export type ProductEventRow = {
 	subscriptionStatus: string;
 	currency: string;
 	billingInterval: string;
+	changeKind: string;
+	previousStatus: string;
+	newStatus: string;
+	previousPlanId: string;
+	quantity: number;
+	previousQuantity: number;
+	newQuantity: number;
+	seatDelta: number;
+	firstPurchase: string;
+	guestCheckout: string;
+	onboarding: string;
+	cancelAtPeriodEnd: string;
+	fullyRefunded: string;
+	endedAt: number;
+	trialEndAt: number;
+	amountDueMinor: number;
+	attemptCount: number;
+	experimentId: string;
+	experimentVariant: string;
+	assignmentVersion: string;
+	deliveryLossCount: number;
 	events: number;
 	actors: number;
 	users: number;
 	organizations: number;
 	revenueMinor: number;
+};
+
+export type IdentityFunnelRow = {
+	linkedVisitors: number;
+	linkedUsers: number;
+	signupUsers: number;
+	organizations: number;
+	guestCheckoutVisitors: number;
+	guestPurchasers: number;
+	authenticatedCheckoutUsers: number;
+	webCheckoutUsers: number;
+	desktopCheckoutUsers: number;
+	mobileCheckoutUsers: number;
+	crossDeviceCheckoutUsers: number;
+	trialUsers: number;
+	purchasers: number;
+	signupRate: number;
+	purchaseRate: number;
 };
 
 export type FeatureAdoptionRow = {
@@ -159,6 +200,7 @@ export type AnalyticsFreshnessRow = {
 	productCalculatedAt: string;
 	trafficCalculatedAt: string;
 	retentionCalculatedAt: string;
+	identityCalculatedAt: string;
 };
 
 export type AdminAnalyticsDashboard = {
@@ -170,6 +212,8 @@ export type AdminAnalyticsDashboard = {
 	activation: ActivationRow[];
 	creatorActivity: CreatorActivityRow[];
 	creatorRetention: CreatorRetentionRow[];
+	identityFunnel: IdentityFunnelRow[];
+	identityFunnelAvailable: boolean;
 	productEvents: ProductEventRow[];
 	featureAdoption: FeatureAdoptionRow[];
 	health: ProductEventsHealthRow[];
@@ -185,7 +229,10 @@ export class AdminAnalyticsConfigurationError extends Error {
 }
 
 export class AdminAnalyticsRequestError extends Error {
-	constructor(message: string) {
+	constructor(
+		message: string,
+		readonly status?: number,
+	) {
 		super(message);
 		this.name = "AdminAnalyticsRequestError";
 	}
@@ -205,6 +252,12 @@ function readString(row: UnknownRecord, key: string): string {
 	return value;
 }
 
+function readOptionalString(row: UnknownRecord, key: string): string {
+	const value = row[key];
+	if (value === undefined || value === null) return "";
+	return readString(row, key);
+}
+
 function readNumber(row: UnknownRecord, key: string): number {
 	const value = row[key];
 	const parsed = typeof value === "number" ? value : Number(value);
@@ -214,6 +267,12 @@ function readNumber(row: UnknownRecord, key: string): number {
 		);
 	}
 	return parsed;
+}
+
+function readOptionalNumber(row: UnknownRecord, key: string): number {
+	const value = row[key];
+	if (value === undefined || value === null) return 0;
+	return readNumber(row, key);
 }
 
 function readNumberArray(row: UnknownRecord, key: string): number[] {
@@ -376,10 +435,31 @@ function decodeCreatorRetentionRow(row: UnknownRecord): CreatorRetentionRow {
 	};
 }
 
+function decodeIdentityFunnelRow(row: UnknownRecord): IdentityFunnelRow {
+	return {
+		linkedVisitors: readNumber(row, "linked_visitors"),
+		linkedUsers: readNumber(row, "linked_users"),
+		signupUsers: readNumber(row, "signup_users"),
+		organizations: readNumber(row, "organizations"),
+		guestCheckoutVisitors: readNumber(row, "guest_checkout_visitors"),
+		guestPurchasers: readNumber(row, "guest_purchasers"),
+		authenticatedCheckoutUsers: readNumber(row, "authenticated_checkout_users"),
+		webCheckoutUsers: readNumber(row, "web_checkout_users"),
+		desktopCheckoutUsers: readNumber(row, "desktop_checkout_users"),
+		mobileCheckoutUsers: readNumber(row, "mobile_checkout_users"),
+		crossDeviceCheckoutUsers: readNumber(row, "cross_device_checkout_users"),
+		trialUsers: readNumber(row, "trial_users"),
+		purchasers: readNumber(row, "purchasers"),
+		signupRate: readNumber(row, "signup_rate"),
+		purchaseRate: readNumber(row, "purchase_rate"),
+	};
+}
+
 function decodeProductEventRow(row: UnknownRecord): ProductEventRow {
 	return {
 		date: readString(row, "date"),
 		eventName: readString(row, "event_name"),
+		schemaVersion: readOptionalNumber(row, "schema_version"),
 		source: readString(row, "source"),
 		platform: readString(row, "platform"),
 		appVersion: readString(row, "app_version"),
@@ -394,6 +474,27 @@ function decodeProductEventRow(row: UnknownRecord): ProductEventRow {
 		subscriptionStatus: readString(row, "subscription_status"),
 		currency: readString(row, "currency"),
 		billingInterval: readString(row, "billing_interval"),
+		changeKind: readOptionalString(row, "change_kind"),
+		previousStatus: readOptionalString(row, "previous_status"),
+		newStatus: readOptionalString(row, "new_status"),
+		previousPlanId: readOptionalString(row, "previous_plan_id"),
+		quantity: readOptionalNumber(row, "quantity"),
+		previousQuantity: readOptionalNumber(row, "previous_quantity"),
+		newQuantity: readOptionalNumber(row, "new_quantity"),
+		seatDelta: readOptionalNumber(row, "seat_delta"),
+		firstPurchase: readOptionalString(row, "first_purchase"),
+		guestCheckout: readOptionalString(row, "guest_checkout"),
+		onboarding: readOptionalString(row, "onboarding"),
+		cancelAtPeriodEnd: readOptionalString(row, "cancel_at_period_end"),
+		fullyRefunded: readOptionalString(row, "fully_refunded"),
+		endedAt: readOptionalNumber(row, "ended_at"),
+		trialEndAt: readOptionalNumber(row, "trial_end_at"),
+		amountDueMinor: readOptionalNumber(row, "amount_due_minor"),
+		attemptCount: readOptionalNumber(row, "attempt_count"),
+		experimentId: readOptionalString(row, "experiment_id"),
+		experimentVariant: readOptionalString(row, "experiment_variant"),
+		assignmentVersion: readOptionalString(row, "assignment_version"),
+		deliveryLossCount: readOptionalNumber(row, "delivery_loss_count"),
 		events: readNumber(row, "events"),
 		actors: readNumber(row, "actors"),
 		users: readNumber(row, "users"),
@@ -437,7 +538,18 @@ function decodeAnalyticsFreshnessRow(
 		productCalculatedAt: readString(row, "product_calculated_at"),
 		trafficCalculatedAt: readString(row, "traffic_calculated_at"),
 		retentionCalculatedAt: readString(row, "retention_calculated_at"),
+		identityCalculatedAt: readOptionalString(row, "identity_calculated_at"),
 	};
+}
+
+export function decodeProductEventsResponse(value: unknown): ProductEventRow[] {
+	return decodeTinybirdRows(value, decodeProductEventRow);
+}
+
+export function decodeAnalyticsFreshnessResponse(
+	value: unknown,
+): AnalyticsFreshnessRow[] {
+	return decodeTinybirdRows(value, decodeAnalyticsFreshnessRow);
 }
 
 type FetchEndpoint = <T>(
@@ -477,6 +589,7 @@ function createFetchEndpoint(): FetchEndpoint {
 		if (!response.ok) {
 			throw new AdminAnalyticsRequestError(
 				`Tinybird endpoint ${endpoint} returned HTTP ${response.status}`,
+				response.status,
 			);
 		}
 
@@ -492,6 +605,25 @@ function createFetchEndpoint(): FetchEndpoint {
 	};
 }
 
+export async function fetchOptionalRollbackEndpoint<T>(
+	fetchEndpoint: FetchEndpoint,
+	endpoint: AdminAnalyticsEndpoint,
+	params: QueryParams,
+	decodeRow: (row: UnknownRecord) => T,
+): Promise<{ available: boolean; rows: T[] }> {
+	try {
+		return {
+			available: true,
+			rows: await fetchEndpoint(endpoint, params, decodeRow),
+		};
+	} catch (error) {
+		if (error instanceof AdminAnalyticsRequestError && error.status === 404) {
+			return { available: false, rows: [] };
+		}
+		throw error;
+	}
+}
+
 export function calculateHealthWindowStart(
 	startDate: string,
 	endDate: string,
@@ -505,21 +637,28 @@ export function calculateHealthWindowStart(
 		.slice(0, 10);
 }
 
-export async function fetchAdminAnalyticsDashboard(
-	filters: AdminAnalyticsFilters,
-): Promise<AdminAnalyticsDashboard> {
-	const rangeStart = new Date(`${filters.startDate}T00:00:00.000Z`);
-	const rangeEnd = new Date(`${filters.endDate}T00:00:00.000Z`);
+export function assertAdminAnalyticsDateRange(
+	startDate: string,
+	endDate: string,
+) {
+	const rangeStart = new Date(`${startDate}T00:00:00.000Z`);
+	const rangeEnd = new Date(`${endDate}T00:00:00.000Z`);
 	if (
 		!Number.isFinite(rangeStart.getTime()) ||
 		!Number.isFinite(rangeEnd.getTime()) ||
 		rangeEnd < rangeStart ||
-		rangeEnd.getTime() - rangeStart.getTime() > 399 * 86_400_000
+		rangeEnd.getTime() - rangeStart.getTime() > 799 * 86_400_000
 	) {
 		throw new AdminAnalyticsRequestError(
-			"The analytics date range must be valid, ordered, and no longer than 400 UTC days.",
+			"The analytics date range must be valid, ordered, and no longer than 800 UTC days.",
 		);
 	}
+}
+
+export async function fetchAdminAnalyticsDashboard(
+	filters: AdminAnalyticsFilters,
+): Promise<AdminAnalyticsDashboard> {
+	assertAdminAnalyticsDateRange(filters.startDate, filters.endDate);
 
 	const fetchEndpoint = createFetchEndpoint();
 	const dateParams = {
@@ -540,6 +679,7 @@ export async function fetchAdminAnalyticsDashboard(
 		activation,
 		creatorActivity,
 		creatorRetention,
+		identityFunnelResult,
 		productEvents,
 		featureAdoption,
 		health,
@@ -584,6 +724,16 @@ export async function fetchAdminAnalyticsDashboard(
 				platform: filters.platform,
 			},
 			decodeCreatorRetentionRow,
+		),
+		fetchOptionalRollbackEndpoint(
+			fetchEndpoint,
+			"product_identity_funnel",
+			{
+				...dateParams,
+				source: filters.source,
+				country: filters.country,
+			},
+			decodeIdentityFunnelRow,
 		),
 		fetchEndpoint(
 			"product_events_daily",
@@ -647,6 +797,8 @@ export async function fetchAdminAnalyticsDashboard(
 		activation,
 		creatorActivity,
 		creatorRetention,
+		identityFunnel: identityFunnelResult.rows,
+		identityFunnelAvailable: identityFunnelResult.available,
 		productEvents,
 		featureAdoption,
 		health,

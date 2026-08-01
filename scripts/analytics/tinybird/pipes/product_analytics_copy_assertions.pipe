@@ -11,9 +11,12 @@ SQL >
 	{% end %}
 	SELECT
 		(SELECT count() FROM product_traffic_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS traffic_markers,
+		(SELECT count() FROM product_events_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS decision_markers,
 		(SELECT count() FROM product_traffic_pages_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS traffic_page_markers,
 		(SELECT count() FROM product_activation_daily_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS activation_markers,
-		(SELECT count() FROM product_creator_retention_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS retention_markers
+		(SELECT count() FROM product_creator_retention_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS retention_markers,
+		(SELECT count() FROM product_identity_funnel_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS identity_markers,
+		(SELECT count() FROM product_events_health_hourly_exact WHERE copy_run_id = {{String(copy_run_id)}}) AS health_markers
 	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
 
 TYPE ENDPOINT

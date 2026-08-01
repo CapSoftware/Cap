@@ -1,7 +1,7 @@
 DESCRIPTION >
 	Rebuild hourly delivery health so privacy erasure retracts all derived state.
 
-TOKEN product_events_agent_read READ
+TOKEN product_events_copy_runner READ
 
 NODE snapshot_product_events_health_hourly_node
 SQL >
@@ -11,6 +11,8 @@ SQL >
 	{% end %}
 	SELECT
 		toStartOfHour(received_at) AS hour,
+		now64(3) AS calculated_at,
+		'' AS copy_run_id,
 		platform,
 		app_version,
 		count() AS received_rows,
@@ -22,6 +24,23 @@ SQL >
 		quantilesTDigestState(0.5, 0.95, 0.99)(toFloat64(dateDiff('millisecond', occurred_at, received_at))) AS ingestion_lag_ms
 	FROM product_events_v1
 	GROUP BY hour, platform, app_version
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		toStartOfHour(now()),
+		now64(3),
+		{{String(copy_run_id)}},
+		'',
+		'',
+		toUInt64(0),
+		uniqExactStateIf('', 0),
+		uniqExactStateIf(tuple('', toFixedString('', 32)), 0),
+		toUInt64(0),
+		toUInt64(0),
+		toUInt64(0),
+		quantilesTDigestState(0.5, 0.95, 0.99)(toFloat64(0))
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
 
 TYPE COPY
 TARGET_DATASOURCE product_events_health_hourly_exact

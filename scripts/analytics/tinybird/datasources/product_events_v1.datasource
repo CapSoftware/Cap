@@ -2,6 +2,7 @@ DESCRIPTION >
 	Provider-neutral product analytics events emitted by Cap.
 
 TOKEN product_events_ingest APPEND
+TOKEN product_events_erasure_lookup READ
 SCHEMA >
 	event_id String `json:$.event_id`,
 	payload_hash FixedString(32) `json:$.payload_hash`,
@@ -33,5 +34,5 @@ SCHEMA >
 ENGINE MergeTree
 ENGINE_PARTITION_KEY toYYYYMM(received_at)
 ENGINE_SORTING_KEY (received_at, event_id)
-ENGINE_TTL toDateTime(received_at) + INTERVAL 400 DAY
+ENGINE_TTL toDateTime(received_at) + INTERVAL 800 DAY
 ENGINE_SETTINGS index_granularity = 8192

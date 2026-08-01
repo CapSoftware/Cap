@@ -1,7 +1,7 @@
 DESCRIPTION >
 	Rebuild exact 30-minute client-session metrics from canonical external page events.
 
-TOKEN product_events_agent_read READ
+TOKEN product_events_copy_runner READ
 
 NODE snapshot_product_traffic_daily_exact_node
 SQL >
@@ -11,16 +11,18 @@ SQL >
 	{% end %}
 	WITH session_engagement AS (
 		SELECT
+			synthetic_run_id,
 			session_id,
 			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS session_engaged_ms,
 			max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth')))) AS session_max_scroll_depth
 		FROM product_events_canonical_v1
 		WHERE event_name = 'page_engagement'
-			AND traffic_class = 'external'
+			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
-		GROUP BY session_id
+		GROUP BY synthetic_run_id, session_id
 	), sessions AS (
 		SELECT
+			synthetic_run_id,
 			session_id,
 			concat('anonymous:', argMin(anonymous_id, occurred_at)) AS visitor_id,
 			min(occurred_at) AS started_at,
@@ -36,14 +38,15 @@ SQL >
 			toUInt64(count()) AS session_pageviews
 		FROM product_events_canonical_v1
 		WHERE event_name = 'page_view'
-			AND traffic_class = 'external'
+			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
 			AND anonymous_id != ''
-		GROUP BY session_id
+		GROUP BY synthetic_run_id, session_id
 	)
 	SELECT
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
+		synthetic_run_id,
 		toDate(started_at, 'UTC') AS date,
 		hostname,
 		country,
@@ -61,13 +64,14 @@ SQL >
 		toUInt64(sum(coalesce(session_engaged_ms, 0))) AS visit_duration_ms,
 		toUInt64(sum(coalesce(session_engaged_ms, 0))) AS engaged_ms
 	FROM sessions
-	LEFT JOIN session_engagement USING session_id
-	GROUP BY date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign
+	LEFT JOIN session_engagement USING (synthetic_run_id, session_id)
+	GROUP BY synthetic_run_id, date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign
 	{% if defined(copy_run_id) %}
 	UNION ALL
 	SELECT
 		now64(3) AS calculated_at,
 		{{String(copy_run_id)}} AS copy_run_id,
+		'' AS synthetic_run_id,
 		today() AS date,
 		'' AS hostname,
 		'' AS country,

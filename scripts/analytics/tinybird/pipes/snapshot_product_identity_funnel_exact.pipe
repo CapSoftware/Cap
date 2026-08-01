@@ -1,0 +1,234 @@
+DESCRIPTION >
+	Rebuild privacy-safe cohorts that join pre-auth acquisition to authoritative user outcomes without exposing identity mappings.
+
+TOKEN product_events_copy_runner READ
+
+NODE snapshot_product_identity_funnel_exact_node
+SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
+	WITH identity_links AS (
+		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, occurred_at
+		FROM product_events_canonical_v1
+		WHERE event_name = 'identity_linked'
+			AND user_id != ''
+			AND anonymous_id != ''
+	), paid_guest_links AS (
+		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, occurred_at
+		FROM product_events_canonical_v1
+		WHERE event_name = 'purchase_completed'
+			AND JSONExtractString(properties, 'payment_status') = 'paid'
+			AND JSONExtractBool(properties, 'is_guest_checkout')
+			AND user_id != ''
+			AND anonymous_id != ''
+	), link_candidates AS (
+		SELECT * FROM identity_links
+		UNION ALL
+		SELECT * FROM paid_guest_links
+	), first_links AS (
+		SELECT
+			synthetic_run_id,
+			user_id,
+			argMin(anonymous_id, occurred_at) AS anonymous_id,
+			argMinIf(organization_id, occurred_at, organization_id != '') AS organization_id,
+			min(occurred_at) AS linked_at
+		FROM link_candidates
+		GROUP BY synthetic_run_id, user_id
+	), organization_first_links AS (
+		SELECT
+			synthetic_run_id,
+			organization_id,
+			argMin(user_id, linked_at) AS first_user_id
+		FROM first_links
+		WHERE organization_id != ''
+		GROUP BY synthetic_run_id, organization_id
+	), acquisition AS (
+		SELECT
+			synthetic_run_id,
+			anonymous_id,
+			min(occurred_at) AS acquired_at,
+			argMin(channel, occurred_at) AS channel,
+			argMin(JSONExtractString(properties, 'session_touch_source'), occurred_at) AS attribution_source,
+			argMin(JSONExtractString(properties, 'session_touch_medium'), occurred_at) AS attribution_medium,
+			argMin(JSONExtractString(properties, 'session_touch_campaign'), occurred_at) AS campaign,
+			argMin(country, occurred_at) AS country
+		FROM product_events_canonical_v1
+		WHERE event_name = 'page_view'
+			AND anonymous_id != ''
+			AND (traffic_class = 'external' OR synthetic_run_id != '')
+		GROUP BY synthetic_run_id, anonymous_id
+	), outcomes AS (
+		SELECT
+			synthetic_run_id,
+			user_id,
+			toUInt64(countIf(event_name = 'user_signed_up') > 0) AS signed_up,
+			toUInt64(countIf(event_name = 'checkout_started') > 0) AS authenticated_checkout,
+			toUInt64(countIf(event_name = 'checkout_started' AND platform = 'web') > 0) AS web_checkout,
+			toUInt64(countIf(event_name = 'checkout_started' AND platform = 'desktop') > 0) AS desktop_checkout,
+			toUInt64(countIf(event_name = 'checkout_started' AND platform = 'mobile') > 0) AS mobile_checkout,
+			toUInt64(uniqExactIf(platform, event_name = 'checkout_started') > 1) AS cross_device_checkout,
+			toUInt64(countIf(event_name = 'trial_started') > 0) AS trial_started,
+			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid') > 0) AS purchased,
+			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid' AND JSONExtractBool(properties, 'is_guest_checkout')) > 0) AS guest_purchased
+		FROM product_events_canonical_v1
+		WHERE user_id != ''
+		GROUP BY synthetic_run_id, user_id
+	), guest_checkouts AS (
+		SELECT
+			synthetic_run_id,
+			anonymous_id,
+			min(occurred_at) AS checkout_at,
+			toUInt64(count() > 0) AS guest_checkout
+		FROM product_events_canonical_v1
+		WHERE event_name = 'guest_checkout_started'
+			AND anonymous_id != ''
+		GROUP BY synthetic_run_id, anonymous_id
+	), guest_path_candidates AS (
+		SELECT
+			link_candidates.synthetic_run_id AS synthetic_run_id,
+			link_candidates.user_id AS user_id,
+			link_candidates.anonymous_id AS anonymous_id,
+			link_candidates.organization_id AS organization_id,
+			guest_checkouts.checkout_at AS path_at,
+			toUInt64(0) AS paid_guest_purchase
+		FROM link_candidates
+		INNER JOIN guest_checkouts ON link_candidates.synthetic_run_id = guest_checkouts.synthetic_run_id AND link_candidates.anonymous_id = guest_checkouts.anonymous_id
+		WHERE guest_checkouts.checkout_at <= link_candidates.occurred_at
+		UNION ALL
+		SELECT
+			synthetic_run_id,
+			user_id,
+			anonymous_id,
+			organization_id,
+			occurred_at AS path_at,
+			toUInt64(1) AS paid_guest_purchase
+		FROM paid_guest_links
+	), guest_paths AS (
+		SELECT
+			synthetic_run_id,
+			user_id,
+			argMin(anonymous_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS anonymous_id,
+			argMin(organization_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS organization_id,
+			argMin(path_at, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS linked_at,
+			toUInt64(max(paid_guest_purchase) > 0) AS guest_purchased
+		FROM guest_path_candidates
+		GROUP BY synthetic_run_id, user_id
+	), user_linked_outcomes AS (
+		SELECT
+			first_links.synthetic_run_id AS synthetic_run_id,
+			first_links.user_id AS user_id,
+			first_links.anonymous_id AS anonymous_id,
+			first_links.organization_id AS organization_id,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, first_links.linked_at, acquisition.acquired_at) AS acquired_at,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, '', acquisition.channel) AS channel,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, '', acquisition.attribution_source) AS attribution_source,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, '', acquisition.attribution_medium) AS attribution_medium,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, '', acquisition.campaign) AS campaign,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > first_links.linked_at, '', acquisition.country) AS country,
+			toUInt64(1) AS linked_user,
+			toUInt64(first_links.organization_id != '' AND organization_first_links.first_user_id = first_links.user_id) AS linked_organization,
+			outcomes.signed_up AS signed_up,
+			toUInt64(0) AS guest_checkout,
+			toUInt64(0) AS guest_purchased,
+			outcomes.authenticated_checkout AS authenticated_checkout,
+			outcomes.web_checkout AS web_checkout,
+			outcomes.desktop_checkout AS desktop_checkout,
+			outcomes.mobile_checkout AS mobile_checkout,
+			outcomes.cross_device_checkout AS cross_device_checkout,
+			outcomes.trial_started AS trial_started,
+			outcomes.purchased AS purchased
+		FROM first_links
+		LEFT JOIN acquisition ON first_links.synthetic_run_id = acquisition.synthetic_run_id AND first_links.anonymous_id = acquisition.anonymous_id
+		LEFT JOIN organization_first_links ON first_links.synthetic_run_id = organization_first_links.synthetic_run_id AND first_links.organization_id = organization_first_links.organization_id
+		LEFT JOIN outcomes ON first_links.synthetic_run_id = outcomes.synthetic_run_id AND first_links.user_id = outcomes.user_id
+		), guest_linked_outcomes AS (
+			SELECT
+				guest_checkouts.synthetic_run_id AS synthetic_run_id,
+				guest_paths.user_id AS user_id,
+				guest_checkouts.anonymous_id AS anonymous_id,
+				guest_paths.organization_id AS organization_id,
+				if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, guest_checkouts.checkout_at, acquisition.acquired_at) AS acquired_at,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, '', acquisition.channel) AS channel,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, '', acquisition.attribution_source) AS attribution_source,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, '', acquisition.attribution_medium) AS attribution_medium,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, '', acquisition.campaign) AS campaign,
+			if(acquisition.anonymous_id = '' OR acquisition.acquired_at > guest_checkouts.checkout_at, '', acquisition.country) AS country,
+			toUInt64(0) AS linked_user,
+			toUInt64(0) AS linked_organization,
+			toUInt64(0) AS signed_up,
+				guest_checkouts.guest_checkout AS guest_checkout,
+			guest_paths.guest_purchased AS guest_purchased,
+			toUInt64(0) AS authenticated_checkout,
+			toUInt64(0) AS web_checkout,
+			toUInt64(0) AS desktop_checkout,
+			toUInt64(0) AS mobile_checkout,
+			toUInt64(0) AS cross_device_checkout,
+			toUInt64(0) AS trial_started,
+			toUInt64(0) AS purchased
+			FROM guest_checkouts
+			LEFT JOIN guest_paths ON guest_checkouts.synthetic_run_id = guest_paths.synthetic_run_id AND guest_checkouts.anonymous_id = guest_paths.anonymous_id
+			LEFT JOIN acquisition ON guest_checkouts.synthetic_run_id = acquisition.synthetic_run_id AND guest_checkouts.anonymous_id = acquisition.anonymous_id
+	), linked_outcomes AS (
+		SELECT * FROM user_linked_outcomes
+		UNION ALL
+		SELECT * FROM guest_linked_outcomes
+	)
+	SELECT
+		now64(3) AS calculated_at,
+		'' AS copy_run_id,
+		synthetic_run_id,
+		toDate(acquired_at, 'UTC') AS cohort_date,
+		channel,
+		attribution_source,
+		attribution_medium,
+		campaign,
+		country,
+		toUInt64(uniqExactIf(anonymous_id, linked_user > 0)) AS linked_visitors,
+		toUInt64(sum(linked_user)) AS linked_users,
+		toUInt64(sum(signed_up)) AS signup_users,
+		toUInt64(sum(linked_organization)) AS organizations,
+		toUInt64(uniqExactIf(anonymous_id, guest_checkout > 0)) AS guest_checkout_visitors,
+		toUInt64(sum(guest_purchased)) AS guest_purchasers,
+		toUInt64(sum(authenticated_checkout)) AS authenticated_checkout_users,
+		toUInt64(sum(web_checkout)) AS web_checkout_users,
+		toUInt64(sum(desktop_checkout)) AS desktop_checkout_users,
+		toUInt64(sum(mobile_checkout)) AS mobile_checkout_users,
+		toUInt64(sum(cross_device_checkout)) AS cross_device_checkout_users,
+		toUInt64(sum(trial_started)) AS trial_users,
+		toUInt64(sum(purchased)) AS purchasers
+	FROM linked_outcomes
+	GROUP BY synthetic_run_id, cohort_date, channel, attribution_source, attribution_medium, campaign, country
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		'' AS synthetic_run_id,
+		today() AS cohort_date,
+		'' AS channel,
+		'' AS attribution_source,
+		'' AS attribution_medium,
+		'' AS campaign,
+		'' AS country,
+		toUInt64(0) AS linked_visitors,
+		toUInt64(0) AS linked_users,
+		toUInt64(0) AS signup_users,
+		toUInt64(0) AS organizations,
+		toUInt64(0) AS guest_checkout_visitors,
+		toUInt64(0) AS guest_purchasers,
+		toUInt64(0) AS authenticated_checkout_users,
+		toUInt64(0) AS web_checkout_users,
+		toUInt64(0) AS desktop_checkout_users,
+		toUInt64(0) AS mobile_checkout_users,
+		toUInt64(0) AS cross_device_checkout_users,
+		toUInt64(0) AS trial_users,
+		toUInt64(0) AS purchasers
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
+
+TYPE COPY
+TARGET_DATASOURCE product_identity_funnel_exact
+COPY_MODE replace
+COPY_SCHEDULE 7-59/8 * * * *

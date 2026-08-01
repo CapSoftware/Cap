@@ -15,6 +15,12 @@ SQL >
 		uniqExactMerge(creator_organizations) AS organizations
 	FROM product_creator_retention_exact
 	WHERE copy_run_id = ''
+		{% if defined(synthetic_run_id) %}
+			AND synthetic_run_id = {{String(synthetic_run_id)}}
+			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+		{% else %}
+			AND synthetic_run_id = ''
+		{% end %}
 		AND cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 180 DAY {% end %}
 		AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 		{% if defined(platform) %} AND (activity_date = cohort_date OR platform = {{String(platform)}}) {% end %}

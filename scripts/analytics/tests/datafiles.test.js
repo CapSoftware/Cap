@@ -64,9 +64,10 @@ test("product datasource matches the runtime event contract", () => {
 	assert.equal(datasource.sortingKey, "(received_at, event_id)");
 	assert.equal(datasource.versionColumn, null);
 	assert.equal(datasource.partitionKey, "toYYYYMM(received_at)");
-	assert.equal(datasource.ttl, "toDateTime(received_at) + INTERVAL 400 DAY");
+	assert.equal(datasource.ttl, "toDateTime(received_at) + INTERVAL 800 DAY");
 	assert.deepEqual(datasource.tokens, [
 		{ name: "product_events_ingest", scope: "APPEND" },
+		{ name: "product_events_erasure_lookup", scope: "READ" },
 	]);
 	assert.equal(
 		datasource.tokens.some(
@@ -74,6 +75,56 @@ test("product datasource matches the runtime event contract", () => {
 				token.name === "product_events_agent_read" && token.scope === "READ",
 		),
 		false,
+	);
+	const retainedDatasources = [
+		"product_events_canonical_v1",
+		"product_events_daily_exact",
+		"product_traffic_daily_exact",
+		"product_traffic_pages_daily_exact",
+		"product_activation_daily_exact",
+		"product_creator_retention_exact",
+		"product_identity_funnel_exact",
+	];
+	for (const name of retainedDatasources) {
+		const retained = project.datasources.find(
+			(candidate) => candidate.name === name,
+		);
+		assert.ok(retained);
+		assert.match(retained.ttl ?? "", /\+ INTERVAL 800 DAY$/);
+	}
+	const copyTargets = [
+		"product_events_canonical_v1",
+		"product_events_daily_exact",
+		"product_traffic_daily_exact",
+		"product_traffic_pages_daily_exact",
+		"product_activation_daily_exact",
+		"product_creator_retention_exact",
+		"product_identity_funnel_exact",
+		"product_events_health_hourly_exact",
+	];
+	for (const name of copyTargets) {
+		const target = project.datasources.find(
+			(candidate) => candidate.name === name,
+		);
+		assert.ok(target);
+		assert.ok(
+			target.tokens.some(
+				(token) =>
+					token.name === "product_events_copy_runner" &&
+					token.scope === "APPEND",
+			),
+		);
+	}
+	const canonical = project.datasources.find(
+		(candidate) => candidate.name === "product_events_canonical_v1",
+	);
+	assert.ok(canonical);
+	assert.ok(
+		canonical.tokens.some(
+			(token) =>
+				token.name === "product_events_erasure_lookup" &&
+				token.scope === "READ",
+		),
 	);
 });
 
@@ -144,6 +195,31 @@ test("retention merges identities across activity platforms", () => {
 	assert.match(contents, /uniqExactMerge\(creator_users\) AS creators/);
 });
 
+test("identity cohorts stitch acquisition and guest purchases without exposing mappings", () => {
+	const snapshot = fs.readFileSync(
+		path.join(
+			TINYBIRD_PROJECT_DIR,
+			"pipes",
+			"snapshot_product_identity_funnel_exact.pipe",
+		),
+		"utf8",
+	);
+	const endpoint = fs.readFileSync(
+		path.join(TINYBIRD_PROJECT_DIR, "pipes", "product_identity_funnel.pipe"),
+		"utf8",
+	);
+	assert.match(snapshot, /event_name = 'identity_linked'/);
+	assert.match(snapshot, /event_name = 'guest_checkout_started'/);
+	assert.match(snapshot, /FROM guest_checkouts\n\s+LEFT JOIN guest_paths/);
+	assert.match(snapshot, /JSONExtractBool\(properties, 'is_guest_checkout'\)/);
+	assert.match(snapshot, /organization_first_links/);
+	assert.match(snapshot, /sum\(linked_organization\)/);
+	assert.match(snapshot, /cross_device_checkout_users/);
+	assert.doesNotMatch(endpoint, /user_id|anonymous_id|organization_id/);
+	assert.match(endpoint, /FROM product_identity_funnel_exact/);
+	assert.doesNotMatch(endpoint, /GROUP BY|LIMIT/);
+});
+
 test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", () => {
 	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
 	const canonical = project.pipes.find(
@@ -200,6 +276,7 @@ test("copy schedules serialize canonical and derived rebuilds", () => {
 		["snapshot_product_traffic_pages_daily_exact", "4-59/8 * * * *"],
 		["snapshot_product_activation_daily_exact", "5-59/8 * * * *"],
 		["snapshot_product_creator_retention_exact", "6-59/8 * * * *"],
+		["snapshot_product_identity_funnel_exact", "7-59/8 * * * *"],
 	]);
 	for (const [name, schedule] of schedules) {
 		const contents = fs.readFileSync(
@@ -207,20 +284,51 @@ test("copy schedules serialize canonical and derived rebuilds", () => {
 			"utf8",
 		);
 		assert.ok(contents.split("\n").includes(`COPY_SCHEDULE ${schedule}`));
+		assert.match(contents, /^TOKEN product_events_copy_runner READ$/m);
+		assert.doesNotMatch(contents, /^TOKEN product_events_agent_read READ$/m);
 		assert.match(contents, /\{\{max_threads\(Int32\(copy_max_threads\)\)\}\}/);
 	}
 	assert.equal(new Set(schedules.values()).size, schedules.size);
 });
 
-test("staging copy markers are excluded from every decision endpoint", () => {
-	for (const name of [
+test("decision endpoints cannot be executed with the Copy runner token", () => {
+	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
+	for (const pipe of project.pipes.filter(
+		(candidate) =>
+			candidate.name.startsWith("product_") && candidate.type === "endpoint",
+	)) {
+		assert.deepEqual(pipe.tokens, [
+			{ name: "product_events_agent_read", scope: "READ" },
+		]);
+	}
+});
+
+test("staging copy markers and synthetic rows are excluded from decision endpoints", () => {
+	const syntheticEndpoints = [
 		"product_traffic_overview",
 		"product_traffic_pages",
 		"product_traffic_sources",
 		"product_traffic_countries",
 		"product_traffic_technology",
 		"product_activation",
+		"product_creator_activity",
 		"product_creator_retention",
+		"product_events_daily",
+		"product_feature_adoption",
+		"product_identity_funnel",
+	];
+	for (const name of syntheticEndpoints) {
+		const contents = fs.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
+			"utf8",
+		);
+		assert.match(contents, /synthetic_run_id = ''/);
+		assert.match(contents, /defined\(synthetic_run_id\)/);
+		assert.match(contents, /synthetic_run_id has an invalid length/);
+	}
+	for (const name of [
+		...syntheticEndpoints.slice(0, 8),
+		"product_identity_funnel",
 	]) {
 		const contents = fs.readFileSync(
 			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
@@ -233,6 +341,7 @@ test("staging copy markers are excluded from every decision endpoint", () => {
 		"snapshot_product_traffic_pages_daily_exact",
 		"snapshot_product_activation_daily_exact",
 		"snapshot_product_creator_retention_exact",
+		"snapshot_product_identity_funnel_exact",
 	]) {
 		const contents = fs.readFileSync(
 			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
@@ -240,6 +349,7 @@ test("staging copy markers are excluded from every decision endpoint", () => {
 		);
 		assert.match(contents, /defined\(copy_run_id\)/);
 		assert.match(contents, /AS copy_run_id/);
+		assert.match(contents, /AS synthetic_run_id/);
 	}
 	const assertions = fs.readFileSync(
 		path.join(
@@ -253,6 +363,7 @@ test("staging copy markers are excluded from every decision endpoint", () => {
 	assert.match(assertions, /traffic_markers/);
 	assert.doesNotMatch(assertions, /requested_copy_run_id/);
 	assert.match(assertions, /retention_markers/);
+	assert.match(assertions, /identity_markers/);
 });
 
 test("health queries use stable hourly aggregates and a bounded window", () => {
@@ -290,8 +401,15 @@ test("staging assertions prove canonical decisions without returning raw IDs", (
 	assert.match(contents, /uniqExact\(payload_hash\) AS payloads/);
 	assert.match(contents, /FROM product_events_canonical_v1/);
 	assert.match(contents, /FROM product_events_daily_exact/);
+	assert.match(contents, /FROM product_traffic_daily_exact/);
+	assert.match(contents, /FROM product_traffic_pages_daily_exact/);
+	assert.match(contents, /FROM product_activation_daily_exact/);
+	assert.match(contents, /FROM product_creator_retention_exact/);
 	assert.match(contents, /canonical_events/);
 	assert.match(contents, /decision_events/);
+	assert.match(contents, /traffic_visitors/);
+	assert.match(contents, /activated_creators/);
+	assert.match(contents, /retention_organizations/);
 	assert.match(contents, /FROM product_events_v1/);
 	assert.doesNotMatch(contents, /event_id AS/);
 	assert.doesNotMatch(contents, /TOKEN product_events_ingest READ/);

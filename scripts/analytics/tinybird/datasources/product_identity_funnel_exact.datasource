@@ -1,0 +1,34 @@
+DESCRIPTION >
+	Privacy-safe anonymous acquisition to authenticated conversion cohorts rebuilt from canonical identity links.
+
+TOKEN product_events_copy_runner APPEND
+
+SCHEMA >
+	calculated_at DateTime64(3),
+	copy_run_id String,
+	synthetic_run_id String,
+	cohort_date Date,
+	channel LowCardinality(String),
+	attribution_source LowCardinality(String),
+	attribution_medium LowCardinality(String),
+	campaign LowCardinality(String),
+	country LowCardinality(String),
+	linked_visitors UInt64,
+	linked_users UInt64,
+	signup_users UInt64,
+	organizations UInt64,
+	guest_checkout_visitors UInt64,
+	guest_purchasers UInt64,
+	authenticated_checkout_users UInt64,
+	web_checkout_users UInt64,
+	desktop_checkout_users UInt64,
+	mobile_checkout_users UInt64,
+	cross_device_checkout_users UInt64,
+	trial_users UInt64,
+	purchasers UInt64
+
+ENGINE SummingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
+ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, cohort_date, channel, attribution_source, attribution_medium, campaign, country)
+ENGINE_TTL cohort_date + INTERVAL 800 DAY
+ENGINE_SETTINGS index_granularity = 256

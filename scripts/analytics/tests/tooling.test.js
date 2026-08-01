@@ -78,12 +78,12 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		.map((step, index) => ({ index, command: step.args?.join(" ") ?? "" }))
 		.filter(({ command }) => command.includes("--local copy pause"))
 		.map(({ index }) => index);
-	assert.equal(pauseIndexes.length, 7);
+	assert.equal(pauseIndexes.length, 8);
 	assert.ok(pauseIndexes.every((index) => index < appendIndex));
 	const copyCommands = commands.filter((command) =>
 		command.includes("--local copy run"),
 	);
-	assert.equal(copyCommands.length, 7);
+	assert.equal(copyCommands.length, 8);
 	assert.ok(
 		copyCommands.every((command) =>
 			command.includes(
@@ -424,6 +424,125 @@ test("project validation rejects agent access to raw product events", () => {
 		assert.ok(
 			validateAnalyticsProject(projectDir).some((issue) =>
 				issue.includes("must not expose raw identity data to agents"),
+			),
+		);
+	} finally {
+		fs.rmSync(tempRoot, { force: true, recursive: true });
+	}
+});
+
+test("project validation rejects the agent token on Copy Pipes", () => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
+	const projectDir = path.join(tempRoot, "tinybird");
+	try {
+		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
+		const pipePath = path.join(
+			projectDir,
+			"pipes",
+			"snapshot_product_events_canonical_v1.pipe",
+		);
+		const contents = fs.readFileSync(pipePath, "utf8");
+		fs.writeFileSync(
+			pipePath,
+			contents.replace(
+				"TOKEN product_events_copy_runner READ",
+				"TOKEN product_events_agent_read READ",
+			),
+		);
+		const issues = validateAnalyticsProject(projectDir);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes("missing its execution-only Copy token"),
+			),
+		);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes("must not grant Copy execution to the agent token"),
+			),
+		);
+	} finally {
+		fs.rmSync(tempRoot, { force: true, recursive: true });
+	}
+});
+
+test("project validation rejects the Copy runner token on decision endpoints", () => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
+	const projectDir = path.join(tempRoot, "tinybird");
+	try {
+		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
+		const pipePath = path.join(
+			projectDir,
+			"pipes",
+			"product_events_health.pipe",
+		);
+		const contents = fs.readFileSync(pipePath, "utf8");
+		fs.writeFileSync(
+			pipePath,
+			contents.replace(
+				"TOKEN product_events_agent_read READ",
+				"TOKEN product_events_copy_runner READ",
+			),
+		);
+		const issues = validateAnalyticsProject(projectDir);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes("missing its read-only agent token"),
+			),
+		);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes("must not be queryable by the Copy runner token"),
+			),
+		);
+	} finally {
+		fs.rmSync(tempRoot, { force: true, recursive: true });
+	}
+});
+
+test("project validation rejects extra Copy and erasure lookup grants", () => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cap-analytics-"));
+	const projectDir = path.join(tempRoot, "tinybird");
+	try {
+		fs.cpSync(TINYBIRD_PROJECT_DIR, projectDir, { recursive: true });
+		const datasourcePath = path.join(
+			projectDir,
+			"datasources",
+			"product_events_v1.datasource",
+		);
+		const contents = fs.readFileSync(datasourcePath, "utf8");
+		fs.writeFileSync(
+			datasourcePath,
+			contents.replace(
+				"TOKEN product_events_ingest APPEND",
+				"TOKEN product_events_ingest APPEND\nTOKEN product_events_copy_runner READ",
+			),
+		);
+		const endpointPath = path.join(
+			projectDir,
+			"pipes",
+			"product_events_health.pipe",
+		);
+		const endpoint = fs.readFileSync(endpointPath, "utf8");
+		fs.writeFileSync(
+			endpointPath,
+			endpoint.replace(
+				"TOKEN product_events_agent_read READ",
+				"TOKEN product_events_agent_read READ\nTOKEN product_events_erasure_lookup READ",
+			),
+		);
+		const issues = validateAnalyticsProject(projectDir);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes(
+					"product_events_copy_runner has unexpected datasource:product_events_v1:READ",
+				),
+			),
+		);
+		assert.ok(
+			issues.some((issue) =>
+				issue.includes(
+					"product_events_erasure_lookup has unexpected pipe:product_events_health:READ",
+				),
 			),
 		);
 	} finally {

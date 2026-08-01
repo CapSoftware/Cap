@@ -43,7 +43,18 @@ const PRODUCT_COPY_PIPES = [
 	"snapshot_product_traffic_pages_daily_exact",
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
+	"snapshot_product_identity_funnel_exact",
 	"snapshot_product_events_health_hourly",
+];
+const PRODUCT_COPY_TARGETS = [
+	"product_events_canonical_v1",
+	"product_events_daily_exact",
+	"product_traffic_daily_exact",
+	"product_traffic_pages_daily_exact",
+	"product_activation_daily_exact",
+	"product_creator_retention_exact",
+	"product_identity_funnel_exact",
+	"product_events_health_hourly_exact",
 ];
 const WORKSPACE_ID_SOURCE =
 	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -264,6 +275,31 @@ const operationPlan = (operation) => {
 const hasToken = (resource, name, scope) =>
 	resource.tokens.some((token) => token.name === name && token.scope === scope);
 
+const tokenGrants = (project, tokenName) => [
+	...project.datasources.flatMap((datasource) =>
+		datasource.tokens
+			.filter(({ name }) => name === tokenName)
+			.map(({ scope }) => `datasource:${datasource.name}:${scope}`),
+	),
+	...project.pipes.flatMap((pipe) =>
+		pipe.tokens
+			.filter(({ name }) => name === tokenName)
+			.map(({ scope }) => `pipe:${pipe.name}:${scope}`),
+	),
+];
+
+const validateExactTokenGrants = (project, tokenName, expected, issues) => {
+	const actual = new Set(tokenGrants(project, tokenName));
+	for (const grant of expected) {
+		if (!actual.has(grant)) issues.push(`${tokenName} is missing ${grant}`);
+	}
+	for (const grant of actual) {
+		if (!expected.has(grant)) {
+			issues.push(`${tokenName} has unexpected ${grant}`);
+		}
+	}
+};
+
 const validateFixtures = (projectDir, issues) => {
 	const fixturePath = path.join(
 		projectDir,
@@ -357,6 +393,24 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	}
 
 	const project = loadTinybirdProject(projectDir);
+	validateExactTokenGrants(
+		project,
+		"product_events_copy_runner",
+		new Set([
+			...PRODUCT_COPY_TARGETS.map((name) => `datasource:${name}:APPEND`),
+			...PRODUCT_COPY_PIPES.map((name) => `pipe:${name}:READ`),
+		]),
+		issues,
+	);
+	validateExactTokenGrants(
+		project,
+		"product_events_erasure_lookup",
+		new Set([
+			"datasource:product_events_v1:READ",
+			"datasource:product_events_canonical_v1:READ",
+		]),
+		issues,
+	);
 	const datasourceNames = new Set(
 		project.datasources.map((datasource) => datasource.name),
 	);
@@ -399,11 +453,14 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		if (product.partitionKey !== "toYYYYMM(received_at)") {
 			issues.push("product_events_v1 must use monthly receipt-time partitions");
 		}
-		if (product.ttl !== "toDateTime(received_at) + INTERVAL 400 DAY") {
-			issues.push("product_events_v1 must retain raw deliveries for 400 days");
+		if (product.ttl !== "toDateTime(received_at) + INTERVAL 800 DAY") {
+			issues.push("product_events_v1 must retain raw deliveries for 800 days");
 		}
 		if (!hasToken(product, "product_events_ingest", "APPEND")) {
 			issues.push("product_events_v1 is missing its append-only token");
+		}
+		if (!hasToken(product, "product_events_erasure_lookup", "READ")) {
+			issues.push("product_events_v1 is missing its erasure lookup token");
 		}
 		if (hasToken(product, "product_events_agent_read", "READ")) {
 			issues.push(
@@ -417,30 +474,49 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	);
 	if (!daily || daily.engine !== "AggregatingMergeTree") {
 		issues.push("Missing product_events_daily_exact snapshot datasource");
-	} else if (hasToken(daily, "product_events_agent_read", "READ")) {
-		issues.push("Product event aggregate states must be endpoint-only");
+	} else {
+		if (hasToken(daily, "product_events_agent_read", "READ")) {
+			issues.push("Product event aggregate states must be endpoint-only");
+		}
+		if (daily.ttl !== "date + INTERVAL 800 DAY") {
+			issues.push("Product event aggregates must retain 800 days");
+		}
 	}
 	const canonical = project.datasources.find(
 		(datasource) => datasource.name === "product_events_canonical_v1",
 	);
 	if (!canonical || canonical.engine !== "MergeTree") {
 		issues.push("Missing product_events_canonical_v1 datasource");
-	} else if (hasToken(canonical, "product_events_agent_read", "READ")) {
-		issues.push("Canonical product events must not be readable by agents");
+	} else {
+		if (hasToken(canonical, "product_events_agent_read", "READ")) {
+			issues.push("Canonical product events must not be readable by agents");
+		}
+		if (canonical.ttl !== "toDateTime(received_at) + INTERVAL 800 DAY") {
+			issues.push("Canonical product events must retain 800 days");
+		}
+		if (!hasToken(canonical, "product_events_erasure_lookup", "READ")) {
+			issues.push("Canonical product events are missing erasure lookup access");
+		}
 	}
-	for (const name of [
-		"product_traffic_daily_exact",
-		"product_traffic_pages_daily_exact",
-		"product_activation_daily_exact",
-		"product_creator_retention_exact",
+	for (const [name, engine] of [
+		["product_traffic_daily_exact", "AggregatingMergeTree"],
+		["product_traffic_pages_daily_exact", "AggregatingMergeTree"],
+		["product_activation_daily_exact", "AggregatingMergeTree"],
+		["product_creator_retention_exact", "AggregatingMergeTree"],
+		["product_identity_funnel_exact", "SummingMergeTree"],
 	]) {
 		const datasource = project.datasources.find(
 			(candidate) => candidate.name === name,
 		);
-		if (!datasource || datasource.engine !== "AggregatingMergeTree") {
+		if (!datasource || datasource.engine !== engine) {
 			issues.push(`Missing privacy-safe aggregate datasource ${name}`);
-		} else if (hasToken(datasource, "product_events_agent_read", "READ")) {
-			issues.push(`${name} aggregate states must be endpoint-only`);
+		} else {
+			if (hasToken(datasource, "product_events_agent_read", "READ")) {
+				issues.push(`${name} aggregate states must be endpoint-only`);
+			}
+			if (!datasource.ttl?.endsWith("+ INTERVAL 800 DAY")) {
+				issues.push(`${name} must retain 800 days`);
+			}
 		}
 	}
 	const healthHourly = project.datasources.find(
@@ -453,8 +529,47 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	} else if (hasToken(healthHourly, "product_events_agent_read", "READ")) {
 		issues.push("Product event health states must be endpoint-only");
 	}
+	for (const name of PRODUCT_COPY_TARGETS) {
+		const datasource = project.datasources.find(
+			(candidate) => candidate.name === name,
+		);
+		if (
+			!datasource ||
+			!hasToken(datasource, "product_events_copy_runner", "APPEND")
+		) {
+			issues.push(`${name} is missing Copy runner append access`);
+		}
+	}
+	for (const datasource of project.datasources) {
+		if (
+			!PRODUCT_COPY_TARGETS.includes(datasource.name) &&
+			hasToken(datasource, "product_events_copy_runner", "APPEND")
+		) {
+			issues.push(`${datasource.name} grants unexpected Copy runner access`);
+		}
+		if (
+			!["product_events_v1", "product_events_canonical_v1"].includes(
+				datasource.name,
+			) &&
+			hasToken(datasource, "product_events_erasure_lookup", "READ")
+		) {
+			issues.push(`${datasource.name} grants unexpected erasure lookup access`);
+		}
+	}
+	for (const name of PRODUCT_COPY_PIPES) {
+		const pipe = project.pipes.find((candidate) => candidate.name === name);
+		if (!pipe) {
+			issues.push(`Missing product analytics pipe ${name}`);
+			continue;
+		}
+		if (!hasToken(pipe, "product_events_copy_runner", "READ")) {
+			issues.push(`${name} is missing its execution-only Copy token`);
+		}
+		if (hasToken(pipe, "product_events_agent_read", "READ")) {
+			issues.push(`${name} must not grant Copy execution to the agent token`);
+		}
+	}
 	for (const name of [
-		...PRODUCT_COPY_PIPES,
 		"product_events_daily",
 		"product_events_health",
 		"product_traffic_overview",
@@ -466,6 +581,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		"product_creator_retention",
 		"product_creator_activity",
 		"product_feature_adoption",
+		"product_identity_funnel",
 		"product_analytics_freshness",
 		"product_analytics_copy_assertions",
 	]) {
@@ -480,6 +596,9 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 			!hasToken(pipe, "product_events_agent_read", "READ")
 		) {
 			issues.push(`${name} is missing its read-only agent token`);
+		}
+		if (hasToken(pipe, "product_events_copy_runner", "READ")) {
+			issues.push(`${name} must not be queryable by the Copy runner token`);
 		}
 	}
 

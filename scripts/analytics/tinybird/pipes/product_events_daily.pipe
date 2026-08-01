@@ -9,6 +9,7 @@ SQL >
 	SELECT
 		date,
 		event_name,
+		schema_version,
 		source,
 		platform,
 		app_version,
@@ -23,17 +24,45 @@ SQL >
 		subscription_status,
 		currency,
 		billing_interval,
+		change_kind,
+		previous_status,
+		new_status,
+		previous_plan_id,
+		quantity,
+		previous_quantity,
+		new_quantity,
+		seat_delta,
+		first_purchase,
+		guest_checkout,
+		onboarding,
+		cancel_at_period_end,
+		fully_refunded,
+		ended_at,
+		trial_end_at,
+		amount_due_minor,
+		attempt_count,
+		experiment_id,
+		experiment_variant,
+		assignment_version,
+		delivery_loss_count,
 		events,
 		uniqExactMerge(actors) AS actors,
 		uniqExactMerge(users) AS users,
 		uniqExactMerge(organizations) AS organizations,
 		revenue_minor
 	FROM product_events_daily_exact
-	WHERE traffic_class = 'external'
-		AND synthetic_run_id = ''
+	WHERE copy_run_id = ''
+		AND {% if defined(synthetic_run_id) %}
+			synthetic_run_id = {{String(synthetic_run_id)}}
+			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+		{% else %}
+			traffic_class = 'external'
+			AND synthetic_run_id = ''
+		{% end %}
 		AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 		{% if defined(event_name) %} AND event_name = {{String(event_name)}} {% end %}
+		{% if defined(schema_version) %} AND schema_version = {{UInt16(schema_version)}} {% end %}
 		{% if defined(source) %} AND source = {{String(source)}} {% end %}
 		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
 		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
@@ -47,8 +76,18 @@ SQL >
 		{% if defined(payment_status) %} AND payment_status = {{String(payment_status)}} {% end %}
 		{% if defined(subscription_status) %} AND subscription_status = {{String(subscription_status)}} {% end %}
 		{% if defined(currency) %} AND currency = upper({{String(currency)}}) {% end %}
-	GROUP BY date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, plan_id, payment_status, subscription_status, currency, billing_interval, events, revenue_minor, calculated_at
-	ORDER BY date DESC, event_name ASC, source ASC, platform ASC, app_version ASC, hostname ASC, country ASC, device ASC, browser ASC, os ASC, channel ASC, plan_id ASC, payment_status ASC, subscription_status ASC, currency ASC, billing_interval ASC
+		{% if defined(change_kind) %} AND change_kind = {{String(change_kind)}} {% end %}
+		{% if defined(previous_status) %} AND previous_status = {{String(previous_status)}} {% end %}
+		{% if defined(new_status) %} AND new_status = {{String(new_status)}} {% end %}
+		{% if defined(first_purchase) %} AND first_purchase = {{String(first_purchase)}} {% end %}
+		{% if defined(guest_checkout) %} AND guest_checkout = {{String(guest_checkout)}} {% end %}
+		{% if defined(cancel_at_period_end) %} AND cancel_at_period_end = {{String(cancel_at_period_end)}} {% end %}
+		{% if defined(fully_refunded) %} AND fully_refunded = {{String(fully_refunded)}} {% end %}
+		{% if defined(experiment_id) %} AND experiment_id = {{String(experiment_id)}} {% end %}
+		{% if defined(experiment_variant) %} AND experiment_variant = {{String(experiment_variant)}} {% end %}
+		{% if defined(assignment_version) %} AND assignment_version = {{String(assignment_version)}} {% end %}
+	GROUP BY date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, plan_id, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version, delivery_loss_count, events, revenue_minor, calculated_at
+	ORDER BY date DESC, event_name ASC, schema_version DESC, source ASC, platform ASC, app_version ASC, hostname ASC, country ASC, device ASC, browser ASC, os ASC, channel ASC, plan_id ASC, payment_status ASC, subscription_status ASC, currency ASC, billing_interval ASC, change_kind ASC, previous_status ASC, new_status ASC, previous_plan_id ASC, experiment_id ASC, experiment_variant ASC, assignment_version ASC
 	LIMIT greatest(1, least({{Int32(limit, 1000)}}, 1000))
 
 TYPE ENDPOINT

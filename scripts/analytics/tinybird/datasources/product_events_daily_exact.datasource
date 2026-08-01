@@ -1,10 +1,14 @@
 DESCRIPTION >
-	Four-hundred-day exact daily product decision metrics rebuilt from canonical event IDs.
+	Eight-hundred-day exact daily product decision metrics rebuilt from canonical event IDs.
+
+TOKEN product_events_copy_runner APPEND
 
 SCHEMA >
 	calculated_at DateTime64(3),
+	copy_run_id String,
 	date Date,
 	event_name LowCardinality(String),
+	schema_version UInt16,
 	source LowCardinality(String),
 	platform LowCardinality(String),
 	app_version LowCardinality(String),
@@ -21,6 +25,27 @@ SCHEMA >
 	subscription_status LowCardinality(String),
 	currency LowCardinality(String),
 	billing_interval LowCardinality(String),
+	change_kind LowCardinality(String),
+	previous_status LowCardinality(String),
+	new_status LowCardinality(String),
+	previous_plan_id LowCardinality(String),
+	quantity Int64,
+	previous_quantity Int64,
+	new_quantity Int64,
+	seat_delta Int64,
+	first_purchase LowCardinality(String),
+	guest_checkout LowCardinality(String),
+	onboarding LowCardinality(String),
+	cancel_at_period_end LowCardinality(String),
+	fully_refunded LowCardinality(String),
+	ended_at Int64,
+	trial_end_at Int64,
+	amount_due_minor Int64,
+	attempt_count Int64,
+	experiment_id LowCardinality(String),
+	experiment_variant LowCardinality(String),
+	assignment_version LowCardinality(String),
+	delivery_loss_count UInt64,
 	events UInt64,
 	actors AggregateFunction(uniqExact, String),
 	users AggregateFunction(uniqExact, String),
@@ -29,6 +54,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (date, event_name, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval)
-ENGINE_TTL date + INTERVAL 400 DAY
+ENGINE_SORTING_KEY (copy_run_id, date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version)
+ENGINE_TTL date + INTERVAL 800 DAY
 ENGINE_SETTINGS index_granularity = 256

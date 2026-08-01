@@ -1,7 +1,7 @@
 DESCRIPTION >
 	Replace the canonical stream with one stable payload per event ID and quarantine conflicts.
 
-TOKEN product_events_agent_read READ
+TOKEN product_events_copy_runner READ
 
 NODE snapshot_product_events_canonical_v1_node
 SQL >

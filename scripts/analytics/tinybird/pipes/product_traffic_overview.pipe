@@ -17,6 +17,12 @@ SQL >
 			sum(engaged_ms) AS engagement_total_ms
 		FROM product_traffic_daily_exact
 		WHERE copy_run_id = ''
+			{% if defined(synthetic_run_id) %}
+				AND synthetic_run_id = {{String(synthetic_run_id)}}
+				AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+			{% else %}
+				AND synthetic_run_id = ''
+			{% end %}
 			AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 			AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 			{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
@@ -38,6 +44,6 @@ SQL >
 		engagement_total_ms AS engaged_ms
 	FROM daily
 	ORDER BY date ASC
-	LIMIT 400
+	LIMIT 800
 
 TYPE ENDPOINT

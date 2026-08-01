@@ -17,7 +17,14 @@ SQL >
 		round(if(wau = 0, 0, 100 * dau / wau), 2) AS dau_wau_stickiness,
 		round(if(mau = 0, 0, 100 * dau / mau), 2) AS dau_mau_stickiness
 	FROM product_creator_retention_exact
-	WHERE activity_date >= as_of_date - INTERVAL 29 DAY
+	WHERE copy_run_id = ''
+		{% if defined(synthetic_run_id) %}
+			AND synthetic_run_id = {{String(synthetic_run_id)}}
+			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+		{% else %}
+			AND synthetic_run_id = ''
+		{% end %}
+		AND activity_date >= as_of_date - INTERVAL 29 DAY
 		AND activity_date <= as_of_date
 		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
 

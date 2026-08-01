@@ -137,6 +137,7 @@ assert.deepEqual(copyAssertions, [
 		traffic_page_markers: 1,
 		activation_markers: 1,
 		retention_markers: 1,
+		identity_markers: 1,
 	},
 ]);
 

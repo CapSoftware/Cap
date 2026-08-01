@@ -1,7 +1,7 @@
 DESCRIPTION >
 	Rebuild active-creator cohorts from exact successful creation and sharing events.
 
-TOKEN product_events_agent_read READ
+TOKEN product_events_copy_runner READ
 
 NODE snapshot_product_creator_retention_exact_node
 SQL >
@@ -11,6 +11,7 @@ SQL >
 	{% end %}
 	WITH activity AS (
 		SELECT DISTINCT
+			synthetic_run_id,
 			user_id,
 			organization_id,
 			toDate(occurred_at, 'UTC') AS activity_date,
@@ -21,51 +22,57 @@ SQL >
 			AND (event_name != 'recording_completed' OR JSONExtractString(properties, 'status') IN ('success', 'degraded'))
 	), user_cohorts AS (
 		SELECT
+			synthetic_run_id,
 			user_id,
 			min(activity_date) AS cohort_date
 		FROM activity
-		GROUP BY user_id
+		GROUP BY synthetic_run_id, user_id
 	), organization_cohorts AS (
 		SELECT
+			synthetic_run_id,
 			organization_id,
 			min(activity_date) AS cohort_date
 		FROM activity
 		WHERE organization_id != ''
-		GROUP BY organization_id
+		GROUP BY synthetic_run_id, organization_id
 	), cohort_activity AS (
 		SELECT
+			synthetic_run_id,
 			cohort_date,
 			activity_date,
 			platform,
 			user_id,
 			'' AS organization_id
 		FROM activity
-		INNER JOIN user_cohorts USING user_id
+	INNER JOIN user_cohorts USING (synthetic_run_id, user_id)
 		UNION ALL
 		SELECT
+			synthetic_run_id,
 			cohort_date,
 			activity_date,
 			platform,
 			'' AS user_id,
 			organization_id
 		FROM activity
-		INNER JOIN organization_cohorts USING organization_id
+	INNER JOIN organization_cohorts USING (synthetic_run_id, organization_id)
 	)
 	SELECT
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
+		synthetic_run_id,
 		cohort_date,
 		activity_date,
 		platform,
 		uniqExactStateIf(user_id, user_id != '') AS creator_users,
 		uniqExactStateIf(organization_id, organization_id != '') AS creator_organizations
 	FROM cohort_activity
-	GROUP BY cohort_date, activity_date, platform
+	GROUP BY synthetic_run_id, cohort_date, activity_date, platform
 	{% if defined(copy_run_id) %}
 	UNION ALL
 	SELECT
 		now64(3) AS calculated_at,
 		{{String(copy_run_id)}} AS copy_run_id,
+		'' AS synthetic_run_id,
 		today() AS cohort_date,
 		today() AS activity_date,
 		'' AS platform,
