@@ -11,7 +11,9 @@ SQL >
 		(SELECT max(calculated_at) FROM product_events_daily_exact WHERE copy_run_id = '') AS product_calculated_at,
 		(SELECT max(calculated_at) FROM product_traffic_daily_exact) AS traffic_calculated_at,
 		(SELECT max(calculated_at) FROM product_creator_retention_exact) AS retention_calculated_at,
-		(SELECT max(calculated_at) FROM product_identity_funnel_exact) AS identity_calculated_at
+		(SELECT max(calculated_at) FROM product_identity_funnel_exact) AS identity_calculated_at,
+		(SELECT max(calculated_at) FROM product_attribution_daily_exact) AS attribution_calculated_at,
+		(SELECT max(calculated_at) FROM product_experiment_outcomes_exact) AS experiment_calculated_at
 	FROM product_events_health_hourly_exact
 	WHERE copy_run_id = ''
 

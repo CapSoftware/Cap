@@ -1,9 +1,12 @@
 DESCRIPTION >
-	Eight-hundred-day privacy-safe page, landing, exit, and foreground-engagement metrics.
+	Settled long-lived traffic-session partitions with one active generation per UTC date.
 
 TOKEN product_events_copy_runner APPEND
 
 SCHEMA >
+	source_cutoff DateTime64(3),
+	generation_id String,
+	is_marker UInt8,
 	calculated_at DateTime64(3),
 	copy_run_id String,
 	synthetic_run_id String,
@@ -11,22 +14,23 @@ SCHEMA >
 	platform LowCardinality(String),
 	app_version LowCardinality(String),
 	hostname LowCardinality(String),
-	pathname String,
 	country LowCardinality(String),
 	device LowCardinality(String),
 	browser LowCardinality(String),
 	os LowCardinality(String),
 	channel LowCardinality(String),
+	attribution_source LowCardinality(String),
+	attribution_medium LowCardinality(String),
+	campaign LowCardinality(String),
 	visitors AggregateFunction(uniqExact, String),
-	visits AggregateFunction(uniqExact, String),
+	visits UInt64,
 	pageviews UInt64,
-	landings UInt64,
-	exits UInt64,
-	engaged_ms UInt64,
-	scroll_depth_sum Float64
+	bounces UInt64,
+	visit_duration_ms UInt64,
+	engaged_ms UInt64
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, date, platform, app_version, hostname, pathname, country, device, browser, os, channel)
+ENGINE_SORTING_KEY (generation_id, is_marker, synthetic_run_id, date, platform, app_version, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
 ENGINE_TTL date + INTERVAL 800 DAY
 ENGINE_SETTINGS index_granularity = 256

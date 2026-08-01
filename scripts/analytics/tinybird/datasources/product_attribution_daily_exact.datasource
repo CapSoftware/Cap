@@ -1,5 +1,5 @@
 DESCRIPTION >
-	Eight-hundred-day privacy-safe daily visit metrics with exact visitor states and no raw identifiers.
+	Eight-hundred-day privacy-safe campaign attribution with exact visitor states for first, session, and last touch.
 
 TOKEN product_events_copy_runner APPEND
 
@@ -8,26 +8,20 @@ SCHEMA >
 	copy_run_id String,
 	synthetic_run_id String,
 	date Date,
+	attribution_model LowCardinality(String),
 	platform LowCardinality(String),
 	app_version LowCardinality(String),
 	hostname LowCardinality(String),
 	country LowCardinality(String),
-	device LowCardinality(String),
-	browser LowCardinality(String),
-	os LowCardinality(String),
-	channel LowCardinality(String),
 	attribution_source LowCardinality(String),
 	attribution_medium LowCardinality(String),
 	campaign LowCardinality(String),
 	visitors AggregateFunction(uniqExact, String),
 	visits UInt64,
-	pageviews UInt64,
-	bounces UInt64,
-	visit_duration_ms UInt64,
-	engaged_ms UInt64
+	pageviews UInt64
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, date, platform, app_version, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
+ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, date, attribution_model, platform, app_version, hostname, country, attribution_source, attribution_medium, campaign)
 ENGINE_TTL date + INTERVAL 800 DAY
 ENGINE_SETTINGS index_granularity = 256

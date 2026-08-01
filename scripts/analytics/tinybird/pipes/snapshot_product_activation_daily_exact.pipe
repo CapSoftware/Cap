@@ -14,7 +14,7 @@ SQL >
 			synthetic_run_id,
 			user_id,
 			min(occurred_at) AS signed_up_at
-		FROM product_events_canonical_v1
+		FROM product_events_canonical_current
 		WHERE event_name = 'user_signed_up'
 			AND user_id != ''
 		GROUP BY synthetic_run_id, user_id
@@ -23,7 +23,7 @@ SQL >
 			synthetic_run_id,
 			user_id,
 			min(occurred_at) AS activated_at
-		FROM product_events_canonical_v1
+		FROM product_events_canonical_current
 		WHERE event_name = 'share_link_created'
 			AND user_id != ''
 		GROUP BY synthetic_run_id, user_id
@@ -55,4 +55,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_activation_daily_exact
 COPY_MODE replace
-COPY_SCHEDULE 5-59/8 * * * *
+COPY_SCHEDULE @on-demand

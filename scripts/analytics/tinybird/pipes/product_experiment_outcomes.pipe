@@ -1,0 +1,42 @@
+DESCRIPTION >
+	Query aggregate 30-day first authoritative outcomes for actors with an explicit stable experiment exposure.
+
+TOKEN product_events_agent_read READ
+
+NODE product_experiment_outcomes_node
+SQL >
+	%
+	SELECT
+		experiment_id,
+		assignment_version,
+		variant,
+		platform,
+		app_version,
+		outcome_name,
+		toUInt64(sum(exposed_actors)) AS exposed_actors,
+		toUInt64(sum(converted_actors)) AS converted_actors,
+		round(if(sum(exposed_actors) = 0, 0, 100 * sum(converted_actors) / sum(exposed_actors)), 2) AS conversion_rate
+	FROM product_experiment_outcomes_exact
+	WHERE copy_run_id = ''
+		{% if defined(synthetic_run_id) %}
+			AND synthetic_run_id = {{String(synthetic_run_id)}}
+			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
+		{% else %}
+			AND synthetic_run_id = ''
+		{% end %}
+		AND cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(experiment_id) %} AND experiment_id = {{String(experiment_id)}} {% end %}
+		{% if defined(assignment_version) %} AND assignment_version = {{String(assignment_version)}} {% end %}
+		{% if defined(variant) %} AND variant = {{String(variant)}} {% end %}
+		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
+		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
+		{% if defined(outcome_name) %}
+			AND outcome_name = {{String(outcome_name)}}
+			AND throwIf(NOT has(['signup', 'share_created', 'paid_purchase'], {{String(outcome_name)}}), 'outcome_name is invalid') = 0
+		{% end %}
+	GROUP BY experiment_id, assignment_version, variant, platform, app_version, outcome_name
+	ORDER BY experiment_id ASC, assignment_version ASC, variant ASC, outcome_name ASC, platform ASC, app_version ASC
+	LIMIT greatest(1, least({{Int32(limit, 1000)}}, 1000))
+
+TYPE ENDPOINT

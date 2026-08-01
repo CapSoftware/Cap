@@ -1,0 +1,105 @@
+DESCRIPTION >
+	Rebuild exact campaign attribution for first, session, and last touch from canonical page views.
+
+TOKEN product_events_copy_runner READ
+
+NODE snapshot_product_attribution_daily_exact_node
+SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
+	WITH expanded_pageviews AS (
+		SELECT
+			synthetic_run_id,
+			session_id,
+			anonymous_id,
+			event_id,
+			occurred_at,
+			platform,
+			app_version,
+			hostname,
+			country,
+			attribution_model,
+			multiIf(
+				attribution_model = 'first', JSONExtractString(properties, 'first_touch_source'),
+				attribution_model = 'session', JSONExtractString(properties, 'session_touch_source'),
+				JSONExtractString(properties, 'last_touch_source')
+			) AS attribution_source,
+			multiIf(
+				attribution_model = 'first', JSONExtractString(properties, 'first_touch_medium'),
+				attribution_model = 'session', JSONExtractString(properties, 'session_touch_medium'),
+				JSONExtractString(properties, 'last_touch_medium')
+			) AS attribution_medium,
+			multiIf(
+				attribution_model = 'first', JSONExtractString(properties, 'first_touch_campaign'),
+				attribution_model = 'session', JSONExtractString(properties, 'session_touch_campaign'),
+				JSONExtractString(properties, 'last_touch_campaign')
+			) AS campaign
+		FROM product_events_canonical_current
+		ARRAY JOIN ['first', 'session', 'last'] AS attribution_model
+		WHERE event_name = 'page_view'
+			AND (traffic_class = 'external' OR synthetic_run_id != '')
+			AND session_id != ''
+			AND anonymous_id != ''
+	), sessions AS (
+		SELECT
+			synthetic_run_id,
+			session_id,
+			attribution_model,
+			concat('anonymous:', argMin(anonymous_id, tuple(occurred_at, event_id))) AS visitor_id,
+			min(occurred_at) AS started_at,
+			argMin(platform, tuple(occurred_at, event_id)) AS platform,
+			argMin(app_version, tuple(occurred_at, event_id)) AS app_version,
+			argMin(hostname, tuple(occurred_at, event_id)) AS hostname,
+			argMin(country, tuple(occurred_at, event_id)) AS country,
+			if(attribution_model = 'last', argMax(attribution_source, tuple(occurred_at, event_id)), argMin(attribution_source, tuple(occurred_at, event_id))) AS attribution_source,
+			if(attribution_model = 'last', argMax(attribution_medium, tuple(occurred_at, event_id)), argMin(attribution_medium, tuple(occurred_at, event_id))) AS attribution_medium,
+			if(attribution_model = 'last', argMax(campaign, tuple(occurred_at, event_id)), argMin(campaign, tuple(occurred_at, event_id))) AS campaign,
+			toUInt64(count()) AS session_pageviews
+		FROM expanded_pageviews
+		GROUP BY synthetic_run_id, session_id, attribution_model
+	)
+	SELECT
+		now64(3) AS calculated_at,
+		'' AS copy_run_id,
+		synthetic_run_id,
+		toDate(started_at, 'UTC') AS date,
+		attribution_model,
+		platform,
+		app_version,
+		hostname,
+		country,
+		attribution_source,
+		attribution_medium,
+		campaign,
+		uniqExactState(visitor_id) AS visitors,
+		toUInt64(count()) AS visits,
+		toUInt64(sum(session_pageviews)) AS pageviews
+	FROM sessions
+	GROUP BY synthetic_run_id, date, attribution_model, platform, app_version, hostname, country, attribution_source, attribution_medium, campaign
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		'' AS synthetic_run_id,
+		today() AS date,
+		'session' AS attribution_model,
+		'' AS platform,
+		'' AS app_version,
+		'' AS hostname,
+		'' AS country,
+		'' AS attribution_source,
+		'' AS attribution_medium,
+		'' AS campaign,
+		uniqExactStateIf('', 0) AS visitors,
+		toUInt64(0) AS visits,
+		toUInt64(0) AS pageviews
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
+
+TYPE COPY
+TARGET_DATASOURCE product_attribution_daily_exact
+COPY_MODE replace
+COPY_SCHEDULE @on-demand

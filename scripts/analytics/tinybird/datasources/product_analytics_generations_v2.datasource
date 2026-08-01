@@ -1,0 +1,18 @@
+DESCRIPTION >
+	Publication barrier for complete cross-model bounded analytics generations.
+
+TOKEN product_events_copy_runner APPEND
+
+SCHEMA >
+	generation_id String,
+	source_cutoff DateTime64(3),
+	generation_kind LowCardinality(String),
+	settled_date Date,
+	published_at DateTime64(3),
+	copy_run_id String
+
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(source_cutoff)
+ENGINE_SORTING_KEY (generation_kind, settled_date, source_cutoff, generation_id)
+ENGINE_TTL toDateTime(source_cutoff) + INTERVAL 807 DAY
+ENGINE_SETTINGS index_granularity = 256

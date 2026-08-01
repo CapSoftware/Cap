@@ -1,11 +1,17 @@
 DESCRIPTION >
-	Rebuild exact 30-minute client-session metrics from canonical external page events.
+	Build one generation of bounded hot or settled 30-minute traffic-session decisions.
 
 TOKEN product_events_copy_runner READ
 
-NODE snapshot_product_traffic_daily_exact_node
+NODE product_traffic_daily_bounded_v2_node
 SQL >
 	%
+	{% if not defined(source_cutoff) %}
+		{{ error('source_cutoff is required') }}
+	{% end %}
+	{% if not defined(generation_id) %}
+		{{ error('generation_id is required') }}
+	{% end %}
 	{% if defined(copy_max_threads) %}
 		{{max_threads(Int32(copy_max_threads))}}
 	{% end %}
@@ -15,7 +21,7 @@ SQL >
 			session_id,
 			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS session_engaged_ms,
 			max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth')))) AS session_max_scroll_depth
-		FROM product_events_canonical_current
+		FROM product_events_canonical_window
 		WHERE event_name = 'page_engagement'
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
@@ -38,7 +44,7 @@ SQL >
 			argMin(JSONExtractString(properties, 'session_touch_medium'), tuple(occurred_at, event_id)) AS attribution_medium,
 			argMin(JSONExtractString(properties, 'session_touch_campaign'), tuple(occurred_at, event_id)) AS campaign,
 			toUInt64(count()) AS session_pageviews
-		FROM product_events_canonical_current
+		FROM product_events_canonical_window
 		WHERE event_name = 'page_view'
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
@@ -46,6 +52,9 @@ SQL >
 		GROUP BY synthetic_run_id, session_id
 	)
 	SELECT
+		toDateTime64({{DateTime64(source_cutoff)}}, 3) AS source_cutoff,
+		{{String(generation_id)}} AS generation_id,
+		toUInt8(0) AS is_marker,
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
 		synthetic_run_id,
@@ -70,34 +79,20 @@ SQL >
 	FROM sessions
 	LEFT JOIN session_engagement USING (synthetic_run_id, session_id)
 	GROUP BY synthetic_run_id, date, platform, app_version, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign
-	{% if defined(copy_run_id) %}
+	HAVING date >= {% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY {% end %}
+		AND date < {% if defined(settled_date) %} toDate({{Date(settled_date)}}) + INTERVAL 1 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) + INTERVAL 1 DAY {% end %}
 	UNION ALL
 	SELECT
-		now64(3) AS calculated_at,
-		{{String(copy_run_id)}} AS copy_run_id,
-		'' AS synthetic_run_id,
-		today() AS date,
-		'' AS platform,
-		'' AS app_version,
-		'' AS hostname,
-		'' AS country,
-		'' AS device,
-		'' AS browser,
-		'' AS os,
-		'' AS channel,
-		'' AS attribution_source,
-		'' AS attribution_medium,
-		'' AS campaign,
-		uniqExactStateIf('', 0) AS visitors,
-		toUInt64(0) AS visits,
-		toUInt64(0) AS pageviews,
-		toUInt64(0) AS bounces,
-		toUInt64(0) AS visit_duration_ms,
-		toUInt64(0) AS engaged_ms
-	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
-	{% end %}
+		toDateTime64({{DateTime64(source_cutoff)}}, 3),
+		{{String(generation_id)}},
+		toUInt8(1),
+		now64(3),
+		{% if defined(copy_run_id) %} {{String(copy_run_id)}} {% else %} '' {% end %},
+		'',
+		{% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) {% end %},
+		'', '', '', '', '', '', '', '', '', '', '',
+		uniqExactStateIf('', 0),
+		toUInt64(0), toUInt64(0), toUInt64(0), toUInt64(0), toUInt64(0)
+	WHERE throwIf(length({{String(generation_id)}}) < 8 OR length({{String(generation_id)}}) > 128, 'generation_id has an invalid length') = 0
+		{% if defined(settled_date) %} AND throwIf(toDate({{Date(settled_date)}}) > toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY, 'settled_date is inside the mutable window') = 0 {% end %}
 
-TYPE COPY
-TARGET_DATASOURCE product_traffic_daily_exact
-COPY_MODE replace
-COPY_SCHEDULE @on-demand

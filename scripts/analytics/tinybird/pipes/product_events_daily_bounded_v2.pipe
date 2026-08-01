@@ -1,15 +1,24 @@
 DESCRIPTION >
-	Rebuild exact decision metrics from one non-conflicting canonical payload per event ID.
+	Build one generation of bounded hot or settled daily event decisions from canonical event states.
 
 TOKEN product_events_copy_runner READ
 
-NODE snapshot_product_events_daily_exact_node
+NODE product_events_daily_bounded_v2_node
 SQL >
 	%
+	{% if not defined(source_cutoff) %}
+		{{ error('source_cutoff is required') }}
+	{% end %}
+	{% if not defined(generation_id) %}
+		{{ error('generation_id is required') }}
+	{% end %}
 	{% if defined(copy_max_threads) %}
 		{{max_threads(Int32(copy_max_threads))}}
 	{% end %}
 	SELECT
+		toDateTime64({{DateTime64(source_cutoff)}}, 3) AS source_cutoff,
+		{{String(generation_id)}} AS generation_id,
+		toUInt8(0) AS is_marker,
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
 		toDate(occurred_at, 'UTC') AS date,
@@ -78,32 +87,26 @@ SQL >
 			event_name = 'subscription_refunded', -JSONExtractInt(properties, 'amount_refunded_minor'),
 			0
 		))) AS revenue_minor
-	FROM product_events_canonical_current
+	FROM product_events_canonical_window
+	WHERE toDate(occurred_at, 'UTC') >= {% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY {% end %}
+		AND toDate(occurred_at, 'UTC') < {% if defined(settled_date) %} toDate({{Date(settled_date)}}) + INTERVAL 1 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) + INTERVAL 1 DAY {% end %}
 	GROUP BY date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, recording_status, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version
-	{% if defined(copy_run_id) %}
 	UNION ALL
 	SELECT
+		toDateTime64({{DateTime64(source_cutoff)}}, 3),
+		{{String(generation_id)}},
+		toUInt8(1),
 		now64(3),
-		{{String(copy_run_id)}},
-		today(),
-		'',
-		toUInt16(0),
-		'', '', '', '', '', '', '', '', '', '', '',
-		'', '', '', '', '', '', '', '', '', '',
+		{% if defined(copy_run_id) %} {{String(copy_run_id)}} {% else %} '' {% end %},
+		{% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) {% end %},
+		'', toUInt16(0), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
 		toInt64(0), toInt64(0), toInt64(0), toInt64(0),
 		'', '', '', '', '',
 		toInt64(0), toInt64(0), toInt64(0), toInt64(0),
 		'', '', '',
-		toUInt64(0),
-		toUInt64(0),
-		uniqExactStateIf('', 0),
-		uniqExactStateIf('', 0),
-		uniqExactStateIf('', 0),
+		toUInt64(0), toUInt64(0),
+		uniqExactStateIf('', 0), uniqExactStateIf('', 0), uniqExactStateIf('', 0),
 		toInt64(0)
-	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
-	{% end %}
+	WHERE throwIf(length({{String(generation_id)}}) < 8 OR length({{String(generation_id)}}) > 128, 'generation_id has an invalid length') = 0
+		{% if defined(settled_date) %} AND throwIf(toDate({{Date(settled_date)}}) > toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY, 'settled_date is inside the mutable window') = 0 {% end %}
 
-TYPE COPY
-TARGET_DATASOURCE product_events_daily_exact
-COPY_MODE replace
-COPY_SCHEDULE @on-demand

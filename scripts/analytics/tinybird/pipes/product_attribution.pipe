@@ -1,19 +1,20 @@
 DESCRIPTION >
-	Query device, browser, and operating-system traffic without raw user agents.
+	Query aggregate first, session, and last campaign attribution without returning visitor or session identifiers.
 
 TOKEN product_events_agent_read READ
 
-NODE product_traffic_technology_node
+NODE product_attribution_node
 SQL >
 	%
 	SELECT
-		device,
-		browser,
-		os,
+		attribution_model,
+		attribution_source AS source,
+		attribution_medium AS medium,
+		campaign,
 		uniqExactMerge(visitors) AS visitors,
-		sum(visits) AS visits,
-		sum(pageviews) AS pageviews
-	FROM product_traffic_daily_exact
+		toUInt64(sum(visits)) AS visits,
+		toUInt64(sum(pageviews)) AS pageviews
+	FROM product_attribution_daily_exact
 	WHERE copy_run_id = ''
 		{% if defined(synthetic_run_id) %}
 			AND synthetic_run_id = {{String(synthetic_run_id)}}
@@ -23,12 +24,17 @@ SQL >
 		{% end %}
 		AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(attribution_model) %}
+			AND attribution_model = {{String(attribution_model)}}
+			AND throwIf(NOT has(['first', 'session', 'last'], {{String(attribution_model)}}), 'attribution_model must be first, session, or last') = 0
+		{% end %}
 		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
 		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
 		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
 		{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
-	GROUP BY device, browser, os
-	ORDER BY visits DESC, device ASC, browser ASC, os ASC
-	LIMIT 500
+		{% if defined(source) %} AND attribution_source = {{String(source)}} {% end %}
+	GROUP BY attribution_model, attribution_source, attribution_medium, campaign
+	ORDER BY attribution_model ASC, visits DESC, source ASC, medium ASC, campaign ASC
+	LIMIT greatest(1, least({{Int32(limit, 300)}}, 1000))
 
 TYPE ENDPOINT

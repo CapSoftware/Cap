@@ -1,0 +1,43 @@
+DESCRIPTION >
+	Publish one generation only after every bounded decision model has completed.
+
+TOKEN product_events_copy_runner READ
+
+NODE publish_product_analytics_generation_v2_node
+SQL >
+	%
+	{% if not defined(source_cutoff) %}
+		{{ error('source_cutoff is required') }}
+	{% end %}
+	{% if not defined(generation_id) %}
+		{{ error('generation_id is required') }}
+	{% end %}
+	{% if not defined(generation_kind) %}
+		{{ error('generation_kind is required') }}
+	{% end %}
+	SELECT
+		{{String(generation_id)}} AS generation_id,
+		toDateTime64({{DateTime64(source_cutoff)}}, 3) AS source_cutoff,
+		{{String(generation_kind)}} AS generation_kind,
+		{% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate('1970-01-01') {% end %} AS settled_date,
+		now64(3) AS published_at,
+		{% if defined(copy_run_id) %} {{String(copy_run_id)}} {% else %} '' {% end %} AS copy_run_id
+	WHERE throwIf(length({{String(generation_id)}}) < 8 OR length({{String(generation_id)}}) > 128, 'generation_id has an invalid length') = 0
+		AND throwIf({{String(generation_kind)}} NOT IN ('hot', 'cold'), 'generation_kind is invalid') = 0
+		{% if defined(settled_date) %}
+			AND throwIf({{String(generation_kind)}} != 'cold', 'settled_date requires a cold generation') = 0
+			AND throwIf(toDate({{Date(settled_date)}}) > toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY, 'settled_date is inside the mutable window') = 0
+			AND throwIf((SELECT count() FROM product_events_daily_cold_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND date = toDate({{Date(settled_date)}}) AND is_marker = 1) = 0, 'event cold generation is incomplete') = 0
+			AND throwIf((SELECT count() FROM product_traffic_daily_cold_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND date = toDate({{Date(settled_date)}}) AND is_marker = 1) = 0, 'traffic cold generation is incomplete') = 0
+			AND throwIf((SELECT count() FROM product_traffic_pages_daily_cold_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND date = toDate({{Date(settled_date)}}) AND is_marker = 1) = 0, 'page cold generation is incomplete') = 0
+		{% else %}
+			AND throwIf({{String(generation_kind)}} != 'hot', 'cold generation requires settled_date') = 0
+			AND throwIf((SELECT count() FROM product_events_daily_hot_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND is_marker = 1) = 0, 'event hot generation is incomplete') = 0
+			AND throwIf((SELECT count() FROM product_traffic_daily_hot_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND is_marker = 1) = 0, 'traffic hot generation is incomplete') = 0
+			AND throwIf((SELECT count() FROM product_traffic_pages_daily_hot_v2 WHERE generation_id = {{String(generation_id)}} AND source_cutoff = toDateTime64({{DateTime64(source_cutoff)}}, 3) AND is_marker = 1) = 0, 'page hot generation is incomplete') = 0
+		{% end %}
+
+TYPE COPY
+TARGET_DATASOURCE product_analytics_generations_v2
+COPY_MODE append
+COPY_SCHEDULE @on-demand

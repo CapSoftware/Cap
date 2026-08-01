@@ -1,0 +1,145 @@
+DESCRIPTION >
+	Rebuild aggregate 30-day first-outcome cohorts anchored only to explicit, stable experiment exposures.
+
+TOKEN product_events_copy_runner READ
+
+NODE snapshot_product_experiment_outcomes_exact_node
+SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
+	WITH identity_candidates AS (
+		SELECT synthetic_run_id, anonymous_id, user_id, event_id, occurred_at
+		FROM product_events_canonical_current
+		WHERE event_name = 'identity_linked'
+			AND anonymous_id != ''
+			AND user_id != ''
+		UNION ALL
+		SELECT synthetic_run_id, anonymous_id, user_id, event_id, occurred_at
+		FROM product_events_canonical_current
+		WHERE event_name = 'purchase_completed'
+			AND JSONExtractString(properties, 'payment_status') = 'paid'
+			AND JSONExtractBool(properties, 'is_guest_checkout')
+			AND anonymous_id != ''
+			AND user_id != ''
+	), identity_links AS (
+		SELECT
+			synthetic_run_id,
+			anonymous_id,
+			argMin(user_id, tuple(occurred_at, event_id)) AS user_id
+		FROM identity_candidates
+		GROUP BY synthetic_run_id, anonymous_id
+		HAVING uniqExact(user_id) = 1
+	), resolved_exposures AS (
+		SELECT
+			exposures.synthetic_run_id AS synthetic_run_id,
+			if(exposures.user_id != '', exposures.user_id, coalesce(identity_links.user_id, '')) AS resolved_user_id,
+			if(
+				if(exposures.user_id != '', exposures.user_id, coalesce(identity_links.user_id, '')) != '',
+				concat('user:', if(exposures.user_id != '', exposures.user_id, coalesce(identity_links.user_id, ''))),
+				concat('anonymous:', exposures.anonymous_id)
+			) AS actor_id,
+			exposures.occurred_at AS occurred_at,
+			exposures.event_id AS event_id,
+			JSONExtractString(exposures.properties, 'experiment_id') AS experiment_id,
+			JSONExtractString(exposures.properties, 'assignment_version') AS assignment_version,
+			JSONExtractString(exposures.properties, 'variant') AS variant,
+			exposures.platform AS platform,
+			exposures.app_version AS app_version
+		FROM product_events_canonical_current AS exposures
+		LEFT JOIN identity_links ON exposures.synthetic_run_id = identity_links.synthetic_run_id AND exposures.anonymous_id = identity_links.anonymous_id
+		WHERE exposures.event_name = 'experiment_exposed'
+			AND (exposures.traffic_class = 'external' OR exposures.synthetic_run_id != '')
+			AND (exposures.user_id != '' OR exposures.anonymous_id != '')
+	), exposures AS (
+		SELECT
+			synthetic_run_id,
+			actor_id,
+			argMin(resolved_user_id, tuple(occurred_at, event_id)) AS user_id,
+			min(occurred_at) AS exposed_at,
+			experiment_id,
+			assignment_version,
+			argMin(variant, tuple(occurred_at, event_id)) AS variant,
+			argMin(platform, tuple(occurred_at, event_id)) AS platform,
+			argMin(app_version, tuple(occurred_at, event_id)) AS app_version
+		FROM resolved_exposures
+		WHERE experiment_id != ''
+			AND assignment_version != ''
+			AND variant != ''
+		GROUP BY synthetic_run_id, actor_id, experiment_id, assignment_version
+		HAVING uniqExact(variant) = 1
+	), outcome_candidates AS (
+		SELECT
+			synthetic_run_id,
+			user_id,
+			event_name,
+			occurred_at
+		FROM product_events_canonical_current
+		WHERE user_id != ''
+			AND (traffic_class = 'external' OR synthetic_run_id != '')
+			AND event_name IN ('user_signed_up', 'share_link_created', 'purchase_completed')
+			AND (event_name != 'purchase_completed' OR JSONExtractString(properties, 'payment_status') = 'paid')
+	), exposure_outcomes AS (
+		SELECT
+			exposures.synthetic_run_id AS synthetic_run_id,
+			exposures.actor_id AS actor_id,
+			exposures.user_id AS user_id,
+			exposures.exposed_at AS exposed_at,
+			exposures.experiment_id AS experiment_id,
+			exposures.assignment_version AS assignment_version,
+			exposures.variant AS variant,
+			exposures.platform AS platform,
+			exposures.app_version AS app_version,
+			minIf(outcomes.occurred_at, outcomes.event_name = 'user_signed_up' AND outcomes.occurred_at >= exposures.exposed_at AND outcomes.occurred_at < exposures.exposed_at + INTERVAL 30 DAY) AS signed_up_at,
+			minIf(outcomes.occurred_at, outcomes.event_name = 'share_link_created' AND outcomes.occurred_at >= exposures.exposed_at AND outcomes.occurred_at < exposures.exposed_at + INTERVAL 30 DAY) AS shared_at,
+			minIf(outcomes.occurred_at, outcomes.event_name = 'purchase_completed' AND outcomes.occurred_at >= exposures.exposed_at AND outcomes.occurred_at < exposures.exposed_at + INTERVAL 30 DAY) AS purchased_at
+		FROM exposures
+		LEFT JOIN outcome_candidates AS outcomes ON exposures.synthetic_run_id = outcomes.synthetic_run_id AND exposures.user_id = outcomes.user_id
+		GROUP BY exposures.synthetic_run_id, exposures.actor_id, exposures.user_id, exposures.exposed_at, exposures.experiment_id, exposures.assignment_version, exposures.variant, exposures.platform, exposures.app_version
+	), outcome_rows AS (
+		SELECT *, 'signup' AS outcome_name, signed_up_at AS outcome_at FROM exposure_outcomes
+		UNION ALL
+		SELECT *, 'share_created' AS outcome_name, shared_at AS outcome_at FROM exposure_outcomes
+		UNION ALL
+		SELECT *, 'paid_purchase' AS outcome_name, purchased_at AS outcome_at FROM exposure_outcomes
+	)
+	SELECT
+		now64(3) AS calculated_at,
+		'' AS copy_run_id,
+		synthetic_run_id,
+		toDate(exposed_at, 'UTC') AS cohort_date,
+		experiment_id,
+		assignment_version,
+		variant,
+		platform,
+		app_version,
+		outcome_name,
+		toUInt64(count()) AS exposed_actors,
+		toUInt64(countIf(outcome_at >= exposed_at AND outcome_at < exposed_at + INTERVAL 30 DAY)) AS converted_actors,
+		toUInt8(0) AS copy_marker
+	FROM outcome_rows
+	GROUP BY synthetic_run_id, cohort_date, experiment_id, assignment_version, variant, platform, app_version, outcome_name
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		'' AS synthetic_run_id,
+		today() AS cohort_date,
+		'' AS experiment_id,
+		'' AS assignment_version,
+		'' AS variant,
+		'' AS platform,
+		'' AS app_version,
+		'' AS outcome_name,
+		toUInt64(0) AS exposed_actors,
+		toUInt64(0) AS converted_actors,
+		toUInt8(1) AS copy_marker
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
+
+TYPE COPY
+TARGET_DATASOURCE product_experiment_outcomes_exact
+COPY_MODE replace
+COPY_SCHEDULE @on-demand

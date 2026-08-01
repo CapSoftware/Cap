@@ -1,18 +1,19 @@
 DESCRIPTION >
-	Query device, browser, and operating-system traffic without raw user agents.
+	Query selected-range unique visitors and exact traffic totals by merging privacy-safe aggregate states across UTC dates.
 
 TOKEN product_events_agent_read READ
 
-NODE product_traffic_technology_node
+NODE product_traffic_totals_node
 SQL >
 	%
 	SELECT
-		device,
-		browser,
-		os,
 		uniqExactMerge(visitors) AS visitors,
-		sum(visits) AS visits,
-		sum(pageviews) AS pageviews
+		toUInt64(sum(visits)) AS visits,
+		toUInt64(sum(pageviews)) AS pageviews,
+		round(if(sum(visits) = 0, 0, sum(pageviews) / sum(visits)), 2) AS views_per_visit,
+		round(if(sum(visits) = 0, 0, 100 * sum(bounces) / sum(visits)), 2) AS bounce_rate,
+		toUInt64(if(sum(visits) = 0, 0, sum(visit_duration_ms) / sum(visits))) AS visit_duration_ms,
+		toUInt64(sum(engaged_ms)) AS engaged_ms
 	FROM product_traffic_daily_exact
 	WHERE copy_run_id = ''
 		{% if defined(synthetic_run_id) %}
@@ -27,8 +28,10 @@ SQL >
 		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
 		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
 		{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}
-	GROUP BY device, browser, os
-	ORDER BY visits DESC, device ASC, browser ASC, os ASC
-	LIMIT 500
+		{% if defined(device) %} AND device = {{String(device)}} {% end %}
+		{% if defined(browser) %} AND browser = {{String(browser)}} {% end %}
+		{% if defined(os) %} AND os = {{String(os)}} {% end %}
+		{% if defined(channel) %} AND channel = {{String(channel)}} {% end %}
+		{% if defined(source) %} AND attribution_source = {{String(source)}} {% end %}
 
 TYPE ENDPOINT

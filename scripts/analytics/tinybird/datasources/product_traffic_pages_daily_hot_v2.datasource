@@ -1,9 +1,12 @@
 DESCRIPTION >
-	Eight-hundred-day privacy-safe page, landing, exit, and foreground-engagement metrics.
+	Bounded mutable page, landing, exit, and foreground-engagement window.
 
 TOKEN product_events_copy_runner APPEND
 
 SCHEMA >
+	source_cutoff DateTime64(3),
+	generation_id String,
+	is_marker UInt8,
 	calculated_at DateTime64(3),
 	copy_run_id String,
 	synthetic_run_id String,
@@ -27,6 +30,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, date, platform, app_version, hostname, pathname, country, device, browser, os, channel)
-ENGINE_TTL date + INTERVAL 800 DAY
+ENGINE_SORTING_KEY (generation_id, is_marker, synthetic_run_id, date, platform, app_version, hostname, pathname, country, device, browser, os, channel)
+ENGINE_TTL date + INTERVAL 16 DAY
 ENGINE_SETTINGS index_granularity = 256

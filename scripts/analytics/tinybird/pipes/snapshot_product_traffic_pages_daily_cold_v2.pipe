@@ -1,0 +1,18 @@
+DESCRIPTION >
+	Append one settled UTC page-decision partition for a controller generation.
+
+TOKEN product_events_copy_runner READ
+
+NODE snapshot_product_traffic_pages_daily_cold_v2_node
+SQL >
+	%
+	{% if not defined(settled_date) %}
+		{{ error('settled_date is required') }}
+	{% end %}
+	SELECT *
+	FROM product_traffic_pages_daily_bounded_v2
+
+TYPE COPY
+TARGET_DATASOURCE product_traffic_pages_daily_cold_v2
+COPY_MODE append
+COPY_SCHEDULE @on-demand

@@ -158,9 +158,11 @@ function parseFilters(params: SearchParams): AdminAnalyticsFilters {
 }
 
 function trafficTotals(data: AdminAnalyticsDashboard) {
-	const visitorDays = sumBy(data.trafficOverview, (row) => row.visitors);
-	const visits = sumBy(data.trafficOverview, (row) => row.visits);
-	const pageviews = sumBy(data.trafficOverview, (row) => row.pageviews);
+	const exact = data.trafficTotals[0];
+	const visits =
+		exact?.visits ?? sumBy(data.trafficOverview, (row) => row.visits);
+	const pageviews =
+		exact?.pageviews ?? sumBy(data.trafficOverview, (row) => row.pageviews);
 	const weightedBounces = sumBy(
 		data.trafficOverview,
 		(row) => row.bounceRate * row.visits,
@@ -171,12 +173,15 @@ function trafficTotals(data: AdminAnalyticsDashboard) {
 	);
 	const latestDay = data.trafficOverview.at(-1);
 	return {
-		visitorDays,
+		visitors: data.trafficTotalsAvailable ? (exact?.visitors ?? 0) : undefined,
 		visits,
 		pageviews,
-		viewsPerVisit: visits === 0 ? 0 : pageviews / visits,
-		bounceRate: visits === 0 ? 0 : weightedBounces / visits,
-		visitDurationMs: visits === 0 ? 0 : weightedDuration / visits,
+		viewsPerVisit:
+			exact?.viewsPerVisit ?? (visits === 0 ? 0 : pageviews / visits),
+		bounceRate:
+			exact?.bounceRate ?? (visits === 0 ? 0 : weightedBounces / visits),
+		visitDurationMs:
+			exact?.visitDurationMs ?? (visits === 0 ? 0 : weightedDuration / visits),
 		latestDay,
 	};
 }
@@ -203,6 +208,20 @@ function activationTotals(data: AdminAnalyticsDashboard) {
 function eventCount(data: AdminAnalyticsDashboard, eventName: string): number {
 	return sumBy(
 		data.productEvents.filter((row) => row.eventName === eventName),
+		(row) => row.events,
+	);
+}
+
+function recordingCount(
+	data: AdminAnalyticsDashboard,
+	status: "success" | "degraded" | "failed" | "unknown",
+): number {
+	return sumBy(
+		data.productEvents.filter(
+			(row) =>
+				row.eventName === "recording_completed" &&
+				(row.recordingStatus || "unknown") === status,
+		),
 		(row) => row.events,
 	);
 }
@@ -448,13 +467,22 @@ function TrafficSection({ data }: { data: AdminAnalyticsDashboard }) {
 	const totals = trafficTotals(data);
 	return (
 		<Section
-			description="Privacy-safe, deduplicated traffic aggregates. Visitor-days are daily uniques summed across the selected range."
+			description="Privacy-safe, deduplicated traffic aggregates. Visitors are exact uniques across the complete selected range, not summed daily uniques."
 			title="Website traffic"
 		>
 			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
 				<MetricCard
-					label="Visitor-days"
-					value={formatInteger(totals.visitorDays)}
+					detail={
+						totals.visitors === undefined
+							? "Unavailable on the active rollback target"
+							: "Selected-range unique visitors"
+					}
+					label="Visitors"
+					value={
+						totals.visitors === undefined
+							? "Unavailable"
+							: formatInteger(totals.visitors)
+					}
 				/>
 				<MetricCard label="Visits" value={formatInteger(totals.visits)} />
 				<MetricCard label="Pageviews" value={formatInteger(totals.pageviews)} />
@@ -543,9 +571,60 @@ function PagesSection({ data }: { data: AdminAnalyticsDashboard }) {
 function AcquisitionSection({ data }: { data: AdminAnalyticsDashboard }) {
 	return (
 		<Section
-			description="Server-normalized acquisition, geography, and technology dimensions without raw IP addresses or user agents."
+			description="Server-normalized acquisition, geography, and technology dimensions without raw IP addresses, user agents, or identity mappings. Campaign attribution is explicit: first touch is the visitor's earliest campaign, session touch is fixed at the 30-minute session boundary, and last touch is the latest campaign-bearing navigation."
 			title="Acquisition and audience"
 		>
+			{data.trafficAttributionAvailable ? (
+				<div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+					<h3 className="border-b border-gray-200 px-4 py-3 text-sm font-semibold">
+						Campaign attribution models
+					</h3>
+					<table className="min-w-full divide-y divide-gray-200 text-sm">
+						<thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+							<tr>
+								<th className="px-4 py-3 font-medium">Model</th>
+								<th className="px-4 py-3 font-medium">Source</th>
+								<th className="px-4 py-3 font-medium">Campaign</th>
+								<th className="px-4 py-3 text-right font-medium">Visitors</th>
+								<th className="px-4 py-3 text-right font-medium">Visits</th>
+								<th className="px-4 py-3 text-right font-medium">Pageviews</th>
+							</tr>
+						</thead>
+						<tbody className="divide-y divide-gray-100">
+							{data.trafficAttribution.slice(0, 45).map((row, index) => (
+								<tr
+									key={`${row.attributionModel}:${row.source}:${row.medium}:${row.campaign}:${index}`}
+								>
+									<td className="px-4 py-3 font-medium capitalize text-gray-900">
+										{row.attributionModel}
+									</td>
+									<td className="px-4 py-3 text-gray-600">
+										{row.source || "Direct"}
+										{row.medium ? ` · ${row.medium}` : ""}
+									</td>
+									<td className="px-4 py-3 text-gray-600">
+										{row.campaign || "Unattributed"}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.visitors)}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.visits)}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatInteger(row.pageviews)}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			) : (
+				<EmptyState>
+					Campaign attribution models are unavailable on the active rollback
+					target.
+				</EmptyState>
+			)}
 			<div className="grid gap-4 xl:grid-cols-3">
 				<div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
 					<h3 className="border-b border-gray-200 px-4 py-3 text-sm font-semibold">
@@ -736,9 +815,23 @@ function ProductSection({
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<MetricCard
-					label="Recordings completed"
-					value={formatInteger(eventCount(data, "recording_completed"))}
+					label="Successful recordings"
+					value={formatInteger(recordingCount(data, "success"))}
 				/>
+				<MetricCard
+					label="Degraded recordings"
+					value={formatInteger(recordingCount(data, "degraded"))}
+				/>
+				<MetricCard
+					label="Failed recordings"
+					value={formatInteger(recordingCount(data, "failed"))}
+				/>
+				<MetricCard
+					label="Unknown recording status"
+					value={formatInteger(recordingCount(data, "unknown"))}
+				/>
+			</div>
+			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<MetricCard
 					label="Uploads completed"
 					value={formatInteger(eventCount(data, "multipart_upload_complete"))}
@@ -910,50 +1003,16 @@ function RevenueSection({ data }: { data: AdminAnalyticsDashboard }) {
 }
 
 function ExperimentationSection({ data }: { data: AdminAnalyticsDashboard }) {
-	const exposures = new Map<
-		string,
-		{
-			experimentId: string;
-			variant: string;
-			assignmentVersion: string;
-			exposures: number;
-			actorDays: number;
-			userDays: number;
-		}
-	>();
-	for (const row of data.productEvents) {
-		if (row.eventName !== "experiment_exposed" || !row.experimentId) continue;
-		const key = [
-			row.experimentId,
-			row.experimentVariant,
-			row.assignmentVersion,
-		].join("\u0000");
-		const current = exposures.get(key) ?? {
-			experimentId: row.experimentId,
-			variant: row.experimentVariant,
-			assignmentVersion: row.assignmentVersion,
-			exposures: 0,
-			actorDays: 0,
-			userDays: 0,
-		};
-		current.exposures += row.events;
-		current.actorDays += row.actors;
-		current.userDays += row.users;
-		exposures.set(key, current);
-	}
-	const rows = [...exposures.values()].sort(
-		(left, right) =>
-			left.experimentId.localeCompare(right.experimentId) ||
-			left.assignmentVersion.localeCompare(right.assignmentVersion) ||
-			left.variant.localeCompare(right.variant),
-	);
-
 	return (
 		<Section
-			description="Exposure is recorded when a stable assignment is rendered. Counts never infer assignment from a later conversion; actor-day and user-day totals are additive daily uniques, not selected-range unique people."
+			description="Every cohort begins with a recorded stable exposure. Outcomes are the first authoritative signup, created share, or paid purchase within 30 days after that exposure; conversion events never infer assignment. Conflicting variants for one actor and assignment version are excluded."
 			title="Experiments"
 		>
-			{rows.length === 0 ? (
+			{!data.experimentOutcomesAvailable ? (
+				<EmptyState>
+					Experiment outcomes are unavailable on the active rollback target.
+				</EmptyState>
+			) : data.experimentOutcomes.length === 0 ? (
 				<EmptyState>No experiment exposures in this period.</EmptyState>
 			) : (
 				<div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -963,15 +1022,16 @@ function ExperimentationSection({ data }: { data: AdminAnalyticsDashboard }) {
 								<th className="px-4 py-3 font-medium">Experiment</th>
 								<th className="px-4 py-3 font-medium">Version</th>
 								<th className="px-4 py-3 font-medium">Variant</th>
-								<th className="px-4 py-3 text-right font-medium">Exposures</th>
-								<th className="px-4 py-3 text-right font-medium">Actor-days</th>
-								<th className="px-4 py-3 text-right font-medium">User-days</th>
+								<th className="px-4 py-3 font-medium">Outcome</th>
+								<th className="px-4 py-3 text-right font-medium">Exposed</th>
+								<th className="px-4 py-3 text-right font-medium">Converted</th>
+								<th className="px-4 py-3 text-right font-medium">Rate</th>
 							</tr>
 						</thead>
 						<tbody className="divide-y divide-gray-100">
-							{rows.map((row) => (
+							{data.experimentOutcomes.map((row) => (
 								<tr
-									key={`${row.experimentId}:${row.assignmentVersion}:${row.variant}`}
+									key={`${row.experimentId}:${row.assignmentVersion}:${row.variant}:${row.platform}:${row.appVersion}:${row.outcomeName}`}
 								>
 									<td className="px-4 py-3 font-medium text-gray-950">
 										{row.experimentId}
@@ -980,14 +1040,17 @@ function ExperimentationSection({ data }: { data: AdminAnalyticsDashboard }) {
 										{row.assignmentVersion}
 									</td>
 									<td className="px-4 py-3 text-gray-600">{row.variant}</td>
-									<td className="px-4 py-3 text-right tabular-nums">
-										{formatInteger(row.exposures)}
+									<td className="px-4 py-3 text-gray-600">
+										{row.outcomeName.replaceAll("_", " ")}
 									</td>
 									<td className="px-4 py-3 text-right tabular-nums">
-										{formatInteger(row.actorDays)}
+										{formatInteger(row.exposedActors)}
 									</td>
 									<td className="px-4 py-3 text-right tabular-nums">
-										{formatInteger(row.userDays)}
+										{formatInteger(row.convertedActors)}
+									</td>
+									<td className="px-4 py-3 text-right tabular-nums">
+										{formatPercent(row.conversionRate)}
 									</td>
 								</tr>
 							))}
@@ -1160,6 +1223,16 @@ function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
 					label="Identity funnel calculated"
 					value={formatTimestamp(freshness?.identityCalculatedAt ?? "")}
 				/>
+				<MetricCard
+					detail="UTC"
+					label="Attribution calculated"
+					value={formatTimestamp(freshness?.attributionCalculatedAt ?? "")}
+				/>
+				<MetricCard
+					detail="UTC"
+					label="Experiments calculated"
+					value={formatTimestamp(freshness?.experimentCalculatedAt ?? "")}
+				/>
 			</div>
 		</Section>
 	);
@@ -1170,7 +1243,7 @@ function Definitions() {
 		["Metric timezone", "All cohorts, sessions, and reporting dates use UTC."],
 		[
 			"Visitor",
-			"An anonymous, privacy-safe visitor key. The overview exposes daily uniques, so the selected-range card is visitor-days, not period-unique people.",
+			"An anonymous, privacy-safe visitor key. The Visitors card merges exact aggregate states across the complete selected range and counts a visitor once.",
 		],
 		[
 			"Visit",
@@ -1205,8 +1278,16 @@ function Definitions() {
 			"Decision-facing endpoints are built from stable event IDs. Duplicate deliveries remain visible in health but count once in metrics.",
 		],
 		[
+			"Campaign attribution",
+			"First touch is the visitor's earliest stored campaign, session touch is fixed when a 30-minute session begins, and last touch is the latest campaign-bearing navigation. Each model is reported independently.",
+		],
+		[
 			"Experiment exposure",
-			"A typed, stable assignment rendered to an actor. Variants are read only from exposure events and are never inferred from conversion behavior.",
+			"A typed, stable assignment rendered to an actor. The outcome cohorts include only recorded exposures, exclude conflicting variants, and measure the first authoritative signup, share creation, or paid purchase within 30 days.",
+		],
+		[
+			"Recording terminal status",
+			"Successful, degraded, failed, and unknown terminal recordings are counted separately. A failed terminal event never contributes to the successful recording metric.",
 		],
 		[
 			"Privacy",
@@ -1214,7 +1295,7 @@ function Definitions() {
 		],
 		[
 			"Filter coverage",
-			"Date applies throughout. Platform applies to product, creator, retention, and health aggregates. App version, source, and plan apply to product aggregates; app version also applies to health. Country applies to product and supported traffic aggregates. Organization cohort selects a first-value UTC date for creator and organization retention.",
+			"Date applies throughout. Platform and app version apply to traffic, attribution, product, experiment, creator, retention, and health aggregates where those dimensions exist. Source and plan apply to product aggregates; source also filters exact traffic totals and attribution. Country applies to product and supported traffic aggregates. Organization cohort selects a first-value UTC date for creator and organization retention.",
 		],
 	];
 	return (

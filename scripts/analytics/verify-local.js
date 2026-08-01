@@ -133,11 +133,13 @@ const copyAssertions = await query("product_analytics_copy_assertions", {
 });
 assert.deepEqual(copyAssertions, [
 	{
+		decision_markers: 1,
 		traffic_markers: 1,
 		traffic_page_markers: 1,
 		activation_markers: 1,
 		retention_markers: 1,
 		identity_markers: 1,
+		health_markers: 1,
 	},
 ]);
 

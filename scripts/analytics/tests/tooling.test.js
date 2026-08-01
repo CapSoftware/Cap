@@ -78,18 +78,31 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		.map((step, index) => ({ index, command: step.args?.join(" ") ?? "" }))
 		.filter(({ command }) => command.includes("--local copy pause"))
 		.map(({ index }) => index);
-	assert.equal(pauseIndexes.length, 8);
+	assert.equal(pauseIndexes.length, 19);
 	assert.ok(pauseIndexes.every((index) => index < appendIndex));
 	const copyCommands = commands.filter((command) =>
 		command.includes("--local copy run"),
 	);
-	assert.equal(copyCommands.length, 8);
+	assert.equal(copyCommands.length, 16);
 	assert.ok(
 		copyCommands.every((command) =>
 			command.includes(
-				"--param copy_max_threads=1 --param copy_run_id=run_local_copy_assertions --wait",
+				"--param copy_max_threads=1 --param copy_run_id=run_local_copy_assertions",
 			),
 		),
+	);
+	assert.equal(
+		copyCommands.filter((command) => command.includes("source_cutoff=")).length,
+		4,
+	);
+	assert.equal(
+		copyCommands.filter((command) => command.includes("generation_id=")).length,
+		4,
+	);
+	assert.equal(
+		copyCommands.filter((command) => command.includes("generation_kind=hot"))
+			.length,
+		1,
 	);
 	assert.ok(steps.some((step) => step.type === "verify-local"));
 	assert.ok(steps.some((step) => step.type === "write-local-env"));

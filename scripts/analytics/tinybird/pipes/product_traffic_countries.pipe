@@ -21,6 +21,8 @@ SQL >
 		{% end %}
 		AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
+		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
+		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
 		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
 	GROUP BY country
 	ORDER BY visits DESC, country ASC

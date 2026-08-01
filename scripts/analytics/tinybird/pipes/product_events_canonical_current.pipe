@@ -1,0 +1,39 @@
+DESCRIPTION >
+	Finalize streaming event states, count exact retries once, and quarantine payload conflicts.
+
+TOKEN product_events_copy_runner READ
+
+NODE product_events_canonical_current
+SQL >
+	%
+	SELECT
+		event_id,
+		argMinMerge(payload_hash) AS payload_hash,
+		argMinMerge(occurred_at) AS occurred_at,
+		max(received_at) AS received_at,
+		argMinMerge(event_name) AS event_name,
+		argMinMerge(schema_version) AS schema_version,
+		argMinMerge(source) AS source,
+		argMinMerge(platform) AS platform,
+		argMinMerge(anonymous_id) AS anonymous_id,
+		argMinMerge(session_id) AS session_id,
+		argMinMerge(user_id) AS user_id,
+		argMinMerge(organization_id) AS organization_id,
+		argMinMerge(app_version) AS app_version,
+		argMinMerge(pathname) AS pathname,
+		argMinMerge(referrer) AS referrer,
+		argMinMerge(country) AS country,
+		argMinMerge(region) AS region,
+		argMinMerge(city) AS city,
+		argMinMerge(hostname) AS hostname,
+		argMinMerge(browser) AS browser,
+		argMinMerge(device) AS device,
+		argMinMerge(os) AS os,
+		argMinMerge(channel) AS channel,
+		argMinMerge(traffic_class) AS traffic_class,
+		argMinMerge(synthetic_run_id) AS synthetic_run_id,
+		argMinMerge(properties) AS properties
+	FROM product_event_id_states_v2
+	WHERE first_received_at <= {% if defined(source_cutoff) %} toDateTime64({{DateTime64(source_cutoff)}}, 3) {% else %} now64(3) {% end %}
+	GROUP BY event_id
+	HAVING uniqExactMerge(payload_hashes) = 1

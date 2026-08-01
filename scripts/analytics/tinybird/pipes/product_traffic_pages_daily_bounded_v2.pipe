@@ -1,11 +1,17 @@
 DESCRIPTION >
-	Rebuild exact external page, landing, exit, and foreground-engagement metrics.
+	Build one generation of bounded hot or settled page and engagement decisions.
 
 TOKEN product_events_copy_runner READ
 
-NODE snapshot_product_traffic_pages_daily_exact_node
+NODE product_traffic_pages_daily_bounded_v2_node
 SQL >
 	%
+	{% if not defined(source_cutoff) %}
+		{{ error('source_cutoff is required') }}
+	{% end %}
+	{% if not defined(generation_id) %}
+		{{ error('generation_id is required') }}
+	{% end %}
 	{% if defined(copy_max_threads) %}
 		{{max_threads(Int32(copy_max_threads))}}
 	{% end %}
@@ -15,7 +21,7 @@ SQL >
 			session_id,
 			argMin(event_id, tuple(occurred_at, event_id)) AS landing_event_id,
 			argMax(event_id, tuple(occurred_at, event_id)) AS exit_event_id
-		FROM product_events_canonical_current
+		FROM product_events_canonical_window
 		WHERE event_name = 'page_view'
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
@@ -26,7 +32,7 @@ SQL >
 			JSONExtractString(properties, 'page_view_id') AS page_view_id,
 			toUInt64(sum(greatest(0, JSONExtractInt(properties, 'engaged_ms')))) AS engaged_ms,
 			toFloat64(max(greatest(0, least(100, JSONExtractInt(properties, 'max_scroll_depth'))))) AS scroll_depth
-		FROM product_events_canonical_current
+		FROM product_events_canonical_window
 		WHERE event_name = 'page_engagement'
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 		GROUP BY synthetic_run_id, page_view_id
@@ -46,13 +52,16 @@ SQL >
 			browser,
 			os,
 			channel
-		FROM product_events_canonical_current
+		FROM product_events_canonical_window
 		WHERE event_name = 'page_view'
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND session_id != ''
 			AND anonymous_id != ''
 	)
 	SELECT
+		toDateTime64({{DateTime64(source_cutoff)}}, 3) AS source_cutoff,
+		{{String(generation_id)}} AS generation_id,
+		toUInt8(0) AS is_marker,
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
 		page_views.synthetic_run_id AS synthetic_run_id,
@@ -77,33 +86,20 @@ SQL >
 	INNER JOIN sessions ON page_views.synthetic_run_id = sessions.synthetic_run_id AND page_views.session_id = sessions.session_id
 	LEFT JOIN engagements ON page_views.synthetic_run_id = engagements.synthetic_run_id AND page_views.event_id = engagements.page_view_id
 	GROUP BY page_views.synthetic_run_id, date, platform, app_version, hostname, pathname, country, device, browser, os, channel
-	{% if defined(copy_run_id) %}
+	HAVING date >= {% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY {% end %}
+		AND date < {% if defined(settled_date) %} toDate({{Date(settled_date)}}) + INTERVAL 1 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) + INTERVAL 1 DAY {% end %}
 	UNION ALL
 	SELECT
-		now64(3) AS calculated_at,
-		{{String(copy_run_id)}} AS copy_run_id,
-		'' AS synthetic_run_id,
-		today() AS date,
-		'' AS platform,
-		'' AS app_version,
-		'' AS hostname,
-		'' AS pathname,
-		'' AS country,
-		'' AS device,
-		'' AS browser,
-		'' AS os,
-		'' AS channel,
-		uniqExactStateIf('', 0) AS visitors,
-		uniqExactStateIf('', 0) AS visits,
-		toUInt64(0) AS pageviews,
-		toUInt64(0) AS landings,
-		toUInt64(0) AS exits,
-		toUInt64(0) AS engaged_ms,
-		toFloat64(0) AS scroll_depth_sum
-	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
-	{% end %}
+		toDateTime64({{DateTime64(source_cutoff)}}, 3),
+		{{String(generation_id)}},
+		toUInt8(1),
+		now64(3),
+		{% if defined(copy_run_id) %} {{String(copy_run_id)}} {% else %} '' {% end %},
+		'',
+		{% if defined(settled_date) %} toDate({{Date(settled_date)}}) {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) {% end %},
+		'', '', '', '', '', '', '', '', '',
+		uniqExactStateIf('', 0), uniqExactStateIf('', 0),
+		toUInt64(0), toUInt64(0), toUInt64(0), toUInt64(0), toFloat64(0)
+	WHERE throwIf(length({{String(generation_id)}}) < 8 OR length({{String(generation_id)}}) > 128, 'generation_id has an invalid length') = 0
+		{% if defined(settled_date) %} AND throwIf(toDate({{Date(settled_date)}}) > toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY, 'settled_date is inside the mutable window') = 0 {% end %}
 
-TYPE COPY
-TARGET_DATASOURCE product_traffic_pages_daily_exact
-COPY_MODE replace
-COPY_SCHEDULE @on-demand

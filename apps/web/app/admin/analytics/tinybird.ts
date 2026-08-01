@@ -2,8 +2,10 @@ import "server-only";
 
 const ADMIN_ANALYTICS_ENDPOINTS = [
 	"product_traffic_overview",
+	"product_traffic_totals",
 	"product_traffic_pages",
 	"product_traffic_sources",
+	"product_attribution",
 	"product_traffic_countries",
 	"product_traffic_technology",
 	"product_activation",
@@ -12,6 +14,7 @@ const ADMIN_ANALYTICS_ENDPOINTS = [
 	"product_identity_funnel",
 	"product_events_daily",
 	"product_feature_adoption",
+	"product_experiment_outcomes",
 	"product_events_health",
 	"product_analytics_freshness",
 ] as const;
@@ -41,6 +44,20 @@ export type TrafficOverviewRow = {
 	bounceRate: number;
 	visitDurationMs: number;
 	engagedMs: number;
+};
+
+export type TrafficTotalsRow = Omit<TrafficOverviewRow, "date">;
+
+export type AttributionModel = "first" | "session" | "last";
+
+export type TrafficAttributionRow = {
+	attributionModel: AttributionModel;
+	source: string;
+	medium: string;
+	campaign: string;
+	visitors: number;
+	visits: number;
+	pageviews: number;
 };
 
 export type TrafficPageRow = {
@@ -124,6 +141,7 @@ export type ProductEventRow = {
 	os: string;
 	channel: string;
 	planId: string;
+	recordingStatus: string;
 	paymentStatus: string;
 	subscriptionStatus: string;
 	currency: string;
@@ -182,6 +200,18 @@ export type FeatureAdoptionRow = {
 	organizationDays: number;
 };
 
+export type ExperimentOutcomeRow = {
+	experimentId: string;
+	assignmentVersion: string;
+	variant: string;
+	platform: string;
+	appVersion: string;
+	outcomeName: string;
+	exposedActors: number;
+	convertedActors: number;
+	conversionRate: number;
+};
+
 export type ProductEventsHealthRow = {
 	receivedRows: number;
 	uniqueEvents: number;
@@ -201,12 +231,18 @@ export type AnalyticsFreshnessRow = {
 	trafficCalculatedAt: string;
 	retentionCalculatedAt: string;
 	identityCalculatedAt: string;
+	attributionCalculatedAt: string;
+	experimentCalculatedAt: string;
 };
 
 export type AdminAnalyticsDashboard = {
 	trafficOverview: TrafficOverviewRow[];
+	trafficTotals: TrafficTotalsRow[];
+	trafficTotalsAvailable: boolean;
 	trafficPages: TrafficPageRow[];
 	trafficSources: TrafficSourceRow[];
+	trafficAttribution: TrafficAttributionRow[];
+	trafficAttributionAvailable: boolean;
 	trafficCountries: TrafficCountryRow[];
 	trafficTechnology: TrafficTechnologyRow[];
 	activation: ActivationRow[];
@@ -216,6 +252,8 @@ export type AdminAnalyticsDashboard = {
 	identityFunnelAvailable: boolean;
 	productEvents: ProductEventRow[];
 	featureAdoption: FeatureAdoptionRow[];
+	experimentOutcomes: ExperimentOutcomeRow[];
+	experimentOutcomesAvailable: boolean;
 	health: ProductEventsHealthRow[];
 	freshness: AnalyticsFreshnessRow[];
 	healthWindowStart: string;
@@ -354,6 +392,57 @@ export function decodeTrafficOverviewResponse(
 	return decodeTinybirdRows(value, decodeTrafficOverviewRow);
 }
 
+function decodeTrafficTotalsRow(row: UnknownRecord): TrafficTotalsRow {
+	return {
+		visitors: readNumber(row, "visitors"),
+		visits: readNumber(row, "visits"),
+		pageviews: readNumber(row, "pageviews"),
+		viewsPerVisit: readNumber(row, "views_per_visit"),
+		bounceRate: readNumber(row, "bounce_rate"),
+		visitDurationMs: readNumber(row, "visit_duration_ms"),
+		engagedMs: readNumber(row, "engaged_ms"),
+	};
+}
+
+export function decodeTrafficTotalsResponse(
+	value: unknown,
+): TrafficTotalsRow[] {
+	return decodeTinybirdRows(value, decodeTrafficTotalsRow);
+}
+
+function decodeAttributionModel(
+	row: UnknownRecord,
+	key: string,
+): AttributionModel {
+	const value = readString(row, key);
+	if (value !== "first" && value !== "session" && value !== "last") {
+		throw new AdminAnalyticsRequestError(
+			`Tinybird returned an invalid ${key} value`,
+		);
+	}
+	return value;
+}
+
+function decodeTrafficAttributionRow(
+	row: UnknownRecord,
+): TrafficAttributionRow {
+	return {
+		attributionModel: decodeAttributionModel(row, "attribution_model"),
+		source: readString(row, "source"),
+		medium: readString(row, "medium"),
+		campaign: readString(row, "campaign"),
+		visitors: readNumber(row, "visitors"),
+		visits: readNumber(row, "visits"),
+		pageviews: readNumber(row, "pageviews"),
+	};
+}
+
+export function decodeTrafficAttributionResponse(
+	value: unknown,
+): TrafficAttributionRow[] {
+	return decodeTinybirdRows(value, decodeTrafficAttributionRow);
+}
+
 function decodeTrafficPageRow(row: UnknownRecord): TrafficPageRow {
 	return {
 		pathname: readString(row, "pathname"),
@@ -470,6 +559,7 @@ function decodeProductEventRow(row: UnknownRecord): ProductEventRow {
 		os: readString(row, "os"),
 		channel: readString(row, "channel"),
 		planId: readString(row, "plan_id"),
+		recordingStatus: readOptionalString(row, "recording_status"),
 		paymentStatus: readString(row, "payment_status"),
 		subscriptionStatus: readString(row, "subscription_status"),
 		currency: readString(row, "currency"),
@@ -513,6 +603,26 @@ function decodeFeatureAdoptionRow(row: UnknownRecord): FeatureAdoptionRow {
 	};
 }
 
+function decodeExperimentOutcomeRow(row: UnknownRecord): ExperimentOutcomeRow {
+	return {
+		experimentId: readString(row, "experiment_id"),
+		assignmentVersion: readString(row, "assignment_version"),
+		variant: readString(row, "variant"),
+		platform: readString(row, "platform"),
+		appVersion: readString(row, "app_version"),
+		outcomeName: readString(row, "outcome_name"),
+		exposedActors: readNumber(row, "exposed_actors"),
+		convertedActors: readNumber(row, "converted_actors"),
+		conversionRate: readNumber(row, "conversion_rate"),
+	};
+}
+
+export function decodeExperimentOutcomesResponse(
+	value: unknown,
+): ExperimentOutcomeRow[] {
+	return decodeTinybirdRows(value, decodeExperimentOutcomeRow);
+}
+
 function decodeProductEventsHealthRow(
 	row: UnknownRecord,
 ): ProductEventsHealthRow {
@@ -539,6 +649,11 @@ function decodeAnalyticsFreshnessRow(
 		trafficCalculatedAt: readString(row, "traffic_calculated_at"),
 		retentionCalculatedAt: readString(row, "retention_calculated_at"),
 		identityCalculatedAt: readOptionalString(row, "identity_calculated_at"),
+		attributionCalculatedAt: readOptionalString(
+			row,
+			"attribution_calculated_at",
+		),
+		experimentCalculatedAt: readOptionalString(row, "experiment_calculated_at"),
 	};
 }
 
@@ -672,8 +787,10 @@ export async function fetchAdminAnalyticsDashboard(
 
 	const [
 		trafficOverview,
+		trafficTotalsResult,
 		trafficPages,
 		trafficSources,
+		trafficAttributionResult,
 		trafficCountries,
 		trafficTechnology,
 		activation,
@@ -682,32 +799,83 @@ export async function fetchAdminAnalyticsDashboard(
 		identityFunnelResult,
 		productEvents,
 		featureAdoption,
+		experimentOutcomesResult,
 		health,
 		freshness,
 	] = await Promise.all([
 		fetchEndpoint(
 			"product_traffic_overview",
-			{ ...dateParams, country: filters.country },
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				country: filters.country,
+			},
 			decodeTrafficOverviewRow,
+		),
+		fetchOptionalRollbackEndpoint(
+			fetchEndpoint,
+			"product_traffic_totals",
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				source: filters.source,
+				country: filters.country,
+			},
+			decodeTrafficTotalsRow,
 		),
 		fetchEndpoint(
 			"product_traffic_pages",
-			{ ...dateParams, country: filters.country, limit: 100 },
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				country: filters.country,
+				limit: 100,
+			},
 			decodeTrafficPageRow,
 		),
 		fetchEndpoint(
 			"product_traffic_sources",
-			{ ...dateParams, limit: 100 },
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				limit: 100,
+			},
 			decodeTrafficSourceRow,
+		),
+		fetchOptionalRollbackEndpoint(
+			fetchEndpoint,
+			"product_attribution",
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				source: filters.source,
+				country: filters.country,
+				limit: 300,
+			},
+			decodeTrafficAttributionRow,
 		),
 		fetchEndpoint(
 			"product_traffic_countries",
-			dateParams,
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+			},
 			decodeTrafficCountryRow,
 		),
 		fetchEndpoint(
 			"product_traffic_technology",
-			{ ...dateParams, country: filters.country },
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				country: filters.country,
+			},
 			decodeTrafficTechnologyRow,
 		),
 		fetchEndpoint("product_activation", dateParams, decodeActivationRow),
@@ -760,6 +928,17 @@ export async function fetchAdminAnalyticsDashboard(
 			},
 			decodeFeatureAdoptionRow,
 		),
+		fetchOptionalRollbackEndpoint(
+			fetchEndpoint,
+			"product_experiment_outcomes",
+			{
+				...dateParams,
+				platform: filters.platform,
+				app_version: filters.appVersion,
+				limit: 1000,
+			},
+			decodeExperimentOutcomeRow,
+		),
 		fetchEndpoint(
 			"product_events_health",
 			{
@@ -782,6 +961,16 @@ export async function fetchAdminAnalyticsDashboard(
 			"Product analytics reached the aggregate endpoint row limit. Narrow the date range or filters before using these metrics for decisions.",
 		);
 	}
+	if (trafficAttributionResult.rows.length >= 300) {
+		throw new AdminAnalyticsRequestError(
+			"Campaign attribution reached the aggregate endpoint row limit. Narrow the date range or filters before using these metrics for decisions.",
+		);
+	}
+	if (experimentOutcomesResult.rows.length >= 1000) {
+		throw new AdminAnalyticsRequestError(
+			"Experiment outcomes reached the aggregate endpoint row limit. Narrow the date range or filters before using these metrics for decisions.",
+		);
+	}
 	if (creatorRetention.length >= 5000) {
 		throw new AdminAnalyticsRequestError(
 			"Creator retention reached the aggregate endpoint row limit. Narrow the date range or platform before using these metrics for decisions.",
@@ -790,8 +979,12 @@ export async function fetchAdminAnalyticsDashboard(
 
 	return {
 		trafficOverview,
+		trafficTotals: trafficTotalsResult.rows,
+		trafficTotalsAvailable: trafficTotalsResult.available,
 		trafficPages,
 		trafficSources,
+		trafficAttribution: trafficAttributionResult.rows,
+		trafficAttributionAvailable: trafficAttributionResult.available,
 		trafficCountries,
 		trafficTechnology,
 		activation,
@@ -801,6 +994,8 @@ export async function fetchAdminAnalyticsDashboard(
 		identityFunnelAvailable: identityFunnelResult.available,
 		productEvents,
 		featureAdoption,
+		experimentOutcomes: experimentOutcomesResult.rows,
+		experimentOutcomesAvailable: experimentOutcomesResult.available,
 		health,
 		freshness,
 		healthWindowStart,

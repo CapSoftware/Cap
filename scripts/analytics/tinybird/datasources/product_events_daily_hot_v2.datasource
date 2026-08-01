@@ -1,9 +1,12 @@
 DESCRIPTION >
-	Eight-hundred-day exact daily product decision metrics rebuilt from canonical event IDs.
+	Bounded mutable event-decision window rebuilt from exact canonical event states.
 
 TOKEN product_events_copy_runner APPEND
 
 SCHEMA >
+	source_cutoff DateTime64(3),
+	generation_id String,
+	is_marker UInt8,
 	calculated_at DateTime64(3),
 	copy_run_id String,
 	date Date,
@@ -55,6 +58,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (copy_run_id, date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, recording_status, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version)
-ENGINE_TTL date + INTERVAL 800 DAY
+ENGINE_SORTING_KEY (generation_id, is_marker, date, event_name, schema_version, source, platform, app_version, hostname, country, device, browser, os, channel, traffic_class, synthetic_run_id, plan_id, recording_status, payment_status, subscription_status, currency, billing_interval, change_kind, previous_status, new_status, previous_plan_id, quantity, previous_quantity, new_quantity, seat_delta, first_purchase, guest_checkout, onboarding, cancel_at_period_end, fully_refunded, ended_at, trial_end_at, amount_due_minor, attempt_count, experiment_id, experiment_variant, assignment_version)
+ENGINE_TTL date + INTERVAL 16 DAY
 ENGINE_SETTINGS index_granularity = 256

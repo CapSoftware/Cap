@@ -36,7 +36,9 @@ const TEST_FILES = fs
 const CLOUD_URL_DEFAULT = "https://api.tinybird.co";
 const STAGING_WORKSPACE_ID = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
 const LOCAL_COPY_RUN_ID = "run_local_copy_assertions";
-const PRODUCT_COPY_PIPES = [
+const EXCEPTIONAL_PRODUCT_COPY_PIPES = [
+	"snapshot_product_event_id_states_v2",
+	"snapshot_product_event_day_states_v2",
 	"snapshot_product_events_canonical_v1",
 	"snapshot_product_events_daily_exact",
 	"snapshot_product_traffic_daily_exact",
@@ -44,9 +46,33 @@ const PRODUCT_COPY_PIPES = [
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
 	"snapshot_product_identity_funnel_exact",
+	"snapshot_product_attribution_daily_exact",
+	"snapshot_product_experiment_outcomes_exact",
 	"snapshot_product_events_health_hourly",
 ];
+const BOUNDED_PRODUCT_COPY_PIPES = [
+	"snapshot_product_events_daily_hot_v2",
+	"snapshot_product_events_daily_cold_v2",
+	"snapshot_product_traffic_daily_hot_v2",
+	"snapshot_product_traffic_daily_cold_v2",
+	"snapshot_product_traffic_pages_daily_hot_v2",
+	"snapshot_product_traffic_pages_daily_cold_v2",
+];
+const PRODUCT_COPY_PIPES = [
+	...EXCEPTIONAL_PRODUCT_COPY_PIPES,
+	...BOUNDED_PRODUCT_COPY_PIPES,
+	"publish_product_analytics_generation_v2",
+];
+const LOCAL_PRODUCT_COPY_PIPES = [
+	...EXCEPTIONAL_PRODUCT_COPY_PIPES,
+	"snapshot_product_events_daily_hot_v2",
+	"snapshot_product_traffic_daily_hot_v2",
+	"snapshot_product_traffic_pages_daily_hot_v2",
+	"publish_product_analytics_generation_v2",
+];
 const PRODUCT_COPY_TARGETS = [
+	"product_event_id_states_v2",
+	"product_event_day_states_v2",
 	"product_events_canonical_v1",
 	"product_events_daily_exact",
 	"product_traffic_daily_exact",
@@ -54,7 +80,23 @@ const PRODUCT_COPY_TARGETS = [
 	"product_activation_daily_exact",
 	"product_creator_retention_exact",
 	"product_identity_funnel_exact",
+	"product_attribution_daily_exact",
+	"product_experiment_outcomes_exact",
 	"product_events_health_hourly_exact",
+	"product_events_daily_hot_v2",
+	"product_events_daily_cold_v2",
+	"product_traffic_daily_hot_v2",
+	"product_traffic_daily_cold_v2",
+	"product_traffic_pages_daily_hot_v2",
+	"product_traffic_pages_daily_cold_v2",
+	"product_analytics_generations_v2",
+];
+const PRODUCT_COPY_SOURCES = [
+	"product_events_canonical_current",
+	"product_events_canonical_window",
+	"product_events_daily_bounded_v2",
+	"product_traffic_daily_bounded_v2",
+	"product_traffic_pages_daily_bounded_v2",
 ];
 const WORKSPACE_ID_SOURCE =
 	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -147,6 +189,35 @@ const cloudCliStep = (...args) => ({
 });
 
 const operationPlan = (operation) => {
+	const localSourceCutoff = new Date().toISOString();
+	const localGenerationId = `local_${localSourceCutoff.replaceAll(/[^0-9]/g, "")}`;
+	const localCopyStep = (name) => {
+		const parameters = [
+			"--param",
+			"copy_max_threads=1",
+			"--param",
+			`copy_run_id=${LOCAL_COPY_RUN_ID}`,
+		];
+		if (
+			BOUNDED_PRODUCT_COPY_PIPES.includes(name) ||
+			name === "publish_product_analytics_generation_v2"
+		) {
+			parameters.push(
+				"--param",
+				`source_cutoff=${localSourceCutoff}`,
+				"--param",
+				`generation_id=${localGenerationId}`,
+			);
+		}
+		if (name === "publish_product_analytics_generation_v2") {
+			parameters.push("--param", "generation_kind=hot");
+		}
+		return {
+			...localCliStep("--local", "copy", "run", name, ...parameters, "--wait"),
+			attempts: 8,
+			retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
+		};
+	};
 	const plans = {
 		validate: [{ type: "validate" }],
 		test: [{ type: "validate" }, { type: "node-test" }],
@@ -182,21 +253,7 @@ const operationPlan = (operation) => {
 				"--file",
 				"fixtures/product_events_v1.local.ndjson",
 			),
-			...PRODUCT_COPY_PIPES.map((name) => ({
-				...localCliStep(
-					"--local",
-					"copy",
-					"run",
-					name,
-					"--param",
-					"copy_max_threads=1",
-					"--param",
-					`copy_run_id=${LOCAL_COPY_RUN_ID}`,
-					"--wait",
-				),
-				attempts: 8,
-				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
-			})),
+			...LOCAL_PRODUCT_COPY_PIPES.map(localCopyStep),
 			{ type: "verify-local" },
 			{ type: "write-local-env" },
 		],
@@ -227,21 +284,7 @@ const operationPlan = (operation) => {
 				"--file",
 				"fixtures/product_events_v1.local.ndjson",
 			),
-			...PRODUCT_COPY_PIPES.map((name) => ({
-				...localCliStep(
-					"--local",
-					"copy",
-					"run",
-					name,
-					"--param",
-					"copy_max_threads=1",
-					"--param",
-					`copy_run_id=${LOCAL_COPY_RUN_ID}`,
-					"--wait",
-				),
-				attempts: 8,
-				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
-			})),
+			...LOCAL_PRODUCT_COPY_PIPES.map(localCopyStep),
 			{ type: "verify-local" },
 		],
 		"local-tokens": [{ type: "write-local-env" }],
@@ -399,6 +442,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		new Set([
 			...PRODUCT_COPY_TARGETS.map((name) => `datasource:${name}:APPEND`),
 			...PRODUCT_COPY_PIPES.map((name) => `pipe:${name}:READ`),
+			...PRODUCT_COPY_SOURCES.map((name) => `pipe:${name}:READ`),
 		]),
 		issues,
 	);
@@ -498,12 +542,132 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 			issues.push("Canonical product events are missing erasure lookup access");
 		}
 	}
+	const eventStates = project.datasources.find(
+		(datasource) => datasource.name === "product_event_id_states_v2",
+	);
+	if (!eventStates || eventStates.engine !== "AggregatingMergeTree") {
+		issues.push("Missing streaming product event ID aggregate state");
+	} else {
+		if (eventStates.sortingKey !== "event_id") {
+			issues.push("Product event ID state must be sorted by event ID");
+		}
+		if (eventStates.ttl !== "toDateTime(received_at) + INTERVAL 800 DAY") {
+			issues.push("Product event ID state must retain the erasure horizon");
+		}
+	}
+	const eventStateMaterialization = project.pipes.find(
+		(pipe) => pipe.name === "materialize_product_event_id_states_v2",
+	);
+	if (
+		!eventStateMaterialization ||
+		eventStateMaterialization.type !== "materialized" ||
+		eventStateMaterialization.targetDatasource !== "product_event_id_states_v2"
+	) {
+		issues.push("Missing streaming product event ID materialization");
+	}
+	const eventDayStates = project.datasources.find(
+		(datasource) => datasource.name === "product_event_day_states_v2",
+	);
+	if (!eventDayStates || eventDayStates.engine !== "AggregatingMergeTree") {
+		issues.push("Missing bounded product event day aggregate state");
+	} else {
+		if (eventDayStates.sortingKey !== "(occurred_date, event_id)") {
+			issues.push(
+				"Product event day state must be sorted by date and event ID",
+			);
+		}
+		if (eventDayStates.partitionKey !== "toYYYYMM(occurred_date)") {
+			issues.push(
+				"Product event day state must use monthly occurrence partitions",
+			);
+		}
+		if (eventDayStates.ttl !== "occurred_date + INTERVAL 807 DAY") {
+			issues.push("Product event day state must retain the erasure horizon");
+		}
+	}
+	const eventDayStateMaterialization = project.pipes.find(
+		(pipe) => pipe.name === "materialize_product_event_day_states_v2",
+	);
+	if (
+		!eventDayStateMaterialization ||
+		eventDayStateMaterialization.type !== "materialized" ||
+		eventDayStateMaterialization.targetDatasource !==
+			"product_event_day_states_v2"
+	) {
+		issues.push("Missing bounded product event day materialization");
+	}
+	for (const [prefix, hotTtl, coldTtl] of [
+		[
+			"product_events_daily",
+			"date + INTERVAL 16 DAY",
+			"date + INTERVAL 800 DAY",
+		],
+		[
+			"product_traffic_daily",
+			"date + INTERVAL 16 DAY",
+			"date + INTERVAL 800 DAY",
+		],
+		[
+			"product_traffic_pages_daily",
+			"date + INTERVAL 16 DAY",
+			"date + INTERVAL 800 DAY",
+		],
+	]) {
+		for (const [suffix, ttl] of [
+			["hot_v2", hotTtl],
+			["cold_v2", coldTtl],
+		]) {
+			const name = `${prefix}_${suffix}`;
+			const datasource = project.datasources.find(
+				(candidate) => candidate.name === name,
+			);
+			if (!datasource || datasource.engine !== "AggregatingMergeTree") {
+				issues.push(`Missing bounded aggregate datasource ${name}`);
+			} else if (datasource.ttl !== ttl) {
+				issues.push(`${name} has an invalid retention window`);
+			}
+		}
+		if (
+			!project.pipes.some(
+				(pipe) =>
+					pipe.name === `${prefix}_current_v2` && pipe.type === "generic",
+			)
+		) {
+			issues.push(
+				`Missing generation-selected aggregate source ${prefix}_current_v2`,
+			);
+		}
+	}
+	for (const name of [
+		"product_events_daily_bounded_v2",
+		"product_traffic_daily_bounded_v2",
+		"product_traffic_pages_daily_bounded_v2",
+	]) {
+		const pipe = project.pipes.find((candidate) => candidate.name === name);
+		if (!pipe || !hasToken(pipe, "product_events_copy_runner", "READ")) {
+			issues.push(`Missing bounded Copy source ${name}`);
+		}
+	}
+	const generations = project.datasources.find(
+		(datasource) => datasource.name === "product_analytics_generations_v2",
+	);
+	if (!generations || generations.engine !== "MergeTree") {
+		issues.push("Missing bounded analytics publication barrier");
+	} else if (
+		generations.ttl !== "toDateTime(source_cutoff) + INTERVAL 807 DAY"
+	) {
+		issues.push(
+			"Analytics generation metadata must retain the erasure horizon",
+		);
+	}
 	for (const [name, engine] of [
 		["product_traffic_daily_exact", "AggregatingMergeTree"],
 		["product_traffic_pages_daily_exact", "AggregatingMergeTree"],
 		["product_activation_daily_exact", "AggregatingMergeTree"],
 		["product_creator_retention_exact", "AggregatingMergeTree"],
 		["product_identity_funnel_exact", "SummingMergeTree"],
+		["product_attribution_daily_exact", "AggregatingMergeTree"],
+		["product_experiment_outcomes_exact", "SummingMergeTree"],
 	]) {
 		const datasource = project.datasources.find(
 			(candidate) => candidate.name === name,
@@ -573,8 +737,10 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		"product_events_daily",
 		"product_events_health",
 		"product_traffic_overview",
+		"product_traffic_totals",
 		"product_traffic_pages",
 		"product_traffic_sources",
+		"product_attribution",
 		"product_traffic_countries",
 		"product_traffic_technology",
 		"product_activation",
@@ -582,6 +748,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		"product_creator_activity",
 		"product_feature_adoption",
 		"product_identity_funnel",
+		"product_experiment_outcomes",
 		"product_analytics_freshness",
 		"product_analytics_copy_assertions",
 	]) {

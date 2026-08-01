@@ -10,14 +10,14 @@ SQL >
 		{{max_threads(Int32(copy_max_threads))}}
 	{% end %}
 	WITH identity_links AS (
-		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, occurred_at
-		FROM product_events_canonical_v1
+		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, event_id, occurred_at
+		FROM product_events_canonical_current
 		WHERE event_name = 'identity_linked'
 			AND user_id != ''
 			AND anonymous_id != ''
 	), paid_guest_links AS (
-		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, occurred_at
-		FROM product_events_canonical_v1
+		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, event_id, occurred_at
+		FROM product_events_canonical_current
 		WHERE event_name = 'purchase_completed'
 			AND JSONExtractString(properties, 'payment_status') = 'paid'
 			AND JSONExtractBool(properties, 'is_guest_checkout')
@@ -31,8 +31,8 @@ SQL >
 		SELECT
 			synthetic_run_id,
 			user_id,
-			argMin(anonymous_id, occurred_at) AS anonymous_id,
-			argMinIf(organization_id, occurred_at, organization_id != '') AS organization_id,
+			argMin(anonymous_id, tuple(occurred_at, event_id)) AS anonymous_id,
+			argMinIf(organization_id, tuple(occurred_at, event_id), organization_id != '') AS organization_id,
 			min(occurred_at) AS linked_at
 		FROM link_candidates
 		GROUP BY synthetic_run_id, user_id
@@ -40,7 +40,7 @@ SQL >
 		SELECT
 			synthetic_run_id,
 			organization_id,
-			argMin(user_id, linked_at) AS first_user_id
+			argMin(user_id, tuple(linked_at, user_id)) AS first_user_id
 		FROM first_links
 		WHERE organization_id != ''
 		GROUP BY synthetic_run_id, organization_id
@@ -49,12 +49,12 @@ SQL >
 			synthetic_run_id,
 			anonymous_id,
 			min(occurred_at) AS acquired_at,
-			argMin(channel, occurred_at) AS channel,
-			argMin(JSONExtractString(properties, 'session_touch_source'), occurred_at) AS attribution_source,
-			argMin(JSONExtractString(properties, 'session_touch_medium'), occurred_at) AS attribution_medium,
-			argMin(JSONExtractString(properties, 'session_touch_campaign'), occurred_at) AS campaign,
-			argMin(country, occurred_at) AS country
-		FROM product_events_canonical_v1
+			argMin(channel, tuple(occurred_at, event_id)) AS channel,
+			argMin(JSONExtractString(properties, 'session_touch_source'), tuple(occurred_at, event_id)) AS attribution_source,
+			argMin(JSONExtractString(properties, 'session_touch_medium'), tuple(occurred_at, event_id)) AS attribution_medium,
+			argMin(JSONExtractString(properties, 'session_touch_campaign'), tuple(occurred_at, event_id)) AS campaign,
+			argMin(country, tuple(occurred_at, event_id)) AS country
+		FROM product_events_canonical_current
 		WHERE event_name = 'page_view'
 			AND anonymous_id != ''
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
@@ -72,7 +72,7 @@ SQL >
 			toUInt64(countIf(event_name = 'trial_started') > 0) AS trial_started,
 			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid') > 0) AS purchased,
 			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid' AND JSONExtractBool(properties, 'is_guest_checkout')) > 0) AS guest_purchased
-		FROM product_events_canonical_v1
+		FROM product_events_canonical_current
 		WHERE user_id != ''
 		GROUP BY synthetic_run_id, user_id
 	), guest_checkouts AS (
@@ -81,7 +81,7 @@ SQL >
 			anonymous_id,
 			min(occurred_at) AS checkout_at,
 			toUInt64(count() > 0) AS guest_checkout
-		FROM product_events_canonical_v1
+		FROM product_events_canonical_current
 		WHERE event_name = 'guest_checkout_started'
 			AND anonymous_id != ''
 		GROUP BY synthetic_run_id, anonymous_id
@@ -109,9 +109,9 @@ SQL >
 		SELECT
 			synthetic_run_id,
 			user_id,
-			argMin(anonymous_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS anonymous_id,
-			argMin(organization_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS organization_id,
-			argMin(path_at, tuple(if(paid_guest_purchase > 0, 0, 1), path_at)) AS linked_at,
+			argMin(anonymous_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS anonymous_id,
+			argMin(organization_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS organization_id,
+			argMin(path_at, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS linked_at,
 			toUInt64(max(paid_guest_purchase) > 0) AS guest_purchased
 		FROM guest_path_candidates
 		GROUP BY synthetic_run_id, user_id
@@ -212,7 +212,7 @@ SQL >
 		'' AS attribution_medium,
 		'' AS campaign,
 		'' AS country,
-		toUInt64(0) AS linked_visitors,
+		toUInt64(1) AS linked_visitors,
 		toUInt64(0) AS linked_users,
 		toUInt64(0) AS signup_users,
 		toUInt64(0) AS organizations,
@@ -231,4 +231,4 @@ SQL >
 TYPE COPY
 TARGET_DATASOURCE product_identity_funnel_exact
 COPY_MODE replace
-COPY_SCHEDULE 7-59/8 * * * *
+COPY_SCHEDULE @on-demand

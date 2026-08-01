@@ -1,0 +1,14 @@
+DESCRIPTION >
+	Replace only the bounded mutable page-decision window for one controller generation.
+
+TOKEN product_events_copy_runner READ
+
+NODE snapshot_product_traffic_pages_daily_hot_v2_node
+SQL >
+	SELECT *
+	FROM product_traffic_pages_daily_bounded_v2
+
+TYPE COPY
+TARGET_DATASOURCE product_traffic_pages_daily_hot_v2
+COPY_MODE replace
+COPY_SCHEDULE @on-demand

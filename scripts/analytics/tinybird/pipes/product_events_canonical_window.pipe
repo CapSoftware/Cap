@@ -1,0 +1,60 @@
+DESCRIPTION >
+	Finalize one bounded UTC event window while retaining global payload-conflict quarantine.
+
+TOKEN product_events_copy_runner READ
+
+NODE product_events_canonical_window_node
+SQL >
+	%
+	{% if not defined(source_cutoff) %}
+		{{ error('source_cutoff is required') }}
+	{% end %}
+	WITH candidate_ids AS (
+		SELECT event_id
+		FROM product_event_day_states_v2
+		WHERE occurred_date >= {% if defined(settled_date) %} toDate({{Date(settled_date)}}) - INTERVAL 1 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 9 DAY {% end %}
+			AND occurred_date < {% if defined(settled_date) %} toDate({{Date(settled_date)}}) + INTERVAL 2 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) + INTERVAL 1 DAY {% end %}
+			AND first_received_at <= toDateTime64({{DateTime64(source_cutoff)}}, 3)
+		GROUP BY event_id
+	), valid_ids AS (
+		SELECT event_id
+		FROM product_event_id_states_v2
+		WHERE event_id IN (SELECT event_id FROM candidate_ids)
+			AND first_received_at <= toDateTime64({{DateTime64(source_cutoff)}}, 3)
+		GROUP BY event_id
+		HAVING uniqExactMerge(payload_hashes) = 1
+	)
+	SELECT
+		event_id,
+		argMinMerge(payload_hash) AS payload_hash,
+		argMinMerge(occurred_at) AS occurred_at,
+		max(received_at) AS received_at,
+		argMinMerge(event_name) AS event_name,
+		argMinMerge(schema_version) AS schema_version,
+		argMinMerge(source) AS source,
+		argMinMerge(platform) AS platform,
+		argMinMerge(anonymous_id) AS anonymous_id,
+		argMinMerge(session_id) AS session_id,
+		argMinMerge(user_id) AS user_id,
+		argMinMerge(organization_id) AS organization_id,
+		argMinMerge(app_version) AS app_version,
+		argMinMerge(pathname) AS pathname,
+		argMinMerge(referrer) AS referrer,
+		argMinMerge(country) AS country,
+		argMinMerge(region) AS region,
+		argMinMerge(city) AS city,
+		argMinMerge(hostname) AS hostname,
+		argMinMerge(browser) AS browser,
+		argMinMerge(device) AS device,
+		argMinMerge(os) AS os,
+		argMinMerge(channel) AS channel,
+		argMinMerge(traffic_class) AS traffic_class,
+		argMinMerge(synthetic_run_id) AS synthetic_run_id,
+		argMinMerge(properties) AS properties
+	FROM product_event_day_states_v2
+	INNER JOIN valid_ids USING event_id
+	WHERE occurred_date >= {% if defined(settled_date) %} toDate({{Date(settled_date)}}) - INTERVAL 1 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 9 DAY {% end %}
+		AND occurred_date < {% if defined(settled_date) %} toDate({{Date(settled_date)}}) + INTERVAL 2 DAY {% else %} toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) + INTERVAL 1 DAY {% end %}
+		AND first_received_at <= toDateTime64({{DateTime64(source_cutoff)}}, 3)
+	GROUP BY event_id
+	HAVING uniqExactMerge(payload_hashes) = 1

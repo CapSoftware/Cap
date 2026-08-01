@@ -1,0 +1,41 @@
+DESCRIPTION >
+	Time-partitioned per-event aggregate state for bounded exact decision refreshes.
+
+TOKEN product_events_copy_runner APPEND
+
+SCHEMA >
+	occurred_date Date,
+	event_id String,
+	payload_hashes AggregateFunction(uniqExact, FixedString(32)),
+	payload_hash AggregateFunction(argMin, FixedString(32), DateTime64(3)),
+	occurred_at AggregateFunction(argMin, DateTime64(3), DateTime64(3)),
+	first_received_at SimpleAggregateFunction(min, DateTime64(3)),
+	received_at SimpleAggregateFunction(max, DateTime64(3)),
+	event_name AggregateFunction(argMin, String, DateTime64(3)),
+	schema_version AggregateFunction(argMin, UInt16, DateTime64(3)),
+	source AggregateFunction(argMin, String, DateTime64(3)),
+	platform AggregateFunction(argMin, String, DateTime64(3)),
+	anonymous_id AggregateFunction(argMin, String, DateTime64(3)),
+	session_id AggregateFunction(argMin, String, DateTime64(3)),
+	user_id AggregateFunction(argMin, String, DateTime64(3)),
+	organization_id AggregateFunction(argMin, String, DateTime64(3)),
+	app_version AggregateFunction(argMin, String, DateTime64(3)),
+	pathname AggregateFunction(argMin, String, DateTime64(3)),
+	referrer AggregateFunction(argMin, String, DateTime64(3)),
+	country AggregateFunction(argMin, String, DateTime64(3)),
+	region AggregateFunction(argMin, String, DateTime64(3)),
+	city AggregateFunction(argMin, String, DateTime64(3)),
+	hostname AggregateFunction(argMin, String, DateTime64(3)),
+	browser AggregateFunction(argMin, String, DateTime64(3)),
+	device AggregateFunction(argMin, String, DateTime64(3)),
+	os AggregateFunction(argMin, String, DateTime64(3)),
+	channel AggregateFunction(argMin, String, DateTime64(3)),
+	traffic_class AggregateFunction(argMin, String, DateTime64(3)),
+	synthetic_run_id AggregateFunction(argMin, String, DateTime64(3)),
+	properties AggregateFunction(argMin, String, DateTime64(3))
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(occurred_date)
+ENGINE_SORTING_KEY (occurred_date, event_id)
+ENGINE_TTL occurred_date + INTERVAL 807 DAY
+ENGINE_SETTINGS index_granularity = 256

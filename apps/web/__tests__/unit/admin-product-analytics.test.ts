@@ -9,8 +9,11 @@ import {
 	buildAdminAnalyticsEndpointUrl,
 	calculateHealthWindowStart,
 	decodeAnalyticsFreshnessResponse,
+	decodeExperimentOutcomesResponse,
 	decodeProductEventsResponse,
+	decodeTrafficAttributionResponse,
 	decodeTrafficOverviewResponse,
+	decodeTrafficTotalsResponse,
 	fetchOptionalRollbackEndpoint,
 } from "@/app/admin/analytics/tinybird";
 
@@ -122,7 +125,41 @@ describe("admin analytics Tinybird client", () => {
 					},
 				],
 			}),
-		).toMatchObject([{ changeKind: "", revenueMinor: 2_500 }]);
+		).toMatchObject([
+			{ changeKind: "", recordingStatus: "", revenueMinor: 2_500 },
+		]);
+		expect(
+			decodeProductEventsResponse({
+				data: [
+					{
+						date: "2026-07-31",
+						event_name: "recording_completed",
+						source: "client",
+						platform: "desktop",
+						app_version: "1.0.0",
+						hostname: "",
+						country: "GB",
+						device: "desktop",
+						browser: "",
+						os: "macOS",
+						channel: "direct",
+						plan_id: "",
+						recording_status: "failed",
+						payment_status: "",
+						subscription_status: "",
+						currency: "",
+						billing_interval: "",
+						events: 2,
+						actors: 2,
+						users: 2,
+						organizations: 1,
+						revenue_minor: 0,
+					},
+				],
+			}),
+		).toMatchObject([
+			{ eventName: "recording_completed", recordingStatus: "failed" },
+		]);
 		expect(
 			decodeAnalyticsFreshnessResponse({
 				data: [
@@ -173,5 +210,105 @@ describe("admin analytics Tinybird client", () => {
 		expect(() => decodeTrafficOverviewResponse({ rows: [] })).toThrow(
 			AdminAnalyticsRequestError,
 		);
+	});
+
+	it("decodes exact traffic totals and explicit attribution models", () => {
+		expect(
+			decodeTrafficTotalsResponse({
+				data: [
+					{
+						visitors: "9",
+						visits: 12,
+						pageviews: "24",
+						views_per_visit: 2,
+						bounce_rate: "25",
+						visit_duration_ms: 30_000,
+						engaged_ms: "60000",
+					},
+				],
+			}),
+		).toEqual([
+			{
+				visitors: 9,
+				visits: 12,
+				pageviews: 24,
+				viewsPerVisit: 2,
+				bounceRate: 25,
+				visitDurationMs: 30_000,
+				engagedMs: 60_000,
+			},
+		]);
+		expect(
+			decodeTrafficAttributionResponse({
+				data: [
+					{
+						attribution_model: "last",
+						source: "newsletter",
+						medium: "email",
+						campaign: "launch",
+						visitors: "7",
+						visits: "8",
+						pageviews: "11",
+					},
+				],
+			}),
+		).toEqual([
+			{
+				attributionModel: "last",
+				source: "newsletter",
+				medium: "email",
+				campaign: "launch",
+				visitors: 7,
+				visits: 8,
+				pageviews: 11,
+			},
+		]);
+		expect(() =>
+			decodeTrafficAttributionResponse({
+				data: [
+					{
+						attribution_model: "inferred",
+						source: "",
+						medium: "",
+						campaign: "",
+						visitors: 1,
+						visits: 1,
+						pageviews: 1,
+					},
+				],
+			}),
+		).toThrow(AdminAnalyticsRequestError);
+	});
+
+	it("decodes aggregate experiment outcomes without identifiers", () => {
+		expect(
+			decodeExperimentOutcomesResponse({
+				data: [
+					{
+						experiment_id: "pricing-copy",
+						assignment_version: "v2",
+						variant: "concise",
+						platform: "web",
+						app_version: "web",
+						outcome_name: "paid_purchase",
+						exposed_actors: "40",
+						converted_actors: "6",
+						conversion_rate: "15",
+					},
+				],
+			}),
+		).toEqual([
+			{
+				experimentId: "pricing-copy",
+				assignmentVersion: "v2",
+				variant: "concise",
+				platform: "web",
+				appVersion: "web",
+				outcomeName: "paid_purchase",
+				exposedActors: 40,
+				convertedActors: 6,
+				conversionRate: 15,
+			},
+		]);
 	});
 });
