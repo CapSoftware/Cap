@@ -1,6 +1,8 @@
 DESCRIPTION >
 	Rebuild signup activation cohorts from exact canonical server facts.
 
+TOKEN product_events_agent_read READ
+
 NODE snapshot_product_activation_daily_exact_node
 SQL >
 	%

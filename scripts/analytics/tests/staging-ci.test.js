@@ -374,4 +374,16 @@ test("the analytics workflow is statically restricted to staging", () => {
 		)?.length,
 		2,
 	);
+	assert.equal(
+		workflow.match(
+			/TINYBIRD_TOKEN: \$\{\{ secrets\.TINYBIRD_STAGING_READ_TOKEN \}\}/g,
+		)?.length,
+		4,
+	);
+	assert.equal(
+		workflow.match(
+			/TB_TOKEN: \$\{\{ secrets\.TINYBIRD_STAGING_READ_TOKEN \}\}/g,
+		)?.length,
+		4,
+	);
 });

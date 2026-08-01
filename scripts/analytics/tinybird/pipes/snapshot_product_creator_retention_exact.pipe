@@ -1,6 +1,8 @@
 DESCRIPTION >
 	Rebuild active-creator cohorts from exact successful creation and sharing events.
 
+TOKEN product_events_agent_read READ
+
 NODE snapshot_product_creator_retention_exact_node
 SQL >
 	%

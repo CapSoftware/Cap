@@ -507,6 +507,7 @@ export const assertWorkflowSafety = (workflow) => {
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+		`TINYBIRD_TOKEN: \${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}`,
 		"probe-preview",
 		"verify-promoted",
 		...COPY_PIPES,

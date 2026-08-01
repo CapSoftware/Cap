@@ -1,6 +1,8 @@
 DESCRIPTION >
 	Rebuild hourly delivery health so privacy erasure retracts all derived state.
 
+TOKEN product_events_agent_read READ
+
 NODE snapshot_product_events_health_hourly_node
 SQL >
 	%

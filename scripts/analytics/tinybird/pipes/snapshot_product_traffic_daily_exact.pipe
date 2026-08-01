@@ -1,6 +1,8 @@
 DESCRIPTION >
 	Rebuild exact 30-minute client-session metrics from canonical external page events.
 
+TOKEN product_events_agent_read READ
+
 NODE snapshot_product_traffic_daily_exact_node
 SQL >
 	%

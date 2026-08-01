@@ -179,8 +179,8 @@ jobs:
       - name: Rebuild staged decision and health copies
         id: staging-copies
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
@@ -230,8 +230,8 @@ jobs:
       - name: Rebuild promoted decision and health copies
         id: promoted-copies
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
@@ -260,8 +260,8 @@ jobs:
         id: erasure-copies
         if: steps.erase-identity.outcome == 'success'
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
@@ -292,8 +292,8 @@ jobs:
         id: cleanup-copies
         if: always() && steps.cleanup.outcome == 'success'
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |

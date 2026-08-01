@@ -32,7 +32,9 @@ Known bots, crawlers, previews, internal IP hashes, and synthetic runs are visib
 
 Vercel request-IP buckets use only the platform-owned forwarding header. A self-hosted deployment does not trust forwarding headers by default, so legacy public view tracking returns `503` until `CAP_ANALYTICS_TRUST_PROXY=1` is configured. That setting uses the first `x-forwarded-for` address and is safe only behind a reverse proxy that overwrites, rather than appends or passes through, that header. Do not set it on Vercel.
 
-Account and organization deletion writes its durable pending marker or tombstone before erasure begins. Delivery and reconciliation reject marked identities, then deletion waits longer than the bounded in-flight delivery attempt before removing matching raw rows with a dedicated erasure token and rebuilding every replace-mode canonical, traffic, activation, retention, and health snapshot. This closes the race where a workflow that passed its identity check could otherwise append after a completed erasure. Deletion fails closed if the erasure credential or any rebuild is unavailable. The staging suite deletes a synthetic user and organization, proves their raw-health and decision state is gone, and proves an out-of-scope row sharing the anonymous ID remains until final test cleanup.
+The desktop critical-event outbox uses AES-256-GCM. Its stable random key is stored in the OS keyring and in a separate app-local recovery-key file so queued events remain recoverable during temporary keyring outages; Unix recovery-key permissions are `0600`, while Windows relies on the per-user app-data ACL. This protects queue contents from accidental store disclosure but does not claim protection from a process or local account with access to both app-data files. An upgrade may read the earlier application-store fallback-key shape only to decrypt and re-encrypt pending queues, then removes that legacy value after both primary and recovery queues are safely consolidated.
+
+Account and organization deletion writes its durable pending marker or tombstone before erasure begins. Delivery and reconciliation reject marked identities, then deletion waits longer than the bounded in-flight delivery attempt before removing matching raw rows with a dedicated erasure token and rebuilding every replace-mode canonical, traffic, activation, retention, and health snapshot. This closes the race where a workflow that passed its identity check could otherwise append after a completed erasure. Deletion fails closed if the erasure credential or any rebuild is unavailable. The staging suite deletes a synthetic user and organization, proves their raw-health and decision state is gone, and proves an out-of-scope row sharing the anonymous ID remains until final test cleanup. Tinybird's row-deletion API currently requires the general `DATASOURCES:CREATE` scope and rejects resource-scoped creation of that operator; the token therefore has no read or deployment scope, lives only in the protected staging environment, and is used by code that accepts bounded validated deletion predicates. Its broader same-workspace mutation capability is an explicit provider limitation rather than a least-privilege claim.
 
 ## Data quality and performance gates
 
@@ -64,7 +66,8 @@ Production remains prohibited until the final staging artifact, relevant CI, sec
 2. Create least-privilege Tinybird tokens:
    - append-only token for `product_events_v1`;
    - aggregate endpoint read token with no raw or canonical datasource access;
-   - erasure token limited to raw deletion, job status, and the seven reviewed copy rebuild pipes;
+   - resource-scoped copy token for the seven reviewed copy pipes, with no raw identity datasource access;
+   - dedicated erasure token with Tinybird's required `DATASOURCES:CREATE` scope, no read/deploy scopes, protected as a high-impact operational secret until Tinybird offers resource-scoped row deletion;
    - deployment token used only by the controlled production release path.
 3. Set these Vercel production variables without copying values into logs or artifacts:
    - `PRODUCT_ANALYTICS_TINYBIRD_HOST`
@@ -88,4 +91,5 @@ Rollback is fail closed: disable collection by removing the app append token or 
 - Anonymous traffic is abuse-resistant rather than proof of a human.
 - Database reconciliation proves stored signup, share, and collaboration facts; Stripe remains the source of truth for money and subscription state.
 - Aggregated actor counts summed across days are actor-days, not period-unique people. The admin UI labels this explicitly.
+- Tinybird requires workspace-wide `DATASOURCES:CREATE` for row deletion; Cap narrows accepted predicates and isolates the credential, but the provider cannot technically restrict it to `product_events_v1` today.
 - No production rollout is authorized by this document or by a green staging workflow.

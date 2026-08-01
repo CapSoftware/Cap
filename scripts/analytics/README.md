@@ -37,7 +37,7 @@ Cloud deployment requires:
 The deployed datafiles create two runtime tokens:
 
 - `product_events_ingest`: append-only access to `product_events_v1`.
-- `product_events_agent_read`: read-only access to product data and saved endpoints.
+- `product_events_agent_read`: read-only access to privacy-safe product endpoints and the seven reviewed copy pipes. It has no raw identity datasource scope.
 
 Set the append token as `PRODUCT_ANALYTICS_TINYBIRD_TOKEN` in the application. Give agents the read token, never the deployment or append token.
 
@@ -62,3 +62,5 @@ The Analytics GitHub workflow runs static tests, Docker Compose validation, a co
 - The infrastructure contains no autocapture or session-replay path.
 
 Routine commands refuse destructive deployment, workspace-clear, datasource-delete, and datasource-truncate arguments. Destructive recovery is intentionally outside the normal workflow and requires separate review.
+
+Tinybird row deletion currently requires the general `DATASOURCES:CREATE` scope rather than a resource-scoped delete permission. Keep the dedicated erasure operator in a protected environment, give it no read or deployment scope, and expose it only to the reviewed deletion workflow. This provider limitation means the credential can technically mutate other datasources in its workspace even though Cap's workflow accepts only validated identity and synthetic-run conditions.

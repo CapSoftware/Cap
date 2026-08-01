@@ -1,6 +1,8 @@
 DESCRIPTION >
 	Rebuild exact external page, landing, exit, and foreground-engagement metrics.
 
+TOKEN product_events_agent_read READ
+
 NODE snapshot_product_traffic_pages_daily_exact_node
 SQL >
 	%
