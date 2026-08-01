@@ -60,6 +60,14 @@ const jobStatus = (response: TinybirdJobResponse) =>
 			"",
 	).toLowerCase();
 
+const formatTinybirdDateTime64 = (value: string) => {
+	const parsed = new Date(value);
+	if (!Number.isFinite(parsed.getTime())) {
+		throw new FatalError("Product analytics refresh cutoff is invalid");
+	}
+	return parsed.toISOString().replace("T", " ").replace(/Z$/, "");
+};
+
 export async function acquireProductAnalyticsRefreshStep(sourceCutoff: string) {
 	"use step";
 	const parsed = new Date(sourceCutoff);
@@ -84,7 +92,8 @@ export async function runProductAnalyticsCopyStep(
 	const host = env.PRODUCT_ANALYTICS_TINYBIRD_HOST;
 	const copyToken = env.PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN;
 	const readToken = env.PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN;
-	if (!host || !copyToken || !readToken) {
+	const schedulerToken = env.PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN;
+	if (!host || !copyToken || !readToken || !schedulerToken) {
 		throw new FatalError("Product analytics refresh is not configured");
 	}
 	const origin = new URL(host);
@@ -95,7 +104,10 @@ export async function runProductAnalyticsCopyStep(
 	copyUrl.searchParams.set("_mode", "replace");
 	copyUrl.searchParams.set("copy_max_threads", "2");
 	copyUrl.searchParams.set("copy_run_id", copyRunId);
-	copyUrl.searchParams.set("source_cutoff", sourceCutoff);
+	copyUrl.searchParams.set(
+		"source_cutoff",
+		formatTinybirdDateTime64(sourceCutoff),
+	);
 	const created = await request<TinybirdJobResponse>(copyUrl, copyToken, {
 		method: "POST",
 	});
@@ -106,7 +118,7 @@ export async function runProductAnalyticsCopyStep(
 	while (Date.now() < deadline) {
 		const job = await request<TinybirdJobResponse>(
 			new URL(`/v0/jobs/${encodeURIComponent(id)}`, origin),
-			copyToken,
+			schedulerToken,
 		);
 		const status = jobStatus(job);
 		if (["done", "success", "finished", "completed"].includes(status)) break;

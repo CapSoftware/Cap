@@ -42,9 +42,43 @@ interface TinybirdJobResponse {
 	};
 }
 
+interface TinybirdJobListResponse {
+	jobs?: Array<{
+		pipe_name?: unknown;
+		status?: unknown;
+	}>;
+}
+
 interface TinybirdPipeResponse {
 	schedule?: { status?: string };
 }
+
+class ProductAnalyticsRequestError extends Error {
+	constructor(
+		readonly status: number,
+		readonly responseBody: string,
+	) {
+		super(`Product analytics erasure request failed (${status})`);
+	}
+}
+
+const isUnscheduledProductAnalyticsCopyError = (error: Error) => {
+	if (
+		!(error instanceof ProductAnalyticsRequestError) ||
+		error.status !== 422
+	) {
+		return false;
+	}
+	try {
+		const payload = JSON.parse(error.responseBody) as { error?: unknown };
+		return (
+			typeof payload.error === "string" &&
+			payload.error.startsWith("The copy Pipe is not scheduled")
+		);
+	} catch {
+		return false;
+	}
+};
 
 const tinybirdJobId = (response: TinybirdJobResponse) => {
 	const id = response.job_id ?? response.job?.id ?? response.id;
@@ -390,9 +424,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					});
 					const body = await response.text();
 					if (!response.ok) {
-						throw new Error(
-							`Product analytics erasure request failed (${response.status})`,
-						);
+						throw new ProductAnalyticsRequestError(response.status, body);
 					}
 					return body ? (JSON.parse(body) as T) : ({} as T);
 				},
@@ -446,7 +478,10 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				for (let attempt = 0; attempt < 450; attempt += 1) {
 					const job = yield* productAnalyticsRequest<TinybirdJobResponse>(
 						`/v0/jobs/${encodeURIComponent(id)}`,
-						{ token: productAnalyticsCopyToken, purpose: "Copy execution" },
+						{
+							token: productAnalyticsSchedulerToken,
+							purpose: "Copy job attestation",
+						},
 					);
 					const status = tinybirdJobStatus(job);
 					if (["done", "success", "finished", "completed"].includes(status)) {
@@ -488,8 +523,15 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				{ method: "POST" },
 			).pipe(
 				Effect.either,
-				Effect.flatMap((mutation) =>
-					productAnalyticsRequest<TinybirdPipeResponse>(
+				Effect.flatMap((mutation) => {
+					if (mutation._tag === "Left") {
+						const error = mutation.left;
+						if (isUnscheduledProductAnalyticsCopyError(error)) {
+							return Effect.void;
+						}
+						return Effect.fail(error);
+					}
+					return productAnalyticsRequest<TinybirdPipeResponse>(
 						`/v0/pipes/${encodeURIComponent(name)}`,
 						auth,
 					).pipe(
@@ -500,15 +542,14 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 								? status === "paused"
 								: status === "scheduled" || status === "active";
 							if (matches) return Effect.void;
-							if (mutation._tag === "Left") return Effect.fail(mutation.left);
 							return Effect.fail(
 								new Error(
 									`Product analytics schedule state did not become ${paused ? "paused" : "active"}`,
 								),
 							);
 						}),
-					),
-				),
+					);
+				}),
 			);
 			return attempt.pipe(Effect.retry({ times: 3 }));
 		};
@@ -557,6 +598,50 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				}
 				return paused;
 			});
+
+		const waitForProductAnalyticsCopyQuiescence = Effect.gen(function* () {
+			for (let attempt = 0; attempt < 90; attempt += 1) {
+				const responses = yield* Effect.all(
+					PRODUCT_ANALYTICS_REBUILD_PIPES.map((name) =>
+						productAnalyticsRequest<TinybirdJobListResponse>(
+							`/v0/jobs?kind=copy&pipe_name=${encodeURIComponent(name)}`,
+							{
+								token: productAnalyticsSchedulerToken,
+								purpose: "Copy job attestation",
+							},
+						),
+					),
+				);
+				if (responses.some((response) => !Array.isArray(response.jobs))) {
+					return yield* Effect.fail(
+						new Error("Product analytics Jobs API response was invalid"),
+					);
+				}
+				const active = responses
+					.flatMap((response) => response.jobs ?? [])
+					.filter((job) => {
+						const status =
+							typeof job.status === "string"
+								? job.status.toLowerCase()
+								: "unknown";
+						return ![
+							"done",
+							"success",
+							"finished",
+							"completed",
+							"failed",
+							"error",
+							"cancelled",
+							"canceled",
+						].includes(status);
+					});
+				if (active.length === 0) return;
+				yield* Effect.sleep(2_000);
+			}
+			return yield* Effect.fail(
+				new Error("Product analytics Copy jobs did not quiesce"),
+			);
+		});
 
 		const waitForProductAnalytics = <T>(
 			label: string,
@@ -659,6 +744,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					pausedPipes = [...paused];
 					return advance("pausing", paused);
 				});
+				yield* waitForProductAnalyticsCopyQuiescence;
 				yield* advance("deleting");
 				const conditions: string[] = [];
 				if (lease.scope.organizationId) {

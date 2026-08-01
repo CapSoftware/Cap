@@ -12,6 +12,7 @@ vi.mock("@cap/env", () => ({
 		PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN: "copy-token",
 		PRODUCT_ANALYTICS_TINYBIRD_HOST: "https://staging.tinybird.test",
 		PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN: "read-token",
+		PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN: "scheduler-token",
 	}),
 }));
 
@@ -84,13 +85,18 @@ describe("product analytics refresh", () => {
 		expect(result.jobs).toHaveLength(8);
 		expect(mocks.renew).toHaveBeenCalledTimes(8);
 		expect(mocks.release).toHaveBeenCalledWith("refresh-owner-1", undefined);
+		for (const request of requestedUrls.filter((url) =>
+			url.pathname.startsWith("/v0/jobs/"),
+		)) {
+			expect(request.pathname).toMatch(/^\/v0\/jobs\/[A-Za-z0-9_-]+$/);
+		}
 		const copyUrls = requestedUrls.filter((url) =>
 			url.pathname.endsWith("/copy"),
 		);
 		expect(copyUrls).toHaveLength(8);
 		expect(
 			copyUrls.map((url) => url.searchParams.get("source_cutoff")),
-		).toEqual(Array.from({ length: 8 }, () => "2026-07-31T12:00:00.000Z"));
+		).toEqual(Array.from({ length: 8 }, () => "2026-07-31 12:00:00.000"));
 		expect(
 			new Set(copyUrls.map((url) => url.searchParams.get("copy_run_id"))).size,
 		).toBe(1);

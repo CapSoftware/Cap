@@ -108,6 +108,12 @@ describe.sequential("product analytics erasure", () => {
 			vi.fn(async (input: string | URL | Request, init: RequestInit = {}) => {
 				const url = new URL(String(input));
 				requests.push({ url, init });
+				if (/\/copy\/(cancel|resume)$/.test(url.pathname)) {
+					return Response.json(
+						{ error: "The copy Pipe is not scheduled" },
+						{ status: 422 },
+					);
+				}
 				const scheduleResponse = copyScheduleResponse(url, pausedPipes);
 				if (scheduleResponse) return scheduleResponse;
 				if (url.pathname === "/v0/sql") {
@@ -139,6 +145,9 @@ describe.sequential("product analytics erasure", () => {
 							},
 						],
 					});
+				}
+				if (url.pathname === "/v0/jobs") {
+					return Response.json({ jobs: [] });
 				}
 				if (url.pathname.startsWith("/v0/jobs/")) {
 					return Response.json({ status: "done" });
@@ -206,9 +215,39 @@ describe.sequential("product analytics erasure", () => {
 		)) {
 			expect(request.url.searchParams.get("_mode")).toBe("replace");
 		}
+		const jobListRequests = requests.filter(
+			({ url }) => url.pathname === "/v0/jobs",
+		);
+		expect(jobListRequests).toHaveLength(12);
+		expect(
+			new Set(
+				jobListRequests.map(({ url }) => url.searchParams.get("pipe_name")),
+			).size,
+		).toBe(12);
+		expect(
+			jobListRequests.every(
+				({ init }) =>
+					new Headers(init.headers).get("Authorization") ===
+					"Bearer scheduler-token",
+			),
+		).toBe(true);
+		expect(
+			requests.filter(({ url }) =>
+				/^\/v0\/pipes\/[A-Za-z0-9_]+$/.test(url.pathname),
+			),
+		).toHaveLength(0);
 		expect(
 			requests.filter(({ url }) => url.pathname.startsWith("/v0/jobs/")),
 		).toHaveLength(12);
+		expect(
+			requests
+				.filter(({ url }) => url.pathname.startsWith("/v0/jobs/"))
+				.every(
+					({ init }) =>
+						new Headers(init.headers).get("Authorization") ===
+						"Bearer scheduler-token",
+				),
+		).toBe(true);
 		expect(
 			requests
 				.filter(({ url }) => url.pathname === "/v0/sql")
@@ -255,6 +294,39 @@ describe.sequential("product analytics erasure", () => {
 		);
 	});
 
+	it("fails closed before deletion when Copy job state is malformed", async () => {
+		const requests: URL[] = [];
+		const pausedPipes = new Set<string>();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = new URL(String(input));
+				requests.push(url);
+				const scheduleResponse = copyScheduleResponse(url, pausedPipes);
+				if (scheduleResponse) return scheduleResponse;
+				if (url.pathname === "/v0/sql") {
+					return Response.json({ data: [{ matching_rows: 1 }] });
+				}
+				if (url.pathname === "/v0/jobs") return Response.json({});
+				return Response.json({});
+			}),
+		);
+
+		const error = await Effect.runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
+				yield* tinybird.eraseProductAnalytics({ organizationId: "org-1" });
+			}).pipe(Effect.provide(tinybirdTestLayer()), Effect.flip),
+		);
+
+		expect(error.message).toBe(
+			"Product analytics Jobs API response was invalid",
+		);
+		expect(requests.some((url) => url.pathname.includes("/delete"))).toBe(
+			false,
+		);
+	});
+
 	it("fails closed when Tinybird does not confirm deletion", async () => {
 		const pausedPipes = new Set<string>();
 		vi.stubGlobal(
@@ -265,6 +337,9 @@ describe.sequential("product analytics erasure", () => {
 				if (scheduleResponse) return scheduleResponse;
 				if (url.pathname === "/v0/sql") {
 					return Response.json({ data: [{ matching_rows: 1 }] });
+				}
+				if (url.pathname === "/v0/jobs") {
+					return Response.json({ jobs: [] });
 				}
 				return Response.json({});
 			}),
@@ -311,6 +386,9 @@ describe.sequential("product analytics erasure", () => {
 						],
 					});
 				}
+				if (url.pathname === "/v0/jobs") {
+					return Response.json({ jobs: [] });
+				}
 				if (url.pathname.startsWith("/v0/jobs/")) {
 					return Response.json({ status: "done" });
 				}
@@ -350,6 +428,9 @@ describe.sequential("product analytics erasure", () => {
 				if (scheduleResponse) return scheduleResponse;
 				if (url.pathname === "/v0/sql") {
 					return Response.json({ data: [{ matching_rows: 0 }] });
+				}
+				if (url.pathname === "/v0/jobs") {
+					return Response.json({ jobs: [] });
 				}
 				if (
 					url.pathname === "/v0/pipes/snapshot_product_event_id_states_v2/copy"
@@ -484,6 +565,9 @@ describe.sequential("product analytics erasure", () => {
 							},
 						],
 					});
+				}
+				if (url.pathname === "/v0/jobs") {
+					return Response.json({ jobs: [] });
 				}
 				if (url.pathname.startsWith("/v0/jobs/")) {
 					return Response.json({ status: "done" });
