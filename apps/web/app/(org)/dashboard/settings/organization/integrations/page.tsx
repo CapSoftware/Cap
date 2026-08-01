@@ -1,14 +1,20 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { getOrganizationSlackSettings } from "@/actions/organization/slack";
 import { getOrganizationStorageSettings } from "@/actions/organization/storage";
+import { SlackIntegration } from "./slack-integration";
 import { OrganizationStorageIntegrations } from "./storage-integrations";
 
 export const metadata: Metadata = {
 	title: "Organization Integrations — Cap",
 };
 
-export default async function OrganizationIntegrationsPage() {
+export default async function OrganizationIntegrationsPage({
+	searchParams,
+}: {
+	searchParams: Promise<{ slack?: string }>;
+}) {
 	const user = await getCurrentUser();
 
 	if (!user) {
@@ -33,6 +39,20 @@ export default async function OrganizationIntegrationsPage() {
 
 		throw error;
 	});
+	const slackSettings = await getOrganizationSlackSettings(
+		user.activeOrganizationId,
+	);
+	const { slack } = await searchParams;
 
-	return <OrganizationStorageIntegrations initialSettings={settings} />;
+	return (
+		<div className="flex flex-col gap-4">
+			<SlackIntegration
+				organizationId={user.activeOrganizationId}
+				configured={slackSettings.configured}
+				installations={slackSettings.installations}
+				result={slack}
+			/>
+			<OrganizationStorageIntegrations initialSettings={settings} />
+		</div>
+	);
 }

@@ -27,6 +27,7 @@ describe("AI generation language support", () => {
 			speech_models: ["universal-3-5-pro", "universal-2"],
 			language_detection: true,
 		});
+		expect(options.disfluencies).toBe(true);
 		if (!("language_detection_options" in options)) {
 			throw new Error("Expected automatic language detection options");
 		}
@@ -39,6 +40,7 @@ describe("AI generation language support", () => {
 		expect(getAssemblyAITranscriptionOptions("ro")).toMatchObject({
 			speech_models: ["universal-3-5-pro", "universal-2"],
 			language_code: "ro",
+			disfluencies: true,
 		});
 		expect(getAssemblyAITranscriptionOptions("zh")).toMatchObject({
 			speech_models: ["universal-3-5-pro", "universal-2"],

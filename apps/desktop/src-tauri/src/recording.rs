@@ -848,11 +848,14 @@ pub async fn list_capture_displays() -> Vec<CaptureDisplay> {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub async fn list_capture_windows() -> Vec<CaptureWindow> {
-    screen_capture::list_windows()
-        .into_iter()
-        .map(|(v, _)| v)
-        .collect()
+pub async fn list_capture_windows(window: tauri::Window) -> Vec<CaptureWindow> {
+    let windows = if window.label() == CapWindowId::Settings.label() {
+        screen_capture::list_excludable_windows()
+    } else {
+        screen_capture::list_windows()
+    };
+
+    windows.into_iter().map(|(v, _)| v).collect()
 }
 
 #[tauri::command(async)]

@@ -1,0 +1,33 @@
+{
+	"_metadata": {
+		"major_version": 1,
+		"minor_version": 1
+	},
+	"display_information": {
+		"name": "Cap",
+		"description": "Use Cap directly inside Slack.",
+		"background_color": "#1e60e6"
+	},
+	"features": {
+		"bot_user": {
+			"display_name": "cap",
+			"always_online": false
+		},
+		"unfurl_domains": ["cap.so", "cap.link"]
+	},
+	"oauth_config": {
+		"redirect_urls": ["https://cap.so/api/integrations/slack/callback"],
+		"scopes": {
+			"bot": ["links:read", "links:write", "links.embed:write"]
+		}
+	},
+	"settings": {
+		"event_subscriptions": {
+			"request_url": "https://cap.so/api/integrations/slack/events",
+			"bot_events": ["link_shared", "app_uninstalled"]
+		},
+		"org_deploy_enabled": false,
+		"socket_mode_enabled": false,
+		"token_rotation_enabled": false
+	}
+}

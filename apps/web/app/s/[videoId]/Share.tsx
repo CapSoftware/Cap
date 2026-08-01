@@ -525,7 +525,13 @@ export const Share = ({
 				<div className="flex flex-col gap-4 lg:flex-row">
 					<div className="flex-1">
 						<div className="overflow-visible relative bg-white rounded-2xl border aspect-video border-gray-5">
-							<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
+							<div
+								className={
+									isScreenshot
+										? "absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl"
+										: "absolute inset-x-3 top-1/2 aspect-video -translate-y-1/2 overflow-visible rounded-xl"
+								}
+							>
 								{isScreenshot ? (
 									<ScreenshotImage src={screenshotImageUrl} alt={data.name} />
 								) : (
