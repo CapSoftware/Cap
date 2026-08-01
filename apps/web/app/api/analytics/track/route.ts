@@ -34,6 +34,10 @@ const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
 const fallbackRateLimiter = new ProductAnalyticsRateLimiter({
 	perKeyLimit: 60,
 });
+const untrustedProxyRateLimiter = new ProductAnalyticsRateLimiter({
+	perKeyLimit: 600,
+	globalLimit: 600,
+});
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -77,22 +81,28 @@ export async function POST(request: NextRequest) {
 			return Response.json({ error: "Invalid origin" }, { status: 403 });
 		}
 	}
+	const isVercel = process.env.VERCEL === "1";
+	const trustedNetworkProxy =
+		isVercel || process.env.CAP_ANALYTICS_TRUST_PROXY === "1";
 	const rateLimitKey = getProductAnalyticsRateLimitKey({
-		trustedVercelProxy: process.env.VERCEL === "1",
+		trustedVercelProxy: trustedNetworkProxy,
 		xVercelForwardedFor:
-			request.headers.get("x-vercel-forwarded-for") ?? undefined,
-		fallbackIdentity: sessionId ?? undefined,
+			request.headers.get(
+				isVercel ? "x-vercel-forwarded-for" : "x-forwarded-for",
+			) ?? undefined,
 	});
-	if (!rateLimitKey) {
+	if (!rateLimitKey && trustedNetworkProxy) {
 		return Response.json(
 			{ error: "Missing request identity" },
 			{ status: 400 },
 		);
 	}
 	if (
-		fallbackRateLimiter.isRateLimited(rateLimitKey) ||
+		(rateLimitKey
+			? fallbackRateLimiter.isRateLimited(rateLimitKey)
+			: untrustedProxyRateLimiter.isRateLimited("self-hosted")) ||
 		(await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
-			key: rateLimitKey,
+			key: rateLimitKey ?? "self-hosted",
 			headers: request.headers,
 		}))
 	) {
