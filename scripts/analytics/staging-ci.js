@@ -160,6 +160,9 @@ const PREVIEW_TINYBIRD_TOKEN_ENV = {
 		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 };
 
+const STAGING_PREVIEW_ACCESS_ORIGIN =
+	"https://cap-web-git-codex-first-party-analytics-mc-ilroy.vercel.app";
+
 const tinybirdEnvironment = (requiredTokenNames = TINYBIRD_TOKEN_NAMES) => {
 	if (environment("TINYBIRD_WORKSPACE_ID") !== STAGING_WORKSPACE_ID) {
 		throw new Error(
@@ -385,6 +388,7 @@ const prepareDeploymentBoundary = async () => {
 			phase: "precreate",
 			preview: {
 				deploymentId: environment("VERCEL_DEPLOYMENT_ID"),
+				accessUrl: new URL(environment("VERCEL_PREVIEW_ACCESS_URL")).origin,
 				url: new URL(environment("VERCEL_PREVIEW_URL")).origin,
 			},
 			tinybird: {
@@ -1304,6 +1308,11 @@ const verifyFreshPullRequestHead = async () => {
 const attestPreviewTinybird = async () => {
 	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
 	const previewOrigin = new URL(environment("ANALYTICS_PREVIEW_URL")).origin;
+	if (previewOrigin !== STAGING_PREVIEW_ACCESS_ORIGIN) {
+		throw new Error(
+			"The preview access URL is not the analytics staging alias",
+		);
+	}
 	const runId = validateSyntheticRunId(environment("ANALYTICS_TEST_RUN_ID"));
 	const { origin: expectedOrigin, tokens } = tinybirdEnvironment(
 		Object.values(PREVIEW_TINYBIRD_TOKEN_ENV),
@@ -1369,21 +1378,86 @@ const previewCookies = (headers) => {
 		.join("; ");
 };
 
+let previewShareCookie;
+
 const previewRequest = async (url, init = {}) => {
 	const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
-	return fetch(url, {
-		...init,
-		headers: {
-			...(bypass
-				? {
-						"x-vercel-protection-bypass": bypass,
-						"x-vercel-set-bypass-cookie": "true",
-					}
-				: {}),
-			...init.headers,
-		},
-		signal: init.signal ?? AbortSignal.timeout(20_000),
+	const shareSecret = process.env.VERCEL_PREVIEW_SHARE_SECRET?.trim();
+	const headers = new Headers({
+		...(bypass
+			? {
+					"x-vercel-protection-bypass": bypass,
+					"x-vercel-set-bypass-cookie": "true",
+				}
+			: {}),
+		...init.headers,
 	});
+	if (previewShareCookie) {
+		headers.set(
+			"Cookie",
+			[headers.get("Cookie"), previewShareCookie].filter(Boolean).join("; "),
+		);
+	}
+	const requestInit = {
+		...init,
+		headers,
+		signal: init.signal ?? AbortSignal.timeout(20_000),
+	};
+	if (!shareSecret || previewShareCookie) return fetch(url, requestInit);
+
+	const shareUrl = new URL(url);
+	shareUrl.searchParams.set("_vercel_share", shareSecret);
+	const handshake = await fetch(shareUrl, {
+		...requestInit,
+		redirect: "manual",
+	});
+	if (![302, 303, 307, 308].includes(handshake.status)) return handshake;
+	const location = handshake.headers.get("location");
+	const cookie = previewCookies(handshake.headers)
+		.split("; ")
+		.find((value) => value.startsWith("_vercel_jwt="));
+	if (!location || !cookie) {
+		throw new Error("The staging alias did not issue a Vercel share cookie");
+	}
+	const redirectUrl = new URL(location, shareUrl);
+	if (redirectUrl.origin !== shareUrl.origin) {
+		throw new Error("The Vercel share bootstrap left the staging alias");
+	}
+	previewShareCookie = cookie;
+	headers.set(
+		"Cookie",
+		[headers.get("Cookie"), previewShareCookie].filter(Boolean).join("; "),
+	);
+	return fetch(redirectUrl, requestInit);
+};
+
+const artifactPreviewUrl = (artifact) =>
+	artifact.vercel.accessUrl ?? artifact.vercel.url;
+
+const attestExactPreviewSha = async ({ previewOrigin, runId }) => {
+	const response = await previewRequest(
+		new URL("/api/analytics/staging-test/attest", previewOrigin),
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${environment("CAP_ANALYTICS_STAGING_TEST_SECRET")}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				runId: validateSyntheticRunId(runId),
+				sha: exactSha(environment("EXPECTED_SHA"), "EXPECTED_SHA"),
+			}),
+		},
+	);
+	if (!response.ok) {
+		throw new Error(
+			`The staging alias failed exact-SHA attestation with HTTP ${response.status}`,
+		);
+	}
+	const payload = await response.json();
+	if (payload.sha !== environment("EXPECTED_SHA")) {
+		throw new Error("The staging alias moved to a different Vercel SHA");
+	}
 };
 
 const cleanupPreviewDatabaseState = async ({
@@ -1394,7 +1468,7 @@ const cleanupPreviewDatabaseState = async ({
 }) => {
 	const url = new URL(
 		"/api/analytics/staging-test/cleanup-database",
-		artifact.vercel.url,
+		artifactPreviewUrl(artifact),
 	);
 	const response = await previewRequest(url, {
 		method: "POST",
@@ -1466,7 +1540,11 @@ const probePreview = async () => {
 	const artifactPath = option("artifact");
 	const state = readJson(statePath);
 	const artifact = readJson(artifactPath);
-	const previewOrigin = new URL(artifact.vercel.url).origin;
+	const previewOrigin = new URL(artifactPreviewUrl(artifact)).origin;
+	await attestExactPreviewSha({
+		previewOrigin,
+		runId: `${state.runId}_preview_api`,
+	});
 	const landing = await previewRequest(previewOrigin);
 	if (!landing.ok) {
 		throw new Error(
@@ -1756,6 +1834,10 @@ const probePreview = async () => {
 		bundleBudgetPassed: true,
 		collectorBudgetPassed: true,
 	};
+	await attestExactPreviewSha({
+		previewOrigin,
+		runId: `${state.runId}_preview_api_final`,
+	});
 	writeJson(artifactPath, artifact);
 };
 
@@ -1766,7 +1848,10 @@ const probeDurableServerPath = async () => {
 	const artifact = readJson(artifactPath);
 	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
 	const serverRunId = validateSyntheticRunId(`${state.runId}_server`);
-	const url = new URL("/api/analytics/staging-test", artifact.vercel.url);
+	const url = new URL(
+		"/api/analytics/staging-test",
+		artifactPreviewUrl(artifact),
+	);
 	const body = (sha) =>
 		JSON.stringify({
 			scenario: "business_lifecycle",
@@ -1844,7 +1929,7 @@ const probeDurableServerPath = async () => {
 	});
 	const healthUrl = new URL(
 		"/api/analytics/staging-test/health",
-		artifact.vercel.url,
+		artifactPreviewUrl(artifact),
 	);
 	const healthResponse = await previewRequest(healthUrl, {
 		method: "POST",
@@ -2067,6 +2152,7 @@ const prepareSeed = async () => {
 		},
 		vercel: {
 			deploymentId: environment("VERCEL_DEPLOYMENT_ID"),
+			accessUrl: environment("VERCEL_PREVIEW_ACCESS_URL"),
 			url: environment("VERCEL_PREVIEW_URL"),
 		},
 		tinybird: { deploymentId },
@@ -3616,7 +3702,10 @@ const eraseSyntheticIdentity = async () => {
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
 	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
-	const url = new URL("/api/analytics/staging-test/erase", artifact.vercel.url);
+	const url = new URL(
+		"/api/analytics/staging-test/erase",
+		artifactPreviewUrl(artifact),
+	);
 	const body = JSON.stringify({ runId: state.runId, sha: artifact.sha });
 	const send = (authorization) =>
 		previewRequest(url, {

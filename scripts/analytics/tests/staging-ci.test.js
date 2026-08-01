@@ -2024,6 +2024,14 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow,
 		/Refuse a preview bound outside Tinybird staging[\s\S]*CAP_ANALYTICS_STAGING_TEST_SECRET[\s\S]*staging-ci\.js attest-preview/,
 	);
+	assert.match(
+		workflow,
+		/ANALYTICS_PREVIEW_ACCESS_URL: https:\/\/cap-web-git-codex-first-party-analytics-mc-ilroy\.vercel\.app/,
+	);
+	assert.match(
+		workflow,
+		/Refuse a preview bound outside Tinybird staging[\s\S]*VERCEL_PREVIEW_SHARE_SECRET[\s\S]*staging-ci\.js attest-preview/,
+	);
 	assert.ok(
 		workflow.indexOf(
 			"Prove promoted delivery, business values, and decision deduplication",
@@ -2232,6 +2240,31 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	const runner = fs.readFileSync(
 		new URL("../staging-ci.js", import.meta.url),
 		"utf8",
+	);
+	assert.match(
+		runner,
+		/const STAGING_PREVIEW_ACCESS_ORIGIN =\s*"https:\/\/cap-web-git-codex-first-party-analytics-mc-ilroy\.vercel\.app"/,
+	);
+	assert.match(
+		runner,
+		/shareUrl\.searchParams\.set\("_vercel_share", shareSecret\)/,
+	);
+	assert.match(runner, /value\.startsWith\("_vercel_jwt="\)/);
+	assert.match(
+		runner,
+		/artifact\.vercel\.accessUrl \?\? artifact\.vercel\.url/,
+	);
+	const browserProbe = fs.readFileSync(
+		new URL(
+			"../../../apps/chrome-extension/e2e/analytics-staging.spec.ts",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	assert.equal(browserProbe.match(/await attestExactSha\(\)/g)?.length, 2);
+	assert.match(
+		browserProbe,
+		/shareUrl\.searchParams\.set\("_vercel_share", shareSecret\)/,
 	);
 	const serverProbe = runner.slice(
 		runner.indexOf("const probeDurableServerPath = async () => {"),

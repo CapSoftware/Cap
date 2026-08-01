@@ -170,6 +170,7 @@ jobs:
       EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
       HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
       ANALYTICS_TEST_RUN_ID: run_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.event.pull_request.head.sha || github.sha }}
+      ANALYTICS_PREVIEW_ACCESS_URL: https://cap-web-git-codex-first-party-analytics-mc-ilroy.vercel.app
     steps:
       - name: Check out exact requested SHA
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -197,7 +198,7 @@ jobs:
         run: node scripts/analytics/staging-ci.js wait-vercel
       - name: Refuse a preview bound outside Tinybird staging
         env:
-          ANALYTICS_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          ANALYTICS_PREVIEW_URL: ${{ env.ANALYTICS_PREVIEW_ACCESS_URL }}
           CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
@@ -207,10 +208,12 @@ jobs:
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: node scripts/analytics/staging-ci.js attest-preview
       - name: Persist the pre-create Tinybird recovery boundary
         env:
           VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_ACCESS_URL: ${{ env.ANALYTICS_PREVIEW_ACCESS_URL }}
           VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
@@ -263,6 +266,7 @@ jobs:
       - name: Prepare immutable synthetic cleanup state before ingestion
         env:
           VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_ACCESS_URL: ${{ env.ANALYTICS_PREVIEW_ACCESS_URL }}
           VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
         run: >-
           node scripts/analytics/staging-ci.js prepare-seed
@@ -419,18 +423,22 @@ jobs:
       - name: Prove the exact-SHA deployed browser tracker
         id: browser-e2e
         env:
-          ANALYTICS_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          ANALYTICS_PREVIEW_URL: ${{ env.ANALYTICS_PREVIEW_ACCESS_URL }}
           ANALYTICS_BROWSER_RUN_ID: ${{ env.ANALYTICS_TEST_RUN_ID }}_preview
           ANALYTICS_STATE_PATH: ${{ runner.temp }}/analytics-staging-state.json
           ANALYTICS_ARTIFACT_PATH: ${{ runner.temp }}/analytics-staging-report.json
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: |
           pnpm --dir apps/chrome-extension exec playwright install --with-deps chromium
           pnpm --dir apps/chrome-extension exec playwright test e2e/analytics-staging.spec.ts
       - name: Probe the exact-SHA Vercel browser collector and staging rate limit
         id: preview-api
         env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js probe-preview
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -442,6 +450,7 @@ jobs:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js probe-server
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -499,6 +508,7 @@ jobs:
         env:
           CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js erase-synthetic-identity
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -535,6 +545,7 @@ jobs:
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: |
           if [[ ! -f "$RUNNER_TEMP/analytics-staging-state.json" ]]; then
             echo "required=false" >> "$GITHUB_OUTPUT"
@@ -701,6 +712,7 @@ jobs:
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js recover
           --checkpoint-directory "$RUNNER_TEMP/analytics-recovery-checkpoints"

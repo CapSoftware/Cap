@@ -41,7 +41,12 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	const runId = requiredEnvironment("ANALYTICS_BROWSER_RUN_ID");
 	const statePath = requiredEnvironment("ANALYTICS_STATE_PATH");
 	const artifactPath = requiredEnvironment("ANALYTICS_ARTIFACT_PATH");
+	const expectedSha = requiredEnvironment("EXPECTED_SHA");
+	const stagingSecret = requiredEnvironment(
+		"CAP_ANALYTICS_STAGING_TEST_SECRET",
+	);
 	const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+	const shareSecret = process.env.VERCEL_PREVIEW_SHARE_SECRET?.trim();
 	const context = await browser.newContext({
 		baseURL: previewUrl,
 		extraHTTPHeaders: {
@@ -54,6 +59,27 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 				: {}),
 		},
 	});
+	if (shareSecret) {
+		const shareUrl = new URL("/api/analytics/staging-test/attest", previewUrl);
+		shareUrl.searchParams.set("_vercel_share", shareSecret);
+		const bootstrap = await context.request.get(shareUrl.toString(), {
+			maxRedirects: 0,
+		});
+		expect([302, 303, 307, 308]).toContain(bootstrap.status());
+	}
+	const attestExactSha = async () => {
+		const response = await context.request.post(
+			"/api/analytics/staging-test/attest",
+			{
+				data: { runId, sha: expectedSha },
+				headers: { Authorization: `Bearer ${stagingSecret}` },
+			},
+		);
+		expect(response.ok()).toBe(true);
+		const payload = (await response.json()) as { sha?: string };
+		expect(payload.sha).toBe(expectedSha);
+	};
+	await attestExactSha();
 	const captured: CapturedEvent[] = [];
 	const acceptedEventIds = new Set<string>();
 	const benchmarkEventIds = new Set<string>();
@@ -465,5 +491,6 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		browserMainThreadBudgetPassed: true,
 	};
 	fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+	await attestExactSha();
 	await context.close();
 });
