@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query feature event volume and daily unique adopters after applying decision filters.
 
-TOKEN product_events_agent_read READ
 
 NODE product_feature_adoption_node
 SQL >

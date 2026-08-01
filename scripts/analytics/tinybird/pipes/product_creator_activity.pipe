@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query active creators, organizations, new-versus-returning activity, and DAU-WAU-MAU stickiness.
 
-TOKEN product_events_agent_read READ
 
 NODE product_creator_activity_node
 SQL >

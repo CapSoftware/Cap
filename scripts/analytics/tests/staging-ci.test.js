@@ -30,6 +30,8 @@ import {
 	extractSameOriginNextScriptUrls,
 	FEATURE_BRANCH,
 	FEATURE_PULL_REQUEST,
+	formatTinybirdDateTime64,
+	isUnscheduledCopyMutation,
 	latencySummary,
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
@@ -44,11 +46,15 @@ import {
 	resolveOwnedMutationTarget,
 	STAGING_DATABASE_FINGERPRINT,
 	STAGING_DATABASE_SCHEMA,
+	STAGING_READ_ENDPOINTS,
+	STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS,
+	STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
 	syntheticIdentityFilterQueries,
 	syntheticMonetizationFilterQueries,
+	tokenScopeProbeWindow,
 	tokenWorkspaceId,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
@@ -59,6 +65,21 @@ import {
 const SHA = "1234567890abcdef1234567890abcdef12345678";
 const token = (workspaceId = STAGING_WORKSPACE_ID) =>
 	`p.${Buffer.from(JSON.stringify({ u: workspaceId })).toString("base64url")}.signature`;
+const readJwt = ({
+	workspaceId = STAGING_WORKSPACE_ID,
+	expiresAt = Date.now() + STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS + 1_000,
+	scopes = STAGING_READ_ENDPOINTS.map((resource) => ({
+		type: "PIPES:READ",
+		resource,
+	})),
+} = {}) =>
+	`ey.${Buffer.from(
+		JSON.stringify({
+			exp: Math.ceil(expiresAt / 1_000),
+			scopes,
+			workspace_id: workspaceId,
+		}),
+	).toString("base64url")}.signature`;
 
 test("schedule pause compensates every schedule already paused", async () => {
 	const calls = [];
@@ -120,6 +141,75 @@ test("schedule state attestation distinguishes paused from active copies", () =>
 	);
 	assert.equal(copyScheduleMatchesAction({}, "pause"), false);
 	assert.equal(copyScheduleMatchesAction({}, "resume"), true);
+});
+
+test("on-demand Copy responses are distinguished from schedule failures", () => {
+	assert.equal(
+		isUnscheduledCopyMutation(422, {
+			error: "The copy Pipe is not scheduled",
+		}),
+		true,
+	);
+	assert.equal(
+		isUnscheduledCopyMutation(422, { error: "Another provider failure" }),
+		false,
+	);
+	assert.equal(
+		isUnscheduledCopyMutation(403, {
+			error: "The copy Pipe is not scheduled",
+		}),
+		false,
+	);
+});
+
+test("token scope probes stay inside the health endpoint window", () => {
+	assert.deepEqual(
+		tokenScopeProbeWindow(
+			"2026-05-14T05:00:00.000Z",
+			"2026-08-01T17:20:36.520Z",
+		),
+		{
+			start_time: "2026-05-14 05:00:00.000",
+			end_time: "2026-05-15 05:00:00.000",
+		},
+	);
+	assert.deepEqual(
+		tokenScopeProbeWindow(
+			"2026-08-01T17:00:00.000Z",
+			"2026-08-01T17:20:36.520Z",
+		),
+		{
+			start_time: "2026-08-01 17:00:00.000",
+			end_time: "2026-08-01 17:20:36.520",
+		},
+	);
+	assert.throws(
+		() =>
+			tokenScopeProbeWindow(
+				"2026-08-02T00:00:00.000Z",
+				"2026-08-01T00:00:00.000Z",
+			),
+		/Token scope probe window is invalid/,
+	);
+});
+
+test("Tinybird DateTime64 parameters are normalized to UTC without a suffix", () => {
+	assert.equal(
+		formatTinybirdDateTime64("2026-08-01T17:20:36.520Z"),
+		"2026-08-01 17:20:36.520",
+	);
+	assert.equal(
+		formatTinybirdDateTime64("2026-08-01T18:20:36.520+01:00"),
+		"2026-08-01 17:20:36.520",
+	);
+	assert.equal(
+		formatTinybirdDateTime64("2026-08-01 17:20:36.520"),
+		"2026-08-01 17:20:36.520",
+	);
+	assert.throws(
+		() => formatTinybirdDateTime64("2026-08-01 17:20:36"),
+		/must include a timezone/,
+	);
 });
 
 test("Copy quiescence waits until every approved pipe has no active jobs", async () => {
@@ -246,10 +336,10 @@ test("Tinybird credentials must all decode to the hard-coded staging workspace",
 		validateTinybirdCredentials({
 			url: "https://api.us-east.aws.tinybird.co",
 			tokens: {
-				deploy: token(),
-				ingest: token(),
-				read: token(),
-				cleanup: token(),
+				TINYBIRD_STAGING_DEPLOY_TOKEN: token(),
+				TINYBIRD_STAGING_INGEST_TOKEN: token(),
+				TINYBIRD_STAGING_READ_TOKEN: readJwt(),
+				TINYBIRD_STAGING_CLEANUP_TOKEN: token(),
 			},
 		}),
 		"https://api.us-east.aws.tinybird.co",
@@ -266,6 +356,40 @@ test("Tinybird credentials must all decode to the hard-coded staging workspace",
 			tokens: { deploy: token("00000000-0000-4000-8000-000000000000") },
 		}),
 	);
+});
+
+test("staging read credentials require an exact, sufficiently-lived endpoint JWT", () => {
+	for (const invalidToken of [
+		token(),
+		readJwt({ expiresAt: Date.now() + 60_000 }),
+		readJwt({
+			expiresAt: Date.now() + STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS + 60_000,
+		}),
+		readJwt({
+			scopes: [
+				...STAGING_READ_ENDPOINTS.map((resource) => ({
+					type: "PIPES:READ",
+					resource,
+				})),
+				{ type: "DATASOURCES:READ", resource: "product_events_v1" },
+			],
+		}),
+		readJwt({ scopes: [] }),
+		readJwt({
+			scopes: STAGING_READ_ENDPOINTS.map((resource) => ({
+				fixed_params: { hidden: "true" },
+				type: "PIPES:READ",
+				resource,
+			})),
+		}),
+	]) {
+		assert.throws(() =>
+			validateTinybirdCredentials({
+				url: "https://api.us-east.aws.tinybird.co",
+				tokens: { TINYBIRD_STAGING_READ_TOKEN: invalidToken },
+			}),
+		);
+	}
 });
 
 test("preview Tinybird attestation requires the exact SHA, host, and staging workspace", () => {
@@ -2195,6 +2319,14 @@ test("the analytics workflow is statically restricted to staging", () => {
 	assert.ok(
 		workflow.indexOf("Rebuild promoted decision and health copies") <
 			workflow.indexOf("Measure populated decision endpoint performance"),
+	);
+	assert.match(
+		workflow,
+		/Rebuild promoted decision and health copies[\s\S]{0,600}TINYBIRD_STAGING_SCHEDULER_TOKEN:[\s\S]{0,400}staging-ci\.js run-copies/,
+	);
+	assert.match(
+		workflow,
+		/Retract synthetic rows from every derived copy[\s\S]{0,600}TINYBIRD_STAGING_SCHEDULER_TOKEN:[\s\S]{0,400}staging-ci\.js run-copies/,
 	);
 	assert.ok(
 		workflow.indexOf("Measure populated decision endpoint performance") <

@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query aggregate first, session, and last campaign attribution without returning visitor or session identifiers.
 
-TOKEN product_events_agent_read READ
 
 NODE product_attribution_node
 SQL >

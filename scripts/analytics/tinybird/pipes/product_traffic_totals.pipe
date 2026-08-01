@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query selected-range unique visitors and exact traffic totals by merging privacy-safe aggregate states across UTC dates.
 
-TOKEN product_events_agent_read READ
 
 NODE product_traffic_totals_node
 SQL >

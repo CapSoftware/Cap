@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query country traffic without raw identifiers or raw network addresses.
 
-TOKEN product_events_agent_read READ
 
 NODE product_traffic_countries_node
 SQL >

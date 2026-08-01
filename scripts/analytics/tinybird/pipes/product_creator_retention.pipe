@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query exact creator and organization retention cohorts with an optional activity-platform filter and an all-platform cohort baseline.
 
-TOKEN product_events_agent_read READ
 
 NODE product_creator_retention_node
 SQL >

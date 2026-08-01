@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query aggregate 30-day first authoritative outcomes for actors with an explicit stable experiment exposure.
 
-TOKEN product_events_agent_read READ
 
 NODE product_experiment_outcomes_node
 SQL >

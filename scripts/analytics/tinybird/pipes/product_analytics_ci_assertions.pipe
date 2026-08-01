@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Prove synthetic retry deduplication and payload-conflict quarantine without exposing raw event identifiers.
 
-TOKEN product_events_agent_read READ
 
 NODE product_analytics_ci_assertions_node
 SQL >

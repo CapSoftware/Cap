@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query exact daily Plausible-style traffic metrics from privacy-safe aggregates.
 
-TOKEN product_events_agent_read READ
 
 NODE product_traffic_overview_node
 SQL >

@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Prove each privacy-safe aggregate copy completed for one bounded staging phase.
 
-TOKEN product_events_agent_read READ
 
 NODE product_analytics_copy_assertions_node
 SQL >

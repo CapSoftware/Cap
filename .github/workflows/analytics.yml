@@ -457,6 +457,7 @@ jobs:
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -561,6 +562,7 @@ jobs:
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"

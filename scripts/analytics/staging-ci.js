@@ -28,7 +28,9 @@ import {
 	evaluateCopyPerformanceBudget,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
+	formatTinybirdDateTime64,
 	hashIdentifier,
+	isUnscheduledCopyMutation,
 	latencySummary,
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
@@ -45,8 +47,10 @@ import {
 	submitTinybirdCopyJobs,
 	syntheticIdentityFilterQueries,
 	syntheticMonetizationFilterQueries,
+	tokenScopeProbeWindow,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
+	waitForTinybirdCopyJob,
 	waitForTinybirdCopyPipesQuiescent,
 } from "./staging-ci-lib.js";
 
@@ -242,7 +246,12 @@ const tinybirdUrl = (origin, pathname, parameters = {}) => {
 	const url = new URL(pathname, origin);
 	for (const [name, value] of Object.entries(parameters)) {
 		if (value !== undefined && value !== "") {
-			url.searchParams.set(name, value);
+			url.searchParams.set(
+				name,
+				["end_time", "source_cutoff", "start_time"].includes(name)
+					? formatTinybirdDateTime64(String(value))
+					: value,
+			);
 		}
 	}
 	return url;
@@ -2727,6 +2736,7 @@ const runCopies = async (parameters = {}) => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 	]);
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
@@ -2770,7 +2780,7 @@ const runCopies = async (parameters = {}) => {
 		const stateJobCompletions = await waitForCopyJobs({
 			jobs: stateJobs,
 			origin,
-			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+			token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 			assertMutationOwnership,
 		});
 		const canonicalJobs = await submitTinybirdCopyJobs({
@@ -2794,6 +2804,12 @@ const runCopies = async (parameters = {}) => {
 			},
 		};
 		writeJson(artifactPath, artifact);
+		const canonicalJobCompletions = await waitForCopyJobs({
+			jobs: canonicalJobs,
+			origin,
+			token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+			assertMutationOwnership,
+		});
 		const canonicalVisibility = await waitForCopyVisibility({
 			label: "Tinybird canonical copy",
 			read: () =>
@@ -2806,6 +2822,7 @@ const runCopies = async (parameters = {}) => {
 				assertPhaseCiAssertions(results, ["canonicalEvents"]),
 		});
 		const downstreamJobs = [];
+		const downstreamJobCompletions = [];
 		const downstreamVisibility = {};
 		const copySteps = [
 			{
@@ -2846,15 +2863,22 @@ const runCopies = async (parameters = {}) => {
 			},
 		];
 		for (const copyStep of copySteps) {
-			downstreamJobs.push(
-				...(await submitTinybirdCopyJobs({
+			const copyJobs = await submitTinybirdCopyJobs({
+				origin,
+				token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+				deploymentId: state.deploymentId,
+				request,
+				pipes: [copyStep.pipe],
+				copyRunId,
+				sourceCutoff,
+				assertMutationOwnership,
+			});
+			downstreamJobs.push(...copyJobs);
+			downstreamJobCompletions.push(
+				...(await waitForCopyJobs({
+					jobs: copyJobs,
 					origin,
-					token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
-					deploymentId: state.deploymentId,
-					request,
-					pipes: [copyStep.pipe],
-					copyRunId,
-					sourceCutoff,
+					token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 					assertMutationOwnership,
 				})),
 			);
@@ -2890,6 +2914,8 @@ const runCopies = async (parameters = {}) => {
 		await assertMutationOwnership();
 		const visibility = latencySummary([
 			...stateJobCompletions.map((completion) => completion.completionMs),
+			...canonicalJobCompletions.map((completion) => completion.completionMs),
+			...downstreamJobCompletions.map((completion) => completion.completionMs),
 			canonicalVisibility.visibilityMs,
 			...Object.values(downstreamVisibility).map(
 				(copyVisibility) => copyVisibility.visibilityMs,
@@ -2901,6 +2927,8 @@ const runCopies = async (parameters = {}) => {
 			copyRunHash: hashIdentifier(copyRunId),
 			jobs: [...stateJobs, ...canonicalJobs, ...downstreamJobs],
 			stateJobCompletions,
+			canonicalJobCompletions,
+			downstreamJobCompletions,
 			canonicalVisibility: {
 				polls: canonicalVisibility.polls,
 				visibilityMs: canonicalVisibility.visibilityMs,
@@ -2943,7 +2971,7 @@ const runCopies = async (parameters = {}) => {
 				providerResourceMetrics: {
 					available: false,
 					limitation:
-						"Tinybird Copy job completion is polled for the prerequisite state rebuild, but provider resource metrics remain unavailable; CI measures job completion, marker visibility, and end-to-end pipeline wall-clock.",
+						"Tinybird Copy job completion is polled for every rebuild, but provider resource metrics remain unavailable; CI measures job completion, marker visibility, and end-to-end pipeline wall-clock.",
 				},
 				baseline: baseline ?? {
 					phase,
@@ -3038,26 +3066,42 @@ const setCopySchedules = async (parameters = {}) => {
 			);
 		}
 	};
+	const unscheduledPipes = new Set();
 	await applyCopyScheduleAction({
 		pipes: COPY_PIPES,
 		action,
 		setSchedule: async (pipe, scheduleAction) => {
 			let mutationError;
+			let unscheduled = false;
 			try {
-				await request(
+				const response = await tokenScopeProbe(
 					tinybirdUrl(
 						origin,
 						`/v0/pipes/${encodeURIComponent(pipe)}/copy/${scheduleAction === "pause" ? "cancel" : "resume"}`,
 					),
-					{
-						token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
-						method: "POST",
-						attempts: 1,
-					},
+					tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+					{ method: "POST" },
 				);
+				if (!response.ok) {
+					const payload =
+						response.status === 422
+							? await response.json().catch(() => ({}))
+							: {};
+					if (isUnscheduledCopyMutation(response.status, payload)) {
+						unscheduled = true;
+						unscheduledPipes.add(pipe);
+					} else {
+						const error = new Error(
+							`Tinybird request was rejected with HTTP ${response.status}`,
+						);
+						error.status = response.status;
+						throw error;
+					}
+				}
 			} catch (error) {
 				mutationError = error;
 			}
+			if (unscheduled) return;
 			if (scheduleAction === "pause") {
 				if (!mutationError) return;
 				if (
@@ -3066,7 +3110,7 @@ const setCopySchedules = async (parameters = {}) => {
 				) {
 					await waitForTinybirdCopyPipesQuiescent({
 						origin,
-						token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+						token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 						pipes: [pipe],
 						request,
 						assertMutationOwnership: assertLiveOwnership,
@@ -3100,7 +3144,7 @@ const setCopySchedules = async (parameters = {}) => {
 		action === "pause"
 			? await waitForTinybirdCopyPipesQuiescent({
 					origin,
-					token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+					token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 					request,
 					requiredVisibleJobIds: Object.values(artifact.copyJobs ?? {})
 						.flatMap((phase) => (Array.isArray(phase?.jobs) ? phase.jobs : []))
@@ -3115,6 +3159,7 @@ const setCopySchedules = async (parameters = {}) => {
 			status: "passed",
 			deploymentId: String(state.deploymentId),
 			pipeCount: COPY_PIPES.length,
+			unscheduledPipeCount: unscheduledPipes.size,
 			...(quiescence ? { quiescence } : {}),
 		},
 	};
@@ -4591,28 +4636,37 @@ const verifyTokenScopes = async () => {
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 	]);
-	await request(
-		tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
-			start_time: state.startTime,
-			end_time: state.endTime,
-		}),
-		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN },
+	const scopeWindow = tokenScopeProbeWindow(state.startTime, state.endTime);
+	const aggregateReadProbeUrl = tinybirdUrl(
+		origin,
+		"/v0/pipes/product_events_health.json",
+		scopeWindow,
 	);
+	await request(aggregateReadProbeUrl, {
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
 	await request(
 		tinybirdUrl(origin, "/v0/sql", {
-			q: "SELECT countIf(user_id != '') AS rows FROM product_events_v1 UNION ALL SELECT countIf(user_id != '') AS rows FROM product_events_canonical_v1",
+			q: "SELECT countIf(user_id != '') AS rows FROM product_events_v1 UNION ALL SELECT countIf(user_id != '') AS rows FROM product_events_canonical_v1 FORMAT JSON",
 		}),
 		{ token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN },
 	);
 	const copyJobsProbe = await tokenScopeProbe(
 		tinybirdUrl(origin, "/v0/jobs", { kind: "copy" }),
-		tokens.TINYBIRD_STAGING_COPY_TOKEN,
+		tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 	);
 	if (!copyJobsProbe.ok) {
 		throw new Error(
-			`The copy-runner token cannot attest Copy job quiescence: HTTP ${copyJobsProbe.status}`,
+			`The schedule-controller token cannot attest Copy job quiescence: HTTP ${copyJobsProbe.status}`,
 		);
 	}
+	await assertScopeDenied(
+		"The copy-runner token job-list probe",
+		tokenScopeProbe(
+			tinybirdUrl(origin, "/v0/jobs", { kind: "copy" }),
+			tokens.TINYBIRD_STAGING_COPY_TOKEN,
+		),
+	);
 	await assertScopeDenied(
 		"The aggregate read token raw identity query",
 		tokenScopeProbe(
@@ -4635,6 +4689,13 @@ const verifyTokenScopes = async () => {
 				body: "\n",
 				headers: { "Content-Type": "application/x-ndjson" },
 			},
+		),
+	);
+	await assertScopeDenied(
+		"The aggregate read token job-list probe",
+		tokenScopeProbe(
+			tinybirdUrl(origin, "/v0/jobs", { kind: "copy" }),
+			tokens.TINYBIRD_STAGING_READ_TOKEN,
 		),
 	);
 	await assertScopeDenied(
@@ -4702,13 +4763,7 @@ const verifyTokenScopes = async () => {
 	]) {
 		await assertScopeDenied(
 			`The ${name} aggregate read probe`,
-			tokenScopeProbe(
-				tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
-					start_time: state.startTime,
-					end_time: state.endTime,
-				}),
-				token,
-			),
+			tokenScopeProbe(aggregateReadProbeUrl, token),
 		);
 	}
 	artifact.tokenScopes = {
@@ -4716,15 +4771,17 @@ const verifyTokenScopes = async () => {
 		rawIdentityReadDenied: true,
 		readTokenAppendDenied: true,
 		readTokenCopyMutationDenied: true,
+		readTokenJobListDenied: true,
 		ingestTokenAppendAuthorized: true,
 		ingestTokenAggregateReadDenied: true,
 		cleanupTokenAggregateReadDenied: true,
 		copyTokenAggregateReadDenied: true,
-		copyTokenJobsReadPassed: true,
+		copyTokenJobListDenied: true,
 		erasureLookupRawReadPassed: true,
 		erasureLookupAppendDenied: true,
 		erasureLookupCopyMutationDenied: true,
 		erasureLookupAggregateReadDenied: true,
+		schedulerTokenJobsReadPassed: true,
 	};
 	artifact.assertions = {
 		...artifact.assertions,

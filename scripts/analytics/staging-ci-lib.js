@@ -6,6 +6,28 @@ export const STAGING_DATABASE_FINGERPRINT =
 export const STAGING_DATABASE_SCHEMA = "0042_lying_sharon_ventura";
 export const FEATURE_BRANCH = "codex/first-party-analytics";
 export const FEATURE_PULL_REQUEST = 2003;
+export const STAGING_READ_ENDPOINTS = [
+	"product_activation",
+	"product_analytics_ci_assertions",
+	"product_analytics_copy_assertions",
+	"product_analytics_freshness",
+	"product_attribution",
+	"product_creator_activity",
+	"product_creator_retention",
+	"product_events_daily",
+	"product_events_health",
+	"product_experiment_outcomes",
+	"product_feature_adoption",
+	"product_identity_funnel",
+	"product_traffic_countries",
+	"product_traffic_overview",
+	"product_traffic_pages",
+	"product_traffic_sources",
+	"product_traffic_technology",
+	"product_traffic_totals",
+];
+export const STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS = 6 * 60 * 60 * 1_000;
+export const STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS = 45 * 24 * 60 * 60 * 1_000;
 export const PREVIEW_TINYBIRD_TOKEN_NAMES = [
 	"PRODUCT_ANALYTICS_TINYBIRD_TOKEN",
 	"PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN",
@@ -114,6 +136,39 @@ export const copyScheduleMatchesAction = (value, action) => {
 		: status === "scheduled" || status === "active";
 };
 
+export const isUnscheduledCopyMutation = (status, payload) =>
+	status === 422 &&
+	typeof payload?.error === "string" &&
+	payload.error.startsWith("The copy Pipe is not scheduled");
+
+export const formatTinybirdDateTime64 = (value) => {
+	if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(value)) {
+		return value;
+	}
+	if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+		throw new Error("Tinybird DateTime64 value must include a timezone");
+	}
+	const parsed = new Date(value);
+	if (!Number.isFinite(parsed.getTime())) {
+		throw new Error("Tinybird DateTime64 value is invalid");
+	}
+	return parsed.toISOString().replace("T", " ").replace(/Z$/, "");
+};
+
+export const tokenScopeProbeWindow = (startTime, endTime) => {
+	const startMs = Date.parse(startTime);
+	const endMs = Date.parse(endTime);
+	if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+		throw new Error("Token scope probe window is invalid");
+	}
+	return {
+		start_time: formatTinybirdDateTime64(new Date(startMs).toISOString()),
+		end_time: formatTinybirdDateTime64(
+			new Date(Math.min(endMs, startMs + 86_400_000)).toISOString(),
+		),
+	};
+};
+
 export const waitForTinybirdCopyPipesQuiescent = async ({
 	origin,
 	token,
@@ -213,19 +268,20 @@ export const assertExecutionScope = ({
 	throw new Error("This event cannot deploy analytics staging");
 };
 
-export const tokenWorkspaceId = (token) => {
+const tinybirdTokenPayload = (token) => {
 	const segments = token.split(".");
-	if (segments.length < 3 || !segments[1]) {
+	if (segments.length !== 3 || !segments[1]) {
 		throw new Error("A Tinybird staging token has an unsupported format");
 	}
-	let payload;
 	try {
-		payload = JSON.parse(
-			Buffer.from(segments[1], "base64url").toString("utf8"),
-		);
+		return JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8"));
 	} catch {
 		throw new Error("A Tinybird staging token cannot be decoded");
 	}
+};
+
+export const tokenWorkspaceId = (token) => {
+	const payload = tinybirdTokenPayload(token);
 	const workspaceId = payload.u ?? payload.workspace_id ?? payload.workspaceId;
 	if (typeof workspaceId !== "string") {
 		throw new Error("A Tinybird staging token does not identify its workspace");
@@ -233,7 +289,51 @@ export const tokenWorkspaceId = (token) => {
 	return workspaceId;
 };
 
-export const validateTinybirdCredentials = ({ url, tokens }) => {
+const validateStagingReadJwt = (token, now) => {
+	const payload = tinybirdTokenPayload(token);
+	if (
+		!Number.isInteger(payload.exp) ||
+		payload.exp * 1_000 < now + STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS ||
+		payload.exp * 1_000 > now + STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS
+	) {
+		throw new Error(
+			"TINYBIRD_STAGING_READ_TOKEN must expire between six hours and 45 days from now",
+		);
+	}
+	if (!Array.isArray(payload.scopes)) {
+		throw new Error(
+			"TINYBIRD_STAGING_READ_TOKEN must be an expiring resource-scoped JWT",
+		);
+	}
+	const scopes = payload.scopes.map((scope) => {
+		if (
+			scope === null ||
+			typeof scope !== "object" ||
+			scope.type !== "PIPES:READ" ||
+			typeof scope.resource !== "string" ||
+			JSON.stringify(Object.keys(scope).sort()) !==
+				JSON.stringify(["resource", "type"])
+		) {
+			throw new Error("TINYBIRD_STAGING_READ_TOKEN has an unauthorized scope");
+		}
+		return scope.resource;
+	});
+	const actual = [...new Set(scopes)].sort();
+	if (
+		actual.length !== scopes.length ||
+		JSON.stringify(actual) !== JSON.stringify(STAGING_READ_ENDPOINTS)
+	) {
+		throw new Error(
+			"TINYBIRD_STAGING_READ_TOKEN must grant only the reviewed decision endpoints",
+		);
+	}
+};
+
+export const validateTinybirdCredentials = ({
+	url,
+	tokens,
+	now = Date.now(),
+}) => {
 	let parsedUrl;
 	try {
 		parsedUrl = new URL(url);
@@ -262,6 +362,9 @@ export const validateTinybirdCredentials = ({ url, tokens }) => {
 			throw new Error(
 				`${name} is not scoped to the analytics staging workspace`,
 			);
+		}
+		if (name === "TINYBIRD_STAGING_READ_TOKEN") {
+			validateStagingReadJwt(token, now);
 		}
 	}
 	return parsedUrl.origin;

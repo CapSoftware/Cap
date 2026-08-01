@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Inspect hourly product event delivery quality over a maximum 31-day window.
 
-TOKEN product_events_agent_read READ
 
 NODE product_events_health_node
 SQL >

@@ -55,7 +55,7 @@ Required live gates are:
 - representative endpoint p95 is within the measured baseline budget;
 - raw and all derived synthetic state is removed successfully;
 - an erased identity disappears from raw and derived results while an out-of-scope control remains;
-- aggregate read tokens cannot query raw identifiers or append, and append/cleanup tokens cannot read aggregate endpoints;
+- the expiring aggregate-read JWT has exactly the reviewed endpoint scopes, cannot query raw identifiers, append, list jobs, or execute Copy Pipes, and append/cleanup tokens cannot read aggregate endpoints;
 - a bounded five-event fixture produces exact non-zero traffic, page, activation, and retention values while remaining absent from normal decision endpoints;
 - a populated-table performance pass measures every typed decision endpoint and full dashboard fanout after materialization;
 - wrong workspace, stale SHA, missing credentials, partial execution, failed promotion, and failed cleanup all fail closed.
@@ -76,10 +76,10 @@ The preview-only `/api/analytics/staging-test` route must not receive a producti
 2. Create an analytics-only production Tinybird workspace, then create its resources from the reviewed datafiles with a deploy credential scoped only to that workspace. Run `deployment create --check`, review destructive/schema changes, create an isolated deployment, run fixture tests, rebuild every copy, query all aggregate endpoints, then promote. Record the workspace and deployment IDs. Do not reuse the staging workspace or tokens.
 3. Create least-privilege Tinybird tokens:
    - append-only token for `product_events_v1`;
-   - aggregate endpoint read token with no raw or canonical datasource access;
-   - resource-scoped copy token for the reviewed copy pipes enumerated by the staging runner, with access to read the status and recent Jobs API records for only its own Copy jobs and no raw identity datasource access;
+   - expiring JWT with exactly the reviewed 18 aggregate endpoint `PIPES:READ` scopes, no raw or canonical datasource access, and an expiry alert plus rotation procedure that replaces it before the six-hour runway; never create a static endpoint-read token because Tinybird's static `PIPES:READ` credential can start an on-demand Copy Pipe by name outside its declared resources;
+   - resource-scoped copy token for only the reviewed Copy Pipes and targets enumerated by the staging runner, with no endpoint, raw identity, or Jobs API access; submit each mutation once and use the separate schedule controller for job attestation;
    - erasure-lookup token limited to read access on `product_events_v1` and `product_events_canonical_v1`, protected from all agent and admin surfaces;
-   - schedule-controller token limited to cancelling, pausing, and resuming the reviewed Copy Pipes enumerated by the staging runner;
+   - schedule-controller token with only Tinybird's `PIPES:CREATE` and `DATASOURCES:CREATE` scopes in the target workspace; Tinybird does not resource-bind these operational scopes, so application code must enforce the reviewed Copy Pipe allowlist, use it only for schedule control and Copy job-list attestation, and prove the token fails aggregate-read probes;
    - dedicated erasure token with Tinybird's required `DATASOURCES:CREATE` scope, no read/deploy scopes, protected as a high-impact operational secret until Tinybird offers resource-scoped row deletion;
    - deployment token used only by the controlled production release path.
 4. Set these Vercel production variables without copying values into logs or artifacts:

@@ -98,6 +98,26 @@ const PRODUCT_COPY_SOURCES = [
 	"product_traffic_daily_bounded_v2",
 	"product_traffic_pages_daily_bounded_v2",
 ];
+const PRODUCT_DECISION_ENDPOINTS = [
+	"product_activation",
+	"product_analytics_ci_assertions",
+	"product_analytics_copy_assertions",
+	"product_analytics_freshness",
+	"product_attribution",
+	"product_creator_activity",
+	"product_creator_retention",
+	"product_events_daily",
+	"product_events_health",
+	"product_experiment_outcomes",
+	"product_feature_adoption",
+	"product_identity_funnel",
+	"product_traffic_countries",
+	"product_traffic_overview",
+	"product_traffic_pages",
+	"product_traffic_sources",
+	"product_traffic_technology",
+	"product_traffic_totals",
+];
 const WORKSPACE_ID_SOURCE =
 	"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const WORKSPACE_ID_PATTERN = new RegExp(`^${WORKSPACE_ID_SOURCE}$`, "i");
@@ -443,6 +463,12 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	const project = loadTinybirdProject(projectDir);
 	validateExactTokenGrants(
 		project,
+		"product_events_agent_read",
+		new Set(),
+		issues,
+	);
+	validateExactTokenGrants(
+		project,
 		"product_events_copy_runner",
 		new Set([
 			...PRODUCT_COPY_TARGETS.map((name) => `datasource:${name}:APPEND`),
@@ -749,36 +775,16 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 			issues.push(`${name} must not grant Copy execution to the agent token`);
 		}
 	}
-	for (const name of [
-		"product_events_daily",
-		"product_events_health",
-		"product_traffic_overview",
-		"product_traffic_totals",
-		"product_traffic_pages",
-		"product_traffic_sources",
-		"product_attribution",
-		"product_traffic_countries",
-		"product_traffic_technology",
-		"product_activation",
-		"product_creator_retention",
-		"product_creator_activity",
-		"product_feature_adoption",
-		"product_identity_funnel",
-		"product_experiment_outcomes",
-		"product_analytics_freshness",
-		"product_analytics_copy_assertions",
-	]) {
+	for (const name of PRODUCT_DECISION_ENDPOINTS) {
 		const pipe = project.pipes.find((candidate) => candidate.name === name);
 		if (!pipe) {
 			issues.push(`Missing product analytics pipe ${name}`);
 			continue;
 		}
-		if (
-			pipe.type !== "materialized" &&
-			pipe.type !== "copy" &&
-			!hasToken(pipe, "product_events_agent_read", "READ")
-		) {
-			issues.push(`${name} is missing its read-only agent token`);
+		if (pipe.tokens.length > 0) {
+			issues.push(
+				`${name} must use an expiring resource-scoped JWT instead of static token grants`,
+			);
 		}
 		if (hasToken(pipe, "product_events_copy_runner", "READ")) {
 			issues.push(`${name} must not be queryable by the Copy runner token`);
@@ -1171,14 +1177,11 @@ const runAnalyticsCommand = async (operation) => {
 		}
 		if (step.type === "verify-local") {
 			const environment = localEnvironment();
-			const readToken = await localResourceToken(
-				environment,
-				"product_events_agent_read",
-			);
 			await runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
-					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: readToken,
+					PRODUCT_ANALYTICS_TINYBIRD_TOKEN:
+						environment.TB_LOCAL_WORKSPACE_TOKEN,
 				},
 			});
 			continue;

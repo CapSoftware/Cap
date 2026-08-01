@@ -584,15 +584,13 @@ test("copy rebuilds are on-demand and require the sequential controller", () => 
 	}
 });
 
-test("decision endpoints cannot be executed with the Copy runner token", () => {
+test("decision endpoints do not create reusable static tokens", () => {
 	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
 	for (const pipe of project.pipes.filter(
 		(candidate) =>
 			candidate.name.startsWith("product_") && candidate.type === "endpoint",
 	)) {
-		assert.deepEqual(pipe.tokens, [
-			{ name: "product_events_agent_read", scope: "READ" },
-		]);
+		assert.deepEqual(pipe.tokens, []);
 	}
 });
 

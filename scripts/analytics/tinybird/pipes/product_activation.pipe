@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query signup cohorts and first-share activation within seven UTC days.
 
-TOKEN product_events_agent_read READ
 
 NODE product_activation_node
 SQL >

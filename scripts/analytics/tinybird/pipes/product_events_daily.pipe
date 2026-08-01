@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query daily product events using typed filters and pre-aggregated data.
 
-TOKEN product_events_agent_read READ
 
 NODE product_events_daily_node
 SQL >

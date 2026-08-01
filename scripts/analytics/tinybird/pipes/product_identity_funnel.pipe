@@ -1,7 +1,6 @@
 DESCRIPTION >
 	Query complete privacy-safe anonymous acquisition to authenticated conversion totals without raw identifiers.
 
-TOKEN product_events_agent_read READ
 
 NODE product_identity_funnel_node
 SQL >

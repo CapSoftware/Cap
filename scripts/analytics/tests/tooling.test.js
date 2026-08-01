@@ -497,14 +497,16 @@ test("project validation rejects the Copy runner token on decision endpoints", (
 		fs.writeFileSync(
 			pipePath,
 			contents.replace(
-				"TOKEN product_events_agent_read READ",
-				"TOKEN product_events_copy_runner READ",
+				"\n\nNODE product_events_health_node",
+				"\nTOKEN product_events_copy_runner READ\n\nNODE product_events_health_node",
 			),
 		);
 		const issues = validateAnalyticsProject(projectDir);
 		assert.ok(
 			issues.some((issue) =>
-				issue.includes("missing its read-only agent token"),
+				issue.includes(
+					"must use an expiring resource-scoped JWT instead of static token grants",
+				),
 			),
 		);
 		assert.ok(
@@ -544,8 +546,8 @@ test("project validation rejects extra Copy and erasure lookup grants", () => {
 		fs.writeFileSync(
 			endpointPath,
 			endpoint.replace(
-				"TOKEN product_events_agent_read READ",
-				"TOKEN product_events_agent_read READ\nTOKEN product_events_erasure_lookup READ",
+				"\n\nNODE product_events_health_node",
+				"\nTOKEN product_events_erasure_lookup READ\n\nNODE product_events_health_node",
 			),
 		);
 		const issues = validateAnalyticsProject(projectDir);
