@@ -654,11 +654,13 @@ const runCopies = async () => {
 	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
 	try {
 		const jobs = await runTinybirdCopyJobs({
 			origin,
-			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			submissionToken: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			statusToken: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
 			deploymentId: state.deploymentId,
 			request,
 			wait: delay,

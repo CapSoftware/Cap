@@ -182,6 +182,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -245,6 +246,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -276,6 +278,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -309,6 +312,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"

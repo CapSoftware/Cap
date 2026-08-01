@@ -212,8 +212,10 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 	);
 });
 
-test("copy jobs use the resource-scoped API and wait for exact completion", async () => {
+test("copy jobs submit with a resource token and poll with the deployment token", async () => {
 	const requests = [];
+	const submissionToken = token();
+	const statusToken = `${token()}.deployment`;
 	const responses = [
 		{ data: { id: "copy_job_123" } },
 		{ data: { status: "working" } },
@@ -222,7 +224,8 @@ test("copy jobs use the resource-scoped API and wait for exact completion", asyn
 	let now = 1_000;
 	const results = await runTinybirdCopyJobs({
 		origin: "https://api.us-east.aws.tinybird.co",
-		token: token(),
+		submissionToken,
+		statusToken,
 		deploymentId: "6",
 		pipes: ["snapshot_product_events_canonical_v1"],
 		request: async (url, options) => {
@@ -246,11 +249,14 @@ test("copy jobs use the resource-scoped API and wait for exact completion", asyn
 	assert.match(requests[0].url, /_mode=replace/);
 	assert.match(requests[0].url, /__tb__deployment=6/);
 	assert.equal(requests[0].options.method, "POST");
+	assert.equal(requests[0].options.token, submissionToken);
 	assert.match(requests[1].url, /\/v0\/jobs\/copy_job_123$/);
+	assert.equal(requests[1].options.token, statusToken);
 	const liveRequests = [];
 	await runTinybirdCopyJobs({
 		origin: "https://api.us-east.aws.tinybird.co",
-		token: token(),
+		submissionToken,
+		statusToken,
 		deploymentId: "6",
 		pipes: ["snapshot_product_events_canonical_v1"],
 		request: async (url, options) => {
@@ -265,7 +271,8 @@ test("copy jobs use the resource-scoped API and wait for exact completion", asyn
 	await assert.rejects(() =>
 		runTinybirdCopyJobs({
 			origin: "https://api.us-east.aws.tinybird.co",
-			token: token(),
+			submissionToken,
+			statusToken,
 			deploymentId: "live",
 			request: async () => ({ data: {} }),
 			wait: async () => {},

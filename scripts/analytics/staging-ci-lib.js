@@ -190,7 +190,8 @@ export const selectStagingDeployment = (
 
 export const runTinybirdCopyJobs = async ({
 	origin,
-	token,
+	submissionToken,
+	statusToken,
 	deploymentId,
 	request,
 	wait,
@@ -222,7 +223,7 @@ export const runTinybirdCopyJobs = async ({
 		let created;
 		try {
 			created = await request(copyUrl, {
-				token,
+				token: submissionToken,
 				method: "POST",
 				attempts: 3,
 			});
@@ -242,7 +243,7 @@ export const runTinybirdCopyJobs = async ({
 			try {
 				job = await request(
 					new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
-					{ token, attempts: 3 },
+					{ token: statusToken, attempts: 3 },
 				);
 			} catch (error) {
 				throw new Error(`Tinybird copy status read failed for ${pipe}`, {
