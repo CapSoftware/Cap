@@ -179,8 +179,22 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 				},
 			],
 			minimum,
+			undefined,
+			true,
 		),
 		{ id: "live", needsPromotion: false },
+	);
+	assert.throws(() =>
+		selectStagingDeployment(
+			[
+				{
+					id: "live",
+					status: "Live",
+					created_at: "2026-07-31T09:00:00.000Z",
+				},
+			],
+			minimum,
+		),
 	);
 	assert.throws(() =>
 		selectStagingDeployment(

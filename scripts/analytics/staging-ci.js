@@ -1179,13 +1179,18 @@ const handlers = {
 	"verify-token-scopes": verifyTokenScopes,
 	"select-deployment": async () => {
 		const createOutput = readJson(option("create-output"));
-		const createdDeploymentId = String(createOutput.output ?? "").match(
+		const output = String(createOutput.output ?? "");
+		const createdDeploymentId = output.match(
 			/Deployment URL:\s+\S+\/deployments\/(\d+)/,
 		)?.[1];
+		const noOpConfirmed =
+			output.includes("No changes to be deployed") &&
+			output.includes("Not deploying. No changes.");
 		const selection = selectStagingDeployment(
 			readJson(option("input")),
 			option("minimum-created-at"),
 			createdDeploymentId,
+			noOpConfirmed,
 		);
 		writeOutput("id", selection.id);
 		writeOutput("needs_promotion", String(selection.needsPromotion));

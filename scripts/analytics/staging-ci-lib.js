@@ -121,6 +121,7 @@ export const selectStagingDeployment = (
 	value,
 	minimumCreatedAt,
 	createdDeploymentId,
+	noOpConfirmed = false,
 ) => {
 	const candidates = Array.isArray(value)
 		? value
@@ -166,6 +167,9 @@ export const selectStagingDeployment = (
 		throw new Error(
 			"Tinybird reported a staging deployment that was not created by this run",
 		);
+	}
+	if (!noOpConfirmed) {
+		throw new Error("Tinybird did not prove that this was a no-op deployment");
 	}
 	const liveDeployments = candidates.filter((candidate) =>
 		deploymentState(candidate).includes("live"),
