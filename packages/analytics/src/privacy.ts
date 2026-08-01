@@ -2,7 +2,8 @@ export type AnalyticsStringFormat =
 	| "attribution"
 	| "category"
 	| "hostname"
-	| "identifier";
+	| "identifier"
+	| "timestamp";
 
 export const PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT =
 	"[PENDING] Account deletion request";
@@ -102,6 +103,13 @@ export function normalizeAnalyticsPropertyString(
 				hostname,
 			)
 			? hostname
+			: undefined;
+	}
+	if (format === "timestamp") {
+		const timestamp = Date.parse(normalized);
+		return Number.isFinite(timestamp) &&
+			new Date(timestamp).toISOString() === normalized
+			? normalized
 			: undefined;
 	}
 	if (containsSensitiveAnalyticsContent(normalized)) return undefined;

@@ -178,6 +178,28 @@ trackEvent(\`tool_\${action}\`);
 	);
 });
 
+test("rejects undeclared and dynamic literal property keys", () => {
+	const result = analyzeTypeScriptSource({
+		file: "caller.ts",
+		registeredEvents,
+		eventProperties: new Map([
+			["page_view", new Set(["hostname", "is_session_entry"])],
+		]),
+		sourceText: `
+import { trackEvent } from "@/app/utils/analytics";
+trackEvent("page_view", {
+	hostname: "cap.so",
+	invalid: true,
+	[dynamicKey]: "hidden",
+});
+`,
+	});
+	assert.deepEqual(
+		result.diagnostics.map((entry) => entry.code),
+		["invalid-property-key", "dynamic-property-key"],
+	);
+});
+
 test("finds inline server event objects and helper-backed emitters", () => {
 	const server = analyzeTypeScriptSource({
 		file: "apps/web/app/api/webhooks/route.ts",
@@ -213,6 +235,104 @@ trackToolInteraction({ tool: "trimmer", action: "loaded" });
 		],
 	);
 	assert.deepEqual([...server.diagnostics, ...browser.diagnostics], []);
+});
+
+test("finds transactional outbox events after the transaction argument", () => {
+	const result = analyzeTypeScriptSource({
+		file: "apps/web/actions/organization/invite.ts",
+		registeredEvents: new Set(["organization_invite_sent"]),
+		sourceText: `
+import { persistProductAnalyticsEvent } from "@/lib/analytics/product-event-outbox";
+await persistProductAnalyticsEvent(tx, {
+	eventId: "invite:1",
+	eventName: "organization_invite_sent",
+	platform: "server",
+});
+`,
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.deepEqual(
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[{ eventName: "organization_invite_sent", platforms: ["server"] }],
+	);
+});
+
+test("finds events passed through the bounded Loom workflow wrapper", () => {
+	const result = analyzeTypeScriptSource({
+		file: "apps/web/workflows/import-loom-video.ts",
+		registeredEvents: new Set(["loom_import_started", "loom_import_completed"]),
+		sourceText: `
+import { persistProductAnalyticsEvent } from "@/lib/analytics/product-event-outbox";
+async function queueLoomAnalyticsEvent(event: ServerProductEvent) {
+	return queueDurableServerProductEvent(event);
+}
+async function saveMetadataAndComplete(
+	videoId: string,
+	operationId: string | undefined,
+	metadata: object,
+	completedEvent: ServerProductEvent,
+) {
+	await persistProductAnalyticsEvent(tx, completedEvent);
+}
+await queueLoomAnalyticsEvent({
+	eventId: "loom:1",
+	eventName: "loom_import_started",
+	platform: "server",
+});
+await saveMetadataAndComplete("video-1", undefined, {}, {
+	eventId: "loom:2",
+	eventName: "loom_import_completed",
+	platform: "server",
+});
+`,
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.deepEqual(
+		result.emissions.map(({ eventName, platforms }) => ({
+			eventName,
+			platforms,
+		})),
+		[
+			{ eventName: "loom_import_started", platforms: ["server"] },
+			{ eventName: "loom_import_completed", platforms: ["server"] },
+		],
+	);
+});
+
+test("rejects emitters on platforms outside the registry contract", () => {
+	const diagnostics = findMissingEmitters(
+		new Map([
+			[
+				"page_view",
+				{
+					name: "page_view",
+					file: "event-registry.ts",
+					line: 1,
+					column: 1,
+					platforms: ["web"],
+				},
+			],
+		]),
+		[
+			{
+				eventName: "page_view",
+				file: "desktop.ts",
+				line: 4,
+				column: 2,
+				platforms: ["desktop"],
+			},
+		],
+	);
+	assert.deepEqual(
+		diagnostics.map((entry) => entry.code),
+		[
+			"emitter-platform-not-declared",
+			"registry-event-platform-without-emitter",
+		],
+	);
 });
 
 test("does not infer a platform from the file when an inline platform is dynamic", () => {
@@ -457,6 +577,34 @@ fn is_core_product_event(name: &str) -> bool {
 		"native-core-catalog-missing",
 		"native-event-name-diverged",
 	]);
+});
+
+test("native Rust property keys must match the registry", () => {
+	const sourceText = `
+enum ProductAnalyticsEvent { RecordingStarted }
+fn event_data(event: ProductAnalyticsEvent) {
+	match event {
+		ProductAnalyticsEvent::RecordingStarted => {
+			let mut data = EventData::new("recording_started");
+			data.set("mode", "studio");
+			data.set("raw_error", "private");
+			data
+		}
+	}
+}
+fn is_core_product_event(name: &str) -> bool {
+	matches!(name, "recording_started")
+}
+`;
+	const result = analyzeRustNativeContract({
+		sourceText,
+		registeredEvents: new Set(["recording_started"]),
+		eventProperties: new Map([["recording_started", new Set(["mode"])]]),
+	});
+	assert.deepEqual(
+		result.diagnostics.map((entry) => entry.code),
+		["native-invalid-property-key"],
+	);
 });
 
 test("registry entries without production emitters fail", () => {

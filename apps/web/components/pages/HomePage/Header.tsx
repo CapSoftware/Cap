@@ -2,7 +2,7 @@
 "use client";
 
 import type {
-	ClientProductEventName,
+	ClientProductEventNameForPlatform,
 	ProductEventArguments,
 } from "@cap/analytics";
 import { Button } from "@cap/ui";
@@ -47,7 +47,9 @@ const HERO_MODE_COLORS = {
 
 const TITLE_LEADING = "leading-[2.25rem] md:leading-[3.5rem]";
 
-const trackHomepageEvent = <Name extends ClientProductEventName>(
+const trackHomepageEvent = <
+	Name extends ClientProductEventNameForPlatform<"web">,
+>(
 	eventName: Name,
 	...args: ProductEventArguments<Name>
 ) => {

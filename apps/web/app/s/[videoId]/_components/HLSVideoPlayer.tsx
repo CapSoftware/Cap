@@ -103,6 +103,7 @@ interface Props {
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
 	previewMode?: "background";
+	onPlaybackStarted?: () => void;
 }
 
 export function HLSVideoPlayer({
@@ -128,6 +129,7 @@ export function HLSVideoPlayer({
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
 	previewMode,
+	onPlaybackStarted,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -684,6 +686,7 @@ export function HLSVideoPlayer({
 					setShowPlayButton(false);
 					setHasPlayedOnce(true);
 					hasPlayedOnceRef.current = true;
+					onPlaybackStarted?.();
 				}}
 				playsInline
 				autoPlay={autoplay}

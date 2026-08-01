@@ -1,14 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	start: vi.fn(async () => ({ runId: "run-1" })),
+	queue: vi.fn(async () => ({
+		eventId: "checkout:cs_1",
+		payloadHash: "hash-1",
+		payloadConflict: false,
+		status: "started",
+		runId: "run-1",
+	})),
 }));
 
-vi.mock("workflow/api", () => ({ start: mocks.start }));
+vi.mock("@/lib/analytics/product-event-outbox", () => ({
+	queueDurableServerProductEvent: mocks.queue,
+}));
 
 describe("analytics durable enqueue", () => {
 	afterEach(() => {
-		mocks.start.mockClear();
+		mocks.queue.mockClear();
 	});
 
 	it("returns only after the workflow run is durably enqueued", async () => {
@@ -22,21 +30,27 @@ describe("analytics durable enqueue", () => {
 				platform: "web",
 				properties: { price_id: "price_1", quantity: 1 },
 			}),
-		).resolves.toEqual({ eventId: "checkout:cs_1", runId: "run-1" });
-		expect(mocks.start).toHaveBeenCalledOnce();
+		).resolves.toEqual({
+			eventId: "checkout:cs_1",
+			payloadHash: "hash-1",
+			payloadConflict: false,
+			status: "started",
+			runId: "run-1",
+		});
+		expect(mocks.queue).toHaveBeenCalledOnce();
 	});
 
 	it("surfaces enqueue failure so a critical business request can retry", async () => {
-		mocks.start.mockRejectedValueOnce(new Error("queue unavailable"));
+		mocks.queue.mockRejectedValueOnce(new Error("database unavailable"));
 		const { queueServerProductEvent } = await import("@/lib/analytics/server");
 		await expect(
 			queueServerProductEvent({
 				eventId: "signup:user-1",
 				eventName: "user_signed_up",
 				occurredAt: "2026-07-12T12:00:00.000Z",
-				platform: "server",
+				platform: "web",
 				userId: "user-1",
 			}),
-		).rejects.toThrow("queue unavailable");
+		).rejects.toThrow("database unavailable");
 	});
 });

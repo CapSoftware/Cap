@@ -11,8 +11,16 @@ import {
 	touchProductAnalyticsSession,
 } from "../utils/product-analytics";
 
-let lastCapturedLocation: string | undefined;
+type CapturedPageView = {
+	location: string;
+	eventId: string;
+	sessionId: string;
+	sessionStartedAt: string;
+};
+
+let lastCapturedPageView: CapturedPageView | undefined;
 const SESSION_TOUCH_THROTTLE_MS = 5_000;
+const ENGAGEMENT_FLUSH_INTERVAL_MS = 5 * 60 * 1_000;
 
 export function ProductAnalyticsPageView() {
 	const pathname = usePathname();
@@ -20,17 +28,16 @@ export function ProductAnalyticsPageView() {
 	const location = `${pathname}?${searchParams.toString()}`;
 
 	useEffect(() => {
-		if (
-			!pathname ||
-			location === lastCapturedLocation ||
-			!shouldCaptureProductPageView(pathname)
-		) {
+		if (!pathname || !shouldCaptureProductPageView(pathname)) {
 			return;
 		}
-		lastCapturedLocation = location;
-		const initialPageView = captureProductPageView();
+		const initialPageView =
+			lastCapturedPageView?.location === location
+				? lastCapturedPageView
+				: captureProductPageView();
 		if (!initialPageView) return;
-		let pageView = initialPageView;
+		let pageView = { ...initialPageView, location };
+		lastCapturedPageView = pageView;
 		const initialActivityAt = performance.now();
 		let activeSince =
 			document.visibilityState === "visible" ? initialActivityAt : undefined;
@@ -53,6 +60,7 @@ export function ProductAnalyticsPageView() {
 				captureProductPageEngagement(
 					pageView.eventId,
 					pageView.sessionId,
+					pageView.sessionStartedAt,
 					pathname,
 					pendingEngagedMs,
 					maxScrollDepth,
@@ -79,7 +87,10 @@ export function ProductAnalyticsPageView() {
 			if (!context.isSessionEntry) return;
 			flushEngagement("normal");
 			const nextPageView = captureProductPageView(context);
-			if (nextPageView) pageView = nextPageView;
+			if (nextPageView) {
+				pageView = { ...nextPageView, location };
+				lastCapturedPageView = pageView;
+			}
 			lastInteractionAt = now;
 			activeSince = now;
 		};
@@ -105,6 +116,10 @@ export function ProductAnalyticsPageView() {
 		window.addEventListener("keydown", handleActivity);
 		window.addEventListener("pagehide", pageHide, { passive: true });
 		document.addEventListener("visibilitychange", updateVisibility);
+		const engagementInterval = window.setInterval(
+			() => flushEngagement("normal"),
+			ENGAGEMENT_FLUSH_INTERVAL_MS,
+		);
 		updateScrollDepth();
 
 		return () => {
@@ -114,6 +129,7 @@ export function ProductAnalyticsPageView() {
 			window.removeEventListener("keydown", handleActivity);
 			window.removeEventListener("pagehide", pageHide);
 			document.removeEventListener("visibilitychange", updateVisibility);
+			window.clearInterval(engagementInterval);
 			flushEngagement("normal");
 		};
 	}, [location, pathname]);

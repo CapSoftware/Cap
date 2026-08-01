@@ -1,6 +1,6 @@
 import {
 	type BrowserAnalyticsContext,
-	type ClientProductEventName,
+	type ClientProductEventNameForPlatform,
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeAnalyticsIdentifier,
@@ -353,10 +353,9 @@ let anonymousId: string | undefined;
 let listenersRegistered = false;
 let fallbackEventIdCounter = 0;
 
-export function captureProductEvent<Name extends ClientProductEventName>(
-	eventName: Name,
-	...args: ProductEventArguments<Name>
-) {
+export function captureProductEvent<
+	Name extends ClientProductEventNameForPlatform<"web">,
+>(eventName: Name, ...args: ProductEventArguments<Name>) {
 	return enqueueBrowserProductEvent(
 		eventName,
 		args,
@@ -367,7 +366,9 @@ export function captureProductEvent<Name extends ClientProductEventName>(
 	);
 }
 
-function enqueueBrowserProductEvent<Name extends ClientProductEventName>(
+function enqueueBrowserProductEvent<
+	Name extends ClientProductEventNameForPlatform<"web">,
+>(
 	eventName: Name,
 	args: ProductEventArguments<Name>,
 	context: ReturnType<typeof resolveBrowserAnalyticsContext>,
@@ -411,6 +412,7 @@ function enqueueBrowserProductEvent<Name extends ClientProductEventName>(
 export function captureProductPageEngagement(
 	pageViewId: string,
 	sessionId: string,
+	sessionStartedAt: string,
 	pathname: string,
 	engagedMs: number,
 	maxScrollDepth: number,
@@ -420,11 +422,17 @@ export function captureProductPageEngagement(
 		[
 			{
 				page_view_id: pageViewId,
+				session_started_at: sessionStartedAt,
 				engaged_ms: Math.max(0, Math.round(engagedMs)),
 				max_scroll_depth: Math.max(0, Math.min(100, maxScrollDepth)),
 			},
 		],
-		{ sessionId, isSessionEntry: false, attribution: {} },
+		{
+			sessionId,
+			sessionStartedAt,
+			isSessionEntry: false,
+			attribution: {},
+		},
 		pathname,
 	);
 }
@@ -439,11 +447,18 @@ export function captureProductPageView(
 				...context.attribution,
 				hostname: window.location.hostname,
 				is_session_entry: context.isSessionEntry,
+				session_started_at: context.sessionStartedAt,
 			},
 		],
 		context,
 	);
-	return eventId ? { eventId, sessionId: context.sessionId } : undefined;
+	return eventId
+		? {
+				eventId,
+				sessionId: context.sessionId,
+				sessionStartedAt: context.sessionStartedAt,
+			}
+		: undefined;
 }
 
 export function touchProductAnalyticsSession() {

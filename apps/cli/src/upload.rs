@@ -267,6 +267,7 @@ async fn upload_file_with_agent(
             Method::POST,
             "/uploads",
             &json!({
+                "initiatingPlatform": "cli",
                 "fileName": file_name,
                 "contentType": "video/mp4",
                 "contentLength": content_length,
@@ -402,6 +403,7 @@ async fn create_video(
     }
 
     let mut params: Vec<(&str, String)> = vec![
+        ("initiatingPlatform", "cli".to_string()),
         ("recordingMode", "desktopMP4".to_string()),
         ("durationInSecs", meta.duration_in_secs.to_string()),
         ("width", meta.width.to_string()),

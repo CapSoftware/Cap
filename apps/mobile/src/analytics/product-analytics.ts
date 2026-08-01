@@ -45,6 +45,8 @@ export const purgeMobileProductAnalytics = (userId: string) =>
 
 export const flushMobileProductAnalytics = () => client.flush();
 
+export const createMobileProductAnalyticsEventId = () => Crypto.randomUUID();
+
 export const trackMobileProductEvent = <Name extends MobileProductEventName>(
 	eventName: Name,
 	...args: ProductEventArguments<Name>

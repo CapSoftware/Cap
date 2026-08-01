@@ -40,6 +40,7 @@ import {
 } from "react-native-safe-area-context";
 import {
 	classifyMobileAnalyticsFailure,
+	createMobileProductAnalyticsEventId,
 	trackMobileProductEventWithId,
 } from "@/analytics/product-analytics";
 import { apiBaseUrl, useAuth } from "@/auth/AuthContext";
@@ -537,6 +538,7 @@ export default function RecordScreen() {
 		recordingTerminalTracked.current = false;
 		setError(null);
 		setPhase("starting");
+		const attemptId = createMobileProductAnalyticsEventId();
 		let createdId: string | null = null;
 		try {
 			await loadRecordingDurationLimit();
@@ -576,6 +578,15 @@ export default function RecordScreen() {
 			setTeleprompterRestartKey((current) => current + 1);
 			setTeleprompterPlaying(hasScript);
 		} catch (recordingError) {
+			await trackMobileProductEventWithId(
+				`mobile:recording_attempt:${attemptId}:failed`,
+				new Date().toISOString(),
+				"recording_start_failed",
+				{
+					mode: "camera",
+					failure_class: classifyMobileAnalyticsFailure(recordingError),
+				},
+			).catch(() => undefined);
 			if (createdId) {
 				await recordingUploads.discardRecording(createdId);
 			}
@@ -613,6 +624,7 @@ export default function RecordScreen() {
 		setError(null);
 		setPhase("starting");
 		screenCompletionStarted.current = false;
+		const attemptId = createMobileProductAnalyticsEventId();
 		let createdId: string | null = null;
 		try {
 			const durationLimit = await loadRecordingDurationLimit();
@@ -636,6 +648,15 @@ export default function RecordScreen() {
 			setScreenPrepared(true);
 			setPhase("ready");
 		} catch (recordingError) {
+			await trackMobileProductEventWithId(
+				`mobile:recording_attempt:${attemptId}:failed`,
+				new Date().toISOString(),
+				"recording_start_failed",
+				{
+					mode: "screen",
+					failure_class: classifyMobileAnalyticsFailure(recordingError),
+				},
+			).catch(() => undefined);
 			if (createdId) {
 				await cancelScreenRecording(createdId).catch(() => undefined);
 				await recordingUploads.discardRecording(createdId);

@@ -80,6 +80,7 @@ const uploadState = vi.hoisted(() => ({
 
 vi.mock("@/analytics/product-analytics", () => ({
 	classifyMobileAnalyticsFailure: vi.fn(() => "unknown"),
+	createMobileProductAnalyticsEventId: vi.fn(() => "attempt_1"),
 	trackMobileProductEventWithId: vi.fn(() => Promise.resolve("event_1")),
 }));
 

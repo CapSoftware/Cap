@@ -1146,8 +1146,22 @@ pub enum RecordingEvent {
 /// event the main window surfaces to the user. The picker overlay that invoked the
 /// command is often already closed (or being torn down) when the error comes back, so
 /// an error returned to the caller alone can vanish without a trace.
-fn notify_recording_start_failed(app: &AppHandle, error: &str) {
+fn capture_recording_start_failed(app: &AppHandle, mode: RecordingMode, error: &str) {
+    use crate::product_analytics::{ProductAnalyticsEvent, capture_event};
+    use crate::recording_telemetry::mode_label;
+
+    capture_event(
+        app,
+        ProductAnalyticsEvent::RecordingStartFailed {
+            mode: mode_label(mode),
+            error: error.to_string(),
+        },
+    );
+}
+
+fn notify_recording_start_failed(app: &AppHandle, mode: RecordingMode, error: &str) {
     error!(%error, "Recording failed to start");
+    capture_recording_start_failed(app, mode, error);
     let _ = RecordingEvent::StartFailed {
         error: error.to_string(),
     }
@@ -1507,7 +1521,7 @@ pub async fn start_recording(
             drop(app_state);
             // Deliberately no clear_pending_recording: the pending/active state that
             // caused the refusal belongs to another recording and must survive.
-            notify_recording_start_failed(&app, &error);
+            notify_recording_start_failed(&app, inputs.mode, &error);
             return Err(error);
         }
         if is_camera_only {
@@ -1522,7 +1536,7 @@ pub async fn start_recording(
                 Err(err) => {
                     let error = ($map_err)(err);
                     state_mtx.write().await.clear_pending_recording();
-                    notify_recording_start_failed(&app, &error);
+                    notify_recording_start_failed(&app, inputs.mode, &error);
                     return Err(error);
                 }
             }
@@ -1535,7 +1549,7 @@ pub async fn start_recording(
         if let Err(err) = (ShowCapWindow::Camera { centered: true }).show(&app).await {
             let error = format!("Failed to show centered camera window: {err}");
             state_mtx.write().await.clear_pending_recording();
-            notify_recording_start_failed(&app, &error);
+            notify_recording_start_failed(&app, inputs.mode, &error);
             return Err(error);
         }
     }
@@ -1580,7 +1594,7 @@ pub async fn start_recording(
                     "Refusing to start recording: disk full"
                 );
                 state_mtx.write().await.clear_pending_recording();
-                notify_recording_start_failed(&app, &error);
+                notify_recording_start_failed(&app, inputs.mode, &error);
                 return Err(error);
             }
             if bytes <= cap_utils::disk_space::LOW_DISK_WARN_BYTES {
@@ -1628,7 +1642,7 @@ pub async fn start_recording(
             let Some(auth) = AuthStore::get(&app).ok().flatten() else {
                 let error = "Please sign in to use instant recording".to_string();
                 state_mtx.write().await.clear_pending_recording();
-                notify_recording_start_failed(&app, &error);
+                notify_recording_start_failed(&app, inputs.mode, &error);
                 return Err(error);
             };
             let instant_mode_max_resolution = if auth.is_upgraded() {
@@ -1663,6 +1677,7 @@ pub async fn start_recording(
                     // invoked us may already be gone — surface it as a start failure too.
                     notify_recording_start_failed(
                         &app,
+                        inputs.mode,
                         "Your session has expired. Please sign in again to use instant recording.",
                     );
                     return Ok(RecordingAction::InvalidAuthentication);
@@ -1671,6 +1686,7 @@ pub async fn start_recording(
                     state_mtx.write().await.clear_pending_recording();
                     notify_recording_start_failed(
                         &app,
+                        inputs.mode,
                         "Instant recording requires an upgraded plan.",
                     );
                     return Ok(RecordingAction::UpgradeRequired);
@@ -1678,7 +1694,7 @@ pub async fn start_recording(
                 Err(err) => {
                     let error = format!("Could not create the shareable link: {err}");
                     state_mtx.write().await.clear_pending_recording();
-                    notify_recording_start_failed(&app, &error);
+                    notify_recording_start_failed(&app, inputs.mode, &error);
                     return Err(error);
                 }
             };
@@ -1699,7 +1715,7 @@ pub async fn start_recording(
         RecordingMode::Screenshot => {
             let error = "Use take_screenshot for screenshots".to_string();
             state_mtx.write().await.clear_pending_recording();
-            notify_recording_start_failed(&app, &error);
+            notify_recording_start_failed(&app, inputs.mode, &error);
             return Err(error);
         }
     };
@@ -2085,6 +2101,7 @@ pub async fn start_recording(
         Ok(Ok(v)) => v,
         Ok(Err(err)) => {
             let message = format!("{err:#}");
+            capture_recording_start_failed(&app, inputs.mode, &message);
             handle_spawn_failure(
                 &app,
                 &state_mtx,
@@ -2097,6 +2114,7 @@ pub async fn start_recording(
         Err(panic) => {
             let panic_msg = panic_message(panic);
             let message = format!("Failed to spawn recording actor: {panic_msg}");
+            capture_recording_start_failed(&app, inputs.mode, &message);
             handle_spawn_failure(
                 &app,
                 &state_mtx,

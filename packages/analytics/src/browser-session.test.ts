@@ -59,6 +59,7 @@ describe("browser analytics sessions", () => {
 
 		expect(firstTab).toMatchObject({
 			sessionId: "session-1",
+			sessionStartedAt: "1970-01-01T00:00:01.000Z",
 			isSessionEntry: true,
 		});
 		expect(reloadedTab).toMatchObject({
@@ -97,6 +98,34 @@ describe("browser analytics sessions", () => {
 			sessionId: "session-2",
 			isSessionEntry: true,
 		});
+	});
+
+	it("converges concurrent tabs on the same next session", () => {
+		const shared = createStorage();
+		resolveBrowserAnalyticsContext({
+			storage: shared,
+			createId: createIds(),
+			now: 0,
+		});
+		const serialized = shared.getItem("cap_analytics_session_v2");
+		if (!serialized) throw new Error("Expected a stored analytics session");
+		const firstTab = createStorage();
+		const secondTab = createStorage();
+		firstTab.setItem("cap_analytics_session_v2", serialized);
+		secondTab.setItem("cap_analytics_session_v2", serialized);
+		const first = resolveBrowserAnalyticsContext({
+			storage: firstTab,
+			createId: () => "first-tab-next",
+			now: PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS + 1,
+		});
+		const second = resolveBrowserAnalyticsContext({
+			storage: secondTab,
+			createId: () => "second-tab-next",
+			now: PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS + 1,
+		});
+
+		expect(first.sessionId).toBe("session-2");
+		expect(second.sessionId).toBe(first.sessionId);
 	});
 
 	it("keeps first and session touch stable while updating last touch", () => {

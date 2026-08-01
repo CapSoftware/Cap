@@ -20,6 +20,11 @@ const makeEvent = (index: number): ProductEventInput => ({
 	anonymousId: "anonymous-1",
 	sessionId: "session-1",
 	platform: "web",
+	properties: {
+		hostname: "cap.so",
+		is_session_entry: true,
+		session_started_at: "2026-07-12T12:00:00.000Z",
+	},
 });
 
 describe("ProductAnalyticsQueue", () => {
@@ -249,7 +254,11 @@ describe("ProductAnalyticsQueue", () => {
 		);
 		abandonedQueue.enqueue({
 			...makeEvent(1),
-			properties: { hostname: "cap.so", is_session_entry: true },
+			properties: {
+				hostname: "cap.so",
+				is_session_entry: true,
+				session_started_at: "2026-07-12T12:00:00.000Z",
+			},
 		});
 		void abandonedQueue.flush("unload");
 

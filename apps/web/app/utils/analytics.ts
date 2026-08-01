@@ -1,14 +1,13 @@
 import type {
-	ClientProductEventName,
+	ClientProductEventNameForPlatform,
 	ProductEventArguments,
 	ProductEventPropertiesFor,
 } from "@cap/analytics";
 import { captureProductEvent } from "./product-analytics";
 
-export function trackEvent<Name extends ClientProductEventName>(
-	eventName: Name,
-	...args: ProductEventArguments<Name>
-) {
+export function trackEvent<
+	Name extends ClientProductEventNameForPlatform<"web">,
+>(eventName: Name, ...args: ProductEventArguments<Name>) {
 	captureProductEvent(eventName, ...args);
 }
 

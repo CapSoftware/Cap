@@ -45,12 +45,38 @@ const WRAPPER_PATHS = new Set([
 	"apps/mobile/src/analytics/product-analytics.ts",
 	"apps/web/app/utils/analytics.ts",
 	"apps/web/app/utils/product-analytics.ts",
+	"apps/web/lib/analytics/authentication-events.ts",
 	"apps/web/lib/analytics/server-event.ts",
 	"apps/web/lib/analytics/server.ts",
+	"apps/web/lib/analytics/product-event-outbox.ts",
 	"apps/web/lib/analytics/stripe-business-events.ts",
 	"apps/web/workflows/deliver-product-analytics-event.ts",
 ]);
+const LOCAL_CAPTURE_FUNCTIONS = new Map([
+	[
+		"apps/web/workflows/import-loom-video.ts",
+		new Map([
+			["queueLoomAnalyticsEvent", { kind: "object" }],
+			["saveMetadataAndComplete", { kind: "object", argumentIndex: 3 }],
+		]),
+	],
+]);
 const CAPTURE_MODULES = new Map([
+	[
+		"@/lib/analytics/authentication-events",
+		new Map([
+			[
+				"recordWebAuthenticationSuccess",
+				{
+					kind: "helper-emissions",
+					emissions: [
+						{ eventName: "user_signed_in", platforms: ["web"] },
+						{ eventName: "identity_linked", platforms: ["server"] },
+					],
+				},
+			],
+		]),
+	],
 	[
 		"@/app/utils/analytics",
 		new Map([
@@ -84,11 +110,21 @@ const CAPTURE_MODULES = new Map([
 		new Map([["queueServerProductEvent", { kind: "object" }]]),
 	],
 	[
+		"@/lib/analytics/product-event-outbox",
+		new Map([
+			["persistProductAnalyticsEvent", { kind: "object", argumentIndex: 1 }],
+		]),
+	],
+	[
 		"@/lib/analytics/business-events",
 		new Map([
 			[
 				"userSignedUpEvent",
 				{ kind: "helper", eventName: "user_signed_up", platforms: ["web"] },
+			],
+			[
+				"userSignedInEvent",
+				{ kind: "helper", eventName: "user_signed_in", platforms: ["web"] },
 			],
 			[
 				"checkoutStartedEvent",
@@ -115,6 +151,22 @@ const CAPTURE_MODULES = new Map([
 				{
 					kind: "helper",
 					eventName: "share_link_created",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"uploadCompletedEvent",
+				{
+					kind: "helper",
+					eventName: "upload_completed",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"uploadFailedEvent",
+				{
+					kind: "helper",
+					eventName: "upload_failed",
 					platformProperty: "platform",
 				},
 			],
@@ -237,11 +289,36 @@ const CAPTURE_MODULES = new Map([
 		new Map([["queueServerProductEvent", { kind: "object" }]]),
 	],
 	[
+		"apps/web/lib/analytics/authentication-events",
+		new Map([
+			[
+				"recordWebAuthenticationSuccess",
+				{
+					kind: "helper-emissions",
+					emissions: [
+						{ eventName: "user_signed_in", platforms: ["web"] },
+						{ eventName: "identity_linked", platforms: ["server"] },
+					],
+				},
+			],
+		]),
+	],
+	[
+		"apps/web/lib/analytics/product-event-outbox",
+		new Map([
+			["persistProductAnalyticsEvent", { kind: "object", argumentIndex: 1 }],
+		]),
+	],
+	[
 		"apps/web/lib/analytics/business-events",
 		new Map([
 			[
 				"userSignedUpEvent",
 				{ kind: "helper", eventName: "user_signed_up", platforms: ["web"] },
+			],
+			[
+				"userSignedInEvent",
+				{ kind: "helper", eventName: "user_signed_in", platforms: ["web"] },
 			],
 			[
 				"checkoutStartedEvent",
@@ -268,6 +345,22 @@ const CAPTURE_MODULES = new Map([
 				{
 					kind: "helper",
 					eventName: "share_link_created",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"uploadCompletedEvent",
+				{
+					kind: "helper",
+					eventName: "upload_completed",
+					platformProperty: "platform",
+				},
+			],
+			[
+				"uploadFailedEvent",
+				{
+					kind: "helper",
+					eventName: "upload_failed",
 					platformProperty: "platform",
 				},
 			],
@@ -510,6 +603,7 @@ function validateStringPropertyRules(sourceFile, file, diagnostics) {
 		"category",
 		"hostname",
 		"identifier",
+		"timestamp",
 	]);
 	const visit = (node) => {
 		if (ts.isObjectLiteralExpression(node)) {
@@ -662,6 +756,18 @@ export function parseEventRegistry(sourceText, file = DEFAULT_REGISTRY_PATH) {
 		const platforms = platformsProperty
 			? staticStringArray(platformsProperty.initializer)
 			: undefined;
+		const propertiesProperty = objectProperty(definition, "properties");
+		const propertiesValue = propertiesProperty
+			? unwrapExpression(propertiesProperty.initializer)
+			: undefined;
+		const propertyKeys = new Set(
+			propertiesValue && ts.isObjectLiteralExpression(propertiesValue)
+				? propertiesValue.properties
+						.filter((entry) => !ts.isSpreadAssignment(entry))
+						.map((entry) => propertyNameText(entry.name))
+						.filter(Boolean)
+				: [],
+		);
 		if (!platforms) {
 			diagnostics.push(
 				diagnostic(
@@ -678,6 +784,7 @@ export function parseEventRegistry(sourceText, file = DEFAULT_REGISTRY_PATH) {
 			name,
 			file: normalizePath(file),
 			platforms: platforms ?? [],
+			propertyKeys,
 			...sourceLocation(sourceFile, property),
 		});
 	}
@@ -698,7 +805,9 @@ function canonicalModuleName(moduleName, file) {
 }
 
 function captureBindings(sourceFile, file) {
-	const identifiers = new Map();
+	const identifiers = new Map(
+		LOCAL_CAPTURE_FUNCTIONS.get(normalizePath(file)) ?? [],
+	);
 	const namespaces = new Map();
 	for (const statement of sourceFile.statements) {
 		if (!ts.isImportDeclaration(statement)) continue;
@@ -859,10 +968,34 @@ function forOfHelperBinding(identifier, call, bindings) {
 	return false;
 }
 
+function forwardedCaptureParameter(identifier, call, bindings) {
+	if (!ts.isIdentifier(identifier)) return false;
+	let current = call.parent;
+	while (current) {
+		if (
+			ts.isFunctionDeclaration(current) &&
+			current.name &&
+			bindings.identifiers.has(current.name.text)
+		) {
+			const descriptor = bindings.identifiers.get(current.name.text);
+			const argumentIndex = descriptor.argumentIndex ?? 0;
+			const parameter = current.parameters[argumentIndex];
+			return (
+				parameter !== undefined &&
+				ts.isIdentifier(parameter.name) &&
+				parameter.name.text === identifier.text
+			);
+		}
+		current = current.parent;
+	}
+	return false;
+}
+
 export function analyzeTypeScriptSource({
 	sourceText,
 	file,
 	registeredEvents,
+	eventProperties = new Map(),
 }) {
 	const scriptKind = file.endsWith(".tsx")
 		? ts.ScriptKind.TSX
@@ -906,10 +1039,50 @@ export function analyzeTypeScriptSource({
 			);
 		}
 	};
+	const validatePropertyKeys = (eventName, expression) => {
+		if (!expression) return;
+		let value = unwrapExpression(expression);
+		if (ts.isIdentifier(value)) {
+			const initializer = initializers.get(value.text);
+			if (!initializer) return;
+			value = unwrapExpression(initializer);
+		}
+		if (!ts.isObjectLiteralExpression(value)) return;
+		const allowed = eventProperties.get(eventName);
+		if (!allowed) return;
+		for (const property of value.properties) {
+			if (ts.isSpreadAssignment(property)) continue;
+			const key = propertyNameText(property.name);
+			if (!key) {
+				diagnostics.push(
+					diagnostic(
+						"dynamic-property-key",
+						file,
+						`Analytics event ${eventName} property keys must be static`,
+						sourceLocation(sourceFile, property),
+					),
+				);
+				continue;
+			}
+			if (allowed.has(key)) continue;
+			diagnostics.push(
+				diagnostic(
+					"invalid-property-key",
+					file,
+					`Analytics event ${eventName} does not declare property ${key}`,
+					sourceLocation(sourceFile, property),
+				),
+			);
+		}
+	};
 	const visit = (node) => {
 		if (ts.isCallExpression(node)) {
 			const descriptor = callDescriptor(node.expression, bindings);
-			if (descriptor?.kind === "helper") {
+			if (descriptor?.kind === "helper-emissions") {
+				for (const emission of descriptor.emissions) {
+					registerEmission(emission.eventName, node, emission.platforms);
+				}
+			} else if (descriptor?.kind === "helper") {
 				registerEmission(
 					descriptor.eventName,
 					node,
@@ -934,6 +1107,10 @@ export function analyzeTypeScriptSource({
 					const result = staticEventName(argument);
 					if (result.kind === "static") {
 						registerEmission(result.eventName, argument);
+						validatePropertyKeys(
+							result.eventName,
+							node.arguments[(descriptor.argumentIndex ?? 0) + 1],
+						);
 					} else {
 						diagnostics.push(
 							diagnostic(
@@ -948,7 +1125,7 @@ export function analyzeTypeScriptSource({
 					}
 				}
 			} else if (descriptor?.kind === "object") {
-				const argument = node.arguments[0];
+				const argument = node.arguments[descriptor.argumentIndex ?? 0];
 				if (!argument) {
 					diagnostics.push(
 						diagnostic(
@@ -967,13 +1144,25 @@ export function analyzeTypeScriptSource({
 							result.platforms ??
 								eventPlatforms(argument, bindings, initializers),
 						);
+						const eventObject = unwrapExpression(argument);
+						if (ts.isObjectLiteralExpression(eventObject)) {
+							validatePropertyKeys(
+								result.eventName,
+								objectProperty(eventObject, "properties")?.initializer,
+							);
+						}
 					} else if (result.kind === "static-set") {
 						for (const eventName of result.eventNames) {
 							registerEmission(eventName, result.node, result.platforms);
 						}
 					} else if (
 						result.kind !== "non-object" ||
-						!forOfHelperBinding(unwrapExpression(argument), node, bindings)
+						(!forOfHelperBinding(unwrapExpression(argument), node, bindings) &&
+							!forwardedCaptureParameter(
+								unwrapExpression(argument),
+								node,
+								bindings,
+							))
 					) {
 						const messages = {
 							"non-object":
@@ -1194,6 +1383,7 @@ export function analyzeRustNativeContract({
 	sourceText,
 	file = DEFAULT_NATIVE_PATH,
 	registeredEvents,
+	eventProperties = new Map(),
 }) {
 	const tokens = tokenizeRust(sourceText);
 	const diagnostics = [];
@@ -1251,6 +1441,37 @@ export function analyzeRustNativeContract({
 			continue;
 		}
 		const eventName = names[0].value;
+		const propertyKeys = [];
+		for (let index = start; index < end - 4; index += 1) {
+			if (!isTokenSequence(body, index, ["data", ".", "set", "("])) {
+				continue;
+			}
+			const keyToken = body[index + 4];
+			if (keyToken?.type !== "string") {
+				diagnostics.push(
+					diagnostic(
+						"native-dynamic-property-key",
+						file,
+						`Native event ${eventName} property keys must be static`,
+						keyToken ?? variantToken,
+					),
+				);
+				continue;
+			}
+			propertyKeys.push(keyToken.value);
+		}
+		const allowedProperties = eventProperties.get(eventName);
+		for (const propertyKey of propertyKeys) {
+			if (!allowedProperties || allowedProperties.has(propertyKey)) continue;
+			diagnostics.push(
+				diagnostic(
+					"native-invalid-property-key",
+					file,
+					`Native event ${eventName} does not declare property ${propertyKey}`,
+					names[0],
+				),
+			);
+		}
 		const expectedName = pascalToSnake(variant);
 		if (eventName !== expectedName) {
 			diagnostics.push(
@@ -1280,6 +1501,7 @@ export function analyzeRustNativeContract({
 			file: normalizePath(file),
 			line: names[0].line,
 			column: names[0].column,
+			propertyKeys,
 		});
 		if (!registeredEvents.has(eventName)) {
 			diagnostics.push(
@@ -1477,6 +1699,19 @@ export function findMissingEmitters(registryEvents, emissions) {
 		const emittedPlatforms = new Set(
 			eventEmissions.flatMap((emission) => emission.platforms ?? []),
 		);
+		for (const emission of eventEmissions) {
+			for (const platform of emission.platforms ?? []) {
+				if (event.platforms.includes(platform)) continue;
+				diagnostics.push(
+					diagnostic(
+						"emitter-platform-not-declared",
+						emission.file,
+						`Analytics event ${event.name} is emitted on undeclared platform ${platform}`,
+						emission,
+					),
+				);
+			}
+		}
 		for (const platform of event.platforms) {
 			if (emittedPlatforms.has(platform)) continue;
 			diagnostics.push(
@@ -1513,6 +1748,9 @@ export function runEventContractCheck({
 	);
 	const registry = parseEventRegistry(registrySource, registryPath);
 	const registeredEvents = new Set(registry.events.keys());
+	const eventProperties = new Map(
+		[...registry.events].map(([name, event]) => [name, event.propertyKeys]),
+	);
 	const diagnostics = [...registry.diagnostics];
 	const emissions = [];
 	const files = sourceFiles(absoluteRoot);
@@ -1529,6 +1767,7 @@ export function runEventContractCheck({
 				sourceText,
 				file: relativePath,
 				registeredEvents,
+				eventProperties,
 			});
 			diagnostics.push(...result.diagnostics);
 			emissions.push(...result.emissions);
@@ -1542,6 +1781,7 @@ export function runEventContractCheck({
 		sourceText: nativeSource,
 		file: nativePath,
 		registeredEvents,
+		eventProperties,
 	});
 	diagnostics.push(...native.diagnostics);
 	const usedNativeVariants = new Map();

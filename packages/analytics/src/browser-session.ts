@@ -30,6 +30,7 @@ export interface AnalyticsTouch {
 
 export interface BrowserAnalyticsSession {
 	id: string;
+	nextId: string;
 	startedAt: number;
 	lastActivityAt: number;
 	sessionTouch?: AnalyticsTouch;
@@ -37,6 +38,7 @@ export interface BrowserAnalyticsSession {
 
 export interface BrowserAnalyticsContext {
 	sessionId: string;
+	sessionStartedAt: string;
 	isSessionEntry: boolean;
 	attribution: ProductEventProperties;
 }
@@ -87,7 +89,8 @@ export function resolveBrowserAnalyticsContext(options: {
 		now - existing.lastActivityAt > PRODUCT_ANALYTICS_SESSION_TIMEOUT_MS;
 	const session: BrowserAnalyticsSession = isSessionEntry
 		? {
-				id: options.createId(),
+				id: existing?.nextId ?? options.createId(),
+				nextId: options.createId(),
 				startedAt: now,
 				lastActivityAt: now,
 				...(options.touch ? { sessionTouch: options.touch } : {}),
@@ -124,6 +127,7 @@ export function resolveBrowserAnalyticsContext(options: {
 
 	return {
 		sessionId: session.id,
+		sessionStartedAt: new Date(session.startedAt).toISOString(),
 		isSessionEntry,
 		attribution: {
 			...touchProperties("first_touch", firstTouch),
@@ -138,6 +142,7 @@ function readStoredSession(storage: AnalyticsStorage | undefined) {
 	if (!isRecord(value)) return undefined;
 	if (
 		typeof value.id !== "string" ||
+		typeof value.nextId !== "string" ||
 		typeof value.startedAt !== "number" ||
 		typeof value.lastActivityAt !== "number"
 	) {
@@ -146,6 +151,7 @@ function readStoredSession(storage: AnalyticsStorage | undefined) {
 	const sessionTouch = parseTouch(value.sessionTouch);
 	return {
 		id: value.id,
+		nextId: value.nextId,
 		startedAt: value.startedAt,
 		lastActivityAt: value.lastActivityAt,
 		...(sessionTouch ? { sessionTouch } : {}),

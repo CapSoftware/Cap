@@ -88,6 +88,11 @@ export const EVENT_REGISTRY = {
 			...optionalAttributionProperties,
 			hostname: { type: "string", required: true, format: "hostname" },
 			is_session_entry: { type: "boolean", required: true },
+			session_started_at: {
+				type: "string",
+				required: true,
+				format: "timestamp",
+			},
 		},
 	},
 	page_engagement: {
@@ -97,6 +102,11 @@ export const EVENT_REGISTRY = {
 			"A bounded summary of foreground engagement for one page view, emitted on route change, hide, or page exit.",
 		properties: {
 			page_view_id: { type: "string", required: true, format: "identifier" },
+			session_started_at: {
+				type: "string",
+				required: true,
+				format: "timestamp",
+			},
 			engaged_ms: { type: "number", required: true },
 			max_scroll_depth: { type: "number", required: true },
 		},
@@ -187,13 +197,16 @@ export const EVENT_REGISTRY = {
 		...criticalServer,
 		platforms: ["server"],
 		semantic:
-			"A newly authenticated user was linked to the first-party anonymous browser identity present during signup. Decision metrics use user_id; this event preserves acquisition stitching without changing the authoritative signup fact.",
+			"A successfully authenticated user was linked to the first-party anonymous browser identity present at authentication. Decision metrics use user_id; this event preserves acquisition stitching without changing authoritative account facts.",
 		properties: {},
 	},
 	user_signed_in: {
-		...bestEffortClient,
-		platforms: ["desktop", "mobile"],
-		semantic: "A native client persisted a valid authenticated session.",
+		version: 1,
+		delivery: "critical",
+		authority: "both",
+		platforms: ["web", "desktop", "mobile"],
+		semantic:
+			"A client persisted a valid authenticated session, or the web authentication provider completed a successful sign-in callback.",
 		properties: {},
 	},
 	user_signed_out: {
@@ -220,6 +233,18 @@ export const EVENT_REGISTRY = {
 			target_height: { type: "number", required: true },
 			fragmented: { type: "boolean", required: true },
 			custom_cursor_capture: { type: "boolean", required: true },
+		},
+	},
+	recording_start_failed: {
+		version: 1,
+		delivery: "critical",
+		authority: "client",
+		platforms: ["desktop", "mobile"],
+		semantic:
+			"A deliberate recording attempt failed before the recorder crossed its started boundary; the stable event ID is retained across delivery retries.",
+		properties: {
+			mode: { type: "string", required: true, format: "category" },
+			failure_class: { type: "string", required: true, format: "category" },
 		},
 	},
 	recording_completed: {
@@ -299,6 +324,22 @@ export const EVENT_REGISTRY = {
 				required: true,
 				format: "category",
 			},
+		},
+	},
+	upload_completed: {
+		...criticalServer,
+		platforms: ["cli", "server"],
+		semantic:
+			"The authoritative upload state accepted a complete single-part object for processing; platform is the persisted initiating surface.",
+		properties: {},
+	},
+	upload_failed: {
+		...criticalServer,
+		platforms: ["cli", "server"],
+		semantic:
+			"The authoritative upload state permanently rejected a single-part upload before processing, using a bounded failure class.",
+		properties: {
+			failure_class: { type: "string", required: true, format: "category" },
 		},
 	},
 	analytics_delivery_loss: {
@@ -434,7 +475,7 @@ export const EVENT_REGISTRY = {
 	},
 	share_link_created: {
 		...criticalServer,
-		platforms: ["desktop", "mobile", "server"],
+		platforms: ["cli", "desktop", "mobile", "server"],
 		semantic:
 			"The authoritative database committed a new shareable video or screenshot owned by the authenticated creator; platform identifies the initiating client when durably known.",
 		properties: {
@@ -876,6 +917,9 @@ type PropertiesFromSchema<Schema extends Record<string, EventPropertyRule>> = {
 export type ProductEventPropertiesFor<Name extends CoreEventName> =
 	PropertiesFromSchema<(typeof EVENT_REGISTRY)[Name]["properties"]>;
 
+export type ProductEventPlatformFor<Name extends CoreEventName> =
+	(typeof EVENT_REGISTRY)[Name]["platforms"][number];
+
 export type ProductEventArguments<Name extends CoreEventName> =
 	keyof (typeof EVENT_REGISTRY)[Name]["properties"] extends never
 		? [properties?: undefined]
@@ -913,6 +957,14 @@ export type ServerProductEventName = {
 		? never
 		: Name;
 }[CoreEventName];
+
+export type ServerProductEventNameForPlatform<
+	Platform extends ProductEventPlatform,
+> = {
+	[Name in ServerProductEventName]: Platform extends ProductEventPlatformFor<Name>
+		? Name
+		: never;
+}[ServerProductEventName];
 
 export const CORE_EVENT_NAMES = Object.freeze(
 	Object.keys(EVENT_REGISTRY) as CoreEventName[],

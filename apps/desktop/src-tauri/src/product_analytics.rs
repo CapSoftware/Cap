@@ -8,7 +8,8 @@ use serde_json::{Map, Value};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    fs,
+    collections::HashSet,
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     sync::{
@@ -38,6 +39,7 @@ const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
 const PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY: &str = "product_analytics_outbox_recovery_v1";
 const PRODUCT_EVENT_OUTBOX_LEGACY_KEY_STORE_KEY: &str = "product_analytics_outbox_fallback_key_v1";
 const PRODUCT_EVENT_OUTBOX_KEY_FILE: &str = "product-analytics-outbox-key-v1";
+const PRODUCT_EVENT_OUTBOX_JOURNAL_FILE: &str = "product-analytics-outbox-journal-v1";
 const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
 const PRODUCT_EVENT_OUTBOX_KEYRING_USER: &str = "product-analytics-outbox-v1";
 const PRODUCT_EVENT_OUTBOX_LEGACY_KEYRING_USER: &str = "product-analytics-outbox-v1-backup";
@@ -78,6 +80,10 @@ pub enum ProductAnalyticsEvent {
         target_height: u32,
         fragmented: bool,
         custom_cursor_capture: bool,
+    },
+    RecordingStartFailed {
+        mode: &'static str,
+        error: String,
     },
     RecordingCompleted {
         mode: &'static str,
@@ -229,6 +235,12 @@ fn event_data(event: ProductAnalyticsEvent) -> EventData {
             data.set("custom_cursor_capture", custom_cursor_capture);
             data
         }
+        ProductAnalyticsEvent::RecordingStartFailed { mode, error } => {
+            let mut data = EventData::new("recording_start_failed");
+            data.set("mode", mode);
+            data.set("failure_class", classify_failure(&error));
+            data
+        }
         ProductAnalyticsEvent::RecordingCompleted {
             mode,
             status,
@@ -290,6 +302,7 @@ fn is_core_product_event(name: &str) -> bool {
         name,
         "recording_started"
             | "recording_completed"
+            | "recording_start_failed"
             | "multipart_upload_complete"
             | "multipart_upload_failed"
             | "recording_recovery_failed"
@@ -302,6 +315,7 @@ fn desktop_client_product_event_name(name: &str) -> Option<&'static str> {
         "user_signed_in" => Some("user_signed_in"),
         "user_signed_out" => Some("user_signed_out"),
         "recording_started" => Some("recording_started"),
+        "recording_start_failed" => Some("recording_start_failed"),
         "recording_completed" => Some("recording_completed"),
         "multipart_upload_complete" => Some("multipart_upload_complete"),
         "multipart_upload_failed" => Some("multipart_upload_failed"),
@@ -408,6 +422,13 @@ fn product_auth_token(app: &AppHandle) -> Option<String> {
 struct DeliveryError {
     retryable: bool,
     status: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProductEventBatchKind {
+    LossReport,
+    Pending,
+    DeadLetterRetry,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -538,6 +559,98 @@ fn file_outbox_key_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_local_data_dir()
         .map(|directory| directory.join(PRODUCT_EVENT_OUTBOX_KEY_FILE))
         .map_err(|_| "outbox_key_directory_unavailable".to_string())
+}
+
+fn outbox_journal_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| directory.join(PRODUCT_EVENT_OUTBOX_JOURNAL_FILE))
+        .map_err(|_| "outbox_journal_directory_unavailable".to_string())
+}
+
+fn append_event_journal(app: &AppHandle, event: &ProductEvent) -> Result<(), String> {
+    let path = outbox_journal_path(app)?;
+    let encryption_key = outbox_encryption_key(app)?;
+    append_encrypted_event_journal(&path, event, encryption_key).map(|_| ())
+}
+
+fn append_encrypted_event_journal(
+    path: &Path,
+    event: &ProductEvent,
+    encryption_key: &[u8; 32],
+) -> Result<usize, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "outbox_journal_directory_unavailable".to_string())?;
+    fs::create_dir_all(parent).map_err(|_| "outbox_journal_directory_unavailable".to_string())?;
+    let encoded = encrypt_outbox_with_key(
+        &ProductEventOutbox {
+            pending: vec![event.clone()],
+            ..ProductEventOutbox::default()
+        },
+        encryption_key,
+    )?;
+    let appended_bytes = encoded.len().saturating_add(1);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|_| "outbox_journal_write_failed".to_string())?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| "outbox_journal_write_failed".to_string())?;
+    file.write_all(encoded.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_data())
+        .map_err(|_| "outbox_journal_write_failed".to_string())?;
+    Ok(appended_bytes)
+}
+
+fn load_event_journal(app: &AppHandle) -> Result<(ProductEventOutbox, bool), String> {
+    let path = outbox_journal_path(app)?;
+    let value = match fs::read_to_string(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((ProductEventOutbox::default(), false));
+        }
+        Err(_) => return Err("outbox_journal_read_failed".to_string()),
+    };
+    let mut outbox = ProductEventOutbox::default();
+    let mut corrupt = false;
+    for encoded in value.lines().filter(|line| !line.is_empty()) {
+        match decrypt_outbox(app, encoded) {
+            Ok(record) => merge_outbox(&mut outbox, record),
+            Err(_) => corrupt = true,
+        }
+    }
+    Ok((outbox, corrupt))
+}
+
+fn truncate_event_journal(app: &AppHandle) -> Result<(), String> {
+    let path = outbox_journal_path(app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "outbox_journal_directory_unavailable".to_string())?;
+    fs::create_dir_all(parent).map_err(|_| "outbox_journal_directory_unavailable".to_string())?;
+    let file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|_| "outbox_journal_write_failed".to_string())?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| "outbox_journal_write_failed".to_string())?;
+    file.sync_all()
+        .map_err(|_| "outbox_journal_write_failed".to_string())
+}
+
+fn delete_event_journal(app: &AppHandle) -> Result<(), String> {
+    match fs::remove_file(outbox_journal_path(app)?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("outbox_journal_delete_failed".to_string()),
+    }
 }
 
 fn read_file_outbox_key(path: &Path) -> Result<Option<[u8; 32]>, String> {
@@ -818,6 +931,39 @@ fn loss_summary_matches(
         && summary.session_id == event.session_id
 }
 
+fn is_capacity_loss_summary(summary: &ProductEventLossSummary) -> bool {
+    summary.failure_class == "summary_capacity" && summary.failed_event_name == "other"
+}
+
+fn capacity_loss_summary(source: ProductEventLossSummary) -> ProductEventLossSummary {
+    ProductEventLossSummary {
+        summary_id: source.summary_id,
+        failure_class: "summary_capacity".to_string(),
+        failed_event_name: "other".to_string(),
+        platform: "desktop".to_string(),
+        app_version: "mixed".to_string(),
+        anonymous_id: source.anonymous_id,
+        session_id: String::new(),
+        status: None,
+        count: source.count,
+        first_sequence: source.first_sequence,
+        last_sequence: source.last_sequence,
+        first_failed_at_ms: source.first_failed_at_ms,
+        last_failed_at_ms: source.last_failed_at_ms,
+    }
+}
+
+fn aggregate_loss_summary(
+    fallback: &mut ProductEventLossSummary,
+    source: &ProductEventLossSummary,
+) {
+    fallback.count = fallback.count.saturating_add(source.count);
+    fallback.first_sequence = fallback.first_sequence.min(source.first_sequence);
+    fallback.last_sequence = fallback.last_sequence.max(source.last_sequence);
+    fallback.first_failed_at_ms = fallback.first_failed_at_ms.min(source.first_failed_at_ms);
+    fallback.last_failed_at_ms = fallback.last_failed_at_ms.max(source.last_failed_at_ms);
+}
+
 fn record_delivery_loss(
     outbox: &mut ProductEventOutbox,
     failure_class: &str,
@@ -858,12 +1004,11 @@ fn record_delivery_loss(
         return;
     }
 
-    if let Some(summary) = outbox.loss_summaries.iter_mut().find(|summary| {
-        summary.failure_class == "summary_capacity"
-            && summary.failed_event_name == "other"
-            && summary.platform == event.platform
-            && summary.app_version == event.app_version
-    }) {
+    if let Some(summary) = outbox
+        .loss_summaries
+        .iter_mut()
+        .find(|summary| is_capacity_loss_summary(summary))
+    {
         summary.count = summary.count.saturating_add(1);
         summary.last_sequence = sequence;
         summary.last_failed_at_ms = failed_at_ms;
@@ -875,10 +1020,10 @@ fn record_delivery_loss(
             summary_id: Uuid::new_v4().to_string(),
             failure_class: "summary_capacity".to_string(),
             failed_event_name: "other".to_string(),
-            platform: event.platform.clone(),
-            app_version: event.app_version.clone(),
+            platform: "desktop".to_string(),
+            app_version: "mixed".to_string(),
             anonymous_id: event.anonymous_id.clone(),
-            session_id: event.session_id.clone(),
+            session_id: String::new(),
             status: None,
             count: 1,
             first_sequence: sequence,
@@ -899,40 +1044,31 @@ fn merge_loss_summary(target: &mut Vec<ProductEventLossSummary>, source: Product
         }
         return;
     }
-    if target.len() < PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY {
+    if let Some(fallback) = target
+        .iter_mut()
+        .find(|summary| is_capacity_loss_summary(summary))
+    {
+        aggregate_loss_summary(fallback, &source);
+        return;
+    }
+
+    let detailed_capacity = PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY.saturating_sub(1);
+    if target.len() < detailed_capacity && !is_capacity_loss_summary(&source) {
         target.push(source);
         return;
     }
 
-    let fallback_index = target.iter().position(|summary| {
-        summary.failure_class == "summary_capacity" && summary.failed_event_name == "other"
-    });
-    let index = fallback_index.unwrap_or_else(|| target.len().saturating_sub(1));
-    let mut fallback = if fallback_index.is_some() {
-        target.remove(index)
+    let mut fallback = if target.len() < PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY {
+        capacity_loss_summary(source)
     } else {
-        let displaced = target.remove(index);
-        ProductEventLossSummary {
-            summary_id: displaced.summary_id,
-            failure_class: "summary_capacity".to_string(),
-            failed_event_name: "other".to_string(),
-            platform: displaced.platform,
-            app_version: displaced.app_version,
-            anonymous_id: displaced.anonymous_id,
-            session_id: displaced.session_id,
-            status: None,
-            count: displaced.count,
-            first_sequence: displaced.first_sequence,
-            last_sequence: displaced.last_sequence,
-            first_failed_at_ms: displaced.first_failed_at_ms,
-            last_failed_at_ms: displaced.last_failed_at_ms,
-        }
+        let displaced = target.remove(target.len().saturating_sub(1));
+        let mut fallback = capacity_loss_summary(displaced);
+        aggregate_loss_summary(&mut fallback, &source);
+        fallback
     };
-    fallback.count = fallback.count.saturating_add(source.count);
-    fallback.first_sequence = fallback.first_sequence.min(source.first_sequence);
-    fallback.last_sequence = fallback.last_sequence.max(source.last_sequence);
-    fallback.first_failed_at_ms = fallback.first_failed_at_ms.min(source.first_failed_at_ms);
-    fallback.last_failed_at_ms = fallback.last_failed_at_ms.max(source.last_failed_at_ms);
+    fallback.platform = "desktop".to_string();
+    fallback.app_version = "mixed".to_string();
+    fallback.session_id.clear();
     target.push(fallback);
 }
 
@@ -1020,21 +1156,36 @@ fn merge_outbox(target: &mut ProductEventOutbox, source: ProductEventOutbox) {
 fn persist_outbox(app: &AppHandle, outbox: &mut ProductEventOutbox) -> Result<(), String> {
     if !PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.load(Ordering::Acquire) {
         if write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, outbox).is_ok() {
-            return Ok(());
+            return truncate_event_journal(app);
         }
         PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
-        return write_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY, outbox);
+        write_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY, outbox)?;
+        return truncate_event_journal(app);
     }
 
     let Ok(mut restored) = load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY) else {
-        return write_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY, outbox);
+        let (journal, corrupt) = load_event_journal(app)?;
+        merge_outbox(outbox, journal);
+        if corrupt {
+            PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            warn!("Product analytics journal contained an incomplete record");
+        }
+        write_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY, outbox)?;
+        return truncate_event_journal(app);
     };
     merge_outbox(&mut restored, outbox.clone());
     let recovery = load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)?;
     merge_outbox(&mut restored, recovery);
+    let (journal, corrupt) = load_event_journal(app)?;
+    merge_outbox(&mut restored, journal);
+    if corrupt {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        warn!("Product analytics journal contained an incomplete record");
+    }
     write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &restored)?;
     delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)?;
     delete_legacy_store_outbox_encryption_keys(app)?;
+    truncate_event_journal(app)?;
     *outbox = restored;
     PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
     Ok(())
@@ -1047,36 +1198,93 @@ fn outbox_guard() -> std::sync::MutexGuard<'static, ProductEventOutbox> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn persist_current_outbox(app: &AppHandle) -> Result<(), String> {
-    let mut outbox = outbox_guard();
-    if let Err(failure_class) = persist_outbox(app, &mut outbox) {
-        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
-        warn!(
-            failure_class,
-            "Failed to persist encrypted product analytics outbox"
-        );
-        return Err(failure_class);
-    }
-    Ok(())
-}
-
-fn remove_delivered_events(app: &AppHandle, delivered: &[ProductEvent]) {
+fn remove_delivered_from_outbox(outbox: &mut ProductEventOutbox, delivered: &[ProductEvent]) {
     let delivered_ids = delivered
         .iter()
         .map(|event| event.event_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    let mut outbox = outbox_guard();
     outbox
         .pending
         .retain(|event| !delivered_ids.contains(event.event_id.as_str()));
     outbox
         .loss_reports_in_flight
         .retain(|event| !delivered_ids.contains(event.event_id.as_str()));
+    outbox
+        .dead_letters
+        .retain(|entry| !delivered_ids.contains(entry.event.event_id.as_str()));
+}
+
+fn remove_delivered_events(app: &AppHandle, delivered: &[ProductEvent]) {
+    let mut outbox = outbox_guard();
+    remove_delivered_from_outbox(&mut outbox, delivered);
     if let Err(failure_class) = persist_outbox(app, &mut outbox) {
         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
         warn!(
             failure_class,
             "Failed to persist delivered product analytics state"
+        );
+    }
+}
+
+fn dead_letter_retry_attempts_guard() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    PRODUCT_EVENT_DEAD_LETTER_RETRY_ATTEMPTS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn select_dead_letter_retry_batch(
+    outbox: &ProductEventOutbox,
+    attempted: &mut HashSet<String>,
+) -> Vec<ProductEvent> {
+    let mut events = Vec::new();
+    for entry in &outbox.dead_letters {
+        if attempted.insert(entry.event.event_id.clone()) {
+            events.push(entry.event.clone());
+        }
+        if events.len() == PRODUCT_EVENT_BATCH_SIZE {
+            break;
+        }
+    }
+    events
+}
+
+fn prepare_dead_letter_retry_batch() -> Vec<ProductEvent> {
+    let mut attempted = dead_letter_retry_attempts_guard();
+    let outbox = outbox_guard();
+    select_dead_letter_retry_batch(&outbox, &mut attempted)
+}
+
+fn record_dead_letter_retry_rejection(
+    app: &AppHandle,
+    events: &[ProductEvent],
+    error: &DeliveryError,
+) {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut outbox = outbox_guard();
+    record_dead_letter_retry_rejection_in_outbox(&mut outbox, events, error, now);
+    if let Err(failure_class) = persist_outbox(app, &mut outbox) {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+        warn!(
+            failure_class,
+            "Failed to persist product analytics dead letter retry state"
+        );
+    }
+}
+
+fn record_dead_letter_retry_rejection_in_outbox(
+    outbox: &mut ProductEventOutbox,
+    events: &[ProductEvent],
+    error: &DeliveryError,
+    failed_at_ms: i64,
+) {
+    for event in events {
+        record_delivery_loss(
+            outbox,
+            "dead_letter_retry_rejected",
+            event,
+            error.status,
+            failed_at_ms,
         );
     }
 }
@@ -1169,19 +1377,27 @@ async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<(
             if !live_telemetry_enabled(&app) {
                 break;
             }
-            let (events, delivery_loss_batch) = match prepare_loss_report_batch(&app) {
-                Ok(loss_reports) if !loss_reports.is_empty() => (loss_reports, true),
+            let (events, batch_kind) = match prepare_loss_report_batch(&app) {
+                Ok(loss_reports) if !loss_reports.is_empty() => {
+                    (loss_reports, ProductEventBatchKind::LossReport)
+                }
                 Ok(_) => {
                     let outbox = outbox_guard();
-                    (
-                        outbox
-                            .pending
-                            .iter()
-                            .take(PRODUCT_EVENT_BATCH_SIZE)
-                            .cloned()
-                            .collect::<Vec<_>>(),
-                        false,
-                    )
+                    let pending = outbox
+                        .pending
+                        .iter()
+                        .take(PRODUCT_EVENT_BATCH_SIZE)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    drop(outbox);
+                    if pending.is_empty() {
+                        (
+                            prepare_dead_letter_retry_batch(),
+                            ProductEventBatchKind::DeadLetterRetry,
+                        )
+                    } else {
+                        (pending, ProductEventBatchKind::Pending)
+                    }
                 }
                 Err(failure_class) => {
                     PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
@@ -1194,6 +1410,9 @@ async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<(
             };
             if events.is_empty() {
                 break;
+            }
+            if batch_kind == ProductEventBatchKind::DeadLetterRetry {
+                PRODUCT_EVENT_RETRIES.fetch_add(events.len() as u64, Ordering::Relaxed);
             }
 
             match send_product_batch_once(&app, &events).await {
@@ -1217,13 +1436,25 @@ async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<(
                     tokio::time::sleep(delay).await;
                 }
                 Err(error) => {
-                    if delivery_loss_batch {
-                        warn!(
-                            event_count = events.len(),
-                            status = error.status,
-                            "Product analytics loss report was rejected and remains encrypted for recovery"
-                        );
-                        break;
+                    match batch_kind {
+                        ProductEventBatchKind::LossReport => {
+                            warn!(
+                                event_count = events.len(),
+                                status = error.status,
+                                "Product analytics loss report was rejected and remains encrypted for recovery"
+                            );
+                            break;
+                        }
+                        ProductEventBatchKind::DeadLetterRetry => {
+                            record_dead_letter_retry_rejection(&app, &events, &error);
+                            warn!(
+                                event_count = events.len(),
+                                status = error.status,
+                                "Product analytics dead letters remain encrypted after a recovery attempt"
+                            );
+                            break;
+                        }
+                        ProductEventBatchKind::Pending => {}
                     }
                     warn!(
                         event_count = events.len(),
@@ -1278,14 +1509,21 @@ fn insert_product_event(
 
 fn enqueue_product_event(app: &AppHandle, event: ProductEvent) -> Result<(), String> {
     let now = chrono::Utc::now();
-    let (should_wake, dead_lettered, dropped) = {
+    let journal_event = event.clone();
+    let (should_wake, dead_lettered, dropped, persistence) = {
         let mut outbox = outbox_guard();
-        insert_product_event(
+        let (should_wake, dead_lettered, dropped) = insert_product_event(
             &mut outbox,
             event,
             now.timestamp_millis(),
             &now.to_rfc3339(),
-        )
+        );
+        let persistence = if dead_lettered || dropped {
+            persist_outbox(app, &mut outbox)
+        } else {
+            append_event_journal(app, &journal_event).or_else(|_| persist_outbox(app, &mut outbox))
+        };
+        (should_wake, dead_lettered, dropped, persistence)
     };
     if dead_lettered {
         PRODUCT_EVENT_DEAD_LETTERS.fetch_add(1, Ordering::Relaxed);
@@ -1293,8 +1531,9 @@ fn enqueue_product_event(app: &AppHandle, event: ProductEvent) -> Result<(), Str
     if dropped {
         PRODUCT_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
     }
-    let persistence = persist_current_outbox(app);
-
+    if persistence.is_err() {
+        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
     let sender = product_event_sender(app);
 
     if should_wake && let Err(mpsc::error::TrySendError::Closed(_)) = sender.try_send(()) {
@@ -1317,6 +1556,7 @@ fn clear_product_event_outbox(outbox: &mut ProductEventOutbox) {
 
 fn purge_stored_product_analytics(app: &AppHandle) -> Result<(), String> {
     clear_product_event_outbox(&mut outbox_guard());
+    dead_letter_retry_attempts_guard().clear();
     let store = app
         .store("store")
         .map_err(|_| "store_unavailable".to_string())?;
@@ -1325,7 +1565,8 @@ fn purge_stored_product_analytics(app: &AppHandle) -> Result<(), String> {
     store.delete(PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY);
     store
         .save()
-        .map_err(|_| "analytics_opt_out_purge_failed".to_string())
+        .map_err(|_| "analytics_opt_out_purge_failed".to_string())?;
+    delete_event_journal(app)
 }
 
 pub fn init_product_session(app: &AppHandle) {
@@ -1353,8 +1594,16 @@ pub fn init_product_session(app: &AppHandle) {
         Err(err) => warn!("Failed to access store for product analytics session: {err}"),
     }
 
+    let journal = load_event_journal(app);
     match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY) {
         Ok(mut loaded) => {
+            if let Ok((journal_outbox, corrupt)) = &journal {
+                merge_outbox(&mut loaded, journal_outbox.clone());
+                if *corrupt {
+                    PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    warn!("Product analytics journal contained an incomplete record");
+                }
+            }
             match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY) {
                 Ok(recovery) => {
                     merge_outbox(&mut loaded, recovery);
@@ -1362,7 +1611,11 @@ pub fn init_product_session(app: &AppHandle) {
                         .and_then(|()| {
                             delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)
                         })
-                        .and_then(|()| delete_legacy_store_outbox_encryption_keys(app));
+                        .and_then(|()| delete_legacy_store_outbox_encryption_keys(app))
+                        .and_then(|()| match journal {
+                            Ok(_) => truncate_event_journal(app),
+                            Err(ref failure_class) => Err(failure_class.clone()),
+                        });
                     if let Err(failure_class) = consolidation {
                         PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
                         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
@@ -1384,6 +1637,7 @@ pub fn init_product_session(app: &AppHandle) {
                 }
             }
             let has_pending = !loaded.pending.is_empty()
+                || !loaded.dead_letters.is_empty()
                 || !loaded.loss_summaries.is_empty()
                 || !loaded.loss_reports_in_flight.is_empty();
             *outbox_guard() = loaded;
@@ -1395,7 +1649,16 @@ pub fn init_product_session(app: &AppHandle) {
             PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
             PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
             match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY) {
-                Ok(recovery) => *outbox_guard() = recovery,
+                Ok(mut recovery) => {
+                    if let Ok((journal_outbox, corrupt)) = &journal {
+                        merge_outbox(&mut recovery, journal_outbox.clone());
+                        if *corrupt {
+                            PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                            warn!("Product analytics journal contained an incomplete record");
+                        }
+                    }
+                    *outbox_guard() = recovery;
+                }
                 Err(recovery_failure_class) => {
                     PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
                     warn!(
@@ -1411,6 +1674,7 @@ pub fn init_product_session(app: &AppHandle) {
             let has_pending = {
                 let outbox = outbox_guard();
                 !outbox.pending.is_empty()
+                    || !outbox.dead_letters.is_empty()
                     || !outbox.loss_summaries.is_empty()
                     || !outbox.loss_reports_in_flight.is_empty()
             };
@@ -1425,6 +1689,7 @@ static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(true);
 static PRODUCT_EVENT_SESSION_ID: OnceLock<Uuid> = OnceLock::new();
 static PRODUCT_EVENT_SENDER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
 static PRODUCT_EVENT_OUTBOX: OnceLock<Mutex<ProductEventOutbox>> = OnceLock::new();
+static PRODUCT_EVENT_DEAD_LETTER_RETRY_ATTEMPTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY: OnceLock<[u8; 32]> = OnceLock::new();
 static PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED: AtomicBool = AtomicBool::new(false);
 static PRODUCT_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
@@ -1545,6 +1810,7 @@ mod tests {
     fn core_product_event_catalog_is_intentionally_small() {
         let included = [
             "recording_started",
+            "recording_start_failed",
             "recording_completed",
             "multipart_upload_complete",
             "multipart_upload_failed",
@@ -1578,6 +1844,20 @@ mod tests {
         assert!(data.properties.values().all(|value| {
             value.is_null() || value.is_boolean() || value.is_number() || value.is_string()
         }));
+    }
+
+    #[test]
+    fn recording_start_failure_is_bounded_and_excludes_raw_errors() {
+        let data = event_data(ProductAnalyticsEvent::RecordingStartFailed {
+            mode: "instant",
+            error: "/Users/private/recording.cap permission denied".to_string(),
+        });
+        let event = product_event(&data, "install-id".to_string()).unwrap();
+
+        assert_eq!(event.event_name, "recording_start_failed");
+        assert_eq!(event.properties["mode"], "instant");
+        assert_eq!(event.properties["failure_class"], "permission");
+        assert!(!event.properties.contains_key("error"));
     }
 
     #[test]
@@ -1650,6 +1930,89 @@ mod tests {
         let decrypted = decrypt_outbox_with_key(&encrypted, &key).unwrap();
         assert_eq!(decrypted.pending.len(), 1);
         assert_eq!(decrypted.pending[0].event_id, event_id);
+    }
+
+    #[test]
+    fn encrypted_durable_journal_enqueue_meets_latency_and_size_budgets() {
+        let data = event_data(recording_started());
+        let event = product_event(&data, "install-id".to_string()).unwrap();
+        let mut pending = Vec::with_capacity(PRODUCT_EVENT_OUTBOX_CAPACITY);
+        for index in 0..PRODUCT_EVENT_OUTBOX_CAPACITY {
+            let mut queued = event.clone();
+            queued.event_id = format!("event-{index}");
+            pending.push(queued);
+        }
+        let full_snapshot = encrypt_outbox_with_key(
+            &ProductEventOutbox {
+                pending,
+                ..ProductEventOutbox::default()
+            },
+            &[7_u8; 32],
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("journal");
+        let encryption_key = [7_u8; 32];
+        let warmup_sample_count = 10;
+        let measured_sample_count = 100;
+        let mut failures = 0_usize;
+        let mut appended_bytes = 0_usize;
+        for index in 0..warmup_sample_count {
+            let mut warmup_event = event.clone();
+            warmup_event.event_id = format!("warmup-{index}");
+            match append_encrypted_event_journal(&path, &warmup_event, &encryption_key) {
+                Ok(bytes) => appended_bytes = appended_bytes.saturating_add(bytes),
+                Err(_) => failures = failures.saturating_add(1),
+            }
+        }
+
+        let mut timings = Vec::with_capacity(measured_sample_count);
+        let mut record_sizes = Vec::with_capacity(measured_sample_count);
+        let measured_started = std::time::Instant::now();
+        for index in 0..measured_sample_count {
+            let mut measured_event = event.clone();
+            measured_event.event_id = format!("measured-{index}");
+            let started = std::time::Instant::now();
+            match append_encrypted_event_journal(&path, &measured_event, &encryption_key) {
+                Ok(bytes) => {
+                    timings.push(started.elapsed());
+                    record_sizes.push(bytes);
+                    appended_bytes = appended_bytes.saturating_add(bytes);
+                }
+                Err(_) => failures = failures.saturating_add(1),
+            }
+        }
+        let measured_elapsed = measured_started.elapsed();
+        timings.sort_unstable();
+        let p50 = timings.get(49).copied().unwrap_or(Duration::MAX);
+        let p95 = timings.get(94).copied().unwrap_or(Duration::MAX);
+        let p99 = timings.get(98).copied().unwrap_or(Duration::MAX);
+        let throughput = timings.len() as f64 / measured_elapsed.as_secs_f64();
+        let journal_size = usize::try_from(fs::metadata(&path).unwrap().len()).unwrap();
+        let max_record_size = record_sizes.iter().copied().max().unwrap_or(usize::MAX);
+
+        eprintln!(
+            "CAP_ANALYTICS_DESKTOP_PERF={{\"samples\":{},\"failures\":{},\"p50_ms\":{:.3},\"p95_ms\":{:.3},\"p99_ms\":{:.3},\"throughput_events_per_second\":{:.2},\"journal_bytes\":{},\"max_record_bytes\":{},\"full_snapshot_bytes\":{}}}",
+            timings.len(),
+            failures,
+            p50.as_secs_f64() * 1_000.0,
+            p95.as_secs_f64() * 1_000.0,
+            p99.as_secs_f64() * 1_000.0,
+            throughput,
+            journal_size,
+            max_record_size,
+            full_snapshot.len()
+        );
+
+        assert_eq!(failures, 0);
+        assert_eq!(timings.len(), measured_sample_count);
+        assert_eq!(journal_size, appended_bytes);
+        assert!(journal_size < full_snapshot.len());
+        assert!(max_record_size.saturating_mul(10) < full_snapshot.len());
+        assert!(p50 < Duration::from_millis(25));
+        assert!(p95 < Duration::from_millis(50));
+        assert!(p99 < Duration::from_millis(100));
+        assert!(throughput >= 20.0);
     }
 
     #[test]
@@ -1808,6 +2171,81 @@ mod tests {
     }
 
     #[test]
+    fn dead_letters_retry_once_per_process_and_again_after_restart() {
+        let mut outbox = ProductEventOutbox::default();
+        for index in 0..=PRODUCT_EVENT_BATCH_SIZE {
+            let mut event =
+                product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
+            event.event_id = format!("dead-letter-{index}");
+            outbox.dead_letters.push(ProductEventDeadLetter {
+                event,
+                failure_class: "contract_rejected".to_string(),
+                status: Some(400),
+                failed_at: "2026-08-01T00:00:00Z".to_string(),
+            });
+        }
+        let mut attempted = HashSet::new();
+
+        let first = select_dead_letter_retry_batch(&outbox, &mut attempted);
+        let second = select_dead_letter_retry_batch(&outbox, &mut attempted);
+        let exhausted = select_dead_letter_retry_batch(&outbox, &mut attempted);
+        let restarted = select_dead_letter_retry_batch(&outbox, &mut HashSet::new());
+
+        assert_eq!(first.len(), PRODUCT_EVENT_BATCH_SIZE);
+        assert_eq!(second.len(), 1);
+        assert!(exhausted.is_empty());
+        assert_eq!(
+            restarted
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            first
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(outbox.dead_letters.len(), PRODUCT_EVENT_BATCH_SIZE + 1);
+    }
+
+    #[test]
+    fn dead_letter_recovery_retains_rejections_and_removes_accepted_events() {
+        let event =
+            product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
+        let mut outbox = ProductEventOutbox {
+            dead_letters: vec![ProductEventDeadLetter {
+                event: event.clone(),
+                failure_class: "contract_rejected".to_string(),
+                status: Some(400),
+                failed_at: "2026-08-01T00:00:00Z".to_string(),
+            }],
+            ..ProductEventOutbox::default()
+        };
+        let error = DeliveryError {
+            retryable: false,
+            status: Some(422),
+        };
+
+        record_dead_letter_retry_rejection_in_outbox(
+            &mut outbox,
+            std::slice::from_ref(&event),
+            &error,
+            1_785_542_400_000,
+        );
+
+        assert_eq!(outbox.dead_letters.len(), 1);
+        assert_eq!(outbox.loss_summaries.len(), 1);
+        assert_eq!(
+            outbox.loss_summaries[0].failure_class,
+            "dead_letter_retry_rejected"
+        );
+        assert_eq!(outbox.loss_summaries[0].status, Some(422));
+
+        remove_delivered_from_outbox(&mut outbox, &[event]);
+
+        assert!(outbox.dead_letters.is_empty());
+    }
+
+    #[test]
     fn loss_report_payload_and_id_survive_encrypted_restart() {
         let event =
             product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
@@ -1835,6 +2273,46 @@ mod tests {
             serde_json::to_value(&restored.loss_reports_in_flight[0]).unwrap(),
             report_json
         );
+    }
+
+    #[test]
+    fn loss_summary_capacity_preserves_counts_across_app_versions() {
+        let mut outbox = ProductEventOutbox::default();
+        for index in 0..=PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY {
+            let mut event =
+                product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
+            event.app_version = format!("version-{index}");
+            record_delivery_loss(
+                &mut outbox,
+                "queue_overflow_unrecoverable",
+                &event,
+                None,
+                1_785_542_400_000_i64
+                    .saturating_add(i64::try_from(index).expect("capacity index fits i64")),
+            );
+        }
+
+        assert_eq!(
+            outbox.loss_summaries.len(),
+            PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY
+        );
+        assert_eq!(
+            outbox
+                .loss_summaries
+                .iter()
+                .map(|summary| summary.count)
+                .sum::<u64>(),
+            u64::try_from(PRODUCT_EVENT_LOSS_SUMMARY_CAPACITY)
+                .expect("loss summary capacity fits u64")
+                + 1
+        );
+        let fallback = outbox
+            .loss_summaries
+            .iter()
+            .find(|summary| is_capacity_loss_summary(summary))
+            .unwrap();
+        assert_eq!(fallback.count, 2);
+        assert_eq!(fallback.app_version, "mixed");
     }
 
     #[test]

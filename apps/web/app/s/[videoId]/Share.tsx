@@ -21,6 +21,7 @@ import {
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { touchProductAnalyticsSession } from "@/app/utils/product-analytics";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
@@ -39,46 +40,13 @@ export type CommentType = typeof commentsSchema.$inferSelect & {
 	sending?: boolean;
 };
 
-const SESSION_STORAGE_KEY = "cap_tb_session_id";
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
-let volatileAnalyticsSessionId: string | undefined;
-
-const ensureAnalyticsSessionId = () => {
-	if (typeof window === "undefined") return "anonymous";
-	const now = Date.now();
-	const newId =
-		volatileAnalyticsSessionId ??
-		(typeof crypto !== "undefined" && "randomUUID" in crypto
-			? crypto.randomUUID()
-			: `${now}-${Math.random().toString(36).slice(2)}`);
-	volatileAnalyticsSessionId = newId;
-	try {
-		const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-		if (raw) {
-			const parsed = JSON.parse(raw) as { value: string; expiry: number };
-			if (parsed?.value && parsed.expiry > now) {
-				volatileAnalyticsSessionId = parsed.value;
-				return parsed.value;
-			}
-		}
-		window.localStorage.setItem(
-			SESSION_STORAGE_KEY,
-			JSON.stringify({ value: newId, expiry: now + SESSION_TTL_MS }),
-		);
-		return newId;
-	} catch (error) {
-		console.warn("Failed to persist analytics session id", error);
-		return newId;
-	}
-};
-
 const trackVideoView = (payload: {
 	videoId: string;
 	orgId?: string | null;
 	ownerId?: string | null;
 }) => {
 	if (typeof window === "undefined") return;
-	const sessionId = ensureAnalyticsSessionId();
+	const sessionId = touchProductAnalyticsSession().sessionId;
 	const screen = window.screen;
 	const body = {
 		videoId: payload.videoId,
@@ -102,8 +70,6 @@ const trackVideoView = (payload: {
 					colorDepth: screen.colorDepth,
 				}
 			: undefined,
-		userAgent:
-			typeof navigator !== "undefined" ? navigator.userAgent : undefined,
 		occurredAt: new Date().toISOString(),
 	};
 
@@ -339,11 +305,10 @@ export const Share = ({
 		[videoStatus],
 	);
 
-	useEffect(() => {
-		if (viewerId && viewerId === data.owner.id) {
-			return;
-		}
-
+	const viewTrackedRef = useRef(false);
+	const handlePlaybackStarted = useCallback(() => {
+		if (viewTrackedRef.current || viewerId === data.owner.id) return;
+		viewTrackedRef.current = true;
 		trackVideoView({
 			videoId: data.id,
 			orgId: data.orgId,
@@ -556,6 +521,7 @@ export const Share = ({
 										isEditProcessing={isEditProcessing}
 										recordingStopped={recordingStopped}
 										defaultPlaybackSpeed={defaultPlaybackSpeed}
+										onPlaybackStarted={handlePlaybackStarted}
 										ref={playerRef}
 									/>
 								)}

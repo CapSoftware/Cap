@@ -71,6 +71,8 @@ describe("normalizeProductEventProperties", () => {
 			normalizeProductEventProperties("page_engagement", {
 				engaged_ms: Number.POSITIVE_INFINITY,
 				max_scroll_depth: 50,
+				page_view_id: "page-1",
+				session_started_at: "2026-07-12T12:00:00.000Z",
 			}),
 		).toBeNull();
 	});
@@ -109,6 +111,7 @@ describe("normalizeProductEventProperties", () => {
 				normalizeProductEventProperties("page_view", {
 					hostname: "cap.so",
 					is_session_entry: true,
+					session_started_at: "2026-07-12T12:00:00.000Z",
 					first_touch_campaign: campaign,
 				}),
 			).toBeNull();
@@ -145,6 +148,7 @@ describe("normalizeProductEventProperties", () => {
 			normalizeProductEventProperties("page_view", {
 				hostname: "WWW.Cap.SO",
 				is_session_entry: true,
+				session_started_at: "2026-07-12T12:00:00.000Z",
 				first_touch_campaign: "Summer launch 2026",
 				first_touch_gclid: "EAIaIQobChMI-safe_click_123",
 			}),
@@ -181,6 +185,35 @@ describe("normalizeProductEventInput", () => {
 
 	it("normalizes a valid event", () => {
 		expect(normalizeProductEventInput(baseEvent, now)).toEqual(baseEvent);
+	});
+
+	it("requires a valid session start at or before traffic activity", () => {
+		const pageView = {
+			eventId: "page-1",
+			eventName: "page_view",
+			occurredAt: "2026-07-12T11:59:59.000Z",
+			anonymousId: "anonymous-1",
+			sessionId: "session-1",
+			platform: "web",
+			properties: {
+				hostname: "cap.so",
+				is_session_entry: true,
+				session_started_at: "2026-07-12T11:30:00.000Z",
+			},
+		} as const;
+		expect(normalizeProductEventInput(pageView, now)).toEqual(pageView);
+		expect(
+			normalizeProductEventInput(
+				{
+					...pageView,
+					properties: {
+						...pageView.properties,
+						session_started_at: "2026-07-12T12:00:00.000Z",
+					},
+				},
+				now,
+			),
+		).toBeNull();
 	});
 
 	it.each([
@@ -323,6 +356,25 @@ describe("createProductEventRows", () => {
 		).toBe("paid_search");
 	});
 
+	it("does not turn same-site navigation into referral acquisition", () => {
+		expect(normalizeAcquisitionChannel(undefined, "www.cap.so", "cap.so")).toBe(
+			"direct",
+		);
+		expect(normalizeAcquisitionChannel(undefined, "cap.so", "app.cap.so")).toBe(
+			"direct",
+		);
+		expect(
+			normalizeAcquisitionChannel(undefined, "partner.example", "cap.so"),
+		).toBe("referral");
+		expect(
+			normalizeAcquisitionChannel(
+				{ session_touch_source: "partner" },
+				"cap.so",
+				"cap.so",
+			),
+		).toBe("referral");
+	});
+
 	it("fingerprints canonical payloads independent of object key order", () => {
 		expect(createProductEventPayloadHash({ a: 1, b: 2 })).toBe(
 			createProductEventPayloadHash({ b: 2, a: 1 }),
@@ -370,5 +422,42 @@ describe("createProductEventRows", () => {
 			properties:
 				'{"payment_status":"paid","subscription_status":"active","is_first_purchase":true,"is_guest_checkout":true,"is_onboarding":false}',
 		});
+	});
+
+	it("conflict-hashes every decision and exclusion dimension", () => {
+		const event = {
+			eventId: "page-1",
+			eventName: "page_view" as const,
+			occurredAt: "2026-07-12T12:00:00.000Z",
+			anonymousId: "anonymous-1",
+			sessionId: "session-1",
+			platform: "web" as const,
+			pathname: "/pricing",
+			properties: {
+				hostname: "cap.so",
+				is_session_entry: true,
+				session_started_at: "2026-07-12T12:00:00.000Z",
+			},
+		};
+		const baseContext = {
+			receivedAt: "2026-07-12T12:00:01.000Z",
+			source: "client" as const,
+			country: "GB",
+			hostname: "cap.so",
+			trafficClass: "external" as const,
+		};
+		const [external] = createProductEventRows([event], baseContext);
+		const [synthetic] = createProductEventRows([event], {
+			...baseContext,
+			syntheticRunId: "synthetic-run-1",
+			trafficClass: "synthetic",
+		});
+		const [differentCountry] = createProductEventRows([event], {
+			...baseContext,
+			country: "US",
+		});
+
+		expect(external?.payload_hash).not.toBe(synthetic?.payload_hash);
+		expect(external?.payload_hash).not.toBe(differentCountry?.payload_hash);
 	});
 });

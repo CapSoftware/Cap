@@ -1,5 +1,5 @@
 import {
-	type ClientProductEventName,
+	type ClientProductEventNameForPlatform,
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeProductEventProperties,
@@ -165,7 +165,7 @@ async function sendProductEventBatch(events: ProductEventInput[]) {
 
 async function enqueueProductEvent(
 	eventId: string,
-	eventName: ClientProductEventName,
+	eventName: ClientProductEventNameForPlatform<"desktop">,
 	occurredAt: string,
 	properties?: Record<string, unknown>,
 ) {
@@ -195,10 +195,9 @@ async function enqueueProductEvent(
 	});
 }
 
-export function trackEvent<Name extends ClientProductEventName>(
-	eventName: Name,
-	...args: ProductEventArguments<Name>
-) {
+export function trackEvent<
+	Name extends ClientProductEventNameForPlatform<"desktop">,
+>(eventName: Name, ...args: ProductEventArguments<Name>) {
 	const eventId = uuid();
 	const occurredAt = new Date().toISOString();
 	if (!isCoreEventName(eventName) || isServerOnlyEventName(eventName)) return;

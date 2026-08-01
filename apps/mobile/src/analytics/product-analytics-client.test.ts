@@ -225,7 +225,7 @@ describe("MobileProductAnalyticsClient", () => {
 			credentialScope: "scope_1",
 			baseUrl: "https://cap.so",
 		});
-		await harness.client.track("user_signed_in");
+		await harness.client.track("user_signed_out");
 		await harness.client.track("user_signed_out");
 		const snapshot = await harness.client.snapshot();
 		expect(snapshot.pending[0]?.event.eventName).toBe("user_signed_out");

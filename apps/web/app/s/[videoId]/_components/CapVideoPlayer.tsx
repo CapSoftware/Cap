@@ -116,6 +116,7 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	onPlaybackStarted?: () => void;
 }
 
 export function CapVideoPlayer({
@@ -150,6 +151,7 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	onPlaybackStarted,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -661,6 +663,7 @@ export function CapVideoPlayer({
 					onPlay={() => {
 						setShowPlayButton(false);
 						setHasPlayedOnce(true);
+						onPlaybackStarted?.();
 					}}
 					crossOrigin={
 						resolvedSrc.data.supportsCrossOrigin ? "anonymous" : undefined

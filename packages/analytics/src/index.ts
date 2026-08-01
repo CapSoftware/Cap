@@ -57,9 +57,11 @@ export type {
 	ProductEventAuthority,
 	ProductEventDelivery,
 	ProductEventPlatform,
+	ProductEventPlatformFor,
 	ProductEventPropertiesFor,
 	ProductEventPropertyField,
 	ServerProductEventName,
+	ServerProductEventNameForPlatform,
 } from "./event-registry";
 
 export type ProductEventProperty = string | number | boolean | null;
@@ -70,6 +72,22 @@ export type ProductEventProperties = Record<string, ProductEventProperty>;
 
 export const PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE =
 	"cap_analytics_anonymous_id";
+
+export type ProductAnalyticsIdentityKind =
+	| "anonymous"
+	| "organization"
+	| "user";
+
+export function productAnalyticsIdentityHash(
+	kind: ProductAnalyticsIdentityKind,
+	value: string,
+) {
+	return bytesToHex(sha256(new TextEncoder().encode(`${kind}\0${value}`)));
+}
+
+export function productAnalyticsEventIdHash(eventId: string) {
+	return bytesToHex(sha256(new TextEncoder().encode(`event\0${eventId}`)));
+}
 
 export interface ProductEventInput<Name extends CoreEventName = CoreEventName> {
 	eventId: string;
@@ -367,6 +385,16 @@ export function normalizeProductEventInput(
 		hasProperties && isRecord(value.properties) ? value.properties : undefined;
 	const properties = normalizeProductEventProperties(eventName, rawProperties);
 	if (properties === null) return null;
+	if (eventName === "page_view" || eventName === "page_engagement") {
+		const sessionStartedAt = (properties as Record<string, unknown> | undefined)
+			?.session_started_at;
+		if (
+			typeof sessionStartedAt !== "string" ||
+			Date.parse(sessionStartedAt) > Date.parse(occurredAt)
+		) {
+			return null;
+		}
+	}
 
 	return {
 		eventId,
@@ -391,6 +419,11 @@ export function createProductEventRows(
 	context: ProductEventContext,
 ): ProductEventRow[] {
 	return events.map((event) => {
+		const channel = normalizeAcquisitionChannel(
+			event.properties as ProductEventProperties | undefined,
+			event.referrer,
+			context.hostname,
+		);
 		const payload = {
 			event_name: event.eventName,
 			schema_version: getProductEventDefinition(event.eventName).version,
@@ -404,13 +437,6 @@ export function createProductEventRows(
 			app_version: event.appVersion ?? "",
 			pathname: event.pathname ?? "",
 			referrer: event.referrer ?? "",
-			properties: event.properties ? JSON.stringify(event.properties) : "{}",
-		};
-		return {
-			event_id: event.eventId,
-			payload_hash: createProductEventPayloadHash(payload),
-			received_at: context.receivedAt,
-			...payload,
 			country: context.country ?? "",
 			region: context.region ?? "",
 			city: context.city ?? "",
@@ -418,12 +444,16 @@ export function createProductEventRows(
 			browser: context.browser ?? "",
 			device: context.device ?? "",
 			os: context.os ?? "",
-			channel: normalizeAcquisitionChannel(
-				event.properties as ProductEventProperties | undefined,
-				event.referrer,
-			),
+			channel,
 			traffic_class: context.trafficClass ?? "external",
 			synthetic_run_id: context.syntheticRunId ?? "",
+			properties: event.properties ? JSON.stringify(event.properties) : "{}",
+		};
+		return {
+			event_id: event.eventId,
+			payload_hash: createProductEventPayloadHash(payload),
+			received_at: context.receivedAt,
+			...payload,
 		};
 	});
 }
@@ -431,6 +461,7 @@ export function createProductEventRows(
 export function normalizeAcquisitionChannel(
 	properties: ProductEventProperties | undefined,
 	referrer?: string,
+	currentHostname?: string,
 ) {
 	if (properties?.session_touch_gclid) {
 		return "paid_search";
@@ -451,6 +482,22 @@ export function normalizeAcquisitionChannel(
 	const source = String(properties?.session_touch_source ?? "").toLowerCase();
 	const hostname = referrer?.toLowerCase() ?? "";
 	if (!source && !hostname) return "direct";
+	const normalizedReferrer = hostname.replace(/^www\./, "");
+	const normalizedCurrent = (currentHostname?.toLowerCase() ?? "").replace(
+		/^www\./,
+		"",
+	);
+	if (
+		!source &&
+		!medium &&
+		normalizedReferrer &&
+		normalizedCurrent &&
+		(normalizedReferrer === normalizedCurrent ||
+			normalizedReferrer.endsWith(`.${normalizedCurrent}`) ||
+			normalizedCurrent.endsWith(`.${normalizedReferrer}`))
+	) {
+		return "direct";
+	}
 	if (
 		/(google|bing|duckduckgo|yahoo|baidu|yandex)/.test(source) ||
 		/(google\.|bing\.|duckduckgo\.|search\.yahoo\.|baidu\.|yandex\.)/.test(

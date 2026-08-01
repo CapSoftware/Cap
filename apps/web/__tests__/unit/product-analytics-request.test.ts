@@ -4,12 +4,14 @@ import {
 } from "@cap/analytics";
 import { describe, expect, it } from "vitest";
 import {
+	classifyAnalyticsTraffic,
 	getProductAnalyticsRateLimitKey,
 	hasExpectedBrowserAnalyticsMetadata,
 	isAllowedAnonymousBrowserProductEvent,
 	isAuthenticatedAnalyticsRequestCandidate,
 	normalizeGeoHeader,
 	normalizeProductEventBatch,
+	normalizeSyntheticRunId,
 	ProductAnalyticsRateLimiter,
 	shouldRejectUnresolvedAuthenticatedAnalyticsRequest,
 } from "@/lib/analytics/request";
@@ -26,6 +28,7 @@ const event: ProductEventInput = {
 	properties: {
 		hostname: "cap.so",
 		is_session_entry: true,
+		session_started_at: "2026-07-12T12:00:00.000Z",
 	},
 };
 const now = Date.parse("2026-07-12T12:00:01.000Z");
@@ -312,5 +315,45 @@ describe("normalizeGeoHeader", () => {
 
 	it("removes unknown values", () => {
 		expect(normalizeGeoHeader("unknown")).toBeUndefined();
+	});
+});
+
+describe("analytics traffic classification", () => {
+	const externalRequest = {
+		userAgent:
+			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/138.0 Safari/537.36",
+		vercelEnvironment: "production" as const,
+		rateLimitKey: `network:${"a".repeat(64)}`,
+	};
+
+	it("accepts ordinary production browsers", () => {
+		expect(classifyAnalyticsTraffic(externalRequest)).toBe("external");
+	});
+
+	it.each([
+		["synthetic", { ...externalRequest, syntheticRunId: "staging_run_123" }],
+		["preview", { ...externalRequest, vercelEnvironment: "preview" as const }],
+		[
+			"bot",
+			{ ...externalRequest, userAgent: "Mozilla/5.0 compatible Googlebot/2.1" },
+		],
+		["internal", { ...externalRequest, internalIpHashes: "a".repeat(64) }],
+	] as const)(
+		"classifies %s traffic before business events",
+		(expected, input) => {
+			expect(classifyAnalyticsTraffic(input)).toBe(expected);
+		},
+	);
+
+	it("accepts synthetic run identifiers only in preview", () => {
+		expect(normalizeSyntheticRunId("staging_run_123", "preview")).toBe(
+			"staging_run_123",
+		);
+		expect(
+			normalizeSyntheticRunId("staging_run_123", "production"),
+		).toBeUndefined();
+		expect(
+			normalizeSyntheticRunId("contains spaces", "preview"),
+		).toBeUndefined();
 	});
 });
