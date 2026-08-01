@@ -34,10 +34,6 @@ const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
 const fallbackRateLimiter = new ProductAnalyticsRateLimiter({
 	perKeyLimit: 60,
 });
-const untrustedProxyRateLimiter = new ProductAnalyticsRateLimiter({
-	perKeyLimit: 600,
-	globalLimit: 600,
-});
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -84,6 +80,12 @@ export async function POST(request: NextRequest) {
 	const isVercel = process.env.VERCEL === "1";
 	const trustedNetworkProxy =
 		isVercel || process.env.CAP_ANALYTICS_TRUST_PROXY === "1";
+	if (!trustedNetworkProxy) {
+		return Response.json(
+			{ error: "Analytics proxy identity is not configured" },
+			{ status: 503 },
+		);
+	}
 	const rateLimitKey = getProductAnalyticsRateLimitKey({
 		trustedVercelProxy: trustedNetworkProxy,
 		xVercelForwardedFor:
@@ -91,18 +93,16 @@ export async function POST(request: NextRequest) {
 				isVercel ? "x-vercel-forwarded-for" : "x-forwarded-for",
 			) ?? undefined,
 	});
-	if (!rateLimitKey && trustedNetworkProxy) {
+	if (!rateLimitKey) {
 		return Response.json(
 			{ error: "Missing request identity" },
 			{ status: 400 },
 		);
 	}
 	if (
-		(rateLimitKey
-			? fallbackRateLimiter.isRateLimited(rateLimitKey)
-			: untrustedProxyRateLimiter.isRateLimited("self-hosted")) ||
+		fallbackRateLimiter.isRateLimited(rateLimitKey) ||
 		(await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
-			key: rateLimitKey ?? "self-hosted",
+			key: rateLimitKey,
 			headers: request.headers,
 		}))
 	) {

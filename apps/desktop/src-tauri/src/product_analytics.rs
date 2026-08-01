@@ -31,11 +31,9 @@ const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
 const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
 const PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY: &str = "product_analytics_outbox_recovery_v1";
-const PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY: &str =
-    "product_analytics_outbox_fallback_key_v1";
 const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
 const PRODUCT_EVENT_OUTBOX_KEYRING_USER: &str = "product-analytics-outbox-v1";
-const PRODUCT_EVENT_OUTBOX_KEY_HISTORY_CAPACITY: usize = 4;
+const PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER: &str = "product-analytics-outbox-v1-backup";
 const PRODUCT_EVENT_OUTBOX_CAPACITY: usize = 500;
 const PRODUCT_EVENT_DEAD_LETTER_CAPACITY: usize = 100;
 const PRODUCT_EVENT_MAX_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
@@ -427,114 +425,71 @@ fn should_retry_product_status(status: u16) -> bool {
     status == 429 || status >= 500
 }
 
-fn fallback_outbox_encryption_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    if let Some(existing) = persisted_outbox_encryption_keys(app)?.first() {
-        return Ok(*existing);
+fn decode_outbox_encryption_key(encoded: &str) -> Result<[u8; 32], String> {
+    BASE64
+        .decode(encoded)
+        .map_err(|_| "invalid_keyring_value".to_string())?
+        .try_into()
+        .map_err(|_| "invalid_keyring_value".to_string())
+}
+
+fn read_keyring_outbox_key(user: &str) -> Result<Option<[u8; 32]>, String> {
+    let entry = keyring::Entry::new(PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE, user)
+        .map_err(|_| "outbox_keyring_unavailable".to_string())?;
+    match entry.get_password() {
+        Ok(encoded) => decode_outbox_encryption_key(&encoded).map(Some),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err("outbox_keyring_unavailable".to_string()),
     }
-    let mut generated = [0_u8; 32];
-    SystemRandom::new()
-        .fill(&mut generated)
-        .map_err(|_| "key_generation_failed".to_string())?;
-    persist_outbox_encryption_key(app, generated)?;
-    Ok(generated)
 }
 
-fn persisted_outbox_encryption_keys(app: &AppHandle) -> Result<Vec<[u8; 32]>, String> {
-    let store = app
-        .store("store")
-        .map_err(|_| "fallback_key_store_unavailable".to_string())?;
-    let Some(value) = store.get(PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY) else {
-        return Ok(Vec::new());
-    };
-    decode_persisted_outbox_encryption_keys(&value)
+fn keyring_outbox_encryption_keys() -> Result<Vec<[u8; 32]>, String> {
+    let mut keys = Vec::new();
+    let mut failure = None;
+    for user in [
+        PRODUCT_EVENT_OUTBOX_KEYRING_USER,
+        PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER,
+    ] {
+        match read_keyring_outbox_key(user) {
+            Ok(Some(key)) if !keys.contains(&key) => keys.push(key),
+            Ok(_) => {}
+            Err(error) => failure = Some(error),
+        }
+    }
+    if keys.is_empty()
+        && let Some(error) = failure
+    {
+        return Err(error);
+    }
+    Ok(keys)
 }
 
-fn decode_persisted_outbox_encryption_keys(
-    value: &serde_json::Value,
-) -> Result<Vec<[u8; 32]>, String> {
-    let encoded_keys = if let Some(encoded) = value.as_str() {
-        vec![encoded]
-    } else if let Some(values) = value.as_array() {
-        values
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .ok_or_else(|| "invalid_fallback_key".to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        return Err("invalid_fallback_key".to_string());
-    };
-    encoded_keys
-        .into_iter()
-        .map(|encoded| {
-            BASE64
-                .decode(encoded)
-                .map_err(|_| "invalid_fallback_key".to_string())?
-                .try_into()
-                .map_err(|_| "invalid_fallback_key".to_string())
-        })
-        .collect()
+fn persist_keyring_outbox_key(user: &str, key: [u8; 32]) -> Result<(), String> {
+    let entry = keyring::Entry::new(PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE, user)
+        .map_err(|_| "outbox_keyring_unavailable".to_string())?;
+    entry
+        .set_password(&BASE64.encode(key))
+        .map_err(|_| "outbox_keyring_write_failed".to_string())
 }
 
-fn persist_outbox_encryption_key(app: &AppHandle, key: [u8; 32]) -> Result<(), String> {
-    let mut keys = persisted_outbox_encryption_keys(app)?;
-    keys.retain(|candidate| candidate != &key);
-    keys.insert(0, key);
-    keys.truncate(PRODUCT_EVENT_OUTBOX_KEY_HISTORY_CAPACITY);
-    let encoded_keys = keys
-        .into_iter()
-        .map(|candidate| serde_json::Value::String(BASE64.encode(candidate)))
-        .collect();
-    let store = app
-        .store("store")
-        .map_err(|_| "fallback_key_store_unavailable".to_string())?;
-    store.set(
-        PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY,
-        serde_json::Value::Array(encoded_keys),
-    );
-    store
-        .save()
-        .map_err(|_| "fallback_key_store_write_failed".to_string())
-}
-
-fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
+fn outbox_encryption_key(_app: &AppHandle) -> Result<&'static [u8; 32], String> {
     if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get() {
         return Ok(key);
     }
 
-    let key = match keyring::Entry::new(
-        PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE,
-        PRODUCT_EVENT_OUTBOX_KEYRING_USER,
-    ) {
-        Ok(entry) => match entry.get_password() {
-            Ok(encoded) => {
-                let decoded = BASE64
-                    .decode(encoded)
-                    .map_err(|_| "invalid_keyring_value".to_string())?;
-                let key = decoded
-                    .try_into()
-                    .map_err(|_| "invalid_keyring_value".to_string())?;
-                persist_outbox_encryption_key(app, key)?;
-                key
-            }
-            Err(keyring::Error::NoEntry) => {
-                let mut generated = [0_u8; 32];
-                SystemRandom::new()
-                    .fill(&mut generated)
-                    .map_err(|_| "key_generation_failed".to_string())?;
-                if entry.set_password(&BASE64.encode(generated)).is_ok() {
-                    persist_outbox_encryption_key(app, generated)?;
-                    generated
-                } else {
-                    fallback_outbox_encryption_key(app)?
-                }
-            }
-            Err(_) => fallback_outbox_encryption_key(app)?,
-        },
-        Err(_) => fallback_outbox_encryption_key(app)?,
+    let keys = keyring_outbox_encryption_keys()?;
+    let key = if let Some(key) = keys.first() {
+        *key
+    } else {
+        let mut generated = [0_u8; 32];
+        SystemRandom::new()
+            .fill(&mut generated)
+            .map_err(|_| "key_generation_failed".to_string())?;
+        persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_USER, generated)?;
+        generated
     };
+    let _ = persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_USER, key);
+    let _ = persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER, key);
     let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
     PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY
         .get()
@@ -570,28 +525,14 @@ fn encrypt_outbox_with_key(
     Ok(BASE64.encode(stored))
 }
 
-fn decrypt_outbox(app: &AppHandle, value: &str) -> Result<ProductEventOutbox, String> {
+fn decrypt_outbox(value: &str) -> Result<ProductEventOutbox, String> {
     if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get()
         && let Ok(outbox) = decrypt_outbox_with_key(value, key)
     {
         return Ok(outbox);
     }
 
-    let mut candidates = Vec::new();
-    if let Ok(entry) = keyring::Entry::new(
-        PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE,
-        PRODUCT_EVENT_OUTBOX_KEYRING_USER,
-    ) && let Ok(encoded) = entry.get_password()
-        && let Ok(decoded) = BASE64.decode(encoded)
-        && let Ok(key) = decoded.try_into()
-    {
-        candidates.push(key);
-    }
-    for key in persisted_outbox_encryption_keys(app)? {
-        if !candidates.contains(&key) {
-            candidates.push(key);
-        }
-    }
+    let candidates = keyring_outbox_encryption_keys()?;
     let (outbox, key) = decrypt_outbox_with_keys(value, &candidates)?;
     let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
     Ok(outbox)
@@ -672,7 +613,7 @@ fn load_stored_outbox(app: &AppHandle, store_key: &str) -> Result<ProductEventOu
     let Some(encrypted) = value.as_str() else {
         return Err("invalid_stored_outbox".to_string());
     };
-    decrypt_outbox(app, encrypted)
+    decrypt_outbox(encrypted)
 }
 
 fn merge_outbox(target: &mut ProductEventOutbox, source: ProductEventOutbox) {
@@ -1191,20 +1132,14 @@ mod tests {
     }
 
     #[test]
-    fn persisted_outbox_keys_support_legacy_and_bounded_history_values() {
-        let first = [7_u8; 32];
-        let second = [8_u8; 32];
-        let legacy = serde_json::Value::String(BASE64.encode(first));
-        let history = serde_json::json!([BASE64.encode(first), BASE64.encode(second)]);
+    fn keyring_outbox_key_requires_a_valid_aes_key() {
+        let key = [7_u8; 32];
 
         assert_eq!(
-            decode_persisted_outbox_encryption_keys(&legacy).unwrap(),
-            vec![first]
+            decode_outbox_encryption_key(&BASE64.encode(key)).unwrap(),
+            key
         );
-        assert_eq!(
-            decode_persisted_outbox_encryption_keys(&history).unwrap(),
-            vec![first, second]
-        );
+        assert!(decode_outbox_encryption_key("invalid").is_err());
     }
 
     #[test]
