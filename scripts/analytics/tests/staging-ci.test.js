@@ -2223,7 +2223,7 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	);
 	assert.match(
 		route,
-		/process\.env\.VERCEL_ENV === "production"[\s\S]*headers\.host !== STAGING_PREVIEW_HOST/,
+		/process\.env\.CAP_ANALYTICS_STAGING_PREVIEW !== "true"[\s\S]*headers\.host !== STAGING_PREVIEW_HOST/,
 	);
 	assert.match(
 		route,

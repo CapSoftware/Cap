@@ -603,7 +603,7 @@ const authorize = (payload: { runId: string; sha: string }) =>
 			Effect.mapError(() => new HttpApiError.BadRequest()),
 		);
 		if (
-			process.env.VERCEL_ENV === "production" ||
+			process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true" ||
 			headers.host !== STAGING_PREVIEW_HOST
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
