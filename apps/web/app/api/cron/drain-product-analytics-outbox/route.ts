@@ -29,5 +29,8 @@ export async function GET(request: Request) {
 		start(drainProductAnalyticsOutboxWorkflow, []),
 		getProductAnalyticsOutboxHealth(),
 	]);
-	return NextResponse.json({ accepted: true, runId: run.runId, health });
+	return NextResponse.json(
+		{ accepted: true, runId: run.runId, health },
+		{ status: health.healthy ? 200 : 503 },
+	);
 }

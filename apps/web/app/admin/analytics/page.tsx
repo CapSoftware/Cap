@@ -1,5 +1,6 @@
 import { buildEnv } from "@cap/env";
 import { notFound } from "next/navigation";
+import { getProductAnalyticsOutboxHealth } from "@/lib/analytics/product-event-outbox";
 import { getViewerContext } from "@/lib/messenger/data";
 import {
 	AdminAnalyticsConfigurationError,
@@ -10,6 +11,9 @@ import {
 } from "./tinybird";
 
 type SearchParams = Record<string, string | string[] | undefined>;
+type ProductAnalyticsOutboxHealth = Awaited<
+	ReturnType<typeof getProductAnalyticsOutboxHealth>
+>;
 
 type MetricCardProps = {
 	label: string;
@@ -148,7 +152,8 @@ function parseFilters(params: SearchParams): AdminAnalyticsFilters {
 		endDate,
 		platform: optionalFilter(firstParam(params, "platform")),
 		appVersion: optionalFilter(firstParam(params, "appVersion")),
-		source: optionalFilter(firstParam(params, "source")),
+		acquisitionSource: optionalFilter(firstParam(params, "acquisitionSource")),
+		eventOrigin: optionalFilter(firstParam(params, "eventOrigin")),
 		country: optionalFilter(firstParam(params, "country"))?.toUpperCase(),
 		plan: optionalFilter(firstParam(params, "plan")),
 		organizationCohort: isDate(firstParam(params, "organizationCohort"))
@@ -316,7 +321,10 @@ function featureAdoptionRows(data: AdminAnalyticsDashboard) {
 	return data.featureAdoption;
 }
 
-function qualityStatus(data: AdminAnalyticsDashboard) {
+function qualityStatus(
+	data: AdminAnalyticsDashboard,
+	outboxHealth: ProductAnalyticsOutboxHealth,
+) {
 	const freshness = data.freshness[0];
 	const health = data.health[0];
 	if (!freshness || !health) {
@@ -328,7 +336,8 @@ function qualityStatus(data: AdminAnalyticsDashboard) {
 	if (
 		freshness.healthFreshnessMs > 7_200_000 ||
 		health.payloadConflicts > 0 ||
-		health.missingIdentityEvents > 0
+		health.missingIdentityEvents > 0 ||
+		!outboxHealth.healthy
 	) {
 		return {
 			label: "Attention required",
@@ -389,13 +398,25 @@ function AnalyticsFilters({ filters }: { filters: AdminAnalyticsFilters }) {
 				/>
 			</label>
 			<label className="text-xs font-medium text-gray-600">
-				Source
+				Acquisition source
 				<input
 					className={fieldClassName}
-					defaultValue={filters.source ?? ""}
-					name="source"
+					defaultValue={filters.acquisitionSource ?? ""}
+					name="acquisitionSource"
 					placeholder="All sources"
 				/>
+			</label>
+			<label className="text-xs font-medium text-gray-600">
+				Event origin
+				<select
+					className={fieldClassName}
+					defaultValue={filters.eventOrigin ?? ""}
+					name="eventOrigin"
+				>
+					<option value="">All origins</option>
+					<option value="client">Client</option>
+					<option value="server">Server</option>
+				</select>
 			</label>
 			<label className="text-xs font-medium text-gray-600">
 				Country
@@ -440,10 +461,11 @@ function AnalyticsFilters({ filters }: { filters: AdminAnalyticsFilters }) {
 				</a>
 			</div>
 			<p className="self-end text-xs text-gray-500">
-				Platform and app version affect product, retention, and health. Source,
-				plan, and country affect endpoints that expose those dimensions.
-				Organization cohort selects one first-value UTC date for the retention
-				view.
+				Platform and app version affect product, retention, and health.
+				Acquisition source filters traffic and attribution; event origin filters
+				product facts. Plan and country affect endpoints that expose those
+				dimensions. Organization cohort selects one first-value UTC date for the
+				retention view.
 			</p>
 		</form>
 	);
@@ -833,8 +855,9 @@ function ProductSection({
 			</div>
 			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				<MetricCard
+					detail="Server-authoritative completion"
 					label="Uploads completed"
-					value={formatInteger(eventCount(data, "multipart_upload_complete"))}
+					value={formatInteger(eventCount(data, "upload_completed"))}
 				/>
 				<MetricCard
 					label="Share links created"
@@ -1133,14 +1156,32 @@ function IdentityFunnelSection({ data }: { data: AdminAnalyticsDashboard }) {
 	);
 }
 
-function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
+function QualitySection({
+	data,
+	outboxHealth,
+}: {
+	data: AdminAnalyticsDashboard;
+	outboxHealth: ProductAnalyticsOutboxHealth;
+}) {
 	const freshness = data.freshness[0];
 	const health = data.health[0];
-	const status = qualityStatus(data);
+	const status = qualityStatus(data, outboxHealth);
 	const lag = health?.ingestionLagMs ?? [];
 	const reportedDeliveryLosses = sumBy(
 		data.productEvents,
 		(row) => row.deliveryLossCount,
+	);
+	const outboxPending = sumBy(
+		outboxHealth.partitions,
+		(row) => row.pending + row.workflowStarted,
+	);
+	const outboxDeadLetters = sumBy(
+		outboxHealth.partitions,
+		(row) => row.deadLetter,
+	);
+	const reconciliationFailures = sumBy(
+		outboxHealth.reconciliationFailures,
+		(row) => row.events,
 	);
 	return (
 		<Section
@@ -1190,6 +1231,24 @@ function QualitySection({ data }: { data: AdminAnalyticsDashboard }) {
 					detail="Deduplicated durable client loss summaries"
 					label="Reported delivery losses"
 					value={formatInteger(reportedDeliveryLosses)}
+				/>
+				<MetricCard
+					detail="MySQL durable delivery queue"
+					label="Server events pending"
+					value={formatInteger(outboxPending)}
+				/>
+				<MetricCard
+					detail="Requires recovery before rollout"
+					label="Server dead letters"
+					value={formatInteger(outboxDeadLetters)}
+				/>
+				<MetricCard
+					label="Receipt conflicts"
+					value={formatInteger(outboxHealth.receiptPayloadConflictEvents)}
+				/>
+				<MetricCard
+					label="Reconciliation failures"
+					value={formatInteger(reconciliationFailures)}
 				/>
 				<MetricCard label="Ingestion p50" value={formatDuration(lag[0] ?? 0)} />
 				<MetricCard label="Ingestion p95" value={formatDuration(lag[1] ?? 0)} />
@@ -1295,7 +1354,7 @@ function Definitions() {
 		],
 		[
 			"Filter coverage",
-			"Date applies throughout. Platform and app version apply to traffic, attribution, product, experiment, creator, retention, and health aggregates where those dimensions exist. Source and plan apply to product aggregates; source also filters exact traffic totals and attribution. Country applies to product and supported traffic aggregates. Organization cohort selects a first-value UTC date for creator and organization retention.",
+			"Date applies throughout. Platform and app version apply to traffic, attribution, product, experiment, creator, retention, and health aggregates where those dimensions exist. Acquisition source filters traffic and attribution, while event origin filters client versus server product facts. Plan and country apply where those dimensions exist. Organization cohort selects a first-value UTC date for creator and organization retention.",
 		],
 	];
 	return (
@@ -1329,8 +1388,12 @@ export default async function AdminAnalyticsPage({
 
 	const filters = parseFilters(await searchParams);
 	let data: AdminAnalyticsDashboard;
+	let outboxHealth: ProductAnalyticsOutboxHealth;
 	try {
-		data = await fetchAdminAnalyticsDashboard(filters);
+		[data, outboxHealth] = await Promise.all([
+			fetchAdminAnalyticsDashboard(filters),
+			getProductAnalyticsOutboxHealth(),
+		]);
 	} catch (error) {
 		return (
 			<main className="min-h-screen bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
@@ -1371,7 +1434,7 @@ export default async function AdminAnalyticsPage({
 					</p>
 				</div>
 				<AnalyticsFilters filters={filters} />
-				<QualitySection data={data} />
+				<QualitySection data={data} outboxHealth={outboxHealth} />
 				<TrafficSection data={data} />
 				<PagesSection data={data} />
 				<AcquisitionSection data={data} />

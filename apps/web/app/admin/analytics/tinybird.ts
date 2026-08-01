@@ -29,7 +29,8 @@ export type AdminAnalyticsFilters = {
 	endDate: string;
 	platform?: string;
 	appVersion?: string;
-	source?: string;
+	acquisitionSource?: string;
+	eventOrigin?: string;
 	country?: string;
 	plan?: string;
 	organizationCohort?: string;
@@ -820,7 +821,7 @@ export async function fetchAdminAnalyticsDashboard(
 				...dateParams,
 				platform: filters.platform,
 				app_version: filters.appVersion,
-				source: filters.source,
+				source: filters.acquisitionSource,
 				country: filters.country,
 			},
 			decodeTrafficTotalsRow,
@@ -853,7 +854,7 @@ export async function fetchAdminAnalyticsDashboard(
 				...dateParams,
 				platform: filters.platform,
 				app_version: filters.appVersion,
-				source: filters.source,
+				source: filters.acquisitionSource,
 				country: filters.country,
 				limit: 300,
 			},
@@ -898,7 +899,7 @@ export async function fetchAdminAnalyticsDashboard(
 			"product_identity_funnel",
 			{
 				...dateParams,
-				source: filters.source,
+				source: filters.acquisitionSource,
 				country: filters.country,
 			},
 			decodeIdentityFunnelRow,
@@ -909,7 +910,7 @@ export async function fetchAdminAnalyticsDashboard(
 				...dateParams,
 				platform: filters.platform,
 				app_version: filters.appVersion,
-				source: filters.source,
+				source: filters.eventOrigin,
 				country: filters.country,
 				plan_id: filters.plan,
 				limit: 1000,
@@ -922,7 +923,7 @@ export async function fetchAdminAnalyticsDashboard(
 				...dateParams,
 				platform: filters.platform,
 				app_version: filters.appVersion,
-				source: filters.source,
+				source: filters.eventOrigin,
 				country: filters.country,
 				plan_id: filters.plan,
 			},
