@@ -945,44 +945,41 @@ const localResourceToken = async (
 	);
 };
 
-const localDecisionJwt = async (
+const localDecisionToken = (
 	environment,
-	fetcher = fetch,
-	now = Date.now(),
+	runner = spawnSync,
+	tokenLister = listLocalStaticToken,
 ) => {
-	const url = new URL(
-		"/v0/tokens",
-		environment.PRODUCT_ANALYTICS_TINYBIRD_HOST,
-	);
-	url.searchParams.set("name", "product_events_local_verification");
-	url.searchParams.set(
-		"expiration_time",
-		String(Math.floor(now / 1_000) + 3_600),
-	);
-	const response = await fetcher(url, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${environment.TB_LOCAL_WORKSPACE_TOKEN}`,
-			"Content-Type": "application/json",
+	const tokenName = "product_events_local_verification";
+	const result = runner(
+		"docker",
+		composeArgs(
+			"run",
+			"--rm",
+			"tinybird-cli",
+			"--local",
+			"token",
+			"create",
+			"static",
+			tokenName,
+			...PRODUCT_DECISION_ENDPOINTS.flatMap((resource) => [
+				"--scope",
+				`PIPES:READ:${resource}`,
+			]),
+		),
+		{
+			cwd: PROJECT_ROOT,
+			encoding: "utf8",
+			env: environment,
+			maxBuffer: 1024 * 1024,
 		},
-		body: JSON.stringify({
-			scopes: PRODUCT_DECISION_ENDPOINTS.map((resource) => ({
-				type: "PIPES:READ",
-				resource,
-			})),
-		}),
-		signal: AbortSignal.timeout(15_000),
-	});
-	if (!response.ok) {
+	);
+	if (result.error || result.status !== 0) {
 		throw new Error(
-			`Tinybird Local could not create its decision-endpoint JWT: HTTP ${response.status}`,
+			"Tinybird Local could not create its decision-endpoint token",
 		);
 	}
-	const payload = await response.json();
-	if (typeof payload.token !== "string" || payload.token.length < 16) {
-		throw new Error("Tinybird Local returned an invalid decision-endpoint JWT");
-	}
-	return payload.token;
+	return tokenLister(environment, tokenName);
 };
 
 const assertSafeStep = (step) => {
@@ -1217,7 +1214,7 @@ const runAnalyticsCommand = async (operation) => {
 		}
 		if (step.type === "verify-local") {
 			const environment = localEnvironment();
-			const readToken = await localDecisionJwt(environment);
+			const readToken = localDecisionToken(environment);
 			await runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
@@ -1247,7 +1244,7 @@ export {
 	assertSafeStep,
 	cloudEnvironment,
 	composeArgs,
-	localDecisionJwt,
+	localDecisionToken,
 	localEnvironment,
 	localResourceToken,
 	operationPlan,

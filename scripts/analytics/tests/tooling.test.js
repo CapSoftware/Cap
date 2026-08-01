@@ -9,7 +9,7 @@ import {
 	COMPOSE_FILE,
 	cloudEnvironment,
 	LOCAL_ENV_FILE,
-	localDecisionJwt,
+	localDecisionToken,
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
@@ -206,42 +206,33 @@ test("local resource discovery returns only the named scoped token", async () =>
 	assert.equal(token, "p.resource-token-value");
 });
 
-test("local decision verification uses an expiring endpoint-scoped JWT", async () => {
-	const requests = [];
-	const token = await localDecisionJwt(
-		{
-			PRODUCT_ANALYTICS_TINYBIRD_HOST: "http://127.0.0.1:7181",
-			TB_LOCAL_WORKSPACE_TOKEN: "local-workspace-token",
+test("local decision verification creates an isolated exact-scope token", () => {
+	const calls = [];
+	const environment = localEnvironment({});
+	const token = localDecisionToken(
+		environment,
+		(command, args, options) => {
+			calls.push({ command, args, options });
+			return { status: 0 };
 		},
-		async (url, init) => {
-			requests.push({ url, init });
-			return Response.json({ token: "local-decision-jwt-value" });
+		(actualEnvironment, tokenName) => {
+			assert.equal(actualEnvironment, environment);
+			assert.equal(tokenName, "product_events_local_verification");
+			return "local-decision-token-value";
 		},
-		1_785_607_200_000,
 	);
 
-	assert.equal(token, "local-decision-jwt-value");
-	assert.equal(requests.length, 1);
-	assert.equal(requests[0].url.pathname, "/v0/tokens");
-	assert.equal(
-		requests[0].url.searchParams.get("expiration_time"),
-		"1785610800",
+	assert.equal(token, "local-decision-token-value");
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].command, "docker");
+	assert.ok(calls[0].args.includes("create"));
+	assert.ok(calls[0].args.includes("static"));
+	const scopes = calls[0].args.filter((value) =>
+		value.startsWith("PIPES:READ:"),
 	);
-	assert.equal(requests[0].init.method, "POST");
-	assert.equal(
-		requests[0].init.headers.Authorization,
-		"Bearer local-workspace-token",
-	);
-	const payload = JSON.parse(requests[0].init.body);
-	assert.equal(payload.scopes.length, 18);
-	assert.ok(
-		payload.scopes.every(
-			(scope) =>
-				scope.type === "PIPES:READ" &&
-				typeof scope.resource === "string" &&
-				Object.keys(scope).length === 2,
-		),
-	);
+	assert.equal(scopes.length, 18);
+	assert.equal(new Set(scopes).size, 18);
+	assert.ok(scopes.every((scope) => !scope.includes("product_events_v1")));
 });
 
 test("local resource discovery falls back to the local user token", async () => {
