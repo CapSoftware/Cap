@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	CORE_EVENT_NAMES,
+	containsSensitiveAnalyticsContent,
 	createProductEventPayloadHash,
 	createProductEventRows,
 	isCoreEventName,
@@ -118,6 +119,24 @@ describe("normalizeProductEventProperties", () => {
 				failure_class: "Network request failed for customer Alice",
 			}),
 		).toBeNull();
+	});
+
+	it("handles repetitive URL and filename probes in linear time", () => {
+		const startedAt = performance.now();
+		expect(containsSensitiveAnalyticsContent(`${"a".repeat(1_000)}:`)).toBe(
+			false,
+		);
+		expect(
+			containsSensitiveAnalyticsContent(`${"a.".repeat(500)}unknown`),
+		).toBe(false);
+		expect(
+			containsSensitiveAnalyticsContent(`${"a".repeat(1_000)}://host`),
+		).toBe(true);
+		expect(containsSensitiveAnalyticsContent(`${"a.".repeat(500)}mp4`)).toBe(
+			true,
+		);
+		expect(containsSensitiveAnalyticsContent("a".repeat(100_000))).toBe(true);
+		expect(performance.now() - startedAt).toBeLessThan(250);
 	});
 
 	it("preserves bounded campaign labels and advertising click identifiers", () => {
