@@ -132,6 +132,23 @@ test("product datasource matches the runtime event contract", () => {
 	);
 });
 
+test("Tinybird node names do not conflict with resource names", () => {
+	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
+	const resourceNames = new Set([
+		...project.datasources.map((datasource) => datasource.name),
+		...project.pipes.map((pipe) => pipe.name),
+	]);
+	for (const pipe of project.pipes) {
+		for (const nodeName of pipe.nodeNames) {
+			assert.equal(
+				resourceNames.has(nodeName),
+				false,
+				`${pipe.name} node ${nodeName} conflicts with a resource name`,
+			);
+		}
+	}
+});
+
 test("existing viewer resources remain in the Tinybird project", () => {
 	const project = loadTinybirdProject(TINYBIRD_PROJECT_DIR);
 	const names = project.datasources.map(({ name }) => name);

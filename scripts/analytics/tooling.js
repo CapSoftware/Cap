@@ -458,9 +458,20 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 	const datasourceNames = new Set(
 		project.datasources.map((datasource) => datasource.name),
 	);
+	const resourceNames = new Set([
+		...datasourceNames,
+		...project.pipes.map((pipe) => pipe.name),
+	]);
 	for (const pipe of project.pipes) {
 		if (datasourceNames.has(pipe.name)) {
 			issues.push(`Tinybird resource name ${pipe.name} is not unique`);
+		}
+		for (const nodeName of pipe.nodeNames) {
+			if (resourceNames.has(nodeName)) {
+				issues.push(
+					`Tinybird node ${nodeName} in ${pipe.name} conflicts with a resource name`,
+				);
+			}
 		}
 	}
 	for (const name of [

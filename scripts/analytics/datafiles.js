@@ -89,6 +89,9 @@ const parsePipe = (filePath) => {
 	return {
 		name: path.basename(filePath, ".pipe"),
 		filePath,
+		nodeNames: [...contents.matchAll(/^NODE\s+(\S+)\s*$/gim)].map(
+			([, name]) => name,
+		),
 		type: (readDirective(contents, "TYPE") ?? "generic").toLowerCase(),
 		targetDatasource:
 			readDirective(contents, "DATASOURCE") ??

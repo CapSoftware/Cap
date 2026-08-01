@@ -3,7 +3,7 @@ DESCRIPTION >
 
 TOKEN product_events_copy_runner READ
 
-NODE product_events_canonical_current
+NODE canonical_current
 SQL >
 	%
 	SELECT
