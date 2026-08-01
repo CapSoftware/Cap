@@ -37,7 +37,7 @@ on:
       - "apps/web/app/api/settings/billing/**"
       - "apps/web/app/api/webhooks/stripe/route.ts"
       - "apps/web/app/mobile/checkout/**"
-      - "apps/web/app/api/mobile/[...route]/route.ts"
+      - "apps/web/app/api/mobile/**"
       - "apps/web/app/utils/analytics.ts"
       - "apps/web/app/utils/product-analytics.ts"
       - "apps/web/lib/analytics/**"
