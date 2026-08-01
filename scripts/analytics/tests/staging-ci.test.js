@@ -506,12 +506,19 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		5,
+		6,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
-		workflow.indexOf(
-			"Discard an unpromoted staging deployment before cleanup",
-		) < workflow.indexOf("Delete strictly scoped synthetic raw rows"),
+		workflow.indexOf("Prove synthetic cleanup no longer affects queries") <
+			workflow.indexOf(
+				"Discard an unpromoted staging deployment after cleanup",
+			),
+	);
+	assert.equal(
+		workflow.match(
+			/steps\.promote\.outcome != 'success' && 'staging' \|\| 'live'/g,
+		)?.length,
+		2,
 	);
 });

@@ -211,16 +211,6 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote --wait
-      - name: Discard an unpromoted staging deployment before cleanup
-        if: always() && steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success'
-        env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: >-
-          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
-          run --rm tinybird-cloud-cli --cloud deployment discard --wait
       - name: Prove least-privilege staging token scopes
         id: token-scopes
         env:
@@ -313,7 +303,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase cleanup
-          --target live
+          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove synthetic cleanup no longer affects queries
@@ -324,8 +314,20 @@ jobs:
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-cleanup
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Discard an unpromoted staging deployment after cleanup
+        if: always() && steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success'
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
+        run: >-
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
+          run --rm tinybird-cloud-cli --cloud deployment discard --wait
       - name: Upload redacted staging evidence
         if: always() && steps.seed.outcome == 'success'
         uses: actions/upload-artifact@v4

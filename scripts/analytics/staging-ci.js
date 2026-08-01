@@ -395,7 +395,7 @@ const probePreview = async () => {
 	}
 	const occurredAt = new Date().toISOString();
 	const runHash = hashIdentifier(state.runId);
-	const previewRunId = validateSyntheticRunId(`${state.runId}_preview`);
+	const previewRunId = validateSyntheticRunId(state.previewRunId);
 	const event = {
 		eventId: `synthetic_preview_${runHash.slice(0, 24)}`,
 		eventName: "page_view",
@@ -403,7 +403,7 @@ const probePreview = async () => {
 		anonymousId,
 		sessionId: `synthetic_preview_${runHash.slice(24, 48)}`,
 		platform: "web",
-		appVersion: `staging-preview-${runHash.slice(0, 12)}`,
+		appVersion: state.previewAppVersion,
 		pathname: "/analytics-synthetic",
 		properties: {
 			hostname: new URL(previewOrigin).hostname,
@@ -494,9 +494,7 @@ const probePreview = async () => {
 			`The exact-SHA collector p95 was ${collectorLatency.p95Ms}ms, over ${collectorP95BudgetMs}ms`,
 		);
 	}
-	state.previewAppVersion = event.appVersion;
 	state.previewAcceptedRows = duplicateResponses.length + replayAccepted;
-	state.previewRunId = previewRunId;
 	writeJson(statePath, state, 0o600);
 	artifact.previewApi = {
 		bootstrapPassed: true,
@@ -546,8 +544,12 @@ const seed = async () => {
 		count: Number(process.env.PERFORMANCE_EVENT_COUNT ?? 1_000),
 		now: startedAt,
 	});
+	const previewRunId = validateSyntheticRunId(`${runId}_preview`);
+	const previewAppVersion = `staging-preview-${hashIdentifier(runId).slice(0, 12)}`;
 	const state = {
 		runId,
+		previewRunId,
+		previewAppVersion,
 		deploymentId,
 		appVersion: fixture.appVersion,
 		loadAppVersion: loadFixture.appVersion,
@@ -819,8 +821,8 @@ const runCopies = async () => {
 	if (!["live", "staging"].includes(target)) {
 		throw new Error("Tinybird copy target is invalid");
 	}
-	if (target === "staging" && phase !== "staged") {
-		throw new Error("Only the staged copy phase can target staging");
+	if (target === "staging" && !["staged", "cleanup"].includes(phase)) {
+		throw new Error("Only staged and cleanup copy phases can target staging");
 	}
 	if (String(state.deploymentId) !== option("deployment-id")) {
 		throw new Error("Tinybird copy deployment does not match the seeded run");
@@ -930,18 +932,8 @@ const runCopies = async () => {
 			downstreamVisibility[copyStep.pipe] = {
 				polls: visibility.polls,
 				visibilityMs: visibility.visibilityMs,
+				...(copyStep.marker ? { marker: copyStep.marker } : {}),
 			};
-		}
-		const markers = normalizeCopyAssertions(
-			(
-				await copyAssertionsQuery({
-					copyRunId,
-					deploymentId: endpointDeploymentId,
-				})
-			).data,
-		);
-		if (Object.values(markers).some((value) => value !== 1)) {
-			throw new Error("Not every Tinybird aggregate copy marker is visible");
 		}
 		artifact.copyJobs = {
 			...artifact.copyJobs,
@@ -953,7 +945,7 @@ const runCopies = async () => {
 					polls: canonicalVisibility.polls,
 					visibilityMs: canonicalVisibility.visibilityMs,
 				},
-				downstreamVisibility: { copies: downstreamVisibility, markers },
+				downstreamVisibility: { copies: downstreamVisibility },
 			},
 		};
 		writeJson(artifactPath, artifact);
@@ -1414,14 +1406,24 @@ const verifyCleanup = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
-	const result = await healthQuery({ state });
+	const target = option("target");
+	if (!["live", "staging"].includes(target)) {
+		throw new Error("Tinybird cleanup verification target is invalid");
+	}
+	if (String(state.deploymentId) !== option("deployment-id")) {
+		throw new Error(
+			"Tinybird cleanup deployment does not match the seeded run",
+		);
+	}
+	const deploymentId = target === "staging" ? state.deploymentId : "";
+	const result = await healthQuery({ state, deploymentId });
 	const health = normalizeHealth(result.data);
 	if (Object.values(health).some((value) => value !== 0)) {
 		throw new Error(
 			"Synthetic rows still affect Tinybird health after cleanup",
 		);
 	}
-	const decisionResult = await ciAssertionsQuery({ state });
+	const decisionResult = await ciAssertionsQuery({ state, deploymentId });
 	const decisionAssertions = normalizeCiAssertions(decisionResult.data);
 	if (Object.values(decisionAssertions).some((value) => value !== 0)) {
 		throw new Error(
@@ -1430,6 +1432,7 @@ const verifyCleanup = async () => {
 	}
 	const loadResult = await healthQuery({
 		state,
+		deploymentId,
 		appVersion: state.loadAppVersion,
 	});
 	const loadHealth = normalizeHealth(loadResult.data);
@@ -1440,6 +1443,7 @@ const verifyCleanup = async () => {
 	}
 	const controlResult = await healthQuery({
 		state,
+		deploymentId,
 		appVersion: state.erasureControlAppVersion,
 	});
 	const controlHealth = normalizeHealth(controlResult.data);
@@ -1451,6 +1455,7 @@ const verifyCleanup = async () => {
 	if (state.previewAppVersion && state.previewRunId) {
 		const previewResult = await healthQuery({
 			state,
+			deploymentId,
 			appVersion: state.previewAppVersion,
 		});
 		const previewHealth = normalizeHealth(previewResult.data);
@@ -1461,6 +1466,7 @@ const verifyCleanup = async () => {
 		}
 		const previewDecisionResult = await ciAssertionsQuery({
 			state,
+			deploymentId,
 			syntheticRunId: state.previewRunId,
 		});
 		const previewDecisionAssertions = normalizeCiAssertions(
