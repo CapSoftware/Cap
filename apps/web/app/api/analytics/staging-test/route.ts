@@ -151,12 +151,7 @@ class Api extends HttpApi.make("AnalyticsStagingTestApi").add(
 
 const RequestHeaders = Schema.Struct({
 	authorization: Schema.optional(Schema.String),
-	host: Schema.String,
-	"x-vercel-deployment-url": Schema.optional(Schema.String),
 });
-
-const STAGING_PREVIEW_HOST =
-	"cap-web-git-codex-first-party-analytics-mc-ilroy.vercel.app";
 
 const safeEqual = (actual: string | undefined, expected: string) =>
 	Boolean(
@@ -600,20 +595,16 @@ const attestDatabaseSchema = async () => {
 
 const authorize = (payload: { runId: string; sha: string }) =>
 	Effect.gen(function* () {
-		const headers = yield* HttpServerRequest.schemaHeaders(RequestHeaders).pipe(
-			Effect.mapError(() => new HttpApiError.BadRequest()),
-		);
-		if (
-			process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true" ||
-			(headers.host !== STAGING_PREVIEW_HOST &&
-				headers.host !== headers["x-vercel-deployment-url"])
-		) {
+		if (process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true") {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
 		const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
 		if (!secret) {
 			return yield* Effect.fail(new HttpApiError.ServiceUnavailable());
 		}
+		const headers = yield* HttpServerRequest.schemaHeaders(RequestHeaders).pipe(
+			Effect.mapError(() => new HttpApiError.BadRequest()),
+		);
 		if (!safeEqual(headers.authorization, `Bearer ${secret}`)) {
 			return yield* Effect.fail(new HttpApiError.Unauthorized());
 		}
