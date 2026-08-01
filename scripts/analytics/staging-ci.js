@@ -639,8 +639,15 @@ const runCopies = async () => {
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
 	const phase = option("phase");
+	const target = option("target");
 	if (!["staged", "promoted", "erasure", "cleanup"].includes(phase)) {
 		throw new Error("Tinybird copy phase is invalid");
+	}
+	if (!["live", "staging"].includes(target)) {
+		throw new Error("Tinybird copy target is invalid");
+	}
+	if (target === "staging" && phase !== "staged") {
+		throw new Error("Only the staged copy phase can target staging");
 	}
 	if (String(state.deploymentId) !== option("deployment-id")) {
 		throw new Error("Tinybird copy deployment does not match the seeded run");
@@ -655,6 +662,7 @@ const runCopies = async () => {
 			deploymentId: state.deploymentId,
 			request,
 			wait: delay,
+			useDeploymentParameter: target === "staging",
 		});
 		artifact.copyJobs = {
 			...artifact.copyJobs,

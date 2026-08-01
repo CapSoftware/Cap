@@ -233,6 +233,7 @@ test("copy jobs use the resource-scoped API and wait for exact completion", asyn
 			now += milliseconds;
 		},
 		now: () => now,
+		useDeploymentParameter: true,
 	});
 	assert.deepEqual(results, [
 		{
@@ -246,6 +247,21 @@ test("copy jobs use the resource-scoped API and wait for exact completion", asyn
 	assert.match(requests[0].url, /__tb__deployment=6/);
 	assert.equal(requests[0].options.method, "POST");
 	assert.match(requests[1].url, /\/v0\/jobs\/copy_job_123$/);
+	const liveRequests = [];
+	await runTinybirdCopyJobs({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		deploymentId: "6",
+		pipes: ["snapshot_product_events_canonical_v1"],
+		request: async (url, options) => {
+			liveRequests.push({ url: String(url), options });
+			return liveRequests.length === 1
+				? { data: { id: "copy_job_live" } }
+				: { data: { status: "done" } };
+		},
+		wait: async () => {},
+	});
+	assert.doesNotMatch(liveRequests[0].url, /__tb__deployment/);
 	await assert.rejects(() =>
 		runTinybirdCopyJobs({
 			origin: "https://api.us-east.aws.tinybird.co",

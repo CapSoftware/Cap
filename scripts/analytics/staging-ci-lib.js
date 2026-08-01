@@ -197,6 +197,7 @@ export const runTinybirdCopyJobs = async ({
 	now = () => Date.now(),
 	timeoutMs = 120_000,
 	pipes = COPY_PIPES,
+	useDeploymentParameter = false,
 }) => {
 	if (!DEPLOYMENT_ID_PATTERN.test(deploymentId)) {
 		throw new Error("Tinybird copy jobs require a numeric deployment ID");
@@ -215,12 +216,21 @@ export const runTinybirdCopyJobs = async ({
 			origin,
 		);
 		copyUrl.searchParams.set("_mode", "replace");
-		copyUrl.searchParams.set("__tb__deployment", deploymentId);
-		const created = await request(copyUrl, {
-			token,
-			method: "POST",
-			attempts: 3,
-		});
+		if (useDeploymentParameter) {
+			copyUrl.searchParams.set("__tb__deployment", deploymentId);
+		}
+		let created;
+		try {
+			created = await request(copyUrl, {
+				token,
+				method: "POST",
+				attempts: 3,
+			});
+		} catch (error) {
+			throw new Error(`Tinybird copy submission failed for ${pipe}`, {
+				cause: error,
+			});
+		}
 		const jobId = String(created.data.id ?? created.data.job_id ?? "");
 		if (!COPY_JOB_ID_PATTERN.test(jobId)) {
 			throw new Error(`Tinybird did not return a valid copy job for ${pipe}`);
@@ -228,10 +238,17 @@ export const runTinybirdCopyJobs = async ({
 		let polls = 0;
 		while (true) {
 			polls += 1;
-			const job = await request(
-				new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
-				{ token, attempts: 3 },
-			);
+			let job;
+			try {
+				job = await request(
+					new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
+					{ token, attempts: 3 },
+				);
+			} catch (error) {
+				throw new Error(`Tinybird copy status read failed for ${pipe}`, {
+					cause: error,
+				});
+			}
 			const status = String(job.data.status ?? "").toLowerCase();
 			if (status === "done") {
 				results.push({

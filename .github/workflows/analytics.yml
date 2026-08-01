@@ -186,6 +186,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase staged
+          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
@@ -248,6 +249,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase promoted
+          --target live
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove promoted preview delivery and decision deduplication
@@ -278,6 +280,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase erasure
+          --target live
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove identity erasure and out-of-scope control preservation
@@ -310,6 +313,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase cleanup
+          --target live
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove synthetic cleanup no longer affects queries
