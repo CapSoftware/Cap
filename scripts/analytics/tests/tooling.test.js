@@ -9,7 +9,6 @@ import {
 	COMPOSE_FILE,
 	cloudEnvironment,
 	LOCAL_ENV_FILE,
-	localDecisionToken,
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
@@ -19,6 +18,7 @@ import {
 	TINYBIRD_PROJECT_DIR,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
+	withLocalDecisionTokenDatafiles,
 	writeLocalEnvironmentFile,
 } from "../tooling.js";
 
@@ -64,7 +64,9 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 	const commands = steps
 		.filter((step) => step.command)
 		.map((step) => step.args.join(" "));
-	assert.ok(commands.some((command) => command.endsWith("--local build")));
+	assert.ok(
+		steps.some((step) => step.type === "build-local-with-decision-token"),
+	);
 	assert.ok(
 		commands.some((command) =>
 			command.endsWith(
@@ -206,33 +208,25 @@ test("local resource discovery returns only the named scoped token", async () =>
 	assert.equal(token, "p.resource-token-value");
 });
 
-test("local decision verification creates an isolated exact-scope token", () => {
-	const calls = [];
-	const environment = localEnvironment({});
-	const token = localDecisionToken(
-		environment,
-		(command, args, options) => {
-			calls.push({ command, args, options });
-			return { status: 0 };
-		},
-		(actualEnvironment, tokenName) => {
-			assert.equal(actualEnvironment, environment);
-			assert.equal(tokenName, "product_events_local_verification");
-			return "local-decision-token-value";
-		},
-	);
+test("local decision verification restores its temporary token datafiles", async () => {
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "analytics-token-"));
+	const pipesDir = path.join(tempDir, "pipes");
+	fs.mkdirSync(pipesDir);
+	const pipeFile = path.join(pipesDir, "product_events_daily.pipe");
+	const original = "NODE endpoint\nSQL >\n\tSELECT 1\n";
+	fs.writeFileSync(pipeFile, original);
 
-	assert.equal(token, "local-decision-token-value");
-	assert.equal(calls.length, 1);
-	assert.equal(calls[0].command, "docker");
-	assert.ok(calls[0].args.includes("create"));
-	assert.ok(calls[0].args.includes("static"));
-	const scopes = calls[0].args.filter((value) =>
-		value.startsWith("PIPES:READ:"),
+	await assert.rejects(
+		withLocalDecisionTokenDatafiles(tempDir, async () => {
+			assert.equal(
+				fs.readFileSync(pipeFile, "utf8"),
+				`TOKEN product_events_local_verification READ\n${original}`,
+			);
+			throw new Error("synthetic build failure");
+		}, ["product_events_daily"]),
+		/synthetic build failure/,
 	);
-	assert.equal(scopes.length, 18);
-	assert.equal(new Set(scopes).size, 18);
-	assert.ok(scopes.every((scope) => !scope.includes("product_events_v1")));
+	assert.equal(fs.readFileSync(pipeFile, "utf8"), original);
 });
 
 test("local resource discovery falls back to the local user token", async () => {

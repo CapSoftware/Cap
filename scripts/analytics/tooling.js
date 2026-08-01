@@ -264,7 +264,7 @@ const operationPlan = (operation) => {
 				),
 				localAuth: true,
 			},
-			localCliStep("--local", "build"),
+			{ type: "build-local-with-decision-token" },
 			...PRODUCT_COPY_PIPES.map((name) =>
 				localCliStep("--local", "copy", "pause", name),
 			),
@@ -945,41 +945,28 @@ const localResourceToken = async (
 	);
 };
 
-const localDecisionToken = (
-	environment,
-	runner = spawnSync,
-	tokenLister = listLocalStaticToken,
+const withLocalDecisionTokenDatafiles = async (
+	projectDir,
+	operation,
+	endpoints = PRODUCT_DECISION_ENDPOINTS,
 ) => {
-	const tokenName = "product_events_local_verification";
-	const result = runner(
-		"docker",
-		composeArgs(
-			"run",
-			"--rm",
-			"tinybird-cli",
-			"--local",
-			"token",
-			"create",
-			"static",
-			tokenName,
-			...PRODUCT_DECISION_ENDPOINTS.flatMap((resource) => [
-				"--scope",
-				`PIPES:READ:${resource}`,
-			]),
-		),
-		{
-			cwd: PROJECT_ROOT,
-			encoding: "utf8",
-			env: environment,
-			maxBuffer: 1024 * 1024,
-		},
-	);
-	if (result.error || result.status !== 0) {
-		throw new Error(
-			"Tinybird Local could not create its decision-endpoint token",
+	const originals = new Map();
+	for (const endpoint of endpoints) {
+		const file = path.join(projectDir, "pipes", `${endpoint}.pipe`);
+		const contents = fs.readFileSync(file, "utf8");
+		originals.set(file, contents);
+		fs.writeFileSync(
+			file,
+			`TOKEN product_events_local_verification READ\n${contents}`,
 		);
 	}
-	return tokenLister(environment, tokenName);
+	try {
+		return await operation();
+	} finally {
+		for (const [file, contents] of originals) {
+			fs.writeFileSync(file, contents);
+		}
+	}
 };
 
 const assertSafeStep = (step) => {
@@ -1176,6 +1163,16 @@ const runAnalyticsCommand = async (operation) => {
 			prepareLocalFixture();
 			continue;
 		}
+		if (step.type === "build-local-with-decision-token") {
+			await withLocalDecisionTokenDatafiles(TINYBIRD_PROJECT_DIR, () =>
+				runProcess(
+					"docker",
+					composeArgs("run", "--rm", "tinybird-cli", "--local", "build"),
+					{ env: localEnvironment() },
+				),
+			);
+			continue;
+		}
 		if (step.type === "reset-local-fixture") {
 			await runProcess(
 				"docker",
@@ -1214,7 +1211,10 @@ const runAnalyticsCommand = async (operation) => {
 		}
 		if (step.type === "verify-local") {
 			const environment = localEnvironment();
-			const readToken = localDecisionToken(environment);
+			const readToken = await localResourceToken(
+				environment,
+				"product_events_local_verification",
+			);
 			await runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
@@ -1244,7 +1244,6 @@ export {
 	assertSafeStep,
 	cloudEnvironment,
 	composeArgs,
-	localDecisionToken,
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
@@ -1254,5 +1253,6 @@ export {
 	runAnalyticsCommand,
 	validateAnalyticsProject,
 	verifyCloudWorkspace,
+	withLocalDecisionTokenDatafiles,
 	writeLocalEnvironmentFile,
 };
