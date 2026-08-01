@@ -87,10 +87,36 @@ jobs:
         if: always()
         run: node scripts/analytics/analytics-cli.js local-stop
 
+  validate-desktop:
+    name: Validate desktop analytics outbox
+    if: >-
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 2003 &&
+      github.event.pull_request.head.ref == 'codex/first-party-analytics') ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/codex/first-party-analytics')
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact requested SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-apple-darwin
+      - name: Compile the desktop analytics path
+        run: cargo check -p cap-desktop --locked
+      - name: Prove durable desktop analytics behavior
+        run: cargo test -p cap-desktop product_analytics::tests --lib --locked
+
   deploy-staging:
     name: Deploy and prove analytics staging
-    needs: validate
-    if: needs.validate.result == 'success'
+    needs: [validate, validate-desktop]
+    if: needs.validate.result == 'success' && needs.validate-desktop.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
