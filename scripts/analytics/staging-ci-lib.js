@@ -291,22 +291,23 @@ export const assertPreviewTinybirdAttestation = ({
 			{ tokenHash, workspaceId },
 		]),
 	);
+	const mismatchedTokens = PREVIEW_TINYBIRD_TOKEN_NAMES.filter((name) => {
+		const workspace = workspaces.get(name);
+		return (
+			!workspace ||
+			typeof workspace.workspaceId !== "string" ||
+			workspace.workspaceId.toLowerCase() !==
+				STAGING_WORKSPACE_ID.toLowerCase() ||
+			!expectedTokenHashes ||
+			workspace.tokenHash !== expectedTokenHashes[name]
+		);
+	});
 	if (
 		workspaces.size !== PREVIEW_TINYBIRD_TOKEN_NAMES.length ||
-		PREVIEW_TINYBIRD_TOKEN_NAMES.some((name) => {
-			const workspace = workspaces.get(name);
-			return (
-				!workspace ||
-				typeof workspace.workspaceId !== "string" ||
-				workspace.workspaceId.toLowerCase() !==
-					STAGING_WORKSPACE_ID.toLowerCase() ||
-				!expectedTokenHashes ||
-				workspace.tokenHash !== expectedTokenHashes[name]
-			);
-		})
+		mismatchedTokens.length > 0
 	) {
 		throw new Error(
-			"The exact-SHA preview is not bound to the verified analytics staging tokens",
+			`The exact-SHA preview is not bound to the verified analytics staging tokens: ${mismatchedTokens.join(", ") || "unexpected token names"}`,
 		);
 	}
 };

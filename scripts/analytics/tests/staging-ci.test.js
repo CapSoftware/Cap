@@ -327,6 +327,23 @@ test("preview Tinybird attestation requires the exact SHA, host, and staging wor
 			}),
 		);
 	}
+	assert.throws(
+		() =>
+			assertPreviewTinybirdAttestation({
+				attestation: {
+					...attestation,
+					workspaces: attestation.workspaces.map((workspace, index) =>
+						index === 0
+							? { ...workspace, tokenHash: "f".repeat(64) }
+							: workspace,
+					),
+				},
+				expectedOrigin: attestation.host,
+				expectedSha: SHA,
+				expectedTokenHashes,
+			}),
+		new RegExp(PREVIEW_TINYBIRD_TOKEN_NAMES[0]),
+	);
 });
 
 test("deployment selection rejects stale or ambiguous staging deployments", () => {
