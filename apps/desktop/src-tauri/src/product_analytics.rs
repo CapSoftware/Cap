@@ -494,13 +494,9 @@ fn read_file_outbox_key(path: &Path) -> Result<Option<[u8; 32]>, String> {
     }
 }
 
-fn persist_file_outbox_key(path: &Path, key: [u8; 32]) -> Result<(), String> {
+fn initialize_file_outbox_key(path: &Path, key: [u8; 32]) -> Result<[u8; 32], String> {
     if let Some(existing) = read_file_outbox_key(path)? {
-        return if existing == key {
-            Ok(())
-        } else {
-            Err("outbox_key_file_conflict".to_string())
-        };
+        return Ok(existing);
     }
     let parent = path
         .parent()
@@ -525,14 +521,10 @@ fn persist_file_outbox_key(path: &Path, key: [u8; 32]) -> Result<(), String> {
             fs::File::open(parent)
                 .and_then(|directory| directory.sync_all())
                 .map_err(|_| "outbox_key_file_write_failed".to_string())?;
-            Ok(())
+            Ok(key)
         }
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if read_file_outbox_key(path)? == Some(key) {
-                Ok(())
-            } else {
-                Err("outbox_key_file_conflict".to_string())
-            }
+            read_file_outbox_key(path)?.ok_or_else(|| "outbox_key_file_unavailable".to_string())
         }
         Err(_) => Err("outbox_key_file_write_failed".to_string()),
     }
@@ -620,7 +612,7 @@ fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
     }
 
     let key_path = file_outbox_key_path(app)?;
-    let key = if let Some(key) = read_file_outbox_key(&key_path)? {
+    let candidate = if let Some(key) = read_file_outbox_key(&key_path)? {
         key
     } else if let Some(key) = keyring_outbox_encryption_keys().unwrap_or_default().first() {
         *key
@@ -631,7 +623,7 @@ fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
             .map_err(|_| "key_generation_failed".to_string())?;
         generated
     };
-    persist_file_outbox_key(&key_path, key)?;
+    let key = initialize_file_outbox_key(&key_path, candidate)?;
     let _ = persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_USER, key);
     let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
     PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY
@@ -1302,15 +1294,18 @@ mod tests {
     }
 
     #[test]
-    fn fallback_key_file_is_created_once_and_rejects_replacement() {
+    fn fallback_key_file_is_created_once_and_concurrent_initializers_adopt_it() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("outbox-key");
         let first = [7_u8; 32];
 
-        persist_file_outbox_key(&path, first).unwrap();
+        assert_eq!(initialize_file_outbox_key(&path, first).unwrap(), first);
 
         assert_eq!(read_file_outbox_key(&path).unwrap(), Some(first));
-        assert!(persist_file_outbox_key(&path, [8_u8; 32]).is_err());
+        assert_eq!(
+            initialize_file_outbox_key(&path, [8_u8; 32]).unwrap(),
+            first
+        );
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
