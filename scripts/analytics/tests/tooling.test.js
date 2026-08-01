@@ -80,6 +80,15 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 		.map(({ index }) => index);
 	assert.equal(pauseIndexes.length, 7);
 	assert.ok(pauseIndexes.every((index) => index < appendIndex));
+	const copyCommands = commands.filter((command) =>
+		command.includes("--local copy run"),
+	);
+	assert.equal(copyCommands.length, 7);
+	assert.ok(
+		copyCommands.every((command) =>
+			command.includes("--param copy_max_threads=1 --wait"),
+		),
+	);
 	assert.ok(steps.some((step) => step.type === "verify-local"));
 	assert.ok(steps.some((step) => step.type === "write-local-env"));
 	assert.ok(

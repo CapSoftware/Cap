@@ -3,6 +3,10 @@ DESCRIPTION >
 
 NODE snapshot_product_events_health_hourly_node
 SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
 	SELECT
 		toStartOfHour(received_at) AS hour,
 		platform,

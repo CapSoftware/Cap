@@ -3,6 +3,10 @@ DESCRIPTION >
 
 NODE snapshot_product_events_canonical_v1_node
 SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
 	SELECT
 		event_id,
 		any(raw_payload_hash) AS payload_hash,

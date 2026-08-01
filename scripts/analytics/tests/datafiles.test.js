@@ -207,6 +207,7 @@ test("copy schedules serialize canonical and derived rebuilds", () => {
 			"utf8",
 		);
 		assert.ok(contents.split("\n").includes(`COPY_SCHEDULE ${schedule}`));
+		assert.match(contents, /\{\{max_threads\(Int32\(copy_max_threads\)\)\}\}/);
 	}
 	assert.equal(new Set(schedules.values()).size, schedules.size);
 });

@@ -3,6 +3,10 @@ DESCRIPTION >
 
 NODE snapshot_product_traffic_pages_daily_exact_node
 SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
 	WITH sessions AS (
 		SELECT
 			session_id,

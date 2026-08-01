@@ -3,6 +3,10 @@ DESCRIPTION >
 
 NODE snapshot_product_events_daily_exact_node
 SQL >
+	%
+	{% if defined(copy_max_threads) %}
+		{{max_threads(Int32(copy_max_threads))}}
+	{% end %}
 	SELECT
 		now64(3) AS calculated_at,
 		toDate(occurred_at, 'UTC') AS date,

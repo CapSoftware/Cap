@@ -171,7 +171,15 @@ const operationPlan = (operation) => {
 				"fixtures/product_events_v1.local.ndjson",
 			),
 			...PRODUCT_COPY_PIPES.map((name) => ({
-				...localCliStep("--local", "copy", "run", name, "--wait"),
+				...localCliStep(
+					"--local",
+					"copy",
+					"run",
+					name,
+					"--param",
+					"copy_max_threads=1",
+					"--wait",
+				),
 				attempts: 8,
 				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
 			})),
@@ -206,7 +214,15 @@ const operationPlan = (operation) => {
 				"fixtures/product_events_v1.local.ndjson",
 			),
 			...PRODUCT_COPY_PIPES.map((name) => ({
-				...localCliStep("--local", "copy", "run", name, "--wait"),
+				...localCliStep(
+					"--local",
+					"copy",
+					"run",
+					name,
+					"--param",
+					"copy_max_threads=1",
+					"--wait",
+				),
 				attempts: 8,
 				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
 			})),
