@@ -117,7 +117,11 @@ function createServerEnv() {
 			PRODUCT_ANALYTICS_TINYBIRD_TOKEN: z.string().optional(),
 			PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN: z.string().optional(),
 			PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN: z.string().optional(),
+			PRODUCT_ANALYTICS_TINYBIRD_ERASURE_LOOKUP_TOKEN: z.string().optional(),
+			PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN: z.string().optional(),
+			PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN: z.string().optional(),
 			PRODUCT_ANALYTICS_INTERNAL_IP_HASHES: z.string().optional(),
+			CAP_ANALYTICS_STAGING_TEST_SECRET: z.string().optional(),
 			VERCEL_ENV: z
 				.union([
 					z.literal("production"),

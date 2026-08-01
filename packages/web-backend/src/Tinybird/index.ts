@@ -1,6 +1,11 @@
 import { serverEnv } from "@cap/env";
 import { Effect } from "effect";
 
+import {
+	type ProductAnalyticsErasureLease,
+	ProductAnalyticsErasureLeaseRepo,
+} from "./ProductAnalyticsErasureLeaseRepo.ts";
+
 const DEFAULT_DATASOURCE = "analytics_events";
 const PRODUCT_ANALYTICS_REBUILD_PIPES = [
 	"snapshot_product_events_canonical_v1",
@@ -9,6 +14,7 @@ const PRODUCT_ANALYTICS_REBUILD_PIPES = [
 	"snapshot_product_traffic_pages_daily_exact",
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
+	"snapshot_product_identity_funnel_exact",
 	"snapshot_product_events_health_hourly",
 ] as const;
 
@@ -32,19 +38,24 @@ interface TinybirdJobResponse {
 	};
 }
 
+interface TinybirdPipeResponse {
+	schedule?: { status?: string };
+}
+
 const tinybirdJobId = (response: TinybirdJobResponse) => {
 	const id = response.job_id ?? response.job?.id ?? response.id;
 	return typeof id === "string" && id ? id : undefined;
 };
 
-const tinybirdJobStatus = (response: TinybirdJobResponse) => {
-	const status =
-		response.status ??
-		response.state ??
-		response.job?.status ??
-		response.job?.state;
-	return typeof status === "string" ? status.toLowerCase() : "";
-};
+const PRODUCT_ANALYTICS_COPY_MARKERS = {
+	snapshot_product_events_daily_exact: "decision_markers",
+	snapshot_product_traffic_daily_exact: "traffic_markers",
+	snapshot_product_traffic_pages_daily_exact: "traffic_page_markers",
+	snapshot_product_activation_daily_exact: "activation_markers",
+	snapshot_product_creator_retention_exact: "retention_markers",
+	snapshot_product_identity_funnel_exact: "identity_markers",
+	snapshot_product_events_health_hourly: "health_markers",
+} as const;
 
 export interface TinybirdEventRow {
 	timestamp: string;
@@ -65,12 +76,19 @@ export interface TinybirdEventRow {
 
 export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 	effect: Effect.gen(function* () {
+		const erasureLeases = yield* ProductAnalyticsErasureLeaseRepo;
 		const env = serverEnv();
 		const token = env.TINYBIRD_TOKEN;
 		const host = env.TINYBIRD_HOST;
 		const productAnalyticsHost = env.PRODUCT_ANALYTICS_TINYBIRD_HOST;
 		const productAnalyticsErasureToken =
-			process.env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN;
+			env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN;
+		const productAnalyticsErasureLookupToken =
+			env.PRODUCT_ANALYTICS_TINYBIRD_ERASURE_LOOKUP_TOKEN;
+		const productAnalyticsCopyToken = env.PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN;
+		const productAnalyticsReadToken = env.PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN;
+		const productAnalyticsSchedulerToken =
+			env.PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN;
 
 		const enabled = Boolean(token && host);
 
@@ -330,15 +348,19 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			}).pipe(Effect.asVoid);
 		};
 
-		const productAnalyticsRequest = <T>(path: string, init?: RequestInit) => {
+		const productAnalyticsRequest = <T>(
+			path: string,
+			auth: { token: string | undefined; purpose: string },
+			init?: RequestInit,
+		) => {
 			if (!productAnalyticsHost) {
 				return Effect.fail(
 					new Error("Product analytics erasure host is not configured"),
 				);
 			}
-			if (!productAnalyticsErasureToken) {
+			if (!auth.token) {
 				return Effect.fail(
-					new Error("Product analytics erasure is not configured"),
+					new Error(`Product analytics ${auth.purpose} is not configured`),
 				);
 			}
 			return Effect.tryPromise({
@@ -346,7 +368,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					const response = await fetch(`${productAnalyticsHost}${path}`, {
 						...init,
 						headers: {
-							Authorization: `Bearer ${productAnalyticsErasureToken}`,
+							Authorization: `Bearer ${auth.token}`,
 							...(init?.headers ?? {}),
 						},
 						signal: AbortSignal.timeout(65_000),
@@ -371,6 +393,10 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			productAnalyticsRequest<{ mutation?: { is_done?: boolean } }>(
 				`/v1/datasources/${encodeURIComponent(name)}/delete?wait=true&wait_max_seconds=60`,
 				{
+					token: productAnalyticsErasureToken,
+					purpose: "erasure deletion",
+				},
+				{
 					method: "POST",
 					body: new URLSearchParams({ delete_condition: deleteCondition }),
 					headers: {
@@ -387,61 +413,195 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				),
 			);
 
-		const runProductAnalyticsCopyPipe = (name: string) =>
-			Effect.gen(function* () {
-				const copy = yield* productAnalyticsRequest<TinybirdJobResponse>(
-					`/v0/pipes/${encodeURIComponent(name)}/copy?_mode=replace`,
-					{ method: "POST" },
-				);
-				const jobId = tinybirdJobId(copy);
-				if (!jobId) {
-					return yield* Effect.fail(
-						new Error("Product analytics copy did not return a job ID"),
-					);
-				}
-
-				for (let attempt = 0; attempt < 90; attempt += 1) {
-					const job = yield* productAnalyticsRequest<TinybirdJobResponse>(
-						`/v0/jobs/${encodeURIComponent(jobId)}`,
-					);
-					const status = tinybirdJobStatus(job);
-					if (["done", "success", "finished", "completed"].includes(status)) {
-						return;
-					}
-					if (["failed", "error", "cancelled", "canceled"].includes(status)) {
-						return yield* Effect.fail(
-							new Error(`Product analytics copy job ended in ${status}`),
-						);
-					}
-					yield* Effect.sleep(2_000);
-				}
-
-				return yield* Effect.fail(
-					new Error("Product analytics copy job timed out"),
-				);
-			});
+		const runProductAnalyticsCopyPipe = (name: string, copyRunId?: string) => {
+			const search = new URLSearchParams({ _mode: "replace" });
+			if (copyRunId) search.set("copy_run_id", copyRunId);
+			return productAnalyticsRequest<TinybirdJobResponse>(
+				`/v0/pipes/${encodeURIComponent(name)}/copy?${search.toString()}`,
+				{ token: productAnalyticsCopyToken, purpose: "Copy execution" },
+				{ method: "POST" },
+			).pipe(
+				Effect.flatMap((copy) =>
+					tinybirdJobId(copy)
+						? Effect.void
+						: Effect.fail(
+								new Error("Product analytics copy did not return a job ID"),
+							),
+				),
+			);
+		};
 
 		const queryProductAnalyticsSql = <T>(sql: string) =>
 			productAnalyticsRequest<{ data: T[] }>(
 				`/v0/sql?q=${encodeURIComponent(sql)}&format=JSON`,
+				{
+					token: productAnalyticsErasureLookupToken,
+					purpose: "erasure lookup",
+				},
 			).pipe(Effect.map((result) => result.data ?? []));
 
-		const eraseProductAnalytics = ({
-			userId,
-			organizationId,
-		}: {
-			userId?: string;
-			organizationId?: string;
-		}) =>
+		const setProductAnalyticsCopySchedulePaused = (
+			name: (typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number],
+			paused: boolean,
+		) => {
+			const auth = {
+				token: productAnalyticsSchedulerToken,
+				purpose: "Copy schedule control",
+			};
+			const attempt = productAnalyticsRequest(
+				`/v0/pipes/${encodeURIComponent(name)}/copy/${paused ? "cancel" : "resume"}`,
+				auth,
+				{ method: "POST" },
+			).pipe(
+				Effect.either,
+				Effect.flatMap((mutation) =>
+					productAnalyticsRequest<TinybirdPipeResponse>(
+						`/v0/pipes/${encodeURIComponent(name)}`,
+						auth,
+					).pipe(
+						Effect.flatMap((pipe) => {
+							const status = pipe.schedule?.status?.toLowerCase() ?? "";
+							const matches = paused
+								? status === "paused"
+								: status === "scheduled" || status === "active";
+							if (matches) return Effect.void;
+							if (mutation._tag === "Left") return Effect.fail(mutation.left);
+							return Effect.fail(
+								new Error(
+									`Product analytics schedule state did not become ${paused ? "paused" : "active"}`,
+								),
+							);
+						}),
+					),
+				),
+			);
+			return attempt.pipe(Effect.retry({ times: 3 }));
+		};
+
+		const resumeProductAnalyticsCopySchedules = (
+			names: ReadonlyArray<(typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number]>,
+		) =>
+			Effect.forEach(
+				names,
+				(name) =>
+					setProductAnalyticsCopySchedulePaused(name, false).pipe(
+						Effect.either,
+					),
+				{ concurrency: 1 },
+			).pipe(
+				Effect.flatMap((outcomes) => {
+					const failure = outcomes.find((outcome) => outcome._tag === "Left");
+					return failure?._tag === "Left"
+						? Effect.fail(failure.left)
+						: Effect.void;
+				}),
+			);
+
+		const pauseProductAnalyticsCopySchedules = (
+			onPaused: (
+				paused: ReadonlyArray<(typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number]>,
+			) => Effect.Effect<void, Error>,
+		) =>
 			Effect.gen(function* () {
+				const paused: Array<(typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number]> =
+					[];
+				for (const name of PRODUCT_ANALYTICS_REBUILD_PIPES) {
+					const outcome = yield* setProductAnalyticsCopySchedulePaused(
+						name,
+						true,
+					).pipe(Effect.either);
+					if (outcome._tag === "Left") {
+						const resumed = yield* resumeProductAnalyticsCopySchedules(
+							paused,
+						).pipe(Effect.either);
+						if (resumed._tag === "Right") yield* onPaused([]);
+						return yield* Effect.fail(outcome.left);
+					}
+					paused.push(name);
+					yield* onPaused(paused);
+				}
+				return paused;
+			});
+
+		const waitForProductAnalytics = <T>(
+			label: string,
+			read: () => Effect.Effect<T, Error>,
+			accept: (value: T) => boolean,
+		) =>
+			Effect.gen(function* () {
+				for (let attempt = 0; attempt < 90; attempt += 1) {
+					const value = yield* read();
+					if (accept(value)) return value;
+					yield* Effect.sleep(2_000);
+				}
+				return yield* Effect.fail(
+					new Error(`Product analytics ${label} timed out`),
+				);
+			});
+
+		const queryProductAnalyticsCopyMarker = (
+			copyRunId: string,
+			marker: string,
+		) =>
+			productAnalyticsRequest<{ data?: Array<Record<string, unknown>> }>(
+				`/v0/pipes/product_analytics_copy_assertions.json?copy_run_id=${encodeURIComponent(copyRunId)}`,
+				{
+					token: productAnalyticsReadToken,
+					purpose: "aggregate read",
+				},
+			).pipe(Effect.map((result) => Number(result.data?.[0]?.[marker] ?? 0)));
+
+		const runProductAnalyticsErasure = (
+			lease: ProductAnalyticsErasureLease,
+		) => {
+			let pausedPipes: Array<(typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number]> =
+				lease.pausedPipes.filter(
+					(name): name is (typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number] =>
+						PRODUCT_ANALYTICS_REBUILD_PIPES.some((known) => known === name),
+				);
+
+			const requireLeaseUpdate = (updated: Effect.Effect<boolean, Error>) =>
+				updated.pipe(
+					Effect.flatMap((owned) =>
+						owned
+							? Effect.void
+							: Effect.fail(
+									new Error("Product analytics erasure lease was fenced"),
+								),
+					),
+				);
+
+			const advance = (
+				phase: "pausing" | "deleting" | "rebuilding" | "resuming",
+				paused: readonly string[] = pausedPipes,
+			) => requireLeaseUpdate(erasureLeases.advance(lease, phase, paused));
+
+			const heartbeat = Effect.forever(
+				Effect.sleep(20_000).pipe(
+					Effect.zipRight(requireLeaseUpdate(erasureLeases.heartbeat(lease))),
+				),
+			);
+
+			const operation = Effect.gen(function* () {
+				if (pausedPipes.length > 0) {
+					yield* advance("resuming");
+					yield* resumeProductAnalyticsCopySchedules(pausedPipes);
+					pausedPipes = [];
+					yield* advance("pausing", []);
+				}
+				pausedPipes = yield* pauseProductAnalyticsCopySchedules((paused) => {
+					pausedPipes = [...paused];
+					return advance("pausing", paused);
+				});
+				yield* advance("deleting");
 				const conditions: string[] = [];
-				if (organizationId) {
+				if (lease.scope.organizationId) {
 					conditions.push(
-						`organization_id = '${escapeTinybirdString(organizationId)}'`,
+						`organization_id = '${escapeTinybirdString(lease.scope.organizationId)}'`,
 					);
 				}
-				if (userId) {
-					const escapedUserId = escapeTinybirdString(userId);
+				if (lease.scope.userId) {
+					const escapedUserId = escapeTinybirdString(lease.scope.userId);
 					const anonymousRows = yield* queryProductAnalyticsSql<{
 						anonymous_id: string;
 					}>(
@@ -473,15 +633,116 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						new Error("Product analytics erasure requires an identity"),
 					);
 				}
-				yield* deleteProductAnalyticsData(
-					"product_events_v1",
-					`(${conditions.join(" OR ")})`,
+				const deleteCondition = `(${conditions.join(" OR ")})`;
+				const countRows = (datasource: string) =>
+					queryProductAnalyticsSql<{ matching_rows: number | string }>(
+						`SELECT count() AS matching_rows FROM ${datasource} WHERE ${deleteCondition}`,
+					).pipe(Effect.map((rows) => Number(rows[0]?.matching_rows ?? 0)));
+				const rawRows = yield* countRows("product_events_v1");
+				if (rawRows > 0) {
+					yield* advance("deleting");
+					yield* deleteProductAnalyticsData(
+						"product_events_v1",
+						deleteCondition,
+					);
+					yield* waitForProductAnalytics(
+						"raw erasure visibility",
+						() => countRows("product_events_v1"),
+						(count) => count === 0,
+					);
+				}
+				yield* advance("rebuilding");
+				yield* runProductAnalyticsCopyPipe(
+					"snapshot_product_events_canonical_v1",
 				);
-				yield* Effect.forEach(
-					PRODUCT_ANALYTICS_REBUILD_PIPES,
-					runProductAnalyticsCopyPipe,
-					{ concurrency: 1 },
+				yield* waitForProductAnalytics(
+					"canonical erasure visibility",
+					() => countRows("product_events_canonical_v1"),
+					(count) => count === 0,
 				);
+				const copyRunId = `erasure_${lease.requestId.replaceAll("-", "")}`;
+				for (const [pipe, marker] of Object.entries(
+					PRODUCT_ANALYTICS_COPY_MARKERS,
+				)) {
+					yield* advance("rebuilding");
+					yield* runProductAnalyticsCopyPipe(pipe, copyRunId);
+					yield* waitForProductAnalytics(
+						`${pipe} visibility`,
+						() => queryProductAnalyticsCopyMarker(copyRunId, marker),
+						(count) => count === 1,
+					);
+				}
+				yield* waitForProductAnalytics(
+					"final erasure verification",
+					() =>
+						Effect.all([
+							countRows("product_events_v1"),
+							countRows("product_events_canonical_v1"),
+						]),
+					([rawCount, canonicalCount]) =>
+						rawCount === 0 && canonicalCount === 0,
+				);
+				yield* advance("resuming");
+				yield* resumeProductAnalyticsCopySchedules(pausedPipes);
+				pausedPipes = [];
+				yield* advance("resuming", []);
+				yield* requireLeaseUpdate(erasureLeases.complete(lease));
+			});
+
+			const recoverableOperation = Effect.gen(function* () {
+				const outcome = yield* operation.pipe(Effect.either);
+				if (outcome._tag === "Right") return;
+				const resumed = yield* resumeProductAnalyticsCopySchedules(
+					pausedPipes,
+				).pipe(Effect.either);
+				if (resumed._tag === "Right") pausedPipes = [];
+				const failed = yield* erasureLeases.fail(
+					lease,
+					pausedPipes,
+					resumed._tag === "Left" ? "resume_failed" : "erase_failed",
+				);
+				if (!failed) {
+					return yield* Effect.fail(
+						new Error("Product analytics erasure lease was fenced"),
+					);
+				}
+				return yield* Effect.fail(outcome.left);
+			});
+
+			return Effect.raceFirst(recoverableOperation, heartbeat);
+		};
+
+		const recoverProductAnalyticsErasure = Effect.gen(function* () {
+			const lease = yield* erasureLeases.claimRecovery();
+			if (!lease) return { recovered: false as const };
+			yield* runProductAnalyticsErasure(lease);
+			return { recovered: true as const, requestId: lease.requestId };
+		});
+
+		const eraseProductAnalytics = ({
+			userId,
+			organizationId,
+		}: {
+			userId?: string;
+			organizationId?: string;
+		}) =>
+			Effect.gen(function* () {
+				if (!userId && !organizationId) {
+					return yield* Effect.fail(
+						new Error("Product analytics erasure requires an identity"),
+					);
+				}
+				let lease = yield* erasureLeases.claimNew({ userId, organizationId });
+				if (!lease) {
+					yield* recoverProductAnalyticsErasure;
+					lease = yield* erasureLeases.claimNew({ userId, organizationId });
+				}
+				if (!lease) {
+					return yield* Effect.fail(
+						new Error("Product analytics erasure is already in progress"),
+					);
+				}
+				yield* runProductAnalyticsErasure(lease);
 			});
 
 		return {
@@ -494,6 +755,8 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			deleteProductAnalyticsData,
 			runProductAnalyticsCopyPipe,
 			eraseProductAnalytics,
+			recoverProductAnalyticsErasure,
 		} as const;
 	}),
+	dependencies: [ProductAnalyticsErasureLeaseRepo.Default],
 }) {}

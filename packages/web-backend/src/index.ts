@@ -35,6 +35,12 @@ export {
 	StorageRepo,
 } from "./Storage/StorageRepo.ts";
 export { Tinybird } from "./Tinybird/index.ts";
+export {
+	type ProductAnalyticsErasureLease,
+	ProductAnalyticsErasureLeaseRepo,
+	type ProductAnalyticsErasureLeaseStore,
+	type ProductAnalyticsErasureScope,
+} from "./Tinybird/ProductAnalyticsErasureLeaseRepo.ts";
 export { Users } from "./Users/index.ts";
 export {
 	collectPasswordHashes,

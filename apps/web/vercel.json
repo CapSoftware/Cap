@@ -16,6 +16,10 @@
 		{
 			"path": "/api/cron/reconcile-product-analytics",
 			"schedule": "43 4 * * *"
+		},
+		{
+			"path": "/api/cron/recover-product-analytics-erasure",
+			"schedule": "*/10 * * * *"
 		}
 	],
 	"functions": {
