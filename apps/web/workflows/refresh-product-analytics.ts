@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { FatalError } from "workflow";
 import {
@@ -154,10 +153,7 @@ export async function refreshProductAnalyticsWorkflow(input: {
 	const sourceCutoff = new Date(input.scheduledAt).toISOString();
 	const lease = await acquireProductAnalyticsRefreshStep(sourceCutoff);
 	if (!lease) return { refreshed: false as const, reason: "lease_unavailable" };
-	const copyRunId = `refresh_${createHash("sha256")
-		.update(sourceCutoff)
-		.digest("hex")
-		.slice(0, 24)}`;
+	const copyRunId = `refresh_${sourceCutoff.replace(/\D/g, "")}`;
 	try {
 		const jobs = [];
 		for (const [pipe, marker] of REFRESH_COPIES) {
