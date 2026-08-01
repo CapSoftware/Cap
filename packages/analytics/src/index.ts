@@ -89,6 +89,13 @@ export function productAnalyticsEventIdHash(eventId: string) {
 	return bytesToHex(sha256(new TextEncoder().encode(`event\0${eventId}`)));
 }
 
+export function canonicalClientProductEventId(
+	anonymousId: string,
+	eventId: string,
+) {
+	return `client:${productAnalyticsEventIdHash(`${anonymousId}\0${eventId}`)}`;
+}
+
 export interface ProductEventInput<Name extends CoreEventName = CoreEventName> {
 	eventId: string;
 	eventName: Name;
@@ -419,8 +426,25 @@ export function createProductEventRows(
 	context: ProductEventContext,
 ): ProductEventRow[] {
 	return events.map((event) => {
+		const eventId =
+			context.source === "client"
+				? canonicalClientProductEventId(event.anonymousId, event.eventId)
+				: event.eventId;
+		const properties =
+			context.source === "client" &&
+			event.properties &&
+			"page_view_id" in event.properties &&
+			typeof event.properties.page_view_id === "string"
+				? {
+						...event.properties,
+						page_view_id: canonicalClientProductEventId(
+							event.anonymousId,
+							event.properties.page_view_id,
+						),
+					}
+				: event.properties;
 		const channel = normalizeAcquisitionChannel(
-			event.properties as ProductEventProperties | undefined,
+			properties as ProductEventProperties | undefined,
 			event.referrer,
 			context.hostname,
 		);
@@ -447,11 +471,27 @@ export function createProductEventRows(
 			channel,
 			traffic_class: context.trafficClass ?? "external",
 			synthetic_run_id: context.syntheticRunId ?? "",
-			properties: event.properties ? JSON.stringify(event.properties) : "{}",
+			properties: properties ? JSON.stringify(properties) : "{}",
+		};
+		const immutableClientPayload = {
+			event_id: eventId,
+			event_name: payload.event_name,
+			schema_version: payload.schema_version,
+			source: payload.source,
+			platform: payload.platform,
+			occurred_at: payload.occurred_at,
+			anonymous_id: payload.anonymous_id,
+			session_id: payload.session_id,
+			app_version: payload.app_version,
+			pathname: payload.pathname,
+			referrer: payload.referrer,
+			properties: payload.properties,
 		};
 		return {
-			event_id: event.eventId,
-			payload_hash: createProductEventPayloadHash(payload),
+			event_id: eventId,
+			payload_hash: createProductEventPayloadHash(
+				context.source === "client" ? immutableClientPayload : payload,
+			),
 			received_at: context.receivedAt,
 			...payload,
 		};

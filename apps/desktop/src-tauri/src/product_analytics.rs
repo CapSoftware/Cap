@@ -424,6 +424,20 @@ struct DeliveryError {
     status: Option<u16>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductEventAdmissionResponse {
+    accepted: usize,
+    accepted_event_ids: Option<Vec<String>>,
+    rejected_event_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ProductEventAdmission {
+    accepted_event_ids: HashSet<String>,
+    rejected_event_ids: HashSet<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProductEventBatchKind {
     LossReport,
@@ -469,9 +483,12 @@ struct ProductEventOutbox {
 async fn send_product_batch_once(
     app: &AppHandle,
     events: &[ProductEvent],
-) -> Result<(), DeliveryError> {
+) -> Result<ProductEventAdmission, DeliveryError> {
     if !live_telemetry_enabled(app) {
-        return Ok(());
+        return Ok(ProductEventAdmission {
+            accepted_event_ids: events.iter().map(|event| event.event_id.clone()).collect(),
+            rejected_event_ids: HashSet::new(),
+        });
     }
 
     let auth_token = product_auth_token(app);
@@ -493,7 +510,18 @@ async fn send_product_batch_once(
         })?;
 
     if response.status().is_success() {
-        Ok(())
+        let status = response.status().as_u16();
+        let payload = response
+            .json::<ProductEventAdmissionResponse>()
+            .await
+            .map_err(|_| DeliveryError {
+                retryable: true,
+                status: Some(status),
+            })?;
+        parse_product_event_admission(events, payload).ok_or(DeliveryError {
+            retryable: true,
+            status: Some(status),
+        })
     } else {
         let status = response.status().as_u16();
         Err(DeliveryError {
@@ -503,8 +531,42 @@ async fn send_product_batch_once(
     }
 }
 
+fn parse_product_event_admission(
+    events: &[ProductEvent],
+    response: ProductEventAdmissionResponse,
+) -> Option<ProductEventAdmission> {
+    let requested_event_ids = events
+        .iter()
+        .map(|event| event.event_id.clone())
+        .collect::<HashSet<_>>();
+    match (response.accepted_event_ids, response.rejected_event_ids) {
+        (Some(accepted_event_ids), Some(rejected_event_ids)) => {
+            let accepted_event_ids = accepted_event_ids.into_iter().collect::<HashSet<_>>();
+            let rejected_event_ids = rejected_event_ids.into_iter().collect::<HashSet<_>>();
+            let accounted_event_ids = accepted_event_ids
+                .union(&rejected_event_ids)
+                .cloned()
+                .collect::<HashSet<_>>();
+            (response.accepted == accepted_event_ids.len()
+                && accepted_event_ids.is_disjoint(&rejected_event_ids)
+                && accounted_event_ids == requested_event_ids)
+                .then_some(ProductEventAdmission {
+                    accepted_event_ids,
+                    rejected_event_ids,
+                })
+        }
+        (None, None) if response.accepted == requested_event_ids.len() => {
+            Some(ProductEventAdmission {
+                accepted_event_ids: requested_event_ids,
+                rejected_event_ids: HashSet::new(),
+            })
+        }
+        _ => None,
+    }
+}
+
 fn should_retry_product_status(status: u16) -> bool {
-    status == 429 || status >= 500
+    status == 404 || status == 410 || status == 429 || status >= 500
 }
 
 fn decode_outbox_encryption_key(encoded: &str) -> Result<[u8; 32], String> {
@@ -1416,8 +1478,39 @@ async fn run_product_event_worker(app: AppHandle, mut receiver: mpsc::Receiver<(
             }
 
             match send_product_batch_once(&app, &events).await {
-                Ok(()) => {
-                    remove_delivered_events(&app, &events);
+                Ok(admission) => {
+                    let accepted_events = events
+                        .iter()
+                        .filter(|event| admission.accepted_event_ids.contains(&event.event_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let rejected_events = events
+                        .iter()
+                        .filter(|event| admission.rejected_event_ids.contains(&event.event_id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    remove_delivered_events(&app, &accepted_events);
+                    if !rejected_events.is_empty() {
+                        let error = DeliveryError {
+                            retryable: false,
+                            status: Some(409),
+                        };
+                        match batch_kind {
+                            ProductEventBatchKind::Pending => {
+                                move_to_dead_letters(&app, &rejected_events, &error);
+                            }
+                            ProductEventBatchKind::DeadLetterRetry => {
+                                record_dead_letter_retry_rejection(&app, &rejected_events, &error);
+                            }
+                            ProductEventBatchKind::LossReport => {
+                                warn!(
+                                    event_count = rejected_events.len(),
+                                    "Product analytics loss reports remain encrypted after selective rejection"
+                                );
+                                break;
+                            }
+                        }
+                    }
                     retry_attempt = 0;
                 }
                 Err(error) if error.retryable => {
@@ -1804,6 +1897,13 @@ mod tests {
             fragmented: true,
             custom_cursor_capture: true,
         }
+    }
+
+    fn product_event_with_id(event_id: &str) -> ProductEvent {
+        let mut event = product_event(&event_data(recording_started()), "install-id".to_string())
+            .expect("recording event should be registered");
+        event.event_id = event_id.to_string();
+        event
     }
 
     #[test]
@@ -2385,7 +2485,45 @@ mod tests {
     fn product_status_retry_policy_matches_the_browser() {
         assert!(!should_retry_product_status(400));
         assert!(!should_retry_product_status(401));
+        assert!(should_retry_product_status(404));
+        assert!(should_retry_product_status(410));
         assert!(should_retry_product_status(429));
         assert!(should_retry_product_status(503));
+    }
+
+    #[test]
+    fn product_admission_is_selective_and_fail_closed() {
+        let first = product_event_with_id("first");
+        let second = product_event_with_id("second");
+        let events = [first, second];
+        let admission = parse_product_event_admission(
+            &events,
+            ProductEventAdmissionResponse {
+                accepted: 1,
+                accepted_event_ids: Some(vec!["first".to_string()]),
+                rejected_event_ids: Some(vec!["second".to_string()]),
+            },
+        )
+        .expect("selective admission should be valid");
+        assert_eq!(
+            admission.accepted_event_ids,
+            HashSet::from(["first".to_string()])
+        );
+        assert_eq!(
+            admission.rejected_event_ids,
+            HashSet::from(["second".to_string()])
+        );
+
+        assert!(
+            parse_product_event_admission(
+                &events,
+                ProductEventAdmissionResponse {
+                    accepted: 1,
+                    accepted_event_ids: Some(vec!["first".to_string()]),
+                    rejected_event_ids: Some(Vec::new()),
+                },
+            )
+            .is_none()
+        );
     }
 }

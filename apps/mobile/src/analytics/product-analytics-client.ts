@@ -504,21 +504,70 @@ export class MobileProductAnalyticsClient {
 			}
 			if (response.ok) {
 				const payload = (await response.json().catch(() => null)) as unknown;
-				if (!isRecord(payload) || payload.accepted !== batch.length) {
+				if (!isRecord(payload)) {
 					await this.#retry(batch);
 					return;
 				}
-				const ids = new Set(batch.map((entry) => entry.event.eventId));
+				const requestedIds = new Set(batch.map((entry) => entry.event.eventId));
+				const rawAcceptedEventIds = Array.isArray(payload.acceptedEventIds)
+					? payload.acceptedEventIds
+					: undefined;
+				const rawRejectedEventIds = Array.isArray(payload.rejectedEventIds)
+					? payload.rejectedEventIds
+					: undefined;
+				const hasSelectiveResult = Boolean(
+					rawAcceptedEventIds && rawRejectedEventIds,
+				);
+				const acceptedEventIds = hasSelectiveResult
+					? (rawAcceptedEventIds ?? []).filter(
+							(eventId: unknown): eventId is string =>
+								typeof eventId === "string" && requestedIds.has(eventId),
+						)
+					: payload.accepted === batch.length
+						? [...requestedIds]
+						: [];
+				const rejectedEventIds = hasSelectiveResult
+					? (rawRejectedEventIds ?? []).filter(
+							(eventId: unknown): eventId is string =>
+								typeof eventId === "string" && requestedIds.has(eventId),
+						)
+					: [];
+				if (
+					payload.accepted !== acceptedEventIds.length ||
+					acceptedEventIds.length + rejectedEventIds.length !==
+						requestedIds.size ||
+					new Set([...acceptedEventIds, ...rejectedEventIds]).size !==
+						requestedIds.size
+				) {
+					await this.#retry(batch);
+					return;
+				}
+				const ids = new Set([...acceptedEventIds, ...rejectedEventIds]);
 				state.pending = state.pending.filter(
 					(entry) => !ids.has(entry.event.eventId),
 				);
-				state.delivery.accepted += batch.length;
+				state.delivery.accepted += acceptedEventIds.length;
+				state.delivery.contract_rejected += rejectedEventIds.length;
 				for (const entry of batch) {
-					this.#recordFinalizedEvent(
-						entry.event,
-						entry.credentialScope,
-						"accepted",
-					);
+					if (acceptedEventIds.includes(entry.event.eventId)) {
+						this.#recordFinalizedEvent(
+							entry.event,
+							entry.credentialScope,
+							"accepted",
+						);
+					} else {
+						this.#deadLetter(
+							entry.event,
+							"contract",
+							409,
+							entry.credentialScope,
+						);
+						this.#recordFinalizedEvent(
+							entry.event,
+							entry.credentialScope,
+							"dead_letter",
+						);
+					}
 				}
 				await this.#persist();
 				continue;
@@ -526,6 +575,8 @@ export class MobileProductAnalyticsClient {
 			if (
 				response.status === 401 ||
 				response.status === 403 ||
+				response.status === 404 ||
+				response.status === 410 ||
 				response.status === 429 ||
 				response.status >= 500
 			) {

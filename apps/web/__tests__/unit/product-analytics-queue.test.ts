@@ -436,7 +436,27 @@ describe("browser product analytics transport", () => {
 		expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ keepalive: true });
 	});
 
+	it("returns per-event admission for a mixed conflict batch", async () => {
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+			Response.json({
+				accepted: 1,
+				acceptedEventIds: ["event-1"],
+				rejectedEventIds: ["event-2"],
+			}),
+		);
+		await expect(
+			sendBrowserProductAnalytics([makeEvent(1), makeEvent(2)], "normal", {
+				fetchImpl,
+			}),
+		).resolves.toEqual({
+			acceptedEventIds: ["event-1"],
+			rejectedEventIds: ["event-2"],
+		});
+	});
+
 	it.each([
+		[404, "retry"],
+		[410, "retry"],
 		[429, "retry"],
 		[503, "retry"],
 		[400, "drop"],

@@ -344,7 +344,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 		expect(ingestionRows).toHaveLength(0);
 	});
 
-	it("forwards exact retries and rejects event ID payload conflicts", async () => {
+	it("isolates payload conflicts without poisoning valid batch neighbors", async () => {
 		const { createProductEventRows, productAnalyticsEventIdHash } =
 			await import("@cap/analytics");
 		const appendRequests: string[] = [];
@@ -388,12 +388,25 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			pathname: "/different",
 			payload_hash: "f".repeat(32),
 		};
-		const conflict = await appendCollectorRowsEither([conflicting]);
-		expect(conflict._tag).toBe("Left");
-		if (conflict._tag === "Left") {
-			expect(conflict.left).toMatchObject({ retryable: false, status: 409 });
-		}
-		expect(appendRequests).toHaveLength(2);
+		const validNeighbor = {
+			...original,
+			event_id: `${original.event_id}_neighbor`,
+			payload_hash: "e".repeat(32),
+		};
+		const admission = await appendCollectorRowsEither([
+			conflicting,
+			validNeighbor,
+		]);
+		expect(admission).toMatchObject({
+			_tag: "Right",
+			right: {
+				acceptedEventIds: [validNeighbor.event_id],
+				rejectedEventIds: [original.event_id],
+			},
+		});
+		expect(appendRequests).toHaveLength(3);
+		expect(appendRequests[2]).toContain(validNeighbor.event_id);
+		expect(appendRequests[2]).not.toContain(conflicting.payload_hash);
 		const verifier = await mysql.createConnection(databaseUrl);
 		const [receipts] = await verifier.query<
 			Array<
@@ -411,8 +424,79 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			payloadHash: original.payload_hash,
 		});
 		await verifier.query(
-			"DELETE FROM product_analytics_event_receipts WHERE eventIdHash = ?",
-			[productAnalyticsEventIdHash(original.event_id)],
+			"DELETE FROM product_analytics_event_receipts WHERE eventIdHash IN (?, ?)",
+			[
+				productAnalyticsEventIdHash(original.event_id),
+				productAnalyticsEventIdHash(validNeighbor.event_id),
+			],
+		);
+		await verifier.end();
+	});
+
+	it("keeps untrusted client IDs disjoint from authoritative server IDs", async () => {
+		const { createProductEventRows, productAnalyticsEventIdHash } =
+			await import("@cap/analytics");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(null, { status: 202 })),
+		);
+		const rawEventId = "share_link_created:known-video-id";
+		const [clientRow] = createProductEventRows(
+			[
+				{
+					anonymousId: "preclaim-anonymous",
+					eventId: rawEventId,
+					eventName: "page_view",
+					occurredAt: "2026-07-31T12:00:00.000Z",
+					platform: "web",
+					properties: {
+						hostname: "cap.test",
+						is_session_entry: true,
+						session_started_at: "2026-07-31T12:00:00.000Z",
+					},
+				},
+			],
+			{
+				hostname: "cap.test",
+				receivedAt: "2026-07-31T12:00:01.000Z",
+				source: "client",
+			},
+		);
+		const [serverRow] = createProductEventRows(
+			[
+				{
+					anonymousId: "user:preclaim-user",
+					eventId: rawEventId,
+					eventName: "share_link_created",
+					occurredAt: "2026-07-31T12:00:02.000Z",
+					platform: "server",
+					properties: {
+						asset_type: "recording",
+						recording_mode: "instant",
+					},
+				},
+			],
+			{
+				organizationId: "preclaim-org",
+				receivedAt: "2026-07-31T12:00:03.000Z",
+				source: "server",
+				userId: "preclaim-user",
+			},
+		);
+		if (!clientRow || !serverRow) throw new Error("Expected preclaim fixtures");
+		expect(clientRow.event_id).not.toBe(serverRow.event_id);
+		const clientAdmission = await appendCollectorRows([clientRow]);
+		const serverAdmission = await appendCollectorRows([serverRow]);
+		expect(clientAdmission.acceptedEventIds).toEqual([clientRow.event_id]);
+		expect(serverAdmission.acceptedEventIds).toEqual([serverRow.event_id]);
+
+		const verifier = await mysql.createConnection(databaseUrl);
+		await verifier.query(
+			"DELETE FROM product_analytics_event_receipts WHERE eventIdHash IN (?, ?)",
+			[
+				productAnalyticsEventIdHash(clientRow.event_id),
+				productAnalyticsEventIdHash(serverRow.event_id),
+			],
 		);
 		await verifier.end();
 	});
@@ -449,6 +533,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 	});
 
 	it("does not spread a deleted user's tombstone to a live organization", async () => {
+		const { createProductEventRows } = await import("@cap/analytics");
 		const { db } = await import("@cap/database");
 		const { productAnalyticsIdentityHash } = await import("@cap/web-backend");
 		const { persistProductAnalyticsEvent } = await import(
@@ -469,6 +554,34 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			}),
 		);
 		expect(suppressed.status).toBe("suppressed");
+		const [blockedCollectorRow] = createProductEventRows(
+			[
+				{
+					anonymousId: "deleted-user:new-alias",
+					eventId: "deleted-user:late-client-event",
+					eventName: "page_view",
+					occurredAt: "2026-07-31T12:00:00.000Z",
+					platform: "web",
+					properties: {
+						hostname: "cap.test",
+						is_session_entry: true,
+						session_started_at: "2026-07-31T12:00:00.000Z",
+					},
+				},
+			],
+			{
+				hostname: "cap.test",
+				receivedAt: "2026-07-31T12:00:01.000Z",
+				source: "client",
+				userId: "deleted-user",
+			},
+		);
+		if (!blockedCollectorRow)
+			throw new Error("Expected a blocked collector row");
+		await expect(appendCollectorRows([blockedCollectorRow])).resolves.toEqual({
+			acceptedEventIds: [],
+			rejectedEventIds: [blockedCollectorRow.event_id],
+		});
 		const accepted = await db().transaction((tx) =>
 			persistProductAnalyticsEvent(tx, {
 				eventId: "live-user:signup",

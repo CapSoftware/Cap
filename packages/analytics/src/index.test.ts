@@ -424,7 +424,7 @@ describe("createProductEventRows", () => {
 		});
 	});
 
-	it("conflict-hashes every decision and exclusion dimension", () => {
+	it("keeps client retry hashes stable across mutable server enrichment", () => {
 		const event = {
 			eventId: "page-1",
 			eventName: "page_view" as const,
@@ -457,7 +457,8 @@ describe("createProductEventRows", () => {
 			country: "US",
 		});
 
-		expect(external?.payload_hash).not.toBe(synthetic?.payload_hash);
-		expect(external?.payload_hash).not.toBe(differentCountry?.payload_hash);
+		expect(external?.payload_hash).toBe(synthetic?.payload_hash);
+		expect(external?.payload_hash).toBe(differentCountry?.payload_hash);
+		expect(external?.event_id).toMatch(/^client:[0-9a-f]{64}$/);
 	});
 });

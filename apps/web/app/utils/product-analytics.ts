@@ -21,7 +21,14 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const ANONYMOUS_ID_KEY = "cap_analytics_anonymous_id_v1";
 const QUEUE_STORAGE_KEY = "cap_analytics_queue_v1";
 
-type TransportResult = "success" | "retry" | "drop";
+type TransportResult =
+	| "success"
+	| "retry"
+	| "drop"
+	| {
+			acceptedEventIds: string[];
+			rejectedEventIds: string[];
+	  };
 type TransportMode = "normal" | "unload";
 type QueuedEvent = { event: ProductEventInput; attempts: number };
 type QueueStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
@@ -210,6 +217,14 @@ export class ProductAnalyticsQueue {
 
 		if (result === "success") {
 			this.delivery.accepted += batch.length;
+			this.persistedInFlight = [];
+			this.persist();
+			return false;
+		}
+		if (typeof result === "object") {
+			this.delivery.accepted += result.acceptedEventIds.length;
+			this.delivery.dropped += result.rejectedEventIds.length;
+			this.delivery.contract_rejected += result.rejectedEventIds.length;
 			this.persistedInFlight = [];
 			this.persist();
 			return false;
@@ -641,8 +656,40 @@ export const sendBrowserProductAnalytics = async (
 			keepalive: mode === "unload",
 			signal: controller.signal,
 		}).finally(() => clearTimeout(timeout));
-		if (response.ok) return "success";
-		return response.status === 429 || response.status >= 500 ? "retry" : "drop";
+		if (response.ok) {
+			const payload = (await response.json().catch(() => null)) as unknown;
+			if (payload === null && response.status === 202) return "success";
+			if (
+				isRecord(payload) &&
+				Array.isArray(payload.acceptedEventIds) &&
+				Array.isArray(payload.rejectedEventIds)
+			) {
+				const requestedIds = new Set(events.map((event) => event.eventId));
+				const acceptedEventIds = payload.acceptedEventIds.filter(
+					(eventId): eventId is string =>
+						typeof eventId === "string" && requestedIds.has(eventId),
+				);
+				const rejectedEventIds = payload.rejectedEventIds.filter(
+					(eventId): eventId is string =>
+						typeof eventId === "string" && requestedIds.has(eventId),
+				);
+				if (
+					acceptedEventIds.length + rejectedEventIds.length ===
+						requestedIds.size &&
+					new Set([...acceptedEventIds, ...rejectedEventIds]).size ===
+						requestedIds.size
+				) {
+					return { acceptedEventIds, rejectedEventIds };
+				}
+			}
+			return "retry";
+		}
+		return response.status === 404 ||
+			response.status === 410 ||
+			response.status === 429 ||
+			response.status >= 500
+			? "retry"
+			: "drop";
 	} catch {
 		return "retry";
 	}

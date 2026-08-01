@@ -126,10 +126,42 @@ describe("MobileProductAnalyticsClient", () => {
 		]);
 	});
 
-	it.each([429, 500])("retries a retryable %s response", async (status) => {
+	it.each([404, 410, 429, 500])(
+		"retries a retryable %s response",
+		async (status) => {
+			const harness = createHarness({
+				fetchImpl: vi.fn<typeof fetch>(
+					async () => new Response(null, { status }),
+				),
+			});
+			await harness.client.configure({
+				apiKey: null,
+				credentialScope: "scope_1",
+				baseUrl: "https://cap.so",
+			});
+			const eventId = await harness.client.track("user_signed_in");
+			await harness.client.configure({
+				apiKey: "mobile_key",
+				credentialScope: "scope_1",
+				baseUrl: "https://cap.so",
+			});
+			const snapshot = await harness.client.snapshot();
+			expect(snapshot.pending[0]?.event.eventId).toBe(eventId);
+			expect(snapshot.pending[0]?.attempts).toBe(1);
+			expect(snapshot.delivery.retried).toBe(1);
+		},
+	);
+
+	it("finalizes accepted rows without losing a rejected batch neighbor", async () => {
+		let acceptedEventId = "";
+		let rejectedEventId = "";
 		const harness = createHarness({
-			fetchImpl: vi.fn<typeof fetch>(
-				async () => new Response(null, { status }),
+			fetchImpl: vi.fn<typeof fetch>(async () =>
+				Response.json({
+					accepted: 1,
+					acceptedEventIds: [acceptedEventId],
+					rejectedEventIds: [rejectedEventId],
+				}),
 			),
 		});
 		await harness.client.configure({
@@ -137,16 +169,26 @@ describe("MobileProductAnalyticsClient", () => {
 			credentialScope: "scope_1",
 			baseUrl: "https://cap.so",
 		});
-		const eventId = await harness.client.track("user_signed_in");
+		acceptedEventId = await harness.client.track("user_signed_in");
+		rejectedEventId = await harness.client.track("user_signed_in");
 		await harness.client.configure({
 			apiKey: "mobile_key",
 			credentialScope: "scope_1",
 			baseUrl: "https://cap.so",
 		});
 		const snapshot = await harness.client.snapshot();
-		expect(snapshot.pending[0]?.event.eventId).toBe(eventId);
-		expect(snapshot.pending[0]?.attempts).toBe(1);
-		expect(snapshot.delivery.retried).toBe(1);
+		expect(snapshot.pending).toEqual([]);
+		expect(snapshot.delivery).toMatchObject({
+			accepted: 1,
+			contract_rejected: 1,
+		});
+		expect(snapshot.deadLetters).toEqual([
+			expect.objectContaining({
+				eventId: rejectedEventId,
+				reason: "contract",
+				status: 409,
+			}),
+		]);
 	});
 
 	it("aborts and retries a request that exceeds the timeout", async () => {

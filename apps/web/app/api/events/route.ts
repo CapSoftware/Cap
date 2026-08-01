@@ -75,7 +75,13 @@ class Api extends HttpApi.make("ProductAnalyticsApi").add(
 					),
 				}),
 			)
-			.addSuccess(Schema.Struct({ accepted: Schema.Number }))
+			.addSuccess(
+				Schema.Struct({
+					accepted: Schema.Number,
+					acceptedEventIds: Schema.Array(Schema.String),
+					rejectedEventIds: Schema.Array(Schema.String),
+				}),
+			)
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.ServiceUnavailable)
 			.addError(RateLimited),
@@ -226,7 +232,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							syntheticRunId,
 						});
 
-						yield* analytics
+						const admission = yield* analytics
 							.appendWithIdentityFence(rows)
 							.pipe(
 								Effect.catchAll((error) =>
@@ -249,7 +255,28 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							});
 						}
 
-						return { accepted: rows.length };
+						const clientEventIds = new Map(
+							rows.map((row, index) => [row.event_id, events[index]?.eventId]),
+						);
+						const acceptedEventIds = [
+							...new Set(
+								admission.acceptedEventIds.flatMap(
+									(eventId) => clientEventIds.get(eventId) ?? [],
+								),
+							),
+						];
+						const rejectedEventIds = [
+							...new Set(
+								admission.rejectedEventIds.flatMap(
+									(eventId) => clientEventIds.get(eventId) ?? [],
+								),
+							),
+						];
+						return {
+							accepted: acceptedEventIds.length,
+							acceptedEventIds,
+							rejectedEventIds,
+						};
 					}),
 				);
 			}),

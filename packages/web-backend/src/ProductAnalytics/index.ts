@@ -232,7 +232,13 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 			});
 			const appendWithIdentityFence = (
 				rows: readonly ProductEventRow[],
-			): Effect.Effect<void, ProductAnalyticsError | DatabaseError> => {
+			): Effect.Effect<
+				{
+					acceptedEventIds: string[];
+					rejectedEventIds: string[];
+				},
+				ProductAnalyticsError | DatabaseError
+			> => {
 				const identities = productAnalyticsRowIdentities(rows);
 				return database
 					.use(async (db) => {
@@ -331,7 +337,11 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 														),
 													);
 											}
-											return undefined;
+											return {
+												acceptedEventIds: [],
+												rejectedEventIds: rows.map((row) => row.event_id),
+												rows: [] as ProductEventRow[],
+											};
 										}
 										const anonymousIdentity = identities.find(
 											(identity) => identity.identityKind === "anonymous",
@@ -368,7 +378,7 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 											now.getTime() + PRODUCT_ANALYTICS_RECEIPT_RETENTION_MS,
 										);
 										const admittedRows: ProductEventRow[] = [];
-										let conflicts = 0;
+										const rejectedEventIds: string[] = [];
 										for (const row of rows) {
 											const eventIdHash = productAnalyticsEventIdHash(
 												row.event_id,
@@ -422,28 +432,23 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 											if (receipt?.payloadHash === row.payload_hash) {
 												admittedRows.push(row);
 											} else {
-												conflicts += 1;
+												rejectedEventIds.push(row.event_id);
 											}
 										}
-										return { conflicts, rows: admittedRows };
+										return {
+											acceptedEventIds: admittedRows.map((row) => row.event_id),
+											rejectedEventIds,
+											rows: admittedRows,
+										};
 									}),
 								)
 								.pipe(
 									Effect.flatMap((admission) =>
-										!admission
-											? Effect.void
-											: admission.conflicts > 0
-												? Effect.fail(
-														new ProductAnalyticsError({
-															cause:
-																"Product analytics event ID was reused with a different payload",
-															retryable: false,
-															status: 409,
-														}),
-													)
-												: admission.rows.length === 0
-													? Effect.void
-													: service.append(admission.rows),
+										admission.rows.length === 0
+											? Effect.succeed(admission)
+											: service
+													.append(admission.rows)
+													.pipe(Effect.as(admission)),
 									),
 									Effect.ensuring(
 										database
@@ -459,6 +464,10 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 											)
 											.pipe(Effect.catchAll(() => Effect.void)),
 									),
+									Effect.map(({ acceptedEventIds, rejectedEventIds }) => ({
+										acceptedEventIds,
+										rejectedEventIds,
+									})),
 								),
 						),
 					);
