@@ -15,6 +15,9 @@ export {
 	hasAnalyticsSessionCookie,
 	ProductAnalytics,
 	ProductAnalyticsError,
+	type ProductAnalyticsIdentityKind,
+	productAnalyticsEventIdHash,
+	productAnalyticsIdentityHash,
 	resolveProductAnalyticsActor,
 	sendProductAnalyticsRows,
 } from "./ProductAnalytics/index.ts";

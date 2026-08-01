@@ -38,7 +38,10 @@ export interface VideoMetadata {
 	agentUpload?: {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
+		acceptedAt?: string;
+		rejectedAt?: string;
 	};
+	initiatingPlatform?: "cli" | "desktop" | "mobile" | "server" | "web";
 }
 
 export type VideoEditRange = {

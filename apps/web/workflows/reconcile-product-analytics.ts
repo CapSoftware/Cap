@@ -1,13 +1,27 @@
+import { createHash } from "node:crypto";
 import { PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT } from "@cap/analytics";
 import { db } from "@cap/database";
 import {
 	comments,
 	messengerSupportEmails,
+	productAnalyticsReconciliationFailures,
 	users,
 	videos,
 } from "@cap/database/schema";
 import { stripe } from "@cap/utils";
-import { and, eq, gte, inArray, isNotNull, lte, notInArray } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gt,
+	gte,
+	inArray,
+	isNotNull,
+	lte,
+	notInArray,
+	or,
+	sql,
+} from "drizzle-orm";
 import type Stripe from "stripe";
 import {
 	checkoutStartedEvent,
@@ -17,6 +31,7 @@ import {
 	shareLinkCreatedEvent,
 	userSignedUpEvent,
 } from "@/lib/analytics/business-events";
+import { queueDurableServerProductEvent } from "@/lib/analytics/product-event-outbox";
 import {
 	isFirstPositiveSubscriptionPayment,
 	isSettledSubscriptionPurchase,
@@ -29,9 +44,11 @@ import {
 	subscriptionTrialConvertedProductEvent,
 	subscriptionTrialStartedProductEvent,
 } from "@/lib/analytics/stripe-business-events";
-import { enqueueReconciledProductAnalyticsEventStep } from "./deliver-product-analytics-event";
+import { videoAnalyticsPlatform } from "@/lib/analytics/video-platform";
 
-const RECONCILIATION_ROW_LIMIT = 5_000;
+const RECONCILIATION_PAGE_SIZE = 250;
+const RECONCILIATION_ENQUEUE_CONCURRENCY = 10;
+const MAX_RECONCILIATION_PAGES_PER_SOURCE = 10_000;
 const STRIPE_ANALYTICS_EVENT_TYPES = [
 	"checkout.session.created",
 	"checkout.session.completed",
@@ -47,30 +64,6 @@ const STRIPE_ANALYTICS_EVENT_TYPES = [
 const checkoutQuantity = (session: Stripe.Checkout.Session) => {
 	const quantity = Number(session.metadata?.analyticsQuantity);
 	return Number.isSafeInteger(quantity) && quantity > 0 ? quantity : undefined;
-};
-
-const videoAnalyticsPlatform = (video: {
-	metadata: unknown;
-	source: { type: string };
-}) => {
-	const metadata =
-		typeof video.metadata === "object" && video.metadata !== null
-			? (video.metadata as Record<string, unknown>)
-			: {};
-	if (
-		metadata.source === "mobileUpload" ||
-		metadata.source === "mobileCamera"
-	) {
-		return "mobile" as const;
-	}
-	if (
-		video.source.type === "desktopMP4" ||
-		video.source.type === "desktopSegments" ||
-		video.source.type === "local"
-	) {
-		return "desktop" as const;
-	}
-	return "server" as const;
 };
 
 function reconciliationWindow(scheduledAt: string, lookbackHours: number) {
@@ -89,16 +82,122 @@ function reconciliationWindow(scheduledAt: string, lookbackHours: number) {
 	};
 }
 
-export async function loadProductAnalyticsReconciliationEventsStep({
+type DatabaseReconciliationSource =
+	| "comment"
+	| "first_view"
+	| "signup"
+	| "video";
+
+type ReconciliationSourceType =
+	| `database_${DatabaseReconciliationSource}`
+	| "stripe_event";
+
+type ReconciliationCandidate = {
+	event: () => Parameters<typeof queueDurableServerProductEvent>[0];
+	sourceId: string;
+	sourceType: ReconciliationSourceType;
+};
+
+const reconciliationSourceHash = (
+	sourceType: ReconciliationSourceType,
+	sourceId: string,
+) =>
+	createHash("sha256")
+		.update(`reconciliation\0${sourceType}\0${sourceId}`)
+		.digest("hex");
+
+async function recordReconciliationFailure({
+	errorCode,
+	sourceHash,
+	sourceType,
+}: {
+	errorCode: "event_invalid" | "queue_failed";
+	sourceHash: string;
+	sourceType: ReconciliationSourceType;
+}) {
+	await db()
+		.insert(productAnalyticsReconciliationFailures)
+		.values({ errorCode, sourceHash, sourceType })
+		.onDuplicateKeyUpdate({
+			set: {
+				attemptCount: sql`${productAnalyticsReconciliationFailures.attemptCount} + 1`,
+				errorCode,
+				lastSeenAt: new Date(),
+			},
+		});
+}
+
+async function reconcileCandidate(candidate: ReconciliationCandidate) {
+	const sourceHash = reconciliationSourceHash(
+		candidate.sourceType,
+		candidate.sourceId,
+	);
+	let event: Parameters<typeof queueDurableServerProductEvent>[0];
+	try {
+		event = candidate.event();
+	} catch {
+		await recordReconciliationFailure({
+			errorCode: "event_invalid",
+			sourceHash,
+			sourceType: candidate.sourceType,
+		});
+		return false;
+	}
+	try {
+		await queueDurableServerProductEvent(event);
+		await db()
+			.delete(productAnalyticsReconciliationFailures)
+			.where(eq(productAnalyticsReconciliationFailures.sourceHash, sourceHash));
+		return true;
+	} catch {
+		await recordReconciliationFailure({
+			errorCode: "queue_failed",
+			sourceHash,
+			sourceType: candidate.sourceType,
+		});
+		return false;
+	}
+}
+
+async function reconcileCandidates(candidates: ReconciliationCandidate[]) {
+	let reconciled = 0;
+	let failed = 0;
+	for (
+		let offset = 0;
+		offset < candidates.length;
+		offset += RECONCILIATION_ENQUEUE_CONCURRENCY
+	) {
+		const results = await Promise.all(
+			candidates
+				.slice(offset, offset + RECONCILIATION_ENQUEUE_CONCURRENCY)
+				.map(reconcileCandidate),
+		);
+		reconciled += results.filter(Boolean).length;
+		failed += results.filter((result) => !result).length;
+	}
+	return { failed, reconciled };
+}
+
+type ReconciliationCursor = { at: string; id: string };
+
+export async function loadProductAnalyticsReconciliationPageStep({
 	scheduledAt,
 	lookbackHours,
+	source,
+	cursor,
 }: {
 	scheduledAt: string;
 	lookbackHours: number;
+	source: DatabaseReconciliationSource;
+	cursor?: ReconciliationCursor;
 }) {
 	"use step";
 
 	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
+	const cursorAt = cursor ? new Date(cursor.at) : undefined;
+	if (cursorAt && !Number.isFinite(cursorAt.getTime())) {
+		throw new Error("Invalid product analytics reconciliation cursor");
+	}
 	const pendingDeletionUserIds = db()
 		.select({ userId: messengerSupportEmails.userId })
 		.from(messengerSupportEmails)
@@ -111,169 +210,257 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 				isNotNull(messengerSupportEmails.userId),
 			),
 		);
-	const [recentUsers, recentVideos, recentComments, recentFirstViews] =
-		await Promise.all([
-			db()
-				.select({
-					id: users.id,
-					organizationId: users.activeOrganizationId,
-					createdAt: users.created_at,
-				})
-				.from(users)
-				.where(
-					and(
-						gte(users.created_at, start),
-						lte(users.created_at, end),
-						notInArray(users.id, pendingDeletionUserIds),
-					),
-				)
-				.limit(RECONCILIATION_ROW_LIMIT + 1),
-			db()
-				.select({
-					id: videos.id,
-					userId: videos.ownerId,
-					organizationId: videos.orgId,
-					createdAt: videos.createdAt,
-					isScreenshot: videos.isScreenshot,
-					source: videos.source,
-					metadata: videos.metadata,
-				})
-				.from(videos)
-				.where(
-					and(
-						gte(videos.createdAt, start),
-						lte(videos.createdAt, end),
-						notInArray(videos.ownerId, pendingDeletionUserIds),
-					),
-				)
-				.limit(RECONCILIATION_ROW_LIMIT + 1),
-			db()
-				.select({
-					id: comments.id,
-					authorId: comments.authorId,
-					organizationId: videos.orgId,
-					createdAt: comments.createdAt,
-					type: comments.type,
-					parentCommentId: comments.parentCommentId,
-				})
-				.from(comments)
-				.leftJoin(videos, eq(comments.videoId, videos.id))
-				.where(
-					and(
-						gte(comments.createdAt, start),
-						lte(comments.createdAt, end),
-						notInArray(comments.authorId, pendingDeletionUserIds),
-					),
-				)
-				.limit(RECONCILIATION_ROW_LIMIT + 1),
-			db()
-				.select({
-					id: videos.id,
-					userId: videos.ownerId,
-					organizationId: videos.orgId,
-					firstExternalViewAt: videos.firstExternalViewAt,
-				})
-				.from(videos)
-				.where(
-					and(
-						isNotNull(videos.firstExternalViewAt),
-						gte(videos.firstExternalViewAt, start),
-						lte(videos.firstExternalViewAt, end),
-						notInArray(videos.ownerId, pendingDeletionUserIds),
-					),
-				)
-				.limit(RECONCILIATION_ROW_LIMIT + 1),
-		]);
-	if (
-		recentUsers.length > RECONCILIATION_ROW_LIMIT ||
-		recentVideos.length > RECONCILIATION_ROW_LIMIT ||
-		recentComments.length > RECONCILIATION_ROW_LIMIT ||
-		recentFirstViews.length > RECONCILIATION_ROW_LIMIT
-	) {
-		throw new Error("Product analytics reconciliation row limit exceeded");
+	if (source === "signup") {
+		const page = await db()
+			.select({ id: users.id, createdAt: users.created_at })
+			.from(users)
+			.where(
+				and(
+					gte(users.created_at, start),
+					lte(users.created_at, end),
+					notInArray(users.id, pendingDeletionUserIds),
+					cursor && cursorAt
+						? or(
+								gt(users.created_at, cursorAt),
+								and(
+									eq(users.created_at, cursorAt),
+									gt(users.id, cursor.id as (typeof users.$inferSelect)["id"]),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(asc(users.created_at), asc(users.id))
+			.limit(RECONCILIATION_PAGE_SIZE);
+		const result = await reconcileCandidates(
+			page.map((user) => ({
+				event: () =>
+					userSignedUpEvent({ userId: user.id, createdAt: user.createdAt }),
+				sourceId: user.id,
+				sourceType: "database_signup",
+			})),
+		);
+		const last = page.at(-1);
+		return {
+			...result,
+			nextCursor:
+				last && page.length === RECONCILIATION_PAGE_SIZE
+					? { at: last.createdAt.toISOString(), id: last.id }
+					: undefined,
+		};
 	}
-
-	return [
-		...recentUsers.map((user) =>
-			userSignedUpEvent({
-				userId: user.id,
-				createdAt: user.createdAt,
-			}),
-		),
-		...recentVideos.map((video) =>
-			shareLinkCreatedEvent({
-				videoId: video.id,
-				platform: videoAnalyticsPlatform(video),
-				userId: video.userId,
-				organizationId: video.organizationId,
-				createdAt: video.createdAt,
-				isScreenshot: video.isScreenshot,
-				sourceType: video.source.type,
-			}),
-		),
-		...recentComments.map((comment) =>
-			collaborationActionCreatedEvent({
-				commentId: comment.id,
-				userId: comment.authorId,
-				organizationId: comment.organizationId,
-				createdAt: comment.createdAt,
-				action: comment.parentCommentId
-					? "reply"
-					: comment.type === "emoji"
-						? "reaction"
-						: "comment",
-			}),
-		),
-		...recentFirstViews.map((video) => {
-			if (!video.firstExternalViewAt) {
-				throw new Error("First-view reconciliation timestamp is missing");
-			}
-			return firstViewReceivedEvent({
-				videoId: video.id,
-				userId: video.userId,
-				organizationId: video.organizationId,
-				createdAt: video.firstExternalViewAt,
-			});
-		}),
-	];
+	if (source === "video") {
+		const page = await db()
+			.select({
+				id: videos.id,
+				userId: videos.ownerId,
+				organizationId: videos.orgId,
+				createdAt: videos.createdAt,
+				isScreenshot: videos.isScreenshot,
+				source: videos.source,
+				metadata: videos.metadata,
+			})
+			.from(videos)
+			.where(
+				and(
+					gte(videos.createdAt, start),
+					lte(videos.createdAt, end),
+					notInArray(videos.ownerId, pendingDeletionUserIds),
+					cursor && cursorAt
+						? or(
+								gt(videos.createdAt, cursorAt),
+								and(
+									eq(videos.createdAt, cursorAt),
+									gt(
+										videos.id,
+										cursor.id as (typeof videos.$inferSelect)["id"],
+									),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(asc(videos.createdAt), asc(videos.id))
+			.limit(RECONCILIATION_PAGE_SIZE);
+		const result = await reconcileCandidates(
+			page.map((video) => ({
+				event: () => {
+					const platform = videoAnalyticsPlatform(video);
+					const analyticsPlatform =
+						platform === "cli"
+							? "cli"
+							: platform === "desktop"
+								? "desktop"
+								: platform === "mobile"
+									? "mobile"
+									: "server";
+					return shareLinkCreatedEvent({
+						videoId: video.id,
+						platform: analyticsPlatform,
+						userId: video.userId,
+						organizationId: video.organizationId,
+						createdAt: video.createdAt,
+						isScreenshot: video.isScreenshot,
+						sourceType: video.source.type,
+					});
+				},
+				sourceId: video.id,
+				sourceType: "database_video",
+			})),
+		);
+		const last = page.at(-1);
+		return {
+			...result,
+			nextCursor:
+				last && page.length === RECONCILIATION_PAGE_SIZE
+					? { at: last.createdAt.toISOString(), id: last.id }
+					: undefined,
+		};
+	}
+	if (source === "comment") {
+		const page = await db()
+			.select({
+				id: comments.id,
+				authorId: comments.authorId,
+				organizationId: videos.orgId,
+				createdAt: comments.createdAt,
+				type: comments.type,
+				parentCommentId: comments.parentCommentId,
+			})
+			.from(comments)
+			.leftJoin(videos, eq(comments.videoId, videos.id))
+			.where(
+				and(
+					gte(comments.createdAt, start),
+					lte(comments.createdAt, end),
+					notInArray(comments.authorId, pendingDeletionUserIds),
+					cursor && cursorAt
+						? or(
+								gt(comments.createdAt, cursorAt),
+								and(
+									eq(comments.createdAt, cursorAt),
+									gt(
+										comments.id,
+										cursor.id as (typeof comments.$inferSelect)["id"],
+									),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(asc(comments.createdAt), asc(comments.id))
+			.limit(RECONCILIATION_PAGE_SIZE);
+		const result = await reconcileCandidates(
+			page.map((comment) => ({
+				event: () =>
+					collaborationActionCreatedEvent({
+						commentId: comment.id,
+						userId: comment.authorId,
+						organizationId: comment.organizationId,
+						createdAt: comment.createdAt,
+						action: comment.parentCommentId
+							? "reply"
+							: comment.type === "emoji"
+								? "reaction"
+								: "comment",
+					}),
+				sourceId: comment.id,
+				sourceType: "database_comment",
+			})),
+		);
+		const last = page.at(-1);
+		return {
+			...result,
+			nextCursor:
+				last && page.length === RECONCILIATION_PAGE_SIZE
+					? { at: last.createdAt.toISOString(), id: last.id }
+					: undefined,
+		};
+	}
+	const page = await db()
+		.select({
+			id: videos.id,
+			userId: videos.ownerId,
+			organizationId: videos.orgId,
+			firstExternalViewAt: videos.firstExternalViewAt,
+		})
+		.from(videos)
+		.where(
+			and(
+				isNotNull(videos.firstExternalViewAt),
+				gte(videos.firstExternalViewAt, start),
+				lte(videos.firstExternalViewAt, end),
+				notInArray(videos.ownerId, pendingDeletionUserIds),
+				cursor && cursorAt
+					? or(
+							gt(videos.firstExternalViewAt, cursorAt),
+							and(
+								eq(videos.firstExternalViewAt, cursorAt),
+								gt(videos.id, cursor.id as (typeof videos.$inferSelect)["id"]),
+							),
+						)
+					: undefined,
+			),
+		)
+		.orderBy(asc(videos.firstExternalViewAt), asc(videos.id))
+		.limit(RECONCILIATION_PAGE_SIZE);
+	const result = await reconcileCandidates(
+		page.map((video) => ({
+			event: () => {
+				if (!video.firstExternalViewAt) {
+					throw new Error("First-view reconciliation timestamp is missing");
+				}
+				return firstViewReceivedEvent({
+					videoId: video.id,
+					userId: video.userId,
+					organizationId: video.organizationId,
+					createdAt: video.firstExternalViewAt,
+				});
+			},
+			sourceId: video.id,
+			sourceType: "database_first_view",
+		})),
+	);
+	const last = page.at(-1);
+	return {
+		...result,
+		nextCursor:
+			last?.firstExternalViewAt && page.length === RECONCILIATION_PAGE_SIZE
+				? { at: last.firstExternalViewAt.toISOString(), id: last.id }
+				: undefined,
+	};
 }
-loadProductAnalyticsReconciliationEventsStep.maxRetries = 4;
+loadProductAnalyticsReconciliationPageStep.maxRetries = 4;
 
-export async function loadStripeAnalyticsReconciliationEventsStep({
-	scheduledAt,
-	lookbackHours,
-}: {
+export async function loadProductAnalyticsReconciliationEventsStep(input: {
 	scheduledAt: string;
 	lookbackHours: number;
 }) {
-	"use step";
-
-	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
-	const stripeEvents: Stripe.Event[] = [];
-	for (const type of STRIPE_ANALYTICS_EVENT_TYPES) {
-		let startingAfter: string | undefined;
-		for (;;) {
-			const page = await stripe().events.list({
-				type,
-				created: {
-					gte: Math.floor(start.getTime() / 1_000),
-					lte: Math.floor(end.getTime() / 1_000),
-				},
-				limit: 100,
-				...(startingAfter ? { starting_after: startingAfter } : {}),
+	let reconciled = 0;
+	let failed = 0;
+	for (const source of ["signup", "video", "comment", "first_view"] as const) {
+		let cursor: ReconciliationCursor | undefined;
+		for (let pageNumber = 0; ; pageNumber += 1) {
+			if (pageNumber >= MAX_RECONCILIATION_PAGES_PER_SOURCE) {
+				throw new Error("Product analytics reconciliation page limit exceeded");
+			}
+			const page = await loadProductAnalyticsReconciliationPageStep({
+				...input,
+				source,
+				cursor,
 			});
-			stripeEvents.push(...page.data);
-			if (stripeEvents.length > RECONCILIATION_ROW_LIMIT) {
-				throw new Error("Stripe analytics reconciliation row limit exceeded");
-			}
-			if (!page.has_more || page.data.length === 0) break;
-			startingAfter = page.data.at(-1)?.id;
-			if (!startingAfter) {
-				throw new Error("Stripe analytics reconciliation pagination failed");
-			}
+			reconciled += page.reconciled;
+			failed += page.failed;
+			if (!page.nextCursor) break;
+			cursor = page.nextCursor;
 		}
 	}
+	return { failed, reconciled };
+}
 
+async function reconcileStripeAnalyticsEventBatch(
+	stripeEvents: Stripe.Event[],
+) {
 	const sessions = stripeEvents
 		.filter(({ type }) => type.startsWith("checkout.session."))
 		.map((event) => ({
@@ -332,23 +519,6 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 	);
 	const reconciled = [];
 	let legacyStripeEventsSkipped = 0;
-	const subscriptionsById = new Map(
-		subscriptionEvents.map(({ subscription }) => [
-			subscription.id,
-			subscription,
-		]),
-	);
-	const getSubscription = async (
-		value: string | Stripe.Subscription | null,
-	) => {
-		if (!value) throw new Error("Stripe event is missing a subscription");
-		if (typeof value !== "string") return value;
-		const existing = subscriptionsById.get(value);
-		if (existing) return existing;
-		const subscription = await stripe().subscriptions.retrieve(value);
-		subscriptionsById.set(value, subscription);
-		return subscription;
-	};
 	const getUser = (
 		customer: string | Stripe.Customer | Stripe.DeletedCustomer | null,
 	) => {
@@ -427,7 +597,10 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 	}
 	for (const { event, invoice } of invoiceEvents) {
 		if (!invoice.subscription) continue;
-		const subscription = await getSubscription(invoice.subscription);
+		const subscriptionId =
+			typeof invoice.subscription === "string"
+				? invoice.subscription
+				: invoice.subscription.id;
 		const user = getUser(invoice.customer);
 		const occurredAt = new Date(event.created * 1_000).toISOString();
 		if (event.type === "invoice.paid") {
@@ -435,11 +608,10 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 				eventId: event.id,
 				occurredAt,
 				invoice,
-				subscription,
 				user,
 				firstPositivePayment: await isFirstPositiveSubscriptionPayment({
 					invoice,
-					subscriptionId: subscription.id,
+					subscriptionId,
 					listPaidInvoices: (input) => stripe().invoices.list(input),
 				}),
 			});
@@ -450,7 +622,6 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 			eventId: event.id,
 			occurredAt,
 			invoice,
-			subscription,
 			user,
 		});
 		if (productEvent) reconciled.push(productEvent);
@@ -462,7 +633,6 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 				? await stripe().invoices.retrieve(charge.invoice)
 				: charge.invoice;
 		if (!invoice.subscription) continue;
-		const subscription = await getSubscription(invoice.subscription);
 		const previous = event.data.previous_attributes as
 			| Partial<Stripe.Charge>
 			| undefined;
@@ -471,7 +641,6 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 			occurredAt: new Date(event.created * 1_000).toISOString(),
 			charge,
 			invoice,
-			subscription,
 			user: getUser(charge.customer),
 			refundedAmount: charge.amount_refunded - (previous?.amount_refunded ?? 0),
 		});
@@ -566,9 +735,109 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 		});
 		if (productEvent) reconciled.push(productEvent);
 	}
-	return { events: reconciled, legacyStripeEventsSkipped };
+	const delivery = await reconcileCandidates(
+		reconciled.map((event) => ({
+			event: () => event,
+			sourceId: event.eventId,
+			sourceType: "stripe_event",
+		})),
+	);
+	return {
+		failed: delivery.failed,
+		reconciled: delivery.reconciled,
+		legacyStripeEventsSkipped,
+	};
 }
-loadStripeAnalyticsReconciliationEventsStep.maxRetries = 4;
+
+export async function loadStripeAnalyticsReconciliationPageStep({
+	scheduledAt,
+	lookbackHours,
+	type,
+	startingAfter,
+}: {
+	scheduledAt: string;
+	lookbackHours: number;
+	type: (typeof STRIPE_ANALYTICS_EVENT_TYPES)[number];
+	startingAfter?: string;
+}) {
+	"use step";
+
+	const { end, start } = reconciliationWindow(scheduledAt, lookbackHours);
+	let reconciled = 0;
+	let failed = 0;
+	let legacyStripeEventsSkipped = 0;
+	const page = await stripe().events.list({
+		type,
+		created: {
+			gte: Math.floor(start.getTime() / 1_000),
+			lte: Math.floor(end.getTime() / 1_000),
+		},
+		limit: 100,
+		...(startingAfter ? { starting_after: startingAfter } : {}),
+	});
+	for (const event of page.data) {
+		try {
+			const batch = await reconcileStripeAnalyticsEventBatch([event]);
+			await db()
+				.delete(productAnalyticsReconciliationFailures)
+				.where(
+					eq(
+						productAnalyticsReconciliationFailures.sourceHash,
+						reconciliationSourceHash("stripe_event", event.id),
+					),
+				);
+			reconciled += batch.reconciled;
+			failed += batch.failed;
+			legacyStripeEventsSkipped += batch.legacyStripeEventsSkipped;
+		} catch {
+			await recordReconciliationFailure({
+				errorCode: "event_invalid",
+				sourceHash: reconciliationSourceHash("stripe_event", event.id),
+				sourceType: "stripe_event",
+			});
+			failed += 1;
+		}
+	}
+	const nextStartingAfter = page.has_more ? page.data.at(-1)?.id : undefined;
+	if (page.has_more && !nextStartingAfter) {
+		throw new Error("Stripe analytics reconciliation pagination failed");
+	}
+	return {
+		failed,
+		legacyStripeEventsSkipped,
+		nextStartingAfter,
+		reconciled,
+	};
+}
+loadStripeAnalyticsReconciliationPageStep.maxRetries = 4;
+
+export async function loadStripeAnalyticsReconciliationEventsStep(input: {
+	scheduledAt: string;
+	lookbackHours: number;
+}) {
+	let reconciled = 0;
+	let failed = 0;
+	let legacyStripeEventsSkipped = 0;
+	for (const type of STRIPE_ANALYTICS_EVENT_TYPES) {
+		let startingAfter: string | undefined;
+		for (let pageNumber = 0; ; pageNumber += 1) {
+			if (pageNumber >= MAX_RECONCILIATION_PAGES_PER_SOURCE) {
+				throw new Error("Stripe analytics reconciliation page limit exceeded");
+			}
+			const page = await loadStripeAnalyticsReconciliationPageStep({
+				...input,
+				type,
+				startingAfter,
+			});
+			reconciled += page.reconciled;
+			failed += page.failed;
+			legacyStripeEventsSkipped += page.legacyStripeEventsSkipped;
+			if (!page.nextStartingAfter) break;
+			startingAfter = page.nextStartingAfter;
+		}
+	}
+	return { failed, legacyStripeEventsSkipped, reconciled };
+}
 
 export async function reconcileProductAnalyticsWorkflow(input: {
 	scheduledAt: string;
@@ -576,15 +845,51 @@ export async function reconcileProductAnalyticsWorkflow(input: {
 }) {
 	"use workflow";
 
-	const events = await loadProductAnalyticsReconciliationEventsStep(input);
-	const stripeReconciliation =
-		await loadStripeAnalyticsReconciliationEventsStep(input);
-	for (const event of [...events, ...stripeReconciliation.events]) {
-		await enqueueReconciledProductAnalyticsEventStep(event);
+	let databaseReconciled = 0;
+	let databaseFailed = 0;
+	for (const source of ["signup", "video", "comment", "first_view"] as const) {
+		let cursor: ReconciliationCursor | undefined;
+		for (let pageNumber = 0; ; pageNumber += 1) {
+			if (pageNumber >= MAX_RECONCILIATION_PAGES_PER_SOURCE) {
+				throw new Error("Product analytics reconciliation page limit exceeded");
+			}
+			const page = await loadProductAnalyticsReconciliationPageStep({
+				...input,
+				source,
+				cursor,
+			});
+			databaseReconciled += page.reconciled;
+			databaseFailed += page.failed;
+			if (!page.nextCursor) break;
+			cursor = page.nextCursor;
+		}
+	}
+	let stripeReconciled = 0;
+	let stripeFailed = 0;
+	let legacyStripeEventsSkipped = 0;
+	for (const type of STRIPE_ANALYTICS_EVENT_TYPES) {
+		let startingAfter: string | undefined;
+		for (let pageNumber = 0; ; pageNumber += 1) {
+			if (pageNumber >= MAX_RECONCILIATION_PAGES_PER_SOURCE) {
+				throw new Error("Stripe analytics reconciliation page limit exceeded");
+			}
+			const page = await loadStripeAnalyticsReconciliationPageStep({
+				...input,
+				type,
+				startingAfter,
+			});
+			stripeReconciled += page.reconciled;
+			stripeFailed += page.failed;
+			legacyStripeEventsSkipped += page.legacyStripeEventsSkipped;
+			if (!page.nextStartingAfter) break;
+			startingAfter = page.nextStartingAfter;
+		}
 	}
 	return {
-		databaseReconciled: events.length,
-		stripeReconciled: stripeReconciliation.events.length,
-		legacyStripeEventsSkipped: stripeReconciliation.legacyStripeEventsSkipped,
+		databaseFailed,
+		databaseReconciled,
+		stripeFailed,
+		stripeReconciled,
+		legacyStripeEventsSkipped,
 	};
 }

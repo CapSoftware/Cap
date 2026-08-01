@@ -131,6 +131,10 @@ export const users = mysqlTable(
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
+		analyticsReconciliationIndex: index("analytics_reconciliation_idx").on(
+			table.created_at,
+			table.id,
+		),
 	}),
 );
 
@@ -207,6 +211,206 @@ export const productAnalyticsErasureLeases = mysqlTable(
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
+);
+
+export const productAnalyticsOutbox = mysqlTable(
+	"product_analytics_outbox",
+	{
+		eventId: varchar("eventId", { length: 128 }).notNull().primaryKey(),
+		deliveryKey: varchar("deliveryKey", { length: 36 }).notNull(),
+		payloadHash: varchar("payloadHash", { length: 32 }).notNull(),
+		eventName: varchar("eventName", { length: 64 }).notNull(),
+		payloadKind: varchar("payloadKind", { length: 32 })
+			.notNull()
+			.default("product_event_row_v1"),
+		payload: json("payload").$type<unknown>().notNull(),
+		anonymousId: varchar("anonymousId", { length: 255 }),
+		userId: varchar("userId", { length: 255 }),
+		organizationId: varchar("organizationId", { length: 255 }),
+		status: varchar("status", { length: 32 }).notNull().default("pending"),
+		attemptCount: int("attemptCount").notNull().default(0),
+		nextAttemptAt: timestamp("nextAttemptAt").notNull().defaultNow(),
+		leaseOwnerId: varchar("leaseOwnerId", { length: 64 }),
+		leaseExpiresAt: timestamp("leaseExpiresAt"),
+		workflowRunId: varchar("workflowRunId", { length: 128 }),
+		payloadConflict: boolean("payloadConflict").notNull().default(false),
+		lastErrorCode: varchar("lastErrorCode", { length: 64 }),
+		deliveredAt: timestamp("deliveredAt"),
+		deadLetteredAt: timestamp("deadLetteredAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		deliveryKeyIndex: uniqueIndex("delivery_key_idx").on(table.deliveryKey),
+		deliveryIndex: index("delivery_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.createdAt,
+		),
+		leaseIndex: index("lease_idx").on(table.leaseExpiresAt),
+		retentionIndex: index("retention_idx").on(table.status, table.deliveredAt),
+		userIdIndex: index("user_id_idx").on(table.userId),
+		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+		anonymousIdIndex: index("anonymous_id_idx").on(table.anonymousId),
+	}),
+);
+
+export const productAnalyticsIdentityState = mysqlTable(
+	"product_analytics_identity_state",
+	{
+		identityHash: varchar("identityHash", { length: 64 })
+			.notNull()
+			.primaryKey(),
+		identityKind: varchar("identityKind", { length: 16 })
+			.notNull()
+			.$type<"anonymous" | "organization" | "user">(),
+		blockedAt: timestamp("blockedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		blockedIndex: index("blocked_idx").on(table.blockedAt),
+	}),
+);
+
+export const productAnalyticsIdentityLinks = mysqlTable(
+	"product_analytics_identity_links",
+	{
+		anonymousIdentityHash: varchar("anonymousIdentityHash", {
+			length: 64,
+		}).notNull(),
+		userIdentityHash: varchar("userIdentityHash", { length: 64 }).notNull(),
+		organizationIdentityHash: varchar("organizationIdentityHash", {
+			length: 64,
+		}),
+		anonymousId: varchar("anonymousId", { length: 255 }).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		primary: primaryKey({
+			name: "identity_link_pk",
+			columns: [table.anonymousIdentityHash, table.userIdentityHash],
+		}),
+		userIndex: index("user_identity_idx").on(table.userIdentityHash),
+		organizationIndex: index("organization_identity_idx").on(
+			table.organizationIdentityHash,
+		),
+	}),
+);
+
+export const productAnalyticsEventReceipts = mysqlTable(
+	"product_analytics_event_receipts",
+	{
+		eventIdHash: varchar("eventIdHash", { length: 64 }).notNull().primaryKey(),
+		payloadHash: varchar("payloadHash", { length: 32 }).notNull(),
+		anonymousIdentityHash: varchar("anonymousIdentityHash", { length: 64 }),
+		userIdentityHash: varchar("userIdentityHash", { length: 64 }),
+		organizationIdentityHash: varchar("organizationIdentityHash", {
+			length: 64,
+		}),
+		conflictCount: int("conflictCount").notNull().default(0),
+		firstSeenAt: timestamp("firstSeenAt").notNull().defaultNow(),
+		lastSeenAt: timestamp("lastSeenAt").notNull().defaultNow().onUpdateNow(),
+		retainUntil: timestamp("retainUntil").notNull(),
+	},
+	(table) => ({
+		anonymousIdentityIndex: index("anonymous_identity_idx").on(
+			table.anonymousIdentityHash,
+		),
+		userIdentityIndex: index("user_identity_idx").on(table.userIdentityHash),
+		organizationIdentityIndex: index("organization_identity_idx").on(
+			table.organizationIdentityHash,
+		),
+		retentionIndex: index("retention_idx").on(table.retainUntil),
+		conflictIndex: index("conflict_idx").on(table.conflictCount),
+	}),
+);
+
+export const productAnalyticsIngestionLeases = mysqlTable(
+	"product_analytics_ingestion_leases",
+	{
+		id: varchar("id", { length: 36 }).notNull().primaryKey(),
+		fencingToken: bigint("fencingToken", {
+			mode: "number",
+			unsigned: true,
+		}).notNull(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		expiryIndex: index("expiry_idx").on(table.expiresAt),
+	}),
+);
+
+export const productAnalyticsRefreshLeases = mysqlTable(
+	"product_analytics_refresh_leases",
+	{
+		name: varchar("name", { length: 64 }).notNull().primaryKey(),
+		ownerId: varchar("ownerId", { length: 36 }),
+		generation: bigint("generation", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		sourceCutoff: timestamp("sourceCutoff"),
+		leaseExpiresAt: timestamp("leaseExpiresAt"),
+		status: varchar("status", { length: 32 }).notNull().default("idle"),
+		lastCompletedAt: timestamp("lastCompletedAt"),
+		lastErrorCode: varchar("lastErrorCode", { length: 64 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		expiryIndex: index("expiry_idx").on(table.leaseExpiresAt),
+		statusIndex: index("status_idx").on(table.status),
+	}),
+);
+
+export const productAnalyticsReconciliationFailures = mysqlTable(
+	"product_analytics_reconciliation_failures",
+	{
+		sourceHash: varchar("sourceHash", { length: 64 }).notNull().primaryKey(),
+		sourceType: varchar("sourceType", { length: 32 }).notNull(),
+		errorCode: varchar("errorCode", { length: 64 }).notNull(),
+		attemptCount: int("attemptCount").notNull().default(1),
+		firstSeenAt: timestamp("firstSeenAt").notNull().defaultNow(),
+		lastSeenAt: timestamp("lastSeenAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		sourceTypeIndex: index("source_type_idx").on(
+			table.sourceType,
+			table.lastSeenAt,
+		),
+	}),
+);
+
+export const productAnalyticsErasureRequests = mysqlTable(
+	"product_analytics_erasure_requests",
+	{
+		id: varchar("id", { length: 36 }).notNull().primaryKey(),
+		scopeHash: varchar("scopeHash", { length: 64 }).notNull(),
+		userId: varchar("userId", { length: 255 }),
+		organizationId: varchar("organizationId", { length: 255 }),
+		status: varchar("status", { length: 32 })
+			.notNull()
+			.default("pending")
+			.$type<"dead_letter" | "pending" | "processing">(),
+		attemptCount: int("attemptCount").notNull().default(0),
+		nextAttemptAt: timestamp("nextAttemptAt").notNull().defaultNow(),
+		leaseOwnerId: varchar("leaseOwnerId", { length: 36 }),
+		leaseExpiresAt: timestamp("leaseExpiresAt"),
+		lastErrorCode: varchar("lastErrorCode", { length: 64 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		scopeIndex: uniqueIndex("scope_hash_idx").on(table.scopeHash),
+		queueIndex: index("queue_idx").on(
+			table.status,
+			table.nextAttemptAt,
+			table.createdAt,
+		),
+		leaseIndex: index("lease_idx").on(table.leaseExpiresAt),
+	}),
 );
 
 export const organizations = mysqlTable(
@@ -317,11 +521,27 @@ export const organizationInvites = mysqlTable(
 			.notNull()
 			.$type<Organisation.OrganisationId>(),
 		invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
+		invitedEmailNormalized: varchar("invitedEmailNormalized", { length: 255 }),
 		invitedByUserId: nanoId("invitedByUserId").notNull().$type<User.UserId>(),
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.$type<OrganisationMemberRole>(),
 		status: varchar("status", { length: 255 }).notNull().default("pending"),
+		emailDeliveryState: varchar("emailDeliveryState", { length: 32 })
+			.notNull()
+			.default("legacy")
+			.$type<"dead_letter" | "legacy" | "pending" | "sent">(),
+		emailDeliveryAttemptCount: int("emailDeliveryAttemptCount")
+			.notNull()
+			.default(0),
+		emailDeliveryNextAttemptAt: timestamp("emailDeliveryNextAttemptAt"),
+		emailDeliveryErrorCode: varchar("emailDeliveryErrorCode", { length: 64 }),
+		emailDeliveryLeaseOwnerId: varchar("emailDeliveryLeaseOwnerId", {
+			length: 36,
+		}),
+		emailDeliveryLeaseExpiresAt: timestamp("emailDeliveryLeaseExpiresAt"),
+		emailProviderMessageId: varchar("emailProviderMessageId", { length: 255 }),
+		emailSentAt: timestamp("emailSentAt"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		expiresAt: timestamp("expiresAt"),
@@ -329,10 +549,18 @@ export const organizationInvites = mysqlTable(
 	(table) => ({
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		invitedEmailIndex: index("invited_email_idx").on(table.invitedEmail),
+		normalizedEmailIndex: uniqueIndex("normalized_email_idx").on(
+			table.organizationId,
+			table.invitedEmailNormalized,
+		),
 		invitedByUserIdIndex: index("invited_by_user_id_idx").on(
 			table.invitedByUserId,
 		),
 		statusIndex: index("status_idx").on(table.status),
+		emailDeliveryIndex: index("email_delivery_idx").on(
+			table.emailDeliveryState,
+			table.emailDeliveryNextAttemptAt,
+		),
 	}),
 );
 
@@ -449,6 +677,11 @@ export const videos = mysqlTable(
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
 		index("first_external_view_at_idx").on(table.firstExternalViewAt),
+		index("analytics_created_at_idx").on(table.createdAt, table.id),
+		index("analytics_first_view_at_idx").on(
+			table.firstExternalViewAt,
+			table.id,
+		),
 		index("org_owner_folder_idx").on(
 			table.orgId,
 			table.ownerId,
@@ -517,6 +750,10 @@ export const comments = mysqlTable(
 			nanoIdNullable("parentCommentId").$type<Comment.CommentId>(),
 	},
 	(table) => ({
+		analyticsReconciliationIndex: index("analytics_reconciliation_idx").on(
+			table.createdAt,
+			table.id,
+		),
 		videoTypeCreatedIndex: index("video_type_created_idx").on(
 			table.videoId,
 			table.type,

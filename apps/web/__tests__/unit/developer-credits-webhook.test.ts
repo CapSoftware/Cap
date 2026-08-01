@@ -55,10 +55,20 @@ vi.mock("@/lib/developer-credits", () => ({
 	addCreditsToAccount: (...args: unknown[]) => mockAddCredits(...args),
 }));
 
-vi.mock("@cap/web-domain", () => ({
-	Organisation: { OrganisationId: { make: (v: string) => v } },
-	User: { UserId: { make: (v: string) => v } },
-}));
+vi.mock("@cap/web-domain", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@cap/web-domain")>();
+	return {
+		...actual,
+		Organisation: {
+			...actual.Organisation,
+			OrganisationId: { make: (value: string) => value },
+		},
+		User: {
+			...actual.User,
+			UserId: { make: (value: string) => value },
+		},
+	};
+});
 
 const mockStripe = {
 	webhooks: {

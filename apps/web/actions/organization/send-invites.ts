@@ -2,8 +2,6 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sendEmail } from "@cap/database/emails/config";
-import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId } from "@cap/database/helpers";
 import {
 	organizationInvites,
@@ -11,11 +9,10 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { queueServerProductEvent } from "@/lib/analytics/server";
+import { deliverOrganizationInvite } from "@/lib/organization-invite-delivery";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import {
 	type AssignableOrganizationRole,
@@ -120,7 +117,10 @@ export async function sendOrganizationInvites(
 				.where(
 					and(
 						eq(organizationInvites.organizationId, organizationId),
-						inArray(organizationInvites.invitedEmail, validEmails),
+						or(
+							inArray(organizationInvites.invitedEmailNormalized, validEmails),
+							inArray(organizationInvites.invitedEmail, validEmails),
+						),
 					),
 				),
 			tx
@@ -158,88 +158,43 @@ export async function sendOrganizationInvites(
 		}));
 
 		if (records.length > 0) {
-			await tx.insert(organizationInvites).values(
-				records.map((r) => ({
-					id: r.id,
-					organizationId: organizationId,
-					invitedEmail: r.email,
-					invitedByUserId: user.id,
-					role: r.role,
-					createdAt: r.createdAt,
-				})),
-			);
+			await tx
+				.insert(organizationInvites)
+				.values(
+					records.map((r) => ({
+						id: r.id,
+						organizationId: organizationId,
+						invitedEmail: r.email,
+						invitedEmailNormalized: r.email,
+						invitedByUserId: user.id,
+						role: r.role,
+						emailDeliveryState: "pending" as const,
+						emailDeliveryNextAttemptAt: r.createdAt,
+						createdAt: r.createdAt,
+					})),
+				)
+				.onDuplicateKeyUpdate({
+					set: {
+						invitedEmailNormalized: sql`${organizationInvites.invitedEmailNormalized}`,
+					},
+				});
 		}
 
 		return records;
 	});
 
 	const emailResults = await Promise.allSettled(
-		inviteRecords.map((record) => {
-			const inviteUrl = `${serverEnv().WEB_URL}/invite/${record.id}`;
-			return sendEmail({
-				email: record.email,
-				subject: `Invitation to join ${organization.name} on Cap`,
-				react: OrganizationInvite({
-					email: record.email,
-					url: inviteUrl,
-					organizationName: organization.name,
-				}),
-			});
-		}),
+		inviteRecords.map((record) => deliverOrganizationInvite(record.id)),
 	);
 
-	const failedInvites = inviteRecords.filter(
-		(_, i) => emailResults[i]?.status === "rejected",
-	);
+	const failedInvites = inviteRecords.filter((_, i) => {
+		const result = emailResults[i];
+		return (
+			result?.status === "rejected" ||
+			(result?.status === "fulfilled" && result.value.status === "deferred")
+		);
+	});
 	const failedEmails = failedInvites.map((r) => r.email);
-
-	if (failedInvites.length > 0) {
-		try {
-			await db()
-				.delete(organizationInvites)
-				.where(
-					inArray(
-						organizationInvites.id,
-						failedInvites.map((r) => r.id),
-					),
-				);
-		} catch (cleanupError) {
-			console.error(
-				"Failed to clean up invite records after email delivery failure:",
-				{
-					failedInviteIds: failedInvites.map((r) => r.id),
-					failedEmails,
-					error: cleanupError,
-				},
-			);
-		}
-	}
-
-	const failedInviteIds = new Set(failedInvites.map((invite) => invite.id));
-	const successfulInvites = inviteRecords.filter(
-		(invite) => !failedInviteIds.has(invite.id),
-	);
-	const firstSuccessfulInvite = successfulInvites[0];
-	if (firstSuccessfulInvite) {
-		await queueServerProductEvent({
-			eventId: `organization_invites:${firstSuccessfulInvite.id}`,
-			eventName: "organization_invite_sent",
-			occurredAt: firstSuccessfulInvite.createdAt.toISOString(),
-			platform: "web",
-			userId: user.id,
-			organizationId,
-			properties: {
-				invite_count: successfulInvites.length,
-				admin_count: successfulInvites.filter(
-					(invite) => invite.role === "admin",
-				).length,
-				member_count: successfulInvites.filter(
-					(invite) => invite.role === "member",
-				).length,
-				delivery: "email",
-			},
-		});
-	}
 
 	revalidatePath("/dashboard/settings/organization");
 

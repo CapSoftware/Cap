@@ -227,15 +227,16 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						});
 
 						yield* analytics
-							.append(rows)
+							.appendWithIdentityFence(rows)
 							.pipe(
-								Effect.catchTag("ProductAnalyticsError", (error) =>
-									Effect.logWarning(
-										"Product analytics ingestion failed",
-										error,
-									).pipe(
-										Effect.andThen(
-											Effect.fail(new HttpApiError.ServiceUnavailable()),
+								Effect.catchAll((error) =>
+									Effect.logWarning("Product analytics ingestion failed").pipe(
+										Effect.zipRight(
+											Effect.fail(
+												"retryable" in error && error.retryable === false
+													? new HttpApiError.BadRequest()
+													: new HttpApiError.ServiceUnavailable(),
+											),
 										),
 									),
 								),

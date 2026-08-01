@@ -525,7 +525,8 @@ describe("agent API contract", () => {
 		expect(importSource).toContain("agentOperationId: operationId");
 		expect(importSource).not.toContain("loomDownloadUrl:");
 		expect(workflow).toContain("claimAgentImport");
-		expect(workflow).toContain("completeAgentImport");
+		expect(workflow).toContain("saveMetadataAndComplete");
+		expect(workflow).toContain("persistProductAnalyticsEvent");
 		expect(workflow).toContain("failAgentImport");
 	});
 });

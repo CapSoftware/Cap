@@ -44,7 +44,15 @@ const nextWithAnalyticsToken = (
 	const existingAnonymousId = normalizeAnalyticsIdentifier(
 		request.cookies.get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
 	);
+	const stagingRunId = request.headers.get("x-cap-analytics-test-run");
+	const stagingAnonymousId =
+		serverEnv().VERCEL_ENV === "preview" &&
+		stagingRunId &&
+		/^[A-Za-z0-9_-]{8,128}$/.test(stagingRunId)
+			? `synthetic_${stagingRunId}`
+			: undefined;
 	const anonymousId =
+		stagingAnonymousId ??
 		existingAnonymousId ??
 		claims?.anonymousId ??
 		createProductAnalyticsAnonymousId();

@@ -11,7 +11,10 @@ import { stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { queueServerProductEvent } from "@/lib/analytics/server";
+import {
+	attemptProductAnalyticsOutboxDelivery,
+	persistProductAnalyticsEvent,
+} from "@/lib/analytics/product-event-outbox";
 import { calculateProSeats } from "@/utils/organization";
 
 async function getOwnerSubscription(
@@ -152,10 +155,11 @@ export async function updateSeatQuantity(
 	newQuantity: number,
 ) {
 	validateQuantity(newQuantity);
-	const { subscription, subscriptionItem, proSeatsUsed, user } =
+	const { owner, subscription, subscriptionItem, proSeatsUsed, user } =
 		await getOwnerSubscription(organizationId);
 	const currentQuantity = subscriptionItem.quantity ?? 1;
-	if (newQuantity === currentQuantity) {
+	const localQuantity = owner.inviteQuota ?? 1;
+	if (newQuantity === currentQuantity && newQuantity === localQuantity) {
 		return { success: true, newQuantity };
 	}
 
@@ -165,24 +169,26 @@ export async function updateSeatQuantity(
 		);
 	}
 
-	const isSeatIncrease = newQuantity > currentQuantity;
-	const updatedSubscription = await stripe().subscriptions.update(
-		subscription.id,
-		{
-			items: [
-				{
-					id: subscriptionItem.id,
-					quantity: newQuantity,
-				},
-			],
-			proration_behavior: isSeatIncrease
-				? "always_invoice"
-				: "create_prorations",
-			...(isSeatIncrease
-				? { payment_behavior: "pending_if_incomplete" as const }
-				: {}),
-		},
-	);
+	const previousQuantity =
+		newQuantity === currentQuantity ? localQuantity : currentQuantity;
+	const isSeatIncrease = newQuantity > previousQuantity;
+	const updatedSubscription =
+		newQuantity === currentQuantity
+			? subscription
+			: await stripe().subscriptions.update(subscription.id, {
+					items: [
+						{
+							id: subscriptionItem.id,
+							quantity: newQuantity,
+						},
+					],
+					proration_behavior: isSeatIncrease
+						? "always_invoice"
+						: "create_prorations",
+					...(isSeatIncrease
+						? { payment_behavior: "pending_if_incomplete" as const }
+						: {}),
+				});
 	const changedAt = new Date().toISOString();
 
 	if (isSeatIncrease && updatedSubscription.pending_update) {
@@ -191,11 +197,36 @@ export async function updateSeatQuantity(
 		);
 	}
 
+	const latestInvoice =
+		typeof updatedSubscription.latest_invoice === "string"
+			? updatedSubscription.latest_invoice
+			: updatedSubscription.latest_invoice?.id;
+	const eventId = `seat_quantity:${subscription.id}:${latestInvoice ?? updatedSubscription.current_period_start}:${newQuantity}`;
 	try {
-		await db()
-			.update(users)
-			.set({ inviteQuota: newQuantity })
-			.where(eq(users.id, user.id));
+		await db().transaction(async (tx) => {
+			await tx
+				.update(users)
+				.set({ inviteQuota: newQuantity })
+				.where(eq(users.id, user.id));
+			await persistProductAnalyticsEvent(tx, {
+				eventId,
+				eventName: "seat_quantity_changed",
+				occurredAt: changedAt,
+				platform: "web",
+				userId: user.id,
+				organizationId,
+				properties: {
+					previous_quantity: previousQuantity,
+					new_quantity: newQuantity,
+					quantity_delta: newQuantity - previousQuantity,
+					direction: isSeatIncrease ? "increase" : "decrease",
+					price_id: subscriptionItem.price.id,
+					unit_amount_minor: subscriptionItem.price.unit_amount,
+					currency: subscriptionItem.price.currency,
+					billing_interval: subscriptionItem.price.recurring?.interval,
+				},
+			});
+		});
 	} catch (dbError) {
 		console.error(
 			"CRITICAL: Stripe updated to quantity",
@@ -210,28 +241,7 @@ export async function updateSeatQuantity(
 	}
 
 	revalidatePath("/dashboard/settings/organization");
-	const latestInvoice =
-		typeof updatedSubscription.latest_invoice === "string"
-			? updatedSubscription.latest_invoice
-			: updatedSubscription.latest_invoice?.id;
-	await queueServerProductEvent({
-		eventId: `seat_quantity:${subscription.id}:${latestInvoice ?? updatedSubscription.current_period_start}:${newQuantity}`,
-		eventName: "seat_quantity_changed",
-		occurredAt: changedAt,
-		platform: "web",
-		userId: user.id,
-		organizationId,
-		properties: {
-			previous_quantity: currentQuantity,
-			new_quantity: newQuantity,
-			quantity_delta: newQuantity - currentQuantity,
-			direction: isSeatIncrease ? "increase" : "decrease",
-			price_id: subscriptionItem.price.id,
-			unit_amount_minor: subscriptionItem.price.unit_amount,
-			currency: subscriptionItem.price.currency,
-			billing_interval: subscriptionItem.price.recurring?.interval,
-		},
-	});
+	await attemptProductAnalyticsOutboxDelivery(eventId);
 
 	return { success: true, newQuantity };
 }

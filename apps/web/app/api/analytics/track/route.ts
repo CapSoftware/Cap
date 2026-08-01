@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -12,7 +13,9 @@ import {
 	firstExternalViewTimestamp,
 } from "@/lib/analytics/first-view";
 import {
+	classifyAnalyticsTraffic,
 	getProductAnalyticsRateLimitKey,
+	normalizeSyntheticRunId,
 	ProductAnalyticsRateLimiter,
 } from "@/lib/analytics/request";
 import { queueServerProductEvent } from "@/lib/analytics/server";
@@ -31,7 +34,6 @@ interface TrackPayload {
 	sessionId?: string;
 	pathname?: string;
 	hostname?: string | null;
-	userAgent?: string;
 	occurredAt?: string;
 }
 
@@ -113,10 +115,22 @@ export async function POST(request: NextRequest) {
 	) {
 		return Response.json({ error: "Rate limited" }, { status: 429 });
 	}
-	const userAgent =
-		sanitizeString(request.headers.get("user-agent")) ||
-		sanitizeString(body.userAgent) ||
-		"unknown";
+	const userAgent = sanitizeString(request.headers.get("user-agent")) || "";
+	const environment = serverEnv();
+	const syntheticRunId = normalizeSyntheticRunId(
+		request.headers.get("x-cap-analytics-test-run") ?? undefined,
+		environment.VERCEL_ENV,
+	);
+	const trafficClass = classifyAnalyticsTraffic({
+		userAgent,
+		vercelEnvironment: environment.VERCEL_ENV,
+		syntheticRunId,
+		rateLimitKey,
+		internalIpHashes: process.env.PRODUCT_ANALYTICS_INTERNAL_IP_HASHES,
+	});
+	if (trafficClass !== "external") {
+		return Response.json({ success: true, excluded: trafficClass });
+	}
 	const parser = new UAParser(userAgent);
 	const browserName = parser.getBrowser().name ?? "unknown";
 	const osName = parser.getOS().name ?? "unknown";

@@ -4,6 +4,8 @@ import {
 	firstViewReceivedEvent,
 	identityLinkedEvent,
 	shareLinkCreatedEvent,
+	uploadCompletedEvent,
+	uploadFailedEvent,
 	userSignedUpEvent,
 } from "@/lib/analytics/business-events";
 import { createServerProductEventRows } from "@/lib/analytics/server-event";
@@ -192,6 +194,21 @@ describe("server product analytics", () => {
 				organizationId: "org-1",
 				createdAt: "2026-07-31T10:03:00.000Z",
 			}),
+			uploadCompletedEvent({
+				videoId: "video-1",
+				platform: "cli",
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:04:00.000Z",
+			}),
+			uploadFailedEvent({
+				videoId: "video-2",
+				platform: "server",
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:05:00.000Z",
+				failureClass: "plan",
+			}),
 		] as const;
 
 		for (const fact of facts) {
@@ -220,10 +237,20 @@ describe("server product analytics", () => {
 
 		expect(signup?.anonymous_id).toBe("user:user-1");
 		expect(link).toMatchObject({
-			event_id: "identity_linked:user-1",
 			event_name: "identity_linked",
 			anonymous_id: "anonymous-1",
 			user_id: "user-1",
 		});
+		expect(link?.event_id).toMatch(/^identity_linked:user-1:[0-9a-f]{24}$/);
+		expect(
+			createServerProductEventRows(
+				identityLinkedEvent({
+					userId: "user-1",
+					organizationId: "org-1",
+					anonymousId: "anonymous-2",
+					createdAt: "2026-07-31T10:00:00.000Z",
+				}),
+			)[0]?.event_id,
+		).not.toBe(link?.event_id);
 	});
 });

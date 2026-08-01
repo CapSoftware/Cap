@@ -114,7 +114,12 @@ import {
 	runAgentMutation,
 	updateAgentCap,
 } from "@/lib/agent-write";
-import { checkoutStartedEvent } from "@/lib/analytics/business-events";
+import {
+	checkoutStartedEvent,
+	uploadCompletedEvent,
+	uploadFailedEvent,
+} from "@/lib/analytics/business-events";
+import { persistProductAnalyticsEvent } from "@/lib/analytics/product-event-outbox";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import { subscriptionCheckoutAnalyticsMetadata } from "@/lib/analytics/stripe-business-events";
 import { hashKey } from "@/lib/developer-key-hash";
@@ -6634,6 +6639,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									fps: payload.fps,
 									metadata: {
 										sourceName: payload.fileName,
+										initiatingPlatform: payload.initiatingPlatform ?? "server",
 										agentUpload: { state: "pending" },
 									},
 									createdAt: now,
@@ -6952,6 +6958,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.select({
 											id: Db.videos.id,
 											ownerId: Db.videos.ownerId,
+											organizationId: Db.videos.orgId,
 											metadata: Db.videos.metadata,
 										})
 										.from(Db.videos)
@@ -6986,12 +6993,18 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										.for("update");
 									if (!upload) return { state: "not_found" as const };
 									if (!allowed) {
+										const rejectedAt = new Date();
+										const isCliUpload =
+											lockedVideo.metadata?.initiatingPlatform === "cli";
 										await tx
 											.update(Db.videos)
 											.set({
 												metadata: {
 													...(lockedVideo.metadata ?? {}),
-													agentUpload: { state: "rejected" },
+													agentUpload: {
+														state: "rejected",
+														rejectedAt: rejectedAt.toISOString(),
+													},
 												},
 											})
 											.where(eq(Db.videos.id, path.id));
@@ -7004,8 +7017,34 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												updatedAt: new Date(),
 											})
 											.where(eq(Db.videoUploads.videoId, path.id));
+										if (isCliUpload) {
+											await persistProductAnalyticsEvent(
+												tx,
+												uploadFailedEvent({
+													videoId: path.id,
+													platform: "cli",
+													userId: lockedVideo.ownerId,
+													organizationId: lockedVideo.organizationId,
+													createdAt: rejectedAt,
+													failureClass: "plan",
+												}),
+											);
+										} else {
+											await persistProductAnalyticsEvent(
+												tx,
+												uploadFailedEvent({
+													videoId: path.id,
+													platform: "server",
+													userId: lockedVideo.ownerId,
+													organizationId: lockedVideo.organizationId,
+													createdAt: rejectedAt,
+													failureClass: "plan",
+												}),
+											);
+										}
 										return { state: "rejected" as const };
 									}
+									const acceptedAt = new Date();
 									await tx
 										.update(Db.videos)
 										.set({
@@ -7017,6 +7056,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												agentUpload: {
 													state: "accepted",
 													rawFileKey: candidateRawFileKey,
+													acceptedAt: acceptedAt.toISOString(),
 												},
 											},
 										})
@@ -7083,6 +7123,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.select({
 										id: Db.videos.id,
 										ownerId: Db.videos.ownerId,
+										organizationId: Db.videos.orgId,
+										createdAt: Db.videos.createdAt,
 										bucketId: Db.videos.bucket,
 										metadata: Db.videos.metadata,
 									})
@@ -7110,6 +7152,33 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!upload) return { state: "not_found" };
+								if (video.metadata?.initiatingPlatform === "cli") {
+									await persistProductAnalyticsEvent(
+										tx,
+										uploadCompletedEvent({
+											videoId: video.id,
+											platform: "cli",
+											userId: video.ownerId,
+											organizationId: video.organizationId,
+											createdAt:
+												video.metadata?.agentUpload?.acceptedAt ??
+												video.createdAt,
+										}),
+									);
+								} else {
+									await persistProductAnalyticsEvent(
+										tx,
+										uploadCompletedEvent({
+											videoId: video.id,
+											platform: "server",
+											userId: video.ownerId,
+											organizationId: video.organizationId,
+											createdAt:
+												video.metadata?.agentUpload?.acceptedAt ??
+												video.createdAt,
+										}),
+									);
+								}
 								return {
 									state: "success",
 									response: {

@@ -8,6 +8,8 @@ import {
 
 const DEFAULT_DATASOURCE = "analytics_events";
 const PRODUCT_ANALYTICS_REBUILD_PIPES = [
+	"snapshot_product_event_id_states_v2",
+	"snapshot_product_event_day_states_v2",
 	"snapshot_product_events_canonical_v1",
 	"snapshot_product_events_daily_exact",
 	"snapshot_product_traffic_daily_exact",
@@ -15,6 +17,8 @@ const PRODUCT_ANALYTICS_REBUILD_PIPES = [
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
 	"snapshot_product_identity_funnel_exact",
+	"snapshot_product_attribution_daily_exact",
+	"snapshot_product_experiment_outcomes_exact",
 	"snapshot_product_events_health_hourly",
 ] as const;
 
@@ -47,6 +51,15 @@ const tinybirdJobId = (response: TinybirdJobResponse) => {
 	return typeof id === "string" && id ? id : undefined;
 };
 
+const tinybirdJobStatus = (response: TinybirdJobResponse) =>
+	String(
+		response.status ??
+			response.state ??
+			response.job?.status ??
+			response.job?.state ??
+			"",
+	).toLowerCase();
+
 const PRODUCT_ANALYTICS_COPY_MARKERS = {
 	snapshot_product_events_daily_exact: "decision_markers",
 	snapshot_product_traffic_daily_exact: "traffic_markers",
@@ -54,6 +67,8 @@ const PRODUCT_ANALYTICS_COPY_MARKERS = {
 	snapshot_product_activation_daily_exact: "activation_markers",
 	snapshot_product_creator_retention_exact: "retention_markers",
 	snapshot_product_identity_funnel_exact: "identity_markers",
+	snapshot_product_attribution_daily_exact: "attribution_markers",
+	snapshot_product_experiment_outcomes_exact: "experiment_markers",
 	snapshot_product_events_health_hourly: "health_markers",
 } as const;
 
@@ -416,19 +431,38 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		const runProductAnalyticsCopyPipe = (name: string, copyRunId?: string) => {
 			const search = new URLSearchParams({ _mode: "replace" });
 			if (copyRunId) search.set("copy_run_id", copyRunId);
-			return productAnalyticsRequest<TinybirdJobResponse>(
-				`/v0/pipes/${encodeURIComponent(name)}/copy?${search.toString()}`,
-				{ token: productAnalyticsCopyToken, purpose: "Copy execution" },
-				{ method: "POST" },
-			).pipe(
-				Effect.flatMap((copy) =>
-					tinybirdJobId(copy)
-						? Effect.void
-						: Effect.fail(
-								new Error("Product analytics copy did not return a job ID"),
-							),
-				),
-			);
+			return Effect.gen(function* () {
+				const copy = yield* productAnalyticsRequest<TinybirdJobResponse>(
+					`/v0/pipes/${encodeURIComponent(name)}/copy?${search.toString()}`,
+					{ token: productAnalyticsCopyToken, purpose: "Copy execution" },
+					{ method: "POST" },
+				);
+				const id = tinybirdJobId(copy);
+				if (!id) {
+					return yield* Effect.fail(
+						new Error("Product analytics copy did not return a job ID"),
+					);
+				}
+				for (let attempt = 0; attempt < 450; attempt += 1) {
+					const job = yield* productAnalyticsRequest<TinybirdJobResponse>(
+						`/v0/jobs/${encodeURIComponent(id)}`,
+						{ token: productAnalyticsCopyToken, purpose: "Copy execution" },
+					);
+					const status = tinybirdJobStatus(job);
+					if (["done", "success", "finished", "completed"].includes(status)) {
+						return;
+					}
+					if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+						return yield* Effect.fail(
+							new Error(`Product analytics copy ${name} ended in ${status}`),
+						);
+					}
+					yield* Effect.sleep(2_000);
+				}
+				return yield* Effect.fail(
+					new Error(`Product analytics copy ${name} timed out`),
+				);
+			});
 		};
 
 		const queryProductAnalyticsSql = <T>(sql: string) =>
@@ -460,6 +494,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						auth,
 					).pipe(
 						Effect.flatMap((pipe) => {
+							if (!pipe.schedule) return Effect.void;
 							const status = pipe.schedule?.status?.toLowerCase() ?? "";
 							const matches = paused
 								? status === "paused"
@@ -583,6 +618,37 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			);
 
 			const operation = Effect.gen(function* () {
+				yield* erasureLeases.waitForIngestionQuiescence();
+				let anonymousIds = yield* erasureLeases.discardPendingEvents(
+					lease.scope,
+				);
+				if (lease.scope.userId) {
+					const escapedUserId = escapeTinybirdString(lease.scope.userId);
+					const anonymousRows = yield* queryProductAnalyticsSql<{
+						anonymous_id: string;
+					}>(
+						`SELECT anonymous_id FROM product_events_v1 WHERE anonymous_id != '' GROUP BY anonymous_id HAVING countIf(user_id = '${escapedUserId}') > 0 AND countIf(user_id != '' AND user_id != '${escapedUserId}') = 0 LIMIT 1001`,
+					);
+					if (anonymousRows.length > 1000) {
+						return yield* Effect.fail(
+							new Error(
+								"Product analytics identity fanout exceeded the erasure bound",
+							),
+						);
+					}
+					anonymousIds = [
+						...new Set([
+							...anonymousIds,
+							...anonymousRows
+								.map(({ anonymous_id: anonymousId }) => anonymousId)
+								.filter(Boolean),
+						]),
+					];
+				}
+				anonymousIds = yield* erasureLeases.discardPendingEvents(
+					lease.scope,
+					anonymousIds,
+				);
 				if (pausedPipes.length > 0) {
 					yield* advance("resuming");
 					yield* resumeProductAnalyticsCopySchedules(pausedPipes);
@@ -602,22 +668,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				}
 				if (lease.scope.userId) {
 					const escapedUserId = escapeTinybirdString(lease.scope.userId);
-					const anonymousRows = yield* queryProductAnalyticsSql<{
-						anonymous_id: string;
-					}>(
-						`SELECT anonymous_id FROM product_events_v1 WHERE anonymous_id != '' GROUP BY anonymous_id HAVING countIf(user_id = '${escapedUserId}') > 0 AND countIf(user_id != '' AND user_id != '${escapedUserId}') = 0 LIMIT 1001`,
-					);
-					if (anonymousRows.length > 1000) {
-						return yield* Effect.fail(
-							new Error(
-								"Product analytics identity fanout exceeded the erasure bound",
-							),
-						);
-					}
 					conditions.push(`user_id = '${escapedUserId}'`);
-					const anonymousIds = anonymousRows
-						.map(({ anonymous_id: anonymousId }) => anonymousId)
-						.filter(Boolean);
 					if (anonymousIds.length > 0) {
 						conditions.push(
 							`(anonymous_id IN (${anonymousIds
@@ -653,6 +704,14 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				}
 				yield* advance("rebuilding");
 				yield* runProductAnalyticsCopyPipe(
+					"snapshot_product_event_id_states_v2",
+				);
+				yield* advance("rebuilding");
+				yield* runProductAnalyticsCopyPipe(
+					"snapshot_product_event_day_states_v2",
+				);
+				yield* advance("rebuilding");
+				yield* runProductAnalyticsCopyPipe(
 					"snapshot_product_events_canonical_v1",
 				);
 				yield* waitForProductAnalytics(
@@ -682,6 +741,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					([rawCount, canonicalCount]) =>
 						rawCount === 0 && canonicalCount === 0,
 				);
+				yield* erasureLeases.discardPendingEvents(lease.scope, anonymousIds);
 				yield* advance("resuming");
 				yield* resumeProductAnalyticsCopySchedules(pausedPipes);
 				pausedPipes = [];
@@ -714,9 +774,24 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 
 		const recoverProductAnalyticsErasure = Effect.gen(function* () {
 			const lease = yield* erasureLeases.claimRecovery();
-			if (!lease) return { recovered: false as const };
-			yield* runProductAnalyticsErasure(lease);
-			return { recovered: true as const, requestId: lease.requestId };
+			if (lease) {
+				yield* runProductAnalyticsErasure(lease);
+				yield* erasureLeases.completeErasureRequest(lease.requestId);
+				return { recovered: true as const, requestId: lease.requestId };
+			}
+			const request = yield* erasureLeases.claimErasureRequest();
+			if (!request) return { recovered: false as const };
+			const nextLease = yield* erasureLeases.claimNew(
+				request.scope,
+				request.id,
+			);
+			if (!nextLease) {
+				yield* erasureLeases.deferErasureRequest(request, "lease_unavailable");
+				return { recovered: false as const };
+			}
+			yield* runProductAnalyticsErasure(nextLease);
+			yield* erasureLeases.completeErasureRequest(request.id);
+			return { recovered: true as const, requestId: request.id };
 		});
 
 		const eraseProductAnalytics = ({
@@ -732,17 +807,21 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						new Error("Product analytics erasure requires an identity"),
 					);
 				}
-				let lease = yield* erasureLeases.claimNew({ userId, organizationId });
+				const scope = { userId, organizationId };
+				const requestId = yield* erasureLeases.enqueueErasureRequest(scope);
+				const request = yield* erasureLeases.claimErasureRequest(requestId);
+				if (!request) return { queued: true as const, requestId };
+				const lease = yield* erasureLeases.claimNew(scope, requestId);
 				if (!lease) {
-					yield* recoverProductAnalyticsErasure;
-					lease = yield* erasureLeases.claimNew({ userId, organizationId });
-				}
-				if (!lease) {
-					return yield* Effect.fail(
-						new Error("Product analytics erasure is already in progress"),
+					yield* erasureLeases.deferErasureRequest(
+						request,
+						"lease_unavailable",
 					);
+					return { queued: true as const, requestId };
 				}
 				yield* runProductAnalyticsErasure(lease);
+				yield* erasureLeases.completeErasureRequest(requestId);
+				return { queued: false as const, requestId };
 			});
 
 		return {

@@ -34,6 +34,18 @@ const tinybirdTestLayer = (
 	overrides: Partial<ProductAnalyticsErasureLeaseStore> = {},
 ) => {
 	const store = {
+		enqueueErasureRequest: () => Effect.succeed("request-1"),
+		claimErasureRequest: () =>
+			Effect.succeed({
+				id: "request-1",
+				ownerId: "request-owner-1",
+				scope: { organizationId: "organization-1", userId: "user-1" },
+			}),
+		completeErasureRequest: () => Effect.void,
+		deferErasureRequest: () => Effect.void,
+		waitForIngestionQuiescence: () => Effect.succeed(undefined),
+		discardPendingEvents: (_scope, anonymousIds = []) =>
+			Effect.succeed([...anonymousIds]),
 		claimNew: (scope) =>
 			Effect.succeed({
 				ownerId: "owner-1",
@@ -116,7 +128,9 @@ describe.sequential("product analytics erasure", () => {
 						data: [
 							{
 								activation_markers: 1,
+								attribution_markers: 1,
 								decision_markers: 1,
+								experiment_markers: 1,
 								health_markers: 1,
 								identity_markers: 1,
 								retention_markers: 1,
@@ -125,6 +139,9 @@ describe.sequential("product analytics erasure", () => {
 							},
 						],
 					});
+				}
+				if (url.pathname.startsWith("/v0/jobs/")) {
+					return Response.json({ status: "done" });
 				}
 				if (url.pathname.includes("/copy")) {
 					const pipe = url.pathname.split("/").at(-2);
@@ -170,6 +187,8 @@ describe.sequential("product analytics erasure", () => {
 				.map(({ url }) => url.pathname),
 		).toEqual(
 			[
+				"snapshot_product_event_id_states_v2",
+				"snapshot_product_event_day_states_v2",
 				"snapshot_product_events_canonical_v1",
 				"snapshot_product_events_daily_exact",
 				"snapshot_product_traffic_daily_exact",
@@ -177,6 +196,8 @@ describe.sequential("product analytics erasure", () => {
 				"snapshot_product_activation_daily_exact",
 				"snapshot_product_creator_retention_exact",
 				"snapshot_product_identity_funnel_exact",
+				"snapshot_product_attribution_daily_exact",
+				"snapshot_product_experiment_outcomes_exact",
 				"snapshot_product_events_health_hourly",
 			].map((pipe) => `/v0/pipes/${pipe}/copy`),
 		);
@@ -185,9 +206,9 @@ describe.sequential("product analytics erasure", () => {
 		)) {
 			expect(request.url.searchParams.get("_mode")).toBe("replace");
 		}
-		expect(requests.some(({ url }) => url.pathname.includes("/jobs/"))).toBe(
-			false,
-		);
+		expect(
+			requests.filter(({ url }) => url.pathname.startsWith("/v0/jobs/")),
+		).toHaveLength(12);
 		expect(
 			requests
 				.filter(({ url }) => url.pathname === "/v0/sql")
@@ -278,7 +299,9 @@ describe.sequential("product analytics erasure", () => {
 						data: [
 							{
 								activation_markers: 1,
+								attribution_markers: 1,
 								decision_markers: 1,
+								experiment_markers: 1,
 								health_markers: 1,
 								identity_markers: 1,
 								retention_markers: 1,
@@ -287,6 +310,9 @@ describe.sequential("product analytics erasure", () => {
 							},
 						],
 					});
+				}
+				if (url.pathname.startsWith("/v0/jobs/")) {
+					return Response.json({ status: "done" });
 				}
 				if (url.pathname.endsWith("/copy")) {
 					return Response.json({ job_id: "copy-job" });
@@ -309,7 +335,49 @@ describe.sequential("product analytics erasure", () => {
 			requests
 				.filter((url) => url.pathname.endsWith("/copy"))
 				.map((url) => url.pathname),
-		).toHaveLength(8);
+		).toHaveLength(12);
+	});
+
+	it("does not start canonical rebuilding until the event-state copy completes", async () => {
+		const requests: URL[] = [];
+		const pausedPipes = new Set<string>();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = new URL(String(input));
+				requests.push(url);
+				const scheduleResponse = copyScheduleResponse(url, pausedPipes);
+				if (scheduleResponse) return scheduleResponse;
+				if (url.pathname === "/v0/sql") {
+					return Response.json({ data: [{ matching_rows: 0 }] });
+				}
+				if (
+					url.pathname === "/v0/pipes/snapshot_product_event_id_states_v2/copy"
+				) {
+					return Response.json({ job_id: "state-copy-job" });
+				}
+				if (url.pathname === "/v0/jobs/state-copy-job") {
+					return Response.json({ status: "failed" });
+				}
+				return Response.json({});
+			}),
+		);
+
+		const error = await Effect.runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
+				yield* tinybird.eraseProductAnalytics({ organizationId: "org-1" });
+			}).pipe(Effect.provide(tinybirdTestLayer()), Effect.flip),
+		);
+
+		expect(error.message).toContain("ended in failed");
+		expect(
+			requests.some(
+				(url) =>
+					url.pathname ===
+					"/v0/pipes/snapshot_product_events_canonical_v1/copy",
+			),
+		).toBe(false);
 	});
 
 	it("resumes schedules already paused when a later pause fails", async () => {
@@ -345,40 +413,44 @@ describe.sequential("product analytics erasure", () => {
 				.map((url) => url.pathname)
 				.filter((pathname) => /\/copy\/(cancel|resume)$/.test(pathname)),
 		).toEqual([
+			"/v0/pipes/snapshot_product_event_id_states_v2/copy/cancel",
+			"/v0/pipes/snapshot_product_event_day_states_v2/copy/cancel",
 			"/v0/pipes/snapshot_product_events_canonical_v1/copy/cancel",
 			"/v0/pipes/snapshot_product_events_daily_exact/copy/cancel",
 			"/v0/pipes/snapshot_product_traffic_daily_exact/copy/cancel",
 			"/v0/pipes/snapshot_product_traffic_daily_exact/copy/cancel",
 			"/v0/pipes/snapshot_product_traffic_daily_exact/copy/cancel",
 			"/v0/pipes/snapshot_product_traffic_daily_exact/copy/cancel",
+			"/v0/pipes/snapshot_product_event_id_states_v2/copy/resume",
+			"/v0/pipes/snapshot_product_event_day_states_v2/copy/resume",
 			"/v0/pipes/snapshot_product_events_canonical_v1/copy/resume",
 			"/v0/pipes/snapshot_product_events_daily_exact/copy/resume",
 		]);
 	});
 
-	it("fails visibly without touching Tinybird when another owner holds the lease", async () => {
+	it("durably queues without touching Tinybird when another owner holds the lease", async () => {
 		const fetch = vi.fn();
+		const deferErasureRequest = vi.fn(() => Effect.void);
 		vi.stubGlobal("fetch", fetch);
 
-		const error = await Effect.runPromise(
+		const result = await Effect.runPromise(
 			Effect.gen(function* () {
 				const tinybird = yield* Tinybird;
-				yield* tinybird.eraseProductAnalytics({ organizationId: "org-1" });
+				return yield* tinybird.eraseProductAnalytics({
+					organizationId: "org-1",
+				});
 			}).pipe(
 				Effect.provide(
 					tinybirdTestLayer({
 						claimNew: () => Effect.succeed(null),
-						claimRecovery: () => Effect.succeed(null),
+						deferErasureRequest,
 					}),
 				),
-				Effect.flip,
 			),
 		);
 
-		expect(error).toBeInstanceOf(Error);
-		expect(error.message).toBe(
-			"Product analytics erasure is already in progress",
-		);
+		expect(result).toEqual({ queued: true, requestId: "request-1" });
+		expect(deferErasureRequest).toHaveBeenCalledOnce();
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
@@ -401,7 +473,9 @@ describe.sequential("product analytics erasure", () => {
 						data: [
 							{
 								activation_markers: 1,
+								attribution_markers: 1,
 								decision_markers: 1,
+								experiment_markers: 1,
 								health_markers: 1,
 								identity_markers: 1,
 								retention_markers: 1,
@@ -410,6 +484,9 @@ describe.sequential("product analytics erasure", () => {
 							},
 						],
 					});
+				}
+				if (url.pathname.startsWith("/v0/jobs/")) {
+					return Response.json({ status: "done" });
 				}
 				if (url.pathname.endsWith("/copy")) {
 					return Response.json({ job_id: "copy-job" });

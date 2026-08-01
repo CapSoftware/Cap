@@ -225,13 +225,13 @@ async function chargeInvoice(charge: Stripe.Charge): Promise<Stripe.Invoice> {
 		: charge.invoice;
 }
 
-async function invoiceSubscription(invoice: Stripe.Invoice) {
+function invoiceSubscriptionId(invoice: Stripe.Invoice) {
 	if (!invoice.subscription) {
 		throw new Error("Subscription invoice is missing its subscription");
 	}
 	return typeof invoice.subscription === "string"
-		? stripe().subscriptions.retrieve(invoice.subscription)
-		: invoice.subscription;
+		? invoice.subscription
+		: invoice.subscription.id;
 }
 
 export const POST = async (req: Request) => {
@@ -261,18 +261,17 @@ export const POST = async (req: Request) => {
 			if (event.type === "invoice.paid") {
 				const invoice = event.data.object as Stripe.Invoice;
 				if (!invoice.subscription) return NextResponse.json({ received: true });
-				const subscription = await invoiceSubscription(invoice);
+				const subscriptionId = invoiceSubscriptionId(invoice);
 				const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
 				if (!dbUser) return retryableUserResolutionFailure();
 				const invoicePaidProductEvent = subscriptionInvoicePaidProductEvent({
 					eventId: event.id,
 					occurredAt: new Date(event.created * 1000).toISOString(),
 					invoice,
-					subscription,
 					user: dbUser,
 					firstPositivePayment: await isFirstPositiveSubscriptionPayment({
 						invoice,
-						subscriptionId: subscription.id,
+						subscriptionId,
 						listPaidInvoices: (input) => stripe().invoices.list(input),
 					}),
 				});
@@ -283,7 +282,6 @@ export const POST = async (req: Request) => {
 			if (event.type === "invoice.payment_failed") {
 				const invoice = event.data.object as Stripe.Invoice;
 				if (invoice.subscription) {
-					const subscription = await invoiceSubscription(invoice);
 					const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
 					if (!dbUser) return retryableUserResolutionFailure();
 					const paymentFailedProductEvent =
@@ -291,7 +289,6 @@ export const POST = async (req: Request) => {
 							eventId: event.id,
 							occurredAt: new Date(event.created * 1000).toISOString(),
 							invoice,
-							subscription,
 							user: dbUser,
 						});
 					if (paymentFailedProductEvent)
@@ -308,7 +305,6 @@ export const POST = async (req: Request) => {
 				const refundedAmount = charge.amount_refunded - previousAmountRefunded;
 				if (charge.invoice && refundedAmount > 0) {
 					const invoice = await chargeInvoice(charge);
-					const subscription = await invoiceSubscription(invoice);
 					const dbUser = await findAnalyticsUserForCustomer(charge.customer);
 					if (!dbUser) return retryableUserResolutionFailure();
 					const refundProductEvent = subscriptionRefundedProductEvent({
@@ -316,7 +312,6 @@ export const POST = async (req: Request) => {
 						occurredAt: new Date(event.created * 1000).toISOString(),
 						charge,
 						invoice,
-						subscription,
 						user: dbUser,
 						refundedAmount,
 					});

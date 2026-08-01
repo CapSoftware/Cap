@@ -18,8 +18,20 @@
 			"schedule": "43 4 * * *"
 		},
 		{
+			"path": "/api/cron/refresh-product-analytics",
+			"schedule": "*/10 * * * *"
+		},
+		{
 			"path": "/api/cron/recover-product-analytics-erasure",
 			"schedule": "*/10 * * * *"
+		},
+		{
+			"path": "/api/cron/drain-product-analytics-outbox",
+			"schedule": "*/5 * * * *"
+		},
+		{
+			"path": "/api/cron/recover-organization-invite-delivery",
+			"schedule": "2-59/5 * * * *"
 		}
 	],
 	"functions": {

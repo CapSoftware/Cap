@@ -94,16 +94,26 @@ export class Organisations extends Effect.Service<Organisations>()(
 					);
 
 				if (!organisation.tombstoneAt) {
-					yield* db.use((db) =>
-						db
-							.update(Db.organizations)
-							.set({ tombstoneAt: new Date() })
-							.where(
-								Dz.and(
-									Dz.eq(Db.organizations.id, id),
-									Dz.isNull(Db.organizations.tombstoneAt),
-								),
-							),
+					yield* db.use((database) =>
+						database.transaction(async (tx) => {
+							await tx
+								.update(Db.organizations)
+								.set({ tombstoneAt: new Date() })
+								.where(
+									Dz.and(
+										Dz.eq(Db.organizations.id, id),
+										Dz.isNull(Db.organizations.tombstoneAt),
+									),
+								);
+							await tx
+								.delete(Db.organizationInvites)
+								.where(
+									Dz.and(
+										Dz.eq(Db.organizationInvites.organizationId, id),
+										Dz.eq(Db.organizationInvites.status, "pending"),
+									),
+								);
+						}),
 					);
 				}
 				yield* Effect.sleep(PRODUCT_ANALYTICS_DELIVERY_DRAIN_MS);

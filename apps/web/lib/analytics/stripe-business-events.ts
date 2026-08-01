@@ -7,10 +7,8 @@ type AnalyticsUser = {
 	id: string;
 };
 
-const subscriptionAnalyticsPlatform = (
-	subscription: Stripe.Subscription,
-): ProductEventPlatform => {
-	const platform = subscription.metadata.platform;
+const analyticsPlatform = (metadata: Stripe.Metadata): ProductEventPlatform => {
+	const platform = metadata.platform;
 	return platform === "web" ||
 		platform === "desktop" ||
 		platform === "mobile" ||
@@ -30,12 +28,29 @@ const subscriptionPrice = (subscription: Stripe.Subscription) => {
 	return { item, price: item.price };
 };
 
-export function subscriptionInvoicePriceId(invoice: Stripe.Invoice): string {
-	const priceId = invoice.lines.data.find((line) => line.price)?.price?.id;
-	if (!priceId) {
+const subscriptionInvoiceLine = (invoice: Stripe.Invoice) => {
+	const line = invoice.lines.data.find((candidate) => candidate.price);
+	if (!line?.price?.id) {
 		throw new Error("Subscription invoice is missing its Stripe price");
 	}
-	return priceId;
+	return { line, price: line.price };
+};
+
+const subscriptionInvoiceMetadata = (invoice: Stripe.Invoice) =>
+	invoice.subscription_details?.metadata ??
+	subscriptionInvoiceLine(invoice).line.metadata;
+
+const validatedInvoiceAnalyticsMetadata = (invoice: Stripe.Invoice) => {
+	const metadata = subscriptionInvoiceMetadata(invoice);
+	if (!metadata.analyticsSchemaVersion) return null;
+	if (metadata.analyticsSchemaVersion !== "1") {
+		throw new Error("Stripe invoice has an unsupported analytics schema");
+	}
+	return metadata;
+};
+
+export function subscriptionInvoicePriceId(invoice: Stripe.Invoice): string {
+	return subscriptionInvoiceLine(invoice).price.id;
 }
 
 export async function isFirstPositiveSubscriptionPayment({
@@ -233,14 +248,12 @@ export function subscriptionInvoicePaidProductEvent({
 	eventId,
 	occurredAt,
 	invoice,
-	subscription,
 	user,
 	firstPositivePayment,
 }: {
 	eventId: string;
 	occurredAt: string;
 	invoice: Stripe.Invoice;
-	subscription: Stripe.Subscription;
 	user: AnalyticsUser;
 	firstPositivePayment: boolean;
 }): ServerProductEvent | null {
@@ -250,7 +263,9 @@ export function subscriptionInvoicePaidProductEvent({
 	) {
 		return null;
 	}
-	const { item, price } = subscriptionPrice(subscription);
+	const metadata = validatedInvoiceAnalyticsMetadata(invoice);
+	if (!metadata) return null;
+	const { line, price } = subscriptionInvoiceLine(invoice);
 	if (!firstPositivePayment) {
 		return {
 			eventId: `stripe:${eventId}:subscription_renewed`,
@@ -258,7 +273,7 @@ export function subscriptionInvoicePaidProductEvent({
 			occurredAt,
 			platform: "server",
 			userId: user.id,
-			organizationId: subscriptionOrganizationId(subscription),
+			organizationId: metadata.analyticsOrganizationId || undefined,
 			properties: {
 				amount_paid_minor: invoice.amount_paid,
 				currency: invoice.currency,
@@ -275,13 +290,13 @@ export function subscriptionInvoicePaidProductEvent({
 		eventId: `stripe:${eventId}:purchase_completed`,
 		eventName: "purchase_completed",
 		occurredAt,
-		anonymousId: subscription.metadata.analyticsAnonymousId,
-		platform: subscriptionAnalyticsPlatform(subscription),
+		anonymousId: metadata.analyticsAnonymousId,
+		platform: analyticsPlatform(metadata),
 		userId: user.id,
-		organizationId: subscriptionOrganizationId(subscription),
+		organizationId: metadata.analyticsOrganizationId || undefined,
 		properties: {
 			payment_status: "paid",
-			subscription_status: subscription.status,
+			subscription_status: "active",
 			amount_total_minor: invoice.amount_paid,
 			amount_subtotal_minor: invoice.subtotal,
 			discount_amount_minor: discountAmount ?? null,
@@ -289,12 +304,12 @@ export function subscriptionInvoicePaidProductEvent({
 			unit_amount_minor: price.unit_amount,
 			billing_interval: price.recurring?.interval ?? null,
 			billing_interval_count: price.recurring?.interval_count ?? null,
-			invite_quota: item.quantity ?? null,
+			invite_quota: line.quantity ?? null,
 			price_id: price.id,
-			quantity: item.quantity ?? null,
+			quantity: line.quantity ?? null,
 			is_first_purchase: true,
-			is_guest_checkout: subscription.metadata.guestCheckout === "true",
-			is_onboarding: subscription.metadata.isOnBoarding === "true",
+			is_guest_checkout: metadata.guestCheckout === "true",
+			is_onboarding: metadata.isOnBoarding === "true",
 		},
 	};
 }
@@ -303,23 +318,23 @@ export function subscriptionPaymentFailedProductEvent({
 	eventId,
 	occurredAt,
 	invoice,
-	subscription,
 	user,
 }: {
 	eventId: string;
 	occurredAt: string;
 	invoice: Stripe.Invoice;
-	subscription: Stripe.Subscription;
 	user: AnalyticsUser;
 }): ServerProductEvent | null {
 	if (invoice.amount_due <= 0) return null;
+	const metadata = validatedInvoiceAnalyticsMetadata(invoice);
+	if (!metadata) return null;
 	return {
 		eventId: `stripe:${eventId}:subscription_payment_failed`,
 		eventName: "subscription_payment_failed",
 		occurredAt,
 		platform: "server",
 		userId: user.id,
-		organizationId: subscriptionOrganizationId(subscription),
+		organizationId: metadata.analyticsOrganizationId || undefined,
 		properties: {
 			amount_due_minor: invoice.amount_due,
 			currency: invoice.currency,
@@ -334,7 +349,6 @@ export function subscriptionRefundedProductEvent({
 	occurredAt,
 	charge,
 	invoice,
-	subscription,
 	user,
 	refundedAmount,
 }: {
@@ -342,18 +356,19 @@ export function subscriptionRefundedProductEvent({
 	occurredAt: string;
 	charge: Stripe.Charge;
 	invoice: Stripe.Invoice;
-	subscription: Stripe.Subscription;
 	user: AnalyticsUser;
 	refundedAmount: number;
 }): ServerProductEvent | null {
 	if (refundedAmount <= 0) return null;
+	const metadata = validatedInvoiceAnalyticsMetadata(invoice);
+	if (!metadata) return null;
 	return {
 		eventId: `stripe:${eventId}:subscription_refunded`,
 		eventName: "subscription_refunded",
 		occurredAt,
 		platform: "server",
 		userId: user.id,
-		organizationId: subscriptionOrganizationId(subscription),
+		organizationId: metadata.analyticsOrganizationId || undefined,
 		properties: {
 			amount_refunded_minor: refundedAmount,
 			currency: charge.currency,

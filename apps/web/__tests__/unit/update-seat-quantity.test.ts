@@ -8,6 +8,7 @@ const mockDb = {
 	where: vi.fn(),
 	limit: vi.fn(),
 	set: vi.fn(),
+	transaction: vi.fn(),
 };
 
 const mockStripe = {
@@ -17,10 +18,8 @@ const mockStripe = {
 	},
 };
 
-const queueServerProductEvent = vi.fn(async (event: { eventId: string }) => ({
-	eventId: event.eventId,
-	runId: "run-1",
-}));
+const persistProductAnalyticsEvent = vi.fn();
+const attemptProductAnalyticsOutboxDelivery = vi.fn();
 
 vi.mock("@cap/database", () => ({
 	db: () => mockDb,
@@ -57,7 +56,10 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
 }));
 
-vi.mock("@/lib/analytics/server", () => ({ queueServerProductEvent }));
+vi.mock("@/lib/analytics/product-event-outbox", () => ({
+	attemptProductAnalyticsOutboxDelivery,
+	persistProductAnalyticsEvent,
+}));
 
 vi.mock("drizzle-orm", () => ({
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
@@ -81,13 +83,18 @@ function resetMockDb() {
 	mockDb.where.mockReturnValue(mockDb);
 	mockDb.limit.mockResolvedValue([]);
 	mockDb.set.mockReturnValue(mockDb);
+	mockDb.transaction.mockImplementation(
+		(callback: (tx: typeof mockDb) => Promise<unknown>) => callback(mockDb),
+	);
 }
 
 function mockSeatLookup({
 	currentQuantity,
+	localQuantity = currentQuantity,
 	proSeatsUsed = 1,
 }: {
 	currentQuantity: number;
+	localQuantity?: number;
 	proSeatsUsed?: number;
 }) {
 	mockGetCurrentUser.mockResolvedValue({
@@ -100,7 +107,7 @@ function mockSeatLookup({
 			{
 				stripeCustomerId: "cus_1",
 				stripeSubscriptionId: "sub_1",
-				inviteQuota: currentQuantity,
+				inviteQuota: localQuantity,
 			},
 		]);
 	mockDb.where
@@ -158,7 +165,8 @@ describe("updateSeatQuantity", () => {
 			proration_behavior: "always_invoice",
 		});
 		expect(mockDb.set).toHaveBeenCalledWith({ inviteQuota: 2 });
-		expect(queueServerProductEvent).toHaveBeenCalledWith(
+		expect(persistProductAnalyticsEvent).toHaveBeenCalledWith(
+			mockDb,
 			expect.objectContaining({
 				eventName: "seat_quantity_changed",
 				occurredAt: expect.any(String),
@@ -168,6 +176,9 @@ describe("updateSeatQuantity", () => {
 					price_id: "price_1",
 				}),
 			}),
+		);
+		expect(attemptProductAnalyticsOutboxDelivery).toHaveBeenCalledWith(
+			expect.stringContaining("seat_quantity:sub_1:"),
 		);
 	});
 
@@ -199,5 +210,26 @@ describe("updateSeatQuantity", () => {
 			items: [{ id: "si_1", quantity: 2 }],
 			proration_behavior: "create_prorations",
 		});
+	});
+
+	it("repairs a local write after Stripe already accepted the quantity", async () => {
+		mockSeatLookup({ currentQuantity: 2, localQuantity: 1 });
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await updateSeatQuantity("org-1" as never, 2);
+
+		expect(mockStripe.subscriptions.update).not.toHaveBeenCalled();
+		expect(mockDb.set).toHaveBeenCalledWith({ inviteQuota: 2 });
+		expect(persistProductAnalyticsEvent).toHaveBeenCalledWith(
+			mockDb,
+			expect.objectContaining({
+				properties: expect.objectContaining({
+					previous_quantity: 1,
+					new_quantity: 2,
+				}),
+			}),
+		);
 	});
 });

@@ -7,8 +7,13 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
+import {
+	attemptProductAnalyticsOutboxDelivery,
+	persistProductAnalyticsEvent,
+	queueDurableServerProductEvent,
+} from "@/lib/analytics/product-event-outbox";
+import type { ServerProductEvent } from "@/lib/analytics/server-event";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
-import { enqueueProductAnalyticsEventStep } from "@/workflows/deliver-product-analytics-event";
 
 interface ImportLoomPayload {
 	videoId: string;
@@ -171,25 +176,6 @@ async function claimAgentImport(operationId: string | undefined) {
 	});
 }
 
-async function completeAgentImport(
-	operationId: string | undefined,
-	videoId: string,
-) {
-	"use step";
-
-	if (!operationId) return;
-	const now = new Date();
-	await db()
-		.update(agentApiOperations)
-		.set({
-			state: "succeeded",
-			result: { videoId },
-			updatedAt: now,
-			completedAt: now,
-		})
-		.where(eq(agentApiOperations.id, operationId));
-}
-
 async function failAgentImport(
 	operationId: string | undefined,
 	message: string,
@@ -210,6 +196,17 @@ async function failAgentImport(
 		.where(eq(agentApiOperations.id, operationId));
 }
 
+export async function queueLoomAnalyticsEvent(event: ServerProductEvent) {
+	"use step";
+	return queueDurableServerProductEvent(event);
+}
+queueLoomAnalyticsEvent.maxRetries = 8;
+
+async function startLoomAnalyticsEvent(eventId: string) {
+	"use step";
+	return attemptProductAnalyticsOutboxDelivery(eventId);
+}
+
 export async function importLoomVideoWorkflow(
 	payload: ImportLoomPayload,
 ): Promise<VideoProcessingResult> {
@@ -221,7 +218,7 @@ export async function importLoomVideoWorkflow(
 	const startedAt = new Date().toISOString();
 	const analyticsContext = await getLoomAnalyticsContext(payload.videoId);
 	const importMode = payload.agentOperationId ? "agent" : "direct";
-	await enqueueProductAnalyticsEventStep({
+	await queueLoomAnalyticsEvent({
 		eventId: `loom_import:${payload.videoId}:started`,
 		eventName: "loom_import_started",
 		occurredAt: startedAt,
@@ -230,36 +227,34 @@ export async function importLoomVideoWorkflow(
 		organizationId: analyticsContext?.organizationId,
 		properties: { import_mode: importMode },
 	});
+	let result: MediaServerProcessResult;
 	try {
 		const processingInput = await downloadLoomToS3(payload);
 
-		const result = await processVideoOnMediaServer(payload, processingInput);
-
-		await saveMetadataAndComplete(payload.videoId, result.metadata);
-		await completeAgentImport(payload.agentOperationId, payload.videoId);
-		await enqueueProductAnalyticsEventStep({
-			eventId: `loom_import:${payload.videoId}:completed`,
-			eventName: "loom_import_completed",
-			occurredAt: new Date().toISOString(),
-			platform: "server",
-			userId: analyticsContext?.ownerId ?? payload.userId,
-			organizationId: analyticsContext?.organizationId,
-			properties: {
-				import_mode: importMode,
-				duration_ms: Date.now() - Date.parse(startedAt),
+		result = await processVideoOnMediaServer(payload, processingInput);
+		const completedAt = new Date().toISOString();
+		await saveMetadataAndComplete(
+			payload.videoId,
+			payload.agentOperationId,
+			result.metadata,
+			{
+				eventId: `loom_import:${payload.videoId}:completed`,
+				eventName: "loom_import_completed",
+				occurredAt: completedAt,
+				platform: "server",
+				userId: analyticsContext?.ownerId ?? payload.userId,
+				organizationId: analyticsContext?.organizationId,
+				properties: {
+					import_mode: importMode,
+					duration_ms: Date.parse(completedAt) - Date.parse(startedAt),
+				},
 			},
-		});
-
-		return {
-			success: true,
-			message: "Loom video imported successfully",
-			metadata: result.metadata,
-		};
+		);
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(payload.videoId, errorMessage);
 		await failAgentImport(payload.agentOperationId, errorMessage);
-		await enqueueProductAnalyticsEventStep({
+		await queueLoomAnalyticsEvent({
 			eventId: `loom_import:${payload.videoId}:failed`,
 			eventName: "loom_import_failed",
 			occurredAt: new Date().toISOString(),
@@ -273,6 +268,14 @@ export async function importLoomVideoWorkflow(
 		});
 		throw new FatalError(errorMessage);
 	}
+
+	await startLoomAnalyticsEvent(`loom_import:${payload.videoId}:completed`);
+
+	return {
+		success: true,
+		message: "Loom video imported successfully",
+		metadata: result.metadata,
+	};
 }
 
 async function getLoomAnalyticsContext(videoId: string) {
@@ -704,25 +707,42 @@ async function waitForProcessingCompletion(
 
 async function saveMetadataAndComplete(
 	videoId: string,
+	agentOperationId: string | undefined,
 	metadata: { duration: number; width: number; height: number; fps: number },
+	completedEvent: ServerProductEvent<"loom_import_completed">,
 ): Promise<void> {
 	"use step";
 
-	await db()
-		.update(videos)
-		.set({
-			width: metadata.width,
-			height: metadata.height,
-			fps: metadata.fps,
-			...(getValidDuration(metadata.duration) === undefined
-				? {}
-				: { duration: metadata.duration }),
-		})
-		.where(eq(videos.id, videoId as Video.VideoId));
+	await db().transaction(async (tx) => {
+		await tx
+			.update(videos)
+			.set({
+				width: metadata.width,
+				height: metadata.height,
+				fps: metadata.fps,
+				...(getValidDuration(metadata.duration) === undefined
+					? {}
+					: { duration: metadata.duration }),
+			})
+			.where(eq(videos.id, videoId as Video.VideoId));
 
-	await db()
-		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+		await tx
+			.delete(videoUploads)
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+		if (agentOperationId) {
+			const now = new Date();
+			await tx
+				.update(agentApiOperations)
+				.set({
+					state: "succeeded",
+					result: { videoId },
+					updatedAt: now,
+					completedAt: now,
+				})
+				.where(eq(agentApiOperations.id, agentOperationId));
+		}
+		await persistProductAnalyticsEvent(tx, completedEvent);
+	});
 }
 
 async function setProcessingError(

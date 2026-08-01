@@ -1095,6 +1095,7 @@ export const AgentMutationResponse = Schema.Struct({
 });
 
 export const AgentUploadCreateInput = Schema.Struct({
+	initiatingPlatform: Schema.optional(Schema.Literal("cli", "server")),
 	organizationId: Schema.optional(OrganisationId),
 	folderId: Schema.optional(FolderId),
 	fileName: Schema.String,

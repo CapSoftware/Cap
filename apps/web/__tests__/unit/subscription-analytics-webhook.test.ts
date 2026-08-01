@@ -118,11 +118,14 @@ const invoice = {
 	subtotal: 3_000,
 	currency: "usd",
 	total_discount_amounts: [{ amount: 300 }],
+	subscription_details: { metadata: subscription.metadata },
 	lines: {
 		data: [
 			{
 				subscription: "sub_1",
-				price: { id: "price_team" },
+				quantity: 3,
+				metadata: subscription.metadata,
+				price: subscription.items.data[0]?.price,
 			},
 		],
 	},
@@ -415,6 +418,13 @@ describe("Stripe subscription analytics", () => {
 	});
 
 	it("counts the first positive post-trial invoice as the purchase", async () => {
+		mocks.retrieveSubscription.mockResolvedValue({
+			...subscription,
+			metadata: {
+				...subscription.metadata,
+				analyticsOrganizationId: "org-mutated",
+			},
+		});
 		mocks.constructEvent.mockReturnValue(event("invoice.paid", invoice));
 
 		expect((await POST(request())).status).toBe(200);
@@ -433,6 +443,7 @@ describe("Stripe subscription analytics", () => {
 		expect(mocks.product).not.toHaveBeenCalledWith(
 			expect.objectContaining({ eventName: "subscription_renewed" }),
 		);
+		expect(mocks.retrieveSubscription).not.toHaveBeenCalled();
 	});
 
 	it("counts a later positive subscription invoice as a renewal", async () => {

@@ -3,7 +3,7 @@ import {
 	normalizeAnalyticsIdentifier,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
-	type ProductEventPlatform,
+	type ProductEventPlatformFor,
 	type ProductEventPropertyField,
 	type ServerProductEventName,
 } from "@cap/analytics";
@@ -14,7 +14,7 @@ type ServerProductEventBase<Name extends ServerProductEventName> = {
 	eventName: Name;
 	occurredAt: string;
 	anonymousId?: string;
-	platform: ProductEventPlatform;
+	platform: ProductEventPlatformFor<Name>;
 	userId?: string;
 	organizationId?: string;
 	pathname?: string;

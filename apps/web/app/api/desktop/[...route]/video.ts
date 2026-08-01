@@ -63,6 +63,9 @@ app.get(
 	zValidator(
 		"query",
 		z.object({
+			initiatingPlatform: z
+				.union([z.literal("cli"), z.literal("desktop")])
+				.default("desktop"),
 			recordingMode: z
 				.union([
 					z.literal("hls"),
@@ -88,6 +91,7 @@ app.get(
 	async (c) => {
 		try {
 			const {
+				initiatingPlatform,
 				recordingMode,
 				isScreenshot,
 				videoId,
@@ -230,9 +234,10 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
-			const metadata: VideoMetadata | undefined = name
-				? { sourceName: name }
-				: undefined;
+			const metadata: VideoMetadata = {
+				initiatingPlatform,
+				...(name ? { sourceName: name } : {}),
+			};
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,
@@ -274,13 +279,15 @@ app.get(
 					width,
 					height,
 					fps,
-					...(metadata ? { metadata } : {}),
+					metadata,
 				});
 
+			const analyticsPlatform =
+				initiatingPlatform === "cli" ? "cli" : "desktop";
 			await queueServerProductEvent(
 				shareLinkCreatedEvent({
 					videoId: idToUse,
-					platform: "desktop",
+					platform: analyticsPlatform,
 					userId: user.id,
 					organizationId: videoOrgId,
 					createdAt,

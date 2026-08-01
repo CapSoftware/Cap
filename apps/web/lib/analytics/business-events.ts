@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ServerProductEvent } from "./server-event";
 
 const occurredAt = (value: Date | string) =>
@@ -22,7 +23,7 @@ export const identityLinkedEvent = (input: {
 	createdAt: Date | string;
 }) =>
 	({
-		eventId: `identity_linked:${input.userId}`,
+		eventId: `identity_linked:${input.userId}:${createHash("sha256").update(input.anonymousId).digest("hex").slice(0, 24)}`,
 		eventName: "identity_linked",
 		occurredAt: occurredAt(input.createdAt),
 		anonymousId: input.anonymousId,
@@ -31,9 +32,26 @@ export const identityLinkedEvent = (input: {
 		organizationId: input.organizationId ?? undefined,
 	}) satisfies ServerProductEvent;
 
+export const userSignedInEvent = (input: {
+	authenticationId: string;
+	userId: string;
+	organizationId?: string | null;
+	anonymousId?: string;
+	createdAt: Date | string;
+}) =>
+	({
+		eventId: `signin:${input.authenticationId}`,
+		eventName: "user_signed_in",
+		occurredAt: occurredAt(input.createdAt),
+		anonymousId: input.anonymousId,
+		platform: "web",
+		userId: input.userId,
+		organizationId: input.organizationId ?? undefined,
+	}) satisfies ServerProductEvent;
+
 export const shareLinkCreatedEvent = (input: {
 	videoId: string;
-	platform: "desktop" | "mobile" | "server";
+	platform: "cli" | "desktop" | "mobile" | "server";
 	userId: string;
 	organizationId: string;
 	createdAt: Date | string;
@@ -51,6 +69,40 @@ export const shareLinkCreatedEvent = (input: {
 			asset_type: input.isScreenshot ? "screenshot" : "recording",
 			recording_mode: input.sourceType,
 		},
+	}) satisfies ServerProductEvent;
+
+export const uploadCompletedEvent = (input: {
+	videoId: string;
+	platform: "cli" | "server";
+	userId: string;
+	organizationId: string;
+	createdAt: Date | string;
+}) =>
+	({
+		eventId: `upload_completed:${input.videoId}`,
+		eventName: "upload_completed",
+		occurredAt: occurredAt(input.createdAt),
+		platform: input.platform,
+		userId: input.userId,
+		organizationId: input.organizationId,
+	}) satisfies ServerProductEvent;
+
+export const uploadFailedEvent = (input: {
+	videoId: string;
+	platform: "cli" | "server";
+	userId: string;
+	organizationId: string;
+	createdAt: Date | string;
+	failureClass: string;
+}) =>
+	({
+		eventId: `upload_failed:${input.videoId}:${input.failureClass}`,
+		eventName: "upload_failed",
+		occurredAt: occurredAt(input.createdAt),
+		platform: input.platform,
+		userId: input.userId,
+		organizationId: input.organizationId,
+		properties: { failure_class: input.failureClass },
 	}) satisfies ServerProductEvent;
 
 export const checkoutStartedEvent = (input: {

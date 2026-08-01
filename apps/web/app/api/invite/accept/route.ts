@@ -7,12 +7,13 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import {
-	queueServerProductEvent,
-	readAnalyticsAnonymousId,
-} from "@/lib/analytics/server";
+	attemptProductAnalyticsOutboxDelivery,
+	persistProductAnalyticsEvent,
+} from "@/lib/analytics/product-event-outbox";
+import { readAnalyticsAnonymousId } from "@/lib/analytics/server";
 import { normalizeAssignableOrganizationRole } from "@/lib/permissions/roles";
 import {
 	calculateProSeats,
@@ -41,8 +42,7 @@ export async function POST(request: NextRequest) {
 
 	try {
 		let joinedMemberId: string | undefined;
-		let joinedOrganizationId: string | undefined;
-		let joinedRole: string | undefined;
+		let joinedEventId: string | undefined;
 		let joinedAt: Date | undefined;
 		let assignedProSeat = false;
 		await db().transaction(async (tx) => {
@@ -53,6 +53,20 @@ export async function POST(request: NextRequest) {
 				.for("update");
 
 			if (!invite) {
+				throw new Error("INVITE_NOT_FOUND");
+			}
+			const [org] = await tx
+				.select({ ownerId: organizations.ownerId })
+				.from(organizations)
+				.where(
+					and(
+						eq(organizations.id, invite.organizationId),
+						isNull(organizations.tombstoneAt),
+					),
+				)
+				.limit(1)
+				.for("update");
+			if (!org) {
 				throw new Error("INVITE_NOT_FOUND");
 			}
 
@@ -87,18 +101,10 @@ export async function POST(request: NextRequest) {
 				});
 				memberId = newId;
 				joinedMemberId = newId;
-				joinedOrganizationId = invite.organizationId;
-				joinedRole = role;
 				joinedAt = createdAt;
 			}
 
-			const [org] = await tx
-				.select({ ownerId: organizations.ownerId })
-				.from(organizations)
-				.where(eq(organizations.id, invite.organizationId))
-				.limit(1);
-
-			if (org && memberId && !existingMembership) {
+			if (memberId && !existingMembership) {
 				const [owner] = await tx
 					.select({
 						id: users.id,
@@ -167,27 +173,27 @@ export async function POST(request: NextRequest) {
 			await tx
 				.delete(organizationInvites)
 				.where(eq(organizationInvites.id, inviteId));
+
+			if (joinedMemberId && joinedAt) {
+				joinedEventId = `organization_member:${joinedMemberId}:joined`;
+				await persistProductAnalyticsEvent(tx, {
+					eventId: joinedEventId,
+					eventName: "organization_member_joined",
+					occurredAt: joinedAt.toISOString(),
+					anonymousId: readAnalyticsAnonymousId(request),
+					platform: "web",
+					userId: user.id,
+					organizationId: invite.organizationId,
+					properties: {
+						role: normalizeAssignableOrganizationRole(invite.role) ?? "member",
+						assigned_pro_seat: assignedProSeat,
+					},
+				});
+			}
 		});
 
-		if (
-			joinedMemberId &&
-			joinedOrganizationId &&
-			joinedAt &&
-			(joinedRole === "admin" || joinedRole === "member")
-		) {
-			await queueServerProductEvent({
-				eventId: `organization_member:${joinedMemberId}:joined`,
-				eventName: "organization_member_joined",
-				occurredAt: joinedAt.toISOString(),
-				anonymousId: readAnalyticsAnonymousId(request),
-				platform: "web",
-				userId: user.id,
-				organizationId: joinedOrganizationId,
-				properties: {
-					role: joinedRole,
-					assigned_pro_seat: assignedProSeat,
-				},
-			});
+		if (joinedEventId) {
+			await attemptProductAnalyticsOutboxDelivery(joinedEventId);
 		}
 
 		return NextResponse.json({ success: true });
