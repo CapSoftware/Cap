@@ -6,6 +6,7 @@ import {
 	createProductEventRows,
 	isCoreEventName,
 	isServerOnlyEventName,
+	normalizeAcquisitionChannel,
 	normalizeProductEventInput,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
@@ -304,6 +305,24 @@ describe("normalizeProductEventInput", () => {
 });
 
 describe("createProductEventRows", () => {
+	it("classifies the current session touch without leaking lifetime first touch", () => {
+		expect(
+			normalizeAcquisitionChannel({
+				first_touch_gclid: "old-paid-click",
+				first_touch_source: "google",
+			}),
+		).toBe("direct");
+		expect(
+			normalizeAcquisitionChannel({
+				first_touch_source: "newsletter",
+				session_touch_medium: "email",
+			}),
+		).toBe("email");
+		expect(
+			normalizeAcquisitionChannel({ session_touch_gclid: "current-click" }),
+		).toBe("paid_search");
+	});
+
 	it("fingerprints canonical payloads independent of object key order", () => {
 		expect(createProductEventPayloadHash({ a: 1, b: 2 })).toBe(
 			createProductEventPayloadHash({ b: 2, a: 1 }),

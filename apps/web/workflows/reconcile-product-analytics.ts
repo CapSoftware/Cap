@@ -12,13 +12,21 @@ import type Stripe from "stripe";
 import {
 	checkoutStartedEvent,
 	collaborationActionCreatedEvent,
+	firstViewReceivedEvent,
 	guestCheckoutStartedEvent,
 	shareLinkCreatedEvent,
 	userSignedUpEvent,
 } from "@/lib/analytics/business-events";
 import {
+	isFirstPositiveSubscriptionPayment,
 	isSettledSubscriptionPurchase,
+	subscriptionCancelledProductEvent,
+	subscriptionChangedProductEvents,
 	subscriptionCheckoutProductEvent,
+	subscriptionInvoicePaidProductEvent,
+	subscriptionPaymentFailedProductEvent,
+	subscriptionRefundedProductEvent,
+	subscriptionTrialConvertedProductEvent,
 	subscriptionTrialStartedProductEvent,
 } from "@/lib/analytics/stripe-business-events";
 import { enqueueReconciledProductAnalyticsEventStep } from "./deliver-product-analytics-event";
@@ -28,7 +36,12 @@ const STRIPE_ANALYTICS_EVENT_TYPES = [
 	"checkout.session.created",
 	"checkout.session.completed",
 	"checkout.session.async_payment_succeeded",
+	"charge.refunded",
+	"invoice.paid",
+	"invoice.payment_failed",
 	"customer.subscription.created",
+	"customer.subscription.updated",
+	"customer.subscription.deleted",
 ] as const;
 
 const checkoutQuantity = (session: Stripe.Checkout.Session) => {
@@ -98,65 +111,84 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 				isNotNull(messengerSupportEmails.userId),
 			),
 		);
-	const [recentUsers, recentVideos, recentComments] = await Promise.all([
-		db()
-			.select({
-				id: users.id,
-				organizationId: users.activeOrganizationId,
-				createdAt: users.created_at,
-			})
-			.from(users)
-			.where(
-				and(
-					gte(users.created_at, start),
-					lte(users.created_at, end),
-					notInArray(users.id, pendingDeletionUserIds),
-				),
-			)
-			.limit(RECONCILIATION_ROW_LIMIT + 1),
-		db()
-			.select({
-				id: videos.id,
-				userId: videos.ownerId,
-				organizationId: videos.orgId,
-				createdAt: videos.createdAt,
-				isScreenshot: videos.isScreenshot,
-				source: videos.source,
-				metadata: videos.metadata,
-			})
-			.from(videos)
-			.where(
-				and(
-					gte(videos.createdAt, start),
-					lte(videos.createdAt, end),
-					notInArray(videos.ownerId, pendingDeletionUserIds),
-				),
-			)
-			.limit(RECONCILIATION_ROW_LIMIT + 1),
-		db()
-			.select({
-				id: comments.id,
-				authorId: comments.authorId,
-				organizationId: videos.orgId,
-				createdAt: comments.createdAt,
-				type: comments.type,
-				parentCommentId: comments.parentCommentId,
-			})
-			.from(comments)
-			.leftJoin(videos, eq(comments.videoId, videos.id))
-			.where(
-				and(
-					gte(comments.createdAt, start),
-					lte(comments.createdAt, end),
-					notInArray(comments.authorId, pendingDeletionUserIds),
-				),
-			)
-			.limit(RECONCILIATION_ROW_LIMIT + 1),
-	]);
+	const [recentUsers, recentVideos, recentComments, recentFirstViews] =
+		await Promise.all([
+			db()
+				.select({
+					id: users.id,
+					organizationId: users.activeOrganizationId,
+					createdAt: users.created_at,
+				})
+				.from(users)
+				.where(
+					and(
+						gte(users.created_at, start),
+						lte(users.created_at, end),
+						notInArray(users.id, pendingDeletionUserIds),
+					),
+				)
+				.limit(RECONCILIATION_ROW_LIMIT + 1),
+			db()
+				.select({
+					id: videos.id,
+					userId: videos.ownerId,
+					organizationId: videos.orgId,
+					createdAt: videos.createdAt,
+					isScreenshot: videos.isScreenshot,
+					source: videos.source,
+					metadata: videos.metadata,
+				})
+				.from(videos)
+				.where(
+					and(
+						gte(videos.createdAt, start),
+						lte(videos.createdAt, end),
+						notInArray(videos.ownerId, pendingDeletionUserIds),
+					),
+				)
+				.limit(RECONCILIATION_ROW_LIMIT + 1),
+			db()
+				.select({
+					id: comments.id,
+					authorId: comments.authorId,
+					organizationId: videos.orgId,
+					createdAt: comments.createdAt,
+					type: comments.type,
+					parentCommentId: comments.parentCommentId,
+				})
+				.from(comments)
+				.leftJoin(videos, eq(comments.videoId, videos.id))
+				.where(
+					and(
+						gte(comments.createdAt, start),
+						lte(comments.createdAt, end),
+						notInArray(comments.authorId, pendingDeletionUserIds),
+					),
+				)
+				.limit(RECONCILIATION_ROW_LIMIT + 1),
+			db()
+				.select({
+					id: videos.id,
+					userId: videos.ownerId,
+					organizationId: videos.orgId,
+					firstExternalViewAt: videos.firstExternalViewAt,
+				})
+				.from(videos)
+				.where(
+					and(
+						isNotNull(videos.firstExternalViewAt),
+						gte(videos.firstExternalViewAt, start),
+						lte(videos.firstExternalViewAt, end),
+						notInArray(videos.ownerId, pendingDeletionUserIds),
+					),
+				)
+				.limit(RECONCILIATION_ROW_LIMIT + 1),
+		]);
 	if (
 		recentUsers.length > RECONCILIATION_ROW_LIMIT ||
 		recentVideos.length > RECONCILIATION_ROW_LIMIT ||
-		recentComments.length > RECONCILIATION_ROW_LIMIT
+		recentComments.length > RECONCILIATION_ROW_LIMIT ||
+		recentFirstViews.length > RECONCILIATION_ROW_LIMIT
 	) {
 		throw new Error("Product analytics reconciliation row limit exceeded");
 	}
@@ -192,6 +224,17 @@ export async function loadProductAnalyticsReconciliationEventsStep({
 						: "comment",
 			}),
 		),
+		...recentFirstViews.map((video) => {
+			if (!video.firstExternalViewAt) {
+				throw new Error("First-view reconciliation timestamp is missing");
+			}
+			return firstViewReceivedEvent({
+				videoId: video.id,
+				userId: video.userId,
+				organizationId: video.organizationId,
+				createdAt: video.firstExternalViewAt,
+			});
+		}),
 	];
 }
 loadProductAnalyticsReconciliationEventsStep.maxRetries = 4;
@@ -238,20 +281,38 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 			session: event.data.object as Stripe.Checkout.Session,
 		}))
 		.filter(({ session }) => session.metadata?.type !== "developer_credits");
-	const createdSubscriptions = stripeEvents
-		.filter(({ type }) => type === "customer.subscription.created")
+	const subscriptionEvents = stripeEvents
+		.filter(({ type }) => type.startsWith("customer.subscription."))
 		.map((event) => ({
 			event,
 			subscription: event.data.object as Stripe.Subscription,
+		}));
+	const invoiceEvents = stripeEvents
+		.filter(
+			({ type }) =>
+				type === "invoice.paid" || type === "invoice.payment_failed",
+		)
+		.map((event) => ({
+			event,
+			invoice: event.data.object as Stripe.Invoice,
+		}));
+	const refundEvents = stripeEvents
+		.filter(({ type }) => type === "charge.refunded")
+		.map((event) => ({
+			event,
+			charge: event.data.object as Stripe.Charge,
 		}));
 	const customerIds = [
 		...new Set(
 			[
 				...sessions.map(({ session }) => session.customer),
-				...createdSubscriptions.map(
-					({ subscription }) => subscription.customer,
-				),
-			].flatMap((customer) => (typeof customer === "string" ? [customer] : [])),
+				...subscriptionEvents.map(({ subscription }) => subscription.customer),
+				...invoiceEvents.map(({ invoice }) => invoice.customer),
+				...refundEvents.map(({ charge }) => charge.customer),
+			].flatMap((customer) => {
+				if (typeof customer === "string") return [customer];
+				return customer?.id ? [customer.id] : [];
+			}),
 		),
 	];
 	const analyticsUsers =
@@ -271,7 +332,35 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 	);
 	const reconciled = [];
 	let legacyStripeEventsSkipped = 0;
-	for (const { event, subscription } of createdSubscriptions) {
+	const subscriptionsById = new Map(
+		subscriptionEvents.map(({ subscription }) => [
+			subscription.id,
+			subscription,
+		]),
+	);
+	const getSubscription = async (
+		value: string | Stripe.Subscription | null,
+	) => {
+		if (!value) throw new Error("Stripe event is missing a subscription");
+		if (typeof value !== "string") return value;
+		const existing = subscriptionsById.get(value);
+		if (existing) return existing;
+		const subscription = await stripe().subscriptions.retrieve(value);
+		subscriptionsById.set(value, subscription);
+		return subscription;
+	};
+	const getUser = (
+		customer: string | Stripe.Customer | Stripe.DeletedCustomer | null,
+	) => {
+		const customerId = typeof customer === "string" ? customer : customer?.id;
+		if (!customerId) throw new Error("Stripe event is missing a customer");
+		const user = usersByCustomerId.get(customerId);
+		if (!user) throw new Error("Stripe event has no matching analytics user");
+		return user;
+	};
+	for (const { event, subscription } of subscriptionEvents.filter(
+		({ event }) => event.type === "customer.subscription.created",
+	)) {
 		const analyticsSchemaVersion = subscription.metadata.analyticsSchemaVersion;
 		if (!analyticsSchemaVersion) {
 			legacyStripeEventsSkipped += 1;
@@ -295,6 +384,96 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 			occurredAt: new Date(event.created * 1_000).toISOString(),
 			subscription,
 			user,
+		});
+		if (productEvent) reconciled.push(productEvent);
+	}
+	for (const { event, subscription } of subscriptionEvents.filter(
+		({ event }) => event.type === "customer.subscription.updated",
+	)) {
+		const user = getUser(subscription.customer);
+		const previous = event.data.previous_attributes as
+			| Partial<Stripe.Subscription>
+			| undefined;
+		const occurredAt = new Date(event.created * 1_000).toISOString();
+		const trialConverted = subscriptionTrialConvertedProductEvent({
+			eventId: event.id,
+			occurredAt,
+			subscription,
+			previousStatus: previous?.status,
+			user,
+		});
+		if (trialConverted) reconciled.push(trialConverted);
+		reconciled.push(
+			...subscriptionChangedProductEvents({
+				eventId: event.id,
+				occurredAt,
+				subscription,
+				previous,
+				user,
+			}),
+		);
+	}
+	for (const { event, subscription } of subscriptionEvents.filter(
+		({ event }) => event.type === "customer.subscription.deleted",
+	)) {
+		reconciled.push(
+			subscriptionCancelledProductEvent({
+				eventId: event.id,
+				occurredAt: new Date(event.created * 1_000).toISOString(),
+				subscription,
+				user: getUser(subscription.customer),
+			}),
+		);
+	}
+	for (const { event, invoice } of invoiceEvents) {
+		if (!invoice.subscription) continue;
+		const subscription = await getSubscription(invoice.subscription);
+		const user = getUser(invoice.customer);
+		const occurredAt = new Date(event.created * 1_000).toISOString();
+		if (event.type === "invoice.paid") {
+			const productEvent = subscriptionInvoicePaidProductEvent({
+				eventId: event.id,
+				occurredAt,
+				invoice,
+				subscription,
+				user,
+				firstPositivePayment: await isFirstPositiveSubscriptionPayment({
+					invoice,
+					subscriptionId: subscription.id,
+					listPaidInvoices: (input) => stripe().invoices.list(input),
+				}),
+			});
+			if (productEvent) reconciled.push(productEvent);
+			continue;
+		}
+		const productEvent = subscriptionPaymentFailedProductEvent({
+			eventId: event.id,
+			occurredAt,
+			invoice,
+			subscription,
+			user,
+		});
+		if (productEvent) reconciled.push(productEvent);
+	}
+	for (const { event, charge } of refundEvents) {
+		if (!charge.invoice) continue;
+		const invoice =
+			typeof charge.invoice === "string"
+				? await stripe().invoices.retrieve(charge.invoice)
+				: charge.invoice;
+		if (!invoice.subscription) continue;
+		const subscription = await getSubscription(invoice.subscription);
+		const previous = event.data.previous_attributes as
+			| Partial<Stripe.Charge>
+			| undefined;
+		const productEvent = subscriptionRefundedProductEvent({
+			eventId: event.id,
+			occurredAt: new Date(event.created * 1_000).toISOString(),
+			charge,
+			invoice,
+			subscription,
+			user: getUser(charge.customer),
+			refundedAmount: charge.amount_refunded - (previous?.amount_refunded ?? 0),
 		});
 		if (productEvent) reconciled.push(productEvent);
 	}
@@ -348,7 +527,9 @@ export async function loadStripeAnalyticsReconciliationEventsStep({
 							? "desktop"
 							: session.metadata?.platform === "mobile"
 								? "mobile"
-								: "web",
+								: session.metadata?.platform === "cli"
+									? "cli"
+									: "web",
 					userId: user.id,
 					organizationId: session.metadata?.analyticsOrganizationId,
 					anonymousId,

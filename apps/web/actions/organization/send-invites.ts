@@ -149,10 +149,12 @@ export async function sendOrganizationInvites(
 				!existingMemberEmails.has(invite.email),
 		);
 
+		const createdAt = new Date();
 		const records = invitesToSend.map((invite) => ({
 			id: nanoId(),
 			email: invite.email,
 			role: invite.role,
+			createdAt,
 		}));
 
 		if (records.length > 0) {
@@ -163,6 +165,7 @@ export async function sendOrganizationInvites(
 					invitedEmail: r.email,
 					invitedByUserId: user.id,
 					role: r.role,
+					createdAt: r.createdAt,
 				})),
 			);
 		}
@@ -221,6 +224,7 @@ export async function sendOrganizationInvites(
 		await queueServerProductEvent({
 			eventId: `organization_invites:${firstSuccessfulInvite.id}`,
 			eventName: "organization_invite_sent",
+			occurredAt: firstSuccessfulInvite.createdAt.toISOString(),
 			platform: "web",
 			userId: user.id,
 			organizationId,

@@ -17,6 +17,11 @@ const mockStripe = {
 	},
 };
 
+const queueServerProductEvent = vi.fn(async (event: { eventId: string }) => ({
+	eventId: event.eventId,
+	runId: "run-1",
+}));
+
 vi.mock("@cap/database", () => ({
 	db: () => mockDb,
 }));
@@ -51,6 +56,8 @@ vi.mock("@cap/env", () => ({
 vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
 }));
+
+vi.mock("@/lib/analytics/server", () => ({ queueServerProductEvent }));
 
 vi.mock("drizzle-orm", () => ({
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
@@ -110,7 +117,18 @@ function mockSeatLookup({
 	mockStripe.subscriptions.retrieve.mockResolvedValue({
 		id: "sub_1",
 		items: {
-			data: [{ id: "si_1", quantity: currentQuantity }],
+			data: [
+				{
+					id: "si_1",
+					quantity: currentQuantity,
+					price: {
+						id: "price_1",
+						unit_amount: 1200,
+						currency: "usd",
+						recurring: { interval: "month" },
+					},
+				},
+			],
 		},
 	});
 }
@@ -140,6 +158,17 @@ describe("updateSeatQuantity", () => {
 			proration_behavior: "always_invoice",
 		});
 		expect(mockDb.set).toHaveBeenCalledWith({ inviteQuota: 2 });
+		expect(queueServerProductEvent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventName: "seat_quantity_changed",
+				occurredAt: expect.any(String),
+				properties: expect.objectContaining({
+					previous_quantity: 1,
+					new_quantity: 2,
+					price_id: "price_1",
+				}),
+			}),
+		);
 	});
 
 	it("does not store added seats when Stripe leaves the subscription update pending", async () => {

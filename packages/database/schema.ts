@@ -185,6 +185,30 @@ export const verificationTokens = mysqlTable("verification_tokens", {
 	updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 });
 
+export const productAnalyticsErasureLeases = mysqlTable(
+	"product_analytics_erasure_leases",
+	{
+		name: varchar("name", { length: 64 }).notNull().primaryKey(),
+		ownerId: varchar("ownerId", { length: 64 }),
+		requestId: varchar("requestId", { length: 64 }),
+		fencingToken: bigint("fencingToken", {
+			mode: "number",
+			unsigned: true,
+		})
+			.notNull()
+			.default(0),
+		leaseExpiresAt: timestamp("leaseExpiresAt"),
+		phase: varchar("phase", { length: 32 }).notNull().default("idle"),
+		pausedPipes: json("pausedPipes").$type<string[]>(),
+		userId: varchar("userId", { length: 255 }),
+		organizationId: varchar("organizationId", { length: 255 }),
+		attemptCount: int("attemptCount").notNull().default(0),
+		lastErrorCode: varchar("lastErrorCode", { length: 64 }),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+);
+
 export const organizations = mysqlTable(
 	"organizations",
 	{
@@ -407,6 +431,7 @@ export const videos = mysqlTable(
 		password: encryptedTextNullable("password"),
 		// LEGACY
 		xStreamInfo: text("xStreamInfo"),
+		firstExternalViewAt: timestamp("firstExternalViewAt"),
 		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
 		// DEPRECATED
@@ -423,6 +448,7 @@ export const videos = mysqlTable(
 		index("is_public_idx").on(table.public),
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
+		index("first_external_view_at_idx").on(table.firstExternalViewAt),
 		index("org_owner_folder_idx").on(
 			table.orgId,
 			table.ownerId,

@@ -50,7 +50,10 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: Omit<typeof videos.$inferSelect, "password"> & {
+		data: Omit<
+			typeof videos.$inferSelect,
+			"firstExternalViewAt" | "password"
+		> & {
 			hasActiveUpload: boolean | undefined;
 		};
 		user: typeof userSelectProps | null;

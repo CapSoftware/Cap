@@ -9,9 +9,16 @@ import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import {
+	isFirstPositiveSubscriptionPayment,
 	isSettledSubscriptionPurchase,
 	queueSubscriptionCheckoutProductEvent,
 	queueSubscriptionTrialStartedProductEvent,
+	subscriptionCancelledProductEvent,
+	subscriptionChangedProductEvents,
+	subscriptionInvoicePaidProductEvent,
+	subscriptionPaymentFailedProductEvent,
+	subscriptionRefundedProductEvent,
+	subscriptionTrialConvertedProductEvent,
 } from "@/lib/analytics/stripe-business-events";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 
@@ -209,6 +216,24 @@ async function findAnalyticsUserForCustomer(
 	return findUserWithRetry(customer.email ?? "", userId, 1);
 }
 
+async function chargeInvoice(charge: Stripe.Charge): Promise<Stripe.Invoice> {
+	if (!charge.invoice) {
+		throw new Error("Subscription refund is missing its Stripe invoice");
+	}
+	return typeof charge.invoice === "string"
+		? stripe().invoices.retrieve(charge.invoice)
+		: charge.invoice;
+}
+
+async function invoiceSubscription(invoice: Stripe.Invoice) {
+	if (!invoice.subscription) {
+		throw new Error("Subscription invoice is missing its subscription");
+	}
+	return typeof invoice.subscription === "string"
+		? stripe().subscriptions.retrieve(invoice.subscription)
+		: invoice.subscription;
+}
+
 export const POST = async (req: Request) => {
 	console.log("Webhook received");
 	const buf = await req.text();
@@ -235,44 +260,42 @@ export const POST = async (req: Request) => {
 		try {
 			if (event.type === "invoice.paid") {
 				const invoice = event.data.object as Stripe.Invoice;
-				if (
-					invoice.subscription &&
-					invoice.billing_reason === "subscription_cycle"
-				) {
-					const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_renewed`,
-						eventName: "subscription_renewed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser?.id,
-						organizationId: dbUser?.activeOrganizationId,
-						properties: {
-							amount_paid_minor: invoice.amount_paid,
-							currency: invoice.currency,
-							billing_reason: "subscription_cycle",
-						},
-					});
-				}
+				if (!invoice.subscription) return NextResponse.json({ received: true });
+				const subscription = await invoiceSubscription(invoice);
+				const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
+				if (!dbUser) return retryableUserResolutionFailure();
+				const invoicePaidProductEvent = subscriptionInvoicePaidProductEvent({
+					eventId: event.id,
+					occurredAt: new Date(event.created * 1000).toISOString(),
+					invoice,
+					subscription,
+					user: dbUser,
+					firstPositivePayment: await isFirstPositiveSubscriptionPayment({
+						invoice,
+						subscriptionId: subscription.id,
+						listPaidInvoices: (input) => stripe().invoices.list(input),
+					}),
+				});
+				if (invoicePaidProductEvent)
+					await queueServerProductEvent(invoicePaidProductEvent);
 			}
 
 			if (event.type === "invoice.payment_failed") {
 				const invoice = event.data.object as Stripe.Invoice;
 				if (invoice.subscription) {
+					const subscription = await invoiceSubscription(invoice);
 					const dbUser = await findAnalyticsUserForCustomer(invoice.customer);
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_payment_failed`,
-						eventName: "subscription_payment_failed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser?.id,
-						organizationId: dbUser?.activeOrganizationId,
-						properties: {
-							amount_due_minor: invoice.amount_due,
-							currency: invoice.currency,
-							attempt_count: invoice.attempt_count,
-						},
-					});
+					if (!dbUser) return retryableUserResolutionFailure();
+					const paymentFailedProductEvent =
+						subscriptionPaymentFailedProductEvent({
+							eventId: event.id,
+							occurredAt: new Date(event.created * 1000).toISOString(),
+							invoice,
+							subscription,
+							user: dbUser,
+						});
+					if (paymentFailedProductEvent)
+						await queueServerProductEvent(paymentFailedProductEvent);
 				}
 			}
 
@@ -284,20 +307,21 @@ export const POST = async (req: Request) => {
 				const previousAmountRefunded = previousCharge?.amount_refunded ?? 0;
 				const refundedAmount = charge.amount_refunded - previousAmountRefunded;
 				if (charge.invoice && refundedAmount > 0) {
+					const invoice = await chargeInvoice(charge);
+					const subscription = await invoiceSubscription(invoice);
 					const dbUser = await findAnalyticsUserForCustomer(charge.customer);
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_refunded`,
-						eventName: "subscription_refunded",
+					if (!dbUser) return retryableUserResolutionFailure();
+					const refundProductEvent = subscriptionRefundedProductEvent({
+						eventId: event.id,
 						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser?.id,
-						organizationId: dbUser?.activeOrganizationId,
-						properties: {
-							amount_refunded_minor: refundedAmount,
-							currency: charge.currency,
-							fully_refunded: charge.refunded,
-						},
+						charge,
+						invoice,
+						subscription,
+						user: dbUser,
+						refundedAmount,
 					});
+					if (refundProductEvent)
+						await queueServerProductEvent(refundProductEvent);
 				}
 			}
 
@@ -566,115 +590,23 @@ export const POST = async (req: Request) => {
 					})
 					.where(eq(users.id, dbUser.id));
 
-				if (
-					previous?.status === "trialing" &&
-					subscription.status === "active"
-				) {
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:trial_converted`,
-						eventName: "trial_converted",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser.id,
-						organizationId: dbUser.activeOrganizationId,
-						properties: {
-							previous_status: "trialing",
-							new_status: "active",
-						},
-					});
-				}
-
-				if (
-					previous?.cancel_at_period_end !== undefined &&
-					previous.cancel_at_period_end !== subscription.cancel_at_period_end
-				) {
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_changed:cancellation`,
-						eventName: "subscription_changed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser.id,
-						organizationId: dbUser.activeOrganizationId,
-						properties: {
-							change_kind: subscription.cancel_at_period_end
-								? "cancellation_scheduled"
-								: "cancellation_reversed",
-							previous_status: previous.status ?? null,
-							new_status: subscription.status,
-							previous_price_id: null,
-							new_price_id: null,
-							previous_quantity: null,
-							new_quantity: null,
-						},
-					});
-				}
-
-				if (previous?.status && previous.status !== subscription.status) {
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_changed:status`,
-						eventName: "subscription_changed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser.id,
-						organizationId: dbUser.activeOrganizationId,
-						properties: {
-							change_kind: "status",
-							previous_status: previous.status,
-							new_status: subscription.status,
-							previous_price_id: null,
-							new_price_id: null,
-							previous_quantity: null,
-							new_quantity: null,
-						},
-					});
-				}
-
-				const previousItem = previous?.items?.data[0];
-				const currentItem = subscription.items.data[0];
-				if (
-					previousItem &&
-					currentItem &&
-					previousItem.price.id !== currentItem.price.id
-				) {
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_changed:plan`,
-						eventName: "subscription_changed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser.id,
-						organizationId: dbUser.activeOrganizationId,
-						properties: {
-							change_kind: "plan",
-							previous_status: null,
-							new_status: null,
-							previous_price_id: previousItem.price.id,
-							new_price_id: currentItem.price.id,
-							previous_quantity: previousItem.quantity,
-							new_quantity: currentItem.quantity,
-						},
-					});
-				} else if (
-					previousItem &&
-					currentItem &&
-					previousItem.quantity !== currentItem.quantity
-				) {
-					await queueServerProductEvent({
-						eventId: `stripe:${event.id}:subscription_changed:seats`,
-						eventName: "subscription_changed",
-						occurredAt: new Date(event.created * 1000).toISOString(),
-						platform: "server",
-						userId: dbUser.id,
-						organizationId: dbUser.activeOrganizationId,
-						properties: {
-							change_kind: "seats",
-							previous_status: null,
-							new_status: null,
-							previous_price_id: previousItem.price.id,
-							new_price_id: currentItem.price.id,
-							previous_quantity: previousItem.quantity,
-							new_quantity: currentItem.quantity,
-						},
-					});
+				const occurredAt = new Date(event.created * 1000).toISOString();
+				const trialConverted = subscriptionTrialConvertedProductEvent({
+					eventId: event.id,
+					occurredAt,
+					subscription,
+					previousStatus: previous?.status,
+					user: dbUser,
+				});
+				if (trialConverted) await queueServerProductEvent(trialConverted);
+				for (const productEvent of subscriptionChangedProductEvents({
+					eventId: event.id,
+					occurredAt,
+					subscription,
+					previous,
+					user: dbUser,
+				})) {
+					await queueServerProductEvent(productEvent);
 				}
 
 				console.log(
@@ -742,19 +674,14 @@ export const POST = async (req: Request) => {
 					})
 					.where(eq(users.id, foundUserId));
 
-				await queueServerProductEvent({
-					eventId: `stripe:${event.id}:subscription_cancelled`,
-					eventName: "subscription_cancelled",
-					occurredAt: new Date(event.created * 1000).toISOString(),
-					platform: "server",
-					userId: foundUserId,
-					organizationId: userResult[0]?.activeOrganizationId,
-					properties: {
-						status: subscription.status,
-						ended_at: subscription.ended_at,
-						cancel_at_period_end: subscription.cancel_at_period_end,
-					},
-				});
+				await queueServerProductEvent(
+					subscriptionCancelledProductEvent({
+						eventId: event.id,
+						occurredAt: new Date(event.created * 1000).toISOString(),
+						subscription,
+						user: { id: foundUserId },
+					}),
+				);
 
 				console.log("User updated successfully", {
 					foundUserId,

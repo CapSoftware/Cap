@@ -277,9 +277,22 @@ test("credits only the literal platform passed to routed business factories", ()
 		file: "apps/web/app/api/desktop/subscribe.ts",
 		registeredEvents: new Set(["checkout_started"]),
 	});
+	const boundedHelper = analyzeTypeScriptSource({
+		sourceText: `
+			import { shareLinkCreatedEvent } from "@/lib/analytics/business-events";
+			const resolvePlatform = (mobile: boolean) => {
+				if (mobile) return "mobile" as const;
+				return "server" as const;
+			};
+			shareLinkCreatedEvent({ platform: resolvePlatform(true) });
+		`,
+		file: "apps/web/workflows/reconcile.ts",
+		registeredEvents: new Set(["share_link_created"]),
+	});
 	assert.deepEqual(literal.emissions[0]?.platforms, ["mobile"]);
 	assert.deepEqual(dynamic.emissions[0]?.platforms, []);
 	assert.deepEqual(bounded.emissions[0]?.platforms, ["mobile", "desktop"]);
+	assert.deepEqual(boundedHelper.emissions[0]?.platforms, ["mobile", "server"]);
 });
 
 test("accepts a bounded helper that emits one of a declared event set", () => {
@@ -307,6 +320,47 @@ test("accepts a bounded helper that emits one of a declared event set", () => {
 				platforms: ["web", "desktop", "mobile", "cli", "server"],
 			},
 		],
+	);
+});
+
+test("resolves queued events created by a registered optional factory", () => {
+	const result = analyzeTypeScriptSource({
+		sourceText: `
+			import { subscriptionPaymentFailedProductEvent } from "@/lib/analytics/stripe-business-events";
+			import { queueServerProductEvent } from "@/lib/analytics/server";
+			const paymentFailed = subscriptionPaymentFailedProductEvent({ eventId: "evt_1" });
+			if (paymentFailed) queueServerProductEvent(paymentFailed);
+		`,
+		file: "apps/web/app/api/webhooks/stripe/route.ts",
+		registeredEvents: new Set(["subscription_payment_failed"]),
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.ok(
+		result.emissions.every(
+			(emission) =>
+				emission.eventName === "subscription_payment_failed" &&
+				emission.platforms.includes("server"),
+		),
+	);
+});
+
+test("accepts queued events iterated from a registered factory", () => {
+	const result = analyzeTypeScriptSource({
+		sourceText: `
+			import { subscriptionChangedProductEvents } from "@/lib/analytics/stripe-business-events";
+			import { queueServerProductEvent } from "@/lib/analytics/server";
+			for (const productEvent of subscriptionChangedProductEvents({ eventId: "evt_1" })) {
+				queueServerProductEvent(productEvent);
+			}
+		`,
+		file: "apps/web/app/api/webhooks/stripe/route.ts",
+		registeredEvents: new Set(["subscription_changed"]),
+	});
+	assert.deepEqual(result.diagnostics, []);
+	assert.ok(
+		result.emissions.some(
+			(emission) => emission.eventName === "subscription_changed",
+		),
 	);
 });
 
@@ -338,6 +392,22 @@ fn production() {
 }
 `);
 	assert.deepEqual([...variants], ["RecordingStarted"]);
+});
+
+test("native emitter discovery can exclude registry mapping functions", () => {
+	const variants = rustProductionVariantUses(
+		`
+fn event_data() {
+	ProductAnalyticsEvent::RecordingStarted;
+}
+
+fn internally_emitted() {
+	ProductAnalyticsEvent::AnalyticsDeliveryLoss;
+}
+`,
+		{ excludeFunctions: ["event_data"] },
+	);
+	assert.deepEqual([...variants], ["AnalyticsDeliveryLoss"]);
 });
 
 test("native Rust mappings match variants, registry and core catalog", () => {

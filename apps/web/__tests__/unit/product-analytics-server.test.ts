@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	collaborationActionCreatedEvent,
+	firstViewReceivedEvent,
 	identityLinkedEvent,
 	shareLinkCreatedEvent,
 	userSignedUpEvent,
@@ -46,10 +47,41 @@ describe("server product analytics", () => {
 		const [row] = createServerProductEventRows({
 			eventId: "signup:user-1",
 			eventName: "user_signed_up",
+			occurredAt: "2026-07-12T12:00:00.000Z",
 			platform: "web",
 			userId: "user-1",
 		});
 		expect(row?.anonymous_id).toBe("user:user-1");
+	});
+
+	it("marks bounded staging events as synthetic without exposing the run ID", () => {
+		const [row] = createServerProductEventRows({
+			_syntheticRunId: "run_staging_route_123",
+			eventId: "signup:user-1",
+			eventName: "user_signed_up",
+			occurredAt: "2026-07-12T12:00:00.000Z",
+			platform: "web",
+			userId: "user-1",
+		});
+
+		expect(row).toMatchObject({
+			synthetic_run_id: "run_staging_route_123",
+			traffic_class: "synthetic",
+		});
+		expect(row?.properties).not.toContain("run_staging_route_123");
+	});
+
+	it("rejects an invalid synthetic staging run ID", () => {
+		expect(
+			createServerProductEventRows({
+				_syntheticRunId: "contains spaces",
+				eventId: "signup:user-1",
+				eventName: "user_signed_up",
+				occurredAt: "2026-07-12T12:00:00.000Z",
+				platform: "web",
+				userId: "user-1",
+			}),
+		).toEqual([]);
 	});
 
 	it("drops an event without any stable identity", () => {
@@ -57,23 +89,23 @@ describe("server product analytics", () => {
 			createServerProductEventRows({
 				eventId: "event-1",
 				eventName: "user_signed_up",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				platform: "web",
 			}),
 		).toEqual([]);
 	});
 
-	it("replaces an invalid timestamp with the receive time", () => {
-		const [row] = createServerProductEventRows({
-			eventId: "event-1",
-			eventName: "purchase_completed",
-			occurredAt: "invalid",
-			platform: "server",
-			userId: "user-1",
-			properties: purchaseProperties,
-		});
-
-		expect(row?.occurred_at).toBe(row?.received_at);
-		expect(Number.isFinite(Date.parse(row?.occurred_at ?? ""))).toBe(true);
+	it("rejects an invalid timestamp before delivery", () => {
+		expect(
+			createServerProductEventRows({
+				eventId: "event-1",
+				eventName: "purchase_completed",
+				occurredAt: "invalid",
+				platform: "server",
+				userId: "user-1",
+				properties: purchaseProperties,
+			}),
+		).toEqual([]);
 	});
 
 	it("rejects a property payload containing undeclared customer data", () => {
@@ -84,6 +116,7 @@ describe("server product analytics", () => {
 			unsafeCreate({
 				eventId: "event-1",
 				eventName: "user_signed_up",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				platform: "web",
 				userId: "user-1",
 				properties: { email: "private@example.com" },
@@ -99,6 +132,7 @@ describe("server product analytics", () => {
 			unsafeCreate({
 				eventId: "stripe:evt_123:purchase_completed",
 				eventName: "purchase_completed",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				platform: "server",
 				userId: "user-1",
 				properties: {
@@ -111,6 +145,7 @@ describe("server product analytics", () => {
 			unsafeCreate({
 				eventId: "loom_import:video-1:failed",
 				eventName: "loom_import_failed",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				platform: "server",
 				userId: "user-1",
 				properties: {
@@ -150,6 +185,12 @@ describe("server product analytics", () => {
 				organizationId: "org-1",
 				createdAt: "2026-07-31T10:02:00.000Z",
 				action: "comment",
+			}),
+			firstViewReceivedEvent({
+				videoId: "video-1",
+				userId: "user-1",
+				organizationId: "org-1",
+				createdAt: "2026-07-31T10:03:00.000Z",
 			}),
 		] as const;
 

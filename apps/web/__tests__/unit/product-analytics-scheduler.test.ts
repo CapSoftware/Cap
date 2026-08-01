@@ -17,6 +17,7 @@ describe("analytics durable enqueue", () => {
 			queueServerProductEvent({
 				eventId: "checkout:cs_1",
 				eventName: "checkout_started",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				anonymousId: "anonymous-1",
 				platform: "web",
 				properties: { price_id: "price_1", quantity: 1 },
@@ -32,6 +33,7 @@ describe("analytics durable enqueue", () => {
 			queueServerProductEvent({
 				eventId: "signup:user-1",
 				eventName: "user_signed_up",
+				occurredAt: "2026-07-12T12:00:00.000Z",
 				platform: "server",
 				userId: "user-1",
 			}),

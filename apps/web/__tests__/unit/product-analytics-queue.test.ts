@@ -46,7 +46,7 @@ describe("ProductAnalyticsQueue", () => {
 		expect(transport.mock.calls[0]?.[0]).toHaveLength(2);
 		expect(transport.mock.calls[0]?.[2]).toMatchObject({
 			attempted: 2,
-			accepted: 2,
+			accepted: 0,
 		});
 	});
 
@@ -229,6 +229,72 @@ describe("ProductAnalyticsQueue", () => {
 		);
 		expect(p95Ms).toBeLessThan(250);
 	});
+
+	it("recovers an unconfirmed in-flight batch after a page restart", async () => {
+		vi.setSystemTime(new Date("2026-07-12T12:01:00.000Z"));
+		const values = new Map<string, string>();
+		const storage = {
+			getItem: (key: string) => values.get(key) ?? null,
+			removeItem: (key: string) => values.delete(key),
+			setItem: (key: string, value: string) => values.set(key, value),
+		};
+		const abandonedTransport = vi.fn<ProductAnalyticsTransport>(
+			() => new Promise(() => {}),
+		);
+		const abandonedQueue = new ProductAnalyticsQueue(
+			abandonedTransport,
+			setTimeout,
+			clearTimeout,
+			storage,
+		);
+		abandonedQueue.enqueue({
+			...makeEvent(1),
+			properties: { hostname: "cap.so", is_session_entry: true },
+		});
+		void abandonedQueue.flush("unload");
+
+		const recoveredTransport = vi
+			.fn<ProductAnalyticsTransport>()
+			.mockResolvedValue("success");
+		const recoveredQueue = new ProductAnalyticsQueue(
+			recoveredTransport,
+			setTimeout,
+			clearTimeout,
+			storage,
+		);
+		expect(recoveredQueue.size).toBe(1);
+		await vi.advanceTimersByTimeAsync(2_000);
+
+		expect(recoveredTransport.mock.calls[0]?.[0][0]?.eventId).toBe("event-1");
+		expect(recoveredQueue.deliverySnapshot).toMatchObject({
+			attempted: 2,
+			accepted: 1,
+			retried: 1,
+			dropped: 0,
+		});
+	});
+
+	it("makes blocked queue persistence observable", () => {
+		const storage = {
+			getItem: () => {
+				throw new Error("blocked");
+			},
+			removeItem: () => {
+				throw new Error("blocked");
+			},
+			setItem: () => {
+				throw new Error("blocked");
+			},
+		};
+		const queue = new ProductAnalyticsQueue(
+			vi.fn<ProductAnalyticsTransport>(),
+			setTimeout,
+			clearTimeout,
+			storage,
+		);
+		queue.enqueue(makeEvent(1));
+		expect(queue.deliverySnapshot.persistence_failed).toBeGreaterThan(0);
+	});
 });
 
 describe("browser analytics identity", () => {
@@ -335,7 +401,7 @@ describe("product page views", () => {
 });
 
 describe("browser product analytics transport", () => {
-	it("uses a beacon during unload without also fetching", async () => {
+	it("treats an accepted unload beacon as unconfirmed for a stable-ID retry", async () => {
 		const fetchImpl = vi.fn<typeof fetch>();
 		const sendBeacon = vi.fn(() => true);
 		await expect(
@@ -343,7 +409,7 @@ describe("browser product analytics transport", () => {
 				fetchImpl,
 				sendBeacon,
 			}),
-		).resolves.toBe("success");
+		).resolves.toBe("retry");
 		expect(sendBeacon).toHaveBeenCalledOnce();
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});

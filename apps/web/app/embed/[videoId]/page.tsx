@@ -185,7 +185,10 @@ async function EmbedContent({
 	autoplay,
 	minimal,
 }: {
-	video: Omit<typeof videos.$inferSelect, "password"> & {
+	video: Omit<
+		typeof videos.$inferSelect,
+		"firstExternalViewAt" | "password"
+	> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;

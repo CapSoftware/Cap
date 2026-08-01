@@ -126,6 +126,14 @@ const CAPTURE_MODULES = new Map([
 					platforms: ["server"],
 				},
 			],
+			[
+				"firstViewReceivedEvent",
+				{
+					kind: "helper",
+					eventName: "first_view_received",
+					platforms: ["server"],
+				},
+			],
 		]),
 	],
 	[
@@ -137,6 +145,54 @@ const CAPTURE_MODULES = new Map([
 					kind: "helper-set",
 					eventNames: ["purchase_completed", "trial_started"],
 					platforms: ["web", "desktop", "mobile", "cli", "server"],
+				},
+			],
+			[
+				"subscriptionInvoicePaidProductEvent",
+				{
+					kind: "helper-set",
+					eventNames: ["purchase_completed", "subscription_renewed"],
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionPaymentFailedProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_payment_failed",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionRefundedProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_refunded",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionTrialConvertedProductEvent",
+				{
+					kind: "helper",
+					eventName: "trial_converted",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionChangedProductEvents",
+				{
+					kind: "helper",
+					eventName: "subscription_changed",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionCancelledProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_cancelled",
+					platforms: ["server"],
 				},
 			],
 		]),
@@ -223,6 +279,14 @@ const CAPTURE_MODULES = new Map([
 					platforms: ["server"],
 				},
 			],
+			[
+				"firstViewReceivedEvent",
+				{
+					kind: "helper",
+					eventName: "first_view_received",
+					platforms: ["server"],
+				},
+			],
 		]),
 	],
 	[
@@ -234,6 +298,54 @@ const CAPTURE_MODULES = new Map([
 					kind: "helper-set",
 					eventNames: ["purchase_completed", "trial_started"],
 					platforms: ["web", "desktop", "mobile", "cli", "server"],
+				},
+			],
+			[
+				"subscriptionInvoicePaidProductEvent",
+				{
+					kind: "helper-set",
+					eventNames: ["purchase_completed", "subscription_renewed"],
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionPaymentFailedProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_payment_failed",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionRefundedProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_refunded",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionTrialConvertedProductEvent",
+				{
+					kind: "helper",
+					eventName: "trial_converted",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionChangedProductEvents",
+				{
+					kind: "helper",
+					eventName: "subscription_changed",
+					platforms: ["server"],
+				},
+			],
+			[
+				"subscriptionCancelledProductEvent",
+				{
+					kind: "helper",
+					eventName: "subscription_cancelled",
+					platforms: ["server"],
 				},
 			],
 		]),
@@ -344,6 +456,50 @@ function staticStringUnion(expression, initializers, seen = new Set()) {
 			initializers,
 			new Set([...seen, value.text]),
 		);
+	}
+	if (
+		ts.isCallExpression(value) &&
+		ts.isIdentifier(value.expression) &&
+		!seen.has(value.expression.text)
+	) {
+		const initializer = initializers.get(value.expression.text);
+		if (
+			!initializer ||
+			(!ts.isArrowFunction(initializer) &&
+				!ts.isFunctionExpression(initializer))
+		) {
+			return undefined;
+		}
+		const nextSeen = new Set([...seen, value.expression.text]);
+		if (!ts.isBlock(initializer.body)) {
+			return staticStringUnion(initializer.body, initializers, nextSeen);
+		}
+		const returns = [];
+		let invalid = false;
+		const visit = (node) => {
+			if (invalid) return;
+			if (ts.isFunctionLike(node) && node !== initializer) return;
+			if (ts.isReturnStatement(node)) {
+				if (!node.expression) {
+					invalid = true;
+					return;
+				}
+				const values = staticStringUnion(
+					node.expression,
+					initializers,
+					nextSeen,
+				);
+				if (!values) {
+					invalid = true;
+					return;
+				}
+				returns.push(...values);
+				return;
+			}
+			ts.forEachChild(node, visit);
+		};
+		ts.forEachChild(initializer.body, visit);
+		return invalid || returns.length === 0 ? undefined : [...new Set(returns)];
 	}
 	return undefined;
 }
@@ -626,8 +782,24 @@ function helperPlatforms(descriptor, call, initializers) {
 	return staticStringUnion(property.initializer, initializers) ?? [];
 }
 
-function eventNameProperty(expression, bindings, initializers) {
+function eventNameProperty(
+	expression,
+	bindings,
+	initializers,
+	seen = new Set(),
+) {
 	const value = unwrapExpression(expression);
+	if (ts.isIdentifier(value) && !seen.has(value.text)) {
+		const initializer = initializers.get(value.text);
+		if (initializer) {
+			return eventNameProperty(
+				initializer,
+				bindings,
+				initializers,
+				new Set([...seen, value.text]),
+			);
+		}
+	}
 	if (ts.isCallExpression(value)) {
 		const descriptor = callDescriptor(value.expression, bindings);
 		if (descriptor?.kind === "helper") {
@@ -636,6 +808,14 @@ function eventNameProperty(expression, bindings, initializers) {
 				kind: "static",
 				node: value,
 				platforms: helperPlatforms(descriptor, value, initializers),
+			};
+		}
+		if (descriptor?.kind === "helper-set") {
+			return {
+				eventNames: descriptor.eventNames,
+				kind: "static-set",
+				node: value,
+				platforms: descriptor.platforms,
 			};
 		}
 	}
@@ -653,6 +833,30 @@ function eventNameProperty(expression, bindings, initializers) {
 		}
 	}
 	return { kind: "missing", node: value };
+}
+
+function forOfHelperBinding(identifier, call, bindings) {
+	if (!ts.isIdentifier(identifier)) return false;
+	let current = call.parent;
+	while (current) {
+		if (ts.isForOfStatement(current)) {
+			const declaration = current.initializer.declarations?.find(
+				(candidate) =>
+					ts.isIdentifier(candidate.name) &&
+					candidate.name.text === identifier.text,
+			);
+			const expression = unwrapExpression(current.expression);
+			if (
+				declaration &&
+				ts.isCallExpression(expression) &&
+				callDescriptor(expression.expression, bindings)
+			) {
+				return true;
+			}
+		}
+		current = current.parent;
+	}
+	return false;
 }
 
 export function analyzeTypeScriptSource({
@@ -763,7 +967,14 @@ export function analyzeTypeScriptSource({
 							result.platforms ??
 								eventPlatforms(argument, bindings, initializers),
 						);
-					} else {
+					} else if (result.kind === "static-set") {
+						for (const eventName of result.eventNames) {
+							registerEmission(eventName, result.node, result.platforms);
+						}
+					} else if (
+						result.kind !== "non-object" ||
+						!forOfHelperBinding(unwrapExpression(argument), node, bindings)
+					) {
 						const messages = {
 							"non-object":
 								"Analytics event objects must be inline object literals",
@@ -1164,8 +1375,39 @@ function rustTokensWithoutTestItems(tokens) {
 	);
 }
 
-export function rustProductionVariantUses(sourceText) {
-	const tokens = rustTokensWithoutTestItems(tokenizeRust(sourceText));
+function rustTokensWithoutFunctions(tokens, functionNames) {
+	const excluded = [];
+	for (let index = 0; index < tokens.length - 2; index += 1) {
+		if (
+			tokens[index]?.value !== "fn" ||
+			!functionNames.has(tokens[index + 1]?.value)
+		) {
+			continue;
+		}
+		let opening = index + 2;
+		while (opening < tokens.length && tokens[opening]?.value !== "{")
+			opening += 1;
+		if (opening >= tokens.length) continue;
+		const closing = matchingTokenIndex(tokens, opening, "{", "}");
+		if (closing === undefined) continue;
+		excluded.push([index, closing]);
+		index = closing;
+	}
+	return tokens.filter(
+		(_token, index) =>
+			!excluded.some(([start, end]) => index >= start && index <= end),
+	);
+}
+
+export function rustProductionVariantUses(
+	sourceText,
+	{ excludeFunctions = [] } = {},
+) {
+	const productionTokens = rustTokensWithoutTestItems(tokenizeRust(sourceText));
+	const tokens = rustTokensWithoutFunctions(
+		productionTokens,
+		new Set(excludeFunctions),
+	);
 	const variants = new Set();
 	for (let index = 0; index < tokens.length - 2; index += 1) {
 		if (isTokenSequence(tokens, index, ["ProductAnalyticsEvent", "::"])) {
@@ -1303,6 +1545,11 @@ export function runEventContractCheck({
 	});
 	diagnostics.push(...native.diagnostics);
 	const usedNativeVariants = new Map();
+	for (const variant of rustProductionVariantUses(nativeSource, {
+		excludeFunctions: ["event_data"],
+	})) {
+		usedNativeVariants.set(variant, new Set(["desktop"]));
+	}
 	for (const relativePath of files) {
 		if (
 			!relativePath.endsWith(".rs") ||

@@ -430,7 +430,7 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())?;
 
-        crate::product_analytics::set_telemetry_enabled(settings.enable_telemetry);
+        crate::product_analytics::set_telemetry_enabled(app, settings.enable_telemetry);
 
         #[cfg(target_os = "macos")]
         crate::permissions::sync_macos_dock_visibility(app);
@@ -492,7 +492,7 @@ pub fn init(app: &AppHandle) {
         raw_store.set(REMOVE_TARGET_SELECT_MIGRATION_KEY, json!(true));
     }
 
-    crate::product_analytics::set_telemetry_enabled(store.enable_telemetry);
+    crate::product_analytics::set_telemetry_enabled(app, store.enable_telemetry);
     register_bundled_muxer_binary(app);
 
     #[cfg(target_os = "macos")]

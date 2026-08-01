@@ -117,3 +117,18 @@ export const collaborationActionCreatedEvent = (input: {
 		organizationId: input.organizationId ?? undefined,
 		properties: { action: input.action },
 	}) satisfies ServerProductEvent;
+
+export const firstViewReceivedEvent = (input: {
+	videoId: string;
+	userId: string;
+	organizationId: string;
+	createdAt: Date | string;
+}) =>
+	({
+		eventId: `first_view:${input.videoId}`,
+		eventName: "first_view_received",
+		occurredAt: occurredAt(input.createdAt),
+		platform: "server",
+		userId: input.userId,
+		organizationId: input.organizationId,
+	}) satisfies ServerProductEvent;

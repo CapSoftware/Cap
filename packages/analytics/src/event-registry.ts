@@ -301,6 +301,28 @@ export const EVENT_REGISTRY = {
 			},
 		},
 	},
+	analytics_delivery_loss: {
+		version: 1,
+		delivery: "critical",
+		authority: "client",
+		platforms: ["desktop"],
+		semantic:
+			"A durable native-client delivery or persistence failure summary became deliverable. Each summary has a stable event ID, bounded categorical dimensions, and a sequence range; it is retried until accepted and never recursively reports its own delivery failure.",
+		properties: {
+			failure_class: { type: "string", required: true, format: "category" },
+			failed_event_name: {
+				type: "string",
+				required: true,
+				format: "category",
+			},
+			status: { type: "number", nullable: true },
+			count: { type: "number", required: true },
+			first_sequence: { type: "number", required: true },
+			last_sequence: { type: "number", required: true },
+			first_failed_at_ms: { type: "number", required: true },
+			last_failed_at_ms: { type: "number", required: true },
+		},
+	},
 	onboarding_milestone_completed: {
 		...bestEffortClient,
 		platforms: ["web"],
@@ -447,9 +469,10 @@ export const EVENT_REGISTRY = {
 	},
 	purchase_completed: {
 		...criticalServer,
+		version: 3,
 		platforms: ["web", "desktop", "mobile", "cli", "server"],
 		semantic:
-			"Stripe reports a checkout whose immutable payment status is paid. Trials without a settled payment are not purchases.",
+			"Stripe reports either a paid checkout or the first positive settled subscription-cycle invoice after a trial. Immediate checkout invoices are not counted again, and trials without settled money are never purchases.",
 		properties: {
 			payment_status: { type: "string", required: true, values: ["paid"] },
 			subscription_status: {
@@ -496,12 +519,14 @@ export const EVENT_REGISTRY = {
 	},
 	subscription_renewed: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"Stripe reports a paid subscription-cycle invoice. Revenue is recorded in minor units and never mixed across currencies.",
 		properties: {
 			amount_paid_minor: { type: "number", required: true },
 			currency: { type: "string", required: true, format: "category" },
+			price_id: { type: "string", required: true, format: "identifier" },
 			billing_reason: {
 				type: "string",
 				required: true,
@@ -511,6 +536,7 @@ export const EVENT_REGISTRY = {
 	},
 	trial_converted: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"An authoritative Stripe subscription transition changed from trialing to active. This does not itself imply a paid invoice.",
@@ -525,10 +551,12 @@ export const EVENT_REGISTRY = {
 				required: true,
 				values: ["active"],
 			},
+			price_id: { type: "string", required: true, format: "identifier" },
 		},
 	},
 	subscription_changed: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"Stripe changed a subscription's status, cancellation schedule, plan, or seat quantity. The typed change kind defines the decision meaning.",
@@ -553,7 +581,7 @@ export const EVENT_REGISTRY = {
 			},
 			new_price_id: {
 				type: "string",
-				nullable: true,
+				required: true,
 				format: "identifier",
 			},
 			previous_quantity: { type: "number", nullable: true },
@@ -562,28 +590,33 @@ export const EVENT_REGISTRY = {
 	},
 	subscription_cancelled: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"Stripe reports that a subscription has terminated. This is the churn boundary, distinct from scheduling cancellation.",
 		properties: {
 			status: { type: "string", required: true, format: "category" },
+			price_id: { type: "string", required: true, format: "identifier" },
 			ended_at: { type: "number", nullable: true },
 			cancel_at_period_end: { type: "boolean", required: true },
 		},
 	},
 	subscription_refunded: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"Stripe reports an incremental increase in money refunded against a settled charge. Each event contributes only the delta since the previous charge state.",
 		properties: {
 			amount_refunded_minor: { type: "number", required: true },
 			currency: { type: "string", required: true, format: "category" },
+			price_id: { type: "string", required: true, format: "identifier" },
 			fully_refunded: { type: "boolean", required: true },
 		},
 	},
 	subscription_payment_failed: {
 		...criticalServer,
+		version: 2,
 		platforms: ["server"],
 		semantic:
 			"Stripe reports that collection failed for a subscription invoice. Attempt count is provider-authoritative.",
@@ -591,6 +624,7 @@ export const EVENT_REGISTRY = {
 			amount_due_minor: { type: "number", required: true },
 			currency: { type: "string", required: true, format: "category" },
 			attempt_count: { type: "number", required: true },
+			price_id: { type: "string", required: true, format: "identifier" },
 		},
 	},
 	organization_invite_sent: {

@@ -4,6 +4,7 @@ import {
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeAnalyticsIdentifier,
+	normalizeProductEventInput,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
 	PRODUCT_ANALYTICS_LIMITS,
@@ -18,10 +19,19 @@ const FLUSH_INTERVAL_MS = 5_000;
 const RETRY_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const ANONYMOUS_ID_KEY = "cap_analytics_anonymous_id_v1";
+const QUEUE_STORAGE_KEY = "cap_analytics_queue_v1";
 
 type TransportResult = "success" | "retry" | "drop";
 type TransportMode = "normal" | "unload";
 type QueuedEvent = { event: ProductEventInput; attempts: number };
+type QueueStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
+
+interface PersistedQueueState {
+	version: 1;
+	queue: QueuedEvent[];
+	inFlight: QueuedEvent[];
+	delivery: ProductAnalyticsDeliverySnapshot;
+}
 
 interface BrowserTransportDependencies {
 	fetchImpl?: typeof fetch;
@@ -42,7 +52,61 @@ export interface ProductAnalyticsDeliverySnapshot {
 	queue_overflow: number;
 	oversize: number;
 	contract_rejected: number;
+	persistence_failed: number;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const normalizeDeliveryCount = (value: unknown, fallback?: number) => {
+	if (value === undefined && fallback !== undefined) return fallback;
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+		throw new Error("Persisted analytics delivery count is invalid");
+	}
+	return value;
+};
+
+const normalizeQueuedEvent = (value: unknown): QueuedEvent => {
+	if (!isRecord(value) || (value.attempts !== 0 && value.attempts !== 1)) {
+		throw new Error("Persisted analytics queue entry is invalid");
+	}
+	const event = normalizeProductEventInput(value.event);
+	if (!event) throw new Error("Persisted analytics event is invalid");
+	return { event, attempts: value.attempts };
+};
+
+const normalizePersistedQueueState = (value: unknown): PersistedQueueState => {
+	if (
+		!isRecord(value) ||
+		value.version !== 1 ||
+		!Array.isArray(value.queue) ||
+		!Array.isArray(value.inFlight) ||
+		!isRecord(value.delivery) ||
+		value.queue.length > PRODUCT_ANALYTICS_LIMITS.queueSize ||
+		value.inFlight.length > PRODUCT_ANALYTICS_LIMITS.batchSize
+	) {
+		throw new Error("Persisted analytics queue state is invalid");
+	}
+	const delivery = value.delivery;
+	return {
+		version: 1,
+		queue: value.queue.map(normalizeQueuedEvent),
+		inFlight: value.inFlight.map(normalizeQueuedEvent),
+		delivery: {
+			attempted: normalizeDeliveryCount(delivery.attempted),
+			accepted: normalizeDeliveryCount(delivery.accepted),
+			retried: normalizeDeliveryCount(delivery.retried),
+			dropped: normalizeDeliveryCount(delivery.dropped),
+			queue_overflow: normalizeDeliveryCount(delivery.queue_overflow),
+			oversize: normalizeDeliveryCount(delivery.oversize),
+			contract_rejected: normalizeDeliveryCount(delivery.contract_rejected, 0),
+			persistence_failed: normalizeDeliveryCount(
+				delivery.persistence_failed,
+				0,
+			),
+		},
+	};
+};
 
 export class ProductAnalyticsQueue {
 	private queue: QueuedEvent[] = [];
@@ -56,13 +120,20 @@ export class ProductAnalyticsQueue {
 		queue_overflow: 0,
 		oversize: 0,
 		contract_rejected: 0,
+		persistence_failed: 0,
 	};
+	private persistedInFlight: QueuedEvent[] = [];
 
 	constructor(
 		private readonly transport: ProductAnalyticsTransport,
 		private readonly schedule: typeof setTimeout = setTimeout,
 		private readonly cancel: typeof clearTimeout = clearTimeout,
-	) {}
+		private readonly storage?: QueueStorage | null,
+	) {
+		if (this.storage === null) this.delivery.persistence_failed += 1;
+		this.restore();
+		if (this.queue.length > 0) this.scheduleFlush(RETRY_INTERVAL_MS);
+	}
 
 	enqueue(event: ProductEventInput) {
 		if (this.queue.length >= PRODUCT_ANALYTICS_LIMITS.queueSize) {
@@ -71,6 +142,7 @@ export class ProductAnalyticsQueue {
 			this.delivery.queue_overflow += 1;
 		}
 		this.queue.push({ event, attempts: 0 });
+		this.persist();
 
 		if (this.queue.length >= PRODUCT_ANALYTICS_LIMITS.batchSize) {
 			void this.flush();
@@ -85,7 +157,10 @@ export class ProductAnalyticsQueue {
 
 		this.clearTimer();
 		const batch = this.takeBatch();
-		if (batch.length === 0) return Promise.resolve();
+		if (batch.length === 0) {
+			this.persist();
+			return Promise.resolve();
+		}
 		let retryScheduled = false;
 		this.inFlight = this.send(batch, mode)
 			.then((scheduled) => {
@@ -115,19 +190,19 @@ export class ProductAnalyticsQueue {
 	recordContractRejection() {
 		this.delivery.dropped += 1;
 		this.delivery.contract_rejected += 1;
+		this.persist();
 	}
 
 	private async send(batch: QueuedEvent[], mode: TransportMode) {
 		let result: TransportResult;
 		this.delivery.attempted += batch.length;
+		this.persistedInFlight = batch;
+		this.persist();
 		try {
 			result = await this.transport(
 				batch.map(({ event }) => event),
 				mode,
-				{
-					...this.deliverySnapshot,
-					accepted: this.delivery.accepted + batch.length,
-				},
+				this.deliverySnapshot,
 			);
 		} catch {
 			result = "retry";
@@ -135,10 +210,14 @@ export class ProductAnalyticsQueue {
 
 		if (result === "success") {
 			this.delivery.accepted += batch.length;
+			this.persistedInFlight = [];
+			this.persist();
 			return false;
 		}
 		if (result === "drop") {
 			this.delivery.dropped += batch.length;
+			this.persistedInFlight = [];
+			this.persist();
 			return false;
 		}
 		this.delivery.retried += batch.length;
@@ -148,13 +227,21 @@ export class ProductAnalyticsQueue {
 			.map(({ event }) => ({ event, attempts: 1 }));
 		if (retryable.length === 0) {
 			this.delivery.dropped += batch.length;
+			this.persistedInFlight = [];
+			this.persist();
 			return false;
 		}
 
-		this.queue = [...retryable, ...this.queue].slice(
+		const nextQueue = [...retryable, ...this.queue];
+		const overflow = Math.max(
 			0,
-			PRODUCT_ANALYTICS_LIMITS.queueSize,
+			nextQueue.length - PRODUCT_ANALYTICS_LIMITS.queueSize,
 		);
+		this.queue = nextQueue.slice(0, PRODUCT_ANALYTICS_LIMITS.queueSize);
+		this.delivery.dropped += overflow;
+		this.delivery.queue_overflow += overflow;
+		this.persistedInFlight = [];
+		this.persist();
 		this.scheduleFlush(RETRY_INTERVAL_MS);
 		return true;
 	}
@@ -200,6 +287,64 @@ export class ProductAnalyticsQueue {
 		}
 
 		return batch;
+	}
+
+	private restore() {
+		if (!this.storage) return;
+		let state: PersistedQueueState;
+		try {
+			const serialized = this.storage.getItem(QUEUE_STORAGE_KEY);
+			if (!serialized) return;
+			const parsed = JSON.parse(serialized) as unknown;
+			state = normalizePersistedQueueState(parsed);
+		} catch {
+			this.delivery.persistence_failed += 1;
+			try {
+				this.storage.removeItem(QUEUE_STORAGE_KEY);
+			} catch {}
+			return;
+		}
+		this.delivery = state.delivery;
+		const recovered: QueuedEvent[] = [];
+		for (const item of state.inFlight) {
+			if (item.attempts === 0) {
+				recovered.push({ event: item.event, attempts: 1 });
+				this.delivery.retried += 1;
+			} else {
+				this.delivery.dropped += 1;
+			}
+		}
+		this.queue = [...recovered, ...state.queue].slice(
+			0,
+			PRODUCT_ANALYTICS_LIMITS.queueSize,
+		);
+		this.delivery.dropped += Math.max(
+			0,
+			recovered.length + state.queue.length - this.queue.length,
+		);
+		this.delivery.queue_overflow += Math.max(
+			0,
+			recovered.length + state.queue.length - this.queue.length,
+		);
+		this.persistedInFlight = [];
+		this.persist();
+	}
+
+	private persist() {
+		if (!this.storage) return;
+		try {
+			this.storage.setItem(
+				QUEUE_STORAGE_KEY,
+				JSON.stringify({
+					version: 1,
+					queue: this.queue,
+					inFlight: this.persistedInFlight,
+					delivery: this.delivery,
+				} satisfies PersistedQueueState),
+			);
+		} catch {
+			this.delivery.persistence_failed += 1;
+		}
 	}
 }
 
@@ -372,7 +517,14 @@ export function createProductEventId(
 }
 
 function getBrowserQueue() {
-	if (!browserQueue) browserQueue = new ProductAnalyticsQueue(browserTransport);
+	if (!browserQueue) {
+		browserQueue = new ProductAnalyticsQueue(
+			browserTransport,
+			setTimeout,
+			clearTimeout,
+			getBrowserStorage("localStorage") ?? null,
+		);
+	}
 	registerLifecycleListeners();
 	return browserQueue;
 }
@@ -458,7 +610,7 @@ export const sendBrowserProductAnalytics = async (
 					new Blob([body], { type: "application/json" }),
 				)
 			) {
-				return "success";
+				return "retry";
 			}
 		} catch {}
 	}

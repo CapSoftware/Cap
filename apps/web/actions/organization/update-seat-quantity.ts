@@ -155,6 +155,9 @@ export async function updateSeatQuantity(
 	const { subscription, subscriptionItem, proSeatsUsed, user } =
 		await getOwnerSubscription(organizationId);
 	const currentQuantity = subscriptionItem.quantity ?? 1;
+	if (newQuantity === currentQuantity) {
+		return { success: true, newQuantity };
+	}
 
 	if (newQuantity < proSeatsUsed) {
 		throw new Error(
@@ -180,6 +183,7 @@ export async function updateSeatQuantity(
 				: {}),
 		},
 	);
+	const changedAt = new Date().toISOString();
 
 	if (isSeatIncrease && updatedSubscription.pending_update) {
 		throw new Error(
@@ -213,6 +217,7 @@ export async function updateSeatQuantity(
 	await queueServerProductEvent({
 		eventId: `seat_quantity:${subscription.id}:${latestInvoice ?? updatedSubscription.current_period_start}:${newQuantity}`,
 		eventName: "seat_quantity_changed",
+		occurredAt: changedAt,
 		platform: "web",
 		userId: user.id,
 		organizationId,

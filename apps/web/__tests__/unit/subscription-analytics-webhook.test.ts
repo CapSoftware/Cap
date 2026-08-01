@@ -4,7 +4,10 @@ const mocks = vi.hoisted(() => ({
 	product: vi.fn(),
 	constructEvent: vi.fn(),
 	retrieveCustomer: vi.fn(),
+	retrieveInvoice: vi.fn(),
 	retrieveSubscription: vi.fn(),
+	listInvoices: vi.fn(),
+	listSubscriptions: vi.fn(),
 }));
 
 const dbChain = {
@@ -41,7 +44,11 @@ vi.mock("@cap/utils", () => ({
 		},
 		subscriptions: {
 			retrieve: mocks.retrieveSubscription,
-			list: vi.fn(),
+			list: mocks.listSubscriptions,
+		},
+		invoices: {
+			retrieve: mocks.retrieveInvoice,
+			list: mocks.listInvoices,
 		},
 	}),
 }));
@@ -71,16 +78,51 @@ const customer = {
 
 const subscription = {
 	id: "sub_1",
+	customer: "cus_1",
 	status: "active",
+	metadata: {
+		platform: "web",
+		analyticsAnonymousId: "anonymous-1",
+		analyticsSchemaVersion: "1",
+		analyticsPriceId: "price_team",
+		analyticsQuantity: "3",
+		analyticsOrganizationId: "org-immutable",
+		analyticsIsFirstPurchase: "true",
+	},
+	cancel_at_period_end: false,
+	ended_at: null,
 	items: {
 		data: [
 			{
 				quantity: 3,
 				price: {
 					id: "price_team",
+					currency: "usd",
 					unit_amount: 900,
 					recurring: { interval: "month", interval_count: 1 },
 				},
+			},
+		],
+	},
+};
+
+const invoice = {
+	id: "in_1",
+	created: 1_752_537_600,
+	customer: "cus_1",
+	subscription: "sub_1",
+	billing_reason: "subscription_cycle",
+	amount_paid: 2_700,
+	amount_due: 2_700,
+	attempt_count: 1,
+	subtotal: 3_000,
+	currency: "usd",
+	total_discount_amounts: [{ amount: 300 }],
+	lines: {
+		data: [
+			{
+				subscription: "sub_1",
+				price: { id: "price_team" },
 			},
 		],
 	},
@@ -139,6 +181,9 @@ describe("Stripe subscription analytics", () => {
 		dbChain.set.mockReturnValue(dbChain);
 		mocks.retrieveCustomer.mockResolvedValue(customer);
 		mocks.retrieveSubscription.mockResolvedValue(subscription);
+		mocks.retrieveInvoice.mockResolvedValue(invoice);
+		mocks.listInvoices.mockResolvedValue({ data: [], has_more: false });
+		mocks.listSubscriptions.mockResolvedValue({ data: [subscription] });
 		POST = (await import("@/app/api/webhooks/stripe/route")).POST;
 	});
 
@@ -362,8 +407,110 @@ describe("Stripe subscription analytics", () => {
 				properties: {
 					amount_refunded_minor: 300,
 					currency: "usd",
+					price_id: "price_team",
 					fully_refunded: false,
 				},
+			}),
+		);
+	});
+
+	it("counts the first positive post-trial invoice as the purchase", async () => {
+		mocks.constructEvent.mockReturnValue(event("invoice.paid", invoice));
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId: "stripe:evt_invoice.paid:purchase_completed",
+				eventName: "purchase_completed",
+				platform: "web",
+				organizationId: "org-immutable",
+				properties: expect.objectContaining({
+					amount_total_minor: 2_700,
+					is_first_purchase: true,
+				}),
+			}),
+		);
+		expect(mocks.product).not.toHaveBeenCalledWith(
+			expect.objectContaining({ eventName: "subscription_renewed" }),
+		);
+	});
+
+	it("counts a later positive subscription invoice as a renewal", async () => {
+		mocks.listInvoices.mockResolvedValue({
+			data: [{ id: "in_prior", amount_paid: 2_700 }],
+			has_more: false,
+		});
+		mocks.constructEvent.mockReturnValue(event("invoice.paid", invoice));
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId: "stripe:evt_invoice.paid:subscription_renewed",
+				eventName: "subscription_renewed",
+				organizationId: "org-immutable",
+			}),
+		);
+		expect(mocks.product).not.toHaveBeenCalledWith(
+			expect.objectContaining({ eventName: "purchase_completed" }),
+		);
+	});
+
+	it("records provider-authoritative failed collection attempts", async () => {
+		mocks.constructEvent.mockReturnValue(
+			event("invoice.payment_failed", {
+				...invoice,
+				amount_paid: 0,
+				amount_due: 2_700,
+				attempt_count: 2,
+			}),
+		);
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId:
+					"stripe:evt_invoice.payment_failed:subscription_payment_failed",
+				eventName: "subscription_payment_failed",
+				organizationId: "org-immutable",
+				properties: expect.objectContaining({
+					amount_due_minor: 2_700,
+					attempt_count: 2,
+				}),
+			}),
+		);
+	});
+
+	it("emits both plan and seat changes from one Stripe update", async () => {
+		mocks.constructEvent.mockReturnValue({
+			...event("customer.subscription.updated", subscription),
+			data: {
+				object: subscription,
+				previous_attributes: {
+					items: {
+						data: [
+							{
+								quantity: 1,
+								price: { id: "price_pro" },
+							},
+						],
+					},
+				},
+			},
+		});
+
+		expect((await POST(request())).status).toBe(200);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId:
+					"stripe:evt_customer.subscription.updated:subscription_changed:plan",
+				properties: expect.objectContaining({ change_kind: "plan" }),
+			}),
+		);
+		expect(mocks.product).toHaveBeenCalledWith(
+			expect.objectContaining({
+				eventId:
+					"stripe:evt_customer.subscription.updated:subscription_changed:seats",
+				properties: expect.objectContaining({ change_kind: "seats" }),
 			}),
 		);
 	});

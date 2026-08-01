@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	eventsList: vi.fn(),
+	invoicesList: vi.fn(),
+	retrieveInvoice: vi.fn(),
 	retrieveSubscription: vi.fn(),
 	users: [] as Array<{
 		id: string;
@@ -30,6 +32,10 @@ vi.mock("@cap/database/schema", () => ({
 vi.mock("@cap/utils", () => ({
 	stripe: () => ({
 		events: { list: mocks.eventsList },
+		invoices: {
+			list: mocks.invoicesList,
+			retrieve: mocks.retrieveInvoice,
+		},
 		subscriptions: { retrieve: mocks.retrieveSubscription },
 	}),
 }));
@@ -72,7 +78,11 @@ const checkoutSession = {
 
 const subscription = {
 	id: "sub_1",
+	customer: "cus_1",
 	status: "active",
+	metadata: checkoutSession.metadata,
+	cancel_at_period_end: false,
+	ended_at: null,
 	items: {
 		data: [
 			{
@@ -114,6 +124,7 @@ describe("Stripe analytics reconciliation", () => {
 			has_more: false,
 		}));
 		mocks.retrieveSubscription.mockResolvedValue(subscription);
+		mocks.invoicesList.mockResolvedValue({ data: [], has_more: false });
 	});
 
 	it("rebuilds Stripe checkout facts with the original event identity", async () => {
@@ -143,6 +154,17 @@ describe("Stripe analytics reconciliation", () => {
 				}),
 			],
 		});
+		expect(mocks.eventsList.mock.calls.map(([input]) => input.type)).toEqual([
+			"checkout.session.created",
+			"checkout.session.completed",
+			"checkout.session.async_payment_succeeded",
+			"charge.refunded",
+			"invoice.paid",
+			"invoice.payment_failed",
+			"customer.subscription.created",
+			"customer.subscription.updated",
+			"customer.subscription.deleted",
+		]);
 	});
 
 	it("rebuilds versioned checkout metadata and counts legacy sessions", async () => {
@@ -256,6 +278,58 @@ describe("Stripe analytics reconciliation", () => {
 				occurredAt: "2025-07-15T00:00:00.000Z",
 				userId: "user-1",
 				organizationId: "org-1",
+			}),
+		]);
+	});
+
+	it("rebuilds the first settled post-trial invoice as a purchase", async () => {
+		const invoice = {
+			id: "in_first_paid",
+			created: 1_752_537_600,
+			customer: "cus_1",
+			subscription: "sub_1",
+			billing_reason: "subscription_cycle",
+			amount_paid: 2_700,
+			amount_due: 2_700,
+			attempt_count: 1,
+			subtotal: 3_000,
+			currency: "usd",
+			total_discount_amounts: [{ amount: 300 }],
+			lines: { data: [{ price: { id: "price_team" } }] },
+		};
+		mocks.eventsList.mockImplementation(async ({ type }: { type: string }) => ({
+			data:
+				type === "invoice.paid"
+					? [
+							{
+								id: "evt_first_paid",
+								created: 1_752_537_600,
+								type,
+								data: { object: invoice },
+							},
+						]
+					: [],
+			has_more: false,
+		}));
+		const { loadStripeAnalyticsReconciliationEventsStep } = await import(
+			"@/workflows/reconcile-product-analytics"
+		);
+
+		const result = await loadStripeAnalyticsReconciliationEventsStep({
+			scheduledAt: "2025-07-16T00:00:00.000Z",
+			lookbackHours: 48,
+		});
+
+		expect(result.events).toEqual([
+			expect.objectContaining({
+				eventId: "stripe:evt_first_paid:purchase_completed",
+				eventName: "purchase_completed",
+				platform: "web",
+				organizationId: "org-1",
+				properties: expect.objectContaining({
+					amount_total_minor: 2_700,
+					is_first_purchase: true,
+				}),
 			}),
 		]);
 	});

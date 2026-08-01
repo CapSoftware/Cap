@@ -57,6 +57,7 @@ import { deliverProductAnalyticsEventStep } from "@/workflows/deliver-product-an
 const event = {
 	eventId: "signup:user-1",
 	eventName: "user_signed_up",
+	occurredAt: "2026-07-12T12:00:00.000Z",
 	platform: "web",
 	userId: "user-1",
 	organizationId: "org-1",

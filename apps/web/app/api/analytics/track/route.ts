@@ -6,6 +6,11 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import UAParser from "ua-parser-js";
+import { firstViewReceivedEvent } from "@/lib/analytics/business-events";
+import {
+	claimFirstExternalView,
+	firstExternalViewTimestamp,
+} from "@/lib/analytics/first-view";
 import {
 	getProductAnalyticsRateLimitKey,
 	ProductAnalyticsRateLimiter,
@@ -191,6 +196,25 @@ export async function POST(request: NextRequest) {
 			}
 
 			const tenantId = videoRecord.organizationId;
+			const isNewVideo = videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
+			if (isNewVideo) {
+				const claimedAt = firstExternalViewTimestamp();
+				const claimed = yield* Effect.tryPromise(() =>
+					claimFirstExternalView(Video.VideoId.make(body.videoId), claimedAt),
+				);
+				if (claimed) {
+					yield* Effect.tryPromise(() =>
+						queueServerProductEvent(
+							firstViewReceivedEvent({
+								videoId: body.videoId,
+								userId: videoRecord.ownerId,
+								organizationId: videoRecord.organizationId,
+								createdAt: claimedAt,
+							}),
+						),
+					);
+				}
+			}
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
@@ -212,21 +236,8 @@ export async function POST(request: NextRequest) {
 				},
 			]);
 
-			const isNewVideo =
-				videoRecord && videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 			const shouldSendFirstViewEmail =
 				isNewVideo && !videoRecord.firstViewEmailSentAt;
-			if (shouldSendFirstViewEmail) {
-				yield* Effect.tryPromise(() =>
-					queueServerProductEvent({
-						eventId: `first_view:${body.videoId}`,
-						eventName: "first_view_received",
-						platform: "server",
-						userId: videoRecord.ownerId,
-						organizationId: videoRecord.organizationId,
-					}),
-				);
-			}
 
 			if (userId) {
 				if (shouldSendFirstViewEmail) {

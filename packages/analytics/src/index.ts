@@ -432,15 +432,13 @@ export function normalizeAcquisitionChannel(
 	properties: ProductEventProperties | undefined,
 	referrer?: string,
 ) {
-	if (properties?.first_touch_gclid || properties?.session_touch_gclid) {
+	if (properties?.session_touch_gclid) {
 		return "paid_search";
 	}
-	if (properties?.first_touch_fbclid || properties?.session_touch_fbclid) {
+	if (properties?.session_touch_fbclid) {
 		return "paid_social";
 	}
-	const medium = String(
-		properties?.session_touch_medium ?? properties?.first_touch_medium ?? "",
-	).toLowerCase();
+	const medium = String(properties?.session_touch_medium ?? "").toLowerCase();
 	if (medium.includes("email")) return "email";
 	if (medium.includes("affiliate")) return "affiliate";
 	if (
@@ -450,9 +448,7 @@ export function normalizeAcquisitionChannel(
 	) {
 		return "paid_other";
 	}
-	const source = String(
-		properties?.session_touch_source ?? properties?.first_touch_source ?? "",
-	).toLowerCase();
+	const source = String(properties?.session_touch_source ?? "").toLowerCase();
 	const hostname = referrer?.toLowerCase() ?? "";
 	if (!source && !hostname) return "direct";
 	if (

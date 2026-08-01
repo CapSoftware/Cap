@@ -9,9 +9,10 @@ import {
 } from "@cap/analytics";
 
 type ServerProductEventBase<Name extends ServerProductEventName> = {
+	_syntheticRunId?: string;
 	eventId: string;
 	eventName: Name;
-	occurredAt?: string;
+	occurredAt: string;
 	anonymousId?: string;
 	platform: ProductEventPlatform;
 	userId?: string;
@@ -38,7 +39,16 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 		event.anonymousId ?? (userId ? `user:${userId}` : undefined),
 	);
 	const eventId = normalizeServerIdentifier(event.eventId);
-	if (!anonymousId || !eventId) return [];
+	const syntheticRunId = normalizeServerIdentifier(event._syntheticRunId);
+	const occurredAt = normalizeServerOccurredAt(event.occurredAt);
+	if (
+		!anonymousId ||
+		!eventId ||
+		!occurredAt ||
+		(event._syntheticRunId !== undefined && !syntheticRunId)
+	) {
+		return [];
+	}
 
 	const receivedAt = new Date().toISOString();
 	const properties = normalizeProductEventProperties(
@@ -51,7 +61,7 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 			{
 				eventId,
 				eventName: event.eventName,
-				occurredAt: normalizeServerOccurredAt(event.occurredAt, receivedAt),
+				occurredAt,
 				anonymousId,
 				platform: event.platform,
 				...(event.pathname ? { pathname: event.pathname } : {}),
@@ -63,19 +73,18 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 			source: "server",
 			userId,
 			organizationId,
+			...(syntheticRunId
+				? { syntheticRunId, trafficClass: "synthetic" as const }
+				: {}),
 		},
 	);
 }
 
-function normalizeServerOccurredAt(
-	value: string | undefined,
-	fallback: string,
-) {
-	if (!value) return fallback;
+function normalizeServerOccurredAt(value: string) {
 	const timestamp = Date.parse(value);
 	return Number.isFinite(timestamp)
 		? new Date(timestamp).toISOString()
-		: fallback;
+		: undefined;
 }
 
 export function normalizeServerIdentifier(value?: string) {

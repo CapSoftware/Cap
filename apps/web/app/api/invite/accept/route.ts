@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
 		let joinedMemberId: string | undefined;
 		let joinedOrganizationId: string | undefined;
 		let joinedRole: string | undefined;
+		let joinedAt: Date | undefined;
 		let assignedProSeat = false;
 		await db().transaction(async (tx) => {
 			const [invite] = await tx
@@ -74,6 +75,7 @@ export async function POST(request: NextRequest) {
 
 			if (!existingMembership) {
 				const newId = nanoId();
+				const createdAt = new Date();
 				const role =
 					normalizeAssignableOrganizationRole(invite.role) ?? "member";
 				await tx.insert(organizationMembers).values({
@@ -81,11 +83,13 @@ export async function POST(request: NextRequest) {
 					organizationId: invite.organizationId,
 					userId: user.id,
 					role,
+					createdAt,
 				});
 				memberId = newId;
 				joinedMemberId = newId;
 				joinedOrganizationId = invite.organizationId;
 				joinedRole = role;
+				joinedAt = createdAt;
 			}
 
 			const [org] = await tx
@@ -168,11 +172,13 @@ export async function POST(request: NextRequest) {
 		if (
 			joinedMemberId &&
 			joinedOrganizationId &&
+			joinedAt &&
 			(joinedRole === "admin" || joinedRole === "member")
 		) {
 			await queueServerProductEvent({
 				eventId: `organization_member:${joinedMemberId}:joined`,
 				eventName: "organization_member_joined",
+				occurredAt: joinedAt.toISOString(),
 				anonymousId: readAnalyticsAnonymousId(request),
 				platform: "web",
 				userId: user.id,

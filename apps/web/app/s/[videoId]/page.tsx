@@ -405,7 +405,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"folderId" | "password" | "settings" | "ownerId"
+		"firstExternalViewAt" | "folderId" | "password" | "settings" | "ownerId"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;

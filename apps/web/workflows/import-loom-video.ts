@@ -240,6 +240,7 @@ export async function importLoomVideoWorkflow(
 		await enqueueProductAnalyticsEventStep({
 			eventId: `loom_import:${payload.videoId}:completed`,
 			eventName: "loom_import_completed",
+			occurredAt: new Date().toISOString(),
 			platform: "server",
 			userId: analyticsContext?.ownerId ?? payload.userId,
 			organizationId: analyticsContext?.organizationId,
@@ -261,6 +262,7 @@ export async function importLoomVideoWorkflow(
 		await enqueueProductAnalyticsEventStep({
 			eventId: `loom_import:${payload.videoId}:failed`,
 			eventName: "loom_import_failed",
+			occurredAt: new Date().toISOString(),
 			platform: "server",
 			userId: analyticsContext?.ownerId ?? payload.userId,
 			organizationId: analyticsContext?.organizationId,

@@ -3,7 +3,10 @@ import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { ImageUpload, Organisation, User } from "@cap/web-domain";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 
-export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
+export type VideoData = Omit<
+	typeof videos.$inferSelect,
+	"firstExternalViewAt" | "ownerId"
+> & {
 	owner: VideoOwner;
 	organizationMembers?: User.UserId[];
 	organizationId?: Organisation.OrganisationId;
