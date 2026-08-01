@@ -5,14 +5,19 @@ use ring::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
 use tracing::{error, warn};
@@ -31,9 +36,11 @@ const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
 const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
 const PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY: &str = "product_analytics_outbox_recovery_v1";
+const PRODUCT_EVENT_OUTBOX_LEGACY_KEY_STORE_KEY: &str = "product_analytics_outbox_fallback_key_v1";
+const PRODUCT_EVENT_OUTBOX_KEY_FILE: &str = "product-analytics-outbox-key-v1";
 const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
 const PRODUCT_EVENT_OUTBOX_KEYRING_USER: &str = "product-analytics-outbox-v1";
-const PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER: &str = "product-analytics-outbox-v1-backup";
+const PRODUCT_EVENT_OUTBOX_LEGACY_KEYRING_USER: &str = "product-analytics-outbox-v1-backup";
 const PRODUCT_EVENT_OUTBOX_CAPACITY: usize = 500;
 const PRODUCT_EVENT_DEAD_LETTER_CAPACITY: usize = 100;
 const PRODUCT_EVENT_MAX_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
@@ -427,10 +434,10 @@ fn should_retry_product_status(status: u16) -> bool {
 
 fn decode_outbox_encryption_key(encoded: &str) -> Result<[u8; 32], String> {
     BASE64
-        .decode(encoded)
-        .map_err(|_| "invalid_keyring_value".to_string())?
+        .decode(encoded.trim())
+        .map_err(|_| "invalid_outbox_key".to_string())?
         .try_into()
-        .map_err(|_| "invalid_keyring_value".to_string())
+        .map_err(|_| "invalid_outbox_key".to_string())
 }
 
 fn read_keyring_outbox_key(user: &str) -> Result<Option<[u8; 32]>, String> {
@@ -448,7 +455,7 @@ fn keyring_outbox_encryption_keys() -> Result<Vec<[u8; 32]>, String> {
     let mut failure = None;
     for user in [
         PRODUCT_EVENT_OUTBOX_KEYRING_USER,
-        PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER,
+        PRODUCT_EVENT_OUTBOX_LEGACY_KEYRING_USER,
     ] {
         match read_keyring_outbox_key(user) {
             Ok(Some(key)) if !keys.contains(&key) => keys.push(key),
@@ -472,24 +479,160 @@ fn persist_keyring_outbox_key(user: &str, key: [u8; 32]) -> Result<(), String> {
         .map_err(|_| "outbox_keyring_write_failed".to_string())
 }
 
-fn outbox_encryption_key(_app: &AppHandle) -> Result<&'static [u8; 32], String> {
+fn file_outbox_key_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|directory| directory.join(PRODUCT_EVENT_OUTBOX_KEY_FILE))
+        .map_err(|_| "outbox_key_directory_unavailable".to_string())
+}
+
+fn read_file_outbox_key(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    match fs::read_to_string(path) {
+        Ok(encoded) => decode_outbox_encryption_key(&encoded).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err("outbox_key_file_unavailable".to_string()),
+    }
+}
+
+fn persist_file_outbox_key(path: &Path, key: [u8; 32]) -> Result<(), String> {
+    if let Some(existing) = read_file_outbox_key(path)? {
+        return if existing == key {
+            Ok(())
+        } else {
+            Err("outbox_key_file_conflict".to_string())
+        };
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "outbox_key_directory_unavailable".to_string())?;
+    fs::create_dir_all(parent).map_err(|_| "outbox_key_directory_unavailable".to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|_| "outbox_key_file_write_failed".to_string())?;
+    #[cfg(unix)]
+    temporary
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| "outbox_key_file_write_failed".to_string())?;
+    temporary
+        .write_all(BASE64.encode(key).as_bytes())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|_| "outbox_key_file_write_failed".to_string())?;
+    match temporary.persist_noclobber(path) {
+        Ok(file) => {
+            file.sync_all()
+                .map_err(|_| "outbox_key_file_write_failed".to_string())?;
+            #[cfg(unix)]
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "outbox_key_file_write_failed".to_string())?;
+            Ok(())
+        }
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if read_file_outbox_key(path)? == Some(key) {
+                Ok(())
+            } else {
+                Err("outbox_key_file_conflict".to_string())
+            }
+        }
+        Err(_) => Err("outbox_key_file_write_failed".to_string()),
+    }
+}
+
+fn decode_legacy_outbox_encryption_keys(value: &Value) -> Result<Vec<[u8; 32]>, String> {
+    if let Some(encoded) = value.as_str() {
+        return decode_outbox_encryption_key(encoded).map(|key| vec![key]);
+    }
+    value
+        .as_array()
+        .ok_or_else(|| "invalid_legacy_outbox_key".to_string())?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| "invalid_legacy_outbox_key".to_string())
+                .and_then(decode_outbox_encryption_key)
+        })
+        .collect()
+}
+
+fn legacy_store_outbox_encryption_keys(app: &AppHandle) -> Result<Vec<[u8; 32]>, String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "legacy_outbox_key_store_unavailable".to_string())?;
+    match store.get(PRODUCT_EVENT_OUTBOX_LEGACY_KEY_STORE_KEY) {
+        Some(value) => decode_legacy_outbox_encryption_keys(&value),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn delete_legacy_store_outbox_encryption_keys(app: &AppHandle) -> Result<(), String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "legacy_outbox_key_store_unavailable".to_string())?;
+    store.delete(PRODUCT_EVENT_OUTBOX_LEGACY_KEY_STORE_KEY);
+    store
+        .save()
+        .map_err(|_| "legacy_outbox_key_store_write_failed".to_string())
+}
+
+fn outbox_encryption_keys(app: &AppHandle) -> Result<Vec<[u8; 32]>, String> {
+    let mut keys = Vec::new();
+    let mut failure = None;
+    if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get() {
+        keys.push(*key);
+    }
+    match file_outbox_key_path(app).and_then(|path| read_file_outbox_key(&path)) {
+        Ok(Some(key)) if !keys.contains(&key) => keys.push(key),
+        Ok(_) => {}
+        Err(error) => failure = Some(error),
+    }
+    match keyring_outbox_encryption_keys() {
+        Ok(keyring_keys) => {
+            for key in keyring_keys {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        Err(error) => failure = Some(error),
+    }
+    match legacy_store_outbox_encryption_keys(app) {
+        Ok(legacy_keys) => {
+            for key in legacy_keys {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        Err(error) => failure = Some(error),
+    }
+    if keys.is_empty()
+        && let Some(error) = failure
+    {
+        return Err(error);
+    }
+    Ok(keys)
+}
+
+fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
     if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get() {
         return Ok(key);
     }
 
-    let keys = keyring_outbox_encryption_keys()?;
-    let key = if let Some(key) = keys.first() {
+    let key_path = file_outbox_key_path(app)?;
+    let key = if let Some(key) = read_file_outbox_key(&key_path)? {
+        key
+    } else if let Some(key) = keyring_outbox_encryption_keys().unwrap_or_default().first() {
         *key
     } else {
         let mut generated = [0_u8; 32];
         SystemRandom::new()
             .fill(&mut generated)
             .map_err(|_| "key_generation_failed".to_string())?;
-        persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_USER, generated)?;
         generated
     };
+    persist_file_outbox_key(&key_path, key)?;
     let _ = persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_USER, key);
-    let _ = persist_keyring_outbox_key(PRODUCT_EVENT_OUTBOX_KEYRING_BACKUP_USER, key);
     let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
     PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY
         .get()
@@ -525,17 +668,15 @@ fn encrypt_outbox_with_key(
     Ok(BASE64.encode(stored))
 }
 
-fn decrypt_outbox(value: &str) -> Result<ProductEventOutbox, String> {
+fn decrypt_outbox(app: &AppHandle, value: &str) -> Result<ProductEventOutbox, String> {
     if let Some(key) = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.get()
         && let Ok(outbox) = decrypt_outbox_with_key(value, key)
     {
         return Ok(outbox);
     }
 
-    let candidates = keyring_outbox_encryption_keys()?;
-    let (outbox, key) = decrypt_outbox_with_keys(value, &candidates)?;
-    let _ = PRODUCT_EVENT_OUTBOX_ENCRYPTION_KEY.set(key);
-    Ok(outbox)
+    let candidates = outbox_encryption_keys(app)?;
+    decrypt_outbox_with_keys(value, &candidates).map(|(outbox, _)| outbox)
 }
 
 fn decrypt_outbox_with_keys(
@@ -613,7 +754,7 @@ fn load_stored_outbox(app: &AppHandle, store_key: &str) -> Result<ProductEventOu
     let Some(encrypted) = value.as_str() else {
         return Err("invalid_stored_outbox".to_string());
     };
-    decrypt_outbox(encrypted)
+    decrypt_outbox(app, encrypted)
 }
 
 fn merge_outbox(target: &mut ProductEventOutbox, source: ProductEventOutbox) {
@@ -653,6 +794,7 @@ fn persist_outbox(app: &AppHandle, outbox: &mut ProductEventOutbox) -> Result<()
     merge_outbox(&mut restored, recovery);
     write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &restored)?;
     delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)?;
+    delete_legacy_store_outbox_encryption_keys(app)?;
     *outbox = restored;
     PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
     Ok(())
@@ -836,25 +978,24 @@ pub fn init_product_session(app: &AppHandle) {
             match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY) {
                 Ok(recovery) => {
                     merge_outbox(&mut loaded, recovery);
-                    if let Err(failure_class) =
-                        write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &loaded)
-                    {
+                    let consolidation = write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &loaded)
+                        .and_then(|()| {
+                            delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)
+                        })
+                        .and_then(|()| delete_legacy_store_outbox_encryption_keys(app));
+                    if let Err(failure_class) = consolidation {
+                        PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
                         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
                         warn!(
                             failure_class,
                             "Failed to consolidate product analytics recovery outbox"
                         );
-                    } else if let Err(failure_class) =
-                        delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)
-                    {
-                        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
-                        warn!(
-                            failure_class,
-                            "Failed to remove consolidated product analytics recovery outbox"
-                        );
+                    } else {
+                        PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
                     }
                 }
                 Err(failure_class) => {
+                    PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
                     PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         failure_class,
@@ -862,7 +1003,6 @@ pub fn init_product_session(app: &AppHandle) {
                     );
                 }
             }
-            PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
             let has_pending = !loaded.pending.is_empty();
             *outbox_guard() = loaded;
             if has_pending {
@@ -1140,6 +1280,42 @@ mod tests {
             key
         );
         assert!(decode_outbox_encryption_key("invalid").is_err());
+    }
+
+    #[test]
+    fn legacy_outbox_keys_remain_readable_during_migration() {
+        let first = [7_u8; 32];
+        let second = [8_u8; 32];
+
+        assert_eq!(
+            decode_legacy_outbox_encryption_keys(&Value::String(BASE64.encode(first))).unwrap(),
+            vec![first]
+        );
+        assert_eq!(
+            decode_legacy_outbox_encryption_keys(&serde_json::json!([
+                BASE64.encode(first),
+                BASE64.encode(second)
+            ]))
+            .unwrap(),
+            vec![first, second]
+        );
+    }
+
+    #[test]
+    fn fallback_key_file_is_created_once_and_rejects_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("outbox-key");
+        let first = [7_u8; 32];
+
+        persist_file_outbox_key(&path, first).unwrap();
+
+        assert_eq!(read_file_outbox_key(&path).unwrap(), Some(first));
+        assert!(persist_file_outbox_key(&path, [8_u8; 32]).is_err());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
