@@ -945,6 +945,46 @@ const localResourceToken = async (
 	);
 };
 
+const localDecisionJwt = async (
+	environment,
+	fetcher = fetch,
+	now = Date.now(),
+) => {
+	const url = new URL(
+		"/v0/tokens",
+		environment.PRODUCT_ANALYTICS_TINYBIRD_HOST,
+	);
+	url.searchParams.set("name", "product_events_local_verification");
+	url.searchParams.set(
+		"expiration_time",
+		String(Math.floor(now / 1_000) + 3_600),
+	);
+	const response = await fetcher(url, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${environment.TB_LOCAL_WORKSPACE_TOKEN}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			scopes: PRODUCT_DECISION_ENDPOINTS.map((resource) => ({
+				type: "PIPES:READ",
+				resource,
+			})),
+		}),
+		signal: AbortSignal.timeout(15_000),
+	});
+	if (!response.ok) {
+		throw new Error(
+			`Tinybird Local could not create its decision-endpoint JWT: HTTP ${response.status}`,
+		);
+	}
+	const payload = await response.json();
+	if (typeof payload.token !== "string" || payload.token.length < 16) {
+		throw new Error("Tinybird Local returned an invalid decision-endpoint JWT");
+	}
+	return payload.token;
+};
+
 const assertSafeStep = (step) => {
 	const command = [step.command, ...(step.args ?? [])].join(" ");
 	if (
@@ -1177,11 +1217,11 @@ const runAnalyticsCommand = async (operation) => {
 		}
 		if (step.type === "verify-local") {
 			const environment = localEnvironment();
+			const readToken = await localDecisionJwt(environment);
 			await runProcess(process.execPath, [LOCAL_VERIFY_SCRIPT], {
 				env: {
 					...environment,
-					PRODUCT_ANALYTICS_TINYBIRD_TOKEN:
-						environment.TB_LOCAL_WORKSPACE_TOKEN,
+					PRODUCT_ANALYTICS_TINYBIRD_TOKEN: readToken,
 				},
 			});
 			continue;
@@ -1207,6 +1247,7 @@ export {
 	assertSafeStep,
 	cloudEnvironment,
 	composeArgs,
+	localDecisionJwt,
 	localEnvironment,
 	localResourceToken,
 	operationPlan,
