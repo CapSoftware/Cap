@@ -152,6 +152,7 @@ class Api extends HttpApi.make("AnalyticsStagingTestApi").add(
 const RequestHeaders = Schema.Struct({
 	authorization: Schema.optional(Schema.String),
 	host: Schema.String,
+	"x-vercel-deployment-url": Schema.optional(Schema.String),
 });
 
 const STAGING_PREVIEW_HOST =
@@ -604,7 +605,8 @@ const authorize = (payload: { runId: string; sha: string }) =>
 		);
 		if (
 			process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true" ||
-			headers.host !== STAGING_PREVIEW_HOST
+			(headers.host !== STAGING_PREVIEW_HOST &&
+				headers.host !== headers["x-vercel-deployment-url"])
 		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
