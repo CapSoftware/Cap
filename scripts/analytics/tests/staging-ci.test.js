@@ -386,4 +386,9 @@ test("the analytics workflow is statically restricted to staging", () => {
 		)?.length,
 		4,
 	);
+	assert.ok(
+		workflow.indexOf(
+			"Discard an unpromoted staging deployment before cleanup",
+		) < workflow.indexOf("Delete strictly scoped synthetic raw rows"),
+	);
 });
