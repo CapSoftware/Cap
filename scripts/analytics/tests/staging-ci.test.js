@@ -2204,7 +2204,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 test("the preview mutation route independently enforces Tinybird staging", () => {
 	const route = fs.readFileSync(
 		new URL(
-			"../../../apps/web/app/api/analytics/staging-test/route.ts",
+			"../../../apps/web/app/api/analytics/staging-test/[[...route]]/route.ts",
 			import.meta.url,
 		),
 		"utf8",

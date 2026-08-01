@@ -848,5 +848,5 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
-const handler = apiToHandler(ApiLive);
-export const POST = handler;
+const postHandler = apiToHandler(ApiLive);
+export const POST = postHandler;
