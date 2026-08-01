@@ -12,6 +12,12 @@ export const COPY_PIPES = [
 	"snapshot_product_creator_retention_exact",
 	"snapshot_product_events_health_hourly",
 ];
+const COPY_MARKER_PIPES = new Set([
+	"snapshot_product_traffic_daily_exact",
+	"snapshot_product_traffic_pages_daily_exact",
+	"snapshot_product_activation_daily_exact",
+	"snapshot_product_creator_retention_exact",
+]);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SYNTHETIC_RUN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -188,24 +194,20 @@ export const selectStagingDeployment = (
 	return { id: String(id), needsPromotion: false };
 };
 
-export const runTinybirdCopyJobs = async ({
+export const submitTinybirdCopyJobs = async ({
 	origin,
-	submissionToken,
-	statusToken,
+	token,
 	deploymentId,
 	request,
-	wait,
 	now = () => Date.now(),
-	timeoutMs = 120_000,
 	pipes = COPY_PIPES,
 	useDeploymentParameter = false,
+	copyRunId = "",
 }) => {
 	if (!DEPLOYMENT_ID_PATTERN.test(deploymentId)) {
 		throw new Error("Tinybird copy jobs require a numeric deployment ID");
 	}
-	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-		throw new Error("Tinybird copy job timeout must be positive");
-	}
+	if (copyRunId) validateSyntheticRunId(copyRunId);
 	const results = [];
 	for (const pipe of pipes) {
 		if (!COPY_PIPES.includes(pipe)) {
@@ -220,10 +222,16 @@ export const runTinybirdCopyJobs = async ({
 		if (useDeploymentParameter) {
 			copyUrl.searchParams.set("__tb__deployment", deploymentId);
 		}
+		if (COPY_MARKER_PIPES.has(pipe)) {
+			if (!copyRunId) {
+				throw new Error(`Tinybird copy marker is required for ${pipe}`);
+			}
+			copyUrl.searchParams.set("copy_run_id", copyRunId);
+		}
 		let created;
 		try {
 			created = await request(copyUrl, {
-				token: submissionToken,
+				token,
 				method: "POST",
 				attempts: 3,
 			});
@@ -236,43 +244,11 @@ export const runTinybirdCopyJobs = async ({
 		if (!COPY_JOB_ID_PATTERN.test(jobId)) {
 			throw new Error(`Tinybird did not return a valid copy job for ${pipe}`);
 		}
-		let polls = 0;
-		while (true) {
-			polls += 1;
-			let job;
-			try {
-				job = await request(
-					new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
-					{ token: statusToken, attempts: 3 },
-				);
-			} catch (error) {
-				throw new Error(`Tinybird copy status read failed for ${pipe}`, {
-					cause: error,
-				});
-			}
-			const status = String(job.data.status ?? "").toLowerCase();
-			if (status === "done") {
-				results.push({
-					pipe,
-					jobId,
-					polls,
-					durationMs: Math.max(0, now() - startedAt),
-				});
-				break;
-			}
-			if (["error", "cancelled"].includes(status)) {
-				throw new Error(`Tinybird copy job for ${pipe} ended in ${status}`);
-			}
-			if (!["waiting", "working", "cancelling"].includes(status)) {
-				throw new Error(
-					`Tinybird copy job for ${pipe} returned an invalid status`,
-				);
-			}
-			if (now() - startedAt >= timeoutMs) {
-				throw new Error(`Tinybird copy job for ${pipe} exceeded its timeout`);
-			}
-			await wait(1_000);
-		}
+		results.push({
+			pipe,
+			jobId,
+			submissionLatencyMs: Math.max(0, now() - startedAt),
+		});
 	}
 	return results;
 };
@@ -471,6 +447,17 @@ export const normalizeCiAssertions = (payload) => {
 	};
 };
 
+export const normalizeCopyAssertions = (payload) => {
+	const row = payload?.data?.[0] ?? {};
+	const number = (value) => Number(value ?? 0);
+	return {
+		trafficMarkers: number(row.traffic_markers),
+		trafficPageMarkers: number(row.traffic_page_markers),
+		activationMarkers: number(row.activation_markers),
+		retentionMarkers: number(row.retention_markers),
+	};
+};
+
 export const assertSyntheticDecisions = (assertions) => {
 	assertSyntheticHealth(assertions);
 	if (assertions.decisionEvents !== 1) {
@@ -481,32 +468,6 @@ export const assertSyntheticDecisions = (assertions) => {
 	if (assertions.canonicalEvents !== 1) {
 		throw new Error(
 			`Synthetic canonical events were ${assertions.canonicalEvents}, expected 1`,
-		);
-	}
-};
-
-export const assertPromotedSyntheticDecisions = (assertions) => {
-	const expected = {
-		uniqueEvents: 3,
-		uniquePayloads: 4,
-		payloadConflicts: 1,
-		canonicalEvents: 2,
-		decisionEvents: 2,
-	};
-	for (const [name, value] of Object.entries(expected)) {
-		if (assertions[name] !== value) {
-			throw new Error(
-				`Promoted synthetic ${name} was ${assertions[name]}, expected ${value}`,
-			);
-		}
-	}
-	if (
-		assertions.receivedRows < 6 ||
-		assertions.duplicateRows !==
-			assertions.receivedRows - assertions.uniquePayloads
-	) {
-		throw new Error(
-			"Promoted synthetic assertions did not preserve retry deliveries",
 		);
 	}
 };

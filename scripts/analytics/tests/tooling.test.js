@@ -86,7 +86,9 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 	assert.equal(copyCommands.length, 7);
 	assert.ok(
 		copyCommands.every((command) =>
-			command.includes("--param copy_max_threads=1 --wait"),
+			command.includes(
+				"--param copy_max_threads=1 --param copy_run_id=run_local_copy_assertions --wait",
+			),
 		),
 	);
 	assert.ok(steps.some((step) => step.type === "verify-local"));

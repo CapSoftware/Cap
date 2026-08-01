@@ -4,7 +4,6 @@ import test from "node:test";
 
 import {
 	assertExecutionScope,
-	assertPromotedSyntheticDecisions,
 	assertSyntheticDecisions,
 	assertSyntheticHealth,
 	assertWorkflowSafety,
@@ -19,10 +18,11 @@ import {
 	FEATURE_PULL_REQUEST,
 	latencySummary,
 	normalizeCiAssertions,
+	normalizeCopyAssertions,
 	normalizeHealth,
-	runTinybirdCopyJobs,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
+	submitTinybirdCopyJobs,
 	tokenWorkspaceId,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
@@ -212,70 +212,77 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 	);
 });
 
-test("copy jobs submit with a resource token and poll with the deployment token", async () => {
+test("copy jobs use only approved resource-scoped submissions and bounded markers", async () => {
 	const requests = [];
-	const submissionToken = token();
-	const statusToken = `${token()}.deployment`;
+	const resourceToken = token();
 	const responses = [
-		{ data: { id: "copy_job_123" } },
-		{ data: { status: "working" } },
-		{ data: { status: "done" } },
+		{ data: { id: "copy_job_canonical" } },
+		{ data: { id: "copy_job_traffic" } },
 	];
 	let now = 1_000;
-	const results = await runTinybirdCopyJobs({
+	const results = await submitTinybirdCopyJobs({
 		origin: "https://api.us-east.aws.tinybird.co",
-		submissionToken,
-		statusToken,
+		token: resourceToken,
 		deploymentId: "6",
-		pipes: ["snapshot_product_events_canonical_v1"],
+		pipes: [
+			"snapshot_product_events_canonical_v1",
+			"snapshot_product_traffic_daily_exact",
+		],
 		request: async (url, options) => {
 			requests.push({ url: String(url), options });
+			now += 10;
 			return responses.shift();
-		},
-		wait: async (milliseconds) => {
-			now += milliseconds;
 		},
 		now: () => now,
 		useDeploymentParameter: true,
+		copyRunId: "run_12345678_staged",
 	});
 	assert.deepEqual(results, [
 		{
 			pipe: "snapshot_product_events_canonical_v1",
-			jobId: "copy_job_123",
-			polls: 2,
-			durationMs: 1_000,
+			jobId: "copy_job_canonical",
+			submissionLatencyMs: 10,
+		},
+		{
+			pipe: "snapshot_product_traffic_daily_exact",
+			jobId: "copy_job_traffic",
+			submissionLatencyMs: 10,
 		},
 	]);
 	assert.match(requests[0].url, /_mode=replace/);
 	assert.match(requests[0].url, /__tb__deployment=6/);
+	assert.doesNotMatch(requests[0].url, /copy_run_id/);
 	assert.equal(requests[0].options.method, "POST");
-	assert.equal(requests[0].options.token, submissionToken);
-	assert.match(requests[1].url, /\/v0\/jobs\/copy_job_123$/);
-	assert.equal(requests[1].options.token, statusToken);
+	assert.equal(requests[0].options.token, resourceToken);
+	assert.match(requests[1].url, /copy_run_id=run_12345678_staged/);
+	assert.ok(requests.every(({ url }) => !url.includes("/v0/jobs/")));
 	const liveRequests = [];
-	await runTinybirdCopyJobs({
+	await submitTinybirdCopyJobs({
 		origin: "https://api.us-east.aws.tinybird.co",
-		submissionToken,
-		statusToken,
+		token: resourceToken,
 		deploymentId: "6",
 		pipes: ["snapshot_product_events_canonical_v1"],
 		request: async (url, options) => {
 			liveRequests.push({ url: String(url), options });
-			return liveRequests.length === 1
-				? { data: { id: "copy_job_live" } }
-				: { data: { status: "done" } };
+			return { data: { id: "copy_job_live" } };
 		},
-		wait: async () => {},
 	});
 	assert.doesNotMatch(liveRequests[0].url, /__tb__deployment/);
 	await assert.rejects(() =>
-		runTinybirdCopyJobs({
+		submitTinybirdCopyJobs({
 			origin: "https://api.us-east.aws.tinybird.co",
-			submissionToken,
-			statusToken,
+			token: resourceToken,
 			deploymentId: "live",
 			request: async () => ({ data: {} }),
-			wait: async () => {},
+		}),
+	);
+	await assert.rejects(() =>
+		submitTinybirdCopyJobs({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: resourceToken,
+			deploymentId: "6",
+			pipes: ["snapshot_product_traffic_daily_exact"],
+			request: async () => ({ data: { id: "copy_job_missing_marker" } }),
 		}),
 	);
 });
@@ -457,19 +464,24 @@ test("CI assertion normalization proves decision deduplication and conflict quar
 	);
 });
 
-test("promoted assertions combine direct and exact-SHA preview duplicate paths", () => {
-	const assertions = {
-		receivedRows: 26,
-		uniqueEvents: 3,
-		uniquePayloads: 4,
-		duplicateRows: 22,
-		payloadConflicts: 1,
-		canonicalEvents: 2,
-		decisionEvents: 2,
-	};
-	assert.doesNotThrow(() => assertPromotedSyntheticDecisions(assertions));
-	assert.throws(() =>
-		assertPromotedSyntheticDecisions({ ...assertions, decisionEvents: 3 }),
+test("copy assertion normalization exposes every marker independently", () => {
+	assert.deepEqual(
+		normalizeCopyAssertions({
+			data: [
+				{
+					traffic_markers: "1",
+					traffic_page_markers: "1",
+					activation_markers: "1",
+					retention_markers: "1",
+				},
+			],
+		}),
+		{
+			trafficMarkers: 1,
+			trafficPageMarkers: 1,
+			activationMarkers: 1,
+			retentionMarkers: 1,
+		},
 	);
 });
 

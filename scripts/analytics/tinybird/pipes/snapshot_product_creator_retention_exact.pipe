@@ -53,6 +53,7 @@ SQL >
 	)
 	SELECT
 		now64(3) AS calculated_at,
+		'' AS copy_run_id,
 		cohort_date,
 		activity_date,
 		platform,
@@ -60,6 +61,18 @@ SQL >
 		uniqExactStateIf(organization_id, organization_id != '') AS creator_organizations
 	FROM cohort_activity
 	GROUP BY cohort_date, activity_date, platform
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		today() AS cohort_date,
+		today() AS activity_date,
+		'' AS platform,
+		uniqExactStateIf('', 0) AS creator_users,
+		uniqExactStateIf('', 0) AS creator_organizations
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
 
 TYPE COPY
 TARGET_DATASOURCE product_creator_retention_exact

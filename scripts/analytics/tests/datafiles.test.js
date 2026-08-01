@@ -212,6 +212,48 @@ test("copy schedules serialize canonical and derived rebuilds", () => {
 	assert.equal(new Set(schedules.values()).size, schedules.size);
 });
 
+test("staging copy markers are excluded from every decision endpoint", () => {
+	for (const name of [
+		"product_traffic_overview",
+		"product_traffic_pages",
+		"product_traffic_sources",
+		"product_traffic_countries",
+		"product_traffic_technology",
+		"product_activation",
+		"product_creator_retention",
+	]) {
+		const contents = fs.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
+			"utf8",
+		);
+		assert.match(contents, /copy_run_id = ''/);
+	}
+	for (const name of [
+		"snapshot_product_traffic_daily_exact",
+		"snapshot_product_traffic_pages_daily_exact",
+		"snapshot_product_activation_daily_exact",
+		"snapshot_product_creator_retention_exact",
+	]) {
+		const contents = fs.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
+			"utf8",
+		);
+		assert.match(contents, /defined\(copy_run_id\)/);
+		assert.match(contents, /AS copy_run_id/);
+	}
+	const assertions = fs.readFileSync(
+		path.join(
+			TINYBIRD_PROJECT_DIR,
+			"pipes",
+			"product_analytics_copy_assertions.pipe",
+		),
+		"utf8",
+	);
+	assert.match(assertions, /copy_run_id is required/);
+	assert.match(assertions, /traffic_markers/);
+	assert.match(assertions, /retention_markers/);
+});
+
 test("health queries use stable hourly aggregates and a bounded window", () => {
 	const contents = fs.readFileSync(
 		path.join(TINYBIRD_PROJECT_DIR, "pipes", "product_events_health.pipe"),

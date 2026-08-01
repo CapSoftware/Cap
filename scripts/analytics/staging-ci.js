@@ -3,7 +3,6 @@ import process from "node:process";
 
 import {
 	assertExecutionScope,
-	assertPromotedSyntheticDecisions,
 	assertSyntheticDecisions,
 	assertSyntheticHealth,
 	createSyntheticErasureControl,
@@ -16,10 +15,11 @@ import {
 	hashIdentifier,
 	latencySummary,
 	normalizeCiAssertions,
+	normalizeCopyAssertions,
 	normalizeHealth,
-	runTinybirdCopyJobs,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
+	submitTinybirdCopyJobs,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
 } from "./staging-ci-lib.js";
@@ -167,13 +167,30 @@ const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
 	);
 };
 
-const ciAssertionsQuery = async ({ state, deploymentId = "" }) => {
+const ciAssertionsQuery = async ({
+	state,
+	deploymentId = "",
+	syntheticRunId = state.runId,
+}) => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
 	return request(
 		tinybirdUrl(origin, "/v0/pipes/product_analytics_ci_assertions.json", {
-			synthetic_run_id: state.runId,
+			synthetic_run_id: syntheticRunId,
+			__tb__deployment: deploymentId,
+		}),
+		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
+	);
+};
+
+const copyAssertionsQuery = async ({ copyRunId, deploymentId = "" }) => {
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
+	return request(
+		tinybirdUrl(origin, "/v0/pipes/product_analytics_copy_assertions.json", {
+			copy_run_id: copyRunId,
 			__tb__deployment: deploymentId,
 		}),
 		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
@@ -378,6 +395,7 @@ const probePreview = async () => {
 	}
 	const occurredAt = new Date().toISOString();
 	const runHash = hashIdentifier(state.runId);
+	const previewRunId = validateSyntheticRunId(`${state.runId}_preview`);
 	const event = {
 		eventId: `synthetic_preview_${runHash.slice(0, 24)}`,
 		eventName: "page_view",
@@ -417,7 +435,7 @@ const probePreview = async () => {
 					Origin: previewOrigin,
 					"Sec-Fetch-Site": "same-origin",
 					"User-Agent": "Cap-Analytics-Staging-E2E/1.0",
-					"x-cap-analytics-test-run": state.runId,
+					"x-cap-analytics-test-run": previewRunId,
 				},
 				body,
 			},
@@ -478,6 +496,7 @@ const probePreview = async () => {
 	}
 	state.previewAppVersion = event.appVersion;
 	state.previewAcceptedRows = duplicateResponses.length + replayAccepted;
+	state.previewRunId = previewRunId;
 	writeJson(statePath, state, 0o600);
 	artifact.previewApi = {
 		bootstrapPassed: true,
@@ -634,6 +653,160 @@ const seed = async () => {
 	});
 };
 
+const waitForCopyVisibility = async ({ label, read, assert }) => {
+	const startedAt = Date.now();
+	const deadline = startedAt + Number(process.env.INGESTION_SLO_MS ?? 180_000);
+	let lastError;
+	let polls = 0;
+	while (Date.now() < deadline) {
+		polls += 1;
+		try {
+			const value = await read();
+			assert(value);
+			return { value, polls, visibilityMs: Date.now() - startedAt };
+		} catch (error) {
+			lastError = error;
+			await delay(2_000);
+		}
+	}
+	throw new Error(
+		`${label} did not become visible: ${lastError instanceof Error ? lastError.message : "unknown assertion failure"}`,
+	);
+};
+
+const phaseRunExpectations = ({ state, phase }) => {
+	const expectations = [
+		{
+			runId: state.runId,
+			canonicalEvents: ["staged", "promoted"].includes(phase) ? 1 : 0,
+			decisionEvents: ["staged", "promoted"].includes(phase) ? 1 : 0,
+		},
+		{
+			runId: state.loadRunId,
+			canonicalEvents: ["staged", "promoted"].includes(phase)
+				? state.loadEventCount
+				: 0,
+			decisionEvents: ["staged", "promoted"].includes(phase)
+				? state.loadEventCount
+				: 0,
+		},
+		{
+			runId: state.erasureControlRunId,
+			canonicalEvents: phase === "cleanup" ? 0 : 1,
+			decisionEvents: phase === "cleanup" ? 0 : 1,
+		},
+	];
+	if (phase !== "staged" && phase !== "cleanup") {
+		if (!state.previewRunId) {
+			throw new Error("The promoted copy phase is missing its preview run ID");
+		}
+	}
+	if (state.previewRunId && phase !== "staged") {
+		expectations.push({
+			runId: state.previewRunId,
+			canonicalEvents: phase === "cleanup" ? 0 : 1,
+			decisionEvents: phase === "cleanup" ? 0 : 1,
+		});
+	}
+	return expectations;
+};
+
+const readPhaseCiAssertions = async ({ state, deploymentId, expectations }) =>
+	Promise.all(
+		expectations.map(async (expectation) => ({
+			...expectation,
+			assertions: normalizeCiAssertions(
+				(
+					await ciAssertionsQuery({
+						state,
+						deploymentId,
+						syntheticRunId: expectation.runId,
+					})
+				).data,
+			),
+		})),
+	);
+
+const assertPhaseCiAssertions = (results, fieldNames) => {
+	for (const result of results) {
+		for (const fieldName of fieldNames) {
+			if (result.assertions[fieldName] !== result[fieldName]) {
+				throw new Error(
+					`Synthetic ${fieldName} was ${result.assertions[fieldName]}, expected ${result[fieldName]}`,
+				);
+			}
+		}
+	}
+};
+
+const assertZeroHealth = (health) => {
+	if (Object.values(health).some((value) => value !== 0)) {
+		throw new Error("Synthetic health was not fully retracted");
+	}
+};
+
+const assertSingleHealth = (health) => {
+	if (
+		health.receivedRows < 1 ||
+		health.uniqueEvents !== 1 ||
+		health.uniquePayloads !== 1 ||
+		health.payloadConflicts !== 0
+	) {
+		throw new Error("Synthetic single-event health is incomplete");
+	}
+};
+
+const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
+	const [main, load, control, preview] = await Promise.all([
+		healthQuery({ state, deploymentId }),
+		healthQuery({
+			state,
+			deploymentId,
+			appVersion: state.loadAppVersion,
+		}),
+		healthQuery({
+			state,
+			deploymentId,
+			appVersion: state.erasureControlAppVersion,
+		}),
+		phase === "staged" || !state.previewAppVersion
+			? Promise.resolve(null)
+			: healthQuery({
+					state,
+					deploymentId,
+					appVersion: state.previewAppVersion,
+				}),
+	]);
+	const health = {
+		main: normalizeHealth(main.data),
+		load: normalizeHealth(load.data),
+		control: normalizeHealth(control.data),
+		preview: preview ? normalizeHealth(preview.data) : null,
+	};
+	if (["staged", "promoted"].includes(phase)) {
+		assertSyntheticHealth(health.main);
+		if (
+			health.load.receivedRows < state.loadEventCount ||
+			health.load.uniqueEvents !== state.loadEventCount ||
+			health.load.uniquePayloads !== state.loadEventCount ||
+			health.load.payloadConflicts !== 0
+		) {
+			throw new Error("Synthetic load health is incomplete");
+		}
+	} else {
+		assertZeroHealth(health.main);
+		assertZeroHealth(health.load);
+	}
+	if (phase === "cleanup") {
+		assertZeroHealth(health.control);
+		if (health.preview) assertZeroHealth(health.preview);
+	} else {
+		assertSingleHealth(health.control);
+		if (health.preview) assertSingleHealth(health.preview);
+	}
+	return health;
+};
+
 const runCopies = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
@@ -654,21 +827,134 @@ const runCopies = async () => {
 	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
-		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
+	const endpointDeploymentId = target === "staging" ? state.deploymentId : "";
+	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
+	const expectations = phaseRunExpectations({ state, phase });
 	try {
-		const jobs = await runTinybirdCopyJobs({
+		const canonicalJobs = await submitTinybirdCopyJobs({
 			origin,
-			submissionToken: tokens.TINYBIRD_STAGING_READ_TOKEN,
-			statusToken: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 			deploymentId: state.deploymentId,
 			request,
-			wait: delay,
+			pipes: ["snapshot_product_events_canonical_v1"],
 			useDeploymentParameter: target === "staging",
 		});
+		const canonicalVisibility = await waitForCopyVisibility({
+			label: "Tinybird canonical copy",
+			read: () =>
+				readPhaseCiAssertions({
+					state,
+					deploymentId: endpointDeploymentId,
+					expectations,
+				}),
+			assert: (results) =>
+				assertPhaseCiAssertions(results, ["canonicalEvents"]),
+		});
+		const downstreamJobs = [];
+		const downstreamVisibility = {};
+		const copySteps = [
+			{
+				pipe: "snapshot_product_events_daily_exact",
+				read: () =>
+					readPhaseCiAssertions({
+						state,
+						deploymentId: endpointDeploymentId,
+						expectations,
+					}),
+				assert: (results) =>
+					assertPhaseCiAssertions(results, ["decisionEvents"]),
+			},
+			{
+				pipe: "snapshot_product_traffic_daily_exact",
+				marker: "trafficMarkers",
+			},
+			{
+				pipe: "snapshot_product_traffic_pages_daily_exact",
+				marker: "trafficPageMarkers",
+			},
+			{
+				pipe: "snapshot_product_activation_daily_exact",
+				marker: "activationMarkers",
+			},
+			{
+				pipe: "snapshot_product_creator_retention_exact",
+				marker: "retentionMarkers",
+			},
+			{
+				pipe: "snapshot_product_events_health_hourly",
+				read: () =>
+					readAndAssertPhaseHealth({
+						state,
+						phase,
+						deploymentId: endpointDeploymentId,
+					}),
+				assert: () => undefined,
+			},
+		];
+		for (const copyStep of copySteps) {
+			downstreamJobs.push(
+				...(await submitTinybirdCopyJobs({
+					origin,
+					token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+					deploymentId: state.deploymentId,
+					request,
+					pipes: [copyStep.pipe],
+					useDeploymentParameter: target === "staging",
+					copyRunId,
+				})),
+			);
+			const visibility = await waitForCopyVisibility({
+				label: `Tinybird ${copyStep.pipe} copy`,
+				read:
+					copyStep.read ??
+					(async () =>
+						normalizeCopyAssertions(
+							(
+								await copyAssertionsQuery({
+									copyRunId,
+									deploymentId: endpointDeploymentId,
+								})
+							).data,
+						)),
+				assert:
+					copyStep.assert ??
+					((markers) => {
+						if (markers[copyStep.marker] !== 1) {
+							throw new Error(
+								`Tinybird ${copyStep.marker} was ${markers[copyStep.marker]}, expected 1`,
+							);
+						}
+					}),
+			});
+			downstreamVisibility[copyStep.pipe] = {
+				polls: visibility.polls,
+				visibilityMs: visibility.visibilityMs,
+			};
+		}
+		const markers = normalizeCopyAssertions(
+			(
+				await copyAssertionsQuery({
+					copyRunId,
+					deploymentId: endpointDeploymentId,
+				})
+			).data,
+		);
+		if (Object.values(markers).some((value) => value !== 1)) {
+			throw new Error("Not every Tinybird aggregate copy marker is visible");
+		}
 		artifact.copyJobs = {
 			...artifact.copyJobs,
-			[phase]: { status: "passed", jobs },
+			[phase]: {
+				status: "passed",
+				copyRunHash: hashIdentifier(copyRunId),
+				jobs: [...canonicalJobs, ...downstreamJobs],
+				canonicalVisibility: {
+					polls: canonicalVisibility.polls,
+					visibilityMs: canonicalVisibility.visibilityMs,
+				},
+				downstreamVisibility: { copies: downstreamVisibility, markers },
+			},
 		};
 		writeJson(artifactPath, artifact);
 	} catch (error) {
@@ -966,6 +1252,22 @@ const verifySyntheticIdentityErasure = async () => {
 	const erasedDecisions = normalizeCiAssertions(
 		(await ciAssertionsQuery({ state })).data,
 	);
+	const previewHealth = normalizeHealth(
+		(
+			await healthQuery({
+				state,
+				appVersion: state.previewAppVersion,
+			})
+		).data,
+	);
+	const previewDecisions = normalizeCiAssertions(
+		(
+			await ciAssertionsQuery({
+				state,
+				syntheticRunId: state.previewRunId,
+			})
+		).data,
+	);
 	if (
 		Object.values(erasedHealth).some((value) => value !== 0) ||
 		Object.values(erasedLoadHealth).some((value) => value !== 0) ||
@@ -973,6 +1275,15 @@ const verifySyntheticIdentityErasure = async () => {
 	) {
 		throw new Error(
 			"Synthetic identity erasure left raw-health or decision-facing state",
+		);
+	}
+	assertSingleHealth(previewHealth);
+	if (
+		previewDecisions.canonicalEvents !== 1 ||
+		previewDecisions.decisionEvents !== 1
+	) {
+		throw new Error(
+			"Synthetic identity erasure corrupted the unrelated preview control",
 		);
 	}
 	const controlHealth = normalizeHealth(
@@ -998,6 +1309,8 @@ const verifySyntheticIdentityErasure = async () => {
 		erasedHealth,
 		erasedLoadHealth,
 		erasedDecisions,
+		previewHealth,
+		previewDecisions,
 		controlHealth,
 		passed: true,
 	};
@@ -1018,10 +1331,14 @@ const cleanup = async () => {
 	]);
 	validateSyntheticRunId(state.loadRunId);
 	validateSyntheticRunId(state.erasureControlRunId);
+	const runIds = [state.runId, state.loadRunId, state.erasureControlRunId];
+	if (state.previewRunId) {
+		runIds.push(validateSyntheticRunId(state.previewRunId));
+	}
 	const rowsAffected = await deleteProductEventRows({
 		origin,
 		token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
-		condition: `synthetic_run_id IN ('${state.runId}', '${state.loadRunId}', '${state.erasureControlRunId}')`,
+		condition: `synthetic_run_id IN (${runIds.map((runId) => `'${runId}'`).join(", ")})`,
 	});
 	const artifact = readJson(artifactPath);
 	artifact.cleanup = {
@@ -1036,7 +1353,11 @@ const verifyPromoted = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
-	if (!state.previewAppVersion || !state.previewAcceptedRows) {
+	if (
+		!state.previewAppVersion ||
+		!state.previewAcceptedRows ||
+		!state.previewRunId
+	) {
 		throw new Error("The exact-SHA preview probe did not complete");
 	}
 	const previewHealthResult = await healthQuery({
@@ -1055,11 +1376,35 @@ const verifyPromoted = async () => {
 			"The promoted health snapshot did not preserve preview retry deliveries",
 		);
 	}
-	const decisionResult = await ciAssertionsQuery({ state });
-	const decisionAssertions = normalizeCiAssertions(decisionResult.data);
-	assertPromotedSyntheticDecisions(decisionAssertions);
+	const seedDecisionResult = await ciAssertionsQuery({ state });
+	const seedDecisionAssertions = normalizeCiAssertions(seedDecisionResult.data);
+	assertSyntheticDecisions(seedDecisionAssertions);
+	const previewDecisionResult = await ciAssertionsQuery({
+		state,
+		syntheticRunId: state.previewRunId,
+	});
+	const previewDecisionAssertions = normalizeCiAssertions(
+		previewDecisionResult.data,
+	);
+	if (
+		previewDecisionAssertions.receivedRows < state.previewAcceptedRows ||
+		previewDecisionAssertions.uniqueEvents !== 1 ||
+		previewDecisionAssertions.uniquePayloads !== 1 ||
+		previewDecisionAssertions.duplicateRows !==
+			previewDecisionAssertions.receivedRows - 1 ||
+		previewDecisionAssertions.payloadConflicts !== 0 ||
+		previewDecisionAssertions.canonicalEvents !== 1 ||
+		previewDecisionAssertions.decisionEvents !== 1
+	) {
+		throw new Error(
+			"The promoted preview run did not preserve exact retry-deduplicated decisions",
+		);
+	}
 	artifact.previewApi.health = previewHealth;
-	artifact.previewApi.decisionAssertions = decisionAssertions;
+	artifact.previewApi.decisionAssertions = {
+		seed: seedDecisionAssertions,
+		preview: previewDecisionAssertions,
+	};
 	artifact.previewApi.endpointLatencyMs = previewHealthResult.latencyMs;
 	artifact.assertions.promotedPreviewDataPassed = true;
 	writeJson(artifactPath, artifact);
@@ -1102,6 +1447,30 @@ const verifyCleanup = async () => {
 		throw new Error(
 			"Synthetic erasure control rows still affect Tinybird health after cleanup",
 		);
+	}
+	if (state.previewAppVersion && state.previewRunId) {
+		const previewResult = await healthQuery({
+			state,
+			appVersion: state.previewAppVersion,
+		});
+		const previewHealth = normalizeHealth(previewResult.data);
+		if (Object.values(previewHealth).some((value) => value !== 0)) {
+			throw new Error(
+				"Synthetic preview rows still affect Tinybird health after cleanup",
+			);
+		}
+		const previewDecisionResult = await ciAssertionsQuery({
+			state,
+			syntheticRunId: state.previewRunId,
+		});
+		const previewDecisionAssertions = normalizeCiAssertions(
+			previewDecisionResult.data,
+		);
+		if (Object.values(previewDecisionAssertions).some((value) => value !== 0)) {
+			throw new Error(
+				"Synthetic preview rows still affect decisions after cleanup",
+			);
+		}
 	}
 	artifact.cleanup = {
 		...artifact.cleanup,

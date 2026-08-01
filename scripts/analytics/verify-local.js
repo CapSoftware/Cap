@@ -128,6 +128,18 @@ assert.equal(
 );
 assert.equal(Number(health[0].payload_conflicts), 0);
 
+const copyAssertions = await query("product_analytics_copy_assertions", {
+	copy_run_id: "run_local_copy_assertions",
+});
+assert.deepEqual(copyAssertions, [
+	{
+		traffic_markers: 1,
+		traffic_page_markers: 1,
+		activation_markers: 1,
+		retention_markers: 1,
+	},
+]);
+
 console.log(
 	"Local Tinybird copies and typed endpoints match fixture semantics.",
 );

@@ -43,6 +43,7 @@ SQL >
 	)
 	SELECT
 		now64(3) AS calculated_at,
+		'' AS copy_run_id,
 		toDate(started_at, 'UTC') AS date,
 		hostname,
 		country,
@@ -62,6 +63,29 @@ SQL >
 	FROM sessions
 	LEFT JOIN session_engagement USING session_id
 	GROUP BY date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		today() AS date,
+		'' AS hostname,
+		'' AS country,
+		'' AS device,
+		'' AS browser,
+		'' AS os,
+		'' AS channel,
+		'' AS attribution_source,
+		'' AS attribution_medium,
+		'' AS campaign,
+		uniqExactStateIf('', 0) AS visitors,
+		toUInt64(0) AS visits,
+		toUInt64(0) AS pageviews,
+		toUInt64(0) AS bounces,
+		toUInt64(0) AS visit_duration_ms,
+		toUInt64(0) AS engaged_ms
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
 
 TYPE COPY
 TARGET_DATASOURCE product_traffic_daily_exact

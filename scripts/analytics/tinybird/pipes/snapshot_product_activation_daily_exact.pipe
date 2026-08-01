@@ -28,6 +28,7 @@ SQL >
 	)
 	SELECT
 		now64(3) AS calculated_at,
+		'' AS copy_run_id,
 		toDate(signed_up_at, 'UTC') AS cohort_date,
 		uniqExactState(signups.user_id) AS signups,
 		uniqExactStateIf(signups.user_id, activated_at >= signed_up_at AND activated_at < signed_up_at + INTERVAL 7 DAY) AS activated_creators,
@@ -35,6 +36,17 @@ SQL >
 	FROM signups
 	LEFT JOIN activations USING user_id
 	GROUP BY cohort_date
+	{% if defined(copy_run_id) %}
+	UNION ALL
+	SELECT
+		now64(3) AS calculated_at,
+		{{String(copy_run_id)}} AS copy_run_id,
+		today() AS cohort_date,
+		uniqExactStateIf('', 0) AS signups,
+		uniqExactStateIf('', 0) AS activated_creators,
+		toUInt64(0) AS time_to_activation_ms
+	WHERE throwIf(length({{String(copy_run_id)}}) < 8 OR length({{String(copy_run_id)}}) > 128, 'copy_run_id has an invalid length') = 0
+	{% end %}
 
 TYPE COPY
 TARGET_DATASOURCE product_activation_daily_exact

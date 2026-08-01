@@ -35,6 +35,7 @@ const TEST_FILES = fs
 	.map((fileName) => path.join(MODULE_DIR, "tests", fileName));
 const CLOUD_URL_DEFAULT = "https://api.tinybird.co";
 const STAGING_WORKSPACE_ID = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
+const LOCAL_COPY_RUN_ID = "run_local_copy_assertions";
 const PRODUCT_COPY_PIPES = [
 	"snapshot_product_events_canonical_v1",
 	"snapshot_product_events_daily_exact",
@@ -178,6 +179,8 @@ const operationPlan = (operation) => {
 					name,
 					"--param",
 					"copy_max_threads=1",
+					"--param",
+					`copy_run_id=${LOCAL_COPY_RUN_ID}`,
 					"--wait",
 				),
 				attempts: 8,
@@ -221,6 +224,8 @@ const operationPlan = (operation) => {
 					name,
 					"--param",
 					"copy_max_threads=1",
+					"--param",
+					`copy_run_id=${LOCAL_COPY_RUN_ID}`,
 					"--wait",
 				),
 				attempts: 8,
@@ -462,6 +467,7 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		"product_creator_activity",
 		"product_feature_adoption",
 		"product_analytics_freshness",
+		"product_analytics_copy_assertions",
 	]) {
 		const pipe = project.pipes.find((candidate) => candidate.name === name);
 		if (!pipe) {

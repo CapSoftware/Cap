@@ -3,6 +3,7 @@ DESCRIPTION >
 
 SCHEMA >
 	calculated_at DateTime64(3),
+	copy_run_id String,
 	cohort_date Date,
 	activity_date Date,
 	platform LowCardinality(String),
@@ -11,6 +12,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(cohort_date)
-ENGINE_SORTING_KEY (cohort_date, activity_date, platform)
+ENGINE_SORTING_KEY (copy_run_id, cohort_date, activity_date, platform)
 ENGINE_TTL cohort_date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256

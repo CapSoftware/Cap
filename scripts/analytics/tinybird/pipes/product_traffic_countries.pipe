@@ -12,7 +12,8 @@ SQL >
 		sum(visits) AS visits,
 		sum(pageviews) AS pageviews
 	FROM product_traffic_daily_exact
-	WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+	WHERE copy_run_id = ''
+		AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 		AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 		{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
 	GROUP BY country

@@ -14,7 +14,8 @@ SQL >
 		uniqExactMerge(creator_users) AS creators,
 		uniqExactMerge(creator_organizations) AS organizations
 	FROM product_creator_retention_exact
-	WHERE cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 180 DAY {% end %}
+	WHERE copy_run_id = ''
+		AND cohort_date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 180 DAY {% end %}
 		AND cohort_date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 		{% if defined(platform) %} AND (activity_date = cohort_date OR platform = {{String(platform)}}) {% end %}
 	GROUP BY cohort_date, activity_date

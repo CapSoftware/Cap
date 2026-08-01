@@ -16,7 +16,8 @@ SQL >
 			sum(visit_duration_ms) AS duration_total_ms,
 			sum(engaged_ms) AS engagement_total_ms
 		FROM product_traffic_daily_exact
-		WHERE date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
+		WHERE copy_run_id = ''
+			AND date >= {% if defined(start_date) %} {{Date(start_date)}} {% else %} today() - INTERVAL 30 DAY {% end %}
 			AND date <= {% if defined(end_date) %} {{Date(end_date)}} {% else %} today() {% end %}
 			{% if defined(hostname) %} AND hostname = lower({{String(hostname)}}) {% end %}
 			{% if defined(country) %} AND country = upper({{String(country)}}) {% end %}

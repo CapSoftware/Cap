@@ -3,6 +3,7 @@ DESCRIPTION >
 
 SCHEMA >
 	calculated_at DateTime64(3),
+	copy_run_id String,
 	date Date,
 	hostname LowCardinality(String),
 	country LowCardinality(String),
@@ -22,6 +23,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(date)
-ENGINE_SORTING_KEY (date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
+ENGINE_SORTING_KEY (copy_run_id, date, hostname, country, device, browser, os, channel, attribution_source, attribution_medium, campaign)
 ENGINE_TTL date + INTERVAL 400 DAY
 ENGINE_SETTINGS index_granularity = 256
