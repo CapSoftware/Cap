@@ -18,6 +18,6 @@ SQL >
 	GROUP BY hour, platform, app_version
 
 TYPE COPY
-TARGET_DATASOURCE product_events_health_hourly
+TARGET_DATASOURCE product_events_health_hourly_exact
 COPY_MODE replace
 COPY_SCHEDULE 1-59/8 * * * *

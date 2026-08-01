@@ -11,6 +11,6 @@ SQL >
 		(SELECT max(calculated_at) FROM product_events_daily_exact) AS product_calculated_at,
 		(SELECT max(calculated_at) FROM product_traffic_daily_exact) AS traffic_calculated_at,
 		(SELECT max(calculated_at) FROM product_creator_retention_exact) AS retention_calculated_at
-	FROM product_events_health_hourly
+	FROM product_events_health_hourly_exact
 
 TYPE ENDPOINT

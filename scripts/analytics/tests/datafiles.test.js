@@ -222,7 +222,7 @@ test("health queries use stable hourly aggregates and a bounded window", () => {
 		contents,
 		/toStartOfHour\(toDateTime64\(\{\{DateTime64\(start_time\)\}\}, 3\)\)/,
 	);
-	assert.match(contents, /FROM product_events_health_hourly/);
+	assert.match(contents, /FROM product_events_health_hourly_exact/);
 	assert.match(contents, /uniqExactMerge\(unique_events\)/);
 	assert.match(contents, /uniqExactMerge\(unique_payloads\)/);
 	assert.match(contents, /payload_conflicts/);

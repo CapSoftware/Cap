@@ -52,14 +52,14 @@ SQL >
 		os,
 		channel,
 		uniqExactState(visitor_id) AS visitors,
-		uniqExactState(session_id) AS visits,
+		uniqExactState(page_views.session_id) AS visits,
 		toUInt64(count()) AS pageviews,
 		toUInt64(countIf(event_id = landing_event_id)) AS landings,
 		toUInt64(countIf(event_id = exit_event_id)) AS exits,
 		toUInt64(sum(coalesce(engaged_ms, 0))) AS engaged_ms,
 		toFloat64(sum(coalesce(scroll_depth, 0))) AS scroll_depth_sum
 	FROM page_views
-	INNER JOIN sessions USING session_id
+	INNER JOIN sessions ON page_views.session_id = sessions.session_id
 	LEFT JOIN engagements ON page_views.event_id = engagements.page_view_id
 	GROUP BY date, hostname, pathname, country, device, browser, os, channel
 

@@ -172,7 +172,7 @@ const operationPlan = (operation) => {
 			),
 			...PRODUCT_COPY_PIPES.map((name) => ({
 				...localCliStep("--local", "copy", "run", name, "--wait"),
-				attempts: 5,
+				attempts: 8,
 				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
 			})),
 			{ type: "verify-local" },
@@ -207,7 +207,7 @@ const operationPlan = (operation) => {
 			),
 			...PRODUCT_COPY_PIPES.map((name) => ({
 				...localCliStep("--local", "copy", "run", name, "--wait"),
-				attempts: 5,
+				attempts: 8,
 				retryPattern: /CANNOT_SCHEDULE_TASK|no free thread/i,
 			})),
 			{ type: "verify-local" },
@@ -423,10 +423,12 @@ const validateAnalyticsProject = (projectDir = TINYBIRD_PROJECT_DIR) => {
 		}
 	}
 	const healthHourly = project.datasources.find(
-		(datasource) => datasource.name === "product_events_health_hourly",
+		(datasource) => datasource.name === "product_events_health_hourly_exact",
 	);
 	if (!healthHourly || healthHourly.engine !== "AggregatingMergeTree") {
-		issues.push("Missing product_events_health_hourly aggregate datasource");
+		issues.push(
+			"Missing product_events_health_hourly_exact aggregate datasource",
+		);
 	} else if (hasToken(healthHourly, "product_events_agent_read", "READ")) {
 		issues.push("Product event health states must be endpoint-only");
 	}
