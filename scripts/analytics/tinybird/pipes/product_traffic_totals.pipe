@@ -7,15 +7,15 @@ NODE product_traffic_totals_node
 SQL >
 	%
 	SELECT
-		uniqExactMerge(visitors) AS visitors,
-		toUInt64(sum(visits)) AS visits,
-		toUInt64(sum(pageviews)) AS pageviews,
-		round(if(sum(visits) = 0, 0, sum(pageviews) / sum(visits)), 2) AS views_per_visit,
-		round(if(sum(visits) = 0, 0, 100 * sum(bounces) / sum(visits)), 2) AS bounce_rate,
-		toUInt64(if(sum(visits) = 0, 0, sum(visit_duration_ms) / sum(visits))) AS visit_duration_ms,
-		toUInt64(sum(engaged_ms)) AS engaged_ms
-	FROM product_traffic_daily_exact
-	WHERE copy_run_id = ''
+		uniqExactMerge(traffic.visitors) AS visitors,
+		toUInt64(sum(traffic.visits)) AS visits,
+		toUInt64(sum(traffic.pageviews)) AS pageviews,
+		round(if(sum(traffic.visits) = 0, 0, sum(traffic.pageviews) / sum(traffic.visits)), 2) AS views_per_visit,
+		round(if(sum(traffic.visits) = 0, 0, 100 * sum(traffic.bounces) / sum(traffic.visits)), 2) AS bounce_rate,
+		toUInt64(if(sum(traffic.visits) = 0, 0, sum(traffic.visit_duration_ms) / sum(traffic.visits))) AS visit_duration_ms,
+		toUInt64(sum(traffic.engaged_ms)) AS engaged_ms
+	FROM product_traffic_daily_exact AS traffic
+	WHERE traffic.copy_run_id = ''
 		{% if defined(synthetic_run_id) %}
 			AND synthetic_run_id = {{String(synthetic_run_id)}}
 			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0

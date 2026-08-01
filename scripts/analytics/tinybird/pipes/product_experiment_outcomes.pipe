@@ -7,17 +7,17 @@ NODE product_experiment_outcomes_node
 SQL >
 	%
 	SELECT
-		experiment_id,
-		assignment_version,
-		variant,
-		platform,
-		app_version,
-		outcome_name,
-		toUInt64(sum(exposed_actors)) AS exposed_actors,
-		toUInt64(sum(converted_actors)) AS converted_actors,
-		round(if(sum(exposed_actors) = 0, 0, 100 * sum(converted_actors) / sum(exposed_actors)), 2) AS conversion_rate
-	FROM product_experiment_outcomes_exact
-	WHERE copy_run_id = ''
+		outcomes.experiment_id,
+		outcomes.assignment_version,
+		outcomes.variant,
+		outcomes.platform,
+		outcomes.app_version,
+		outcomes.outcome_name,
+		toUInt64(sum(outcomes.exposed_actors)) AS exposed_actors,
+		toUInt64(sum(outcomes.converted_actors)) AS converted_actors,
+		round(if(sum(outcomes.exposed_actors) = 0, 0, 100 * sum(outcomes.converted_actors) / sum(outcomes.exposed_actors)), 2) AS conversion_rate
+	FROM product_experiment_outcomes_exact AS outcomes
+	WHERE outcomes.copy_run_id = ''
 		{% if defined(synthetic_run_id) %}
 			AND synthetic_run_id = {{String(synthetic_run_id)}}
 			AND throwIf(length({{String(synthetic_run_id)}}) < 8 OR length({{String(synthetic_run_id)}}) > 128, 'synthetic_run_id has an invalid length') = 0
@@ -35,8 +35,8 @@ SQL >
 			AND outcome_name = {{String(outcome_name)}}
 			AND throwIf(NOT has(['signup', 'share_created', 'paid_purchase'], {{String(outcome_name)}}), 'outcome_name is invalid') = 0
 		{% end %}
-	GROUP BY experiment_id, assignment_version, variant, platform, app_version, outcome_name
-	ORDER BY experiment_id ASC, assignment_version ASC, variant ASC, outcome_name ASC, platform ASC, app_version ASC
+	GROUP BY outcomes.experiment_id, outcomes.assignment_version, outcomes.variant, outcomes.platform, outcomes.app_version, outcomes.outcome_name
+	ORDER BY outcomes.experiment_id ASC, outcomes.assignment_version ASC, outcomes.variant ASC, outcomes.outcome_name ASC, outcomes.platform ASC, outcomes.app_version ASC
 	LIMIT greatest(1, least({{Int32(limit, 1000)}}, 1000))
 
 TYPE ENDPOINT

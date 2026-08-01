@@ -29,13 +29,13 @@ SQL >
 		SELECT * FROM paid_guest_links
 	), first_links AS (
 		SELECT
-			synthetic_run_id,
-			user_id,
-			argMin(anonymous_id, tuple(occurred_at, event_id)) AS anonymous_id,
-			argMinIf(organization_id, tuple(occurred_at, event_id), organization_id != '') AS organization_id,
-			min(occurred_at) AS linked_at
-		FROM link_candidates
-		GROUP BY synthetic_run_id, user_id
+			candidates.synthetic_run_id,
+			candidates.user_id,
+			argMin(candidates.anonymous_id, tuple(candidates.occurred_at, candidates.event_id)) AS anonymous_id,
+			argMinIf(candidates.organization_id, tuple(candidates.occurred_at, candidates.event_id), candidates.organization_id != '') AS organization_id,
+			min(candidates.occurred_at) AS linked_at
+		FROM link_candidates AS candidates
+		GROUP BY candidates.synthetic_run_id, candidates.user_id
 	), organization_first_links AS (
 		SELECT
 			synthetic_run_id,
@@ -107,14 +107,14 @@ SQL >
 		FROM paid_guest_links
 	), guest_paths AS (
 		SELECT
-			synthetic_run_id,
-			user_id,
-			argMin(anonymous_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS anonymous_id,
-			argMin(organization_id, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS organization_id,
-			argMin(path_at, tuple(if(paid_guest_purchase > 0, 0, 1), path_at, anonymous_id)) AS linked_at,
-			toUInt64(max(paid_guest_purchase) > 0) AS guest_purchased
-		FROM guest_path_candidates
-		GROUP BY synthetic_run_id, user_id
+			candidates.synthetic_run_id,
+			candidates.user_id,
+			argMin(candidates.anonymous_id, tuple(if(candidates.paid_guest_purchase > 0, 0, 1), candidates.path_at, candidates.anonymous_id)) AS anonymous_id,
+			argMin(candidates.organization_id, tuple(if(candidates.paid_guest_purchase > 0, 0, 1), candidates.path_at, candidates.anonymous_id)) AS organization_id,
+			argMin(candidates.path_at, tuple(if(candidates.paid_guest_purchase > 0, 0, 1), candidates.path_at, candidates.anonymous_id)) AS linked_at,
+			toUInt64(max(candidates.paid_guest_purchase) > 0) AS guest_purchased
+		FROM guest_path_candidates AS candidates
+		GROUP BY candidates.synthetic_run_id, candidates.user_id
 	), user_linked_outcomes AS (
 		SELECT
 			first_links.synthetic_run_id AS synthetic_run_id,

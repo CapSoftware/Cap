@@ -211,7 +211,7 @@ test("traffic totals merge visitor states across the selected range", () => {
 		path.join(TINYBIRD_PROJECT_DIR, "pipes", "product_traffic_totals.pipe"),
 		"utf8",
 	);
-	assert.match(contents, /uniqExactMerge\(visitors\) AS visitors/);
+	assert.match(contents, /uniqExactMerge\(traffic\.visitors\) AS visitors/);
 	assert.match(contents, /FROM product_traffic_daily_exact/);
 	assert.match(contents, /platform = \{\{String\(platform\)\}\}/);
 	assert.match(contents, /app_version = \{\{String\(app_version\)\}\}/);
@@ -333,8 +333,8 @@ test("experiment outcomes are aggregate-only and anchored to explicit exposures"
 		"utf8",
 	);
 	assert.match(snapshot, /event_name = 'experiment_exposed'/);
-	assert.match(snapshot, /HAVING uniqExact\(user_id\) = 1/);
-	assert.match(snapshot, /HAVING uniqExact\(variant\) = 1/);
+	assert.match(snapshot, /HAVING uniqExact\(candidates\.user_id\) = 1/);
+	assert.match(snapshot, /HAVING uniqExact\(resolved\.variant\) = 1/);
 	assert.match(snapshot, /outcome_candidates AS/);
 	assert.match(
 		snapshot,
@@ -347,7 +347,7 @@ test("experiment outcomes are aggregate-only and anchored to explicit exposures"
 		/JSONExtractString\(properties, 'payment_status'\) = 'paid'/,
 	);
 	assert.match(endpoint, /FROM product_experiment_outcomes_exact/);
-	assert.match(endpoint, /sum\(converted_actors\)/);
+	assert.match(endpoint, /sum\(outcomes\.converted_actors\)/);
 	assert.doesNotMatch(
 		endpoint,
 		/anonymous_id|session_id|user_id|organization_id/,
@@ -438,8 +438,8 @@ test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", 
 		),
 		"utf8",
 	);
-	assert.match(stateContents, /uniqExactState\(payload_hash\)/);
-	assert.match(stateContents, /GROUP BY event_id/);
+	assert.match(stateContents, /uniqExactState\(raw\.payload_hash\)/);
+	assert.match(stateContents, /GROUP BY raw\.event_id/);
 	assert.match(stateContents, /^TYPE MATERIALIZED$/m);
 	const currentContents = fs.readFileSync(
 		path.join(

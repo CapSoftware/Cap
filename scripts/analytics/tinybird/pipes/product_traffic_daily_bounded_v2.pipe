@@ -95,4 +95,3 @@ SQL >
 		toUInt64(0), toUInt64(0), toUInt64(0), toUInt64(0), toUInt64(0)
 	WHERE throwIf(length({{String(generation_id)}}) < 8 OR length({{String(generation_id)}}) > 128, 'generation_id has an invalid length') = 0
 		{% if defined(settled_date) %} AND throwIf(toDate({{Date(settled_date)}}) > toDate(toDateTime64({{DateTime64(source_cutoff)}}, 3)) - INTERVAL 8 DAY, 'settled_date is inside the mutable window') = 0 {% end %}
-

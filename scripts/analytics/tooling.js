@@ -189,7 +189,10 @@ const cloudCliStep = (...args) => ({
 });
 
 const operationPlan = (operation) => {
-	const localSourceCutoff = new Date().toISOString();
+	const localSourceCutoff = new Date()
+		.toISOString()
+		.replace("T", " ")
+		.replace("Z", "");
 	const localGenerationId = `local_${localSourceCutoff.replaceAll(/[^0-9]/g, "")}`;
 	const localCopyStep = (name) => {
 		const parameters = [
@@ -245,6 +248,7 @@ const operationPlan = (operation) => {
 			...PRODUCT_COPY_PIPES.map((name) =>
 				localCliStep("--local", "copy", "pause", name),
 			),
+			{ type: "reset-local-fixture" },
 			localCliStep(
 				"--local",
 				"datasource",
@@ -276,6 +280,7 @@ const operationPlan = (operation) => {
 			...PRODUCT_COPY_PIPES.map((name) =>
 				localCliStep("--local", "copy", "pause", name),
 			),
+			{ type: "reset-local-fixture" },
 			localCliStep(
 				"--local",
 				"datasource",
@@ -1126,6 +1131,23 @@ const runAnalyticsCommand = async (operation) => {
 		}
 		if (step.type === "prepare-local-fixture") {
 			prepareLocalFixture();
+			continue;
+		}
+		if (step.type === "reset-local-fixture") {
+			await runProcess(
+				"docker",
+				composeArgs(
+					"run",
+					"--rm",
+					"tinybird-cli",
+					"--local",
+					"datasource",
+					"truncate",
+					"product_events_v1",
+					"--yes",
+				),
+				{ env: localEnvironment() },
+			);
 			continue;
 		}
 		if (step.type === "verify-cloud-workspace") {

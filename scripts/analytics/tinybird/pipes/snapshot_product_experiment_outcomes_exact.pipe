@@ -25,12 +25,12 @@ SQL >
 			AND user_id != ''
 	), identity_links AS (
 		SELECT
-			synthetic_run_id,
-			anonymous_id,
-			argMin(user_id, tuple(occurred_at, event_id)) AS user_id
-		FROM identity_candidates
-		GROUP BY synthetic_run_id, anonymous_id
-		HAVING uniqExact(user_id) = 1
+			candidates.synthetic_run_id,
+			candidates.anonymous_id,
+			argMin(candidates.user_id, tuple(candidates.occurred_at, candidates.event_id)) AS user_id
+		FROM identity_candidates AS candidates
+		GROUP BY candidates.synthetic_run_id, candidates.anonymous_id
+		HAVING uniqExact(candidates.user_id) = 1
 	), resolved_exposures AS (
 		SELECT
 			exposures.synthetic_run_id AS synthetic_run_id,
@@ -54,21 +54,21 @@ SQL >
 			AND (exposures.user_id != '' OR exposures.anonymous_id != '')
 	), exposures AS (
 		SELECT
-			synthetic_run_id,
-			actor_id,
-			argMin(resolved_user_id, tuple(occurred_at, event_id)) AS user_id,
-			min(occurred_at) AS exposed_at,
-			experiment_id,
-			assignment_version,
-			argMin(variant, tuple(occurred_at, event_id)) AS variant,
-			argMin(platform, tuple(occurred_at, event_id)) AS platform,
-			argMin(app_version, tuple(occurred_at, event_id)) AS app_version
-		FROM resolved_exposures
-		WHERE experiment_id != ''
-			AND assignment_version != ''
-			AND variant != ''
-		GROUP BY synthetic_run_id, actor_id, experiment_id, assignment_version
-		HAVING uniqExact(variant) = 1
+			resolved.synthetic_run_id,
+			resolved.actor_id,
+			argMin(resolved.resolved_user_id, tuple(resolved.occurred_at, resolved.event_id)) AS user_id,
+			min(resolved.occurred_at) AS exposed_at,
+			resolved.experiment_id,
+			resolved.assignment_version,
+			argMin(resolved.variant, tuple(resolved.occurred_at, resolved.event_id)) AS variant,
+			argMin(resolved.platform, tuple(resolved.occurred_at, resolved.event_id)) AS platform,
+			argMin(resolved.app_version, tuple(resolved.occurred_at, resolved.event_id)) AS app_version
+		FROM resolved_exposures AS resolved
+		WHERE resolved.experiment_id != ''
+			AND resolved.assignment_version != ''
+			AND resolved.variant != ''
+		GROUP BY resolved.synthetic_run_id, resolved.actor_id, resolved.experiment_id, resolved.assignment_version
+		HAVING uniqExact(resolved.variant) = 1
 	), outcome_candidates AS (
 		SELECT
 			synthetic_run_id,

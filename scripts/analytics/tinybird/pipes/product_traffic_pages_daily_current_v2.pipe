@@ -4,20 +4,20 @@ DESCRIPTION >
 NODE product_traffic_pages_daily_latest_hot_generation_v2_node
 SQL >
 	SELECT
-		argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
-		argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
-	FROM product_analytics_generations_v2
-	WHERE generation_kind = 'hot'
+		argMax(generations.generation_id, tuple(generations.source_cutoff, generations.published_at, generations.generation_id)) AS generation_id,
+		argMax(generations.source_cutoff, tuple(generations.source_cutoff, generations.published_at, generations.generation_id)) AS source_cutoff
+	FROM product_analytics_generations_v2 AS generations
+	WHERE generations.generation_kind = 'hot'
 
 NODE product_traffic_pages_daily_latest_cold_generations_v2_node
 SQL >
 	SELECT
-		settled_date AS date,
-		argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
-		argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
-	FROM product_analytics_generations_v2
-	WHERE generation_kind = 'cold'
-	GROUP BY settled_date
+		generations.settled_date AS date,
+		argMax(generations.generation_id, tuple(generations.source_cutoff, generations.published_at, generations.generation_id)) AS generation_id,
+		argMax(generations.source_cutoff, tuple(generations.source_cutoff, generations.published_at, generations.generation_id)) AS source_cutoff
+	FROM product_analytics_generations_v2 AS generations
+	WHERE generations.generation_kind = 'cold'
+	GROUP BY generations.settled_date
 
 NODE product_traffic_pages_daily_current_v2_node
 SQL >

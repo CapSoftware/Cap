@@ -74,12 +74,17 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 	const appendIndex = steps.findIndex((step) =>
 		step.args?.join(" ").includes("datasource append product_events_v1"),
 	);
+	const resetIndex = steps.findIndex(
+		(step) => step.type === "reset-local-fixture",
+	);
 	const pauseIndexes = steps
 		.map((step, index) => ({ index, command: step.args?.join(" ") ?? "" }))
 		.filter(({ command }) => command.includes("--local copy pause"))
 		.map(({ index }) => index);
 	assert.equal(pauseIndexes.length, 19);
 	assert.ok(pauseIndexes.every((index) => index < appendIndex));
+	assert.ok(resetIndex > Math.max(...pauseIndexes));
+	assert.ok(resetIndex < appendIndex);
 	const copyCommands = commands.filter((command) =>
 		command.includes("--local copy run"),
 	);

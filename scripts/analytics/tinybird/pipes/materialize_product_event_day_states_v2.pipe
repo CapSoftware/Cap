@@ -4,37 +4,37 @@ DESCRIPTION >
 NODE materialize_product_event_day_states_v2_node
 SQL >
 	SELECT
-		toDate(occurred_at, 'UTC') AS occurred_date,
-		event_id,
-		uniqExactState(payload_hash) AS payload_hashes,
-		argMinState(payload_hash, received_at) AS payload_hash,
-		argMinState(occurred_at, received_at) AS occurred_at,
-		min(received_at) AS first_received_at,
-		max(received_at) AS received_at,
-		argMinState(toString(event_name), received_at) AS event_name,
-		argMinState(schema_version, received_at) AS schema_version,
-		argMinState(toString(source), received_at) AS source,
-		argMinState(toString(platform), received_at) AS platform,
-		argMinState(anonymous_id, received_at) AS anonymous_id,
-		argMinState(session_id, received_at) AS session_id,
-		argMinState(user_id, received_at) AS user_id,
-		argMinState(organization_id, received_at) AS organization_id,
-		argMinState(toString(app_version), received_at) AS app_version,
-		argMinState(pathname, received_at) AS pathname,
-		argMinState(referrer, received_at) AS referrer,
-		argMinState(toString(country), received_at) AS country,
-		argMinState(toString(region), received_at) AS region,
-		argMinState(toString(city), received_at) AS city,
-		argMinState(toString(hostname), received_at) AS hostname,
-		argMinState(toString(browser), received_at) AS browser,
-		argMinState(toString(device), received_at) AS device,
-		argMinState(toString(os), received_at) AS os,
-		argMinState(toString(channel), received_at) AS channel,
-		argMinState(toString(traffic_class), received_at) AS traffic_class,
-		argMinState(synthetic_run_id, received_at) AS synthetic_run_id,
-		argMinState(properties, received_at) AS properties
-	FROM product_events_v1
-	GROUP BY occurred_date, event_id
+		toDate(raw.occurred_at, 'UTC') AS occurred_date,
+		raw.event_id,
+		uniqExactState(raw.payload_hash) AS payload_hashes,
+		argMinState(raw.payload_hash, raw.received_at) AS payload_hash,
+		argMinState(raw.occurred_at, raw.received_at) AS occurred_at,
+		min(raw.received_at) AS first_received_at,
+		max(raw.received_at) AS received_at,
+		argMinState(toString(raw.event_name), raw.received_at) AS event_name,
+		argMinState(raw.schema_version, raw.received_at) AS schema_version,
+		argMinState(toString(raw.source), raw.received_at) AS source,
+		argMinState(toString(raw.platform), raw.received_at) AS platform,
+		argMinState(raw.anonymous_id, raw.received_at) AS anonymous_id,
+		argMinState(raw.session_id, raw.received_at) AS session_id,
+		argMinState(raw.user_id, raw.received_at) AS user_id,
+		argMinState(raw.organization_id, raw.received_at) AS organization_id,
+		argMinState(toString(raw.app_version), raw.received_at) AS app_version,
+		argMinState(raw.pathname, raw.received_at) AS pathname,
+		argMinState(raw.referrer, raw.received_at) AS referrer,
+		argMinState(toString(raw.country), raw.received_at) AS country,
+		argMinState(toString(raw.region), raw.received_at) AS region,
+		argMinState(toString(raw.city), raw.received_at) AS city,
+		argMinState(toString(raw.hostname), raw.received_at) AS hostname,
+		argMinState(toString(raw.browser), raw.received_at) AS browser,
+		argMinState(toString(raw.device), raw.received_at) AS device,
+		argMinState(toString(raw.os), raw.received_at) AS os,
+		argMinState(toString(raw.channel), raw.received_at) AS channel,
+		argMinState(toString(raw.traffic_class), raw.received_at) AS traffic_class,
+		argMinState(raw.synthetic_run_id, raw.received_at) AS synthetic_run_id,
+		argMinState(raw.properties, raw.received_at) AS properties
+	FROM product_events_v1 AS raw
+	GROUP BY toDate(raw.occurred_at, 'UTC'), raw.event_id
 
 TYPE MATERIALIZED
 DATASOURCE product_event_day_states_v2

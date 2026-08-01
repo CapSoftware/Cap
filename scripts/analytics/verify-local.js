@@ -139,6 +139,8 @@ assert.deepEqual(copyAssertions, [
 		activation_markers: 1,
 		retention_markers: 1,
 		identity_markers: 1,
+		attribution_markers: 1,
+		experiment_markers: 1,
 		health_markers: 1,
 	},
 ]);

@@ -727,6 +727,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		},
 		now: () => now,
 		copyRunId: "run_12345678_staged",
+		sourceCutoff: "2026-08-01T13:34:45.197Z",
 		assertMutationOwnership: async () => {
 			ownershipChecks += 1;
 		},
@@ -745,6 +746,10 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		},
 	]);
 	assert.match(requests[0].url, /_mode=replace/);
+	assert.equal(
+		new URL(requests[0].url).searchParams.get("source_cutoff"),
+		"2026-08-01 13:34:45.197",
+	);
 	assert.doesNotMatch(requests[0].url, /__tb__deployment/);
 	assert.doesNotMatch(requests[0].url, /copy_run_id/);
 	assert.equal(requests[0].options.method, "POST");

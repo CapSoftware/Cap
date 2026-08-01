@@ -721,6 +721,9 @@ export const submitTinybirdCopyJobs = async ({
 	if (sourceCutoff && !Number.isFinite(Date.parse(sourceCutoff))) {
 		throw new Error("Tinybird copy source cutoff must be an ISO timestamp");
 	}
+	const tinybirdSourceCutoff = sourceCutoff
+		? new Date(sourceCutoff).toISOString().replace("T", " ").replace("Z", "")
+		: "";
 	if (typeof assertMutationOwnership !== "function") {
 		throw new Error("Tinybird copies require an ownership check");
 	}
@@ -735,7 +738,9 @@ export const submitTinybirdCopyJobs = async ({
 			origin,
 		);
 		copyUrl.searchParams.set("_mode", "replace");
-		if (sourceCutoff) copyUrl.searchParams.set("source_cutoff", sourceCutoff);
+		if (tinybirdSourceCutoff) {
+			copyUrl.searchParams.set("source_cutoff", tinybirdSourceCutoff);
+		}
 		if (COPY_MARKER_PIPES.has(pipe)) {
 			if (!copyRunId) {
 				throw new Error(`Tinybird copy marker is required for ${pipe}`);
