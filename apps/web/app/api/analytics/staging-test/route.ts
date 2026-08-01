@@ -595,7 +595,10 @@ const attestDatabaseSchema = async () => {
 
 const authorize = (payload: { runId: string; sha: string }) =>
 	Effect.gen(function* () {
-		if (process.env.VERCEL_ENV !== "preview") {
+		if (
+			process.env.VERCEL_ENV === "production" ||
+			process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true"
+		) {
 			return yield* Effect.fail(new HttpApiError.NotFound());
 		}
 		const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
