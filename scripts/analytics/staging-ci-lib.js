@@ -3094,6 +3094,8 @@ export const assertWorkflowSafety = (workflow) => {
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"staging-ci.js run-copies",
 		"staging-ci.js set-copy-schedules",
+		"steps.deployment-state.outputs.promoted == 'true'",
+		"steps.deployment-state.outputs.target == 'staging' || steps.pause-copies.outcome == 'success'",
 		"attest-preview",
 		"probe-preview",
 		"verify-promoted",

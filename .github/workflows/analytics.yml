@@ -525,7 +525,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Quiesce scheduled and active Copy jobs before final cleanup
         id: pause-copies
-        if: always() && steps.seed.outcome != 'skipped'
+        if: always() && steps.seed.outcome != 'skipped' && steps.deployment-state.outputs.promoted == 'true'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
@@ -538,7 +538,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows
         id: cleanup
-        if: always() && steps.seed.outcome != 'skipped' && steps.pause-copies.outcome == 'success'
+        if: always() && steps.seed.outcome != 'skipped' && (steps.deployment-state.outputs.target == 'staging' || steps.pause-copies.outcome == 'success')
         env:
           CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
@@ -586,7 +586,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Resume reviewed Copy schedules
         id: resume-copies
-        if: always() && steps.pause-copies.outcome != 'skipped'
+        if: always() && steps.pause-copies.outcome == 'success'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}

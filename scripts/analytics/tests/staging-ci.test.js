@@ -2184,7 +2184,18 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow,
 		/--baseline-deployment-id "\$\{\{ steps\.promote\.outputs\.previous_live_id \|\| steps\.tinybird\.outputs\.id \}\}"/,
 	);
-	assert.match(workflow, /steps\.seed\.outcome != 'skipped'/);
+	assert.match(
+		workflow,
+		/Quiesce scheduled and active Copy jobs before final cleanup\n {8}id: pause-copies\n {8}if: always\(\) && steps\.seed\.outcome != 'skipped' && steps\.deployment-state\.outputs\.promoted == 'true'/,
+	);
+	assert.match(
+		workflow,
+		/Delete strictly scoped synthetic raw rows\n {8}id: cleanup\n {8}if: always\(\) && steps\.seed\.outcome != 'skipped' && \(steps\.deployment-state\.outputs\.target == 'staging' \|\| steps\.pause-copies\.outcome == 'success'\)/,
+	);
+	assert.match(
+		workflow,
+		/Resume reviewed Copy schedules\n {8}id: resume-copies\n {8}if: always\(\) && steps\.pause-copies\.outcome == 'success'/,
+	);
 	assert.match(workflow, /steps\.cleanup\.outputs\.requires_copies == 'true'/);
 	assert.doesNotMatch(workflow, /steps\.seed\.outcome == 'success'/);
 	assert.match(workflow, /echo "required=false" >> "\$GITHUB_OUTPUT"/);
@@ -2339,6 +2350,11 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(prepareSource, /assertions: \{ seedAccepted: false \}/);
 	assert.match(prepareSource, /rowsPlanned: fixture\.rows\.length/);
 	assert.match(prepareSource, /rowsAttempted: 0/);
+	assert.match(
+		seedSource,
+		/tinybirdEnvironment\(\[\s*"TINYBIRD_STAGING_INGEST_TOKEN",?\s*\]\)/,
+	);
+	assert.doesNotMatch(seedSource, /TINYBIRD_STAGING_COPY_TOKEN/);
 	assert.ok(
 		seedSource.indexOf("artifact.delivery.rowsAttempted += 1") <
 			seedSource.indexOf("const result = await request"),
@@ -2346,6 +2362,44 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
+	);
+});
+
+test("recovery avoids unowned schedule changes and publishes failure evidence", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const recoverySource = source.slice(
+		source.indexOf("const recoverStaging = async () => {"),
+		source.indexOf("const handlers ="),
+	);
+	assert.ok(
+		recoverySource.indexOf('strategy: "incomplete"') <
+			recoverySource.indexOf("recoveryCheckpoint("),
+	);
+	assert.match(
+		recoverySource,
+		/artifact\.copySchedule\?\.pause\?\.status === "passed" &&[\s\S]*pausedDeploymentId === retainedDeploymentId[\s\S]*await setCopySchedules/,
+	);
+});
+
+test("candidate cleanup refuses a live transition before any deletion", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const cleanupSource = source.slice(
+		source.indexOf("const cleanup = async"),
+		source.indexOf("const verifyPromoted = async"),
+	);
+	const targetGuard = cleanupSource.indexOf("if (target !== requestedTarget)");
+	assert.ok(targetGuard >= 0);
+	assert.ok(targetGuard < cleanupSource.indexOf("cleanupPreviewDatabaseState"));
+	assert.ok(targetGuard < cleanupSource.indexOf("deleteProductEventRows"));
+	assert.match(
+		cleanupSource,
+		/Tinybird cleanup target changed before scoped cleanup/,
 	);
 });
 

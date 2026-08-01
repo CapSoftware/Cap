@@ -2285,7 +2285,6 @@ const seed = async () => {
 		now: startedAt,
 	});
 	const { origin, tokens } = tinybirdEnvironment([
-		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 	]);
 	const deliver = async (row, fixtureRow = false) => {
@@ -4016,8 +4015,8 @@ const cleanup = async (parameters = {}) => {
 		origin,
 		token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
 	});
-	if (requestedTarget === "live" && target !== "live") {
-		throw new Error("Tinybird cleanup target regressed from live to staging");
+	if (target !== requestedTarget) {
+		throw new Error("Tinybird cleanup target changed before scoped cleanup");
 	}
 	validateSyntheticRunId(state.runId);
 	validateSyntheticRunId(state.loadRunId);
@@ -4764,8 +4763,14 @@ const recoveryCheckpoint = (directory) => {
 };
 
 const recoverStaging = async () => {
-	const checkpoint = recoveryCheckpoint(option("checkpoint-directory"));
 	const recoveryArtifactPath = option("artifact");
+	writeJson(recoveryArtifactPath, {
+		recovered: false,
+		strategy: "incomplete",
+		workspaceId: STAGING_WORKSPACE_ID,
+		verifiedAt: new Date().toISOString(),
+	});
+	const checkpoint = recoveryCheckpoint(option("checkpoint-directory"));
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"TINYBIRD_STAGING_COPY_TOKEN",
@@ -4921,11 +4926,19 @@ const recoverStaging = async () => {
 		}
 	} else {
 		const retainedState = { ...state, deploymentId: retainedDeploymentId };
-		await setCopySchedules({
-			action: "resume",
-			artifactPath: checkpoint.artifactPath,
-			state: retainedState,
-		});
+		const pausedDeploymentId = String(
+			artifact.copySchedule?.pause?.deploymentId ?? "",
+		);
+		if (
+			artifact.copySchedule?.pause?.status === "passed" &&
+			pausedDeploymentId === retainedDeploymentId
+		) {
+			await setCopySchedules({
+				action: "resume",
+				artifactPath: checkpoint.artifactPath,
+				state: retainedState,
+			});
+		}
 		if (candidateLifecycle !== "deleted") {
 			await discardOwnedDeployment({ deploymentId: candidateId });
 		}
