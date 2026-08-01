@@ -46,8 +46,9 @@ permissions:
   statuses: read
 
 concurrency:
-  group: analytics-staging-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: >-
+    ${{ ((github.event_name == 'pull_request' && github.event.pull_request.number == 2003 && github.event.pull_request.head.ref == 'codex/first-party-analytics') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/first-party-analytics')) && 'analytics-staging-37b8fef9-817f-4c3c-b21f-218c36a6077d' || format('analytics-staging-out-of-scope-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 env:
   TINYBIRD_WORKSPACE_ID: 37b8fef9-817f-4c3c-b21f-218c36a6077d
@@ -182,6 +183,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -205,15 +207,13 @@ jobs:
         if: steps.tinybird.outputs.needs_promotion == 'true'
         continue-on-error: true
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
-          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote --wait
+          node scripts/analytics/staging-ci.js promote-deployment --deployment-id "${{ steps.tinybird.outputs.id }}"
       - name: Resolve authoritative Tinybird state after the promotion attempt
         id: deployment-state
         if: always() && steps.tinybird.outcome == 'success'
@@ -247,7 +247,7 @@ jobs:
           done
           exit 1
       - name: Refuse to proceed without an authoritative live deployment
-        if: steps.deployment-state.outputs.promoted != 'true'
+        if: steps.deployment-state.outputs.promoted != 'true' || steps.promote.outcome == 'failure'
         run: exit 1
       - name: Prove least-privilege staging token scopes
         id: token-scopes
@@ -273,6 +273,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -294,6 +295,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js erase-synthetic-identity
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -304,6 +306,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -327,6 +330,7 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: |
           if [[ ! -f "$RUNNER_TEMP/analytics-staging-state.json" ]]; then
             echo "required=false" >> "$GITHUB_OUTPUT"
@@ -344,11 +348,12 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase cleanup
-          --target "${{ steps.deployment-state.outputs.target || (steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live') }}"
+          --target "${{ steps.cleanup.outputs.target }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove synthetic cleanup no longer affects queries
@@ -360,19 +365,18 @@ jobs:
         run: >-
           node scripts/analytics/staging-ci.js verify-cleanup
           --deployment-id "${{ steps.tinybird.outputs.id }}"
-          --target "${{ steps.deployment-state.outputs.target || (steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live') }}"
+          --target "${{ steps.cleanup-copies.outputs.target }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Discard an unpromoted staging deployment after cleanup
+        id: discard
         if: always() && steps.deployment-state.outputs.discard == 'true'
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
-          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
-          run --rm tinybird-cloud-cli --cloud deployment discard --wait
+          node scripts/analytics/staging-ci.js discard-deployment
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
       - name: Upload redacted staging evidence
         if: always() && steps.cleanup.outputs.required == 'true'
         uses: actions/upload-artifact@v4

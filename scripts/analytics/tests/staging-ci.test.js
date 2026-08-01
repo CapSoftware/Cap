@@ -21,7 +21,12 @@ import {
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
 	normalizeHealth,
+	reconcileCleanupTarget,
 	resolveDeploymentState,
+	resolveExactDeploymentLifecycle,
+	resolveExactPromotionPlan,
+	resolveOwnedDiscardTarget,
+	resolveOwnedMutationTarget,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -214,14 +219,14 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 	);
 });
 
-test("data mutations target only the exact staging deployment", () => {
+test("data mutations validate the exact deployment before using the staging selector", () => {
 	assert.deepEqual(
 		dataMutationDeploymentParameters({
 			target: "staging",
 			deploymentId: "7",
 			expectedDeploymentId: "7",
 		}),
-		{ __tb__deployment: "7" },
+		{ __tb__deployment: "staging" },
 	);
 	assert.deepEqual(
 		dataMutationDeploymentParameters({
@@ -242,6 +247,131 @@ test("data mutations target only the exact staging deployment", () => {
 	]) {
 		assert.throws(() => dataMutationDeploymentParameters(input));
 	}
+});
+
+test("mutation ownership follows only the exact staging candidate or promoted live ID", () => {
+	assert.equal(
+		resolveOwnedMutationTarget(
+			{
+				deployments: [
+					{ id: "6", status: "data_ready", live: true },
+					{ id: "7", status: "data_ready", live: false },
+				],
+			},
+			"7",
+		),
+		"staging",
+	);
+	assert.equal(
+		resolveOwnedMutationTarget(
+			{
+				deployments: [
+					{ id: "7", status: "data_ready", live: true },
+					{ id: "8", status: "data_ready", live: false },
+				],
+			},
+			"7",
+		),
+		"live",
+	);
+	assert.equal(
+		resolveOwnedMutationTarget(
+			{
+				deployments: [
+					{ id: "6", status: "data_ready", live: true },
+					{ id: "7", status: "creating_schema", live: false },
+				],
+			},
+			"7",
+		),
+		"pending",
+	);
+	assert.equal(
+		resolveOwnedMutationTarget(
+			{
+				deployments: [
+					{ id: "6", status: "data_ready", live: true },
+					{ id: "7", status: "promoting", live: false },
+				],
+			},
+			"7",
+		),
+		"pending",
+	);
+	for (const deployments of [
+		[{ id: "8", status: "data_ready", live: false }],
+		[
+			{ id: "7", status: "data_ready", live: false },
+			{ id: "8", status: "data_ready", live: false },
+		],
+	]) {
+		assert.throws(() => resolveOwnedMutationTarget({ deployments }, "7"));
+	}
+});
+
+test("cleanup target transitions only once from staging to the owned live deployment", () => {
+	assert.equal(reconcileCleanupTarget("staging", "staging"), "staging");
+	assert.equal(reconcileCleanupTarget("staging", "live"), "live");
+	assert.equal(reconcileCleanupTarget("live", "live"), "live");
+	assert.throws(() => reconcileCleanupTarget("live", "staging"));
+	assert.throws(() => reconcileCleanupTarget("staging", "pending"));
+});
+
+test("promotion and discard plans stay bound to exact numeric deployments", () => {
+	const deployments = {
+		deployments: [
+			{ id: "6", status: "data_ready", live: true },
+			{ id: "7", status: "data_ready", live: false },
+		],
+	};
+	assert.deepEqual(resolveExactPromotionPlan(deployments, "7"), {
+		previousLiveDeploymentId: "6",
+	});
+	assert.equal(resolveOwnedDiscardTarget(deployments, "7"), "ready");
+	assert.throws(() => resolveExactPromotionPlan(deployments, "6"));
+	assert.throws(() => resolveOwnedDiscardTarget(deployments, "6"));
+	assert.throws(() =>
+		resolveOwnedDiscardTarget(
+			{
+				deployments: [
+					...deployments.deployments,
+					{ id: "8", status: "creating_schema", live: false },
+				],
+			},
+			"7",
+		),
+	);
+});
+
+test("exact deployment lifecycle refuses wrong IDs and distinguishes deletion", () => {
+	assert.equal(
+		resolveExactDeploymentLifecycle(
+			{ deployment: { id: "7", status: "data_ready", live: true } },
+			"7",
+		),
+		"live",
+	);
+	for (const [status, expected] of [
+		["data_ready", "ready"],
+		["creating_schema", "pending"],
+		["deleting", "deleting"],
+		["deleted", "deleted"],
+		["failed", "failed"],
+	]) {
+		assert.equal(
+			resolveExactDeploymentLifecycle(
+				{ deployment: { id: "7", status, live: false } },
+				"7",
+			),
+			expected,
+		);
+	}
+	assert.throws(() =>
+		resolveExactDeploymentLifecycle(
+			{ deployment: { id: "8", status: "deleted" } },
+			"7",
+		),
+	);
 });
 
 test("deployment state resolution binds cleanup to the exact deployment", () => {
@@ -309,6 +439,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		{ data: { id: "copy_job_traffic" } },
 	];
 	let now = 1_000;
+	let ownershipChecks = 0;
 	const results = await submitTinybirdCopyJobs({
 		origin: "https://api.us-east.aws.tinybird.co",
 		token: resourceToken,
@@ -318,6 +449,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 			"snapshot_product_traffic_daily_exact",
 		],
 		request: async (url, options) => {
+			await options.beforeAttempt();
 			requests.push({ url: String(url), options });
 			now += 10;
 			return responses.shift();
@@ -325,7 +457,11 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		now: () => now,
 		useDeploymentParameter: true,
 		copyRunId: "run_12345678_staged",
+		assertMutationOwnership: async () => {
+			ownershipChecks += 1;
+		},
 	});
+	assert.equal(ownershipChecks, 2);
 	assert.deepEqual(results, [
 		{
 			pipe: "snapshot_product_events_canonical_v1",
@@ -339,7 +475,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		},
 	]);
 	assert.match(requests[0].url, /_mode=replace/);
-	assert.match(requests[0].url, /__tb__deployment=6/);
+	assert.match(requests[0].url, /__tb__deployment=staging/);
 	assert.doesNotMatch(requests[0].url, /copy_run_id/);
 	assert.equal(requests[0].options.method, "POST");
 	assert.equal(requests[0].options.token, resourceToken);
@@ -352,9 +488,11 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		deploymentId: "6",
 		pipes: ["snapshot_product_events_canonical_v1"],
 		request: async (url, options) => {
+			await options.beforeAttempt();
 			liveRequests.push({ url: String(url), options });
 			return { data: { id: "copy_job_live" } };
 		},
+		assertMutationOwnership: async () => undefined,
 	});
 	assert.doesNotMatch(liveRequests[0].url, /__tb__deployment/);
 	await assert.rejects(() =>
@@ -372,6 +510,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 			deploymentId: "6",
 			pipes: ["snapshot_product_traffic_daily_exact"],
 			request: async () => ({ data: { id: "copy_job_missing_marker" } }),
+			assertMutationOwnership: async () => undefined,
 		}),
 	);
 });
@@ -595,7 +734,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		9,
+		11,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
@@ -604,7 +743,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 				"Discard an unpromoted staging deployment after cleanup",
 			),
 	);
-	assert.doesNotMatch(workflow, /steps\.promote\.outcome/);
+	assert.match(workflow, /steps\.promote\.outcome == 'failure'/);
 	assert.match(workflow, /continue-on-error: true/);
 	assert.match(workflow, /staging-ci\.js resolve-deployment-state/);
 	assert.match(workflow, /resolution_exit=\$\?/);
@@ -617,13 +756,26 @@ test("the analytics workflow is statically restricted to staging", () => {
 	);
 	assert.match(
 		workflow,
-		/Discard an unpromoted staging deployment after cleanup\n {8}if: always\(\) && steps\.deployment-state\.outputs\.discard == 'true'/,
+		/Discard an unpromoted staging deployment after cleanup\n {8}id: discard\n {8}if: always\(\) && steps\.deployment-state\.outputs\.discard == 'true'/,
+	);
+	assert.match(
+		workflow,
+		/staging-ci\.js promote-deployment --deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/,
+	);
+	assert.match(workflow, /staging-ci\.js discard-deployment/);
+	assert.doesNotMatch(
+		workflow,
+		/tinybird-cloud-cli --cloud deployment promote/,
+	);
+	assert.doesNotMatch(
+		workflow,
+		/tinybird-cloud-cli --cloud deployment discard/,
 	);
 	assert.equal(
 		workflow.match(
 			/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/g,
 		)?.length,
-		3,
+		1,
 	);
 	assert.equal(
 		workflow.match(
@@ -689,8 +841,26 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 		/writeOutput\("discard", resolution\.pending \|\| resolution\.discard\)/,
 	);
 	assert.match(workflow, /node scripts\/analytics\/staging-ci\.js cleanup/);
+	assert.match(source, /let target = await waitForOwnedMutationTarget/);
+	assert.match(source, /writeOutput\("target", target\)/);
 	assert.match(
 		workflow,
 		/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/,
+	);
+	assert.equal(
+		workflow.match(/--target "\$\{\{ steps\.cleanup\.outputs\.target \}\}"/g)
+			?.length,
+		1,
+	);
+	assert.equal(
+		workflow.match(
+			/--target "\$\{\{ steps\.cleanup-copies\.outputs\.target \}\}"/g,
+		)?.length,
+		1,
+	);
+	assert.match(workflow, /analytics-staging-out-of-scope-/);
+	assert.match(
+		workflow,
+		/analytics-staging-37b8fef9-817f-4c3c-b21f-218c36a6077d/,
 	);
 });

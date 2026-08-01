@@ -125,18 +125,58 @@ const deploymentState = (deployment) =>
 			"",
 	).toLowerCase();
 
+const deploymentsFromResponse = (value) => {
+	const deployments = Array.isArray(value)
+		? value
+		: (value.deployments ?? value.data ?? value.results ?? []);
+	if (!Array.isArray(deployments)) {
+		throw new Error("Tinybird returned an unsupported deployment list");
+	}
+	return deployments;
+};
+
+const isLiveDeployment = (deployment) =>
+	deployment.live === true || deploymentState(deployment).includes("live");
+
+const isStagingDeployment = (deployment) => {
+	const state = deploymentState(deployment);
+	return (
+		!isLiveDeployment(deployment) &&
+		(state === "data_ready" || state.includes("staging"))
+	);
+};
+
+const isPendingDeployment = (deployment) => {
+	const state = deploymentState(deployment);
+	return (
+		state.includes("in progress") ||
+		state.includes("pending") ||
+		state.includes("promot") ||
+		["calculating", "creating_schema", "schema_ready", "deleting"].includes(
+			state,
+		)
+	);
+};
+
+const exactDeployment = (value, expectedDeploymentId) => {
+	const deployment = value.deployment ?? value;
+	if (
+		!deployment ||
+		typeof deployment !== "object" ||
+		String(deploymentId(deployment)) !== expectedDeploymentId
+	) {
+		throw new Error("Tinybird returned the wrong exact deployment");
+	}
+	return deployment;
+};
+
 export const selectStagingDeployment = (
 	value,
 	minimumCreatedAt,
 	createdDeploymentId,
 	noOpConfirmed = false,
 ) => {
-	const candidates = Array.isArray(value)
-		? value
-		: (value.deployments ?? value.data ?? value.results ?? []);
-	if (!Array.isArray(candidates)) {
-		throw new Error("Tinybird returned an unsupported deployment list");
-	}
+	const candidates = deploymentsFromResponse(value);
 	const minimumTime = Date.parse(minimumCreatedAt);
 	const stagingDeployments = candidates
 		.filter((candidate) => {
@@ -194,6 +234,118 @@ export const selectStagingDeployment = (
 	return { id: String(id), needsPromotion: false };
 };
 
+export const resolveOwnedMutationTarget = (value, expectedDeploymentId) => {
+	if (!DEPLOYMENT_ID_PATTERN.test(expectedDeploymentId)) {
+		throw new Error("Tinybird mutation ownership requires a numeric ID");
+	}
+	const deployments = deploymentsFromResponse(value);
+	const matches = deployments.filter(
+		(deployment) => String(deploymentId(deployment)) === expectedDeploymentId,
+	);
+	if (matches.length !== 1) {
+		throw new Error("The owned Tinybird deployment is missing or ambiguous");
+	}
+	if (isLiveDeployment(matches[0])) return "live";
+	if (isPendingDeployment(matches[0])) return "pending";
+	if (!isStagingDeployment(matches[0])) {
+		throw new Error("The owned Tinybird deployment is not ready for mutation");
+	}
+	const stagingDeployments = deployments.filter(isStagingDeployment);
+	if (
+		stagingDeployments.length !== 1 ||
+		String(deploymentId(stagingDeployments[0])) !== expectedDeploymentId
+	) {
+		throw new Error("The Tinybird staging alias is not owned by this run");
+	}
+	return "staging";
+};
+
+export const resolveExactPromotionPlan = (value, expectedDeploymentId) => {
+	if (resolveOwnedMutationTarget(value, expectedDeploymentId) !== "staging") {
+		throw new Error("The owned Tinybird deployment is not staging");
+	}
+	if (resolveOwnedDiscardTarget(value, expectedDeploymentId) !== "ready") {
+		throw new Error("The owned Tinybird deployment is not ready for promotion");
+	}
+	const liveDeployments =
+		deploymentsFromResponse(value).filter(isLiveDeployment);
+	if (liveDeployments.length !== 1) {
+		throw new Error(
+			"Tinybird promotion requires exactly one current live deployment",
+		);
+	}
+	const previousLiveDeploymentId = String(deploymentId(liveDeployments[0]));
+	if (
+		!DEPLOYMENT_ID_PATTERN.test(previousLiveDeploymentId) ||
+		previousLiveDeploymentId === expectedDeploymentId
+	) {
+		throw new Error("Tinybird returned an invalid previous live deployment");
+	}
+	return { previousLiveDeploymentId };
+};
+
+export const resolveOwnedDiscardTarget = (value, expectedDeploymentId) => {
+	if (!DEPLOYMENT_ID_PATTERN.test(expectedDeploymentId)) {
+		throw new Error("Tinybird discard ownership requires a numeric ID");
+	}
+	const deployments = deploymentsFromResponse(value);
+	const matches = deployments.filter(
+		(deployment) => String(deploymentId(deployment)) === expectedDeploymentId,
+	);
+	if (matches.length !== 1 || isLiveDeployment(matches[0])) {
+		throw new Error("The owned Tinybird deployment cannot be discarded");
+	}
+	const state = deploymentState(matches[0]);
+	if (
+		!isStagingDeployment(matches[0]) &&
+		!isPendingDeployment(matches[0]) &&
+		!state.includes("failed")
+	) {
+		throw new Error("The owned Tinybird deployment is not discardable");
+	}
+	const mutableDeployments = deployments.filter((deployment) => {
+		const candidateState = deploymentState(deployment);
+		return (
+			!isLiveDeployment(deployment) &&
+			!candidateState.includes("deleted") &&
+			(isStagingDeployment(deployment) ||
+				isPendingDeployment(deployment) ||
+				candidateState.includes("failed"))
+		);
+	});
+	if (
+		mutableDeployments.length !== 1 ||
+		String(deploymentId(mutableDeployments[0])) !== expectedDeploymentId
+	) {
+		throw new Error("The Tinybird discard candidate is not owned by this run");
+	}
+	return isPendingDeployment(matches[0]) ? "pending" : "ready";
+};
+
+export const resolveExactDeploymentLifecycle = (
+	value,
+	expectedDeploymentId,
+) => {
+	if (!DEPLOYMENT_ID_PATTERN.test(expectedDeploymentId)) {
+		throw new Error("Tinybird exact deployment lookup requires a numeric ID");
+	}
+	const deployment = exactDeployment(value, expectedDeploymentId);
+	const state = deploymentState(deployment);
+	if (isLiveDeployment(deployment)) return "live";
+	if (state.includes("deleted")) return "deleted";
+	if (state.includes("deleting")) return "deleting";
+	if (state.includes("failed")) return "failed";
+	if (isPendingDeployment(deployment)) return "pending";
+	if (isStagingDeployment(deployment)) return "ready";
+	throw new Error(`The exact Tinybird deployment is ${state || "unknown"}`);
+};
+
+export const reconcileCleanupTarget = (currentTarget, resolvedTarget) => {
+	if (currentTarget === resolvedTarget) return currentTarget;
+	if (currentTarget === "staging" && resolvedTarget === "live") return "live";
+	throw new Error("Tinybird cleanup target changed non-monotonically");
+};
+
 export const dataMutationDeploymentParameters = ({
 	target,
 	deploymentId,
@@ -208,19 +360,14 @@ export const dataMutationDeploymentParameters = ({
 	) {
 		throw new Error("Tinybird data mutation deployment is invalid");
 	}
-	return target === "staging" ? { __tb__deployment: deploymentId } : {};
+	return target === "staging" ? { __tb__deployment: "staging" } : {};
 };
 
 export const resolveDeploymentState = (value, expectedDeploymentId) => {
 	if (!DEPLOYMENT_ID_PATTERN.test(expectedDeploymentId)) {
 		throw new Error("Tinybird deployment state requires a numeric ID");
 	}
-	const deployments = Array.isArray(value)
-		? value
-		: (value.deployments ?? value.data ?? value.results ?? []);
-	if (!Array.isArray(deployments)) {
-		throw new Error("Tinybird returned an unsupported deployment list");
-	}
+	const deployments = deploymentsFromResponse(value);
 	const matches = deployments.filter(
 		(deployment) => String(deploymentId(deployment)) === expectedDeploymentId,
 	);
@@ -285,11 +432,15 @@ export const submitTinybirdCopyJobs = async ({
 	pipes = COPY_PIPES,
 	useDeploymentParameter = false,
 	copyRunId = "",
+	assertMutationOwnership,
 }) => {
 	if (!DEPLOYMENT_ID_PATTERN.test(deploymentId)) {
 		throw new Error("Tinybird copy jobs require a numeric deployment ID");
 	}
 	if (copyRunId) validateSyntheticRunId(copyRunId);
+	if (typeof assertMutationOwnership !== "function") {
+		throw new Error("Tinybird copies require an ownership check");
+	}
 	const results = [];
 	for (const pipe of pipes) {
 		if (!COPY_PIPES.includes(pipe)) {
@@ -302,7 +453,7 @@ export const submitTinybirdCopyJobs = async ({
 		);
 		copyUrl.searchParams.set("_mode", "replace");
 		if (useDeploymentParameter) {
-			copyUrl.searchParams.set("__tb__deployment", deploymentId);
+			copyUrl.searchParams.set("__tb__deployment", "staging");
 		}
 		if (COPY_MARKER_PIPES.has(pipe)) {
 			if (!copyRunId) {
@@ -316,6 +467,7 @@ export const submitTinybirdCopyJobs = async ({
 				token,
 				method: "POST",
 				attempts: 3,
+				beforeAttempt: assertMutationOwnership,
 			});
 		} catch (error) {
 			throw new Error(`Tinybird copy submission failed for ${pipe}`, {
@@ -662,11 +814,12 @@ export const assertWorkflowSafety = (workflow) => {
 		STAGING_WORKSPACE_ID,
 		FEATURE_BRANCH,
 		String(FEATURE_PULL_REQUEST),
-		"cancel-in-progress: true",
+		"cancel-in-progress: false",
+		"analytics-staging-out-of-scope-",
 		"pull_request.head.sha",
 		"deployment create --allow-destructive-operations --check",
-		"deployment promote",
-		"deployment discard",
+		"staging-ci.js promote-deployment",
+		"staging-ci.js discard-deployment",
 		"environment: staging",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 		"TINYBIRD_STAGING_INGEST_TOKEN",

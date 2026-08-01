@@ -18,7 +18,12 @@ import {
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
 	normalizeHealth,
+	reconcileCleanupTarget,
 	resolveDeploymentState,
+	resolveExactDeploymentLifecycle,
+	resolveExactPromotionPlan,
+	resolveOwnedDiscardTarget,
+	resolveOwnedMutationTarget,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -96,12 +101,20 @@ const tinybirdEnvironment = (requiredTokenNames = TINYBIRD_TOKEN_NAMES) => {
 
 const request = async (
 	url,
-	{ token, method = "GET", body, headers = {}, attempts = 1 } = {},
+	{
+		token,
+		method = "GET",
+		body,
+		headers = {},
+		attempts = 1,
+		beforeAttempt,
+	} = {},
 ) => {
 	let lastError;
 	for (let attempt = 1; attempt <= attempts; attempt += 1) {
 		const startedAt = performance.now();
 		try {
+			if (beforeAttempt) await beforeAttempt();
 			const response = await fetch(url, {
 				method,
 				body,
@@ -197,6 +210,215 @@ const copyAssertionsQuery = async ({ copyRunId, deploymentId = "" }) => {
 		}),
 		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
 	);
+};
+
+const ownedMutationTarget = async ({ state, origin, token }) => {
+	const deployments = await request(tinybirdUrl(origin, "/v1/deployments"), {
+		token,
+		attempts: 3,
+	});
+	return resolveOwnedMutationTarget(
+		deployments.data,
+		String(state.deploymentId),
+	);
+};
+
+const waitForOwnedMutationTarget = async ({ state, origin, token }) => {
+	const deadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	let lastError;
+	while (Date.now() < deadline) {
+		const target = await ownedMutationTarget({ state, origin, token });
+		if (target !== "pending") return target;
+		lastError = new Error("The owned Tinybird deployment is still pending");
+		await delay(2_000);
+	}
+	throw new Error("Timed out waiting for the owned Tinybird deployment", {
+		cause: lastError,
+	});
+};
+
+const deploymentList = async ({ origin, token }) =>
+	request(tinybirdUrl(origin, "/v1/deployments"), {
+		token,
+		attempts: 3,
+	});
+
+const exactDeployment = async ({ origin, token, deploymentId }) =>
+	request(
+		tinybirdUrl(origin, `/v1/deployments/${encodeURIComponent(deploymentId)}`),
+		{ token, attempts: 3 },
+	);
+
+const promoteOwnedDeployment = async () => {
+	const deploymentId = option("deployment-id");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	const initial = await deploymentList({ origin, token });
+	const plan = resolveExactPromotionPlan(initial.data, deploymentId);
+	const promotionDeadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	let lastPromotionError;
+	let promotionAttempts = 0;
+	while (Date.now() < promotionDeadline) {
+		const current = await deploymentList({ origin, token });
+		const target = resolveOwnedMutationTarget(current.data, deploymentId);
+		if (target === "live") break;
+		if (target === "pending") {
+			await delay(2_000);
+			continue;
+		}
+		if (promotionAttempts >= 3) {
+			throw new Error("The exact Tinybird deployment remained staging", {
+				cause: lastPromotionError,
+			});
+		}
+		const currentPlan = resolveExactPromotionPlan(current.data, deploymentId);
+		if (
+			currentPlan.previousLiveDeploymentId !== plan.previousLiveDeploymentId
+		) {
+			throw new Error("The Tinybird live deployment changed before promotion");
+		}
+		try {
+			promotionAttempts += 1;
+			await request(
+				tinybirdUrl(
+					origin,
+					`/v1/deployments/${encodeURIComponent(deploymentId)}/set-live`,
+				),
+				{ token, method: "POST" },
+			);
+		} catch (error) {
+			lastPromotionError = error;
+		}
+		await delay(2_000);
+	}
+	const promoted = await deploymentList({ origin, token });
+	if (resolveOwnedMutationTarget(promoted.data, deploymentId) !== "live") {
+		throw new Error("The exact Tinybird deployment was not promoted", {
+			cause: lastPromotionError,
+		});
+	}
+	const deadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	let lastDeletionError;
+	while (Date.now() < deadline) {
+		const previous = await exactDeployment({
+			origin,
+			token,
+			deploymentId: plan.previousLiveDeploymentId,
+		});
+		const lifecycle = resolveExactDeploymentLifecycle(
+			previous.data,
+			plan.previousLiveDeploymentId,
+		);
+		if (lifecycle === "deleted") {
+			writeOutput("promoted", "true");
+			return;
+		}
+		if (lifecycle === "live") {
+			throw new Error("The previous Tinybird deployment became live again");
+		}
+		if (lifecycle !== "deleting") {
+			try {
+				await request(
+					tinybirdUrl(
+						origin,
+						`/v1/deployments/${encodeURIComponent(plan.previousLiveDeploymentId)}`,
+					),
+					{
+						token,
+						method: "DELETE",
+						beforeAttempt: async () => {
+							const ownership = await deploymentList({ origin, token });
+							if (
+								resolveOwnedMutationTarget(ownership.data, deploymentId) !==
+								"live"
+							) {
+								throw new Error(
+									"The promoted Tinybird deployment is no longer live",
+								);
+							}
+							const exactPrevious = await exactDeployment({
+								origin,
+								token,
+								deploymentId: plan.previousLiveDeploymentId,
+							});
+							if (
+								resolveExactDeploymentLifecycle(
+									exactPrevious.data,
+									plan.previousLiveDeploymentId,
+								) === "live"
+							) {
+								throw new Error(
+									"Refusing to delete a live Tinybird deployment",
+								);
+							}
+						},
+					},
+				);
+			} catch (error) {
+				lastDeletionError = error;
+			}
+		}
+		await delay(2_000);
+	}
+	throw new Error("Timed out deleting the previous Tinybird deployment", {
+		cause: lastDeletionError,
+	});
+};
+
+const discardOwnedDeployment = async () => {
+	const deploymentId = option("deployment-id");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	const initial = await deploymentList({ origin, token });
+	resolveOwnedDiscardTarget(initial.data, deploymentId);
+	const deadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	let lastDeletionError;
+	while (Date.now() < deadline) {
+		const current = await exactDeployment({ origin, token, deploymentId });
+		const lifecycle = resolveExactDeploymentLifecycle(
+			current.data,
+			deploymentId,
+		);
+		if (lifecycle === "deleted") {
+			writeOutput("discarded", "true");
+			return;
+		}
+		if (lifecycle === "live") {
+			throw new Error("Refusing to discard a live Tinybird deployment");
+		}
+		if (lifecycle !== "deleting") {
+			try {
+				await request(
+					tinybirdUrl(
+						origin,
+						`/v1/deployments/${encodeURIComponent(deploymentId)}`,
+					),
+					{
+						token,
+						method: "DELETE",
+						beforeAttempt: async () => {
+							const ownership = await deploymentList({ origin, token });
+							resolveOwnedDiscardTarget(ownership.data, deploymentId);
+						},
+					},
+				);
+			} catch (error) {
+				lastDeletionError = error;
+			}
+		}
+		await delay(2_000);
+	}
+	throw new Error("Timed out discarding the exact Tinybird deployment", {
+		cause: lastDeletionError,
+	});
 };
 
 const decisionEndpointQuery = async ({ origin, token, name, parameters }) =>
@@ -854,14 +1076,14 @@ const runCopies = async () => {
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
 	const phase = option("phase");
-	const target = option("target");
+	const requestedTarget = option("target");
 	if (!["staged", "promoted", "erasure", "cleanup"].includes(phase)) {
 		throw new Error("Tinybird copy phase is invalid");
 	}
-	if (!["live", "staging"].includes(target)) {
+	if (!["live", "staging"].includes(requestedTarget)) {
 		throw new Error("Tinybird copy target is invalid");
 	}
-	if (target === "staging" && !["staged", "cleanup"].includes(phase)) {
+	if (requestedTarget === "staging" && !["staged", "cleanup"].includes(phase)) {
 		throw new Error("Only staged and cleanup copy phases can target staging");
 	}
 	if (String(state.deploymentId) !== option("deployment-id")) {
@@ -869,11 +1091,22 @@ const runCopies = async () => {
 	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
-	const endpointDeploymentId = target === "staging" ? state.deploymentId : "";
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
-	try {
+	const executeCopies = async (target) => {
+		const assertMutationOwnership = async () => {
+			if (
+				(await ownedMutationTarget({
+					state,
+					origin,
+					token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+				})) !== target
+			) {
+				throw new Error("The owned Tinybird deployment target changed");
+			}
+		};
 		const canonicalJobs = await submitTinybirdCopyJobs({
 			origin,
 			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
@@ -881,13 +1114,14 @@ const runCopies = async () => {
 			request,
 			pipes: ["snapshot_product_events_canonical_v1"],
 			useDeploymentParameter: target === "staging",
+			assertMutationOwnership,
 		});
 		const canonicalVisibility = await waitForCopyVisibility({
 			label: "Tinybird canonical copy",
 			read: () =>
 				readPhaseCiAssertions({
 					state,
-					deploymentId: endpointDeploymentId,
+					deploymentId: state.deploymentId,
 					expectations,
 				}),
 			assert: (results) =>
@@ -901,7 +1135,7 @@ const runCopies = async () => {
 				read: () =>
 					readPhaseCiAssertions({
 						state,
-						deploymentId: endpointDeploymentId,
+						deploymentId: state.deploymentId,
 						expectations,
 					}),
 				assert: (results) =>
@@ -929,7 +1163,7 @@ const runCopies = async () => {
 					readAndAssertPhaseHealth({
 						state,
 						phase,
-						deploymentId: endpointDeploymentId,
+						deploymentId: state.deploymentId,
 					}),
 				assert: () => undefined,
 			},
@@ -944,6 +1178,7 @@ const runCopies = async () => {
 					pipes: [copyStep.pipe],
 					useDeploymentParameter: target === "staging",
 					copyRunId,
+					assertMutationOwnership,
 				})),
 			);
 			const visibility = await waitForCopyVisibility({
@@ -955,7 +1190,7 @@ const runCopies = async () => {
 							(
 								await copyAssertionsQuery({
 									copyRunId,
-									deploymentId: endpointDeploymentId,
+									deploymentId: state.deploymentId,
 								})
 							).data,
 						)),
@@ -975,34 +1210,61 @@ const runCopies = async () => {
 				...(copyStep.marker ? { marker: copyStep.marker } : {}),
 			};
 		}
-		artifact.copyJobs = {
-			...artifact.copyJobs,
-			[phase]: {
-				status: "passed",
-				copyRunHash: hashIdentifier(copyRunId),
-				jobs: [...canonicalJobs, ...downstreamJobs],
-				canonicalVisibility: {
-					polls: canonicalVisibility.polls,
-					visibilityMs: canonicalVisibility.visibilityMs,
+		await assertMutationOwnership();
+		return {
+			status: "passed",
+			target,
+			copyRunHash: hashIdentifier(copyRunId),
+			jobs: [...canonicalJobs, ...downstreamJobs],
+			canonicalVisibility: {
+				polls: canonicalVisibility.polls,
+				visibilityMs: canonicalVisibility.visibilityMs,
+			},
+			downstreamVisibility: { copies: downstreamVisibility },
+		};
+	};
+	let target = requestedTarget;
+	for (
+		let transitionAttempt = 0;
+		transitionAttempt < 2;
+		transitionAttempt += 1
+	) {
+		try {
+			artifact.copyJobs = {
+				...artifact.copyJobs,
+				[phase]: await executeCopies(target),
+			};
+			if (phase === "cleanup") writeOutput("target", target);
+			writeJson(artifactPath, artifact);
+			return;
+		} catch (error) {
+			if (phase === "cleanup" && target === "staging") {
+				const resolvedTarget = await waitForOwnedMutationTarget({
+					state,
+					origin,
+					token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+				});
+				const nextTarget = reconcileCleanupTarget(target, resolvedTarget);
+				if (nextTarget !== target) {
+					target = nextTarget;
+					continue;
+				}
+			}
+			artifact.copyJobs = {
+				...artifact.copyJobs,
+				[phase]: {
+					status: "failed",
+					error:
+						error instanceof Error
+							? error.message
+							: "Unknown Tinybird copy error",
 				},
-				downstreamVisibility: { copies: downstreamVisibility },
-			},
-		};
-		writeJson(artifactPath, artifact);
-	} catch (error) {
-		artifact.copyJobs = {
-			...artifact.copyJobs,
-			[phase]: {
-				status: "failed",
-				error:
-					error instanceof Error
-						? error.message
-						: "Unknown Tinybird copy error",
-			},
-		};
-		writeJson(artifactPath, artifact);
-		throw error;
+			};
+			writeJson(artifactPath, artifact);
+			throw error;
+		}
 	}
+	throw new Error("Tinybird cleanup copies changed target more than once");
 };
 
 const verify = async () => {
@@ -1241,6 +1503,7 @@ const deleteProductEventRows = async ({
 	token,
 	condition,
 	deploymentParameters = {},
+	beforeAttempt,
 }) => {
 	const body = new URLSearchParams({ delete_condition: condition });
 	const deletion = await request(
@@ -1253,6 +1516,7 @@ const deleteProductEventRows = async ({
 			body,
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
 			attempts: 3,
+			beforeAttempt,
 		},
 	);
 	const jobId =
@@ -1266,7 +1530,7 @@ const deleteProductEventRows = async ({
 			tinybirdUrl(origin, `/v0/jobs/${encodeURIComponent(jobId)}`, {
 				...deploymentParameters,
 			}),
-			{ token, attempts: 3 },
+			{ token, attempts: 3, beforeAttempt },
 		);
 		const status = String(
 			job.data.status ?? job.data.state ?? job.data.job?.status ?? "",
@@ -1300,11 +1564,24 @@ const eraseSyntheticIdentity = async () => {
 	);
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
+	const assertLiveOwnership = async () => {
+		if (
+			(await ownedMutationTarget({
+				state,
+				origin,
+				token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+			})) !== "live"
+		) {
+			throw new Error("The owned Tinybird deployment is no longer live");
+		}
+	};
 	const rowsAffected = await deleteProductEventRows({
 		origin,
 		token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
 		condition: `organization_id = '${organizationId}' OR user_id = '${userId}' OR (anonymous_id = '${anonymousId}' AND (user_id = '' OR user_id = '${userId}'))`,
+		beforeAttempt: assertLiveOwnership,
 	});
 	artifact.erasure = {
 		...artifact.erasure,
@@ -1318,22 +1595,31 @@ const verifySyntheticIdentityErasure = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
-	const erasedHealth = normalizeHealth((await healthQuery({ state })).data);
+	const erasedHealth = normalizeHealth(
+		(await healthQuery({ state, deploymentId: state.deploymentId })).data,
+	);
 	const erasedLoadHealth = normalizeHealth(
 		(
 			await healthQuery({
 				state,
+				deploymentId: state.deploymentId,
 				appVersion: state.loadAppVersion,
 			})
 		).data,
 	);
 	const erasedDecisions = normalizeCiAssertions(
-		(await ciAssertionsQuery({ state })).data,
+		(
+			await ciAssertionsQuery({
+				state,
+				deploymentId: state.deploymentId,
+			})
+		).data,
 	);
 	const previewHealth = normalizeHealth(
 		(
 			await healthQuery({
 				state,
+				deploymentId: state.deploymentId,
 				appVersion: state.previewAppVersion,
 			})
 		).data,
@@ -1342,6 +1628,7 @@ const verifySyntheticIdentityErasure = async () => {
 		(
 			await ciAssertionsQuery({
 				state,
+				deploymentId: state.deploymentId,
 				syntheticRunId: state.previewRunId,
 			})
 		).data,
@@ -1368,6 +1655,7 @@ const verifySyntheticIdentityErasure = async () => {
 		(
 			await healthQuery({
 				state,
+				deploymentId: state.deploymentId,
 				appVersion: state.erasureControlAppVersion,
 			})
 		).data,
@@ -1403,27 +1691,80 @@ const verifySyntheticIdentityErasure = async () => {
 const cleanup = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
-	const deploymentParameters = dataMutationDeploymentParameters({
-		target: option("target"),
-		deploymentId: option("deployment-id"),
-		expectedDeploymentId: String(state.deploymentId),
-	});
-	validateSyntheticRunId(state.runId);
+	const requestedTarget = option("target");
+	if (!["live", "staging"].includes(requestedTarget)) {
+		throw new Error("Tinybird cleanup target is invalid");
+	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
+	let target = await waitForOwnedMutationTarget({
+		state,
+		origin,
+		token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+	});
+	if (requestedTarget === "live" && target !== "live") {
+		throw new Error("Tinybird cleanup target regressed from live to staging");
+	}
+	validateSyntheticRunId(state.runId);
 	validateSyntheticRunId(state.loadRunId);
 	validateSyntheticRunId(state.erasureControlRunId);
 	const runIds = [state.runId, state.loadRunId, state.erasureControlRunId];
 	if (state.previewRunId) {
 		runIds.push(validateSyntheticRunId(state.previewRunId));
 	}
-	const rowsAffected = await deleteProductEventRows({
-		origin,
-		token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
-		condition: `synthetic_run_id IN (${runIds.map((runId) => `'${runId}'`).join(", ")})`,
-		deploymentParameters,
-	});
+	let rowsAffected;
+	for (
+		let transitionAttempt = 0;
+		transitionAttempt < 2;
+		transitionAttempt += 1
+	) {
+		const deploymentParameters = dataMutationDeploymentParameters({
+			target,
+			deploymentId: option("deployment-id"),
+			expectedDeploymentId: String(state.deploymentId),
+		});
+		const assertMutationOwnership = async () => {
+			if (
+				(await ownedMutationTarget({
+					state,
+					origin,
+					token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+				})) !== target
+			) {
+				throw new Error("The owned Tinybird cleanup target changed");
+			}
+		};
+		try {
+			rowsAffected = await deleteProductEventRows({
+				origin,
+				token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
+				condition: `synthetic_run_id IN (${runIds.map((runId) => `'${runId}'`).join(", ")})`,
+				deploymentParameters,
+				beforeAttempt: assertMutationOwnership,
+			});
+			break;
+		} catch (error) {
+			if (target === "staging") {
+				const resolvedTarget = await waitForOwnedMutationTarget({
+					state,
+					origin,
+					token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+				});
+				const nextTarget = reconcileCleanupTarget(target, resolvedTarget);
+				if (nextTarget !== target) {
+					target = nextTarget;
+					continue;
+				}
+			}
+			throw error;
+		}
+	}
+	if (rowsAffected === undefined) {
+		throw new Error("Tinybird cleanup changed target more than once");
+	}
+	writeOutput("target", target);
 	const artifact = readJson(artifactPath);
 	artifact.cleanup = {
 		...artifact.cleanup,
@@ -1446,6 +1787,7 @@ const verifyPromoted = async () => {
 	}
 	const previewHealthResult = await healthQuery({
 		state,
+		deploymentId: state.deploymentId,
 		appVersion: state.previewAppVersion,
 	});
 	const previewHealth = normalizeHealth(previewHealthResult.data);
@@ -1460,11 +1802,15 @@ const verifyPromoted = async () => {
 			"The promoted health snapshot did not preserve preview retry deliveries",
 		);
 	}
-	const seedDecisionResult = await ciAssertionsQuery({ state });
+	const seedDecisionResult = await ciAssertionsQuery({
+		state,
+		deploymentId: state.deploymentId,
+	});
 	const seedDecisionAssertions = normalizeCiAssertions(seedDecisionResult.data);
 	assertSyntheticDecisions(seedDecisionAssertions);
 	const previewDecisionResult = await ciAssertionsQuery({
 		state,
+		deploymentId: state.deploymentId,
 		syntheticRunId: state.previewRunId,
 	});
 	const previewDecisionAssertions = normalizeCiAssertions(
@@ -1507,7 +1853,7 @@ const verifyCleanup = async () => {
 			"Tinybird cleanup deployment does not match the seeded run",
 		);
 	}
-	const deploymentId = target === "staging" ? state.deploymentId : "";
+	const deploymentId = state.deploymentId;
 	const result = await healthQuery({ state, deploymentId });
 	const health = normalizeHealth(result.data);
 	if (Object.values(health).some((value) => value !== 0)) {
@@ -1698,6 +2044,8 @@ const handlers = {
 		}),
 	"verify-credentials": async () => tinybirdEnvironment(),
 	"verify-token-scopes": verifyTokenScopes,
+	"promote-deployment": promoteOwnedDeployment,
+	"discard-deployment": discardOwnedDeployment,
 	"select-deployment": async () => {
 		const createOutput = readJson(option("create-output"));
 		const output = String(createOutput.output ?? "");
