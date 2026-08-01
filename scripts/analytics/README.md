@@ -41,6 +41,8 @@ The deployed datafiles create two runtime tokens:
 
 Set the append token as `PRODUCT_ANALYTICS_TINYBIRD_TOKEN` in the application. Give agents the read token, never the deployment or append token.
 
+The staging workflow triggers reviewed Copy Pipes through Tinybird's direct Copy API. This preserves the resource-scoped `product_events_agent_read` token; `tb copy run` performs a workspace-level lookup that rejects otherwise sufficient per-pipe read scopes.
+
 Set `TINYBIRD_AGENT_TOKEN` and `TINYBIRD_URL` for the query command. Set a separate `TINYBIRD_READ_TOKEN` with workspace metadata access when running `pnpm analytics:check`; the append and deployment tokens are intentionally rejected for that task.
 
 ## Agent access

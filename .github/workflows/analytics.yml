@@ -180,18 +180,14 @@ jobs:
       - name: Rebuild staged decision and health copies
         id: staging-copies
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: |
-          deployment_flag=()
-          if [[ "${{ steps.tinybird.outputs.needs_promotion }}" == "true" ]]; then
-            deployment_flag=(--staging)
-          fi
-          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud "${deployment_flag[@]}" copy run "$pipe" --wait --mode replace
-          done
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js run-copies
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --phase staged
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
         id: verify
         env:
@@ -246,14 +242,14 @@ jobs:
       - name: Rebuild promoted decision and health copies
         id: promoted-copies
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: |
-          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
-          done
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js run-copies
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --phase promoted
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove promoted preview delivery and decision deduplication
         id: verify-promoted
         env:
@@ -276,14 +272,14 @@ jobs:
         id: erasure-copies
         if: steps.erase-identity.outcome == 'success'
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: |
-          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
-          done
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js run-copies
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --phase erasure
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove identity erasure and out-of-scope control preservation
         id: verify-erasure
         if: steps.erasure-copies.outcome == 'success'
@@ -308,14 +304,14 @@ jobs:
         id: cleanup-copies
         if: always() && steps.cleanup.outcome == 'success'
         env:
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: |
-          for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud copy run "$pipe" --wait --mode replace
-          done
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js run-copies
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --phase cleanup
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove synthetic cleanup no longer affects queries
         id: verify-cleanup
         if: always() && steps.cleanup-copies.outcome == 'success'

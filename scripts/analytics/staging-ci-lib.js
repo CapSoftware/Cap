@@ -15,6 +15,8 @@ export const COPY_PIPES = [
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SYNTHETIC_RUN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const COPY_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const DEPLOYMENT_ID_PATTERN = /^[0-9]+$/;
 
 export const assertExecutionScope = ({
 	eventName,
@@ -184,6 +186,77 @@ export const selectStagingDeployment = (
 		throw new Error("The live Tinybird deployment does not have an ID");
 	}
 	return { id: String(id), needsPromotion: false };
+};
+
+export const runTinybirdCopyJobs = async ({
+	origin,
+	token,
+	deploymentId,
+	request,
+	wait,
+	now = () => Date.now(),
+	timeoutMs = 120_000,
+	pipes = COPY_PIPES,
+}) => {
+	if (!DEPLOYMENT_ID_PATTERN.test(deploymentId)) {
+		throw new Error("Tinybird copy jobs require a numeric deployment ID");
+	}
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		throw new Error("Tinybird copy job timeout must be positive");
+	}
+	const results = [];
+	for (const pipe of pipes) {
+		if (!COPY_PIPES.includes(pipe)) {
+			throw new Error("Tinybird copy job requested an unapproved pipe");
+		}
+		const startedAt = now();
+		const copyUrl = new URL(
+			`/v0/pipes/${encodeURIComponent(pipe)}/copy`,
+			origin,
+		);
+		copyUrl.searchParams.set("_mode", "replace");
+		copyUrl.searchParams.set("__tb__deployment", deploymentId);
+		const created = await request(copyUrl, {
+			token,
+			method: "POST",
+			attempts: 3,
+		});
+		const jobId = String(created.data.id ?? created.data.job_id ?? "");
+		if (!COPY_JOB_ID_PATTERN.test(jobId)) {
+			throw new Error(`Tinybird did not return a valid copy job for ${pipe}`);
+		}
+		let polls = 0;
+		while (true) {
+			polls += 1;
+			const job = await request(
+				new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
+				{ token, attempts: 3 },
+			);
+			const status = String(job.data.status ?? "").toLowerCase();
+			if (status === "done") {
+				results.push({
+					pipe,
+					jobId,
+					polls,
+					durationMs: Math.max(0, now() - startedAt),
+				});
+				break;
+			}
+			if (["error", "cancelled"].includes(status)) {
+				throw new Error(`Tinybird copy job for ${pipe} ended in ${status}`);
+			}
+			if (!["waiting", "working", "cancelling"].includes(status)) {
+				throw new Error(
+					`Tinybird copy job for ${pipe} returned an invalid status`,
+				);
+			}
+			if (now() - startedAt >= timeoutMs) {
+				throw new Error(`Tinybird copy job for ${pipe} exceeded its timeout`);
+			}
+			await wait(1_000);
+		}
+	}
+	return results;
 };
 
 export const validateSyntheticRunId = (runId) => {
@@ -538,10 +611,9 @@ export const assertWorkflowSafety = (workflow) => {
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
-		`TINYBIRD_TOKEN: \${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}`,
+		"staging-ci.js run-copies",
 		"probe-preview",
 		"verify-promoted",
-		...COPY_PIPES,
 	]) {
 		if (!workflow.includes(required)) {
 			throw new Error(`Workflow is missing staging safeguard: ${required}`);

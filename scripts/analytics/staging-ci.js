@@ -17,6 +17,7 @@ import {
 	latencySummary,
 	normalizeCiAssertions,
 	normalizeHealth,
+	runTinybirdCopyJobs,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	validateSyntheticRunId,
@@ -633,6 +634,49 @@ const seed = async () => {
 	});
 };
 
+const runCopies = async () => {
+	const state = readJson(option("state"));
+	const artifactPath = option("artifact");
+	const artifact = readJson(artifactPath);
+	const phase = option("phase");
+	if (!["staged", "promoted", "erasure", "cleanup"].includes(phase)) {
+		throw new Error("Tinybird copy phase is invalid");
+	}
+	if (String(state.deploymentId) !== option("deployment-id")) {
+		throw new Error("Tinybird copy deployment does not match the seeded run");
+	}
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
+	try {
+		const jobs = await runTinybirdCopyJobs({
+			origin,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			deploymentId: state.deploymentId,
+			request,
+			wait: delay,
+		});
+		artifact.copyJobs = {
+			...artifact.copyJobs,
+			[phase]: { status: "passed", jobs },
+		};
+		writeJson(artifactPath, artifact);
+	} catch (error) {
+		artifact.copyJobs = {
+			...artifact.copyJobs,
+			[phase]: {
+				status: "failed",
+				error:
+					error instanceof Error
+						? error.message
+						: "Unknown Tinybird copy error",
+			},
+		};
+		writeJson(artifactPath, artifact);
+		throw error;
+	}
+};
+
 const verify = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
@@ -1197,6 +1241,7 @@ const handlers = {
 	},
 	"wait-vercel": waitForVercel,
 	seed,
+	"run-copies": runCopies,
 	verify,
 	"probe-preview": probePreview,
 	"verify-promoted": verifyPromoted,

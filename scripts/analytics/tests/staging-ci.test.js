@@ -20,6 +20,7 @@ import {
 	latencySummary,
 	normalizeCiAssertions,
 	normalizeHealth,
+	runTinybirdCopyJobs,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	tokenWorkspaceId,
@@ -208,6 +209,51 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 			minimum,
 			"expected",
 		),
+	);
+});
+
+test("copy jobs use the resource-scoped API and wait for exact completion", async () => {
+	const requests = [];
+	const responses = [
+		{ data: { id: "copy_job_123" } },
+		{ data: { status: "working" } },
+		{ data: { status: "done" } },
+	];
+	let now = 1_000;
+	const results = await runTinybirdCopyJobs({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		deploymentId: "6",
+		pipes: ["snapshot_product_events_canonical_v1"],
+		request: async (url, options) => {
+			requests.push({ url: String(url), options });
+			return responses.shift();
+		},
+		wait: async (milliseconds) => {
+			now += milliseconds;
+		},
+		now: () => now,
+	});
+	assert.deepEqual(results, [
+		{
+			pipe: "snapshot_product_events_canonical_v1",
+			jobId: "copy_job_123",
+			polls: 2,
+			durationMs: 1_000,
+		},
+	]);
+	assert.match(requests[0].url, /_mode=replace/);
+	assert.match(requests[0].url, /__tb__deployment=6/);
+	assert.equal(requests[0].options.method, "POST");
+	assert.match(requests[1].url, /\/v0\/jobs\/copy_job_123$/);
+	await assert.rejects(() =>
+		runTinybirdCopyJobs({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: token(),
+			deploymentId: "live",
+			request: async () => ({ data: {} }),
+			wait: async () => {},
+		}),
 	);
 });
 
@@ -417,17 +463,17 @@ test("the analytics workflow is statically restricted to staging", () => {
 		2,
 	);
 	assert.equal(
-		workflow.match(
-			/TINYBIRD_TOKEN: \$\{\{ secrets\.TINYBIRD_STAGING_READ_TOKEN \}\}/g,
-		)?.length,
+		workflow.match(/node scripts\/analytics\/staging-ci\.js run-copies/g)
+			?.length,
 		4,
 	);
 	assert.equal(
 		workflow.match(
-			/TB_TOKEN: \$\{\{ secrets\.TINYBIRD_STAGING_READ_TOKEN \}\}/g,
+			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		4,
+		5,
 	);
+	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
 		workflow.indexOf(
 			"Discard an unpromoted staging deployment before cleanup",
