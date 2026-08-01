@@ -8,6 +8,7 @@ import {
 	createSyntheticErasureControl,
 	createSyntheticEvents,
 	createSyntheticLoadEvents,
+	dataMutationDeploymentParameters,
 	decisionEndpointQueries,
 	evaluateBundleBudget,
 	evaluateLatencyBudget,
@@ -565,7 +566,35 @@ const seed = async () => {
 		endTime: new Date(startedAt.getTime() + 300_000).toISOString(),
 	};
 	writeJson(statePath, state, 0o600);
-	const deliver = async (row) => {
+	const artifact = {
+		schemaVersion: 1,
+		sha,
+		githubRun: {
+			id: environment("GITHUB_RUN_ID"),
+			attempt: environment("GITHUB_RUN_ATTEMPT"),
+		},
+		vercel: {
+			deploymentId: environment("VERCEL_DEPLOYMENT_ID"),
+			url: environment("VERCEL_PREVIEW_URL"),
+		},
+		tinybird: { deploymentId },
+		syntheticRunHash: hashIdentifier(runId),
+		startedAt: state.startedAt,
+		delivery: {
+			rowsAttempted: fixture.rows.length,
+			rowsAccepted: 0,
+		},
+		load: { rows: loadFixture.rows.length },
+		erasure: {
+			controlRunHash: hashIdentifier(erasureControl.runId),
+			identityHash: hashIdentifier(
+				`${fixture.userId}:${fixture.organizationId}:${fixture.anonymousId}`,
+			),
+		},
+		assertions: { seedAccepted: false },
+	};
+	writeJson(artifactPath, artifact);
+	const deliver = async (row, fixtureRow = false) => {
 		const result = await request(
 			tinybirdUrl(origin, "/v0/events", {
 				name: "product_events_v1",
@@ -580,14 +609,20 @@ const seed = async () => {
 				attempts: 4,
 			},
 		);
+		if (fixtureRow) {
+			artifact.delivery.rowsAccepted += 1;
+			artifact.delivery.retryAttempts =
+				(artifact.delivery.retryAttempts ?? 0) + result.attempt - 1;
+			writeJson(artifactPath, artifact);
+		}
 		return { attempts: result.attempt, latencyMs: result.latencyMs };
 	};
 	const concurrentDeliveries = await Promise.all(
-		fixture.rows.slice(0, 2).map(deliver),
+		fixture.rows.slice(0, 2).map((row) => deliver(row, true)),
 	);
 	const separateBatchDeliveries = [];
 	for (const row of fixture.rows.slice(2)) {
-		separateBatchDeliveries.push(await deliver(row));
+		separateBatchDeliveries.push(await deliver(row, true));
 	}
 	const deliveries = [...concurrentDeliveries, ...separateBatchDeliveries];
 	const loadStartedAt = performance.now();
@@ -609,50 +644,35 @@ const seed = async () => {
 		1,
 		Math.round(performance.now() - loadStartedAt),
 	);
+	artifact.load = {
+		rows: loadFixture.rows.length,
+		rowsAccepted: loadFixture.rows.length,
+		requestLatencyMs: loadDelivery.latencyMs,
+		retryAttempts: loadDelivery.attempt - 1,
+		rowsPerSecond: Math.round(
+			(loadFixture.rows.length * 1_000) / loadElapsedMs,
+		),
+	};
+	writeJson(artifactPath, artifact);
 	const erasureControlDelivery = await deliver(erasureControl.row);
-	writeJson(artifactPath, {
-		schemaVersion: 1,
-		sha,
-		githubRun: {
-			id: environment("GITHUB_RUN_ID"),
-			attempt: environment("GITHUB_RUN_ATTEMPT"),
-		},
-		vercel: {
-			deploymentId: environment("VERCEL_DEPLOYMENT_ID"),
-			url: environment("VERCEL_PREVIEW_URL"),
-		},
-		tinybird: { deploymentId },
-		syntheticRunHash: hashIdentifier(runId),
-		startedAt: state.startedAt,
-		delivery: {
-			rowsAttempted: fixture.rows.length,
-			rowsAccepted: deliveries.length,
-			requestLatency: latencySummary(
-				deliveries.map((delivery) => delivery.latencyMs),
-			),
-			retryAttempts: deliveries.reduce(
-				(total, delivery) => total + delivery.attempts - 1,
-				0,
-			),
-		},
-		load: {
-			rows: loadFixture.rows.length,
-			requestLatencyMs: loadDelivery.latencyMs,
-			retryAttempts: loadDelivery.attempt - 1,
-			rowsPerSecond: Math.round(
-				(loadFixture.rows.length * 1_000) / loadElapsedMs,
-			),
-		},
-		erasure: {
-			controlRunHash: hashIdentifier(erasureControl.runId),
-			identityHash: hashIdentifier(
-				`${fixture.userId}:${fixture.organizationId}:${fixture.anonymousId}`,
-			),
-			controlDeliveryLatencyMs: erasureControlDelivery.latencyMs,
-			controlRetryAttempts: erasureControlDelivery.attempts - 1,
-		},
-		assertions: { seedAccepted: true },
-	});
+	artifact.delivery = {
+		rowsAttempted: fixture.rows.length,
+		rowsAccepted: deliveries.length,
+		requestLatency: latencySummary(
+			deliveries.map((delivery) => delivery.latencyMs),
+		),
+		retryAttempts: deliveries.reduce(
+			(total, delivery) => total + delivery.attempts - 1,
+			0,
+		),
+	};
+	artifact.erasure = {
+		...artifact.erasure,
+		controlDeliveryLatencyMs: erasureControlDelivery.latencyMs,
+		controlRetryAttempts: erasureControlDelivery.attempts - 1,
+	};
+	artifact.assertions.seedAccepted = true;
+	writeJson(artifactPath, artifact);
 };
 
 const waitForCopyVisibility = async ({ label, read, assert }) => {
@@ -969,6 +989,12 @@ const verify = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
+	const target = option("target");
+	dataMutationDeploymentParameters({
+		target,
+		deploymentId: option("deployment-id"),
+		expectedDeploymentId: String(state.deploymentId),
+	});
 	const deadline = Date.now() + Number(process.env.INGESTION_SLO_MS ?? 180_000);
 	let result;
 	let health;
@@ -1004,6 +1030,37 @@ const verify = async () => {
 		throw new Error(
 			"Synthetic load health did not match the accepted event set",
 		);
+	}
+	if (target === "staging") {
+		const [liveHealthResult, liveLoadResult, liveControlResult, liveDecisions] =
+			await Promise.all([
+				healthQuery({ state }),
+				healthQuery({ state, appVersion: state.loadAppVersion }),
+				healthQuery({ state, appVersion: state.erasureControlAppVersion }),
+				ciAssertionsQuery({ state }),
+			]);
+		for (const liveHealth of [
+			normalizeHealth(liveHealthResult.data),
+			normalizeHealth(liveLoadResult.data),
+			normalizeHealth(liveControlResult.data),
+		]) {
+			assertZeroHealth(liveHealth);
+		}
+		if (
+			Object.values(normalizeCiAssertions(liveDecisions.data)).some(
+				(value) => value !== 0,
+			)
+		) {
+			throw new Error(
+				"Candidate-only synthetic events affected live decisions",
+			);
+		}
+		artifact.candidateIsolation = {
+			candidateDeploymentId: state.deploymentId,
+			candidateVisible: true,
+			liveVisible: false,
+		};
+		artifact.assertions.candidateIsolationPassed = true;
 	}
 	const samples = [result.latencyMs];
 	for (let index = 1; index < 20; index += 1) {
@@ -1159,10 +1216,17 @@ const safeSyntheticIdentifier = (value, name) => {
 	return value;
 };
 
-const deleteProductEventRows = async ({ origin, token, condition }) => {
+const deleteProductEventRows = async ({
+	origin,
+	token,
+	condition,
+	deploymentParameters = {},
+}) => {
 	const body = new URLSearchParams({ delete_condition: condition });
 	const deletion = await request(
-		tinybirdUrl(origin, "/v0/datasources/product_events_v1/delete"),
+		tinybirdUrl(origin, "/v0/datasources/product_events_v1/delete", {
+			...deploymentParameters,
+		}),
 		{
 			token,
 			method: "POST",
@@ -1179,7 +1243,9 @@ const deleteProductEventRows = async ({ origin, token, condition }) => {
 	const deadline = Date.now() + 180_000;
 	while (Date.now() < deadline) {
 		const job = await request(
-			tinybirdUrl(origin, `/v0/jobs/${encodeURIComponent(jobId)}`),
+			tinybirdUrl(origin, `/v0/jobs/${encodeURIComponent(jobId)}`, {
+				...deploymentParameters,
+			}),
 			{ token, attempts: 3 },
 		);
 		const status = String(
@@ -1317,6 +1383,11 @@ const verifySyntheticIdentityErasure = async () => {
 const cleanup = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
+	const deploymentParameters = dataMutationDeploymentParameters({
+		target: option("target"),
+		deploymentId: option("deployment-id"),
+		expectedDeploymentId: String(state.deploymentId),
+	});
 	validateSyntheticRunId(state.runId);
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
@@ -1331,6 +1402,7 @@ const cleanup = async () => {
 		origin,
 		token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
 		condition: `synthetic_run_id IN (${runIds.map((runId) => `'${runId}'`).join(", ")})`,
+		deploymentParameters,
 	});
 	const artifact = readJson(artifactPath);
 	artifact.cleanup = {

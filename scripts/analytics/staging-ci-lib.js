@@ -194,6 +194,23 @@ export const selectStagingDeployment = (
 	return { id: String(id), needsPromotion: false };
 };
 
+export const dataMutationDeploymentParameters = ({
+	target,
+	deploymentId,
+	expectedDeploymentId,
+}) => {
+	if (!["live", "staging"].includes(target)) {
+		throw new Error("Tinybird data mutation target is invalid");
+	}
+	if (
+		!DEPLOYMENT_ID_PATTERN.test(deploymentId) ||
+		deploymentId !== expectedDeploymentId
+	) {
+		throw new Error("Tinybird data mutation deployment is invalid");
+	}
+	return target === "staging" ? { __tb__deployment: deploymentId } : {};
+};
+
 export const submitTinybirdCopyJobs = async ({
 	origin,
 	token,

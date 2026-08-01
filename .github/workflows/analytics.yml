@@ -196,6 +196,8 @@ jobs:
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Promote the verified staging deployment
@@ -285,17 +287,24 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows
         id: cleanup
-        if: always() && steps.seed.outcome == 'success'
+        if: always() && steps.seed.outcome != 'skipped'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
-        run: >-
-          node scripts/analytics/staging-ci.js cleanup
-          --state "$RUNNER_TEMP/analytics-staging-state.json"
-          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+        run: |
+          if [[ ! -f "$RUNNER_TEMP/analytics-staging-state.json" ]]; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "required=true" >> "$GITHUB_OUTPUT"
+          node scripts/analytics/staging-ci.js cleanup \
+            --deployment-id "${{ steps.tinybird.outputs.id }}" \
+            --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}" \
+            --state "$RUNNER_TEMP/analytics-staging-state.json" \
+            --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Retract synthetic rows from every derived copy
         id: cleanup-copies
-        if: always() && steps.cleanup.outcome == 'success'
+        if: always() && steps.cleanup.outputs.required == 'true' && steps.cleanup.outcome == 'success'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
@@ -329,7 +338,7 @@ jobs:
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics
           run --rm tinybird-cloud-cli --cloud deployment discard --wait
       - name: Upload redacted staging evidence
-        if: always() && steps.seed.outcome == 'success'
+        if: always() && steps.cleanup.outputs.required == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: analytics-staging-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
