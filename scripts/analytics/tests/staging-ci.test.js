@@ -53,6 +53,7 @@ import {
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
 	waitForTinybirdCopyJob,
+	waitForTinybirdCopyPipesQuiescent,
 } from "../staging-ci-lib.js";
 
 const SHA = "1234567890abcdef1234567890abcdef12345678";
@@ -117,8 +118,70 @@ test("schedule state attestation distinguishes paused from active copies", () =>
 		copyScheduleMatchesAction({ schedule: { status: "paused" } }, "resume"),
 		false,
 	);
-	assert.equal(copyScheduleMatchesAction({}, "pause"), true);
+	assert.equal(copyScheduleMatchesAction({}, "pause"), false);
 	assert.equal(copyScheduleMatchesAction({}, "resume"), true);
+});
+
+test("Copy quiescence waits until every approved pipe has no active jobs", async () => {
+	let now = 1_000;
+	let round = 0;
+	const result = await waitForTinybirdCopyPipesQuiescent({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		pipes: ["copy_one", "copy_two"],
+		request: async (url) => {
+			const pipe = new URL(url).searchParams.get("pipe_name");
+			return {
+				data: {
+					jobs:
+						round === 0 && pipe === "copy_one"
+							? [{ id: "copy_job_active", status: "working" }]
+							: [],
+				},
+			};
+		},
+		assertMutationOwnership: async () => undefined,
+		now: () => now,
+		wait: async (milliseconds) => {
+			now += milliseconds;
+			round += 1;
+		},
+		timeoutMs: 10_000,
+		pollIntervalMs: 2_000,
+	});
+	assert.deepEqual(result, {
+		activeJobs: 0,
+		polls: 2,
+		quiescenceMs: 2_000,
+		visibleRequiredJobs: 0,
+	});
+});
+
+test("Copy quiescence rejects a malformed Jobs API payload", async () => {
+	await assert.rejects(
+		waitForTinybirdCopyPipesQuiescent({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: token(),
+			pipes: ["copy_one"],
+			request: async () => ({ data: {} }),
+			assertMutationOwnership: async () => undefined,
+		}),
+		/invalid Copy job list/,
+	);
+});
+
+test("Copy quiescence proves visibility of this run's completed jobs", async () => {
+	await assert.rejects(
+		waitForTinybirdCopyPipesQuiescent({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: token(),
+			pipes: ["copy_one"],
+			requiredVisibleJobIds: ["copy_job_expected"],
+			request: async () => ({ data: { jobs: [] } }),
+			assertMutationOwnership: async () => undefined,
+		}),
+		/could not attest the Copy jobs created by this run/,
+	);
 });
 
 test("execution scope accepts only PR 2003 or manual feature branch runs", () => {
@@ -633,8 +696,18 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 	const requests = [];
 	const resourceToken = token();
 	const responses = [
-		{ data: { id: "copy_job_canonical" } },
-		{ data: { id: "copy_job_traffic" } },
+		{
+			data: {
+				id: "t_canonical_pipe_node",
+				job: { id: "copy_job_canonical", job_id: "copy_job_canonical" },
+			},
+		},
+		{
+			data: {
+				id: "t_traffic_pipe_node",
+				job: { job_id: "copy_job_traffic" },
+			},
+		},
 	];
 	let now = 1_000;
 	let ownershipChecks = 0;
@@ -687,7 +760,12 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		request: async (url, options) => {
 			await options.beforeAttempt();
 			liveRequests.push({ url: String(url), options });
-			return { data: { id: "copy_job_live" } };
+			return {
+				data: {
+					id: "t_live_pipe_node",
+					job: { id: "copy_job_live" },
+				},
+			};
 		},
 		assertMutationOwnership: async () => undefined,
 	});
@@ -698,6 +776,16 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 			token: resourceToken,
 			deploymentId: "live",
 			request: async () => ({ data: {} }),
+		}),
+	);
+	await assert.rejects(() =>
+		submitTinybirdCopyJobs({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: resourceToken,
+			deploymentId: "6",
+			pipes: ["snapshot_product_events_canonical_v1"],
+			request: async () => ({ data: { id: "t_pipe_node_is_not_a_job" } }),
+			assertMutationOwnership: async () => undefined,
 		}),
 	);
 	await assert.rejects(() =>

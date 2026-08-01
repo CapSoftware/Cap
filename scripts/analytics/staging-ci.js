@@ -47,6 +47,7 @@ import {
 	syntheticMonetizationFilterQueries,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
+	waitForTinybirdCopyPipesQuiescent,
 } from "./staging-ci-lib.js";
 
 const args = process.argv.slice(2);
@@ -2861,6 +2862,7 @@ const setCopySchedules = async (parameters = {}) => {
 	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 	]);
 	if (
@@ -2874,6 +2876,19 @@ const setCopySchedules = async (parameters = {}) => {
 			"Copy schedules can change only on the owned live deployment",
 		);
 	}
+	const assertLiveOwnership = async () => {
+		if (
+			(await ownedMutationTarget({
+				state,
+				origin,
+				token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+			})) !== "live"
+		) {
+			throw new Error(
+				"The owned Tinybird deployment changed during Copy control",
+			);
+		}
+	};
 	await applyCopyScheduleAction({
 		pipes: COPY_PIPES,
 		action,
@@ -2894,6 +2909,23 @@ const setCopySchedules = async (parameters = {}) => {
 			} catch (error) {
 				mutationError = error;
 			}
+			if (scheduleAction === "pause") {
+				if (!mutationError) return;
+				if (
+					mutationError instanceof Error &&
+					[400, 404].includes(mutationError.status)
+				) {
+					await waitForTinybirdCopyPipesQuiescent({
+						origin,
+						token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+						pipes: [pipe],
+						request,
+						assertMutationOwnership: assertLiveOwnership,
+					});
+					return;
+				}
+				throw mutationError;
+			}
 			const pipeState = await request(
 				tinybirdUrl(origin, `/v0/pipes/${encodeURIComponent(pipe)}`),
 				{
@@ -2901,19 +2933,40 @@ const setCopySchedules = async (parameters = {}) => {
 					attempts: 4,
 				},
 			);
-			if (copyScheduleMatchesAction(pipeState, scheduleAction)) return;
+			if (
+				copyScheduleMatchesAction(pipeState, scheduleAction) &&
+				(!mutationError ||
+					(mutationError instanceof Error &&
+						[400, 404].includes(mutationError.status)))
+			) {
+				return;
+			}
 			if (mutationError) throw mutationError;
 			throw new Error(
 				`Tinybird did not attest the ${scheduleAction} state for ${pipe}`,
 			);
 		},
 	});
+	const quiescence =
+		action === "pause"
+			? await waitForTinybirdCopyPipesQuiescent({
+					origin,
+					token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+					request,
+					requiredVisibleJobIds: Object.values(artifact.copyJobs ?? {})
+						.flatMap((phase) => (Array.isArray(phase?.jobs) ? phase.jobs : []))
+						.map((job) => job?.jobId)
+						.filter((jobId) => typeof jobId === "string"),
+					assertMutationOwnership: assertLiveOwnership,
+				})
+			: undefined;
 	artifact.copySchedule = {
 		...(artifact.copySchedule ?? {}),
 		[action]: {
 			status: "passed",
 			deploymentId: String(state.deploymentId),
 			pipeCount: COPY_PIPES.length,
+			...(quiescence ? { quiescence } : {}),
 		},
 	};
 	writeJson(artifactPath, artifact);
@@ -4365,6 +4418,15 @@ const verifyTokenScopes = async () => {
 		}),
 		{ token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN },
 	);
+	const copyJobsProbe = await tokenScopeProbe(
+		tinybirdUrl(origin, "/v0/jobs", { kind: "copy" }),
+		tokens.TINYBIRD_STAGING_COPY_TOKEN,
+	);
+	if (!copyJobsProbe.ok) {
+		throw new Error(
+			`The copy-runner token cannot attest Copy job quiescence: HTTP ${copyJobsProbe.status}`,
+		);
+	}
 	await assertScopeDenied(
 		"The aggregate read token raw identity query",
 		tokenScopeProbe(
@@ -4472,6 +4534,7 @@ const verifyTokenScopes = async () => {
 		ingestTokenAggregateReadDenied: true,
 		cleanupTokenAggregateReadDenied: true,
 		copyTokenAggregateReadDenied: true,
+		copyTokenJobsReadPassed: true,
 		erasureLookupRawReadPassed: true,
 		erasureLookupAppendDenied: true,
 		erasureLookupCopyMutationDenied: true,
@@ -4507,6 +4570,8 @@ const markRecoveryReadyToFinalize = async () => {
 		state.recoveryPhase !== "prepromote" ||
 		artifact.assertions?.cleanupPassed !== true ||
 		artifact.rollbackDrill?.passed !== true ||
+		artifact.copySchedule?.pause?.status !== "passed" ||
+		artifact.copySchedule?.pause?.quiescence?.activeJobs !== 0 ||
 		artifact.copySchedule?.resume?.status !== "passed"
 	) {
 		throw new Error(

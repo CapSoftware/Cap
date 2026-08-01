@@ -107,11 +107,75 @@ export const applyCopyScheduleAction = async ({
 
 export const copyScheduleMatchesAction = (value, action) => {
 	const payload = value?.data ?? value;
-	if (!payload?.schedule) return true;
+	if (!payload?.schedule) return action === "resume";
 	const status = String(payload?.schedule?.status ?? "").toLowerCase();
 	return action === "pause"
 		? status === "paused"
 		: status === "scheduled" || status === "active";
+};
+
+export const waitForTinybirdCopyPipesQuiescent = async ({
+	origin,
+	token,
+	pipes = COPY_PIPES,
+	request,
+	assertMutationOwnership,
+	requiredVisibleJobIds = [],
+	now = () => Date.now(),
+	wait = (milliseconds) =>
+		new Promise((resolve) => setTimeout(resolve, milliseconds)),
+	timeoutMs = 120_000,
+	pollIntervalMs = 2_000,
+}) => {
+	if (typeof assertMutationOwnership !== "function") {
+		throw new Error("Tinybird Copy quiescence requires an ownership check");
+	}
+	const startedAt = now();
+	const deadline = startedAt + timeoutMs;
+	let polls = 0;
+	const visibleJobIds = new Set();
+	while (now() < deadline) {
+		await assertMutationOwnership();
+		const activeJobs = [];
+		for (const pipe of pipes) {
+			const url = new URL("/v0/jobs", origin);
+			url.searchParams.set("kind", "copy");
+			url.searchParams.set("pipe_name", pipe);
+			const response = await request(url, { token, attempts: 3 });
+			if (!Array.isArray(response.data?.jobs)) {
+				throw new Error("Tinybird Jobs API returned an invalid Copy job list");
+			}
+			const jobs = response.data.jobs;
+			for (const job of jobs) {
+				if (typeof job?.id === "string") visibleJobIds.add(job.id);
+				const status = String(job?.status ?? "").toLowerCase();
+				if (
+					["waiting", "working", "cancelling", "canceling"].includes(status)
+				) {
+					activeJobs.push({ id: String(job?.id ?? ""), pipe, status });
+				}
+			}
+		}
+		polls += 1;
+		if (activeJobs.length === 0) {
+			const missingJobIds = requiredVisibleJobIds.filter(
+				(jobId) => !visibleJobIds.has(jobId),
+			);
+			if (missingJobIds.length > 0) {
+				throw new Error(
+					"Tinybird Jobs API could not attest the Copy jobs created by this run",
+				);
+			}
+			return {
+				activeJobs: 0,
+				polls,
+				quiescenceMs: Math.max(0, now() - startedAt),
+				visibleRequiredJobs: requiredVisibleJobIds.length,
+			};
+		}
+		await wait(pollIntervalMs);
+	}
+	throw new Error("Timed out waiting for Tinybird Copy jobs to quiesce");
 };
 
 export const assertExecutionScope = ({
@@ -692,7 +756,12 @@ export const submitTinybirdCopyJobs = async ({
 				cause: error,
 			});
 		}
-		const jobId = String(created.data.id ?? created.data.job_id ?? "");
+		const jobId = String(
+			created.data?.job?.id ??
+				created.data?.job?.job_id ??
+				created.data?.job_id ??
+				"",
+		);
 		if (!COPY_JOB_ID_PATTERN.test(jobId)) {
 			throw new Error(`Tinybird did not return a valid copy job for ${pipe}`);
 		}

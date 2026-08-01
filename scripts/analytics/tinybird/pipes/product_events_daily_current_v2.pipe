@@ -1,36 +1,39 @@
 DESCRIPTION >
 	Expose the active bounded event-decision generation and latest settled UTC partitions.
 
+NODE product_events_daily_latest_hot_generation_v2_node
+SQL >
+	SELECT
+		argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
+		argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
+	FROM product_analytics_generations_v2
+	WHERE generation_kind = 'hot'
+
+NODE product_events_daily_latest_cold_generations_v2_node
+SQL >
+	SELECT
+		settled_date AS date,
+		argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
+		argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
+	FROM product_analytics_generations_v2
+	WHERE generation_kind = 'cold'
+	GROUP BY settled_date
+
 NODE product_events_daily_current_v2_node
 SQL >
-	WITH hot_generation AS (
-		SELECT
-			argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
-			argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
-		FROM product_analytics_generations_v2
-		WHERE generation_kind = 'hot'
-	), cold_generations AS (
-		SELECT
-			settled_date AS date,
-			argMax(generation_id, tuple(source_cutoff, published_at, generation_id)) AS generation_id,
-			argMax(source_cutoff, tuple(source_cutoff, published_at, generation_id)) AS source_cutoff
-		FROM product_analytics_generations_v2
-		WHERE generation_kind = 'cold'
-		GROUP BY settled_date
-	)
 	SELECT hot.*
 	FROM product_events_daily_hot_v2 AS hot
-	INNER JOIN hot_generation AS generation
+	INNER JOIN product_events_daily_latest_hot_generation_v2_node AS generation
 		ON hot.generation_id = generation.generation_id
 		AND hot.source_cutoff = generation.source_cutoff
 	WHERE hot.is_marker = 0
 	UNION ALL
 	SELECT cold.*
 	FROM product_events_daily_cold_v2 AS cold
-	INNER JOIN cold_generations AS generation
+	INNER JOIN product_events_daily_latest_cold_generations_v2_node AS generation
 		ON cold.date = generation.date
 		AND cold.generation_id = generation.generation_id
 		AND cold.source_cutoff = generation.source_cutoff
-	CROSS JOIN hot_generation AS hot_generation
+	CROSS JOIN product_events_daily_latest_hot_generation_v2_node AS hot_generation
 	WHERE cold.is_marker = 0
 		AND cold.date < toDate(hot_generation.source_cutoff, 'UTC') - INTERVAL 8 DAY

@@ -518,6 +518,7 @@ jobs:
         if: always() && steps.seed.outcome != 'skipped'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
@@ -527,7 +528,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows
         id: cleanup
-        if: always() && steps.seed.outcome != 'skipped'
+        if: always() && steps.seed.outcome != 'skipped' && steps.pause-copies.outcome == 'success'
         env:
           CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
@@ -577,6 +578,7 @@ jobs:
         if: always() && steps.pause-copies.outcome != 'skipped'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
@@ -586,7 +588,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Persist finalization eligibility
         id: recovery-ready
-        if: steps.verify-cleanup.outcome == 'success' && steps.rollback-drill.outcome == 'success' && steps.resume-copies.outcome == 'success'
+        if: steps.pause-copies.outcome == 'success' && steps.verify-cleanup.outcome == 'success' && steps.rollback-drill.outcome == 'success' && steps.resume-copies.outcome == 'success'
         run: >-
           node scripts/analytics/staging-ci.js mark-recovery-ready
           --state "$RUNNER_TEMP/analytics-staging-state.json"
