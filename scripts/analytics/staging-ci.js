@@ -1451,8 +1451,10 @@ const previewRequest = async (url, init = {}) => {
 	const shareUrl = new URL(url);
 	shareUrl.searchParams.set("_vercel_share", shareSecret);
 	const handshake = await fetch(shareUrl, {
-		...requestInit,
+		headers: { Accept: "text/html" },
+		method: "GET",
 		redirect: "manual",
+		signal: requestInit.signal,
 	});
 	if (![302, 303, 307, 308].includes(handshake.status)) return handshake;
 	const location = handshake.headers.get("location");

@@ -2256,6 +2256,10 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		runner,
 		/shareUrl\.searchParams\.set\("_vercel_share", shareSecret\)/,
 	);
+	assert.match(
+		runner,
+		/const handshake = await fetch\(shareUrl, \{[\s\S]*method: "GET",[\s\S]*redirect: "manual"/,
+	);
 	assert.match(runner, /value\.startsWith\("_vercel_jwt="\)/);
 	assert.match(
 		runner,
