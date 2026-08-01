@@ -117,7 +117,7 @@ test("Tinybird credentials must all decode to the hard-coded staging workspace",
 
 test("deployment selection rejects stale or ambiguous staging deployments", () => {
 	const minimum = "2026-07-31T10:00:00.000Z";
-	assert.equal(
+	assert.deepEqual(
 		selectStagingDeployment(
 			{
 				deployments: [
@@ -134,10 +134,11 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 				],
 			},
 			minimum,
+			"current",
 		),
-		"current",
+		{ id: "current", needsPromotion: true },
 	);
-	assert.equal(
+	assert.deepEqual(
 		selectStagingDeployment(
 			[
 				{
@@ -147,8 +148,9 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 				},
 			],
 			minimum,
+			"42",
 		),
-		"42",
+		{ id: "42", needsPromotion: true },
 	);
 	assert.throws(() =>
 		selectStagingDeployment(
@@ -165,6 +167,32 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 				},
 			],
 			minimum,
+		),
+	);
+	assert.deepEqual(
+		selectStagingDeployment(
+			[
+				{
+					id: "live",
+					status: "Live",
+					created_at: "2026-07-31T09:00:00.000Z",
+				},
+			],
+			minimum,
+		),
+		{ id: "live", needsPromotion: false },
+	);
+	assert.throws(() =>
+		selectStagingDeployment(
+			[
+				{
+					id: "foreign",
+					status: "Staging",
+					created_at: "2026-07-31T10:00:01.000Z",
+				},
+			],
+			minimum,
+			"expected",
 		),
 	);
 });

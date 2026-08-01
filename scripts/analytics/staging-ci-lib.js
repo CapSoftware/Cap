@@ -105,7 +105,23 @@ export const validateTinybirdCredentials = ({ url, tokens }) => {
 	return parsedUrl.origin;
 };
 
-export const selectStagingDeployment = (value, minimumCreatedAt) => {
+const deploymentId = (deployment) =>
+	deployment.id ?? deployment.ID ?? deployment.deployment_id;
+
+const deploymentState = (deployment) =>
+	String(
+		deployment.status ??
+			deployment.Status ??
+			deployment.state ??
+			deployment.environment ??
+			"",
+	).toLowerCase();
+
+export const selectStagingDeployment = (
+	value,
+	minimumCreatedAt,
+	createdDeploymentId,
+) => {
 	const candidates = Array.isArray(value)
 		? value
 		: (value.deployments ?? value.data ?? value.results ?? []);
@@ -113,15 +129,8 @@ export const selectStagingDeployment = (value, minimumCreatedAt) => {
 		throw new Error("Tinybird returned an unsupported deployment list");
 	}
 	const minimumTime = Date.parse(minimumCreatedAt);
-	const deployments = candidates
+	const stagingDeployments = candidates
 		.filter((candidate) => {
-			const state = String(
-				candidate.status ??
-					candidate.Status ??
-					candidate.state ??
-					candidate.environment ??
-					"",
-			).toLowerCase();
 			const createdAt = Date.parse(
 				candidate.created_at ??
 					candidate.createdAt ??
@@ -130,7 +139,7 @@ export const selectStagingDeployment = (value, minimumCreatedAt) => {
 					"",
 			);
 			return (
-				state.includes("staging") &&
+				deploymentState(candidate).includes("staging") &&
 				Number.isFinite(createdAt) &&
 				createdAt >= minimumTime
 			);
@@ -142,17 +151,35 @@ export const selectStagingDeployment = (value, minimumCreatedAt) => {
 				) -
 				Date.parse(a.created_at ?? a.createdAt ?? a["Created at"] ?? a.created),
 		);
-	if (deployments.length !== 1) {
+	if (createdDeploymentId) {
+		const matching = stagingDeployments.filter(
+			(deployment) => String(deploymentId(deployment)) === createdDeploymentId,
+		);
+		if (matching.length !== 1) {
+			throw new Error(
+				"The created Tinybird deployment is missing, stale, or ambiguous",
+			);
+		}
+		return { id: createdDeploymentId, needsPromotion: true };
+	}
+	if (stagingDeployments.length > 0) {
 		throw new Error(
-			"Expected exactly one staging deployment created by this run",
+			"Tinybird reported a staging deployment that was not created by this run",
 		);
 	}
-	const id =
-		deployments[0].id ?? deployments[0].ID ?? deployments[0].deployment_id;
-	if (typeof id !== "string" && typeof id !== "number") {
-		throw new Error("The staging deployment does not have an ID");
+	const liveDeployments = candidates.filter((candidate) =>
+		deploymentState(candidate).includes("live"),
+	);
+	if (liveDeployments.length !== 1) {
+		throw new Error(
+			"Expected exactly one live Tinybird deployment for a no-op",
+		);
 	}
-	return String(id);
+	const id = deploymentId(liveDeployments[0]);
+	if (typeof id !== "string" && typeof id !== "number") {
+		throw new Error("The live Tinybird deployment does not have an ID");
+	}
+	return { id: String(id), needsPromotion: false };
 };
 
 export const validateSyntheticRunId = (runId) => {

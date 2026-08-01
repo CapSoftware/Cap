@@ -1178,11 +1178,17 @@ const handlers = {
 	"verify-credentials": async () => tinybirdEnvironment(),
 	"verify-token-scopes": verifyTokenScopes,
 	"select-deployment": async () => {
-		const id = selectStagingDeployment(
+		const createOutput = readJson(option("create-output"));
+		const createdDeploymentId = String(createOutput.output ?? "").match(
+			/Deployment URL:\s+\S+\/deployments\/(\d+)/,
+		)?.[1];
+		const selection = selectStagingDeployment(
 			readJson(option("input")),
 			option("minimum-created-at"),
+			createdDeploymentId,
 		);
-		writeOutput("id", id);
+		writeOutput("id", selection.id);
+		writeOutput("needs_promotion", String(selection.needsPromotion));
 	},
 	"wait-vercel": waitForVercel,
 	seed,

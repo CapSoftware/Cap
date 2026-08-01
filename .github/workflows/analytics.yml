@@ -139,9 +139,10 @@ jobs:
           TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
-        run: >-
-          docker compose --file packages/local-docker/docker-compose.yml --profile analytics
-          run --rm tinybird-cloud-cli --cloud deployment create --allow-destructive-operations --wait
+        run: |
+          set -o pipefail
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment create --allow-destructive-operations --wait | tee "$RUNNER_TEMP/tinybird-create-output.txt"
+          node -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[2], JSON.stringify({ output: fs.readFileSync(process.argv[1], "utf8") }));' "$RUNNER_TEMP/tinybird-create-output.txt" "$RUNNER_TEMP/tinybird-create-output.json"
       - name: Resolve only the deployment created by this run
         id: tinybird
         env:
@@ -151,7 +152,7 @@ jobs:
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --output json deployment ls > "$RUNNER_TEMP/tinybird-deployments.json"
-          node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
+          node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --create-output "$RUNNER_TEMP/tinybird-create-output.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
       - name: Refuse source mutations after exact-SHA checkout
         run: |
           git diff --exit-code
@@ -184,8 +185,12 @@ jobs:
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
+          deployment_flag=()
+          if [[ "${{ steps.tinybird.outputs.needs_promotion }}" == "true" ]]; then
+            deployment_flag=(--staging)
+          fi
           for pipe in snapshot_product_events_canonical_v1 snapshot_product_events_daily_exact snapshot_product_traffic_daily_exact snapshot_product_traffic_pages_daily_exact snapshot_product_activation_daily_exact snapshot_product_creator_retention_exact snapshot_product_events_health_hourly; do
-            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --staging copy run "$pipe" --wait --mode replace
+            docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud "${deployment_flag[@]}" copy run "$pipe" --wait --mode replace
           done
       - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
         id: verify
@@ -198,6 +203,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Promote the verified staging deployment
         id: promote
+        if: steps.tinybird.outputs.needs_promotion == 'true'
         env:
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
@@ -207,9 +213,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
-          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote
+          docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote --wait
       - name: Discard an unpromoted staging deployment before cleanup
-        if: always() && steps.create-deployment.outcome != 'skipped' && steps.promote.outcome != 'success'
+        if: always() && steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success'
         env:
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
