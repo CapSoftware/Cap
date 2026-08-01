@@ -210,6 +210,21 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: node scripts/analytics/staging-ci.js attest-preview
+      - name: Retire only a superseded Tinybird staging predecessor
+        id: retired-deployment
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js discard-retired-deployment
+          --artifact "$RUNNER_TEMP/analytics-retired-deployment.json"
+      - name: Upload retired Tinybird deployment evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-retired-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/analytics-retired-deployment.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Persist the pre-create Tinybird recovery boundary
         env:
           VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}

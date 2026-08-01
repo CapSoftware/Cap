@@ -50,6 +50,7 @@ import {
 	STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS,
 	STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS,
 	STAGING_WORKSPACE_ID,
+	selectRetiredStagingDeployment,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
 	syntheticIdentityFilterQueries,
@@ -619,6 +620,66 @@ test("deployment recovery resolves only one candidate created after its boundary
 			boundary,
 		),
 	);
+});
+
+test("retired deployment cleanup selects only an older staging predecessor", () => {
+	assert.deepEqual(
+		selectRetiredStagingDeployment({
+			deployments: [
+				{
+					id: "13",
+					status: "Live",
+					created_at: "2026-08-01T17:00:00.000Z",
+				},
+				{
+					id: "10",
+					status: "Staging",
+					created_at: "2026-08-01T07:00:00.000Z",
+				},
+			],
+		}),
+		{ liveDeploymentId: "13", retiredDeploymentId: "10" },
+	);
+	assert.deepEqual(
+		selectRetiredStagingDeployment({
+			deployments: [
+				{
+					id: "13",
+					status: "Live",
+					created_at: "2026-08-01T17:00:00.000Z",
+				},
+			],
+		}),
+		{ liveDeploymentId: "13", retiredDeploymentId: undefined },
+	);
+	for (const deployments of [
+		[
+			{
+				id: "13",
+				status: "Live",
+				created_at: "2026-08-01T17:00:00.000Z",
+			},
+			{
+				id: "14",
+				status: "Staging",
+				created_at: "2026-08-01T18:00:00.000Z",
+			},
+		],
+		[
+			{
+				id: "13",
+				status: "Live",
+				created_at: "2026-08-01T17:00:00.000Z",
+			},
+			{
+				id: "14",
+				status: "creating_schema",
+				created_at: "2026-08-01T18:00:00.000Z",
+			},
+		],
+	]) {
+		assert.throws(() => selectRetiredStagingDeployment({ deployments }));
+	}
 });
 
 test("data mutations validate the exact deployment before using the staging selector", () => {
@@ -2366,8 +2427,16 @@ test("the analytics workflow is statically restricted to staging", () => {
 		/Upload redacted staging evidence\n {8}if: always\(\) && steps\.cleanup\.outputs\.required == 'true'/,
 	);
 	assert.ok(
+		workflow.indexOf("Retire only a superseded Tinybird staging predecessor") <
+			workflow.indexOf("Persist the pre-create Tinybird recovery boundary"),
+	);
+	assert.ok(
 		workflow.indexOf("Upload the immutable pre-create recovery boundary") <
 			workflow.indexOf("Create isolated Tinybird staging deployment"),
+	);
+	assert.match(
+		workflow,
+		/staging-ci\.js discard-retired-deployment[\s\S]*analytics-retired-deployment\.json/,
 	);
 	assert.ok(
 		workflow.indexOf("Upload the immutable pre-ingestion recovery checkpoint") <

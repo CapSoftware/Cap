@@ -466,6 +466,59 @@ export const createDeploymentBoundary = (value) => {
 	};
 };
 
+export const selectRetiredStagingDeployment = (value) => {
+	const deployments = deploymentsFromResponse(value);
+	const liveDeployments = deployments.filter(isLiveDeployment);
+	if (liveDeployments.length !== 1) {
+		throw new Error(
+			"Tinybird retired-deployment cleanup requires exactly one live deployment",
+		);
+	}
+	const pendingDeployments = deployments.filter(isPendingDeployment);
+	if (pendingDeployments.length > 0) {
+		throw new Error(
+			"Tinybird has an active deployment that cannot be retired automatically",
+		);
+	}
+	const stagingDeployments = deployments.filter(isStagingDeployment);
+	const liveDeployment = liveDeployments[0];
+	const liveDeploymentId = String(deploymentId(liveDeployment));
+	if (!DEPLOYMENT_ID_PATTERN.test(liveDeploymentId)) {
+		throw new Error("Tinybird returned an invalid live deployment ID");
+	}
+	if (stagingDeployments.length === 0) {
+		return { liveDeploymentId, retiredDeploymentId: undefined };
+	}
+	if (stagingDeployments.length !== 1) {
+		throw new Error(
+			"Tinybird has multiple staging deployments that cannot be retired automatically",
+		);
+	}
+	const retiredDeployment = stagingDeployments[0];
+	const retiredDeploymentId = String(deploymentId(retiredDeployment));
+	const createdAt = (deployment) =>
+		Date.parse(
+			deployment.created_at ??
+				deployment.createdAt ??
+				deployment["Created at"] ??
+				deployment.created ??
+				"",
+		);
+	const liveCreatedAt = createdAt(liveDeployment);
+	const retiredCreatedAt = createdAt(retiredDeployment);
+	if (
+		!DEPLOYMENT_ID_PATTERN.test(retiredDeploymentId) ||
+		!Number.isFinite(liveCreatedAt) ||
+		!Number.isFinite(retiredCreatedAt) ||
+		retiredCreatedAt >= liveCreatedAt
+	) {
+		throw new Error(
+			"Tinybird staging deployment is not a proven retired predecessor",
+		);
+	}
+	return { liveDeploymentId, retiredDeploymentId };
+};
+
 export const resolveDeploymentCreatedAfterBoundary = (
 	value,
 	boundary,

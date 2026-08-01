@@ -43,6 +43,7 @@ import {
 	resolveOwnedDiscardTarget,
 	resolveOwnedMutationTarget,
 	STAGING_WORKSPACE_ID,
+	selectRetiredStagingDeployment,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
 	syntheticIdentityFilterQueries,
@@ -594,6 +595,41 @@ const deleteRetiredDeployment = async ({
 	throw new Error("Timed out deleting the previous Tinybird deployment", {
 		cause: lastDeletionError,
 	});
+};
+
+const discardRetiredStagingDeployment = async () => {
+	const artifactPath = option("artifact");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	const before = await deploymentList({ origin, token });
+	const pair = selectRetiredStagingDeployment(before.data);
+	if (pair.retiredDeploymentId) {
+		await deleteRetiredDeployment({
+			origin,
+			token,
+			liveDeploymentId: pair.liveDeploymentId,
+			retiredDeploymentId: pair.retiredDeploymentId,
+		});
+	}
+	const after = selectRetiredStagingDeployment(
+		(await deploymentList({ origin, token })).data,
+	);
+	if (
+		after.liveDeploymentId !== pair.liveDeploymentId ||
+		after.retiredDeploymentId !== undefined
+	) {
+		throw new Error("Tinybird retired deployment cleanup did not settle");
+	}
+	writeJson(artifactPath, {
+		liveDeploymentId: pair.liveDeploymentId,
+		retiredDeploymentId: pair.retiredDeploymentId ?? null,
+		retired: pair.retiredDeploymentId !== undefined,
+		verifiedAt: new Date().toISOString(),
+		workspaceId: STAGING_WORKSPACE_ID,
+	});
+	writeOutput("retired", pair.retiredDeploymentId ? "true" : "false");
 };
 
 const switchLiveDeployment = async ({
@@ -5141,6 +5177,7 @@ const handlers = {
 	"prepare-seed": prepareSeed,
 	"promote-deployment": promoteOwnedDeployment,
 	"drill-rollback": drillOwnedRollback,
+	"discard-retired-deployment": discardRetiredStagingDeployment,
 	"finalize-promotion": finalizeOwnedPromotion,
 	"rollback-promotion": rollbackOwnedPromotion,
 	"discard-deployment": discardOwnedDeployment,
