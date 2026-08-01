@@ -92,6 +92,7 @@ const RequestHeaders = Schema.Struct({
 	"x-vercel-ip-country-region": Schema.optional(Schema.String),
 	"x-vercel-ip-city": Schema.optional(Schema.String),
 	"x-vercel-forwarded-for": Schema.optional(Schema.String),
+	"x-forwarded-for": Schema.optional(Schema.String),
 	"user-agent": Schema.optional(Schema.String),
 	"x-cap-analytics-test-run": Schema.optional(Schema.String),
 });
@@ -132,12 +133,18 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							return yield* Effect.fail(new HttpApiError.BadRequest());
 						}
 
+						const isVercel = process.env.VERCEL === "1";
+						const trustedNetworkProxy =
+							isVercel || process.env.CAP_ANALYTICS_TRUST_PROXY === "1";
+						if (!trustedNetworkProxy) {
+							return yield* Effect.fail(new HttpApiError.ServiceUnavailable());
+						}
 						const rateLimitKey = getProductAnalyticsRateLimitKey({
-							trustedVercelProxy: process.env.VERCEL === "1",
-							xVercelForwardedFor: headers["x-vercel-forwarded-for"],
-							fallbackIdentity:
-								(browserClaims ? browserClaims.anonymousId : undefined) ??
-								headers.authorization,
+							trustedNetworkProxy,
+							forwardedFor:
+								headers[
+									isVercel ? "x-vercel-forwarded-for" : "x-forwarded-for"
+								],
 						});
 						if (!rateLimitKey) {
 							return yield* Effect.fail(new HttpApiError.BadRequest());

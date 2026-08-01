@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import {
 	isServerOnlyEventName,
 	normalizeProductEventInput,
@@ -166,19 +167,13 @@ export function normalizeProductEventBatch(
 }
 
 export function getProductAnalyticsRateLimitKey(headers: {
-	trustedVercelProxy: boolean;
-	xVercelForwardedFor?: string;
-	fallbackIdentity?: string;
+	trustedNetworkProxy: boolean;
+	forwardedFor?: string;
 }) {
-	if (!headers.trustedVercelProxy) {
-		const identity = headers.fallbackIdentity?.trim();
-		if (!identity) return null;
-		return `self-hosted:${createHash("sha256").update(identity).digest("hex")}`;
-	}
-	const identity = headers.xVercelForwardedFor?.split(",")[0]?.trim();
-	return identity
-		? identity.slice(0, PRODUCT_ANALYTICS_LIMITS.identifierLength)
-		: null;
+	if (!headers.trustedNetworkProxy) return null;
+	const identity = headers.forwardedFor?.split(",")[0]?.trim();
+	if (!identity || isIP(identity) === 0) return null;
+	return `network:${createHash("sha256").update(identity).digest("hex")}`;
 }
 
 export function normalizeGeoHeader(value?: string, decode = false) {
@@ -244,7 +239,9 @@ export function classifyAnalyticsTraffic({
 			.map((value) => value.trim().toLowerCase())
 			.filter((value) => /^[0-9a-f]{64}$/.test(value)) ?? [],
 	);
-	const requestHash = createHash("sha256").update(rateLimitKey).digest("hex");
+	const requestHash = rateLimitKey.startsWith("network:")
+		? rateLimitKey.slice("network:".length)
+		: createHash("sha256").update(rateLimitKey).digest("hex");
 	if (hashes.has(requestHash)) return "internal" as const;
 	return "external" as const;
 }

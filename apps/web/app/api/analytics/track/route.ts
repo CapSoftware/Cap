@@ -87,8 +87,8 @@ export async function POST(request: NextRequest) {
 		);
 	}
 	const rateLimitKey = getProductAnalyticsRateLimitKey({
-		trustedVercelProxy: trustedNetworkProxy,
-		xVercelForwardedFor:
+		trustedNetworkProxy,
+		forwardedFor:
 			request.headers.get(
 				isVercel ? "x-vercel-forwarded-for" : "x-forwarded-for",
 			) ?? undefined,

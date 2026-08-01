@@ -265,36 +265,38 @@ describe("ProductAnalyticsRateLimiter", () => {
 		expect(limiter.isRateLimited("a", 1_000)).toBe(false);
 	});
 
-	it("uses a platform-owned proxy identity or hashed self-hosted identity", () => {
-		expect(
+	it("uses only a hashed platform-owned network identity", () => {
+		const first = getProductAnalyticsRateLimitKey({
+			trustedNetworkProxy: true,
+			forwardedFor: "203.0.113.10, 10.0.0.1",
+		});
+		expect(first).toMatch(/^network:[0-9a-f]{64}$/);
+		expect(first).toBe(
 			getProductAnalyticsRateLimitKey({
-				trustedVercelProxy: true,
-				xVercelForwardedFor: "203.0.113.10, 10.0.0.1",
+				trustedNetworkProxy: true,
+				forwardedFor: "203.0.113.10",
 			}),
-		).toBe("203.0.113.10");
-		expect(
+		);
+		expect(first).not.toBe(
 			getProductAnalyticsRateLimitKey({
-				trustedVercelProxy: false,
-				xVercelForwardedFor: "attacker-controlled",
-				fallbackIdentity: "browser-1",
-			}),
-		).toMatch(/^self-hosted:[0-9a-f]{64}$/);
-		expect(
-			getProductAnalyticsRateLimitKey({
-				trustedVercelProxy: false,
-				fallbackIdentity: "browser-1",
-			}),
-		).not.toBe(
-			getProductAnalyticsRateLimitKey({
-				trustedVercelProxy: false,
-				fallbackIdentity: "browser-2",
+				trustedNetworkProxy: true,
+				forwardedFor: "203.0.113.11",
 			}),
 		);
 		expect(
-			getProductAnalyticsRateLimitKey({ trustedVercelProxy: true }),
+			getProductAnalyticsRateLimitKey({
+				trustedNetworkProxy: false,
+				forwardedFor: "203.0.113.10",
+			}),
 		).toBeNull();
 		expect(
-			getProductAnalyticsRateLimitKey({ trustedVercelProxy: false }),
+			getProductAnalyticsRateLimitKey({
+				trustedNetworkProxy: true,
+				forwardedFor: "attacker-controlled",
+			}),
+		).toBeNull();
+		expect(
+			getProductAnalyticsRateLimitKey({ trustedNetworkProxy: true }),
 		).toBeNull();
 	});
 });
