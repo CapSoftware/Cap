@@ -2015,6 +2015,14 @@ test("the analytics workflow is statically restricted to staging", () => {
 		"utf8",
 	);
 	assert.doesNotThrow(() => assertWorkflowSafety(workflow));
+	const reorderedWorkflow = workflow
+		.replace("staging-ci.js seed", "staging-ci.js __seed_placeholder__")
+		.replace("staging-ci.js promote-deployment", "staging-ci.js seed")
+		.replace(
+			"staging-ci.js __seed_placeholder__",
+			"staging-ci.js promote-deployment",
+		);
+	assert.throws(() => assertWorkflowSafety(reorderedWorkflow));
 	assert.equal(
 		workflow.match(
 			/deployment create --allow-destructive-operations --(?:check|wait)/g,
@@ -2024,13 +2032,13 @@ test("the analytics workflow is statically restricted to staging", () => {
 	assert.equal(
 		workflow.match(/node scripts\/analytics\/staging-ci\.js run-copies/g)
 			?.length,
-		3,
+		2,
 	);
 	assert.equal(
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		16,
+		15,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
@@ -2121,7 +2129,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 	assert.match(workflow, /staging-ci\.js rollback-promotion/);
 	assert.match(
 		workflow,
-		/steps\.promote\.outputs\.previous_live_id != '' && steps\.finalize\.outcome != 'success' && steps\.rollback-drill\.outputs\.rollback_target_usable != 'false'/,
+		/steps\.promote\.outputs\.previous_live_id != '' && steps\.finalize\.outcome != 'success' && steps\.rollback-drill\.outputs\.rollback_target_usable != 'false' && \(steps\.seed\.outcome == 'skipped' \|\| steps\.verify-cleanup\.outcome == 'success'\)/,
 	);
 	assert.doesNotMatch(
 		workflow,
@@ -2145,8 +2153,26 @@ test("the analytics workflow is statically restricted to staging", () => {
 	);
 	assert.match(
 		workflow,
-		/Rebuild no-op live decision and health copies\n {8}id: staging-copies\n {8}if: steps\.tinybird\.outputs\.needs_promotion != 'true'[\s\S]*--target live/,
+		/Prove exact candidate endpoints before promotion[\s\S]*staging-ci\.js verify-preseed/,
 	);
+	assert.ok(
+		workflow.indexOf("Prove exact candidate endpoints before promotion") <
+			workflow.indexOf("Promote the verified staging deployment"),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Refuse to proceed without an authoritative live deployment",
+		) <
+			workflow.indexOf(
+				"Seed bounded duplicate and conflict probes into exact live staging",
+			),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Seed bounded duplicate and conflict probes into exact live staging",
+		) < workflow.indexOf("Prove least-privilege staging token scopes"),
+	);
+	assert.match(workflow, /35-postseed/);
 	assert.ok(
 		workflow.indexOf("Prove the exact-SHA deployed browser tracker") <
 			workflow.indexOf(
@@ -2197,7 +2223,10 @@ test("the analytics workflow is statically restricted to staging", () => {
 		/Resume reviewed Copy schedules\n {8}id: resume-copies\n {8}if: always\(\) && steps\.pause-copies\.outcome == 'success'/,
 	);
 	assert.match(workflow, /steps\.cleanup\.outputs\.requires_copies == 'true'/);
-	assert.doesNotMatch(workflow, /steps\.seed\.outcome == 'success'/);
+	assert.match(
+		workflow,
+		/Upload the immutable post-ingestion recovery checkpoint\n {8}if: steps\.seed\.outcome == 'success'/,
+	);
 	assert.match(workflow, /echo "required=false" >> "\$GITHUB_OUTPUT"/);
 	assert.match(workflow, /echo "required=true" >> "\$GITHUB_OUTPUT"/);
 	assert.match(
@@ -2352,9 +2381,11 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(prepareSource, /rowsAttempted: 0/);
 	assert.match(
 		seedSource,
-		/tinybirdEnvironment\(\[\s*"TINYBIRD_STAGING_INGEST_TOKEN",?\s*\]\)/,
+		/tinybirdEnvironment\(\[\s*"TINYBIRD_STAGING_DEPLOY_TOKEN",\s*"TINYBIRD_STAGING_INGEST_TOKEN",?\s*\]\)/,
 	);
 	assert.doesNotMatch(seedSource, /TINYBIRD_STAGING_COPY_TOKEN/);
+	assert.match(seedSource, /assertExactLiveOwnership/);
+	assert.match(seedSource, /state\.recoveryPhase = "postseed"/);
 	assert.ok(
 		seedSource.indexOf("artifact.delivery.rowsAttempted += 1") <
 			seedSource.indexOf("const result = await request"),
@@ -2363,6 +2394,21 @@ test("the seed checkpoint is persisted before ingestion", () => {
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
 	);
+});
+
+test("candidate validation performs no synthetic writes before promotion", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const preSeedSource = source.slice(
+		source.indexOf("const verifyPreSeedDeployment = async"),
+		source.indexOf("const verify = async"),
+	);
+	assert.match(preSeedSource, /strategy: "promote_then_seed"/);
+	assert.match(preSeedSource, /candidatePreSeedCleanPassed: true/);
+	assert.doesNotMatch(preSeedSource, /\/v0\/events/);
+	assert.doesNotMatch(preSeedSource, /TINYBIRD_STAGING_INGEST_TOKEN/);
 });
 
 test("recovery avoids unowned schedule changes and publishes failure evidence", () => {
@@ -2382,6 +2428,14 @@ test("recovery avoids unowned schedule changes and publishes failure evidence", 
 		recoverySource,
 		/artifact\.copySchedule\?\.pause\?\.status === "passed" &&[\s\S]*pausedDeploymentId === retainedDeploymentId[\s\S]*await setCopySchedules/,
 	);
+	assert.match(
+		recoverySource,
+		/previousLifecycle === "ready"[\s\S]*action: "pause"[\s\S]*await cleanup\([\s\S]*await runCopies\([\s\S]*action: "resume"[\s\S]*await switchLiveDeployment/,
+	);
+	assert.match(
+		recoverySource,
+		/candidateLifecycle === "ready"[\s\S]*target: "staging"[\s\S]*syntheticCleanupCompleted = true/,
+	);
 });
 
 test("candidate cleanup refuses a live transition before any deletion", () => {
@@ -2400,6 +2454,10 @@ test("candidate cleanup refuses a live transition before any deletion", () => {
 	assert.match(
 		cleanupSource,
 		/Tinybird cleanup target changed before scoped cleanup/,
+	);
+	assert.match(
+		cleanupSource,
+		/if \(target === "staging"\)[\s\S]*liveBeforeDeploymentId[\s\S]*deleteProductEventRows[\s\S]*liveSyntheticRowsDeleted: true/,
 	);
 });
 

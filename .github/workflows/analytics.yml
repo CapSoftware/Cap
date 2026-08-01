@@ -296,43 +296,14 @@ jobs:
           TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: node scripts/analytics/analytics-cli.js test
-      - name: Seed bounded duplicate and conflict probes
-        id: seed
-        env:
-          VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
-          VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
-          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
-        run: >-
-          node scripts/analytics/staging-ci.js seed
-          --run-id "$ANALYTICS_TEST_RUN_ID"
-          --deployment-id "${{ steps.tinybird.outputs.id }}"
-          --state "$RUNNER_TEMP/analytics-staging-state.json"
-          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Rebuild no-op live decision and health copies
-        id: staging-copies
-        if: steps.tinybird.outputs.needs_promotion != 'true'
-        env:
-          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
-          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
-          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-        run: >-
-          node scripts/analytics/staging-ci.js run-copies
-          --deployment-id "${{ steps.tinybird.outputs.id }}"
-          --phase staged
-          --target live
-          --state "$RUNNER_TEMP/analytics-staging-state.json"
-          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Prove candidate isolation or no-op live decision quality
+      - name: Prove exact candidate endpoints before promotion
         id: verify
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
-          node scripts/analytics/staging-ci.js verify
+          node scripts/analytics/staging-ci.js verify-preseed
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
@@ -406,6 +377,30 @@ jobs:
       - name: Refuse to proceed without an authoritative live deployment
         if: steps.deployment-state.outputs.promoted != 'true' || steps.promote.outcome == 'failure'
         run: exit 1
+      - name: Seed bounded duplicate and conflict probes into exact live staging
+        id: seed
+        env:
+          VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js seed
+          --run-id "$ANALYTICS_TEST_RUN_ID"
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Upload the immutable post-ingestion recovery checkpoint
+        if: steps.seed.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-35-postseed
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Prove least-privilege staging token scopes
         id: token-scopes
         env:
@@ -544,6 +539,7 @@ jobs:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: |
@@ -627,7 +623,7 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Restore the previous staging deployment on failure
         id: rollback
-        if: always() && steps.promote.outputs.previous_live_id != '' && steps.finalize.outcome != 'success' && steps.rollback-drill.outputs.rollback_target_usable != 'false'
+        if: always() && steps.promote.outputs.previous_live_id != '' && steps.finalize.outcome != 'success' && steps.rollback-drill.outputs.rollback_target_usable != 'false' && (steps.seed.outcome == 'skipped' || steps.verify-cleanup.outcome == 'success')
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}

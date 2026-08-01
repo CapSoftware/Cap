@@ -3092,10 +3092,12 @@ export const assertWorkflowSafety = (workflow) => {
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+		"staging-ci.js verify-preseed",
 		"staging-ci.js run-copies",
 		"staging-ci.js set-copy-schedules",
 		"steps.deployment-state.outputs.promoted == 'true'",
 		"steps.deployment-state.outputs.target == 'staging' || steps.pause-copies.outcome == 'success'",
+		"steps.seed.outcome == 'skipped' || steps.verify-cleanup.outcome == 'success'",
 		"attest-preview",
 		"probe-preview",
 		"verify-promoted",
@@ -3115,5 +3117,19 @@ export const assertWorkflowSafety = (workflow) => {
 		)
 	) {
 		throw new Error("Workflow contains a non-staging Tinybird workspace ID");
+	}
+	const candidateValidation = workflow.indexOf("staging-ci.js verify-preseed");
+	const promotion = workflow.indexOf("staging-ci.js promote-deployment");
+	const seed = workflow.indexOf("staging-ci.js seed");
+	if (
+		candidateValidation < 0 ||
+		promotion < 0 ||
+		seed < 0 ||
+		candidateValidation > promotion ||
+		promotion > seed
+	) {
+		throw new Error(
+			"Workflow must validate, promote, and then seed the exact staging deployment",
+		);
 	}
 };
