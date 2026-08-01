@@ -108,6 +108,8 @@ jobs:
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: x86_64-apple-darwin
+      - name: Prepare pinned native dependencies
+        run: node scripts/setup.js
       - name: Compile the desktop analytics path
         run: cargo check -p cap-desktop --locked
       - name: Prove durable desktop analytics behavior
