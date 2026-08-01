@@ -2223,7 +2223,11 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	);
 	assert.match(
 		route,
-		/process\.env\.VERCEL_ENV === "production"[\s\S]*process\.env\.CAP_ANALYTICS_STAGING_PREVIEW !== "true"/,
+		/process\.env\.VERCEL_ENV === "production"[\s\S]*headers\.host !== STAGING_PREVIEW_HOST/,
+	);
+	assert.match(
+		route,
+		/const STAGING_PREVIEW_HOST =\s*"cap-web-git-codex-first-party-analytics-mc-ilroy\.vercel\.app"/,
 	);
 	assert.match(
 		route,
