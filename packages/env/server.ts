@@ -87,6 +87,7 @@ function createServerEnv() {
 				),
 			TRUSTED_PROXY_AUTH_EMAIL: z
 				.string()
+				.email()
 				.optional()
 				.describe(
 					"Email of the Cap account to sign in when the trusted header is present.",
