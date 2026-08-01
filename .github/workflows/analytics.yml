@@ -203,6 +203,7 @@ jobs:
       - name: Promote the verified staging deployment
         id: promote
         if: steps.tinybird.outputs.needs_promotion == 'true'
+        continue-on-error: true
         env:
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
@@ -213,6 +214,41 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment promote --wait
+      - name: Resolve authoritative Tinybird state after the promotion attempt
+        id: deployment-state
+        if: always() && steps.tinybird.outcome == 'success'
+        env:
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
+        run: |
+          for resolution_attempt in $(seq 1 30); do
+            if ! docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --output json deployment ls > "$RUNNER_TEMP/tinybird-final-deployments.json"; then
+              if [[ "$resolution_attempt" -eq 30 ]]; then
+                exit 1
+              fi
+              sleep 5
+              continue
+            fi
+            recover_pending=false
+            if [[ "$resolution_attempt" -eq 30 ]]; then
+              recover_pending=true
+            fi
+            if node scripts/analytics/staging-ci.js resolve-deployment-state --input "$RUNNER_TEMP/tinybird-final-deployments.json" --deployment-id "${{ steps.tinybird.outputs.id }}" --recover-pending "$recover_pending"; then
+              exit 0
+            else
+              resolution_exit=$?
+            fi
+            if [[ "$resolution_exit" -ne 75 ]]; then
+              exit "$resolution_exit"
+            fi
+            sleep 5
+          done
+          exit 1
+      - name: Refuse to proceed without an authoritative live deployment
+        if: steps.deployment-state.outputs.promoted != 'true'
+        run: exit 1
       - name: Prove least-privilege staging token scopes
         id: token-scopes
         env:
@@ -299,7 +335,7 @@ jobs:
           echo "required=true" >> "$GITHUB_OUTPUT"
           node scripts/analytics/staging-ci.js cleanup \
             --deployment-id "${{ steps.tinybird.outputs.id }}" \
-            --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}" \
+            --target "${{ steps.deployment-state.outputs.target || (steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live') }}" \
             --state "$RUNNER_TEMP/analytics-staging-state.json" \
             --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Retract synthetic rows from every derived copy
@@ -312,7 +348,7 @@ jobs:
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase cleanup
-          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}"
+          --target "${{ steps.deployment-state.outputs.target || (steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live') }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove synthetic cleanup no longer affects queries
@@ -324,11 +360,11 @@ jobs:
         run: >-
           node scripts/analytics/staging-ci.js verify-cleanup
           --deployment-id "${{ steps.tinybird.outputs.id }}"
-          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success' && 'staging' || 'live' }}"
+          --target "${{ steps.deployment-state.outputs.target || (steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live') }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Discard an unpromoted staging deployment after cleanup
-        if: always() && steps.tinybird.outputs.needs_promotion == 'true' && steps.promote.outcome != 'success'
+        if: always() && steps.deployment-state.outputs.discard == 'true'
         env:
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TB_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}

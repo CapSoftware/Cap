@@ -211,6 +211,71 @@ export const dataMutationDeploymentParameters = ({
 	return target === "staging" ? { __tb__deployment: deploymentId } : {};
 };
 
+export const resolveDeploymentState = (value, expectedDeploymentId) => {
+	if (!DEPLOYMENT_ID_PATTERN.test(expectedDeploymentId)) {
+		throw new Error("Tinybird deployment state requires a numeric ID");
+	}
+	const deployments = Array.isArray(value)
+		? value
+		: (value.deployments ?? value.data ?? value.results ?? []);
+	if (!Array.isArray(deployments)) {
+		throw new Error("Tinybird returned an unsupported deployment list");
+	}
+	const matches = deployments.filter(
+		(deployment) => String(deploymentId(deployment)) === expectedDeploymentId,
+	);
+	if (matches.length !== 1) {
+		throw new Error("The exact Tinybird deployment state is ambiguous");
+	}
+	const state = deploymentState(matches[0]);
+	if (state.includes("live")) {
+		return {
+			target: "live",
+			discard: false,
+			promoted: true,
+			pending: false,
+			state: "live",
+		};
+	}
+	if (state.includes("staging")) {
+		return {
+			target: "staging",
+			discard: true,
+			promoted: false,
+			pending: false,
+			state: "staging",
+		};
+	}
+	if (state.includes("in progress")) {
+		return {
+			target: "staging",
+			discard: false,
+			promoted: false,
+			pending: true,
+			state: "in_progress",
+		};
+	}
+	if (state.includes("failed")) {
+		return {
+			target: "staging",
+			discard: true,
+			promoted: false,
+			pending: false,
+			state: "failed",
+		};
+	}
+	if (state.includes("deleted")) {
+		return {
+			target: "staging",
+			discard: false,
+			promoted: false,
+			pending: false,
+			state: "deleted",
+		};
+	}
+	throw new Error(`The exact Tinybird deployment is ${state || "unknown"}`);
+};
+
 export const submitTinybirdCopyJobs = async ({
 	origin,
 	token,

@@ -21,6 +21,7 @@ import {
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
 	normalizeHealth,
+	resolveDeploymentState,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -241,6 +242,63 @@ test("data mutations target only the exact staging deployment", () => {
 	]) {
 		assert.throws(() => dataMutationDeploymentParameters(input));
 	}
+});
+
+test("deployment state resolution binds cleanup to the exact deployment", () => {
+	assert.deepEqual(resolveDeploymentState([{ id: 7, status: "Live" }], "7"), {
+		target: "live",
+		discard: false,
+		promoted: true,
+		pending: false,
+		state: "live",
+	});
+	assert.deepEqual(
+		resolveDeploymentState([{ id: 7, status: "Staging" }], "7"),
+		{
+			target: "staging",
+			discard: true,
+			promoted: false,
+			pending: false,
+			state: "staging",
+		},
+	);
+	assert.deepEqual(
+		resolveDeploymentState([{ id: 7, status: "In progress" }], "7"),
+		{
+			target: "staging",
+			discard: false,
+			promoted: false,
+			pending: true,
+			state: "in_progress",
+		},
+	);
+	assert.deepEqual(resolveDeploymentState([{ id: 7, status: "Failed" }], "7"), {
+		target: "staging",
+		discard: true,
+		promoted: false,
+		pending: false,
+		state: "failed",
+	});
+	assert.throws(() => resolveDeploymentState([{ id: 8, status: "Live" }], "7"));
+	assert.throws(() =>
+		resolveDeploymentState(
+			[
+				{ id: 7, status: "Live" },
+				{ id: 7, status: "Staging" },
+			],
+			"7",
+		),
+	);
+	assert.deepEqual(
+		resolveDeploymentState([{ id: 7, status: "Deleted" }], "7"),
+		{
+			target: "staging",
+			discard: false,
+			promoted: false,
+			pending: false,
+			state: "deleted",
+		},
+	);
 });
 
 test("copy jobs use only approved resource-scoped submissions and bounded markers", async () => {
@@ -537,7 +595,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		8,
+		9,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
@@ -546,15 +604,30 @@ test("the analytics workflow is statically restricted to staging", () => {
 				"Discard an unpromoted staging deployment after cleanup",
 			),
 	);
+	assert.doesNotMatch(workflow, /steps\.promote\.outcome/);
+	assert.match(workflow, /continue-on-error: true/);
+	assert.match(workflow, /staging-ci\.js resolve-deployment-state/);
+	assert.match(workflow, /resolution_exit=\$\?/);
+	assert.match(workflow, /"\$resolution_exit" -ne 75/);
+	assert.match(workflow, /--recover-pending "\$recover_pending"/);
+	assert.match(workflow, /recover_pending=true/);
+	assert.match(
+		workflow,
+		/Refuse to proceed without an authoritative live deployment/,
+	);
+	assert.match(
+		workflow,
+		/Discard an unpromoted staging deployment after cleanup\n {8}if: always\(\) && steps\.deployment-state\.outputs\.discard == 'true'/,
+	);
 	assert.equal(
 		workflow.match(
-			/steps\.promote\.outcome != 'success' && 'staging' \|\| 'live'/g,
+			/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/g,
 		)?.length,
 		3,
 	);
 	assert.equal(
 		workflow.match(
-			/steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'/g,
+			/--target "\$\{\{ steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live' \}\}"/g,
 		)?.length,
 		2,
 	);
@@ -584,6 +657,12 @@ test("the seed persists cleanup state and partial evidence before ingestion", ()
 	assert.ok(artifactWrite > stateWrite);
 	assert.ok(firstDelivery > artifactWrite);
 	assert.match(seedSource, /assertions: \{ seedAccepted: false \}/);
+	assert.match(seedSource, /rowsPlanned: fixture\.rows\.length/);
+	assert.match(seedSource, /rowsAttempted: 0/);
+	assert.ok(
+		seedSource.indexOf("artifact.delivery.rowsAttempted += 1") <
+			seedSource.indexOf("const result = await request"),
+	);
 	assert.match(
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
@@ -606,7 +685,12 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 	assert.doesNotMatch(deleteSource, /__tb__min_deployment/);
 	assert.equal(deleteSource.match(/\.\.\.deploymentParameters/g)?.length, 2);
 	assert.match(
+		source,
+		/writeOutput\("discard", resolution\.pending \|\| resolution\.discard\)/,
+	);
+	assert.match(workflow, /node scripts\/analytics\/staging-ci\.js cleanup/);
+	assert.match(
 		workflow,
-		/cleanup \\\n {12}--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}" \\\n {12}--target "\$\{\{ steps\.tinybird\.outputs\.needs_promotion == 'true' && steps\.promote\.outcome != 'success' && 'staging' \|\| 'live' \}\}"/,
+		/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/,
 	);
 });

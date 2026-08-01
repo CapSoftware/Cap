@@ -18,6 +18,7 @@ import {
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
 	normalizeHealth,
+	resolveDeploymentState,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -581,20 +582,31 @@ const seed = async () => {
 		syntheticRunHash: hashIdentifier(runId),
 		startedAt: state.startedAt,
 		delivery: {
-			rowsAttempted: fixture.rows.length,
+			rowsPlanned: fixture.rows.length,
+			rowsAttempted: 0,
 			rowsAccepted: 0,
 		},
-		load: { rows: loadFixture.rows.length },
+		load: {
+			rowsPlanned: loadFixture.rows.length,
+			rowsAttempted: 0,
+			rowsAccepted: 0,
+		},
 		erasure: {
 			controlRunHash: hashIdentifier(erasureControl.runId),
 			identityHash: hashIdentifier(
 				`${fixture.userId}:${fixture.organizationId}:${fixture.anonymousId}`,
 			),
+			controlAttempted: false,
+			controlAccepted: false,
 		},
 		assertions: { seedAccepted: false },
 	};
 	writeJson(artifactPath, artifact);
 	const deliver = async (row, fixtureRow = false) => {
+		if (fixtureRow) {
+			artifact.delivery.rowsAttempted += 1;
+			writeJson(artifactPath, artifact);
+		}
 		const result = await request(
 			tinybirdUrl(origin, "/v0/events", {
 				name: "product_events_v1",
@@ -625,6 +637,8 @@ const seed = async () => {
 		separateBatchDeliveries.push(await deliver(row, true));
 	}
 	const deliveries = [...concurrentDeliveries, ...separateBatchDeliveries];
+	artifact.load.rowsAttempted = loadFixture.rows.length;
+	writeJson(artifactPath, artifact);
 	const loadStartedAt = performance.now();
 	const loadDelivery = await request(
 		tinybirdUrl(origin, "/v0/events", {
@@ -646,6 +660,8 @@ const seed = async () => {
 	);
 	artifact.load = {
 		rows: loadFixture.rows.length,
+		rowsPlanned: loadFixture.rows.length,
+		rowsAttempted: loadFixture.rows.length,
 		rowsAccepted: loadFixture.rows.length,
 		requestLatencyMs: loadDelivery.latencyMs,
 		retryAttempts: loadDelivery.attempt - 1,
@@ -654,8 +670,11 @@ const seed = async () => {
 		),
 	};
 	writeJson(artifactPath, artifact);
+	artifact.erasure.controlAttempted = true;
+	writeJson(artifactPath, artifact);
 	const erasureControlDelivery = await deliver(erasureControl.row);
 	artifact.delivery = {
+		rowsPlanned: fixture.rows.length,
 		rowsAttempted: fixture.rows.length,
 		rowsAccepted: deliveries.length,
 		requestLatency: latencySummary(
@@ -668,6 +687,7 @@ const seed = async () => {
 	};
 	artifact.erasure = {
 		...artifact.erasure,
+		controlAccepted: true,
 		controlDeliveryLatencyMs: erasureControlDelivery.latencyMs,
 		controlRetryAttempts: erasureControlDelivery.attempts - 1,
 	};
@@ -1695,6 +1715,25 @@ const handlers = {
 		);
 		writeOutput("id", selection.id);
 		writeOutput("needs_promotion", String(selection.needsPromotion));
+	},
+	"resolve-deployment-state": async () => {
+		const recoverPending = option("recover-pending");
+		if (!["true", "false"].includes(recoverPending)) {
+			throw new Error("--recover-pending must be true or false");
+		}
+		const resolution = resolveDeploymentState(
+			readJson(option("input")),
+			option("deployment-id"),
+		);
+		if (resolution.pending && recoverPending === "false") {
+			process.exitCode = 75;
+			return;
+		}
+		writeOutput("target", resolution.target);
+		writeOutput("discard", resolution.pending || resolution.discard);
+		writeOutput("promoted", resolution.promoted);
+		writeOutput("state", resolution.state);
+		writeOutput("pending_recovery", resolution.pending);
 	},
 	"wait-vercel": waitForVercel,
 	seed,
