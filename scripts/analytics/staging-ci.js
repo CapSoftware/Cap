@@ -1329,12 +1329,17 @@ const attestPreviewTinybird = async () => {
 	);
 	const url = new URL("/api/analytics/staging-test/attest", previewOrigin);
 	const body = (sha) => JSON.stringify({ runId, sha });
-	const send = (authorization, sha = environment("EXPECTED_SHA")) =>
+	const send = (
+		authorization,
+		sha = environment("EXPECTED_SHA"),
+		headers = {},
+	) =>
 		previewRequest(url, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 				...(authorization ? { Authorization: authorization } : {}),
+				...headers,
 			},
 			body: body(sha),
 		});
@@ -1342,6 +1347,14 @@ const attestPreviewTinybird = async () => {
 	if (unauthorized.status !== 401) {
 		throw new Error(
 			`The preview configuration attestation accepted missing authorization with HTTP ${unauthorized.status}`,
+		);
+	}
+	const invalidSignature = await send(`Bearer ${secret}`, undefined, {
+		"x-cap-analytics-staging-signature": "0".repeat(64),
+	});
+	if (invalidSignature.status !== 401) {
+		throw new Error(
+			`The preview configuration attestation accepted an invalid request signature with HTTP ${invalidSignature.status}`,
 		);
 	}
 	const wrongSha = await send(
@@ -1383,6 +1396,35 @@ let previewShareCookie;
 const previewRequest = async (url, init = {}) => {
 	const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
 	const shareSecret = process.env.VERCEL_PREVIEW_SHARE_SECRET?.trim();
+	const stagingSignatureHeaders = (() => {
+		const pathname = new URL(url).pathname;
+		if (
+			pathname !== "/api/analytics/staging-test" &&
+			!pathname.startsWith("/api/analytics/staging-test/")
+		) {
+			return {};
+		}
+		if (typeof init.body !== "string") return {};
+		let payload;
+		try {
+			payload = JSON.parse(init.body);
+		} catch {
+			return {};
+		}
+		if (
+			typeof payload?.runId !== "string" ||
+			typeof payload?.sha !== "string"
+		) {
+			return {};
+		}
+		const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
+		if (!secret) return {};
+		return {
+			"x-cap-analytics-staging-signature": createHmac("sha256", secret)
+				.update(`${payload.runId}:${payload.sha}`)
+				.digest("hex"),
+		};
+	})();
 	const headers = new Headers({
 		...(bypass
 			? {
@@ -1390,6 +1432,7 @@ const previewRequest = async (url, init = {}) => {
 					"x-vercel-set-bypass-cookie": "true",
 				}
 			: {}),
+		...stagingSignatureHeaders,
 		...init.headers,
 	});
 	if (previewShareCookie) {

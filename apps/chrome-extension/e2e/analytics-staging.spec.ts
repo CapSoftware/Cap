@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import fs from "node:fs";
 import { expect, test } from "@playwright/test";
 
@@ -68,11 +68,17 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		expect([302, 303, 307, 308]).toContain(bootstrap.status());
 	}
 	const attestExactSha = async () => {
+		const stagingSignature = createHmac("sha256", stagingSecret)
+			.update(`${runId}:${expectedSha}`)
+			.digest("hex");
 		const response = await context.request.post(
 			"/api/analytics/staging-test/attest",
 			{
 				data: { runId, sha: expectedSha },
-				headers: { Authorization: `Bearer ${stagingSecret}` },
+				headers: {
+					Authorization: `Bearer ${stagingSecret}`,
+					"x-cap-analytics-staging-signature": stagingSignature,
+				},
 			},
 		);
 		expect(response.ok()).toBe(true);

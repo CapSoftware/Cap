@@ -2221,8 +2221,13 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		route,
 		/const authorize = [\s\S]*!configurationAttestation\(runId\)/,
 	);
-	assert.match(route, /process\.env\.CAP_ANALYTICS_STAGING_PREVIEW !== "true"/);
+	assert.doesNotMatch(route, /CAP_ANALYTICS_STAGING_PREVIEW/);
 	assert.doesNotMatch(route, /process\.env\.VERCEL_ENV/);
+	assert.match(route, /"x-cap-analytics-staging-signature"/);
+	assert.match(
+		route,
+		/createHmac\("sha256", secret\)[\s\S]*\.update\(`\$\{runId\}:\$\{payload\.sha\}`\)/,
+	);
 	assert.match(
 		route,
 		/const STAGING_DATABASE_FINGERPRINT =\s*"fff37a9b160f31bfb82b8c5585829b8ee08f70b3645169dca6e7cb29033a039a"/,
@@ -2256,6 +2261,12 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		runner,
 		/artifact\.vercel\.accessUrl \?\? artifact\.vercel\.url/,
 	);
+	assert.match(runner, /"x-cap-analytics-staging-signature"/);
+	assert.match(
+		runner,
+		/pathname !== "\/api\/analytics\/staging-test" &&[\s\S]*!pathname\.startsWith\("\/api\/analytics\/staging-test\/"\)/,
+	);
+	assert.match(runner, /accepted an invalid request signature with HTTP/);
 	const browserProbe = fs.readFileSync(
 		new URL(
 			"../../../apps/chrome-extension/e2e/analytics-staging.spec.ts",
@@ -2264,6 +2275,8 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		"utf8",
 	);
 	assert.equal(browserProbe.match(/await attestExactSha\(\)/g)?.length, 2);
+	assert.match(browserProbe, /createHmac\("sha256", stagingSecret\)/);
+	assert.match(browserProbe, /"x-cap-analytics-staging-signature"/);
 	assert.match(
 		browserProbe,
 		/shareUrl\.searchParams\.set\("_vercel_share", shareSecret\)/,

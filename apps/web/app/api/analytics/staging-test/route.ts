@@ -151,6 +151,7 @@ class Api extends HttpApi.make("AnalyticsStagingTestApi").add(
 
 const RequestHeaders = Schema.Struct({
 	authorization: Schema.optional(Schema.String),
+	"x-cap-analytics-staging-signature": Schema.optional(Schema.String),
 });
 
 const safeEqual = (actual: string | undefined, expected: string) =>
@@ -595,9 +596,6 @@ const attestDatabaseSchema = async () => {
 
 const authorize = (payload: { runId: string; sha: string }) =>
 	Effect.gen(function* () {
-		if (process.env.CAP_ANALYTICS_STAGING_PREVIEW !== "true") {
-			return yield* Effect.fail(new HttpApiError.NotFound());
-		}
 		const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
 		if (!secret) {
 			return yield* Effect.fail(new HttpApiError.ServiceUnavailable());
@@ -609,9 +607,21 @@ const authorize = (payload: { runId: string; sha: string }) =>
 			return yield* Effect.fail(new HttpApiError.Unauthorized());
 		}
 		const runId = boundedRunId(payload.runId);
+		if (!runId || !draftSha(payload.sha)) {
+			return yield* Effect.fail(new HttpApiError.BadRequest());
+		}
+		const expectedSignature = createHmac("sha256", secret)
+			.update(`${runId}:${payload.sha}`)
+			.digest("hex");
 		if (
-			!runId ||
-			!draftSha(payload.sha) ||
+			!safeEqual(
+				headers["x-cap-analytics-staging-signature"],
+				expectedSignature,
+			)
+		) {
+			return yield* Effect.fail(new HttpApiError.Unauthorized());
+		}
+		if (
 			payload.sha !== process.env.VERCEL_GIT_COMMIT_SHA ||
 			!configurationAttestation(runId)
 		) {
