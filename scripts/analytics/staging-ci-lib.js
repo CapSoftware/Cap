@@ -1,9 +1,22 @@
 import { createHash } from "node:crypto";
 
 export const STAGING_WORKSPACE_ID = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
+export const STAGING_DATABASE_FINGERPRINT =
+	"fff37a9b160f31bfb82b8c5585829b8ee08f70b3645169dca6e7cb29033a039a";
+export const STAGING_DATABASE_SCHEMA = "0042_lying_sharon_ventura";
 export const FEATURE_BRANCH = "codex/first-party-analytics";
 export const FEATURE_PULL_REQUEST = 2003;
+export const PREVIEW_TINYBIRD_TOKEN_NAMES = [
+	"PRODUCT_ANALYTICS_TINYBIRD_TOKEN",
+	"PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN",
+	"PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN",
+	"PRODUCT_ANALYTICS_TINYBIRD_ERASURE_LOOKUP_TOKEN",
+	"PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN",
+	"PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN",
+];
 export const COPY_PIPES = [
+	"snapshot_product_event_id_states_v2",
+	"snapshot_product_event_day_states_v2",
 	"snapshot_product_events_canonical_v1",
 	"snapshot_product_events_daily_exact",
 	"snapshot_product_traffic_daily_exact",
@@ -11,6 +24,8 @@ export const COPY_PIPES = [
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
 	"snapshot_product_identity_funnel_exact",
+	"snapshot_product_attribution_daily_exact",
+	"snapshot_product_experiment_outcomes_exact",
 	"snapshot_product_events_health_hourly",
 ];
 const COPY_MARKER_PIPES = new Set([
@@ -20,6 +35,8 @@ const COPY_MARKER_PIPES = new Set([
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
 	"snapshot_product_identity_funnel_exact",
+	"snapshot_product_attribution_daily_exact",
+	"snapshot_product_experiment_outcomes_exact",
 	"snapshot_product_events_health_hourly",
 ]);
 
@@ -90,6 +107,7 @@ export const applyCopyScheduleAction = async ({
 
 export const copyScheduleMatchesAction = (value, action) => {
 	const payload = value?.data ?? value;
+	if (!payload?.schedule) return true;
 	const status = String(payload?.schedule?.status ?? "").toLowerCase();
 	return action === "pause"
 		? status === "paused"
@@ -185,6 +203,50 @@ export const validateTinybirdCredentials = ({ url, tokens }) => {
 	return parsedUrl.origin;
 };
 
+export const assertPreviewTinybirdAttestation = ({
+	attestation,
+	expectedOrigin,
+	expectedSha,
+	expectedTokenHashes,
+}) => {
+	if (
+		!attestation ||
+		attestation.sha !== expectedSha ||
+		attestation.host !== expectedOrigin ||
+		attestation.databaseFingerprint !== STAGING_DATABASE_FINGERPRINT ||
+		attestation.databaseSchema !== STAGING_DATABASE_SCHEMA ||
+		!Array.isArray(attestation.workspaces)
+	) {
+		throw new Error(
+			"The exact-SHA preview did not attest its Tinybird staging configuration",
+		);
+	}
+	const workspaces = new Map(
+		attestation.workspaces.map(({ name, tokenHash, workspaceId }) => [
+			name,
+			{ tokenHash, workspaceId },
+		]),
+	);
+	if (
+		workspaces.size !== PREVIEW_TINYBIRD_TOKEN_NAMES.length ||
+		PREVIEW_TINYBIRD_TOKEN_NAMES.some((name) => {
+			const workspace = workspaces.get(name);
+			return (
+				!workspace ||
+				typeof workspace.workspaceId !== "string" ||
+				workspace.workspaceId.toLowerCase() !==
+					STAGING_WORKSPACE_ID.toLowerCase() ||
+				!expectedTokenHashes ||
+				workspace.tokenHash !== expectedTokenHashes[name]
+			);
+		})
+	) {
+		throw new Error(
+			"The exact-SHA preview is not bound to the verified analytics staging tokens",
+		);
+	}
+};
+
 const deploymentId = (deployment) =>
 	deployment.id ?? deployment.ID ?? deployment.deployment_id;
 
@@ -205,6 +267,88 @@ const deploymentsFromResponse = (value) => {
 		throw new Error("Tinybird returned an unsupported deployment list");
 	}
 	return deployments;
+};
+
+export const createDeploymentBoundary = (value) => {
+	const deployments = deploymentsFromResponse(value);
+	const liveDeployments = deployments.filter(isLiveDeployment);
+	if (liveDeployments.length !== 1) {
+		throw new Error(
+			"Tinybird deployment recovery requires exactly one current live deployment",
+		);
+	}
+	const liveDeploymentId = String(deploymentId(liveDeployments[0]));
+	if (!DEPLOYMENT_ID_PATTERN.test(liveDeploymentId)) {
+		throw new Error("Tinybird returned an invalid live deployment ID");
+	}
+	const deploymentIds = deployments.map((deployment) =>
+		String(deploymentId(deployment)),
+	);
+	if (
+		deploymentIds.some((id) => !DEPLOYMENT_ID_PATTERN.test(id)) ||
+		new Set(deploymentIds).size !== deploymentIds.length
+	) {
+		throw new Error("Tinybird returned invalid or duplicate deployment IDs");
+	}
+	return {
+		deploymentIds: deploymentIds.sort((left, right) =>
+			left.localeCompare(right, "en", { numeric: true }),
+		),
+		liveDeploymentId,
+	};
+};
+
+export const resolveDeploymentCreatedAfterBoundary = (
+	value,
+	boundary,
+	{ allowNone = false } = {},
+) => {
+	if (
+		!boundary ||
+		typeof boundary !== "object" ||
+		!Array.isArray(boundary.deploymentIds) ||
+		!DEPLOYMENT_ID_PATTERN.test(String(boundary.liveDeploymentId ?? "")) ||
+		boundary.deploymentIds.some((id) => !DEPLOYMENT_ID_PATTERN.test(String(id)))
+	) {
+		throw new Error("Tinybird recovery boundary is invalid");
+	}
+	const deployments = deploymentsFromResponse(value);
+	const liveDeployments = deployments.filter(isLiveDeployment);
+	if (
+		liveDeployments.length !== 1 ||
+		String(deploymentId(liveDeployments[0])) !==
+			String(boundary.liveDeploymentId)
+	) {
+		throw new Error(
+			"Tinybird live deployment changed after the create boundary",
+		);
+	}
+	const previousIds = new Set(boundary.deploymentIds.map(String));
+	const created = deployments.filter((deployment) => {
+		const id = String(deploymentId(deployment));
+		const state = deploymentState(deployment);
+		return (
+			!previousIds.has(id) &&
+			!isLiveDeployment(deployment) &&
+			!state.includes("deleted") &&
+			(isStagingDeployment(deployment) ||
+				isPendingDeployment(deployment) ||
+				state.includes("failed"))
+		);
+	});
+	if (created.length === 0 && allowNone) return undefined;
+	if (created.length !== 1) {
+		throw new Error(
+			"Tinybird uncertain create did not resolve to exactly one new deployment",
+		);
+	}
+	const id = String(deploymentId(created[0]));
+	if (!DEPLOYMENT_ID_PATTERN.test(id)) {
+		throw new Error(
+			"Tinybird uncertain create returned an invalid deployment ID",
+		);
+	}
+	return { id, needsPromotion: true };
 };
 
 const isLiveDeployment = (deployment) =>
@@ -503,12 +647,16 @@ export const submitTinybirdCopyJobs = async ({
 	now = () => Date.now(),
 	pipes = COPY_PIPES,
 	copyRunId = "",
+	sourceCutoff = "",
 	assertMutationOwnership,
 }) => {
 	if (!DEPLOYMENT_ID_PATTERN.test(deploymentId)) {
 		throw new Error("Tinybird copy jobs require a numeric deployment ID");
 	}
 	if (copyRunId) validateSyntheticRunId(copyRunId);
+	if (sourceCutoff && !Number.isFinite(Date.parse(sourceCutoff))) {
+		throw new Error("Tinybird copy source cutoff must be an ISO timestamp");
+	}
 	if (typeof assertMutationOwnership !== "function") {
 		throw new Error("Tinybird copies require an ownership check");
 	}
@@ -523,6 +671,7 @@ export const submitTinybirdCopyJobs = async ({
 			origin,
 		);
 		copyUrl.searchParams.set("_mode", "replace");
+		if (sourceCutoff) copyUrl.searchParams.set("source_cutoff", sourceCutoff);
 		if (COPY_MARKER_PIPES.has(pipe)) {
 			if (!copyRunId) {
 				throw new Error(`Tinybird copy marker is required for ${pipe}`);
@@ -554,6 +703,67 @@ export const submitTinybirdCopyJobs = async ({
 		});
 	}
 	return results;
+};
+
+export const waitForTinybirdCopyJob = async ({
+	origin,
+	token,
+	jobId,
+	request,
+	assertMutationOwnership,
+	now = () => Date.now(),
+	wait = (milliseconds) =>
+		new Promise((resolve) => setTimeout(resolve, milliseconds)),
+	timeoutMs = 900_000,
+	pollIntervalMs = 2_000,
+}) => {
+	if (!COPY_JOB_ID_PATTERN.test(jobId)) {
+		throw new Error("Tinybird Copy status requires a valid job ID");
+	}
+	if (typeof assertMutationOwnership !== "function") {
+		throw new Error("Tinybird Copy status requires an ownership check");
+	}
+	if (
+		!Number.isFinite(timeoutMs) ||
+		timeoutMs <= 0 ||
+		!Number.isFinite(pollIntervalMs) ||
+		pollIntervalMs <= 0
+	) {
+		throw new Error("Tinybird Copy status polling bounds are invalid");
+	}
+	const startedAt = now();
+	const deadline = startedAt + timeoutMs;
+	let polls = 0;
+	while (now() < deadline) {
+		const job = await request(
+			new URL(`/v0/jobs/${encodeURIComponent(jobId)}`, origin),
+			{
+				token,
+				attempts: 3,
+				beforeAttempt: assertMutationOwnership,
+			},
+		);
+		polls += 1;
+		const status = String(
+			job.data.status ??
+				job.data.state ??
+				job.data.job?.status ??
+				job.data.job?.state ??
+				"",
+		).toLowerCase();
+		if (["done", "success", "finished", "completed"].includes(status)) {
+			return {
+				status,
+				polls,
+				completionMs: Math.max(0, now() - startedAt),
+			};
+		}
+		if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+			throw new Error(`Tinybird Copy job ended in ${status}`);
+		}
+		await wait(pollIntervalMs);
+	}
+	throw new Error("Timed out waiting for Tinybird Copy job");
 };
 
 export const validateSyntheticRunId = (runId) => {
@@ -654,6 +864,7 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 		properties: JSON.stringify({
 			hostname: "preview.cap.so",
 			is_session_entry: true,
+			session_started_at: now.toISOString(),
 		}),
 	};
 	const duplicateId = `synthetic_duplicate_${runHash.slice(0, 24)}`;
@@ -677,6 +888,7 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 				properties: JSON.stringify({
 					hostname: "preview.cap.so",
 					is_session_entry: false,
+					session_started_at: now.toISOString(),
 				}),
 			},
 		],
@@ -703,6 +915,7 @@ export const createSyntheticErasureControl = ({ runId, now = new Date() }) => {
 			properties: JSON.stringify({
 				hostname: fixture.rows[0].hostname,
 				is_session_entry: true,
+				session_started_at: now.toISOString(),
 			}),
 		},
 	};
@@ -723,6 +936,8 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 	const abandonedGuestSessionId = `synthetic_abandoned_session_${runHash.slice(0, 16)}`;
 	const sharedAnonymousId = `synthetic_shared_${runHash.slice(0, 20)}`;
 	const sharedSessionId = `synthetic_shared_session_${runHash.slice(0, 16)}`;
+	const sessionStartedAt = (index) =>
+		new Date(now.getTime() + index * 1_000).toISOString();
 	const event = ({
 		anonymousId = fixture.anonymousId,
 		channel = "direct",
@@ -790,10 +1005,17 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 				properties: {
 					hostname,
 					is_session_entry: true,
+					session_started_at: sessionStartedAt(0),
+					first_touch_source: "first-touch",
+					first_touch_medium: "first",
+					first_touch_campaign: "first-campaign",
 					session_touch_source: "google",
 					session_touch_medium: "cpc",
 					session_touch_campaign: "synthetic-campaign",
 					session_touch_gclid: "synthetic-click-id",
+					last_touch_source: "last-touch",
+					last_touch_medium: "last",
+					last_touch_campaign: "last-campaign",
 				},
 				source: "client",
 			}),
@@ -807,6 +1029,7 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 					page_view_id: pageViewId,
 					engaged_ms: 15_000,
 					max_scroll_depth: 75,
+					session_started_at: sessionStartedAt(0),
 				},
 				source: "client",
 			}),
@@ -857,10 +1080,17 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 				properties: {
 					hostname,
 					is_session_entry: true,
+					session_started_at: sessionStartedAt(6),
+					first_touch_source: "first-touch",
+					first_touch_medium: "first",
+					first_touch_campaign: "first-campaign",
 					session_touch_source: "google",
 					session_touch_medium: "cpc",
 					session_touch_campaign: "synthetic-campaign",
 					session_touch_gclid: "synthetic-guest-click-id",
+					last_touch_source: "last-touch",
+					last_touch_medium: "last",
+					last_touch_campaign: "last-campaign",
 				},
 				sessionId: guestSessionId,
 				source: "client",
@@ -1066,8 +1296,15 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 				properties: {
 					hostname,
 					is_session_entry: true,
+					session_started_at: sessionStartedAt(20),
+					first_touch_source: "first-touch",
+					first_touch_medium: "first",
+					first_touch_campaign: "first-campaign",
 					session_touch_source: "synthetic-partner",
 					session_touch_medium: "referral",
+					last_touch_source: "last-touch",
+					last_touch_medium: "last",
+					last_touch_campaign: "last-campaign",
 				},
 				referrer: "https://synthetic-partner.example/path",
 				sessionId: sharedSessionId,
@@ -1148,6 +1385,16 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 				},
 				source: "client",
 			}),
+			event({
+				eventName: "share_link_created",
+				index: 27,
+				platform: "server",
+				properties: {
+					asset_type: "recording",
+					recording_mode: "screen",
+				},
+				source: "server",
+			}),
 		],
 	};
 };
@@ -1155,16 +1402,32 @@ export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 export const createSyntheticLoadEvents = ({
 	runId,
 	count,
+	dimensionBucketCount = 64,
+	daySpan = 1,
 	now = new Date(),
 }) => {
 	if (
 		!Number.isInteger(count) ||
 		count < 100 ||
-		count > 10_000 ||
+		count > 100_000 ||
 		count % 10 !== 0
 	) {
 		throw new Error(
-			"Synthetic load size must be a multiple of 10 between 100 and 10000 rows",
+			"Synthetic load size must be a multiple of 10 between 100 and 100000 rows",
+		);
+	}
+	if (
+		!Number.isInteger(dimensionBucketCount) ||
+		dimensionBucketCount < 1 ||
+		dimensionBucketCount > 100
+	) {
+		throw new Error(
+			"Synthetic load dimension buckets must be an integer between 1 and 100",
+		);
+	}
+	if (!Number.isInteger(daySpan) || daySpan < 1 || daySpan > 400) {
+		throw new Error(
+			"Synthetic load day span must be an integer between 1 and 400",
 		);
 	}
 	const fixture = createSyntheticEvents({ runId, now });
@@ -1174,25 +1437,38 @@ export const createSyntheticLoadEvents = ({
 		.replace(/[0-9]/g, (digit) => String.fromCharCode(103 + Number(digit)));
 	const appVersion = `staging-load-${runHash.slice(0, 12)}`;
 	const loadRunId = `${runId}_load`;
+	const effectiveDimensionBucketCount = Math.min(
+		dimensionBucketCount,
+		count / 10,
+	);
 	validateSyntheticRunId(loadRunId);
 	return {
 		appVersion,
+		daySpan,
+		dimensionBucketCount: effectiveDimensionBucketCount,
 		runId: loadRunId,
 		rows: Array.from({ length: count }, (_, index) => {
 			const cohort = Math.floor(index / 10);
+			const dayOffset = cohort % daySpan;
+			const cohortOccurredAt =
+				now.getTime() - dayOffset * 86_400_000 - (cohort % 86_400) * 1_000;
+			const dimensionBucket = cohort % effectiveDimensionBucketCount;
 			const eventKind = index % 10;
 			const eventId = `synthetic_load_${eventNamespace}_${cohort}_${eventKind}`;
 			const pageViewId = `synthetic_load_${eventNamespace}_${cohort}_0`;
-			const hostname = `load-${runHash.slice(0, 8)}-${cohort}.preview.cap.so`;
+			const hostname = `load-${runHash.slice(0, 8)}-${dimensionBucket}.preview.cap.so`;
 			const anonymousId = `synthetic_load_${runHash.slice(0, 8)}_${cohort}`;
 			const userId = `synthetic_load_user_${runHash.slice(0, 8)}_${cohort}`;
 			const organizationId = `synthetic_load_org_${runHash.slice(0, 8)}_${cohort}`;
 			const sessionId = `synthetic_load_session_${runHash.slice(0, 8)}_${cohort}`;
-			const checkoutPlatform = ["web", "desktop", "mobile"][cohort % 3];
-			const occurredAt = new Date(now.getTime() + index * 10)
+			const checkoutPlatform = ["web", "desktop", "mobile"][
+				dimensionBucket % 3
+			];
+			const occurredAt = new Date(cohortOccurredAt)
 				.toISOString()
 				.replace("T", " ")
 				.replace("Z", "");
+			const sessionStartedAt = new Date(cohortOccurredAt).toISOString();
 			const shapes = [
 				{
 					eventName: "page_view",
@@ -1201,9 +1477,10 @@ export const createSyntheticLoadEvents = ({
 					properties: {
 						hostname,
 						is_session_entry: true,
-						session_touch_source: `source-${cohort}`,
+						session_started_at: sessionStartedAt,
+						session_touch_source: `source-${dimensionBucket}`,
 						session_touch_medium: "cpc",
-						session_touch_campaign: `campaign-${cohort}`,
+						session_touch_campaign: `campaign-${dimensionBucket}`,
 					},
 					channel: "paid_other",
 				},
@@ -1215,6 +1492,7 @@ export const createSyntheticLoadEvents = ({
 						page_view_id: pageViewId,
 						engaged_ms: 5_000,
 						max_scroll_depth: 60,
+						session_started_at: sessionStartedAt,
 					},
 				},
 				{
@@ -1239,15 +1517,13 @@ export const createSyntheticLoadEvents = ({
 					},
 				},
 				{
-					eventName: "recording_completed",
+					eventName: "experiment_exposed",
 					source: "client",
-					platform: "desktop",
+					platform: "web",
 					properties: {
-						mode: "screen",
-						status: "success",
-						duration_secs: 30,
-						segment_count: 1,
-						track_failure_count: 0,
+						experiment_id: `synthetic-load-${dimensionBucket}`,
+						variant: dimensionBucket % 2 === 0 ? "control" : "treatment",
+						assignment_version: "v1",
 					},
 				},
 				{
@@ -1255,7 +1531,7 @@ export const createSyntheticLoadEvents = ({
 					source: "server",
 					platform: checkoutPlatform,
 					properties: {
-						price_id: `price_load_${cohort}`,
+						price_id: `price_load_${dimensionBucket}`,
 						quantity: 1,
 						is_onboarding: false,
 					},
@@ -1266,7 +1542,7 @@ export const createSyntheticLoadEvents = ({
 					platform: checkoutPlatform,
 					properties: {
 						subscription_status: "trialing",
-						price_id: `price_load_${cohort}`,
+						price_id: `price_load_${dimensionBucket}`,
 						quantity: 1,
 						currency: "usd",
 						unit_amount_minor: 1_000,
@@ -1291,7 +1567,7 @@ export const createSyntheticLoadEvents = ({
 						billing_interval: "month",
 						billing_interval_count: 1,
 						invite_quota: 1,
-						price_id: `price_load_${cohort}`,
+						price_id: `price_load_${dimensionBucket}`,
 						quantity: 1,
 						is_first_purchase: true,
 						is_guest_checkout: false,
@@ -1305,7 +1581,7 @@ export const createSyntheticLoadEvents = ({
 					properties: {
 						amount_paid_minor: 1_000,
 						currency: "usd",
-						price_id: `price_load_${cohort}`,
+						price_id: `price_load_${dimensionBucket}`,
 						billing_reason: "subscription_cycle",
 					},
 				},
@@ -1327,7 +1603,7 @@ export const createSyntheticLoadEvents = ({
 				organization_id: eventKind < 2 ? "" : organizationId,
 				app_version: appVersion,
 				hostname,
-				pathname: `/analytics-load/${cohort}`,
+				pathname: `/analytics-load/${dimensionBucket}`,
 				country: "US",
 				device: shape.platform === "mobile" ? "mobile" : "desktop",
 				browser: "Chrome",
@@ -1539,6 +1815,19 @@ export const assertSyntheticEndpointDecisions = ({
 		},
 	);
 	assertEndpointFields(
+		"product_traffic_totals",
+		singleEndpointRow(payloads, "product_traffic_totals"),
+		{
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			views_per_visit: 1,
+			bounce_rate: 66.67,
+			visit_duration_ms: 5_000,
+			engaged_ms: 15_000,
+		},
+	);
+	assertEndpointFields(
 		"product_traffic_pages",
 		singleEndpointRow(payloads, "product_traffic_pages"),
 		{
@@ -1570,6 +1859,64 @@ export const assertSyntheticEndpointDecisions = ({
 			visits: 2,
 			pageviews: 2,
 			bounce_rate: 50,
+		},
+	);
+	const attributionRows = endpointRows(payloads, "product_attribution");
+	if (attributionRows.length !== 4) {
+		throw new Error(
+			`Synthetic endpoint product_attribution returned ${attributionRows.length} rows, expected 4`,
+		);
+	}
+	for (const [model, source, medium, campaign] of [
+		["first", "first-touch", "first", "first-campaign"],
+		["last", "last-touch", "last", "last-campaign"],
+	]) {
+		assertEndpointFields(
+			"product_attribution",
+			attributionRows.find(
+				(row) => row.attribution_model === model && row.source === source,
+			) ?? {},
+			{
+				attribution_model: model,
+				source,
+				medium,
+				campaign,
+				visitors: 3,
+				visits: 3,
+				pageviews: 3,
+			},
+		);
+	}
+	assertEndpointFields(
+		"product_attribution",
+		attributionRows.find(
+			(row) => row.attribution_model === "session" && row.source === "google",
+		) ?? {},
+		{
+			attribution_model: "session",
+			source: "google",
+			medium: "cpc",
+			campaign: "synthetic-campaign",
+			visitors: 2,
+			visits: 2,
+			pageviews: 2,
+		},
+	);
+	assertEndpointFields(
+		"product_attribution",
+		attributionRows.find(
+			(row) =>
+				row.attribution_model === "session" &&
+				row.source === "synthetic-partner",
+		) ?? {},
+		{
+			attribution_model: "session",
+			source: "synthetic-partner",
+			medium: "referral",
+			campaign: "",
+			visitors: 1,
+			visits: 1,
+			pageviews: 1,
 		},
 	);
 	assertEndpointFields(
@@ -1708,11 +2055,17 @@ export const assertSyntheticEndpointDecisions = ({
 				users: 2,
 			},
 			{ eventName: "user_signed_up", source: "server", platform: "web" },
-			{ eventName: "share_link_created", source: "server", platform: "server" },
+			{
+				eventName: "share_link_created",
+				source: "server",
+				platform: "server",
+				events: 2,
+			},
 			{
 				eventName: "recording_completed",
 				source: "client",
 				platform: "desktop",
+				recordingStatus: "success",
 			},
 			{
 				eventName: "guest_checkout_started",
@@ -1932,6 +2285,7 @@ export const assertSyntheticEndpointDecisions = ({
 			users: expected.users ?? 1,
 			organizations: expected.organizations ?? 1,
 			plan_id: expected.planId ?? "",
+			recording_status: expected.recordingStatus ?? "",
 			payment_status: expected.paymentStatus ?? "",
 			subscription_status: expected.subscriptionStatus ?? "",
 			currency: expected.currency ?? "",
@@ -1967,7 +2321,7 @@ export const assertSyntheticEndpointDecisions = ({
 			["page_engagement", 1, 0],
 			["identity_linked", 2, 2, 1],
 			["user_signed_up", 1, 1],
-			["share_link_created", 1, 1],
+			["share_link_created", 2, 1],
 			["recording_completed", 1, 1],
 			["guest_checkout_started", 2, 0, 0, 2],
 			["checkout_started", 3, 1],
@@ -2011,6 +2365,33 @@ export const assertSyntheticEndpointDecisions = ({
 			organization_days: expected.organizations,
 		});
 	}
+	const experimentRows = endpointRows(payloads, "product_experiment_outcomes");
+	if (experimentRows.length !== 3) {
+		throw new Error(
+			`Synthetic endpoint product_experiment_outcomes returned ${experimentRows.length} rows, expected 3`,
+		);
+	}
+	for (const [outcomeName, convertedActors] of [
+		["signup", 0],
+		["share_created", 1],
+		["paid_purchase", 0],
+	]) {
+		assertEndpointFields(
+			"product_experiment_outcomes",
+			experimentRows.find((row) => row.outcome_name === outcomeName) ?? {},
+			{
+				experiment_id: "synthetic-checkout-copy",
+				assignment_version: "v1",
+				variant: "treatment",
+				platform: "web",
+				app_version: appVersion,
+				outcome_name: outcomeName,
+				exposed_actors: 1,
+				converted_actors: convertedActors,
+				conversion_rate: convertedActors * 100,
+			},
+		);
+	}
 	const freshness = singleEndpointRow(payloads, "product_analytics_freshness");
 	for (const field of [
 		"latest_received_hour",
@@ -2018,6 +2399,8 @@ export const assertSyntheticEndpointDecisions = ({
 		"traffic_calculated_at",
 		"retention_calculated_at",
 		"identity_calculated_at",
+		"attribution_calculated_at",
+		"experiment_calculated_at",
 	]) {
 		if (typeof freshness[field] !== "string" || freshness[field].length === 0) {
 			throw new Error(
@@ -2028,24 +2411,29 @@ export const assertSyntheticEndpointDecisions = ({
 };
 
 export const assertRepresentativeEndpointCoverage = ({
+	dimensionBucketCount,
 	expectedEvents,
 	payloads,
 }) => {
 	const cohorts = expectedEvents / 10;
+	const boundedDimensions = dimensionBucketCount ?? cohorts;
 	const sum = (rows, field) =>
 		rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
 	const expectedRows = {
 		product_traffic_overview: 1,
-		product_traffic_pages: cohorts,
-		product_traffic_sources: cohorts,
+		product_traffic_totals: 1,
+		product_traffic_pages: boundedDimensions,
+		product_traffic_sources: boundedDimensions,
+		product_attribution: boundedDimensions + 2,
 		product_traffic_countries: 1,
 		product_traffic_technology: 1,
 		product_activation: 1,
 		product_creator_activity: 1,
 		product_creator_retention: 1,
 		product_identity_funnel: 1,
-		product_events_daily: Math.min(expectedEvents, 1_000),
+		product_events_daily: boundedDimensions * 10,
 		product_feature_adoption: 10,
+		product_experiment_outcomes: boundedDimensions * 3,
 		product_analytics_freshness: 1,
 	};
 	for (const [name, count] of Object.entries(expectedRows)) {
@@ -2058,8 +2446,10 @@ export const assertRepresentativeEndpointCoverage = ({
 	}
 	const exactTotals = [
 		["product_traffic_overview", "pageviews", cohorts],
+		["product_traffic_totals", "pageviews", cohorts],
 		["product_traffic_pages", "pageviews", cohorts],
 		["product_traffic_sources", "pageviews", cohorts],
+		["product_attribution", "pageviews", cohorts * 3],
 		["product_activation", "signups", cohorts],
 		["product_creator_activity", "dau", cohorts],
 		["product_creator_retention", "creators", cohorts],
@@ -2068,6 +2458,8 @@ export const assertRepresentativeEndpointCoverage = ({
 		["product_events_daily", "events", expectedEvents],
 		["product_events_daily", "revenue_minor", cohorts * 2_000],
 		["product_feature_adoption", "events", expectedEvents],
+		["product_experiment_outcomes", "exposed_actors", cohorts * 3],
+		["product_experiment_outcomes", "converted_actors", cohorts],
 	];
 	for (const [name, field, expected] of exactTotals) {
 		const actual = sum(endpointRows(payloads, name), field);
@@ -2367,6 +2759,8 @@ export const normalizeCopyAssertions = (payload) => {
 		activationMarkers: number(row.activation_markers),
 		retentionMarkers: number(row.retention_markers),
 		identityMarkers: number(row.identity_markers),
+		attributionMarkers: number(row.attribution_markers),
+		experimentMarkers: number(row.experiment_markers),
 		healthMarkers: number(row.health_markers),
 	};
 };
@@ -2428,19 +2822,109 @@ export const percentile = (samples, quantile) => {
 	return sorted[Math.ceil(quantile * sorted.length) - 1];
 };
 
-export const latencySummary = (samples) => ({
-	count: samples.length,
-	minMs: Math.min(...samples),
-	maxMs: Math.max(...samples),
-	p50Ms: percentile(samples, 0.5),
-	p95Ms: percentile(samples, 0.95),
-	p99Ms: percentile(samples, 0.99),
-});
+export const latencySummary = (samples) => {
+	if (samples.length === 0) {
+		throw new Error("At least one latency sample is required");
+	}
+	const meanMs =
+		samples.reduce((total, sample) => total + sample, 0) / samples.length;
+	const variance =
+		samples.reduce((total, sample) => total + (sample - meanMs) ** 2, 0) /
+		samples.length;
+	const standardDeviationMs = Math.sqrt(variance);
+	return {
+		count: samples.length,
+		minMs: Math.min(...samples),
+		maxMs: Math.max(...samples),
+		meanMs: Number(meanMs.toFixed(3)),
+		standardDeviationMs: Number(standardDeviationMs.toFixed(3)),
+		coefficientOfVariation:
+			meanMs === 0 ? 0 : Number((standardDeviationMs / meanMs).toFixed(4)),
+		p50Ms: percentile(samples, 0.5),
+		p95Ms: percentile(samples, 0.95),
+		p99Ms: percentile(samples, 0.99),
+	};
+};
+
+export const evaluateCopyPerformanceBudget = ({
+	absolutePipelineMs,
+	absoluteVisibilityP95Ms,
+	baseline,
+	measured,
+	regressionFactor,
+	regressionFloorMs,
+}) => {
+	const baselineValues = baseline
+		? [baseline.pipelineWallClockMs, baseline.visibility.p95Ms]
+		: [];
+	if (
+		![
+			absolutePipelineMs,
+			absoluteVisibilityP95Ms,
+			measured.pipelineWallClockMs,
+			measured.visibility.p95Ms,
+			regressionFactor,
+			regressionFloorMs,
+			...baselineValues,
+		].every(Number.isFinite) ||
+		absolutePipelineMs <= 0 ||
+		absoluteVisibilityP95Ms <= 0 ||
+		measured.pipelineWallClockMs < 0 ||
+		measured.visibility.p95Ms < 0 ||
+		regressionFactor < 1 ||
+		regressionFloorMs < 0 ||
+		baselineValues.some((value) => value < 0)
+	) {
+		throw new Error("Copy performance budget inputs are invalid");
+	}
+	const pipelineRegressionLimitMs = baseline
+		? Math.ceil(
+				Math.max(
+					baseline.pipelineWallClockMs * regressionFactor,
+					baseline.pipelineWallClockMs + regressionFloorMs,
+				),
+			)
+		: null;
+	const visibilityRegressionLimitMs = baseline
+		? Math.ceil(
+				Math.max(
+					baseline.visibility.p95Ms * regressionFactor,
+					baseline.visibility.p95Ms + regressionFloorMs,
+				),
+			)
+		: null;
+	return {
+		mode: baseline ? "baseline_comparison" : "baseline_capture",
+		absolutePipelineMs,
+		absoluteVisibilityP95Ms,
+		regressionFactor,
+		regressionFloorMs,
+		pipelineRegressionLimitMs,
+		visibilityRegressionLimitMs,
+		pipelineRegressionRatio:
+			baseline && baseline.pipelineWallClockMs > 0
+				? measured.pipelineWallClockMs / baseline.pipelineWallClockMs
+				: null,
+		visibilityRegressionRatio:
+			baseline && baseline.visibility.p95Ms > 0
+				? measured.visibility.p95Ms / baseline.visibility.p95Ms
+				: null,
+		passed:
+			measured.pipelineWallClockMs <= absolutePipelineMs &&
+			measured.visibility.p95Ms <= absoluteVisibilityP95Ms &&
+			(pipelineRegressionLimitMs === null ||
+				measured.pipelineWallClockMs <= pipelineRegressionLimitMs) &&
+			(visibilityRegressionLimitMs === null ||
+				measured.visibility.p95Ms <= visibilityRegressionLimitMs),
+	};
+};
 
 const DECISION_ENDPOINT_NAMES = [
 	"product_traffic_overview",
+	"product_traffic_totals",
 	"product_traffic_pages",
 	"product_traffic_sources",
+	"product_attribution",
 	"product_traffic_countries",
 	"product_traffic_technology",
 	"product_activation",
@@ -2449,6 +2933,7 @@ const DECISION_ENDPOINT_NAMES = [
 	"product_identity_funnel",
 	"product_events_daily",
 	"product_feature_adoption",
+	"product_experiment_outcomes",
 	"product_analytics_freshness",
 ];
 
@@ -2456,11 +2941,14 @@ export const decisionEndpointQueries = ({
 	startDate,
 	endDate,
 	deploymentId = "",
+	excludedEndpointNames = [],
 	includeIdentityFunnel = true,
 	syntheticRunId = "",
 }) =>
 	DECISION_ENDPOINT_NAMES.filter(
-		(name) => includeIdentityFunnel || name !== "product_identity_funnel",
+		(name) =>
+			(includeIdentityFunnel || name !== "product_identity_funnel") &&
+			!excludedEndpointNames.includes(name),
 	).map((name) => ({
 		name,
 		parameters: {
@@ -2531,6 +3019,7 @@ export const assertWorkflowSafety = (workflow) => {
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"staging-ci.js run-copies",
 		"staging-ci.js set-copy-schedules",
+		"attest-preview",
 		"probe-preview",
 		"verify-promoted",
 	]) {

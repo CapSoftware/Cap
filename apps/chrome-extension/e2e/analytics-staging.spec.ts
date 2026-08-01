@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { expect, test } from "@playwright/test";
 
@@ -27,7 +28,13 @@ const requiredEnvironment = (name: string) => {
 	return value;
 };
 
-test("exact-SHA browser tracker preserves sessions, retries, unloads, and its main-thread budget", async ({
+const percentile = (samples: readonly number[], value: number) => {
+	if (samples.length === 0) throw new Error("Performance samples are required");
+	const sorted = [...samples].sort((left, right) => left - right);
+	return sorted[Math.ceil((value / 100) * sorted.length) - 1];
+};
+
+test("exact-SHA browser tracker preserves sessions, retries, unloads, and matched-control performance", async ({
 	browser,
 }) => {
 	const previewUrl = requiredEnvironment("ANALYTICS_PREVIEW_URL");
@@ -49,22 +56,33 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and its ma
 	});
 	const captured: CapturedEvent[] = [];
 	const acceptedEventIds = new Set<string>();
+	const benchmarkEventIds = new Set<string>();
 	let acceptedRequests = 0;
 	let failedRequests = 0;
+	let benchmarking = false;
 	context.on("request", (request) => {
 		if (!request.url().endsWith("/api/events") || request.method() !== "POST") {
 			return;
 		}
-		captured.push(...requestEvents(request));
+		const events = requestEvents(request);
+		if (
+			benchmarking ||
+			events.some((event) => benchmarkEventIds.has(event.eventId))
+		) {
+			return;
+		}
+		captured.push(...events);
 	});
 	context.on("response", (response) => {
 		if (
 			response.url().endsWith("/api/events") &&
 			response.request().method() === "POST"
 		) {
+			const events = requestEvents(response.request());
+			if (events.some((event) => benchmarkEventIds.has(event.eventId))) return;
 			if (response.ok()) {
 				acceptedRequests += 1;
-				for (const event of requestEvents(response.request())) {
+				for (const event of events) {
 					acceptedEventIds.add(event.eventId);
 				}
 			}
@@ -215,6 +233,158 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and its ma
 		process.env.ANALYTICS_BROWSER_TASK_BUDGET_MS ?? 1_500,
 	);
 	expect(interactionTaskDurationMs).toBeLessThanOrEqual(taskDurationBudgetMs);
+
+	const captureSampleCount = 30;
+	let benchmarkCapturedEvents = 0;
+	let benchmarkCapturedEngagementEvents = 0;
+	await context.route("**/api/events", async (route) => {
+		const events = requestEvents(route.request());
+		benchmarkCapturedEvents += events.length;
+		benchmarkCapturedEngagementEvents += events.filter(
+			(event) => event.eventName === "page_engagement",
+		).length;
+		for (const event of events) benchmarkEventIds.add(event.eventId);
+		await route.fulfill({
+			body: JSON.stringify({ accepted: events.length }),
+			contentType: "application/json",
+			status: 200,
+		});
+	});
+	benchmarking = true;
+	const longTaskSupported = await page.evaluate(() => {
+		const benchmarkWindow = window as typeof window & {
+			__capAnalyticsLongTaskObserver?: PerformanceObserver;
+			__capAnalyticsLongTasks?: Array<{ duration: number; startTime: number }>;
+		};
+		benchmarkWindow.__capAnalyticsLongTaskObserver?.disconnect();
+		benchmarkWindow.__capAnalyticsLongTasks = [];
+		if (!PerformanceObserver.supportedEntryTypes.includes("longtask")) {
+			return false;
+		}
+		const observer = new PerformanceObserver((entries) => {
+			for (const entry of entries.getEntries()) {
+				benchmarkWindow.__capAnalyticsLongTasks?.push({
+					duration: entry.duration,
+					startTime: entry.startTime,
+				});
+			}
+		});
+		observer.observe({ type: "longtask" });
+		benchmarkWindow.__capAnalyticsLongTaskObserver = observer;
+		Object.defineProperty(navigator, "sendBeacon", {
+			configurable: true,
+			value: () => false,
+		});
+		window.addEventListener("cap-analytics-control-pointerdown", () => {}, {
+			passive: true,
+		});
+		window.addEventListener("cap-analytics-control-pagehide", () => {}, {
+			passive: true,
+		});
+		return true;
+	});
+	expect(longTaskSupported).toBe(true);
+	type DispatchMeasurement = {
+		durationMs: number;
+		endedAt: number;
+		startedAt: number;
+	};
+	const dispatchMeasurement = async (
+		control: boolean,
+		event: "pagehide" | "pointerdown",
+	): Promise<DispatchMeasurement> =>
+		page.evaluate(
+			({ control, event }) => {
+				const startedAt = performance.now();
+				if (control) {
+					window.dispatchEvent(
+						event === "pagehide"
+							? new PageTransitionEvent("cap-analytics-control-pagehide")
+							: new Event("cap-analytics-control-pointerdown"),
+					);
+				} else if (event === "pagehide") {
+					window.dispatchEvent(new PageTransitionEvent("pagehide"));
+				} else {
+					window.dispatchEvent(new Event("pointerdown"));
+				}
+				const endedAt = performance.now();
+				return { durationMs: endedAt - startedAt, endedAt, startedAt };
+			},
+			{ control, event },
+		);
+	const captureMeasurements: number[] = [];
+	const controlMeasurements: number[] = [];
+	const captureWindows: Array<{ endedAt: number; startedAt: number }> = [];
+	const controlWindows: Array<{ endedAt: number; startedAt: number }> = [];
+	const measureCapture = async (control: boolean) => {
+		const pointer = await dispatchMeasurement(control, "pointerdown");
+		await page.waitForTimeout(5);
+		const pagehide = await dispatchMeasurement(control, "pagehide");
+		const windows = control ? controlWindows : captureWindows;
+		windows.push(pointer, pagehide);
+		return pointer.durationMs + pagehide.durationMs;
+	};
+	for (let index = 0; index < captureSampleCount; index += 1) {
+		if (index % 2 === 0) {
+			controlMeasurements.push(await measureCapture(true));
+			captureMeasurements.push(await measureCapture(false));
+		} else {
+			captureMeasurements.push(await measureCapture(false));
+			controlMeasurements.push(await measureCapture(true));
+		}
+		await page.waitForTimeout(10);
+	}
+	await expect
+		.poll(() => benchmarkCapturedEngagementEvents, { timeout: 15_000 })
+		.toBeGreaterThanOrEqual(captureSampleCount);
+	await page.waitForTimeout(100);
+	const longTasks = await page.evaluate(() => {
+		const benchmarkWindow = window as typeof window & {
+			__capAnalyticsLongTaskObserver?: PerformanceObserver;
+			__capAnalyticsLongTasks?: Array<{ duration: number; startTime: number }>;
+		};
+		benchmarkWindow.__capAnalyticsLongTaskObserver?.disconnect();
+		return benchmarkWindow.__capAnalyticsLongTasks ?? [];
+	});
+	benchmarking = false;
+	await context.unroute("**/api/events");
+	const overlapsWindow = (
+		entry: { duration: number; startTime: number },
+		windows: ReadonlyArray<{ endedAt: number; startedAt: number }>,
+	) =>
+		windows.some(
+			(window) =>
+				entry.startTime < window.endedAt &&
+				entry.startTime + entry.duration > window.startedAt,
+		);
+	const captureLongTasks = longTasks.filter((entry) =>
+		overlapsWindow(entry, captureWindows),
+	);
+	const controlLongTasks = longTasks.filter((entry) =>
+		overlapsWindow(entry, controlWindows),
+	);
+	const perEventDeltas = captureMeasurements.map((duration, index) =>
+		Math.max(0, duration - controlMeasurements[index]),
+	);
+	const captureP50Ms = percentile(perEventDeltas, 50);
+	const captureP95Ms = percentile(perEventDeltas, 95);
+	const captureP99Ms = percentile(perEventDeltas, 99);
+	const captureP95BudgetMs = Number(
+		process.env.ANALYTICS_BROWSER_CAPTURE_P95_BUDGET_MS ?? 2,
+	);
+	const captureP99BudgetMs = Number(
+		process.env.ANALYTICS_BROWSER_CAPTURE_P99_BUDGET_MS ?? 5,
+	);
+	const additionalLongTaskBudget = Number(
+		process.env.ANALYTICS_BROWSER_LONG_TASK_BUDGET ?? 0,
+	);
+	expect(captureMeasurements).toHaveLength(captureSampleCount);
+	expect(controlMeasurements).toHaveLength(captureSampleCount);
+	expect(captureP95Ms).toBeLessThanOrEqual(captureP95BudgetMs);
+	expect(captureP99Ms).toBeLessThanOrEqual(captureP99BudgetMs);
+	expect(captureLongTasks.length).toBeLessThanOrEqual(
+		controlLongTasks.length + additionalLongTaskBudget,
+	);
 	const uniqueEventIds = new Set(captured.map((event) => event.eventId));
 	expect(uniqueEventIds.size).toBeGreaterThanOrEqual(6);
 	expect(
@@ -223,12 +393,21 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and its ma
 	expect(captured.some((event) => event.eventName === "page_engagement")).toBe(
 		true,
 	);
+	const anonymousId = await page.evaluate(() =>
+		localStorage.getItem("cap_analytics_anonymous_id_v1"),
+	);
+	if (!anonymousId) {
+		throw new Error("Browser analytics anonymous identity was not persisted");
+	}
 
 	const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<
 		string,
 		unknown
 	>;
 	state.browserExpectedEvents = acceptedEventIds.size;
+	state.browserAnonymousIdentityHash = createHash("sha256")
+		.update(`anonymous\0${anonymousId}`)
+		.digest("hex");
 	fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, {
 		mode: 0o600,
 	});
@@ -253,6 +432,32 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and its ma
 		unloadPassed: true,
 		interactionTaskDurationMs,
 		taskDurationBudgetMs,
+		capturePerformance: {
+			capturedEngagementEvents: benchmarkCapturedEngagementEvents,
+			capturedEvents: benchmarkCapturedEvents,
+			captureP50Ms,
+			captureP95BudgetMs,
+			captureP95Ms,
+			captureP99BudgetMs,
+			captureP99Ms,
+			captureSamples: captureMeasurements,
+			controlP50Ms: percentile(controlMeasurements, 50),
+			controlP95Ms: percentile(controlMeasurements, 95),
+			controlP99Ms: percentile(controlMeasurements, 99),
+			controlSamples: controlMeasurements,
+			additionalLongTaskBudget,
+			captureLongTaskCount: captureLongTasks.length,
+			captureLongTaskMaxDurationMs: Math.max(
+				0,
+				...captureLongTasks.map((entry) => entry.duration),
+			),
+			controlLongTaskCount: controlLongTasks.length,
+			controlLongTaskMaxDurationMs: Math.max(
+				0,
+				...controlLongTasks.map((entry) => entry.duration),
+			),
+			sampleCount: captureSampleCount,
+		},
 	};
 	artifact.assertions = {
 		...(artifact.assertions ?? {}),

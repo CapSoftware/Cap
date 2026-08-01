@@ -1,9 +1,11 @@
+import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import process from "node:process";
 
 import {
 	applyCopyScheduleAction,
 	assertExecutionScope,
+	assertPreviewTinybirdAttestation,
 	assertRepresentativeEndpointCoverage,
 	assertSyntheticBusinessDecisions,
 	assertSyntheticDecisions,
@@ -15,6 +17,7 @@ import {
 	assertSyntheticMonetizationFilters,
 	COPY_PIPES,
 	copyScheduleMatchesAction,
+	createDeploymentBoundary,
 	createSyntheticDecisionEvents,
 	createSyntheticErasureControl,
 	createSyntheticEvents,
@@ -22,6 +25,7 @@ import {
 	dataMutationDeploymentParameters,
 	decisionEndpointQueries,
 	evaluateBundleBudget,
+	evaluateCopyPerformanceBudget,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	hashIdentifier,
@@ -30,6 +34,7 @@ import {
 	normalizeCopyAssertions,
 	normalizeHealth,
 	reconcileCleanupTarget,
+	resolveDeploymentCreatedAfterBoundary,
 	resolveDeploymentState,
 	resolveExactDeploymentLifecycle,
 	resolveExactPromotionPlan,
@@ -89,6 +94,50 @@ const writeJson = (filePath, value, mode = 0o644) => {
 	});
 };
 
+const exactSha = (value, label) => {
+	if (!/^[0-9a-f]{40}$/.test(value)) {
+		throw new Error(`${label} must be an exact 40-character Git SHA`);
+	}
+	return value;
+};
+
+const recoveryIdentity = () => ({
+	eventName: environment("GITHUB_EVENT_NAME"),
+	expectedSha: exactSha(environment("EXPECTED_SHA"), "EXPECTED_SHA"),
+	headRef: process.env.HEAD_REF ?? "",
+	pullRequest: process.env.EVENT_NUMBER ?? "",
+	ref: environment("GITHUB_REF"),
+	repository: environment("GITHUB_REPOSITORY"),
+	runAttempt: environment("GITHUB_RUN_ATTEMPT"),
+	runId: environment("GITHUB_RUN_ID"),
+	workspaceId: environment("TINYBIRD_WORKSPACE_ID"),
+});
+
+const assertRecoveryIdentity = (value) => {
+	const expected = recoveryIdentity();
+	for (const [name, expectedValue] of Object.entries(expected)) {
+		if (String(value?.[name] ?? "") !== expectedValue) {
+			throw new Error(`Recovery checkpoint ${name} does not match this run`);
+		}
+	}
+	const pullRequestScope =
+		expected.eventName === "pull_request" &&
+		expected.pullRequest === "2003" &&
+		expected.headRef === "codex/first-party-analytics";
+	const dispatchScope =
+		expected.eventName === "workflow_dispatch" &&
+		expected.ref === "refs/heads/codex/first-party-analytics";
+	if (
+		(!pullRequestScope && !dispatchScope) ||
+		expected.workspaceId !== STAGING_WORKSPACE_ID
+	) {
+		throw new Error(
+			"Recovery is restricted to the analytics staging pull request",
+		);
+	}
+	return expected;
+};
+
 const TINYBIRD_TOKEN_NAMES = [
 	"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	"TINYBIRD_STAGING_COPY_TOKEN",
@@ -98,6 +147,17 @@ const TINYBIRD_TOKEN_NAMES = [
 	"TINYBIRD_STAGING_READ_TOKEN",
 	"TINYBIRD_STAGING_CLEANUP_TOKEN",
 ];
+
+const PREVIEW_TINYBIRD_TOKEN_ENV = {
+	PRODUCT_ANALYTICS_TINYBIRD_TOKEN: "TINYBIRD_STAGING_INGEST_TOKEN",
+	PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN: "TINYBIRD_STAGING_READ_TOKEN",
+	PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN: "TINYBIRD_STAGING_CLEANUP_TOKEN",
+	PRODUCT_ANALYTICS_TINYBIRD_ERASURE_LOOKUP_TOKEN:
+		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
+	PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN: "TINYBIRD_STAGING_COPY_TOKEN",
+	PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN:
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
+};
 
 const tinybirdEnvironment = (requiredTokenNames = TINYBIRD_TOKEN_NAMES) => {
 	if (environment("TINYBIRD_WORKSPACE_ID") !== STAGING_WORKSPACE_ID) {
@@ -192,16 +252,56 @@ const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
 		appVersion === state.previewAppVersion &&
 		state.previewStartTime &&
 		state.previewEndTime;
-	return request(
-		tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
-			start_time: previewWindow ? state.previewStartTime : state.startTime,
-			end_time: previewWindow ? state.previewEndTime : state.endTime,
-			platform: "web",
-			app_version: appVersion ?? state.appVersion,
-			__tb__deployment: deploymentId,
-		}),
-		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
+	const allPlatformCorpus = [
+		state.loadAppVersion,
+		state.largeLoadAppVersion,
+	].includes(appVersion);
+	const startTime = previewWindow ? state.previewStartTime : state.startTime;
+	const endTime = previewWindow ? state.previewEndTime : state.endTime;
+	const windows = [];
+	const endMs = Date.parse(endTime);
+	for (let startMs = Date.parse(startTime); startMs <= endMs; ) {
+		const endExclusiveMs = Math.min(startMs + 30 * 86_400_000, endMs + 1);
+		windows.push({
+			startTime: new Date(startMs).toISOString(),
+			endTime: new Date(endExclusiveMs - 1).toISOString(),
+		});
+		startMs = endExclusiveMs;
+	}
+	const startedAt = performance.now();
+	const results = await Promise.all(
+		windows.map((window) =>
+			request(
+				tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
+					start_time: window.startTime,
+					end_time: window.endTime,
+					platform: allPlatformCorpus ? undefined : "web",
+					app_version: appVersion ?? state.appVersion,
+					__tb__deployment: deploymentId,
+				}),
+				{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
+			),
+		),
 	);
+	if (results.length === 1) return results[0];
+	const total = {
+		received_rows: 0,
+		unique_events: 0,
+		unique_payloads: 0,
+		duplicate_rows: 0,
+		payload_conflicts: 0,
+	};
+	for (const result of results) {
+		const row = result.data?.data?.[0] ?? {};
+		for (const name of Object.keys(total)) {
+			total[name] += Number(row[name] ?? 0);
+		}
+	}
+	return {
+		data: { data: [total] },
+		latencyMs: Math.round(performance.now() - startedAt),
+		attempt: Math.max(...results.map((result) => result.attempt)),
+	};
 };
 
 const ciAssertionsQuery = async ({
@@ -266,20 +366,103 @@ const deploymentList = async ({ origin, token }) =>
 		attempts: 3,
 	});
 
+const prepareDeploymentBoundary = async () => {
+	const outputPath = option("output");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	const deployments = await deploymentList({
+		origin,
+		token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+	});
+	const boundary = createDeploymentBoundary(deployments.data);
+	writeJson(
+		outputPath,
+		{
+			schemaVersion: 1,
+			identity: recoveryIdentity(),
+			phase: "precreate",
+			preview: {
+				deploymentId: environment("VERCEL_DEPLOYMENT_ID"),
+				url: new URL(environment("VERCEL_PREVIEW_URL")).origin,
+			},
+			tinybird: {
+				...boundary,
+				createStartedAt: new Date().toISOString(),
+			},
+		},
+		0o600,
+	);
+};
+
 const exactDeployment = async ({ origin, token, deploymentId }) =>
 	request(
 		tinybirdUrl(origin, `/v1/deployments/${encodeURIComponent(deploymentId)}`),
 		{ token, attempts: 3 },
 	);
 
+const settledDeploymentLifecycle = async ({ origin, token, deploymentId }) => {
+	const deadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	while (Date.now() < deadline) {
+		try {
+			const lifecycle = resolveExactDeploymentLifecycle(
+				(await exactDeployment({ origin, token, deploymentId })).data,
+				deploymentId,
+			);
+			if (lifecycle !== "deleting") return lifecycle;
+		} catch (error) {
+			if (error instanceof Error && error.status === 404) return "deleted";
+			throw error;
+		}
+		await delay(2_000);
+	}
+	throw new Error("Timed out resolving a deleting Tinybird deployment");
+};
+
+const prepareOwnedPromotion = async () => {
+	const deploymentId = option("deployment-id");
+	const statePath = option("state");
+	const state = readJson(statePath);
+	if (
+		String(state.deploymentId) !== deploymentId ||
+		state.needsPromotion !== true
+	) {
+		throw new Error("Tinybird promotion checkpoint does not own the candidate");
+	}
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	const current = await deploymentList({
+		origin,
+		token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+	});
+	const plan = resolveExactPromotionPlan(current.data, deploymentId);
+	state.previousLiveDeploymentId = plan.previousLiveDeploymentId;
+	state.recoveryPhase = "prepromote";
+	writeJson(statePath, state, 0o600);
+	writeOutput("previous_live_id", plan.previousLiveDeploymentId);
+};
+
 const promoteOwnedDeployment = async () => {
 	const deploymentId = option("deployment-id");
+	const state = readJson(option("state"));
+	if (
+		String(state.deploymentId) !== deploymentId ||
+		state.recoveryPhase !== "prepromote" ||
+		!/^\d+$/.test(String(state.previousLiveDeploymentId ?? ""))
+	) {
+		throw new Error("Tinybird promotion requires a persisted promotion plan");
+	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
 	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
 	const initial = await deploymentList({ origin, token });
 	const plan = resolveExactPromotionPlan(initial.data, deploymentId);
+	if (plan.previousLiveDeploymentId !== state.previousLiveDeploymentId) {
+		throw new Error("The persisted Tinybird promotion plan is stale");
+	}
 	writeOutput("previous_live_id", plan.previousLiveDeploymentId);
 	const promotionDeadline =
 		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
@@ -564,18 +747,17 @@ const drillOwnedRollback = async () => {
 	}
 	let rollbackEndpointSuite;
 	let rollbackProbeError;
-	let retainedIdentityFunnelAvailable = false;
+	let excludedRollbackEndpoints = [];
 	try {
-		retainedIdentityFunnelAvailable = await decisionEndpointAvailable({
+		excludedRollbackEndpoints = await unavailableDecisionEndpoints({
 			deploymentId: previousLiveDeploymentId,
-			name: "product_identity_funnel",
 			origin,
 			state,
 			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 		});
 		rollbackEndpointSuite = await queryDecisionEndpointSuite({
 			deploymentId: previousLiveDeploymentId,
-			includeIdentityFunnel: retainedIdentityFunnelAvailable,
+			excludedEndpointNames: excludedRollbackEndpoints,
 			origin,
 			state,
 			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
@@ -677,7 +859,7 @@ const drillOwnedRollback = async () => {
 		restoredEndpointLatencyMs: restoredEndpointSuite.latencyMs,
 		restoredMonetizationFilterLatencyMs: restoredMonetizationFilters.latencyMs,
 		restoredIdentityFilterLatencyMs: restoredIdentityFilters.latencyMs,
-		retainedIdentityFunnelAvailable,
+		excludedRollbackEndpoints,
 		verifiedAt: new Date().toISOString(),
 	};
 	writeJson(artifactPath, artifact);
@@ -717,18 +899,17 @@ const rollbackOwnedPromotion = async () => {
 		});
 	}
 	let rollbackEndpointSuite;
-	let retainedIdentityFunnelAvailable = false;
+	let excludedRollbackEndpoints = [];
 	try {
-		retainedIdentityFunnelAvailable = await decisionEndpointAvailable({
+		excludedRollbackEndpoints = await unavailableDecisionEndpoints({
 			deploymentId: previousLiveDeploymentId,
-			name: "product_identity_funnel",
 			origin,
 			state,
 			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 		});
 		rollbackEndpointSuite = await queryDecisionEndpointSuite({
 			deploymentId: previousLiveDeploymentId,
-			includeIdentityFunnel: retainedIdentityFunnelAvailable,
+			excludedEndpointNames: excludedRollbackEndpoints,
 			origin,
 			state,
 			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
@@ -766,16 +947,16 @@ const rollbackOwnedPromotion = async () => {
 			restoredDeploymentId: previousLiveDeploymentId,
 			rejectedDeploymentId: deploymentId,
 			endpointLatencyMs: rollbackEndpointSuite.latencyMs,
-			retainedIdentityFunnelAvailable,
+			excludedRollbackEndpoints,
 			verifiedAt: new Date().toISOString(),
 		};
 		writeJson(artifactPath, artifact);
 	}
 };
 
-const discardOwnedDeployment = async () => {
-	const deploymentId = option("deployment-id");
-	const artifactPath = options.get("artifact");
+const discardOwnedDeployment = async (parameters = {}) => {
+	const deploymentId = parameters.deploymentId ?? option("deployment-id");
+	const artifactPath = parameters.artifactPath ?? options.get("artifact");
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
@@ -846,6 +1027,13 @@ const decisionEndpointQuery = async ({ origin, token, name, parameters }) =>
 		attempts: 3,
 	});
 
+const ROLLBACK_OPTIONAL_DECISION_ENDPOINTS = [
+	"product_traffic_totals",
+	"product_attribution",
+	"product_identity_funnel",
+	"product_experiment_outcomes",
+];
+
 const decisionEndpointAvailable = async ({
 	deploymentId,
 	name,
@@ -868,8 +1056,32 @@ const decisionEndpointAvailable = async ({
 	}
 };
 
+const unavailableDecisionEndpoints = async ({
+	deploymentId,
+	origin,
+	state,
+	token,
+}) => {
+	const availability = await Promise.all(
+		ROLLBACK_OPTIONAL_DECISION_ENDPOINTS.map(async (name) => ({
+			available: await decisionEndpointAvailable({
+				deploymentId,
+				name,
+				origin,
+				state,
+				token,
+			}),
+			name,
+		})),
+	);
+	return availability
+		.filter(({ available }) => !available)
+		.map(({ name }) => name);
+};
+
 const queryDecisionEndpointSuite = async ({
 	deploymentId,
+	excludedEndpointNames = [],
 	includeIdentityFunnel = true,
 	origin,
 	state,
@@ -883,6 +1095,7 @@ const queryDecisionEndpointSuite = async ({
 		startDate: state.startTime.slice(0, 10),
 		endDate,
 		deploymentId,
+		excludedEndpointNames,
 		includeIdentityFunnel,
 		syntheticRunId,
 	});
@@ -1050,6 +1263,100 @@ const waitForVercel = async () => {
 	);
 };
 
+const verifyFreshPullRequestHead = async () => {
+	const repository = environment("GITHUB_REPOSITORY");
+	const token = environment("GITHUB_TOKEN");
+	const apiOrigin = environment("GITHUB_API_URL");
+	const expectedSha = environment("EXPECTED_SHA");
+	const pullRequestNumber = process.env.EVENT_NUMBER?.trim() || "2003";
+	if (pullRequestNumber !== "2003") {
+		throw new Error("Analytics staging promotion is restricted to PR 2003");
+	}
+	const response = await fetch(
+		new URL(`/repos/${repository}/pulls/${pullRequestNumber}`, apiOrigin),
+		{
+			headers: {
+				Accept: "application/vnd.github+json",
+				Authorization: `Bearer ${token}`,
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+			signal: AbortSignal.timeout(15_000),
+		},
+	);
+	if (!response.ok) {
+		throw new Error(
+			`GitHub pull request lookup failed with HTTP ${response.status}`,
+		);
+	}
+	const pullRequest = await response.json();
+	if (
+		pullRequest.state !== "open" ||
+		pullRequest.head?.ref !== "codex/first-party-analytics" ||
+		pullRequest.head?.sha !== expectedSha
+	) {
+		throw new Error(
+			"The analytics pull request head changed after this staging run started",
+		);
+	}
+};
+
+const attestPreviewTinybird = async () => {
+	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
+	const previewOrigin = new URL(environment("ANALYTICS_PREVIEW_URL")).origin;
+	const runId = validateSyntheticRunId(environment("ANALYTICS_TEST_RUN_ID"));
+	const { origin: expectedOrigin, tokens } = tinybirdEnvironment(
+		Object.values(PREVIEW_TINYBIRD_TOKEN_ENV),
+	);
+	const expectedTokenHashes = Object.fromEntries(
+		Object.entries(PREVIEW_TINYBIRD_TOKEN_ENV).map(
+			([runtimeName, environmentName]) => [
+				runtimeName,
+				createHmac("sha256", `${secret}:${runId}`)
+					.update(tokens[environmentName])
+					.digest("hex"),
+			],
+		),
+	);
+	const url = new URL("/api/analytics/staging-test/attest", previewOrigin);
+	const body = (sha) => JSON.stringify({ runId, sha });
+	const send = (authorization, sha = environment("EXPECTED_SHA")) =>
+		previewRequest(url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(authorization ? { Authorization: authorization } : {}),
+			},
+			body: body(sha),
+		});
+	const unauthorized = await send();
+	if (unauthorized.status !== 401) {
+		throw new Error(
+			`The preview configuration attestation accepted missing authorization with HTTP ${unauthorized.status}`,
+		);
+	}
+	const wrongSha = await send(
+		`Bearer ${secret}`,
+		"0000000000000000000000000000000000000000",
+	);
+	if (wrongSha.status !== 400) {
+		throw new Error(
+			`The preview configuration attestation accepted a wrong SHA with HTTP ${wrongSha.status}`,
+		);
+	}
+	const response = await send(`Bearer ${secret}`);
+	if (!response.ok) {
+		throw new Error(
+			`The preview configuration attestation failed with HTTP ${response.status}`,
+		);
+	}
+	assertPreviewTinybirdAttestation({
+		attestation: await response.json(),
+		expectedOrigin,
+		expectedSha: environment("EXPECTED_SHA"),
+		expectedTokenHashes,
+	});
+};
+
 const previewCookies = (headers) => {
 	const values =
 		typeof headers.getSetCookie === "function"
@@ -1076,6 +1383,52 @@ const previewRequest = async (url, init = {}) => {
 		},
 		signal: init.signal ?? AbortSignal.timeout(20_000),
 	});
+};
+
+const cleanupPreviewDatabaseState = async ({
+	anonymousIdentityHashes,
+	artifact,
+	runIds,
+	secret,
+}) => {
+	const url = new URL(
+		"/api/analytics/staging-test/cleanup-database",
+		artifact.vercel.url,
+	);
+	const response = await previewRequest(url, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${secret}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			anonymousIdentityHashes,
+			runId: runIds[0],
+			scopeRunIds: runIds,
+			sha: artifact.sha,
+		}),
+		signal: AbortSignal.timeout(60_000),
+	});
+	if (!response.ok) {
+		throw new Error(
+			`The scoped staging database cleanup failed with HTTP ${response.status}`,
+		);
+	}
+	const result = await response.json();
+	if (
+		result.cleaned !== true ||
+		Number(result.remaining) !== 0 ||
+		Number(result.runIds) !== runIds.length ||
+		Number(result.identityHashes) < anonymousIdentityHashes.length
+	) {
+		throw new Error("The scoped staging database cleanup was incomplete");
+	}
+	return {
+		cleaned: true,
+		identityHashes: Number(result.identityHashes),
+		remaining: Number(result.remaining),
+		runIds: Number(result.runIds),
+	};
 };
 
 const measurePageBundle = async ({ landing, requestImpl }) => {
@@ -1178,6 +1531,7 @@ const probePreview = async () => {
 		properties: {
 			hostname: new URL(previewOrigin).hostname,
 			is_session_entry: true,
+			session_started_at: occurredAt,
 		},
 	};
 	const body = JSON.stringify({
@@ -1192,8 +1546,7 @@ const probePreview = async () => {
 			contract_rejected: 0,
 		},
 	});
-	const collectorLatencySamples = [];
-	const post = async (cookieHeader = cookies) => {
+	const post = async ({ cookieHeader = cookies, requestBody = body } = {}) => {
 		const startedAt = performance.now();
 		const response = await previewRequest(
 			new URL("/api/events", previewOrigin),
@@ -1207,38 +1560,137 @@ const probePreview = async () => {
 					"User-Agent": "Cap-Analytics-Staging-E2E/1.0",
 					"x-cap-analytics-test-run": previewRunId,
 				},
-				body,
+				body: requestBody,
 			},
 		);
-		collectorLatencySamples.push(Math.round(performance.now() - startedAt));
-		return response;
+		return {
+			latencyMs: Math.round(performance.now() - startedAt),
+			response,
+		};
 	};
-	const missingToken = await post("");
-	if (missingToken.status !== 400) {
+	const missingToken = await post({ cookieHeader: "" });
+	if (missingToken.response.status !== 400) {
 		throw new Error(
-			`The preview collector accepted a missing browser token with HTTP ${missingToken.status}`,
+			`The preview collector accepted a missing browser token with HTTP ${missingToken.response.status}`,
 		);
 	}
-	const expiredToken = await post(
-		`cap_analytics_anonymous_id=${anonymousId}; cap_analytics_browser_token=v1.0.${anonymousId}.expired`,
-	);
-	if (expiredToken.status !== 400) {
+	const expiredToken = await post({
+		cookieHeader: `cap_analytics_anonymous_id=${anonymousId}; cap_analytics_browser_token=v1.0.${anonymousId}.expired`,
+	});
+	if (expiredToken.response.status !== 400) {
 		throw new Error(
-			`The preview collector accepted an expired browser token with HTTP ${expiredToken.status}`,
+			`The preview collector accepted an expired browser token with HTTP ${expiredToken.response.status}`,
 		);
 	}
 	const duplicateResponses = await Promise.all([post(), post()]);
-	if (duplicateResponses.some((response) => !response.ok)) {
+	if (duplicateResponses.some(({ response }) => !response.ok)) {
 		throw new Error(
 			"The preview collector rejected a valid concurrent duplicate",
 		);
 	}
+	const collectorRequestCount = Number(
+		process.env.COLLECTOR_PERFORMANCE_REQUESTS ?? 20,
+	);
+	const collectorConcurrency = Number(
+		process.env.COLLECTOR_PERFORMANCE_CONCURRENCY ?? 4,
+	);
+	if (
+		!Number.isInteger(collectorRequestCount) ||
+		collectorRequestCount < 10 ||
+		collectorRequestCount > 40 ||
+		!Number.isInteger(collectorConcurrency) ||
+		collectorConcurrency < 1 ||
+		collectorConcurrency > 8
+	) {
+		throw new Error("Collector performance configuration is invalid");
+	}
+	const collectorBatches = Array.from(
+		{ length: collectorRequestCount },
+		(_, batchIndex) =>
+			JSON.stringify({
+				events: Array.from({ length: 20 }, (_, eventIndex) => ({
+					...event,
+					eventId: `synthetic_preview_load_${runHash.slice(0, 16)}_${batchIndex}_${eventIndex}`,
+					occurredAt: new Date(
+						Date.parse(occurredAt) + batchIndex * 20 + eventIndex,
+					).toISOString(),
+					pathname: `/analytics-synthetic/load-${eventIndex}`,
+					properties: {
+						...event.properties,
+						is_session_entry: batchIndex === 0 && eventIndex === 0,
+					},
+				})),
+				delivery: {
+					attempted: 20,
+					accepted: 0,
+					retried: 0,
+					dropped: 0,
+					queue_overflow: 0,
+					oversize: 0,
+					contract_rejected: 0,
+				},
+			}),
+	);
+	const collectorBenchmarkStartedAt = performance.now();
+	const collectorLatencySamples = [];
+	let collectorAcceptedEvents = 0;
+	let collectorErrors = 0;
+	for (
+		let offset = 0;
+		offset < collectorBatches.length;
+		offset += collectorConcurrency
+	) {
+		const wave = await Promise.all(
+			collectorBatches
+				.slice(offset, offset + collectorConcurrency)
+				.map((requestBody) => post({ requestBody })),
+		);
+		for (const result of wave) {
+			collectorLatencySamples.push(result.latencyMs);
+			if (!result.response.ok) {
+				collectorErrors += 1;
+				continue;
+			}
+			const payload = await result.response.json();
+			if (Number(payload.accepted) !== 20) {
+				collectorErrors += 1;
+				continue;
+			}
+			collectorAcceptedEvents += 20;
+		}
+	}
+	const collectorElapsedMs = Math.max(
+		1,
+		Math.round(performance.now() - collectorBenchmarkStartedAt),
+	);
+	const collectorLatency = latencySummary(collectorLatencySamples);
+	const collectorP95BudgetMs = Number(
+		process.env.COLLECTOR_P95_BUDGET_MS ?? 2_500,
+	);
+	const collectorP99BudgetMs = Number(
+		process.env.COLLECTOR_P99_BUDGET_MS ?? 3_000,
+	);
+	const collectorMinimumEventsPerSecond = Number(
+		process.env.COLLECTOR_MINIMUM_EVENTS_PER_SECOND ?? 50,
+	);
+	const collectorEventsPerSecond = Math.round(
+		(collectorAcceptedEvents * 1_000) / collectorElapsedMs,
+	);
+	if (
+		collectorErrors !== 0 ||
+		collectorAcceptedEvents !== collectorBatches.length * 20 ||
+		collectorLatency.p95Ms > collectorP95BudgetMs ||
+		collectorLatency.p99Ms > collectorP99BudgetMs ||
+		collectorEventsPerSecond < collectorMinimumEventsPerSecond
+	) {
+		throw new Error("The exact-SHA collector performance budget failed");
+	}
 	const minimumAccepted = Number(process.env.RATE_LIMIT_MIN_ACCEPTED ?? 20);
-	const maximumAccepted = Number(process.env.RATE_LIMIT_MAX_ACCEPTED ?? 80);
+	const maximumAccepted = Number(process.env.RATE_LIMIT_MAX_ACCEPTED ?? 120);
 	let replayAccepted = 0;
 	let rateLimited = false;
 	for (let index = 0; index <= maximumAccepted; index += 1) {
-		const response = await post();
+		const { response } = await post();
 		if (response.status === 429) {
 			rateLimited = true;
 			break;
@@ -1255,17 +1707,13 @@ const probePreview = async () => {
 			`The preview rate limit accepted ${replayAccepted} replay requests before ${rateLimited ? "limiting too aggressively" : "failing to limit"}`,
 		);
 	}
-	const collectorLatency = latencySummary(collectorLatencySamples);
-	const collectorP95BudgetMs = Number(
-		process.env.COLLECTOR_P95_BUDGET_MS ?? 3_000,
+	state.previewAcceptedRows =
+		duplicateResponses.length + replayAccepted + collectorAcceptedEvents;
+	state.previewExpectedEvents =
+		Number(state.browserExpectedEvents ?? 0) + 1 + collectorAcceptedEvents;
+	state.previewAnonymousIdentityHash = hashIdentifier(
+		`anonymous\0${anonymousId}`,
 	);
-	if (collectorLatency.p95Ms > collectorP95BudgetMs) {
-		throw new Error(
-			`The exact-SHA collector p95 was ${collectorLatency.p95Ms}ms, over ${collectorP95BudgetMs}ms`,
-		);
-	}
-	state.previewAcceptedRows = duplicateResponses.length + replayAccepted;
-	state.previewExpectedEvents = Number(state.browserExpectedEvents ?? 0) + 1;
 	state.previewStartTime = new Date(
 		new Date(occurredAt).getTime() - 120_000,
 	).toISOString();
@@ -1276,10 +1724,21 @@ const probePreview = async () => {
 		missingTokenRejected: true,
 		expiredTokenRejected: true,
 		concurrentDuplicateAccepted: true,
+		collectorPerformance: {
+			acceptedEvents: collectorAcceptedEvents,
+			concurrency: collectorConcurrency,
+			elapsedMs: collectorElapsedMs,
+			errorCount: collectorErrors,
+			eventsPerSecond: collectorEventsPerSecond,
+			latency: collectorLatency,
+			requestCount: collectorRequestCount,
+		},
 		replayAcceptedBeforeRateLimit: replayAccepted,
 		rateLimitPassed: true,
 		collectorLatency,
 		collectorP95BudgetMs,
+		collectorP99BudgetMs,
+		collectorMinimumEventsPerSecond,
 	};
 	artifact.bundle = {
 		baselineOrigin,
@@ -1346,7 +1805,7 @@ const probeDurableServerPath = async () => {
 	const result = await response.json();
 	if (
 		Number(result.accepted) !== 5 ||
-		Number(result.uniqueEvents) !== 4 ||
+		Number(result.uniqueEvents) !== 5 ||
 		!Array.isArray(result.workflowRuns) ||
 		result.workflowRuns.length !== 5
 	) {
@@ -1382,33 +1841,133 @@ const probeDurableServerPath = async () => {
 			}
 		},
 	});
+	const healthUrl = new URL(
+		"/api/analytics/staging-test/health",
+		artifact.vercel.url,
+	);
+	const healthResponse = await previewRequest(healthUrl, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${secret}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ runId: serverRunId, sha: artifact.sha }),
+	});
+	if (!healthResponse.ok) {
+		throw new Error(
+			`The durable outbox health probe failed with HTTP ${healthResponse.status}`,
+		);
+	}
+	const outboxHealth = await healthResponse.json();
+	if (
+		outboxHealth.healthy !== false ||
+		Number(outboxHealth.activeEvents) !== 0 ||
+		Number(outboxHealth.deadLetterEvents) !== 1 ||
+		Number(outboxHealth.payloadConflictEvents) !== 0 ||
+		Number(outboxHealth.receiptPayloadConflictEvents) !== 0 ||
+		Number(outboxHealth.receiptPayloadConflictAttempts) !== 0 ||
+		Number(outboxHealth.provider429Retries) !== 1 ||
+		Number(outboxHealth.provider503Retries) !== 1 ||
+		Number(outboxHealth.timeoutAfterAcceptRetries) !== 1 ||
+		Number(outboxHealth.providerRejectedDeadLetters) !== 1
+	) {
+		throw new Error(
+			"The durable staging outbox did not expose the expected retry and dead-letter evidence",
+		);
+	}
+	const databaseCleanup = await cleanupPreviewDatabaseState({
+		anonymousIdentityHashes: [],
+		artifact,
+		runIds: [serverRunId],
+		secret,
+	});
+	const cleanHealthResponse = await previewRequest(healthUrl, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${secret}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ runId: serverRunId, sha: artifact.sha }),
+	});
+	if (!cleanHealthResponse.ok) {
+		throw new Error(
+			`The durable outbox cleanup health probe failed with HTTP ${cleanHealthResponse.status}`,
+		);
+	}
+	const cleanHealth = await cleanHealthResponse.json();
+	if (
+		cleanHealth.healthy !== true ||
+		Number(cleanHealth.activeEvents) !== 0 ||
+		Number(cleanHealth.deadLetterEvents) !== 0 ||
+		Number(cleanHealth.payloadConflictEvents) !== 0 ||
+		Number(cleanHealth.receiptPayloadConflictEvents) !== 0 ||
+		Number(cleanHealth.receiptPayloadConflictAttempts) !== 0
+	) {
+		throw new Error("The durable staging database cleanup was incomplete");
+	}
 	artifact.serverDelivery = {
-		acceptedRows: 5,
+		acceptedRows: visibility.value.receivedRows,
 		uniqueEvents: 4,
 		duplicateRows: visibility.value.duplicateRows,
 		workflowRuns: 5,
+		provider429RetryPassed: true,
+		provider503RetryPassed: true,
+		providerRejectionDeadLetterPassed: true,
+		lostAcknowledgementRetryPassed: true,
 		visibilityMs: visibility.visibilityMs,
+		databaseCleanup,
+		outboxHealth: {
+			activeEvents: Number(outboxHealth.activeEvents),
+			deadLetterEvents: Number(outboxHealth.deadLetterEvents),
+			oldestActiveAgeSeconds: Number(outboxHealth.oldestActiveAgeSeconds),
+			payloadConflictEvents: Number(outboxHealth.payloadConflictEvents),
+			receiptPayloadConflictAttempts: Number(
+				outboxHealth.receiptPayloadConflictAttempts,
+			),
+			receiptPayloadConflictEvents: Number(
+				outboxHealth.receiptPayloadConflictEvents,
+			),
+		},
 		unauthorizedRejected: true,
 		wrongShaRejected: true,
 	};
 	artifact.assertions = {
 		...artifact.assertions,
 		durableServerPathPassed: true,
+		durableOutboxHealthPassed: true,
+		durableDatabaseCleanupPassed: true,
 		serverDuplicateDeliveryPassed: true,
 	};
 	writeJson(artifactPath, artifact);
 };
 
-const seed = async () => {
+const prepareSeed = async () => {
 	const runId = validateSyntheticRunId(option("run-id"));
 	const deploymentId = option("deployment-id");
 	const statePath = option("state");
 	const artifactPath = option("artifact");
-	const sha = environment("EXPECTED_SHA");
-	const { origin, tokens } = tinybirdEnvironment([
-		"TINYBIRD_STAGING_COPY_TOKEN",
-		"TINYBIRD_STAGING_INGEST_TOKEN",
-	]);
+	const boundary = readJson(option("boundary"));
+	assertRecoveryIdentity(boundary.identity);
+	const needsPromotionValue = option("needs-promotion");
+	if (!["true", "false"].includes(needsPromotionValue)) {
+		throw new Error("--needs-promotion must be true or false");
+	}
+	const needsPromotion = needsPromotionValue === "true";
+	if (
+		needsPromotion &&
+		String(boundary.tinybird?.liveDeploymentId ?? "") === deploymentId
+	) {
+		throw new Error(
+			"A Tinybird candidate cannot equal the prior live deployment",
+		);
+	}
+	if (
+		!needsPromotion &&
+		String(boundary.tinybird?.liveDeploymentId ?? "") !== deploymentId
+	) {
+		throw new Error("A Tinybird no-op must retain the prior live deployment");
+	}
+	const sha = exactSha(environment("EXPECTED_SHA"), "EXPECTED_SHA");
 	const startedAt = new Date();
 	const fixture = createSyntheticEvents({ runId, now: startedAt });
 	const erasureControl = createSyntheticErasureControl({
@@ -1422,11 +1981,19 @@ const seed = async () => {
 	const loadFixture = createSyntheticLoadEvents({
 		runId,
 		count: Number(process.env.PERFORMANCE_EVENT_COUNT ?? 1_000),
+		daySpan: Number(process.env.PERFORMANCE_DAY_SPAN ?? 30),
+		dimensionBucketCount: Number(
+			process.env.PERFORMANCE_DIMENSION_BUCKETS ?? 32,
+		),
 		now: startedAt,
 	});
 	const largeLoadFixture = createSyntheticLoadEvents({
 		runId: `${runId}_large`,
-		count: Number(process.env.LARGE_PERFORMANCE_EVENT_COUNT ?? 10_000),
+		count: Number(process.env.LARGE_PERFORMANCE_EVENT_COUNT ?? 100_000),
+		daySpan: Number(process.env.LARGE_PERFORMANCE_DAY_SPAN ?? 80),
+		dimensionBucketCount: Number(
+			process.env.LARGE_PERFORMANCE_DIMENSION_BUCKETS ?? 64,
+		),
 		now: startedAt,
 	});
 	if (largeLoadFixture.rows.length <= loadFixture.rows.length) {
@@ -1437,17 +2004,28 @@ const seed = async () => {
 	const previewRunId = validateSyntheticRunId(`${runId}_preview`);
 	const previewAppVersion = `staging-preview-${hashIdentifier(runId).slice(0, 12)}`;
 	const state = {
+		recoveryIdentity: boundary.identity,
+		recoveryPhase: "preseed",
 		runId,
 		previewRunId,
 		previewAppVersion,
+		previewAnonymousIdentityHash: hashIdentifier(
+			`anonymous\0synthetic_${previewRunId}`,
+		),
 		deploymentId,
+		liveBeforeDeploymentId: boundary.tinybird.liveDeploymentId,
+		needsPromotion,
 		appVersion: fixture.appVersion,
 		loadAppVersion: loadFixture.appVersion,
+		loadDaySpan: loadFixture.daySpan,
 		loadRunId: loadFixture.runId,
 		loadEventCount: loadFixture.rows.length,
+		loadDimensionBucketCount: loadFixture.dimensionBucketCount,
 		largeLoadAppVersion: largeLoadFixture.appVersion,
+		largeLoadDaySpan: largeLoadFixture.daySpan,
 		largeLoadRunId: largeLoadFixture.runId,
 		largeLoadEventCount: largeLoadFixture.rows.length,
+		largeLoadDimensionBucketCount: largeLoadFixture.dimensionBucketCount,
 		decisionRunId: decisionFixture.runId,
 		decisionAppVersion: decisionFixture.appVersion,
 		decisionEventCount: decisionFixture.rows.length,
@@ -1467,7 +2045,15 @@ const seed = async () => {
 		erasureControlRunId: erasureControl.runId,
 		erasureControlAppVersion: erasureControl.appVersion,
 		startedAt: startedAt.toISOString(),
-		startTime: new Date(startedAt.getTime() - 120_000).toISOString(),
+		startTime: new Date(
+			Math.floor(
+				(startedAt.getTime() -
+					(Math.max(loadFixture.daySpan, largeLoadFixture.daySpan) - 1) *
+						86_400_000 -
+					12 * 60 * 60 * 1_000) /
+					3_600_000,
+			) * 3_600_000,
+		).toISOString(),
 		endTime: new Date(startedAt.getTime() + 300_000).toISOString(),
 	};
 	writeJson(statePath, state, 0o600);
@@ -1492,11 +2078,15 @@ const seed = async () => {
 		},
 		load: {
 			rowsPlanned: loadFixture.rows.length,
+			daySpan: loadFixture.daySpan,
+			dimensionBucketCount: loadFixture.dimensionBucketCount,
 			rowsAttempted: 0,
 			rowsAccepted: 0,
 		},
 		largeLoad: {
 			rowsPlanned: largeLoadFixture.rows.length,
+			daySpan: largeLoadFixture.daySpan,
+			dimensionBucketCount: largeLoadFixture.dimensionBucketCount,
 			rowsAttempted: 0,
 			rowsAccepted: 0,
 		},
@@ -1516,6 +2106,56 @@ const seed = async () => {
 		assertions: { seedAccepted: false },
 	};
 	writeJson(artifactPath, artifact);
+};
+
+const seed = async () => {
+	const runId = validateSyntheticRunId(option("run-id"));
+	const deploymentId = option("deployment-id");
+	const statePath = option("state");
+	const artifactPath = option("artifact");
+	const state = readJson(statePath);
+	const artifact = readJson(artifactPath);
+	assertRecoveryIdentity(state.recoveryIdentity);
+	if (
+		state.recoveryPhase !== "preseed" ||
+		state.runId !== runId ||
+		String(state.deploymentId) !== deploymentId ||
+		artifact.sha !== environment("EXPECTED_SHA") ||
+		String(artifact.tinybird?.deploymentId ?? "") !== deploymentId
+	) {
+		throw new Error("Tinybird seed does not match its persisted checkpoint");
+	}
+	const startedAt = new Date(state.startedAt);
+	if (!Number.isFinite(startedAt.getTime())) {
+		throw new Error("Tinybird seed checkpoint has an invalid start time");
+	}
+	const fixture = createSyntheticEvents({ runId, now: startedAt });
+	const erasureControl = createSyntheticErasureControl({
+		runId,
+		now: startedAt,
+	});
+	const decisionFixture = createSyntheticDecisionEvents({
+		runId,
+		now: startedAt,
+	});
+	const loadFixture = createSyntheticLoadEvents({
+		runId,
+		count: state.loadEventCount,
+		daySpan: state.loadDaySpan,
+		dimensionBucketCount: state.loadDimensionBucketCount,
+		now: startedAt,
+	});
+	const largeLoadFixture = createSyntheticLoadEvents({
+		runId: `${runId}_large`,
+		count: state.largeLoadEventCount,
+		daySpan: state.largeLoadDaySpan,
+		dimensionBucketCount: state.largeLoadDimensionBucketCount,
+		now: startedAt,
+	});
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_COPY_TOKEN",
+		"TINYBIRD_STAGING_INGEST_TOKEN",
+	]);
 	const deliver = async (row, fixtureRow = false) => {
 		if (fixtureRow) {
 			artifact.delivery.rowsAttempted += 1;
@@ -1553,48 +2193,83 @@ const seed = async () => {
 	const deliveries = [...concurrentDeliveries, ...separateBatchDeliveries];
 	const sendLoadFixture = async (fixture, artifactKey) => {
 		const batchSize = Number(process.env.PERFORMANCE_INGEST_BATCH_SIZE ?? 500);
+		const concurrency = Number(process.env.PERFORMANCE_INGEST_CONCURRENCY ?? 4);
 		if (!Number.isInteger(batchSize) || batchSize < 100 || batchSize > 1_000) {
 			throw new Error("Performance ingestion batch size must be 100 to 1000");
+		}
+		if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) {
+			throw new Error("Performance ingestion concurrency must be 1 to 8");
 		}
 		artifact[artifactKey].rowsAttempted = fixture.rows.length;
 		writeJson(artifactPath, artifact);
 		const started = performance.now();
 		const latencies = [];
 		let accepted = 0;
+		let errorCount = 0;
 		let retryAttempts = 0;
+		const batches = [];
 		for (let offset = 0; offset < fixture.rows.length; offset += batchSize) {
-			const batch = fixture.rows.slice(offset, offset + batchSize);
-			const delivery = await request(
-				tinybirdUrl(origin, "/v0/events", {
-					name: "product_events_v1",
-					wait: "true",
-					__tb__min_deployment: deploymentId,
+			batches.push(fixture.rows.slice(offset, offset + batchSize));
+		}
+		for (let offset = 0; offset < batches.length; offset += concurrency) {
+			const wave = await Promise.all(
+				batches.slice(offset, offset + concurrency).map(async (batch) => {
+					const batchStartedAt = performance.now();
+					try {
+						const delivery = await request(
+							tinybirdUrl(origin, "/v0/events", {
+								name: "product_events_v1",
+								wait: "true",
+								__tb__min_deployment: deploymentId,
+							}),
+							{
+								token: tokens.TINYBIRD_STAGING_INGEST_TOKEN,
+								method: "POST",
+								body: `${batch.map((row) => JSON.stringify(row)).join("\n")}\n`,
+								headers: { "Content-Type": "application/x-ndjson" },
+								attempts: 1,
+							},
+						);
+						return {
+							accepted: batch.length,
+							error: false,
+							latencyMs: delivery.latencyMs,
+							retryAttempts: delivery.attempt - 1,
+						};
+					} catch {
+						return {
+							accepted: 0,
+							error: true,
+							latencyMs: Math.round(performance.now() - batchStartedAt),
+							retryAttempts: 0,
+						};
+					}
 				}),
-				{
-					token: tokens.TINYBIRD_STAGING_INGEST_TOKEN,
-					method: "POST",
-					body: `${batch.map((row) => JSON.stringify(row)).join("\n")}\n`,
-					headers: { "Content-Type": "application/x-ndjson" },
-					attempts: 1,
-				},
 			);
-			latencies.push(delivery.latencyMs);
-			retryAttempts += delivery.attempt - 1;
-			accepted += batch.length;
+			for (const result of wave) {
+				latencies.push(result.latencyMs);
+				accepted += result.accepted;
+				retryAttempts += result.retryAttempts;
+				if (result.error) errorCount += 1;
+			}
 		}
 		const elapsedMs = Math.max(1, Math.round(performance.now() - started));
 		artifact[artifactKey] = {
+			...artifact[artifactKey],
 			rows: fixture.rows.length,
 			rowsPlanned: fixture.rows.length,
 			rowsAttempted: fixture.rows.length,
 			rowsAccepted: accepted,
 			batchSize,
-			batches: latencies.length,
+			concurrency,
+			batches: batches.length,
 			batchLatency: latencySummary(latencies),
-			errorRate: 0,
+			errorCount,
+			errorRate: errorCount / batches.length,
 			retryAttempts,
-			rowsPerSecond: Math.round((fixture.rows.length * 1_000) / elapsedMs),
+			rowsPerSecond: Math.round((accepted * 1_000) / elapsedMs),
 		};
+		writeJson(artifactPath, artifact);
 	};
 	await sendLoadFixture(loadFixture, "load");
 	await sendLoadFixture(largeLoadFixture, "largeLoad");
@@ -1683,6 +2358,28 @@ const waitForCopyVisibility = async ({ label, read, assert }) => {
 	);
 };
 
+const waitForCopyJobs = async ({
+	jobs,
+	origin,
+	token,
+	assertMutationOwnership,
+}) => {
+	const completions = [];
+	for (const job of jobs) {
+		completions.push({
+			pipe: job.pipe,
+			...(await waitForTinybirdCopyJob({
+				origin,
+				token,
+				jobId: job.jobId,
+				request,
+				assertMutationOwnership,
+			})),
+		});
+	}
+	return completions;
+};
+
 const phaseRunExpectations = ({ state, phase }) => {
 	const expectations = [
 		{
@@ -1735,9 +2432,9 @@ const phaseRunExpectations = ({ state, phase }) => {
 				phase === "cleanup" ? 0 : Number(state.previewExpectedEvents ?? 1),
 		});
 	}
-	if (state.serverRunId && phase !== "staged") {
+	if ((state.serverRunId || phase === "cleanup") && phase !== "staged") {
 		expectations.push({
-			runId: state.serverRunId,
+			runId: state.serverRunId ?? `${state.runId}_server`,
 			canonicalEvents:
 				phase === "cleanup" ? 0 : Number(state.serverExpectedEvents),
 			decisionEvents:
@@ -1858,12 +2555,14 @@ const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 	return health;
 };
 
-const runCopies = async () => {
-	const state = readJson(option("state"));
-	const artifactPath = option("artifact");
+const runCopies = async (parameters = {}) => {
+	const state =
+		parameters.state ?? readJson(parameters.statePath ?? option("state"));
+	const artifactPath = parameters.artifactPath ?? option("artifact");
 	const artifact = readJson(artifactPath);
-	const phase = option("phase");
-	const requestedTarget = option("target");
+	const phase = parameters.phase ?? option("phase");
+	const requestedTarget = parameters.target ?? option("target");
+	const deploymentId = parameters.deploymentId ?? option("deployment-id");
 	if (!["staged", "promoted", "erasure", "cleanup"].includes(phase)) {
 		throw new Error("Tinybird copy phase is invalid");
 	}
@@ -1872,7 +2571,7 @@ const runCopies = async () => {
 			"Tinybird Copy mutations are allowed only after staging promotion",
 		);
 	}
-	if (String(state.deploymentId) !== option("deployment-id")) {
+	if (String(state.deploymentId) !== deploymentId) {
 		throw new Error("Tinybird copy deployment does not match the seeded run");
 	}
 	const { origin, tokens } = tinybirdEnvironment([
@@ -1882,6 +2581,8 @@ const runCopies = async () => {
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
 	const executeCopies = async (target) => {
+		const pipelineStartedAt = performance.now();
+		const sourceCutoff = new Date().toISOString();
 		const assertMutationOwnership = async () => {
 			if (
 				(await ownedMutationTarget({
@@ -1893,12 +2594,42 @@ const runCopies = async () => {
 				throw new Error("The owned Tinybird deployment target changed");
 			}
 		};
+		const stateJobs = await submitTinybirdCopyJobs({
+			origin,
+			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+			deploymentId: state.deploymentId,
+			request,
+			pipes: [
+				"snapshot_product_event_id_states_v2",
+				"snapshot_product_event_day_states_v2",
+			],
+			sourceCutoff,
+			assertMutationOwnership,
+		});
+		artifact.copyJobs = {
+			...artifact.copyJobs,
+			[phase]: {
+				status: "state_in_progress",
+				target,
+				copyRunHash: hashIdentifier(copyRunId),
+				sourceCutoff,
+				jobs: stateJobs,
+			},
+		};
+		writeJson(artifactPath, artifact);
+		const stateJobCompletions = await waitForCopyJobs({
+			jobs: stateJobs,
+			origin,
+			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+			assertMutationOwnership,
+		});
 		const canonicalJobs = await submitTinybirdCopyJobs({
 			origin,
 			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
 			deploymentId: state.deploymentId,
 			request,
 			pipes: ["snapshot_product_events_canonical_v1"],
+			sourceCutoff,
 			assertMutationOwnership,
 		});
 		artifact.copyJobs = {
@@ -1907,7 +2638,9 @@ const runCopies = async () => {
 				status: "in_progress",
 				target,
 				copyRunHash: hashIdentifier(copyRunId),
-				jobs: canonicalJobs,
+				sourceCutoff,
+				jobs: [...stateJobs, ...canonicalJobs],
+				stateJobCompletions,
 			},
 		};
 		writeJson(artifactPath, artifact);
@@ -1950,6 +2683,14 @@ const runCopies = async () => {
 				marker: "identityMarkers",
 			},
 			{
+				pipe: "snapshot_product_attribution_daily_exact",
+				marker: "attributionMarkers",
+			},
+			{
+				pipe: "snapshot_product_experiment_outcomes_exact",
+				marker: "experimentMarkers",
+			},
+			{
 				pipe: "snapshot_product_events_health_hourly",
 				marker: "healthMarkers",
 			},
@@ -1963,6 +2704,7 @@ const runCopies = async () => {
 					request,
 					pipes: [copyStep.pipe],
 					copyRunId,
+					sourceCutoff,
 					assertMutationOwnership,
 				})),
 			);
@@ -1996,16 +2738,28 @@ const runCopies = async () => {
 			};
 		}
 		await assertMutationOwnership();
+		const visibility = latencySummary([
+			...stateJobCompletions.map((completion) => completion.completionMs),
+			canonicalVisibility.visibilityMs,
+			...Object.values(downstreamVisibility).map(
+				(copyVisibility) => copyVisibility.visibilityMs,
+			),
+		]);
 		return {
 			status: "passed",
 			target,
 			copyRunHash: hashIdentifier(copyRunId),
-			jobs: [...canonicalJobs, ...downstreamJobs],
+			jobs: [...stateJobs, ...canonicalJobs, ...downstreamJobs],
+			stateJobCompletions,
 			canonicalVisibility: {
 				polls: canonicalVisibility.polls,
 				visibilityMs: canonicalVisibility.visibilityMs,
 			},
 			downstreamVisibility: { copies: downstreamVisibility },
+			performance: {
+				pipelineWallClockMs: Math.round(performance.now() - pipelineStartedAt),
+				visibility,
+			},
 		};
 	};
 	let target = requestedTarget;
@@ -2015,12 +2769,56 @@ const runCopies = async () => {
 		transitionAttempt += 1
 	) {
 		try {
+			const result = await executeCopies(target);
+			const baseline = artifact.copyPerformance?.baseline ?? null;
+			const budget = evaluateCopyPerformanceBudget({
+				absolutePipelineMs: Number(
+					process.env.COPY_PIPELINE_WALL_CLOCK_BUDGET_MS ?? 600_000,
+				),
+				absoluteVisibilityP95Ms: Number(
+					process.env.COPY_VISIBILITY_P95_BUDGET_MS ?? 120_000,
+				),
+				baseline,
+				measured: result.performance,
+				regressionFactor: Number(process.env.COPY_REGRESSION_FACTOR ?? 2),
+				regressionFloorMs: Number(
+					process.env.COPY_REGRESSION_FLOOR_MS ?? 30_000,
+				),
+			});
+			const phasePerformance = {
+				...result.performance,
+				budget,
+			};
+			artifact.copyPerformance = {
+				providerResourceMetrics: {
+					available: false,
+					limitation:
+						"Tinybird Copy job completion is polled for the prerequisite state rebuild, but provider resource metrics remain unavailable; CI measures job completion, marker visibility, and end-to-end pipeline wall-clock.",
+				},
+				baseline: baseline ?? {
+					phase,
+					pipelineWallClockMs: result.performance.pipelineWallClockMs,
+					visibility: result.performance.visibility,
+				},
+				phases: {
+					...artifact.copyPerformance?.phases,
+					[phase]: phasePerformance,
+				},
+			};
 			artifact.copyJobs = {
 				...artifact.copyJobs,
-				[phase]: await executeCopies(target),
+				[phase]: {
+					...result,
+					performance: phasePerformance,
+				},
 			};
 			if (phase === "cleanup") writeOutput("target", target);
 			writeJson(artifactPath, artifact);
+			if (!budget.passed) {
+				throw new Error(
+					`Tinybird Copy performance budget failed for ${phase}: pipeline ${result.performance.pipelineWallClockMs}ms, visibility p95 ${result.performance.visibility.p95Ms}ms`,
+				);
+			}
 			return;
 		} catch (error) {
 			if (phase === "cleanup" && target === "staging") {
@@ -2053,11 +2851,11 @@ const runCopies = async () => {
 	throw new Error("Tinybird cleanup copies changed target more than once");
 };
 
-const setCopySchedules = async () => {
-	const state = readJson(option("state"));
-	const artifactPath = option("artifact");
+const setCopySchedules = async (parameters = {}) => {
+	const state = parameters.state ?? readJson(option("state"));
+	const artifactPath = parameters.artifactPath ?? option("artifact");
 	const artifact = readJson(artifactPath);
-	const action = option("action");
+	const action = parameters.action ?? option("action");
 	if (!["pause", "resume"].includes(action)) {
 		throw new Error("Tinybird Copy schedule action must be pause or resume");
 	}
@@ -2380,21 +3178,23 @@ const verify = async () => {
 			"Tinybird performance baseline must be a numeric deployment",
 		);
 	}
-	const retainedIdentityFunnelAvailable =
-		baselineDeploymentId === state.deploymentId ||
-		(await decisionEndpointAvailable({
-			deploymentId: baselineDeploymentId,
-			name: "product_identity_funnel",
-			origin,
-			state,
-			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
-		}));
-	const baselineQueries = decisionEndpointQueries({
-		startDate: state.startTime.slice(0, 10),
-		endDate: state.endTime.slice(0, 10),
-		deploymentId: baselineDeploymentId,
-		includeIdentityFunnel: retainedIdentityFunnelAvailable,
-	});
+	const hasIndependentBaseline = baselineDeploymentId !== state.deploymentId;
+	const excludedBaselineEndpoints = hasIndependentBaseline
+		? await unavailableDecisionEndpoints({
+				deploymentId: baselineDeploymentId,
+				origin,
+				state,
+				token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			})
+		: [];
+	const baselineQueries = hasIndependentBaseline
+		? decisionEndpointQueries({
+				startDate: state.startTime.slice(0, 10),
+				endDate: state.endTime.slice(0, 10),
+				deploymentId: baselineDeploymentId,
+				excludedEndpointNames: excludedBaselineEndpoints,
+			})
+		: [];
 	const measuredQueries = decisionEndpointQueries({
 		startDate: state.startTime.slice(0, 10),
 		endDate: state.endTime.slice(0, 10),
@@ -2420,6 +3220,7 @@ const verify = async () => {
 		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 	});
 	assertRepresentativeEndpointCoverage({
+		dimensionBucketCount: state.loadDimensionBucketCount,
 		expectedEvents: state.loadEventCount,
 		payloads: representativeCoverage.payloads,
 	});
@@ -2431,6 +3232,7 @@ const verify = async () => {
 		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 	});
 	assertRepresentativeEndpointCoverage({
+		dimensionBucketCount: state.largeLoadDimensionBucketCount,
 		expectedEvents: state.largeLoadEventCount,
 		payloads: largeCoverage.payloads,
 	});
@@ -2470,29 +3272,40 @@ const verify = async () => {
 			endpointSamples[queries[index].name].push(results[index].latencyMs);
 		}
 	};
-	for (let index = 0; index < 10; index += 1) {
-		await sampleDecisionRound(
-			baselineQueries,
-			baselineSamples,
-			baselineFanoutSamples,
-		);
+	const samplingWorkloads = [
+		{
+			queries: measuredQueries,
+			samples: measuredSamples,
+			fanout: measuredFanoutSamples,
+		},
+		{
+			queries: representativeQueries,
+			samples: representativeSamples,
+			fanout: representativeFanoutSamples,
+		},
+		{
+			queries: largeQueries,
+			samples: largeSamples,
+			fanout: largeFanoutSamples,
+		},
+	];
+	if (hasIndependentBaseline) {
+		samplingWorkloads.push({
+			queries: baselineQueries,
+			samples: baselineSamples,
+			fanout: baselineFanoutSamples,
+		});
 	}
-	for (let index = 0; index < 10; index += 1) {
-		await sampleDecisionRound(largeQueries, largeSamples, largeFanoutSamples);
-	}
-	for (let index = 0; index < 15; index += 1) {
-		await sampleDecisionRound(
-			measuredQueries,
-			measuredSamples,
-			measuredFanoutSamples,
-		);
-	}
-	for (let index = 0; index < 10; index += 1) {
-		await sampleDecisionRound(
-			representativeQueries,
-			representativeSamples,
-			representativeFanoutSamples,
-		);
+	for (let round = 0; round < 30; round += 1) {
+		for (let offset = 0; offset < samplingWorkloads.length; offset += 1) {
+			const workload =
+				samplingWorkloads[(round + offset) % samplingWorkloads.length];
+			await sampleDecisionRound(
+				workload.queries,
+				workload.samples,
+				workload.fanout,
+			);
+		}
 	}
 	const regressionFactor = Number(process.env.ENDPOINT_REGRESSION_FACTOR ?? 2);
 	const regressionFloorMs = Number(
@@ -2511,6 +3324,9 @@ const verify = async () => {
 					large.p95Ms <= Math.max(representative.p95Ms * 2, 250),
 			};
 			if (!baselineSamples[name]) {
+				const noBaselineMode = hasIndependentBaseline
+					? "endpoint_unavailable_on_baseline"
+					: "absolute_only_no_independent_baseline";
 				return [
 					name,
 					{
@@ -2519,12 +3335,12 @@ const verify = async () => {
 						representative,
 						large,
 						budget: {
-							mode: "new_endpoint_no_baseline",
+							mode: noBaselineMode,
 							absoluteP95Ms: endpointP95BudgetMs,
 							passed: measured.p95Ms <= endpointP95BudgetMs,
 						},
 						representativeBudget: {
-							mode: "new_endpoint_no_baseline",
+							mode: noBaselineMode,
 							absoluteP95Ms: endpointP95BudgetMs,
 							passed: representative.p95Ms <= endpointP95BudgetMs,
 						},
@@ -2562,24 +3378,38 @@ const verify = async () => {
 	const fanoutP95BudgetMs = Number(
 		process.env.DASHBOARD_FANOUT_P95_BUDGET_MS ?? 3_500,
 	);
-	const dashboardBaseline = latencySummary(baselineFanoutSamples);
+	const dashboardBaseline = hasIndependentBaseline
+		? latencySummary(baselineFanoutSamples)
+		: null;
 	const dashboardMeasured = latencySummary(measuredFanoutSamples);
 	const dashboardRepresentative = latencySummary(representativeFanoutSamples);
 	const dashboardLarge = latencySummary(largeFanoutSamples);
-	const dashboardBudget = evaluateLatencyBudget({
-		baseline: dashboardBaseline,
-		measured: dashboardMeasured,
-		absoluteP95Ms: fanoutP95BudgetMs,
-		regressionFactor,
-		regressionFloorMs,
-	});
-	const dashboardRepresentativeBudget = evaluateLatencyBudget({
-		baseline: dashboardBaseline,
-		measured: dashboardRepresentative,
-		absoluteP95Ms: fanoutP95BudgetMs,
-		regressionFactor,
-		regressionFloorMs,
-	});
+	const dashboardBudget = dashboardBaseline
+		? evaluateLatencyBudget({
+				baseline: dashboardBaseline,
+				measured: dashboardMeasured,
+				absoluteP95Ms: fanoutP95BudgetMs,
+				regressionFactor,
+				regressionFloorMs,
+			})
+		: {
+				mode: "absolute_only_no_independent_baseline",
+				absoluteP95Ms: fanoutP95BudgetMs,
+				passed: dashboardMeasured.p95Ms <= fanoutP95BudgetMs,
+			};
+	const dashboardRepresentativeBudget = dashboardBaseline
+		? evaluateLatencyBudget({
+				baseline: dashboardBaseline,
+				measured: dashboardRepresentative,
+				absoluteP95Ms: fanoutP95BudgetMs,
+				regressionFactor,
+				regressionFloorMs,
+			})
+		: {
+				mode: "absolute_only_no_independent_baseline",
+				absoluteP95Ms: fanoutP95BudgetMs,
+				passed: dashboardRepresentative.p95Ms <= fanoutP95BudgetMs,
+			};
 	const dashboardLargeBudget = {
 		absoluteP95Ms: fanoutP95BudgetMs,
 		maximumRepresentativeFactor: 2,
@@ -2609,16 +3439,13 @@ const verify = async () => {
 	artifact.endpointLatency = endpointLatency;
 	artifact.decisionEndpointLatency = decisionEndpointLatency;
 	artifact.performanceBaseline = {
-		deploymentId: baselineDeploymentId,
-		mode:
-			baselineDeploymentId === state.deploymentId
-				? "same_deployment_noop"
-				: "retained_deployment",
+		deploymentId: hasIndependentBaseline ? baselineDeploymentId : null,
+		mode: hasIndependentBaseline
+			? "retained_deployment"
+			: "absolute_only_no_independent_baseline",
 		representativeRows: state.loadEventCount,
 		largeRows: state.largeLoadEventCount,
-		newEndpointsWithoutBaseline: retainedIdentityFunnelAvailable
-			? []
-			: ["product_identity_funnel"],
+		newEndpointsWithoutBaseline: excludedBaselineEndpoints,
 		representativeCoverageLatencyMs: representativeCoverage.latencyMs,
 		largeCoverageLatencyMs: largeCoverage.latencyMs,
 	};
@@ -2982,12 +3809,16 @@ const verifySyntheticIdentityErasure = async () => {
 	writeJson(artifactPath, artifact);
 };
 
-const cleanup = async () => {
-	const state = readJson(option("state"));
-	const artifactPath = option("artifact");
-	const requestedTarget = option("target");
+const cleanup = async (parameters = {}) => {
+	const state = parameters.state ?? readJson(option("state"));
+	const artifactPath = parameters.artifactPath ?? option("artifact");
+	const requestedTarget = parameters.target ?? option("target");
+	const deploymentId = parameters.deploymentId ?? option("deployment-id");
 	if (!["live", "staging"].includes(requestedTarget)) {
 		throw new Error("Tinybird cleanup target is invalid");
+	}
+	if (String(state.deploymentId) !== deploymentId) {
+		throw new Error("Tinybird cleanup does not match the seeded deployment");
 	}
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
@@ -3006,7 +3837,9 @@ const cleanup = async () => {
 	validateSyntheticRunId(state.largeLoadRunId);
 	validateSyntheticRunId(state.decisionRunId);
 	validateSyntheticRunId(state.erasureControlRunId);
-	if (state.serverRunId) validateSyntheticRunId(state.serverRunId);
+	const serverRunId = validateSyntheticRunId(
+		state.serverRunId ?? `${state.runId}_server`,
+	);
 	const runIds = [
 		state.runId,
 		state.loadRunId,
@@ -3017,7 +3850,32 @@ const cleanup = async () => {
 	if (state.previewRunId) {
 		runIds.push(validateSyntheticRunId(state.previewRunId));
 	}
-	if (state.serverRunId) runIds.push(state.serverRunId);
+	runIds.push(serverRunId);
+	{
+		const databaseArtifact = readJson(artifactPath);
+		const anonymousIdentityHashes = [
+			state.browserAnonymousIdentityHash,
+			state.previewAnonymousIdentityHash,
+		].filter(
+			(identityHash) =>
+				typeof identityHash === "string" && /^[0-9a-f]{64}$/.test(identityHash),
+		);
+		const databaseCleanup = await cleanupPreviewDatabaseState({
+			anonymousIdentityHashes,
+			artifact: databaseArtifact,
+			runIds: [state.runId, serverRunId],
+			secret: environment("CAP_ANALYTICS_STAGING_TEST_SECRET"),
+		});
+		databaseArtifact.cleanup = {
+			...databaseArtifact.cleanup,
+			database: databaseCleanup,
+		};
+		databaseArtifact.assertions = {
+			...databaseArtifact.assertions,
+			syntheticDatabaseCleanupPassed: true,
+		};
+		writeJson(artifactPath, databaseArtifact);
+	}
 	if (target === "staging") {
 		writeOutput("target", target);
 		writeOutput("requires_copies", "false");
@@ -3039,7 +3897,7 @@ const cleanup = async () => {
 	) {
 		const deploymentParameters = dataMutationDeploymentParameters({
 			target,
-			deploymentId: option("deployment-id"),
+			deploymentId,
 			expectedDeploymentId: String(state.deploymentId),
 		});
 		const assertMutationOwnership = async () => {
@@ -3626,6 +4484,276 @@ const verifyTokenScopes = async () => {
 	writeJson(artifactPath, artifact);
 };
 
+const checkpointFiles = (directory, fileName) => {
+	const matches = [];
+	for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+		const entryPath = `${directory}/${entry.name}`;
+		if (entry.isDirectory()) {
+			matches.push(...checkpointFiles(entryPath, fileName));
+		} else if (entry.isFile() && entry.name === fileName) {
+			matches.push(entryPath);
+		}
+	}
+	return matches;
+};
+
+const markRecoveryReadyToFinalize = async () => {
+	const statePath = option("state");
+	const artifact = readJson(option("artifact"));
+	const state = readJson(statePath);
+	assertRecoveryIdentity(state.recoveryIdentity);
+	if (
+		state.needsPromotion !== true ||
+		state.recoveryPhase !== "prepromote" ||
+		artifact.assertions?.cleanupPassed !== true ||
+		artifact.rollbackDrill?.passed !== true ||
+		artifact.copySchedule?.resume?.status !== "passed"
+	) {
+		throw new Error(
+			"Tinybird finalization checkpoint requires cleanup, rollback, and schedule proof",
+		);
+	}
+	state.recoveryPhase = "ready_to_finalize";
+	writeJson(statePath, state, 0o600);
+};
+
+const recoveryCheckpoint = (directory) => {
+	const stateCandidates = checkpointFiles(
+		directory,
+		"analytics-staging-state.json",
+	).map((statePath) => {
+		const state = readJson(statePath);
+		assertRecoveryIdentity(state.recoveryIdentity);
+		const phaseRank = {
+			preseed: 1,
+			prepromote: 2,
+			ready_to_finalize: 3,
+		}[state.recoveryPhase];
+		if (!phaseRank) {
+			throw new Error("Recovery checkpoint has an unsupported phase");
+		}
+		const artifactPath = `${statePath.slice(0, -"analytics-staging-state.json".length)}analytics-staging-report.json`;
+		if (!fs.existsSync(artifactPath)) {
+			throw new Error("Recovery checkpoint is missing its staging report");
+		}
+		return { artifactPath, phaseRank, state, statePath };
+	});
+	if (stateCandidates.length > 0) {
+		stateCandidates.sort((left, right) => right.phaseRank - left.phaseRank);
+		const selected = stateCandidates[0];
+		for (const candidate of stateCandidates.slice(1)) {
+			if (
+				candidate.state.runId !== selected.state.runId ||
+				String(candidate.state.deploymentId) !==
+					String(selected.state.deploymentId)
+			) {
+				throw new Error("Recovery checkpoints disagree on mutation ownership");
+			}
+		}
+		return { kind: "seeded", ...selected };
+	}
+	const boundaries = checkpointFiles(
+		directory,
+		"analytics-deployment-boundary.json",
+	);
+	if (boundaries.length !== 1) {
+		throw new Error("Recovery requires exactly one deployment boundary");
+	}
+	const boundary = readJson(boundaries[0]);
+	assertRecoveryIdentity(boundary.identity);
+	return { boundary, kind: "boundary" };
+};
+
+const recoverStaging = async () => {
+	const checkpoint = recoveryCheckpoint(option("checkpoint-directory"));
+	const recoveryArtifactPath = option("artifact");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_CLEANUP_TOKEN",
+		"TINYBIRD_STAGING_COPY_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_READ_TOKEN",
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
+	]);
+	const deployToken = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	const currentDeployments = await deploymentList({
+		origin,
+		token: deployToken,
+	});
+	if (checkpoint.kind === "boundary") {
+		const candidate = resolveDeploymentCreatedAfterBoundary(
+			currentDeployments.data,
+			checkpoint.boundary.tinybird,
+			{ allowNone: true },
+		);
+		if (candidate) {
+			await discardOwnedDeployment({ deploymentId: candidate.id });
+		}
+		writeJson(recoveryArtifactPath, {
+			recovered: true,
+			strategy: candidate ? "discard_uncertain_create" : "no_mutation",
+			workspaceId: STAGING_WORKSPACE_ID,
+			verifiedAt: new Date().toISOString(),
+		});
+		return;
+	}
+	const state = checkpoint.state;
+	const artifact = readJson(checkpoint.artifactPath);
+	if (
+		artifact.sha !== state.recoveryIdentity.expectedSha ||
+		String(artifact.tinybird?.deploymentId ?? "") !== String(state.deploymentId)
+	) {
+		throw new Error("Recovery report does not match its exact-SHA checkpoint");
+	}
+	const candidateId = String(state.deploymentId);
+	const previousLiveDeploymentId = String(
+		state.previousLiveDeploymentId ?? state.liveBeforeDeploymentId ?? "",
+	);
+	let retainedDeploymentId = candidateId;
+	let strategy = "clean_noop_live";
+	const candidateLifecycle = await settledDeploymentLifecycle({
+		origin,
+		token: deployToken,
+		deploymentId: candidateId,
+	});
+	if (state.needsPromotion === true) {
+		if (!/^\d+$/.test(previousLiveDeploymentId)) {
+			throw new Error("Recovery is missing the exact prior live deployment");
+		}
+		if (candidateLifecycle === "live") {
+			const previousLifecycle = await settledDeploymentLifecycle({
+				origin,
+				token: deployToken,
+				deploymentId: previousLiveDeploymentId,
+			});
+			if (previousLifecycle === "ready") {
+				await switchLiveDeployment({
+					origin,
+					token: deployToken,
+					fromDeploymentId: candidateId,
+					toDeploymentId: previousLiveDeploymentId,
+				});
+				try {
+					const excludedEndpoints = await unavailableDecisionEndpoints({
+						deploymentId: previousLiveDeploymentId,
+						origin,
+						state,
+						token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+					});
+					assertDecisionEndpointSuiteReadable(
+						(
+							await queryDecisionEndpointSuite({
+								deploymentId: previousLiveDeploymentId,
+								excludedEndpointNames: excludedEndpoints,
+								origin,
+								state,
+								token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+							})
+						).payloads,
+					);
+				} catch (error) {
+					await switchLiveDeployment({
+						origin,
+						token: deployToken,
+						fromDeploymentId: previousLiveDeploymentId,
+						toDeploymentId: candidateId,
+					});
+					throw new Error(
+						"The prior Tinybird deployment failed recovery validation",
+						{ cause: error },
+					);
+				}
+				retainedDeploymentId = previousLiveDeploymentId;
+				strategy = "rollback_and_discard";
+			} else if (
+				previousLifecycle === "deleted" &&
+				state.recoveryPhase === "ready_to_finalize"
+			) {
+				strategy = "retain_finalized_candidate";
+			} else {
+				throw new Error(
+					"The prior Tinybird deployment cannot safely receive rollback",
+				);
+			}
+		} else if (["ready", "failed", "pending"].includes(candidateLifecycle)) {
+			retainedDeploymentId = previousLiveDeploymentId;
+			strategy = "discard_rejected_candidate";
+		} else if (candidateLifecycle === "deleted") {
+			retainedDeploymentId = previousLiveDeploymentId;
+			strategy = "already_discarded";
+		} else {
+			throw new Error("The exact Tinybird candidate is not recoverable");
+		}
+	}
+	const serverRunId = validateSyntheticRunId(`${state.runId}_server`);
+	let databaseCleanup;
+	if (
+		state.needsPromotion !== true ||
+		strategy === "retain_finalized_candidate"
+	) {
+		await setCopySchedules({
+			action: "pause",
+			artifactPath: checkpoint.artifactPath,
+			state,
+		});
+		try {
+			await cleanup({
+				artifactPath: checkpoint.artifactPath,
+				deploymentId: candidateId,
+				state,
+				target: "live",
+			});
+			databaseCleanup = readJson(checkpoint.artifactPath).cleanup?.database;
+			if (!databaseCleanup?.cleaned) {
+				throw new Error("Recovery did not attest staging database cleanup");
+			}
+			await runCopies({
+				artifactPath: checkpoint.artifactPath,
+				deploymentId: candidateId,
+				phase: "cleanup",
+				state,
+				target: "live",
+			});
+		} finally {
+			await setCopySchedules({
+				action: "resume",
+				artifactPath: checkpoint.artifactPath,
+				state,
+			});
+		}
+	} else {
+		const retainedState = { ...state, deploymentId: retainedDeploymentId };
+		await setCopySchedules({
+			action: "resume",
+			artifactPath: checkpoint.artifactPath,
+			state: retainedState,
+		});
+		if (candidateLifecycle !== "deleted") {
+			await discardOwnedDeployment({ deploymentId: candidateId });
+		}
+		databaseCleanup = await cleanupPreviewDatabaseState({
+			anonymousIdentityHashes: [
+				state.browserAnonymousIdentityHash,
+				state.previewAnonymousIdentityHash,
+			].filter(
+				(identityHash) =>
+					typeof identityHash === "string" &&
+					/^[0-9a-f]{64}$/.test(identityHash),
+			),
+			artifact,
+			runIds: [state.runId, serverRunId],
+			secret: environment("CAP_ANALYTICS_STAGING_TEST_SECRET"),
+		});
+	}
+	writeJson(recoveryArtifactPath, {
+		databaseCleanup,
+		recovered: true,
+		retainedDeploymentId,
+		strategy,
+		workspaceId: STAGING_WORKSPACE_ID,
+		verifiedAt: new Date().toISOString(),
+	});
+};
+
 const handlers = {
 	"verify-scope": async () =>
 		assertExecutionScope({
@@ -3638,6 +4766,9 @@ const handlers = {
 		}),
 	"verify-credentials": async () => tinybirdEnvironment(),
 	"verify-token-scopes": verifyTokenScopes,
+	"prepare-deployment-boundary": prepareDeploymentBoundary,
+	"prepare-promotion": prepareOwnedPromotion,
+	"prepare-seed": prepareSeed,
 	"promote-deployment": promoteOwnedDeployment,
 	"drill-rollback": drillOwnedRollback,
 	"finalize-promotion": finalizeOwnedPromotion,
@@ -3650,14 +4781,22 @@ const handlers = {
 			/Deployment URL:\s+\S+\/deployments\/(\d+)/,
 		)?.[1];
 		const noOpConfirmed =
+			Number(createOutput.exitCode) === 0 &&
 			output.includes("No changes to be deployed") &&
 			output.includes("Not deploying. No changes.");
-		const selection = selectStagingDeployment(
-			readJson(option("input")),
-			option("minimum-created-at"),
-			createdDeploymentId,
-			noOpConfirmed,
-		);
+		const deployments = readJson(option("input"));
+		const selection =
+			createdDeploymentId || noOpConfirmed
+				? selectStagingDeployment(
+						deployments,
+						option("minimum-created-at"),
+						createdDeploymentId,
+						noOpConfirmed,
+					)
+				: resolveDeploymentCreatedAfterBoundary(
+						deployments,
+						readJson(option("boundary")).tinybird,
+					);
 		writeOutput("id", selection.id);
 		writeOutput("needs_promotion", String(selection.needsPromotion));
 	},
@@ -3681,6 +4820,8 @@ const handlers = {
 		writeOutput("pending_recovery", resolution.pending);
 	},
 	"wait-vercel": waitForVercel,
+	"verify-pr-head": verifyFreshPullRequestHead,
+	"attest-preview": attestPreviewTinybird,
 	seed,
 	"run-copies": runCopies,
 	"set-copy-schedules": setCopySchedules,
@@ -3690,6 +4831,8 @@ const handlers = {
 	"verify-promoted": verifyPromoted,
 	"erase-synthetic-identity": eraseSyntheticIdentity,
 	"verify-synthetic-identity-erasure": verifySyntheticIdentityErasure,
+	"mark-recovery-ready": markRecoveryReadyToFinalize,
+	recover: recoverStaging,
 	cleanup,
 	"verify-cleanup": verifyCleanup,
 };

@@ -12,6 +12,12 @@ on:
       - "packages/database/**"
       - "packages/env/server.ts"
       - "packages/web-backend/src/ProductAnalytics/**"
+      - "packages/web-backend/src/Tinybird/**"
+      - "packages/web-backend/src/Organisations/**"
+      - "packages/web-domain/**"
+      - "apps/cli/**"
+      - "apps/desktop/**"
+      - "apps/web/**"
       - "apps/cli/src/analytics.rs"
       - "apps/mobile/**"
       - "apps/web/actions/analytics/**"
@@ -21,17 +27,26 @@ on:
       - "apps/web/app/Layout/*Analytics*.tsx"
       - "apps/web/app/admin/analytics/**"
       - "apps/web/app/api/analytics/**"
+      - "apps/web/app/api/cron/drain-product-analytics-outbox/**"
       - "apps/web/app/api/cron/reconcile-product-analytics/**"
+      - "apps/web/app/api/cron/recover-organization-invite-delivery/**"
+      - "apps/web/app/api/cron/recover-product-analytics-erasure/**"
+      - "apps/web/app/api/cron/refresh-product-analytics/**"
       - "apps/web/app/api/events/**"
       - "apps/web/app/api/invite/accept/route.ts"
       - "apps/web/app/api/settings/billing/**"
       - "apps/web/app/api/webhooks/stripe/route.ts"
       - "apps/web/app/mobile/checkout/**"
+      - "apps/web/app/api/mobile/[...route]/route.ts"
       - "apps/web/app/utils/analytics.ts"
       - "apps/web/app/utils/product-analytics.ts"
       - "apps/web/lib/analytics/**"
+      - "apps/web/lib/organization-invite-delivery.ts"
+      - "apps/web/proxy.ts"
+      - "apps/web/vercel.json"
       - "apps/web/lib/rate-limit.ts"
       - "apps/web/workflows/*product-analytics*"
+      - "apps/web/workflows/recover-organization-invite-delivery.ts"
       - "apps/desktop/src-tauri/src/lib.rs"
       - "apps/desktop/src-tauri/src/product_analytics.rs"
       - "apps/desktop/src/utils/analytics.ts"
@@ -41,8 +56,10 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   deployments: read
+  pull-requests: read
   statuses: read
 
 concurrency:
@@ -64,6 +81,18 @@ jobs:
       github.ref == 'refs/heads/codex/first-party-analytics')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     env:
       EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
@@ -79,6 +108,12 @@ jobs:
         run: node scripts/analytics/staging-ci.js verify-scope --actual-sha "$(git rev-parse HEAD)"
       - name: Run analytics contract and regression suites
         run: pnpm analytics:test
+      - name: Prove analytics leases, receipts, and shared-cookie erasure in MySQL
+        env:
+          CAP_PRODUCT_ANALYTICS_MYSQL_E2E: "1"
+        run: >-
+          pnpm --filter @cap/web exec vitest run
+          __tests__/e2e/product-analytics-mysql-e2e.test.ts
       - name: Validate Docker Compose
         run: node scripts/analytics/analytics-cli.js compose-check
       - name: Build and test Tinybird datafiles with fixtures
@@ -107,9 +142,17 @@ jobs:
         uses: dtolnay/rust-toolchain@1.88.0
       - uses: ./.github/actions/setup-rust-cache
         with:
-          target: x86_64-apple-darwin
+          target: aarch64-apple-darwin
       - name: Prepare pinned native dependencies
         run: node scripts/setup.js
+      - name: Create compile-only Tauri sidecars
+        run: |
+          target="$(rustc -vV | sed -n 's|host: ||p')"
+          binaries="apps/desktop/src-tauri/binaries"
+          install -d "$binaries"
+          for binary in cap-muxer cap-exporter cap-cli; do
+            install -m 755 /dev/null "$binaries/$binary-$target"
+          done
       - name: Compile the desktop analytics path
         run: cargo check -p cap-desktop --locked
       - name: Prove durable desktop analytics behavior
@@ -120,7 +163,7 @@ jobs:
     needs: [validate, validate-desktop]
     if: needs.validate.result == 'success' && needs.validate-desktop.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     environment: staging
     env:
       EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -152,6 +195,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/analytics/staging-ci.js wait-vercel
+      - name: Refuse a preview bound outside Tinybird staging
+        env:
+          ANALYTICS_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: node scripts/analytics/staging-ci.js attest-preview
+      - name: Persist the pre-create Tinybird recovery boundary
+        env:
+          VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js prepare-deployment-boundary
+          --output "$RUNNER_TEMP/analytics-deployment-boundary.json"
+      - name: Upload the immutable pre-create recovery boundary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-00-precreate
+          path: ${{ runner.temp }}/analytics-deployment-boundary.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Record Tinybird deployment boundary
         run: echo "TINYBIRD_DEPLOYMENT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$GITHUB_ENV"
       - name: Check Tinybird cloud deployment plan
@@ -173,8 +245,11 @@ jobs:
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           set -o pipefail
+          set +e
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud deployment create --allow-destructive-operations --wait | tee "$RUNNER_TEMP/tinybird-create-output.txt"
-          node -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[2], JSON.stringify({ output: fs.readFileSync(process.argv[1], "utf8") }));' "$RUNNER_TEMP/tinybird-create-output.txt" "$RUNNER_TEMP/tinybird-create-output.json"
+          create_exit="${PIPESTATUS[0]}"
+          set -e
+          node -e 'const fs = require("node:fs"); fs.writeFileSync(process.argv[2], JSON.stringify({ exitCode: Number(process.argv[3]), output: fs.readFileSync(process.argv[1], "utf8") }));' "$RUNNER_TEMP/tinybird-create-output.txt" "$RUNNER_TEMP/tinybird-create-output.json" "$create_exit"
       - name: Resolve only the deployment created by this run
         id: tinybird
         env:
@@ -184,7 +259,28 @@ jobs:
           TB_HOST: ${{ secrets.TINYBIRD_STAGING_URL }}
         run: |
           docker compose --file packages/local-docker/docker-compose.yml --profile analytics run --rm tinybird-cloud-cli --cloud --output json deployment ls > "$RUNNER_TEMP/tinybird-deployments.json"
-          node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --create-output "$RUNNER_TEMP/tinybird-create-output.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
+          node scripts/analytics/staging-ci.js select-deployment --input "$RUNNER_TEMP/tinybird-deployments.json" --create-output "$RUNNER_TEMP/tinybird-create-output.json" --boundary "$RUNNER_TEMP/analytics-deployment-boundary.json" --minimum-created-at "$TINYBIRD_DEPLOYMENT_STARTED_AT"
+      - name: Prepare immutable synthetic cleanup state before ingestion
+        env:
+          VERCEL_DEPLOYMENT_ID: ${{ steps.vercel.outputs.deployment_id }}
+          VERCEL_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+        run: >-
+          node scripts/analytics/staging-ci.js prepare-seed
+          --run-id "$ANALYTICS_TEST_RUN_ID"
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --needs-promotion "${{ steps.tinybird.outputs.needs_promotion }}"
+          --boundary "$RUNNER_TEMP/analytics-deployment-boundary.json"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Upload the immutable pre-ingestion recovery checkpoint
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-20-preseed
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Refuse source mutations after exact-SHA checkout
         run: |
           git diff --exit-code
@@ -237,18 +333,40 @@ jobs:
           --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live' }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Persist the exact Tinybird promotion plan
+        id: promotion-plan
+        if: steps.tinybird.outputs.needs_promotion == 'true'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js prepare-promotion
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+      - name: Upload the immutable pre-promotion recovery checkpoint
+        if: steps.promotion-plan.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-30-prepromote
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Promote the verified staging deployment
         id: promote
         if: steps.tinybird.outputs.needs_promotion == 'true'
         continue-on-error: true
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
-          node scripts/analytics/staging-ci.js promote-deployment --deployment-id "${{ steps.tinybird.outputs.id }}"
+          node scripts/analytics/staging-ci.js verify-pr-head
+          node scripts/analytics/staging-ci.js promote-deployment --deployment-id "${{ steps.tinybird.outputs.id }}" --state "$RUNNER_TEMP/analytics-staging-state.json"
       - name: Resolve authoritative Tinybird state after the promotion attempt
         id: deployment-state
         if: always() && steps.tinybird.outcome == 'success'
@@ -411,9 +529,11 @@ jobs:
         id: cleanup
         if: always() && steps.seed.outcome != 'skipped'
         env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           if [[ ! -f "$RUNNER_TEMP/analytics-staging-state.json" ]]; then
             echo "required=false" >> "$GITHUB_OUTPUT"
@@ -464,9 +584,26 @@ jobs:
           --action resume
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Persist finalization eligibility
+        id: recovery-ready
+        if: steps.verify-cleanup.outcome == 'success' && steps.rollback-drill.outcome == 'success' && steps.resume-copies.outcome == 'success'
+        run: >-
+          node scripts/analytics/staging-ci.js mark-recovery-ready
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Upload the immutable pre-finalization recovery checkpoint
+        if: steps.recovery-ready.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-40-ready-to-finalize
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Finalize the fully verified staging promotion
         id: finalize
-        if: steps.verify-cleanup.outcome == 'success' && steps.rollback-drill.outcome == 'success' && steps.resume-copies.outcome == 'success'
+        if: steps.recovery-ready.outcome == 'success'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
@@ -502,9 +639,75 @@ jobs:
           node scripts/analytics/staging-ci.js discard-deployment "${discard_args[@]}"
       - name: Upload redacted staging evidence
         if: always() && steps.cleanup.outputs.required == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: analytics-staging-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  recover-staging:
+    name: Recover interrupted analytics staging
+    needs: deploy-staging
+    if: always() && needs.deploy-staging.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pull-requests: read
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_NUMBER: ${{ github.event.pull_request.number || '' }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+      ANALYTICS_TEST_RUN_ID: run_${{ github.run_id }}_${{ github.run_attempt }}_${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out the interrupted exact SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Locate immutable recovery checkpoints
+        id: checkpoints
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_PREFIX: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-
+        run: |
+          count="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '[.artifacts[] | select(.expired == false and (.name | startswith(env.CHECKPOINT_PREFIX)))] | length')"
+          if [[ "$count" -eq 0 ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+      - name: Download immutable recovery checkpoints
+        if: steps.checkpoints.outputs.found == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/analytics-recovery-checkpoints
+      - name: Reconcile and recover only the owned staging run
+        id: recover
+        if: steps.checkpoints.outputs.found == 'true'
+        env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: >-
+          node scripts/analytics/staging-ci.js recover
+          --checkpoint-directory "$RUNNER_TEMP/analytics-recovery-checkpoints"
+          --artifact "$RUNNER_TEMP/analytics-recovery-report.json"
+      - name: Upload redacted recovery evidence
+        if: always() && steps.checkpoints.outputs.found == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/analytics-recovery-report.json
           if-no-files-found: error
           retention-days: 30

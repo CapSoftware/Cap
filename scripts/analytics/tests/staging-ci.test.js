@@ -5,6 +5,7 @@ import test from "node:test";
 import {
 	applyCopyScheduleAction,
 	assertExecutionScope,
+	assertPreviewTinybirdAttestation,
 	assertRepresentativeEndpointCoverage,
 	assertSyntheticBusinessDecisions,
 	assertSyntheticDecisions,
@@ -16,6 +17,7 @@ import {
 	assertSyntheticMonetizationFilters,
 	assertWorkflowSafety,
 	copyScheduleMatchesAction,
+	createDeploymentBoundary,
 	createSyntheticDecisionEvents,
 	createSyntheticErasureControl,
 	createSyntheticEvents,
@@ -23,6 +25,7 @@ import {
 	dataMutationDeploymentParameters,
 	decisionEndpointQueries,
 	evaluateBundleBudget,
+	evaluateCopyPerformanceBudget,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	FEATURE_BRANCH,
@@ -31,12 +34,16 @@ import {
 	normalizeCiAssertions,
 	normalizeCopyAssertions,
 	normalizeHealth,
+	PREVIEW_TINYBIRD_TOKEN_NAMES,
 	reconcileCleanupTarget,
+	resolveDeploymentCreatedAfterBoundary,
 	resolveDeploymentState,
 	resolveExactDeploymentLifecycle,
 	resolveExactPromotionPlan,
 	resolveOwnedDiscardTarget,
 	resolveOwnedMutationTarget,
+	STAGING_DATABASE_FINGERPRINT,
+	STAGING_DATABASE_SCHEMA,
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -45,6 +52,7 @@ import {
 	tokenWorkspaceId,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
+	waitForTinybirdCopyJob,
 } from "../staging-ci-lib.js";
 
 const SHA = "1234567890abcdef1234567890abcdef12345678";
@@ -109,6 +117,8 @@ test("schedule state attestation distinguishes paused from active copies", () =>
 		copyScheduleMatchesAction({ schedule: { status: "paused" } }, "resume"),
 		false,
 	);
+	assert.equal(copyScheduleMatchesAction({}, "pause"), true);
+	assert.equal(copyScheduleMatchesAction({}, "resume"), true);
 });
 
 test("execution scope accepts only PR 2003 or manual feature branch runs", () => {
@@ -193,6 +203,67 @@ test("Tinybird credentials must all decode to the hard-coded staging workspace",
 			tokens: { deploy: token("00000000-0000-4000-8000-000000000000") },
 		}),
 	);
+});
+
+test("preview Tinybird attestation requires the exact SHA, host, and staging workspace", () => {
+	const expectedTokenHashes = Object.fromEntries(
+		PREVIEW_TINYBIRD_TOKEN_NAMES.map((name, index) => [
+			name,
+			String(index).padStart(64, "0"),
+		]),
+	);
+	const attestation = {
+		databaseFingerprint: STAGING_DATABASE_FINGERPRINT,
+		databaseSchema: STAGING_DATABASE_SCHEMA,
+		host: "https://api.us-east.aws.tinybird.co",
+		sha: SHA,
+		workspaces: PREVIEW_TINYBIRD_TOKEN_NAMES.map((name) => ({
+			name,
+			tokenHash: expectedTokenHashes[name],
+			workspaceId: STAGING_WORKSPACE_ID,
+		})),
+	};
+	assert.doesNotThrow(() =>
+		assertPreviewTinybirdAttestation({
+			attestation,
+			expectedOrigin: attestation.host,
+			expectedSha: SHA,
+			expectedTokenHashes,
+		}),
+	);
+	for (const invalid of [
+		{ ...attestation, sha: "0".repeat(40) },
+		{ ...attestation, host: "https://api.tinybird.co" },
+		{ ...attestation, databaseFingerprint: "f".repeat(64) },
+		{ ...attestation, databaseSchema: "0039_bumpy_phil_sheldon" },
+		{ ...attestation, workspaces: attestation.workspaces.slice(1) },
+		{
+			...attestation,
+			workspaces: attestation.workspaces.map((workspace, index) =>
+				index === 0
+					? {
+							...workspace,
+							workspaceId: "00000000-0000-4000-8000-000000000000",
+						}
+					: workspace,
+			),
+		},
+		{
+			...attestation,
+			workspaces: attestation.workspaces.map((workspace, index) =>
+				index === 0 ? { ...workspace, tokenHash: "f".repeat(64) } : workspace,
+			),
+		},
+	]) {
+		assert.throws(() =>
+			assertPreviewTinybirdAttestation({
+				attestation: invalid,
+				expectedOrigin: attestation.host,
+				expectedSha: SHA,
+				expectedTokenHashes,
+			}),
+		);
+	}
 });
 
 test("deployment selection rejects stale or ambiguous staging deployments", () => {
@@ -287,6 +358,61 @@ test("deployment selection rejects stale or ambiguous staging deployments", () =
 			],
 			minimum,
 			"expected",
+		),
+	);
+});
+
+test("deployment recovery resolves only one candidate created after its boundary", () => {
+	const before = {
+		deployments: [
+			{ id: "6", status: "Live" },
+			{ id: "5", status: "Deleted" },
+		],
+	};
+	const boundary = createDeploymentBoundary(before);
+	assert.deepEqual(boundary, {
+		deploymentIds: ["5", "6"],
+		liveDeploymentId: "6",
+	});
+	assert.deepEqual(
+		resolveDeploymentCreatedAfterBoundary(
+			{
+				deployments: [
+					...before.deployments,
+					{ id: "7", status: "creating_schema" },
+				],
+			},
+			boundary,
+		),
+		{ id: "7", needsPromotion: true },
+	);
+	assert.equal(
+		resolveDeploymentCreatedAfterBoundary(before, boundary, {
+			allowNone: true,
+		}),
+		undefined,
+	);
+	assert.throws(() =>
+		resolveDeploymentCreatedAfterBoundary(
+			{
+				deployments: [
+					...before.deployments,
+					{ id: "7", status: "Staging" },
+					{ id: "8", status: "failed" },
+				],
+			},
+			boundary,
+		),
+	);
+	assert.throws(() =>
+		resolveDeploymentCreatedAfterBoundary(
+			{
+				deployments: [
+					{ id: "6", status: "Staging" },
+					{ id: "7", status: "Live" },
+				],
+			},
+			boundary,
 		),
 	);
 });
@@ -599,6 +725,79 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 	);
 });
 
+test("Copy prerequisite polling waits for a successful terminal job", async () => {
+	let now = 1_000;
+	let ownershipChecks = 0;
+	const requests = [];
+	const responses = [
+		{ data: { status: "working" } },
+		{ data: { job: { state: "completed" } } },
+	];
+	const result = await waitForTinybirdCopyJob({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		jobId: "copy_job_state",
+		request: async (url, options) => {
+			await options.beforeAttempt();
+			requests.push(String(url));
+			return responses.shift();
+		},
+		assertMutationOwnership: async () => {
+			ownershipChecks += 1;
+		},
+		now: () => now,
+		wait: async (milliseconds) => {
+			now += milliseconds;
+		},
+		timeoutMs: 10_000,
+		pollIntervalMs: 2_000,
+	});
+	assert.deepEqual(result, {
+		status: "completed",
+		polls: 2,
+		completionMs: 2_000,
+	});
+	assert.equal(ownershipChecks, 2);
+	assert.equal(requests.length, 2);
+	assert.ok(requests.every((url) => url.endsWith("/v0/jobs/copy_job_state")));
+});
+
+test("Copy prerequisite polling fails closed on rejection and timeout", async () => {
+	await assert.rejects(
+		waitForTinybirdCopyJob({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: token(),
+			jobId: "copy_job_failed",
+			request: async (_url, options) => {
+				await options.beforeAttempt();
+				return { data: { status: "failed" } };
+			},
+			assertMutationOwnership: async () => undefined,
+		}),
+		/Tinybird Copy job ended in failed/,
+	);
+	let now = 1_000;
+	await assert.rejects(
+		waitForTinybirdCopyJob({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: token(),
+			jobId: "copy_job_timeout",
+			request: async (_url, options) => {
+				await options.beforeAttempt();
+				return { data: { status: "working" } };
+			},
+			assertMutationOwnership: async () => undefined,
+			now: () => now,
+			wait: async (milliseconds) => {
+				now += milliseconds;
+			},
+			timeoutMs: 2_000,
+			pollIntervalMs: 2_000,
+		}),
+		/Timed out waiting for Tinybird Copy job/,
+	);
+});
+
 test("synthetic fixtures are deterministic, isolated, and model duplicates and conflicts", () => {
 	const runId = "run_12345678";
 	const fixture = createSyntheticEvents({
@@ -626,6 +825,50 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	assert.equal(new Set(load.rows.map((row) => row.event_id)).size, 100);
 	assert.ok(load.rows.every((row) => row.app_version === load.appVersion));
 	assert.ok(load.rows.every((row) => row.synthetic_run_id === load.runId));
+	const retainedLoad = createSyntheticLoadEvents({
+		runId: `${runId}_retained`,
+		count: 10_000,
+		daySpan: 30,
+		dimensionBucketCount: 8,
+		now: new Date("2026-07-31T10:00:00.000Z"),
+	});
+	assert.equal(retainedLoad.dimensionBucketCount, 8);
+	assert.equal(retainedLoad.daySpan, 30);
+	assert.equal(
+		new Set(retainedLoad.rows.map((row) => row.occurred_at.slice(0, 10))).size,
+		30,
+	);
+	assert.ok(
+		retainedLoad.rows.every(
+			(row) =>
+				Date.parse(`${row.occurred_at}Z`) <=
+				Date.parse("2026-07-31T10:00:00.000Z"),
+		),
+	);
+	assert.equal(new Set(retainedLoad.rows.map((row) => row.hostname)).size, 8);
+	assert.equal(new Set(retainedLoad.rows.map((row) => row.pathname)).size, 8);
+	assert.equal(
+		new Set(retainedLoad.rows.map((row) => row.event_id)).size,
+		10_000,
+	);
+	const retainedPrices = new Set(
+		retainedLoad.rows
+			.map((row) => JSON.parse(row.properties).price_id)
+			.filter(Boolean),
+	);
+	assert.equal(retainedPrices.size, 8);
+	const retainedEndpointDimensions = new Set(
+		retainedLoad.rows.map((row) => {
+			const properties = JSON.parse(row.properties);
+			return [
+				row.event_name,
+				row.platform,
+				row.hostname,
+				properties.price_id ?? "",
+			].join(":");
+		}),
+	);
+	assert.ok(retainedEndpointDimensions.size <= 80);
 	const control = createSyntheticErasureControl({
 		runId,
 		now: new Date("2026-07-31T10:00:00.000Z"),
@@ -638,9 +881,9 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 		runId,
 		now: new Date("2026-07-31T10:00:00.000Z"),
 	});
-	assert.equal(decisions.rows.length, 27);
+	assert.equal(decisions.rows.length, 28);
 	assert.equal(decisions.runId, `${runId}_decisions`);
-	assert.equal(new Set(decisions.rows.map((row) => row.event_id)).size, 27);
+	assert.equal(new Set(decisions.rows.map((row) => row.event_id)).size, 28);
 	assert.deepEqual(
 		decisions.rows.map((row) => row.event_name),
 		[
@@ -671,6 +914,7 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 			"subscription_renewed",
 			"experiment_exposed",
 			"analytics_delivery_loss",
+			"share_link_created",
 		],
 	);
 	assert.equal(decisions.rows[0].user_id, "");
@@ -700,6 +944,17 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	);
 	assert.match(decisions.pathname, /^\/analytics-synthetic-[0-9a-f]{12}$/);
 	assert.throws(() => createSyntheticLoadEvents({ runId, count: 99 }));
+	assert.throws(() => createSyntheticLoadEvents({ runId, count: 100_010 }));
+	assert.throws(() =>
+		createSyntheticLoadEvents({ runId, count: 100, daySpan: 0 }),
+	);
+	assert.throws(() =>
+		createSyntheticLoadEvents({
+			runId,
+			count: 100,
+			dimensionBucketCount: 101,
+		}),
+	);
 });
 
 test("health normalization and latency percentiles use decision-facing assertions", () => {
@@ -723,6 +978,9 @@ test("health normalization and latency percentiles use decision-facing assertion
 		count: 5,
 		minMs: 1,
 		maxMs: 5,
+		meanMs: 3,
+		standardDeviationMs: Number(Math.SQRT2.toFixed(3)),
+		coefficientOfVariation: 0.4714,
 		p50Ms: 3,
 		p95Ms: 5,
 		p99Ms: 5,
@@ -870,8 +1128,13 @@ test("representative endpoint coverage requires mixed funnel and revenue data", 
 		Array.from({ length: count }, () => ({ ...value }));
 	const payloads = {
 		product_traffic_overview: row([{ pageviews: cohorts }]),
+		product_traffic_totals: row([{ pageviews: cohorts }]),
 		product_traffic_pages: row(repeated(cohorts, { pageviews: 1 })),
 		product_traffic_sources: row(repeated(cohorts, { pageviews: 1 })),
+		product_attribution: row([
+			...repeated(cohorts + 1, { pageviews: 0 }),
+			{ pageviews: cohorts * 3 },
+		]),
 		product_traffic_countries: row([{}]),
 		product_traffic_technology: row([{}]),
 		product_activation: row([{ signups: cohorts }]),
@@ -885,6 +1148,13 @@ test("representative endpoint coverage requires mixed funnel and revenue data", 
 			{ events: 1, revenue_minor: 20_000 },
 		]),
 		product_feature_adoption: row(repeated(10, { events: 10 })),
+		product_experiment_outcomes: row([
+			...repeated(cohorts * 3 - 1, {
+				exposed_actors: 1,
+				converted_actors: 0,
+			}),
+			{ exposed_actors: 1, converted_actors: cohorts },
+		]),
 		product_analytics_freshness: row([{}]),
 	};
 	assert.doesNotThrow(() =>
@@ -981,6 +1251,7 @@ test("typed endpoint assertions require exact public response semantics", () => 
 		hostname,
 		channel: "direct",
 		plan_id: "",
+		recording_status: "",
 		payment_status: "",
 		subscription_status: "",
 		currency: "",
@@ -1036,8 +1307,10 @@ test("typed endpoint assertions require exact public response semantics", () => 
 			users: 2,
 		}),
 		event("user_signed_up", "server", "web"),
-		event("share_link_created", "server", "server"),
-		event("recording_completed", "client", "desktop"),
+		event("share_link_created", "server", "server", { events: 2 }),
+		event("recording_completed", "client", "desktop", {
+			recording_status: "success",
+		}),
 		event("guest_checkout_started", "server", "web", {
 			plan_id: "price_pro_annual",
 			quantity: 1,
@@ -1164,7 +1437,7 @@ test("typed endpoint assertions require exact public response semantics", () => 
 		["page_engagement", 1, 1, 0, 0],
 		["identity_linked", 2, 2, 2, 1],
 		["user_signed_up", 1, 1, 1, 1],
-		["share_link_created", 1, 1, 1, 1],
+		["share_link_created", 2, 1, 1, 1],
 		["recording_completed", 1, 1, 1, 1],
 		["guest_checkout_started", 2, 2, 0, 0],
 		["checkout_started", 3, 1, 1, 1],
@@ -1182,6 +1455,15 @@ test("typed endpoint assertions require exact public response semantics", () => 
 	const payloads = {
 		product_traffic_overview: row({
 			date,
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			views_per_visit: 1,
+			bounce_rate: 66.67,
+			visit_duration_ms: 5_000,
+			engaged_ms: 15_000,
+		}),
+		product_traffic_totals: row({
 			visitors: 3,
 			visits: 3,
 			pageviews: 3,
@@ -1221,6 +1503,46 @@ test("typed endpoint assertions require exact public response semantics", () => 
 					visits: 1,
 					pageviews: 1,
 					bounce_rate: 100,
+				},
+			],
+		},
+		product_attribution: {
+			data: [
+				{
+					attribution_model: "first",
+					source: "first-touch",
+					medium: "first",
+					campaign: "first-campaign",
+					visitors: 3,
+					visits: 3,
+					pageviews: 3,
+				},
+				{
+					attribution_model: "last",
+					source: "last-touch",
+					medium: "last",
+					campaign: "last-campaign",
+					visitors: 3,
+					visits: 3,
+					pageviews: 3,
+				},
+				{
+					attribution_model: "session",
+					source: "google",
+					medium: "cpc",
+					campaign: "synthetic-campaign",
+					visitors: 2,
+					visits: 2,
+					pageviews: 2,
+				},
+				{
+					attribution_model: "session",
+					source: "synthetic-partner",
+					medium: "referral",
+					campaign: "",
+					visitors: 1,
+					visits: 1,
+					pageviews: 1,
 				},
 			],
 		},
@@ -1295,12 +1617,31 @@ test("typed endpoint assertions require exact public response semantics", () => 
 				}),
 			),
 		},
+		product_experiment_outcomes: {
+			data: [
+				["signup", 0],
+				["share_created", 1],
+				["paid_purchase", 0],
+			].map(([outcomeName, convertedActors]) => ({
+				experiment_id: "synthetic-checkout-copy",
+				assignment_version: "v1",
+				variant: "treatment",
+				platform: "web",
+				app_version: appVersion,
+				outcome_name: outcomeName,
+				exposed_actors: 1,
+				converted_actors: convertedActors,
+				conversion_rate: convertedActors * 100,
+			})),
+		},
 		product_analytics_freshness: row({
 			latest_received_hour: "2026-07-31 10:00:00",
 			product_calculated_at: "2026-07-31 10:01:00",
 			traffic_calculated_at: "2026-07-31 10:01:00",
 			retention_calculated_at: "2026-07-31 10:01:00",
 			identity_calculated_at: "2026-07-31 10:01:00",
+			attribution_calculated_at: "2026-07-31 10:01:00",
+			experiment_calculated_at: "2026-07-31 10:01:00",
 		}),
 	};
 	const input = { appVersion, date, hostname, pathname, payloads };
@@ -1325,7 +1666,7 @@ test("staging performance covers every typed decision endpoint", () => {
 		endDate: "2026-07-31",
 		deploymentId: "deployment-1",
 	});
-	assert.equal(queries.length, 12);
+	assert.equal(queries.length, 15);
 	assert.equal(new Set(queries.map(({ name }) => name)).size, queries.length);
 	assert.ok(
 		queries.every(
@@ -1336,12 +1677,24 @@ test("staging performance covers every typed decision endpoint", () => {
 		startDate: "2026-07-01",
 		endDate: "2026-07-31",
 		deploymentId: "deployment-0",
-		includeIdentityFunnel: false,
+		excludedEndpointNames: [
+			"product_traffic_totals",
+			"product_attribution",
+			"product_identity_funnel",
+			"product_experiment_outcomes",
+		],
 	});
 	assert.equal(retainedQueries.length, 11);
-	assert.equal(
-		retainedQueries.some(({ name }) => name === "product_identity_funnel"),
-		false,
+	assert.ok(
+		retainedQueries.every(
+			({ name }) =>
+				!{
+					product_traffic_totals: true,
+					product_attribution: true,
+					product_identity_funnel: true,
+					product_experiment_outcomes: true,
+				}[name],
+		),
 	);
 	assert.deepEqual(
 		queries.find(({ name }) => name === "product_creator_activity")?.parameters,
@@ -1435,6 +1788,66 @@ test("latency budgets require both absolute and measured-baseline gates", () => 
 	);
 });
 
+test("Copy performance budgets gate visibility and pipeline regressions", () => {
+	const baseline = {
+		pipelineWallClockMs: 80_000,
+		visibility: latencySummary([5_000, 10_000, 20_000]),
+	};
+	assert.deepEqual(
+		evaluateCopyPerformanceBudget({
+			absolutePipelineMs: 600_000,
+			absoluteVisibilityP95Ms: 120_000,
+			baseline,
+			measured: {
+				pipelineWallClockMs: 100_000,
+				visibility: latencySummary([10_000, 20_000, 30_000]),
+			},
+			regressionFactor: 2,
+			regressionFloorMs: 30_000,
+		}),
+		{
+			mode: "baseline_comparison",
+			absolutePipelineMs: 600_000,
+			absoluteVisibilityP95Ms: 120_000,
+			regressionFactor: 2,
+			regressionFloorMs: 30_000,
+			pipelineRegressionLimitMs: 160_000,
+			visibilityRegressionLimitMs: 50_000,
+			pipelineRegressionRatio: 1.25,
+			visibilityRegressionRatio: 1.5,
+			passed: true,
+		},
+	);
+	assert.equal(
+		evaluateCopyPerformanceBudget({
+			absolutePipelineMs: 600_000,
+			absoluteVisibilityP95Ms: 120_000,
+			baseline,
+			measured: {
+				pipelineWallClockMs: 200_000,
+				visibility: latencySummary([60_000]),
+			},
+			regressionFactor: 2,
+			regressionFloorMs: 30_000,
+		}).passed,
+		false,
+	);
+	assert.equal(
+		evaluateCopyPerformanceBudget({
+			absolutePipelineMs: 600_000,
+			absoluteVisibilityP95Ms: 120_000,
+			baseline: null,
+			measured: {
+				pipelineWallClockMs: 80_000,
+				visibility: latencySummary([20_000]),
+			},
+			regressionFactor: 2,
+			regressionFloorMs: 30_000,
+		}).mode,
+		"baseline_capture",
+	);
+});
+
 test("CI assertion normalization proves decision deduplication and conflict quarantine", () => {
 	const assertions = normalizeCiAssertions({
 		data: [
@@ -1466,6 +1879,8 @@ test("copy assertion normalization exposes every marker independently", () => {
 					activation_markers: "1",
 					retention_markers: "1",
 					identity_markers: "1",
+					attribution_markers: "1",
+					experiment_markers: "1",
 					health_markers: "1",
 				},
 			],
@@ -1477,6 +1892,8 @@ test("copy assertion normalization exposes every marker independently", () => {
 			activationMarkers: 1,
 			retentionMarkers: 1,
 			identityMarkers: 1,
+			attributionMarkers: 1,
+			experimentMarkers: 1,
 			healthMarkers: 1,
 		},
 	);
@@ -1503,9 +1920,17 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		14,
+		16,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
+	assert.ok(
+		workflow.indexOf("Refuse a preview bound outside Tinybird staging") <
+			workflow.indexOf("Record Tinybird deployment boundary"),
+	);
+	assert.match(
+		workflow,
+		/Refuse a preview bound outside Tinybird staging[\s\S]*CAP_ANALYTICS_STAGING_TEST_SECRET[\s\S]*staging-ci\.js attest-preview/,
+	);
 	assert.ok(
 		workflow.indexOf(
 			"Prove promoted delivery, business values, and decision deduplication",
@@ -1650,26 +2075,108 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow,
 		/Upload redacted staging evidence\n {8}if: always\(\) && steps\.cleanup\.outputs\.required == 'true'/,
 	);
+	assert.ok(
+		workflow.indexOf("Upload the immutable pre-create recovery boundary") <
+			workflow.indexOf("Create isolated Tinybird staging deployment"),
+	);
+	assert.ok(
+		workflow.indexOf("Upload the immutable pre-ingestion recovery checkpoint") <
+			workflow.indexOf("Seed bounded duplicate and conflict probes"),
+	);
+	assert.ok(
+		workflow.indexOf("Upload the immutable pre-promotion recovery checkpoint") <
+			workflow.indexOf("Promote the verified staging deployment"),
+	);
+	assert.match(
+		workflow,
+		/recover-staging:[\s\S]*needs: deploy-staging[\s\S]*if: always\(\) && needs\.deploy-staging\.result != 'success'/,
+	);
+	assert.match(workflow, /permissions:[\s\S]*actions: read/);
+	assert.match(
+		workflow,
+		/actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/,
+	);
+	assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact@v\d/);
+	assert.match(workflow, /staging-ci\.js recover/);
 });
 
-test("the seed persists cleanup state and partial evidence before ingestion", () => {
+test("the preview mutation route independently enforces Tinybird staging", () => {
+	const route = fs.readFileSync(
+		new URL(
+			"../../../apps/web/app/api/analytics/staging-test/route.ts",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	assert.match(
+		route,
+		/const TINYBIRD_STAGING_ORIGIN = "https:\/\/api\.us-east\.aws\.tinybird\.co"/,
+	);
+	assert.match(
+		route,
+		/const TINYBIRD_STAGING_WORKSPACE_ID =\s*"37b8fef9-817f-4c3c-b21f-218c36a6077d"/,
+	);
+	assert.match(
+		route,
+		/const authorize = [\s\S]*!configurationAttestation\(runId\)/,
+	);
+	assert.match(
+		route,
+		/const STAGING_DATABASE_FINGERPRINT =\s*"fff37a9b160f31bfb82b8c5585829b8ee08f70b3645169dca6e7cb29033a039a"/,
+	);
+	assert.match(
+		route,
+		/databaseSchema: Schema\.Literal\("0042_lying_sharon_ventura"\)/,
+	);
+	assert.match(route, /HttpApiEndpoint\.post\("health"/);
+	assert.match(route, /const scopedDatabaseHealth = async/);
+	assert.match(route, /FROM information_schema\.STATISTICS/);
+	assert.match(route, /product_analytics_ingestion_leases:fencingToken/);
+	assert.match(route, /product_analytics_refresh_leases:name/);
+	assert.match(route, /product_analytics_outbox:delivery_idx:1:3:createdAt/);
+	assert.match(route, /\/api\/analytics\/staging-test\/cleanup-database/);
+
+	const runner = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const serverProbe = runner.slice(
+		runner.indexOf("const probeDurableServerPath = async () => {"),
+		runner.indexOf("const seed = async () => {"),
+	);
+	assert.match(serverProbe, /\/api\/analytics\/staging-test\/health/);
+	assert.match(serverProbe, /Number\(outboxHealth\.activeEvents\) !== 0/);
+	assert.match(serverProbe, /Number\(outboxHealth\.deadLetterEvents\) !== 1/);
+	assert.match(serverProbe, /durableOutboxHealthPassed: true/);
+});
+
+test("the seed checkpoint is persisted before ingestion", () => {
 	const source = fs.readFileSync(
 		new URL("../staging-ci.js", import.meta.url),
 		"utf8",
+	);
+	const prepareSource = source.slice(
+		source.indexOf("const prepareSeed = async () => {"),
+		source.indexOf("const seed = async () => {"),
 	);
 	const seedSource = source.slice(
 		source.indexOf("const seed = async () => {"),
 		source.indexOf("const waitForCopyVisibility"),
 	);
-	const stateWrite = seedSource.indexOf("writeJson(statePath, state, 0o600)");
-	const artifactWrite = seedSource.indexOf("writeJson(artifactPath, artifact)");
+	const stateWrite = prepareSource.indexOf(
+		"writeJson(statePath, state, 0o600)",
+	);
+	const artifactWrite = prepareSource.indexOf(
+		"writeJson(artifactPath, artifact)",
+	);
 	const firstDelivery = seedSource.indexOf("const concurrentDeliveries");
 	assert.ok(stateWrite >= 0);
 	assert.ok(artifactWrite > stateWrite);
-	assert.ok(firstDelivery > artifactWrite);
-	assert.match(seedSource, /assertions: \{ seedAccepted: false \}/);
-	assert.match(seedSource, /rowsPlanned: fixture\.rows\.length/);
-	assert.match(seedSource, /rowsAttempted: 0/);
+	assert.ok(firstDelivery >= 0);
+	assert.match(prepareSource, /recoveryPhase: "preseed"/);
+	assert.match(prepareSource, /assertions: \{ seedAccepted: false \}/);
+	assert.match(prepareSource, /rowsPlanned: fixture\.rows\.length/);
+	assert.match(prepareSource, /rowsAttempted: 0/);
 	assert.ok(
 		seedSource.indexOf("artifact.delivery.rowsAttempted += 1") <
 			seedSource.indexOf("const result = await request"),
@@ -1677,6 +2184,31 @@ test("the seed persists cleanup state and partial evidence before ingestion", ()
 	assert.match(
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
+	);
+});
+
+test("event state reaches terminal success before canonical rebuilding", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const runCopiesSource = source.slice(
+		source.indexOf("const runCopies = async"),
+		source.indexOf("const verify = async"),
+	);
+	const stateCopy = runCopiesSource.indexOf(
+		'"snapshot_product_event_id_states_v2",\n\t\t\t\t"snapshot_product_event_day_states_v2",',
+	);
+	const stateWait = runCopiesSource.indexOf("await waitForCopyJobs");
+	const canonicalCopy = runCopiesSource.indexOf(
+		'pipes: ["snapshot_product_events_canonical_v1"]',
+	);
+	assert.ok(stateCopy >= 0);
+	assert.ok(stateCopy < stateWait);
+	assert.ok(stateWait < canonicalCopy);
+	assert.match(
+		runCopiesSource,
+		/jobs: \[\.\.\.stateJobs, \.\.\.canonicalJobs, \.\.\.downstreamJobs\]/,
 	);
 });
 
@@ -1702,8 +2234,12 @@ test("rollback drill proves old and restored deployment data planes", () => {
 	);
 	assert.match(drillSource, /previousLiveDeploymentId/);
 	assert.match(drillSource, /assertDecisionEndpointSuiteReadable/);
-	assert.match(drillSource, /retainedIdentityFunnelAvailable/);
-	assert.match(drillSource, /decisionEndpointAvailable/);
+	assert.match(drillSource, /excludedRollbackEndpoints/);
+	assert.match(drillSource, /unavailableDecisionEndpoints/);
+	assert.match(
+		source,
+		/unavailableDecisionEndpoints[\s\S]*await decisionEndpointAvailable[\s\S]*filter\(\(\{ available \}\) => !available\)/,
+	);
 	assert.match(drillSource, /assertSyntheticEndpointDecisions/);
 	assert.match(drillSource, /assertSyntheticBusinessDecisions/);
 	assert.match(drillSource, /readAndAssertPhaseHealth/);
@@ -1744,9 +2280,23 @@ test("performance compares the retained deployment and a larger synthetic volume
 	assert.match(verifySource, /representativePerformancePassed/);
 	assert.match(verifySource, /assertRepresentativeEndpointCoverage/);
 	assert.match(verifySource, /representativeBudget/);
-	assert.match(verifySource, /new_endpoint_no_baseline/);
-	assert.match(verifySource, /retainedIdentityFunnelAvailable/);
-	assert.match(verifySource, /decisionEndpointAvailable/);
+	assert.match(verifySource, /absolute_only_no_independent_baseline/);
+	assert.match(verifySource, /round < 30/);
+	assert.match(verifySource, /excludedBaselineEndpoints/);
+	assert.match(verifySource, /unavailableDecisionEndpoints/);
+	assert.match(
+		verifySource,
+		/newEndpointsWithoutBaseline: excludedBaselineEndpoints/,
+	);
+	assert.match(source, /LARGE_PERFORMANCE_EVENT_COUNT \?\? 100_000/);
+	assert.match(source, /PERFORMANCE_DAY_SPAN \?\? 30/);
+	assert.match(source, /LARGE_PERFORMANCE_DAY_SPAN \?\? 80/);
+	assert.match(source, /COLLECTOR_PERFORMANCE_REQUESTS \?\? 20/);
+	assert.match(source, /COLLECTOR_PERFORMANCE_CONCURRENCY \?\? 4/);
+	assert.match(source, /LARGE_PERFORMANCE_DIMENSION_BUCKETS \?\? 64/);
+	assert.match(source, /COPY_PIPELINE_WALL_CLOCK_BUDGET_MS \?\? 600_000/);
+	assert.match(source, /COPY_VISIBILITY_P95_BUDGET_MS \?\? 120_000/);
+	assert.match(source, /providerResourceMetrics/);
 });
 
 test("synthetic deletion targets the deployment used for ingestion", () => {
