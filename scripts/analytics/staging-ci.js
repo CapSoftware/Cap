@@ -372,6 +372,7 @@ const promoteOwnedDeployment = async () => {
 
 const discardOwnedDeployment = async () => {
 	const deploymentId = option("deployment-id");
+	const artifactPath = options.get("artifact");
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
@@ -389,6 +390,21 @@ const discardOwnedDeployment = async () => {
 		);
 		if (lifecycle === "deleted") {
 			writeOutput("discarded", "true");
+			if (artifactPath && fs.existsSync(artifactPath)) {
+				const artifact = readJson(artifactPath);
+				artifact.cleanup = {
+					...artifact.cleanup,
+					strategy: "deployment_discard",
+					candidateDiscarded: true,
+					passed: true,
+					verifiedAt: new Date().toISOString(),
+				};
+				artifact.assertions = {
+					...artifact.assertions,
+					cleanupPassed: true,
+				};
+				writeJson(artifactPath, artifact);
+			}
 			return;
 		}
 		if (lifecycle === "live") {
@@ -1096,6 +1112,10 @@ const runCopies = async () => {
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
 	const executeCopies = async (target) => {
+		const copyToken =
+			target === "staging"
+				? tokens.TINYBIRD_STAGING_DEPLOY_TOKEN
+				: tokens.TINYBIRD_STAGING_READ_TOKEN;
 		const assertMutationOwnership = async () => {
 			if (
 				(await ownedMutationTarget({
@@ -1109,13 +1129,23 @@ const runCopies = async () => {
 		};
 		const canonicalJobs = await submitTinybirdCopyJobs({
 			origin,
-			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			token: copyToken,
 			deploymentId: state.deploymentId,
 			request,
 			pipes: ["snapshot_product_events_canonical_v1"],
 			useDeploymentParameter: target === "staging",
 			assertMutationOwnership,
 		});
+		artifact.copyJobs = {
+			...artifact.copyJobs,
+			[phase]: {
+				status: "in_progress",
+				target,
+				copyRunHash: hashIdentifier(copyRunId),
+				jobs: canonicalJobs,
+			},
+		};
+		writeJson(artifactPath, artifact);
 		const canonicalVisibility = await waitForCopyVisibility({
 			label: "Tinybird canonical copy",
 			read: () =>
@@ -1172,7 +1202,7 @@ const runCopies = async () => {
 			downstreamJobs.push(
 				...(await submitTinybirdCopyJobs({
 					origin,
-					token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+					token: copyToken,
 					deploymentId: state.deploymentId,
 					request,
 					pipes: [copyStep.pipe],
@@ -1253,6 +1283,7 @@ const runCopies = async () => {
 			artifact.copyJobs = {
 				...artifact.copyJobs,
 				[phase]: {
+					...artifact.copyJobs?.[phase],
 					status: "failed",
 					error:
 						error instanceof Error
@@ -1714,6 +1745,19 @@ const cleanup = async () => {
 	if (state.previewRunId) {
 		runIds.push(validateSyntheticRunId(state.previewRunId));
 	}
+	if (target === "staging") {
+		writeOutput("target", target);
+		writeOutput("requires_copies", "false");
+		writeOutput("requires_discard", "true");
+		const artifact = readJson(artifactPath);
+		artifact.cleanup = {
+			...artifact.cleanup,
+			strategy: "deployment_discard",
+			candidateDiscarded: false,
+		};
+		writeJson(artifactPath, artifact);
+		return;
+	}
 	let rowsAffected;
 	for (
 		let transitionAttempt = 0;
@@ -1765,6 +1809,8 @@ const cleanup = async () => {
 		throw new Error("Tinybird cleanup changed target more than once");
 	}
 	writeOutput("target", target);
+	writeOutput("requires_copies", "true");
+	writeOutput("requires_discard", "false");
 	const artifact = readJson(artifactPath);
 	artifact.cleanup = {
 		...artifact.cleanup,

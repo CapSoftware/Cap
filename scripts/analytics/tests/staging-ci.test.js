@@ -756,7 +756,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 	);
 	assert.match(
 		workflow,
-		/Discard an unpromoted staging deployment after cleanup\n {8}id: discard\n {8}if: always\(\) && steps\.deployment-state\.outputs\.discard == 'true'/,
+		/Discard an unpromoted staging deployment after cleanup\n {8}id: discard\n {8}if: always\(\) && \(steps\.deployment-state\.outputs\.discard == 'true' \|\| steps\.cleanup\.outputs\.requires_discard == 'true'\)/,
 	);
 	assert.match(
 		workflow,
@@ -784,6 +784,7 @@ test("the analytics workflow is statically restricted to staging", () => {
 		2,
 	);
 	assert.match(workflow, /steps\.seed\.outcome != 'skipped'/);
+	assert.match(workflow, /steps\.cleanup\.outputs\.requires_copies == 'true'/);
 	assert.doesNotMatch(workflow, /steps\.seed\.outcome == 'success'/);
 	assert.match(workflow, /echo "required=false" >> "\$GITHUB_OUTPUT"/);
 	assert.match(workflow, /echo "required=true" >> "\$GITHUB_OUTPUT"/);
@@ -843,6 +844,18 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 	assert.match(workflow, /node scripts\/analytics\/staging-ci\.js cleanup/);
 	assert.match(source, /let target = await waitForOwnedMutationTarget/);
 	assert.match(source, /writeOutput\("target", target\)/);
+	assert.match(
+		source,
+		/target === "staging"[\s\S]*strategy: "deployment_discard"/,
+	);
+	assert.match(source, /writeOutput\("requires_copies", "false"\)/);
+	assert.match(source, /writeOutput\("requires_copies", "true"\)/);
+	assert.match(source, /writeOutput\("requires_discard", "true"\)/);
+	assert.match(source, /writeOutput\("requires_discard", "false"\)/);
+	assert.match(
+		source,
+		/target === "staging"[\s\S]*tokens\.TINYBIRD_STAGING_DEPLOY_TOKEN[\s\S]*tokens\.TINYBIRD_STAGING_READ_TOKEN/,
+	);
 	assert.match(
 		workflow,
 		/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/,

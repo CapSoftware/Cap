@@ -344,7 +344,7 @@ jobs:
             --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Retract synthetic rows from every derived copy
         id: cleanup-copies
-        if: always() && steps.cleanup.outputs.required == 'true' && steps.cleanup.outcome == 'success'
+        if: always() && steps.cleanup.outputs.required == 'true' && steps.cleanup.outcome == 'success' && steps.cleanup.outputs.requires_copies == 'true'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
@@ -370,13 +370,16 @@ jobs:
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Discard an unpromoted staging deployment after cleanup
         id: discard
-        if: always() && steps.deployment-state.outputs.discard == 'true'
+        if: always() && (steps.deployment-state.outputs.discard == 'true' || steps.cleanup.outputs.requires_discard == 'true')
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-        run: >-
-          node scripts/analytics/staging-ci.js discard-deployment
-          --deployment-id "${{ steps.tinybird.outputs.id }}"
+        run: |
+          discard_args=(--deployment-id "${{ steps.tinybird.outputs.id }}")
+          if [[ -f "$RUNNER_TEMP/analytics-staging-report.json" ]]; then
+            discard_args+=(--artifact "$RUNNER_TEMP/analytics-staging-report.json")
+          fi
+          node scripts/analytics/staging-ci.js discard-deployment "${discard_args[@]}"
       - name: Upload redacted staging evidence
         if: always() && steps.cleanup.outputs.required == 'true'
         uses: actions/upload-artifact@v4
