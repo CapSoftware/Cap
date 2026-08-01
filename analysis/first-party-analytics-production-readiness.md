@@ -14,7 +14,7 @@ Desktop critical events enter a bounded encrypted local outbox before network de
 
 - Visitor: a first-party pseudonymous browser ID stored in a persistent cookie/local storage. It is not a claim that the actor is a person.
 - Session: a browser visit shared across tabs and renewed after 30 minutes of inactivity. Reloads and SPA navigation retain the session; activity at 29 minutes extends it; a return after more than 30 minutes starts a new session. Hidden time is not engagement time.
-- Actor: `user_id` when authenticated, otherwise the anonymous visitor ID, otherwise the session ID. Anonymous and authenticated IDs are carried together during signup and checkout so the journey can be stitched without replacing the authenticated source of truth.
+- Actor: `user_id` when authenticated, otherwise the anonymous visitor ID, otherwise the session ID. A canonical `identity_linked` event maps pre-auth acquisition to signup, while a settled guest purchase may establish the same mapping from its preserved anonymous checkout identity. The privacy-safe funnel materialization returns cohort counts only and never exposes that mapping.
 - User: an authenticated Cap account. Cross-device creator metrics use `user_id`.
 - Organization: the authoritative organization attached to a server fact. Organization metrics never infer membership from an anonymous browser event.
 
@@ -36,9 +36,11 @@ The desktop critical-event outbox uses AES-256-GCM. Its stable random key is sto
 
 Account and organization deletion writes its durable pending marker or tombstone before erasure begins. Delivery and reconciliation reject marked identities, then deletion waits longer than the bounded in-flight delivery attempt before removing matching raw rows with a dedicated erasure token and rebuilding every replace-mode canonical, traffic, activation, retention, and health snapshot. This closes the race where a workflow that passed its identity check could otherwise append after a completed erasure. Deletion fails closed if the erasure credential or any rebuild is unavailable. The staging suite deletes a synthetic user and organization, proves their raw-health and decision state is gone, and proves an out-of-scope row sharing the anonymous ID remains until final test cleanup. Tinybird's row-deletion API currently requires the general `DATASOURCES:CREATE` scope and rejects resource-scoped creation of that operator; the token therefore has no read or deployment scope, lives only in the protected staging environment, and is used by code that accepts bounded validated deletion predicates. Its broader same-workspace mutation capability is an explicit provider limitation rather than a least-privilege claim.
 
+Raw, canonical, and decision data share an 800-day TTL. This supports two complete 365-day comparison windows plus a rebuild buffer for year-over-year decisions. The identity-bearing source is intentionally retained for the same horizon as its exact aggregates so a later account or organization deletion can still retract every historical contribution. Keeping only irreversible long-lived counts would use less storage but would break the derived-erasure guarantee. Health-detail aggregates remain limited to 90 days. This retention choice requires privacy-owner approval before production rollout and must be disclosed with the persistent first-party identifier model.
+
 ## Data quality and performance gates
 
-The staging workflow is restricted to PR 2003 and `codex/first-party-analytics`, hard-codes the staging Tinybird workspace ID, checks the exact Git SHA, waits for the exact-SHA Vercel preview, creates an isolated Tinybird staging deployment, runs fixture and synthetic tests, promotes only a verified deployment inside that staging workspace, and discards an unpromoted deployment on failure. It has no push trigger, production environment, production token, or production deployment command.
+The staging workflow is restricted to PR 2003 and `codex/first-party-analytics`, hard-codes the staging Tinybird workspace ID, checks the exact Git SHA, waits for the exact-SHA Vercel preview, creates an isolated Tinybird staging deployment, runs fixture and synthetic tests, and promotes only a verified deployment inside that staging workspace. Candidate reads use the exact numeric deployment ID and prove raw delivery, isolation, endpoint execution, and absolute latency before promotion. Tinybird's Copy API does not reliably route an on-demand Copy mutation into a candidate, so Copy mutations are prohibited until the exact candidate is live in staging. The prior staging deployment remains available until promoted Copy results, public business values, retained-deployment and representative-volume performance, erasure, cleanup, and a live rollback-and-restoration drill pass. The first rollout of a new endpoint compares only shared endpoints to the retained deployment, records the new endpoint as having no historical baseline, and still applies candidate and representative absolute budgets. The rollback drill executes every shared typed endpoint while the prior deployment is live; the exact-SHA admin client treats only an absent identity-funnel endpoint as optional, then the drill restores the candidate and re-proves the full endpoint suite, health, and synthetic business responses. Ambiguous live-switch responses are reconciled against the exact deployment pair before recovery continues. Any earlier failure restores a data-plane-proven prior deployment and removes the rejected candidate. The workflow has no push trigger, production environment, production token, or production deployment command.
 
 The redacted evidence artifact records the Git SHA, GitHub run, Vercel and Tinybird deployment IDs, hashed synthetic-run identity, delivery attempts, ingestion throughput, endpoint and full-dashboard p50/p95/p99, measured-baseline regressions, visibility time, health totals, decision-dedup assertions, conflict quarantine, least-privilege token checks, scoped identity erasure, and cleanup. Synthetic rows are excluded from normal metrics and cleanup is verified after every promoted run.
 
@@ -52,21 +54,27 @@ Required live gates are:
 - raw and all derived synthetic state is removed successfully;
 - an erased identity disappears from raw and derived results while an out-of-scope control remains;
 - aggregate read tokens cannot query raw identifiers or append, and append/cleanup tokens cannot read aggregate endpoints;
+- a bounded five-event fixture produces exact non-zero traffic, page, activation, and retention values while remaining absent from normal decision endpoints;
+- a populated-table performance pass measures every typed decision endpoint and full dashboard fanout after materialization;
 - wrong workspace, stale SHA, missing credentials, partial execution, failed promotion, and failed cleanup all fail closed.
 
-Copy-backed decision tables rebuild on serialized eight-minute schedules to avoid competing for the same Tinybird worker pool. Exact-SHA staging runs invoke the seven copies in dependency order immediately after seeding, promotion, identity erasure, and final cleanup, so the staging visibility SLO measures the deployed data path rather than waiting for the periodic schedule. Dashboard freshness exposes the most recent aggregate timestamps; scheduled production freshness is therefore bounded by the documented copy cadence plus provider execution time.
+Copy-backed decision tables rebuild on serialized eight-minute schedules to avoid competing for the same Tinybird worker pool. Exact-SHA staging runs invoke the eight copies in dependency order after an exact candidate is promoted, after identity erasure, and after final cleanup. A no-op deployment invokes them immediately after seeding. Candidate ingestion visibility is measured directly against the exact candidate and promoted Copy visibility is measured separately, so neither proof waits for the periodic schedule. Dashboard freshness exposes product, traffic, retention, and identity-funnel aggregate timestamps; scheduled production freshness is therefore bounded by the documented copy cadence plus provider execution time.
 
-The first staging run establishes absolute ingestion and endpoint baselines on the exact deployed code. The final branch must then commit regression budgets derived from those measurements and rerun at representative and larger bounded volumes. A green static/unit run alone is not rollout evidence.
+The staging run records absolute ingestion budgets, compares shared typed endpoints and dashboard fanout against the retained prior deployment, and separately measures bounded 1,000-row and 10,000-row mixed high-cardinality corpora with nonzero traffic, activation, retention, identity, product, and revenue assertions. It measures exact-SHA browser main-thread cost and append-batch p50, p95, p99, error rate, and throughput. A newly introduced endpoint without an honest prior baseline is labeled as such and must pass measured and representative absolute budgets. It reports p50, p95, and p99 for baseline, measured, and representative samples, and applies retained-baseline regression budgets to representative samples wherever a baseline exists. A green static/unit run alone is not rollout evidence.
 
 ## Production rollout checklist
 
 Production remains prohibited until the final staging artifact, relevant CI, security/data/performance reviews, and Greptile are green for the same branch SHA.
 
+The preview-only `/api/analytics/staging-test` route must not receive a production secret. Its `CAP_ANALYTICS_STAGING_TEST_SECRET` exists only in the Vercel Preview environment and the protected GitHub staging environment; the route returns `404` outside `VERCEL_ENV=preview` and requires the exact Vercel Git SHA.
+
 1. Create production Tinybird resources from the reviewed datafiles with a deploy credential scoped only to the production workspace. Run `deployment create --check`, review destructive/schema changes, create an isolated deployment, run fixture tests, rebuild every copy, query all aggregate endpoints, then promote. Record the deployment ID. Do not reuse the staging workspace or tokens.
 2. Create least-privilege Tinybird tokens:
    - append-only token for `product_events_v1`;
    - aggregate endpoint read token with no raw or canonical datasource access;
-   - resource-scoped copy token for the seven reviewed copy pipes, with no raw identity datasource access;
+   - resource-scoped copy token for the eight reviewed copy pipes, with no raw identity datasource access;
+   - erasure-lookup token limited to read access on `product_events_v1` and `product_events_canonical_v1`, protected from all agent and admin surfaces;
+   - schedule-controller token limited to cancelling, pausing, and resuming the eight reviewed Copy Pipes;
    - dedicated erasure token with Tinybird's required `DATASOURCES:CREATE` scope, no read/deploy scopes, protected as a high-impact operational secret until Tinybird offers resource-scoped row deletion;
    - deployment token used only by the controlled production release path.
 3. Set these Vercel production variables without copying values into logs or artifacts:
@@ -74,6 +82,9 @@ Production remains prohibited until the final staging artifact, relevant CI, sec
    - `PRODUCT_ANALYTICS_TINYBIRD_TOKEN`
    - `PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN`
    - `PRODUCT_ANALYTICS_TINYBIRD_ERASURE_TOKEN`
+   - `PRODUCT_ANALYTICS_TINYBIRD_ERASURE_LOOKUP_TOKEN`
+   - `PRODUCT_ANALYTICS_TINYBIRD_COPY_TOKEN`
+   - `PRODUCT_ANALYTICS_TINYBIRD_SCHEDULER_TOKEN`
    - `PRODUCT_ANALYTICS_INTERNAL_IP_HASHES`
    - `CRON_SECRET`
    - `NEXTAUTH_SECRET` (existing application secret used to sign the short-lived anonymous browser token; do not create an analytics-specific duplicate)

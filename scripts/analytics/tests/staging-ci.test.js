@@ -3,10 +3,20 @@ import fs from "node:fs";
 import test from "node:test";
 
 import {
+	applyCopyScheduleAction,
 	assertExecutionScope,
+	assertRepresentativeEndpointCoverage,
+	assertSyntheticBusinessDecisions,
 	assertSyntheticDecisions,
+	assertSyntheticEndpointDecisions,
 	assertSyntheticHealth,
+	assertSyntheticIdentityFilters,
+	assertSyntheticLoadDecisions,
+	assertSyntheticLoadHealth,
+	assertSyntheticMonetizationFilters,
 	assertWorkflowSafety,
+	copyScheduleMatchesAction,
+	createSyntheticDecisionEvents,
 	createSyntheticErasureControl,
 	createSyntheticEvents,
 	createSyntheticLoadEvents,
@@ -30,6 +40,8 @@ import {
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
+	syntheticIdentityFilterQueries,
+	syntheticMonetizationFilterQueries,
 	tokenWorkspaceId,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
@@ -38,6 +50,66 @@ import {
 const SHA = "1234567890abcdef1234567890abcdef12345678";
 const token = (workspaceId = STAGING_WORKSPACE_ID) =>
 	`p.${Buffer.from(JSON.stringify({ u: workspaceId })).toString("base64url")}.signature`;
+
+test("schedule pause compensates every schedule already paused", async () => {
+	const calls = [];
+	await assert.rejects(
+		applyCopyScheduleAction({
+			pipes: ["one", "two", "three"],
+			action: "pause",
+			setSchedule: async (pipe, action) => {
+				calls.push([pipe, action]);
+				if (pipe === "two" && action === "pause") {
+					throw new Error("provider failure");
+				}
+			},
+		}),
+		/Failed to pause two: provider failure/,
+	);
+	assert.deepEqual(calls, [
+		["one", "pause"],
+		["two", "pause"],
+		["one", "resume"],
+	]);
+});
+
+test("schedule resume attempts every schedule before failing", async () => {
+	const calls = [];
+	await assert.rejects(
+		applyCopyScheduleAction({
+			pipes: ["one", "two", "three"],
+			action: "resume",
+			setSchedule: async (pipe, action) => {
+				calls.push([pipe, action]);
+				if (pipe !== "two") throw new Error(`${pipe} failed`);
+			},
+		}),
+		/one: one failed, three: three failed/,
+	);
+	assert.deepEqual(calls, [
+		["one", "resume"],
+		["two", "resume"],
+		["three", "resume"],
+	]);
+});
+
+test("schedule state attestation distinguishes paused from active copies", () => {
+	assert.equal(
+		copyScheduleMatchesAction(
+			{ data: { schedule: { status: "paused" } } },
+			"pause",
+		),
+		true,
+	);
+	assert.equal(
+		copyScheduleMatchesAction({ schedule: { status: "scheduled" } }, "resume"),
+		true,
+	);
+	assert.equal(
+		copyScheduleMatchesAction({ schedule: { status: "paused" } }, "resume"),
+		false,
+	);
+});
 
 test("execution scope accepts only PR 2003 or manual feature branch runs", () => {
 	assert.doesNotThrow(() =>
@@ -455,7 +527,6 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 			return responses.shift();
 		},
 		now: () => now,
-		useDeploymentParameter: true,
 		copyRunId: "run_12345678_staged",
 		assertMutationOwnership: async () => {
 			ownershipChecks += 1;
@@ -475,7 +546,7 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 		},
 	]);
 	assert.match(requests[0].url, /_mode=replace/);
-	assert.match(requests[0].url, /__tb__deployment=staging/);
+	assert.doesNotMatch(requests[0].url, /__tb__deployment/);
 	assert.doesNotMatch(requests[0].url, /copy_run_id/);
 	assert.equal(requests[0].options.method, "POST");
 	assert.equal(requests[0].options.token, resourceToken);
@@ -512,6 +583,19 @@ test("copy jobs use only approved resource-scoped submissions and bounded marker
 			request: async () => ({ data: { id: "copy_job_missing_marker" } }),
 			assertMutationOwnership: async () => undefined,
 		}),
+	);
+	await assert.rejects(
+		submitTinybirdCopyJobs({
+			origin: "https://api.us-east.aws.tinybird.co",
+			token: resourceToken,
+			deploymentId: "6",
+			pipes: ["snapshot_product_events_canonical_v1"],
+			request: async () => {
+				throw new Error("Tinybird request was rejected with HTTP 403");
+			},
+			assertMutationOwnership: async () => undefined,
+		}),
+		/Tinybird copy submission failed.*HTTP 403/,
 	);
 });
 
@@ -550,6 +634,71 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	assert.notEqual(control.row.user_id, fixture.userId);
 	assert.notEqual(control.row.organization_id, fixture.organizationId);
 	assert.equal(control.row.synthetic_run_id, control.runId);
+	const decisions = createSyntheticDecisionEvents({
+		runId,
+		now: new Date("2026-07-31T10:00:00.000Z"),
+	});
+	assert.equal(decisions.rows.length, 27);
+	assert.equal(decisions.runId, `${runId}_decisions`);
+	assert.equal(new Set(decisions.rows.map((row) => row.event_id)).size, 27);
+	assert.deepEqual(
+		decisions.rows.map((row) => row.event_name),
+		[
+			"page_view",
+			"page_engagement",
+			"identity_linked",
+			"user_signed_up",
+			"share_link_created",
+			"recording_completed",
+			"page_view",
+			"guest_checkout_started",
+			"checkout_started",
+			"checkout_started",
+			"checkout_started",
+			"trial_started",
+			"purchase_completed",
+			"subscription_renewed",
+			"guest_checkout_started",
+			"trial_converted",
+			"subscription_changed",
+			"subscription_changed",
+			"subscription_cancelled",
+			"subscription_refunded",
+			"subscription_payment_failed",
+			"page_view",
+			"identity_linked",
+			"purchase_completed",
+			"subscription_renewed",
+			"experiment_exposed",
+			"analytics_delivery_loss",
+		],
+	);
+	assert.equal(decisions.rows[0].user_id, "");
+	assert.equal(decisions.rows[1].user_id, "");
+	assert.equal(decisions.rows[7].user_id, "");
+	assert.equal(decisions.rows[2].anonymous_id, decisions.rows[0].anonymous_id);
+	assert.notEqual(
+		decisions.rows[2].anonymous_id,
+		decisions.rows[23].anonymous_id,
+	);
+	assert.equal(decisions.rows[23].anonymous_id, decisions.rows[7].anonymous_id);
+	assert.equal(
+		JSON.parse(decisions.rows[23].properties).is_guest_checkout,
+		true,
+	);
+	assert.ok(
+		decisions.rows.every(
+			(row) =>
+				row.synthetic_run_id === decisions.runId &&
+				row.hostname === decisions.hostname &&
+				row.pathname === decisions.pathname,
+		),
+	);
+	assert.match(
+		decisions.hostname,
+		/^synthetic-[0-9a-f]{12}\.preview\.cap\.so$/,
+	);
+	assert.match(decisions.pathname, /^\/analytics-synthetic-[0-9a-f]{12}$/);
 	assert.throws(() => createSyntheticLoadEvents({ runId, count: 99 }));
 });
 
@@ -580,18 +729,619 @@ test("health normalization and latency percentiles use decision-facing assertion
 	});
 });
 
+test("candidate load assertions require complete unique delivery", () => {
+	assert.doesNotThrow(() =>
+		assertSyntheticLoadHealth(
+			{
+				receivedRows: 1_000,
+				uniqueEvents: 1_000,
+				uniquePayloads: 1_000,
+				duplicateRows: 0,
+				payloadConflicts: 0,
+			},
+			1_000,
+		),
+	);
+	for (const health of [
+		{
+			receivedRows: 999,
+			uniqueEvents: 999,
+			uniquePayloads: 999,
+			duplicateRows: 0,
+			payloadConflicts: 0,
+		},
+		{
+			receivedRows: 1_001,
+			uniqueEvents: 1_000,
+			uniquePayloads: 1_000,
+			duplicateRows: 0,
+			payloadConflicts: 0,
+		},
+		{
+			receivedRows: 1_000,
+			uniqueEvents: 1_000,
+			uniquePayloads: 1_000,
+			duplicateRows: 0,
+			payloadConflicts: 1,
+		},
+	]) {
+		assert.throws(() => assertSyntheticLoadHealth(health, 1_000));
+	}
+});
+
+test("business decision assertions require exact materialized metrics", () => {
+	const assertions = {
+		trafficVisitors: 3,
+		trafficVisits: 3,
+		trafficPageviews: 3,
+		trafficBounces: 2,
+		trafficDurationMs: 15_000,
+		pageVisitors: 3,
+		pageVisits: 3,
+		pageviews: 3,
+		pageLandings: 3,
+		pageExits: 3,
+		pageEngagedMs: 15_000,
+		pageScrollDepth: 75,
+		activationSignups: 1,
+		activatedCreators: 1,
+		retentionCreators: 1,
+		retentionOrganizations: 1,
+		identityLinkedVisitors: 2,
+		identityLinkedUsers: 2,
+		identitySignupUsers: 1,
+		identityOrganizations: 1,
+		identityGuestCheckoutVisitors: 2,
+		identityGuestPurchasers: 1,
+		identityAuthenticatedCheckoutUsers: 1,
+		identityWebCheckoutUsers: 1,
+		identityDesktopCheckoutUsers: 1,
+		identityMobileCheckoutUsers: 1,
+		identityCrossDeviceCheckoutUsers: 1,
+		identityTrialUsers: 1,
+		identityPurchasers: 1,
+		decisionRevenueMinor: 7_000,
+	};
+	assert.doesNotThrow(() => assertSyntheticBusinessDecisions(assertions));
+	assert.throws(() =>
+		assertSyntheticBusinessDecisions({
+			...assertions,
+			activatedCreators: 0,
+		}),
+	);
+});
+
+test("load decision assertions require a high-cardinality materialization", () => {
+	const expectedEvents = 1_000;
+	const assertions = {
+		receivedRows: expectedEvents,
+		uniqueEvents: expectedEvents,
+		uniquePayloads: expectedEvents,
+		duplicateRows: 0,
+		payloadConflicts: 0,
+		canonicalEvents: expectedEvents,
+		decisionEvents: expectedEvents,
+		decisionRevenueMinor: 200_000,
+		trafficVisitors: 100,
+		trafficVisits: 100,
+		trafficPageviews: 100,
+		trafficBounces: 0,
+		trafficDurationMs: 500_000,
+		pageVisitors: 100,
+		pageVisits: 100,
+		pageviews: 100,
+		pageLandings: 100,
+		pageExits: 100,
+		pageEngagedMs: 500_000,
+		pageScrollDepth: 6_000,
+		activationSignups: 100,
+		activatedCreators: 100,
+		retentionCreators: 100,
+		retentionOrganizations: 100,
+		identityLinkedVisitors: 100,
+		identityLinkedUsers: 100,
+		identitySignupUsers: 100,
+		identityOrganizations: 100,
+		identityGuestCheckoutVisitors: 0,
+		identityGuestPurchasers: 0,
+		identityAuthenticatedCheckoutUsers: 100,
+		identityWebCheckoutUsers: 34,
+		identityDesktopCheckoutUsers: 33,
+		identityMobileCheckoutUsers: 33,
+		identityCrossDeviceCheckoutUsers: 0,
+		identityTrialUsers: 100,
+		identityPurchasers: 100,
+	};
+	assert.doesNotThrow(() =>
+		assertSyntheticLoadDecisions(assertions, expectedEvents),
+	);
+	assert.throws(() =>
+		assertSyntheticLoadDecisions(
+			{ ...assertions, trafficVisits: expectedEvents - 1 },
+			expectedEvents,
+		),
+	);
+});
+
+test("representative endpoint coverage requires mixed funnel and revenue data", () => {
+	const row = (data) => ({ data });
+	const cohorts = 10;
+	const repeated = (count, value) =>
+		Array.from({ length: count }, () => ({ ...value }));
+	const payloads = {
+		product_traffic_overview: row([{ pageviews: cohorts }]),
+		product_traffic_pages: row(repeated(cohorts, { pageviews: 1 })),
+		product_traffic_sources: row(repeated(cohorts, { pageviews: 1 })),
+		product_traffic_countries: row([{}]),
+		product_traffic_technology: row([{}]),
+		product_activation: row([{ signups: cohorts }]),
+		product_creator_activity: row([{ dau: cohorts }]),
+		product_creator_retention: row([{ creators: cohorts }]),
+		product_identity_funnel: row([
+			{ linked_users: cohorts, purchasers: cohorts },
+		]),
+		product_events_daily: row([
+			...repeated(99, { events: 1, revenue_minor: 0 }),
+			{ events: 1, revenue_minor: 20_000 },
+		]),
+		product_feature_adoption: row(repeated(10, { events: 10 })),
+		product_analytics_freshness: row([{}]),
+	};
+	assert.doesNotThrow(() =>
+		assertRepresentativeEndpointCoverage({
+			expectedEvents: 100,
+			payloads,
+		}),
+	);
+	assert.throws(() =>
+		assertRepresentativeEndpointCoverage({
+			expectedEvents: 100,
+			payloads: { ...payloads, product_identity_funnel: row([]) },
+		}),
+	);
+});
+
+test("synthetic monetization filters prove lifecycle values and legacy coverage", () => {
+	const queries = syntheticMonetizationFilterQueries({
+		date: "2026-07-31",
+		deploymentId: "7",
+		syntheticRunId: "run_12345678_decisions",
+	});
+	const payloads = Object.fromEntries(
+		queries.map((query) => [
+			query.label,
+			{
+				data:
+					query.expectedRows === 0
+						? []
+						: [
+								{
+									events: query.expectedEvents,
+									revenue_minor: query.expectedRevenueMinor,
+									...query.expectedFields,
+								},
+							],
+			},
+		]),
+	);
+	assert.doesNotThrow(() =>
+		assertSyntheticMonetizationFilters({ payloads, queries }),
+	);
+	assert.throws(() =>
+		assertSyntheticMonetizationFilters({
+			payloads: {
+				...payloads,
+				renewal_revenue: {
+					data: [{ events: 1, revenue_minor: 2_499 }],
+				},
+			},
+			queries,
+		}),
+	);
+});
+
+test("synthetic identity filters prove source attribution and empty totals", () => {
+	const queries = syntheticIdentityFilterQueries({
+		date: "2026-07-31",
+		deploymentId: "7",
+		syntheticRunId: "run_12345678_decisions",
+	});
+	const payloads = Object.fromEntries(
+		queries.map((query) => [query.label, { data: [query.expected] }]),
+	);
+	assert.doesNotThrow(() =>
+		assertSyntheticIdentityFilters({ payloads, queries }),
+	);
+	assert.throws(() =>
+		assertSyntheticIdentityFilters({
+			payloads: {
+				...payloads,
+				referral_identity: {
+					data: [{ ...queries[1].expected, organizations: 1 }],
+				},
+			},
+			queries,
+		}),
+	);
+});
+
+test("typed endpoint assertions require exact public response semantics", () => {
+	const row = (value) => ({ data: [value] });
+	const date = "2026-07-31";
+	const appVersion = "staging-decisions-123456789abc";
+	const hostname = "synthetic-123456789abc.preview.cap.so";
+	const pathname = "/analytics-synthetic-123456789abc";
+	const event = (eventName, source, platform, overrides = {}) => ({
+		date,
+		event_name: eventName,
+		schema_version: 1,
+		source,
+		platform,
+		app_version: appVersion,
+		hostname,
+		channel: "direct",
+		plan_id: "",
+		payment_status: "",
+		subscription_status: "",
+		currency: "",
+		billing_interval: "",
+		change_kind: "",
+		previous_status: "",
+		new_status: "",
+		previous_plan_id: "",
+		quantity: 0,
+		previous_quantity: 0,
+		new_quantity: 0,
+		seat_delta: 0,
+		first_purchase: "",
+		guest_checkout: "",
+		onboarding: "",
+		cancel_at_period_end: "",
+		fully_refunded: "",
+		ended_at: 0,
+		trial_end_at: 0,
+		amount_due_minor: 0,
+		attempt_count: 0,
+		experiment_id: "",
+		experiment_variant: "",
+		assignment_version: "",
+		delivery_loss_count: 0,
+		events: 1,
+		actors: 1,
+		users: 1,
+		organizations: 1,
+		revenue_minor: 0,
+		...overrides,
+	});
+	const eventShapes = [
+		event("page_view", "client", "web", {
+			events: 2,
+			actors: 2,
+			channel: "paid_search",
+			users: 0,
+			organizations: 0,
+		}),
+		event("page_view", "client", "web", {
+			channel: "referral",
+			users: 0,
+			organizations: 0,
+		}),
+		event("page_engagement", "client", "web", {
+			users: 0,
+			organizations: 0,
+		}),
+		event("identity_linked", "server", "server", {
+			events: 2,
+			actors: 2,
+			users: 2,
+		}),
+		event("user_signed_up", "server", "web"),
+		event("share_link_created", "server", "server"),
+		event("recording_completed", "client", "desktop"),
+		event("guest_checkout_started", "server", "web", {
+			plan_id: "price_pro_annual",
+			quantity: 1,
+			events: 2,
+			actors: 2,
+			users: 0,
+			organizations: 0,
+		}),
+		event("checkout_started", "server", "web", {
+			plan_id: "price_pro_annual",
+			quantity: 1,
+			onboarding: "false",
+		}),
+		event("checkout_started", "server", "desktop", {
+			plan_id: "price_pro_annual",
+			quantity: 1,
+			onboarding: "false",
+		}),
+		event("checkout_started", "server", "mobile", {
+			plan_id: "price_pro_annual",
+			quantity: 1,
+			onboarding: "false",
+		}),
+		event("trial_started", "server", "web", {
+			plan_id: "price_pro_annual",
+			subscription_status: "trialing",
+			currency: "GBP",
+			billing_interval: "year",
+			quantity: 1,
+			guest_checkout: "false",
+			onboarding: "false",
+			trial_end_at: 1_900_604_800,
+		}),
+		event("purchase_completed", "server", "web", {
+			schema_version: 3,
+			plan_id: "price_pro_annual",
+			payment_status: "paid",
+			subscription_status: "active",
+			currency: "GBP",
+			billing_interval: "year",
+			revenue_minor: 2_500,
+			quantity: 1,
+			first_purchase: "true",
+			guest_checkout: "false",
+			onboarding: "false",
+		}),
+		event("purchase_completed", "server", "web", {
+			schema_version: 3,
+			plan_id: "price_guest_monthly",
+			payment_status: "paid",
+			subscription_status: "active",
+			currency: "GBP",
+			billing_interval: "month",
+			revenue_minor: 1_500,
+			quantity: 1,
+			first_purchase: "true",
+			guest_checkout: "true",
+			onboarding: "false",
+		}),
+		event("subscription_renewed", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			currency: "GBP",
+			revenue_minor: 2_500,
+		}),
+		event("subscription_renewed", "server", "server", {
+			currency: "GBP",
+			revenue_minor: 1_000,
+		}),
+		event("trial_converted", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			subscription_status: "active",
+			previous_status: "trialing",
+			new_status: "active",
+		}),
+		event("subscription_changed", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			change_kind: "plan",
+			previous_plan_id: "price_pro_monthly",
+		}),
+		event("subscription_changed", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			change_kind: "seats",
+			previous_plan_id: "price_pro_annual",
+			previous_quantity: 1,
+			new_quantity: 3,
+			seat_delta: 2,
+		}),
+		event("subscription_cancelled", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			subscription_status: "canceled",
+			cancel_at_period_end: "false",
+			ended_at: 1_900_000_000,
+		}),
+		event("subscription_refunded", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			currency: "GBP",
+			revenue_minor: -500,
+			fully_refunded: "false",
+		}),
+		event("subscription_payment_failed", "server", "server", {
+			schema_version: 2,
+			plan_id: "price_pro_annual",
+			currency: "GBP",
+			amount_due_minor: 2_500,
+			attempt_count: 2,
+		}),
+		event("experiment_exposed", "client", "web", {
+			experiment_id: "synthetic-checkout-copy",
+			experiment_variant: "treatment",
+			assignment_version: "v1",
+		}),
+		event("analytics_delivery_loss", "client", "desktop", {
+			delivery_loss_count: 3,
+		}),
+	];
+	const adoptionShapes = [
+		["page_view", 3, 3, 0, 0],
+		["page_engagement", 1, 1, 0, 0],
+		["identity_linked", 2, 2, 2, 1],
+		["user_signed_up", 1, 1, 1, 1],
+		["share_link_created", 1, 1, 1, 1],
+		["recording_completed", 1, 1, 1, 1],
+		["guest_checkout_started", 2, 2, 0, 0],
+		["checkout_started", 3, 1, 1, 1],
+		["trial_started", 1, 1, 1, 1],
+		["purchase_completed", 2, 1, 1, 1],
+		["subscription_renewed", 2, 1, 1, 1],
+		["trial_converted", 1, 1, 1, 1],
+		["subscription_changed", 2, 1, 1, 1],
+		["subscription_cancelled", 1, 1, 1, 1],
+		["subscription_refunded", 1, 1, 1, 1],
+		["subscription_payment_failed", 1, 1, 1, 1],
+		["experiment_exposed", 1, 1, 1, 1],
+		["analytics_delivery_loss", 1, 1, 1, 1],
+	];
+	const payloads = {
+		product_traffic_overview: row({
+			date,
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			views_per_visit: 1,
+			bounce_rate: 66.67,
+			visit_duration_ms: 5_000,
+			engaged_ms: 15_000,
+		}),
+		product_traffic_pages: row({
+			pathname,
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			landings: 3,
+			exits: 3,
+			time_on_page_ms: 5_000,
+			average_scroll_depth: 25,
+		}),
+		product_traffic_sources: {
+			data: [
+				{
+					channel: "paid_search",
+					source: "google",
+					medium: "cpc",
+					campaign: "synthetic-campaign",
+					visitors: 2,
+					visits: 2,
+					pageviews: 2,
+					bounce_rate: 50,
+				},
+				{
+					channel: "referral",
+					source: "synthetic-partner",
+					medium: "referral",
+					campaign: "",
+					visitors: 1,
+					visits: 1,
+					pageviews: 1,
+					bounce_rate: 100,
+				},
+			],
+		},
+		product_traffic_countries: row({
+			country: "US",
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+		}),
+		product_traffic_technology: row({
+			device: "desktop",
+			browser: "Chrome",
+			os: "macOS",
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+		}),
+		product_activation: row({
+			cohort_date: date,
+			signups: 1,
+			activated_creators: 1,
+			activation_rate: 100,
+			average_time_to_activation_ms: 1_000,
+		}),
+		product_creator_activity: row({
+			as_of_date: date,
+			dau: 1,
+			wau: 1,
+			mau: 1,
+			daily_active_organizations: 1,
+			new_creators: 1,
+			returning_creators: 0,
+			dau_wau_stickiness: 100,
+			dau_mau_stickiness: 100,
+		}),
+		product_creator_retention: row({
+			cohort_date: date,
+			activity_date: date,
+			cohort_day: 0,
+			platform: "all",
+			creators: 1,
+			organizations: 1,
+		}),
+		product_identity_funnel: row({
+			linked_visitors: 2,
+			linked_users: 2,
+			signup_users: 1,
+			organizations: 1,
+			guest_checkout_visitors: 2,
+			guest_purchasers: 1,
+			authenticated_checkout_users: 1,
+			web_checkout_users: 1,
+			desktop_checkout_users: 1,
+			mobile_checkout_users: 1,
+			cross_device_checkout_users: 1,
+			trial_users: 1,
+			purchasers: 1,
+			signup_rate: 50,
+			purchase_rate: 50,
+		}),
+		product_events_daily: {
+			data: eventShapes,
+		},
+		product_feature_adoption: {
+			data: adoptionShapes.map(
+				([eventName, events, actorDays, userDays, organizationDays]) => ({
+					event_name: eventName,
+					events,
+					actor_days: actorDays,
+					user_days: userDays,
+					organization_days: organizationDays,
+				}),
+			),
+		},
+		product_analytics_freshness: row({
+			latest_received_hour: "2026-07-31 10:00:00",
+			product_calculated_at: "2026-07-31 10:01:00",
+			traffic_calculated_at: "2026-07-31 10:01:00",
+			retention_calculated_at: "2026-07-31 10:01:00",
+			identity_calculated_at: "2026-07-31 10:01:00",
+		}),
+	};
+	const input = { appVersion, date, hostname, pathname, payloads };
+	assert.doesNotThrow(() => assertSyntheticEndpointDecisions(input));
+	assert.throws(() =>
+		assertSyntheticEndpointDecisions({
+			...input,
+			payloads: {
+				...payloads,
+				product_activation: row({
+					...payloads.product_activation.data[0],
+					activated_creators: 0,
+				}),
+			},
+		}),
+	);
+});
+
 test("staging performance covers every typed decision endpoint", () => {
 	const queries = decisionEndpointQueries({
 		startDate: "2026-07-01",
 		endDate: "2026-07-31",
 		deploymentId: "deployment-1",
 	});
-	assert.equal(queries.length, 11);
+	assert.equal(queries.length, 12);
 	assert.equal(new Set(queries.map(({ name }) => name)).size, queries.length);
 	assert.ok(
 		queries.every(
 			({ parameters }) => parameters.__tb__deployment === "deployment-1",
 		),
+	);
+	const retainedQueries = decisionEndpointQueries({
+		startDate: "2026-07-01",
+		endDate: "2026-07-31",
+		deploymentId: "deployment-0",
+		includeIdentityFunnel: false,
+	});
+	assert.equal(retainedQueries.length, 11);
+	assert.equal(
+		retainedQueries.some(({ name }) => name === "product_identity_funnel"),
+		false,
 	);
 	assert.deepEqual(
 		queries.find(({ name }) => name === "product_creator_activity")?.parameters,
@@ -601,6 +1351,19 @@ test("staging performance covers every typed decision endpoint", () => {
 		queries.find(({ name }) => name === "product_analytics_freshness")
 			?.parameters,
 		{ __tb__deployment: "deployment-1" },
+	);
+	const syntheticQueries = decisionEndpointQueries({
+		startDate: "2026-07-01",
+		endDate: "2026-07-31",
+		deploymentId: "deployment-1",
+		syntheticRunId: "run_12345678_load",
+	});
+	assert.ok(
+		syntheticQueries.every(
+			({ name, parameters }) =>
+				name === "product_analytics_freshness" ||
+				parameters.synthetic_run_id === "run_12345678_load",
+		),
 	);
 });
 
@@ -697,18 +1460,24 @@ test("copy assertion normalization exposes every marker independently", () => {
 		normalizeCopyAssertions({
 			data: [
 				{
+					decision_markers: "1",
 					traffic_markers: "1",
 					traffic_page_markers: "1",
 					activation_markers: "1",
 					retention_markers: "1",
+					identity_markers: "1",
+					health_markers: "1",
 				},
 			],
 		}),
 		{
+			decisionMarkers: 1,
 			trafficMarkers: 1,
 			trafficPageMarkers: 1,
 			activationMarkers: 1,
 			retentionMarkers: 1,
+			identityMarkers: 1,
+			healthMarkers: 1,
 		},
 	);
 });
@@ -728,20 +1497,57 @@ test("the analytics workflow is statically restricted to staging", () => {
 	assert.equal(
 		workflow.match(/node scripts\/analytics\/staging-ci\.js run-copies/g)
 			?.length,
-		4,
+		3,
 	);
 	assert.equal(
 		workflow.match(
 			/--deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/g,
 		)?.length,
-		11,
+		14,
 	);
 	assert.doesNotMatch(workflow, /tinybird-cloud-cli --cloud copy run/);
 	assert.ok(
-		workflow.indexOf("Prove synthetic cleanup no longer affects queries") <
+		workflow.indexOf(
+			"Prove promoted delivery, business values, and decision deduplication",
+		) < workflow.indexOf("Prove exact staging rollback and restoration"),
+	);
+	assert.ok(
+		workflow.indexOf("Prove exact staging rollback and restoration") <
 			workflow.indexOf(
-				"Discard an unpromoted staging deployment after cleanup",
+				"Delete the scoped identity through the exact-SHA application path",
 			),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Delete the scoped identity through the exact-SHA application path",
+		) <
+			workflow.indexOf(
+				"Prove identity erasure and out-of-scope control preservation",
+			),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Prove identity erasure and out-of-scope control preservation",
+		) <
+			workflow.indexOf(
+				"Quiesce scheduled and active Copy jobs before final cleanup",
+			),
+	);
+	assert.match(
+		workflow,
+		/Delete the scoped identity through the exact-SHA application path[\s\S]*CAP_ANALYTICS_STAGING_TEST_SECRET[\s\S]*staging-ci\.js erase-synthetic-identity/,
+	);
+	assert.ok(
+		workflow.indexOf("Prove synthetic cleanup no longer affects queries") <
+			workflow.indexOf("Resume reviewed Copy schedules"),
+	);
+	assert.ok(
+		workflow.indexOf("Resume reviewed Copy schedules") <
+			workflow.indexOf("Finalize the fully verified staging promotion"),
+	);
+	assert.ok(
+		workflow.indexOf("Finalize the fully verified staging promotion") <
+			workflow.indexOf("Restore the previous staging deployment on failure"),
 	);
 	assert.match(workflow, /steps\.promote\.outcome == 'failure'/);
 	assert.match(workflow, /continue-on-error: true/);
@@ -756,13 +1562,24 @@ test("the analytics workflow is statically restricted to staging", () => {
 	);
 	assert.match(
 		workflow,
-		/Discard an unpromoted staging deployment after cleanup\n {8}id: discard\n {8}if: always\(\) && \(steps\.deployment-state\.outputs\.discard == 'true' \|\| steps\.cleanup\.outputs\.requires_discard == 'true'\)/,
+		/Discard an unpromoted staging deployment after cleanup\n {8}id: discard\n {8}if: always\(\) && steps\.rollback\.outcome != 'success' && \(steps\.deployment-state\.outputs\.discard == 'true' \|\| steps\.cleanup\.outputs\.requires_discard == 'true'\)/,
 	);
 	assert.match(
 		workflow,
 		/staging-ci\.js promote-deployment --deployment-id "\$\{\{ steps\.tinybird\.outputs\.id \}\}"/,
 	);
 	assert.match(workflow, /staging-ci\.js discard-deployment/);
+	assert.match(workflow, /staging-ci\.js drill-rollback/);
+	assert.match(
+		workflow,
+		/Prove exact staging rollback and restoration[\s\S]*TINYBIRD_STAGING_READ_TOKEN[\s\S]*--state "\$RUNNER_TEMP\/analytics-staging-state\.json"/,
+	);
+	assert.match(workflow, /staging-ci\.js finalize-promotion/);
+	assert.match(workflow, /staging-ci\.js rollback-promotion/);
+	assert.match(
+		workflow,
+		/steps\.promote\.outputs\.previous_live_id != '' && steps\.finalize\.outcome != 'success' && steps\.rollback-drill\.outputs\.rollback_target_usable != 'false'/,
+	);
 	assert.doesNotMatch(
 		workflow,
 		/tinybird-cloud-cli --cloud deployment promote/,
@@ -781,7 +1598,48 @@ test("the analytics workflow is statically restricted to staging", () => {
 		workflow.match(
 			/--target "\$\{\{ steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live' \}\}"/g,
 		)?.length,
-		2,
+		1,
+	);
+	assert.match(
+		workflow,
+		/Rebuild no-op live decision and health copies\n {8}id: staging-copies\n {8}if: steps\.tinybird\.outputs\.needs_promotion != 'true'[\s\S]*--target live/,
+	);
+	assert.ok(
+		workflow.indexOf("Prove the exact-SHA deployed browser tracker") <
+			workflow.indexOf(
+				"Probe the exact-SHA Vercel browser collector and staging rate limit",
+			),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Probe the exact-SHA Vercel browser collector and staging rate limit",
+		) < workflow.indexOf("Prove exact-SHA durable server delivery"),
+	);
+	assert.ok(
+		workflow.indexOf("Prove exact-SHA durable server delivery") <
+			workflow.indexOf("Rebuild promoted decision and health copies"),
+	);
+	assert.match(
+		workflow,
+		/Prove exact-SHA durable server delivery[\s\S]*CAP_ANALYTICS_STAGING_TEST_SECRET[\s\S]*staging-ci\.js probe-server/,
+	);
+	assert.ok(
+		workflow.indexOf("Rebuild promoted decision and health copies") <
+			workflow.indexOf("Measure populated decision endpoint performance"),
+	);
+	assert.ok(
+		workflow.indexOf("Measure populated decision endpoint performance") <
+			workflow.indexOf(
+				"Prove promoted delivery, business values, and decision deduplication",
+			),
+	);
+	assert.match(
+		workflow,
+		/Measure populated decision endpoint performance[\s\S]*staging-ci\.js verify[\s\S]*--target live/,
+	);
+	assert.match(
+		workflow,
+		/--baseline-deployment-id "\$\{\{ steps\.promote\.outputs\.previous_live_id \|\| steps\.tinybird\.outputs\.id \}\}"/,
 	);
 	assert.match(workflow, /steps\.seed\.outcome != 'skipped'/);
 	assert.match(workflow, /steps\.cleanup\.outputs\.requires_copies == 'true'/);
@@ -822,6 +1680,75 @@ test("the seed persists cleanup state and partial evidence before ingestion", ()
 	);
 });
 
+test("rollback drill proves old and restored deployment data planes", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const drillSource = source.slice(
+		source.indexOf("const drillOwnedRollback"),
+		source.indexOf("const rollbackOwnedPromotion"),
+	);
+	const recoverySource = source.slice(
+		source.indexOf("const rollbackOwnedPromotion"),
+		source.indexOf("const discardOwnedDeployment"),
+	);
+	assert.ok(
+		(drillSource.match(/await switchLiveDeployment/g)?.length ?? 0) >= 2,
+	);
+	assert.equal(
+		drillSource.match(/await queryDecisionEndpointSuite/g)?.length,
+		2,
+	);
+	assert.match(drillSource, /previousLiveDeploymentId/);
+	assert.match(drillSource, /assertDecisionEndpointSuiteReadable/);
+	assert.match(drillSource, /retainedIdentityFunnelAvailable/);
+	assert.match(drillSource, /decisionEndpointAvailable/);
+	assert.match(drillSource, /assertSyntheticEndpointDecisions/);
+	assert.match(drillSource, /assertSyntheticBusinessDecisions/);
+	assert.match(drillSource, /readAndAssertPhaseHealth/);
+	assert.match(drillSource, /dataPlanePassed: true/);
+	assert.match(drillSource, /rollback_target_usable/);
+	assert.ok(
+		drillSource.indexOf("rollbackProbeError = error") <
+			drillSource.lastIndexOf("await switchLiveDeployment"),
+	);
+	assert.match(recoverySource, /await queryDecisionEndpointSuite/);
+	assert.match(recoverySource, /assertDecisionEndpointSuiteReadable/);
+	assert.match(
+		recoverySource,
+		/The Tinybird rollback destination is not usable/,
+	);
+	assert.ok(
+		recoverySource.indexOf("await queryDecisionEndpointSuite") <
+			recoverySource.indexOf("await deleteRetiredDeployment"),
+	);
+});
+
+test("performance compares the retained deployment and a larger synthetic volume", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const verifySource = source.slice(
+		source.indexOf("const verify = async () =>"),
+		source.indexOf("const safeSyntheticIdentifier"),
+	);
+	assert.match(verifySource, /options\.get\("baseline-deployment-id"\)/);
+	assert.match(
+		verifySource,
+		/deploymentId: baselineDeploymentId[\s\S]*deploymentId: state\.deploymentId[\s\S]*syntheticRunId: state\.loadRunId/,
+	);
+	assert.match(verifySource, /representativeSamples/);
+	assert.match(verifySource, /representativeRows: state\.loadEventCount/);
+	assert.match(verifySource, /representativePerformancePassed/);
+	assert.match(verifySource, /assertRepresentativeEndpointCoverage/);
+	assert.match(verifySource, /representativeBudget/);
+	assert.match(verifySource, /new_endpoint_no_baseline/);
+	assert.match(verifySource, /retainedIdentityFunnelAvailable/);
+	assert.match(verifySource, /decisionEndpointAvailable/);
+});
+
 test("synthetic deletion targets the deployment used for ingestion", () => {
 	const source = fs.readFileSync(
 		new URL("../staging-ci.js", import.meta.url),
@@ -835,7 +1762,16 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 		source.indexOf("const deleteProductEventRows"),
 		source.indexOf("const eraseSyntheticIdentity"),
 	);
+	const verifyCleanupSource = source.slice(
+		source.indexOf("const verifyCleanup"),
+		source.indexOf("const tokenScopeProbe"),
+	);
 	assert.doesNotMatch(deleteSource, /__tb__min_deployment/);
+	assert.match(verifyCleanupSource, /syntheticRunId: state\.decisionRunId/);
+	assert.match(
+		verifyCleanupSource,
+		/Object\.values\(businessDecisionAssertions\)\.some/,
+	);
 	assert.equal(deleteSource.match(/\.\.\.deploymentParameters/g)?.length, 2);
 	assert.match(
 		source,
@@ -852,10 +1788,8 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 	assert.match(source, /writeOutput\("requires_copies", "true"\)/);
 	assert.match(source, /writeOutput\("requires_discard", "true"\)/);
 	assert.match(source, /writeOutput\("requires_discard", "false"\)/);
-	assert.match(
-		source,
-		/target === "staging"[\s\S]*tokens\.TINYBIRD_STAGING_DEPLOY_TOKEN[\s\S]*tokens\.TINYBIRD_STAGING_READ_TOKEN/,
-	);
+	assert.match(source, /requestedTarget !== "live"/);
+	assert.doesNotMatch(source, /useDeploymentParameter/);
 	assert.match(
 		workflow,
 		/steps\.deployment-state\.outputs\.target \|\| \(steps\.tinybird\.outputs\.needs_promotion == 'true' && 'staging' \|\| 'live'\)/,

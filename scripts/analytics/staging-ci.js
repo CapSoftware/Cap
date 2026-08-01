@@ -2,9 +2,20 @@ import fs from "node:fs";
 import process from "node:process";
 
 import {
+	applyCopyScheduleAction,
 	assertExecutionScope,
+	assertRepresentativeEndpointCoverage,
+	assertSyntheticBusinessDecisions,
 	assertSyntheticDecisions,
+	assertSyntheticEndpointDecisions,
 	assertSyntheticHealth,
+	assertSyntheticIdentityFilters,
+	assertSyntheticLoadDecisions,
+	assertSyntheticLoadHealth,
+	assertSyntheticMonetizationFilters,
+	COPY_PIPES,
+	copyScheduleMatchesAction,
+	createSyntheticDecisionEvents,
 	createSyntheticErasureControl,
 	createSyntheticEvents,
 	createSyntheticLoadEvents,
@@ -27,6 +38,8 @@ import {
 	STAGING_WORKSPACE_ID,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
+	syntheticIdentityFilterQueries,
+	syntheticMonetizationFilterQueries,
 	validateSyntheticRunId,
 	validateTinybirdCredentials,
 } from "./staging-ci-lib.js";
@@ -78,6 +91,9 @@ const writeJson = (filePath, value, mode = 0o644) => {
 
 const TINYBIRD_TOKEN_NAMES = [
 	"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	"TINYBIRD_STAGING_COPY_TOKEN",
+	"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
+	"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 	"TINYBIRD_STAGING_INGEST_TOKEN",
 	"TINYBIRD_STAGING_READ_TOKEN",
 	"TINYBIRD_STAGING_CLEANUP_TOKEN",
@@ -135,10 +151,12 @@ const request = async (
 				};
 			}
 			if (response.status < 500 && response.status !== 429) {
-				throw new Error(
+				const error = new Error(
 					`Tinybird request was rejected with HTTP ${response.status}`,
 					{ cause: "permanent" },
 				);
+				error.status = response.status;
+				throw error;
 			}
 			lastError = new Error(
 				`Tinybird request failed with HTTP ${response.status}`,
@@ -170,10 +188,14 @@ const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
+	const previewWindow =
+		appVersion === state.previewAppVersion &&
+		state.previewStartTime &&
+		state.previewEndTime;
 	return request(
 		tinybirdUrl(origin, "/v0/pipes/product_events_health.json", {
-			start_time: state.startTime,
-			end_time: state.endTime,
+			start_time: previewWindow ? state.previewStartTime : state.startTime,
+			end_time: previewWindow ? state.previewEndTime : state.endTime,
 			platform: "web",
 			app_version: appVersion ?? state.appVersion,
 			__tb__deployment: deploymentId,
@@ -258,6 +280,7 @@ const promoteOwnedDeployment = async () => {
 	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
 	const initial = await deploymentList({ origin, token });
 	const plan = resolveExactPromotionPlan(initial.data, deploymentId);
+	writeOutput("previous_live_id", plan.previousLiveDeploymentId);
 	const promotionDeadline =
 		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
 	let lastPromotionError;
@@ -301,6 +324,15 @@ const promoteOwnedDeployment = async () => {
 			cause: lastPromotionError,
 		});
 	}
+	writeOutput("promoted", "true");
+};
+
+const deleteRetiredDeployment = async ({
+	origin,
+	token,
+	liveDeploymentId,
+	retiredDeploymentId,
+}) => {
 	const deadline =
 		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
 	let lastDeletionError;
@@ -308,25 +340,24 @@ const promoteOwnedDeployment = async () => {
 		const previous = await exactDeployment({
 			origin,
 			token,
-			deploymentId: plan.previousLiveDeploymentId,
+			deploymentId: retiredDeploymentId,
 		});
 		const lifecycle = resolveExactDeploymentLifecycle(
 			previous.data,
-			plan.previousLiveDeploymentId,
+			retiredDeploymentId,
 		);
 		if (lifecycle === "deleted") {
-			writeOutput("promoted", "true");
 			return;
 		}
 		if (lifecycle === "live") {
-			throw new Error("The previous Tinybird deployment became live again");
+			throw new Error("Refusing to delete a live Tinybird deployment");
 		}
 		if (lifecycle !== "deleting") {
 			try {
 				await request(
 					tinybirdUrl(
 						origin,
-						`/v1/deployments/${encodeURIComponent(plan.previousLiveDeploymentId)}`,
+						`/v1/deployments/${encodeURIComponent(retiredDeploymentId)}`,
 					),
 					{
 						token,
@@ -334,22 +365,20 @@ const promoteOwnedDeployment = async () => {
 						beforeAttempt: async () => {
 							const ownership = await deploymentList({ origin, token });
 							if (
-								resolveOwnedMutationTarget(ownership.data, deploymentId) !==
+								resolveOwnedMutationTarget(ownership.data, liveDeploymentId) !==
 								"live"
 							) {
-								throw new Error(
-									"The promoted Tinybird deployment is no longer live",
-								);
+								throw new Error("The retained Tinybird deployment is not live");
 							}
 							const exactPrevious = await exactDeployment({
 								origin,
 								token,
-								deploymentId: plan.previousLiveDeploymentId,
+								deploymentId: retiredDeploymentId,
 							});
 							if (
 								resolveExactDeploymentLifecycle(
 									exactPrevious.data,
-									plan.previousLiveDeploymentId,
+									retiredDeploymentId,
 								) === "live"
 							) {
 								throw new Error(
@@ -368,6 +397,380 @@ const promoteOwnedDeployment = async () => {
 	throw new Error("Timed out deleting the previous Tinybird deployment", {
 		cause: lastDeletionError,
 	});
+};
+
+const switchLiveDeployment = async ({
+	origin,
+	token,
+	fromDeploymentId,
+	toDeploymentId,
+}) => {
+	const before = await deploymentList({ origin, token });
+	if (
+		resolveOwnedMutationTarget(before.data, fromDeploymentId) !== "live" ||
+		resolveOwnedMutationTarget(before.data, toDeploymentId) !== "staging"
+	) {
+		throw new Error(
+			"Tinybird live switch did not match the exact deployment pair",
+		);
+	}
+	let mutationError;
+	try {
+		await request(
+			tinybirdUrl(
+				origin,
+				`/v1/deployments/${encodeURIComponent(toDeploymentId)}/set-live`,
+			),
+			{
+				token,
+				method: "POST",
+				beforeAttempt: async () => {
+					const ownership = await deploymentList({ origin, token });
+					if (
+						resolveOwnedMutationTarget(ownership.data, fromDeploymentId) !==
+							"live" ||
+						resolveOwnedMutationTarget(ownership.data, toDeploymentId) !==
+							"staging"
+					) {
+						throw new Error("Tinybird live switch ownership changed");
+					}
+				},
+			},
+		);
+	} catch (error) {
+		mutationError = error;
+	}
+	const deadline =
+		Date.now() + Number(process.env.DEPLOYMENT_WAIT_MS ?? 300_000);
+	let lastOwnershipError;
+	while (Date.now() < deadline) {
+		try {
+			const current = await deploymentList({ origin, token });
+			const toTarget = resolveOwnedMutationTarget(current.data, toDeploymentId);
+			const fromTarget = resolveOwnedMutationTarget(
+				current.data,
+				fromDeploymentId,
+			);
+			if (toTarget === "live" && fromTarget === "staging") return;
+			if (
+				mutationError instanceof Error &&
+				mutationError.cause === "permanent" &&
+				toTarget === "staging" &&
+				fromTarget === "live"
+			) {
+				throw mutationError;
+			}
+		} catch (error) {
+			if (error === mutationError) throw error;
+			lastOwnershipError = error;
+		}
+		await delay(2_000);
+	}
+	throw new Error("Timed out reconciling the exact Tinybird live deployment", {
+		cause: mutationError ?? lastOwnershipError,
+	});
+};
+
+const finalizeOwnedPromotion = async () => {
+	const deploymentId = option("deployment-id");
+	const previousLiveDeploymentId = option("previous-live-id");
+	const artifactPath = option("artifact");
+	if (deploymentId === previousLiveDeploymentId) {
+		throw new Error("Tinybird finalization requires distinct deployments");
+	}
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	await deleteRetiredDeployment({
+		origin,
+		token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+		liveDeploymentId: deploymentId,
+		retiredDeploymentId: previousLiveDeploymentId,
+	});
+	const artifact = readJson(artifactPath);
+	artifact.promotion = {
+		deploymentId,
+		previousLiveDeploymentId,
+		finalized: true,
+		verifiedAt: new Date().toISOString(),
+	};
+	writeJson(artifactPath, artifact);
+	writeOutput("finalized", "true");
+};
+
+const drillOwnedRollback = async () => {
+	const deploymentId = option("deployment-id");
+	const previousLiveDeploymentId = option("previous-live-id");
+	const state = readJson(option("state"));
+	if (deploymentId === previousLiveDeploymentId) {
+		throw new Error("Tinybird rollback drill requires distinct deployments");
+	}
+	if (String(state.deploymentId) !== deploymentId) {
+		throw new Error(
+			"Tinybird rollback drill does not match the seeded deployment",
+		);
+	}
+	const artifactPath = option("artifact");
+	const artifact = readJson(artifactPath);
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
+	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	try {
+		await switchLiveDeployment({
+			origin,
+			token,
+			fromDeploymentId: deploymentId,
+			toDeploymentId: previousLiveDeploymentId,
+		});
+	} catch (error) {
+		let candidateRestored = false;
+		try {
+			const ownership = await deploymentList({ origin, token });
+			const candidateTarget = resolveOwnedMutationTarget(
+				ownership.data,
+				deploymentId,
+			);
+			const previousTarget = resolveOwnedMutationTarget(
+				ownership.data,
+				previousLiveDeploymentId,
+			);
+			if (candidateTarget === "live" && previousTarget === "staging") {
+				candidateRestored = true;
+			} else if (candidateTarget === "staging" && previousTarget === "live") {
+				await switchLiveDeployment({
+					origin,
+					token,
+					fromDeploymentId: previousLiveDeploymentId,
+					toDeploymentId: deploymentId,
+				});
+				candidateRestored = true;
+			}
+		} catch {
+			candidateRestored = false;
+		}
+		if (candidateRestored) {
+			writeOutput("rollback_target_usable", "false");
+		}
+		artifact.rollbackDrill = {
+			passed: false,
+			candidateRestored,
+			rollbackTargetUsable: false,
+			verifiedAt: new Date().toISOString(),
+		};
+		writeJson(artifactPath, artifact);
+		throw error;
+	}
+	let rollbackEndpointSuite;
+	let rollbackProbeError;
+	let retainedIdentityFunnelAvailable = false;
+	try {
+		retainedIdentityFunnelAvailable = await decisionEndpointAvailable({
+			deploymentId: previousLiveDeploymentId,
+			name: "product_identity_funnel",
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+		});
+		rollbackEndpointSuite = await queryDecisionEndpointSuite({
+			deploymentId: previousLiveDeploymentId,
+			includeIdentityFunnel: retainedIdentityFunnelAvailable,
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+		});
+		assertDecisionEndpointSuiteReadable(rollbackEndpointSuite.payloads);
+	} catch (error) {
+		rollbackProbeError = error;
+	}
+	writeOutput("rollback_target_usable", rollbackProbeError ? "false" : "true");
+	try {
+		await switchLiveDeployment({
+			origin,
+			token,
+			fromDeploymentId: previousLiveDeploymentId,
+			toDeploymentId: deploymentId,
+		});
+	} catch (error) {
+		artifact.rollbackDrill = {
+			passed: false,
+			candidateRestored: false,
+			rollbackTargetUsable: !rollbackProbeError,
+			verifiedAt: new Date().toISOString(),
+		};
+		writeJson(artifactPath, artifact);
+		throw error;
+	}
+	if (rollbackProbeError) {
+		artifact.rollbackDrill = {
+			passed: false,
+			candidateRestored: true,
+			rollbackTargetUsable: false,
+			verifiedAt: new Date().toISOString(),
+		};
+		writeJson(artifactPath, artifact);
+		throw new Error("The prior Tinybird deployment data plane is not usable", {
+			cause: rollbackProbeError,
+		});
+	}
+	const restoredBusinessResult = await ciAssertionsQuery({
+		state,
+		deploymentId,
+		syntheticRunId: state.decisionRunId,
+	});
+	const restoredBusinessAssertions = normalizeCiAssertions(
+		restoredBusinessResult.data,
+	);
+	assertSyntheticLoadHealth(
+		restoredBusinessAssertions,
+		state.decisionEventCount,
+	);
+	if (
+		restoredBusinessAssertions.canonicalEvents !== state.decisionEventCount ||
+		restoredBusinessAssertions.decisionEvents !== state.decisionEventCount
+	) {
+		throw new Error(
+			"Tinybird rollback restoration lost exact decision materialization",
+		);
+	}
+	assertSyntheticBusinessDecisions(restoredBusinessAssertions);
+	const restoredEndpointSuite = await queryDecisionEndpointSuite({
+		deploymentId,
+		origin,
+		state,
+		syntheticRunId: state.decisionRunId,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	assertSyntheticEndpointDecisions({
+		appVersion: state.decisionAppVersion,
+		date: state.decisionDate,
+		hostname: state.decisionHostname,
+		pathname: state.decisionPathname,
+		payloads: restoredEndpointSuite.payloads,
+	});
+	const restoredMonetizationFilters = await querySyntheticMonetizationFilters({
+		deploymentId,
+		origin,
+		state,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	const restoredIdentityFilters = await querySyntheticIdentityFilters({
+		deploymentId,
+		origin,
+		state,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	await readAndAssertPhaseHealth({
+		state,
+		phase: "promoted",
+		deploymentId,
+	});
+	artifact.rollbackDrill = {
+		passed: true,
+		dataPlanePassed: true,
+		candidateRestored: true,
+		rollbackTargetUsable: true,
+		rollbackDeploymentId: previousLiveDeploymentId,
+		restoredDeploymentId: deploymentId,
+		rollbackEndpointLatencyMs: rollbackEndpointSuite.latencyMs,
+		restoredEndpointLatencyMs: restoredEndpointSuite.latencyMs,
+		restoredMonetizationFilterLatencyMs: restoredMonetizationFilters.latencyMs,
+		restoredIdentityFilterLatencyMs: restoredIdentityFilters.latencyMs,
+		retainedIdentityFunnelAvailable,
+		verifiedAt: new Date().toISOString(),
+	};
+	writeJson(artifactPath, artifact);
+};
+
+const rollbackOwnedPromotion = async () => {
+	const deploymentId = option("deployment-id");
+	const previousLiveDeploymentId = option("previous-live-id");
+	const state = readJson(option("state"));
+	if (deploymentId === previousLiveDeploymentId) {
+		throw new Error("Tinybird rollback requires distinct deployments");
+	}
+	if (String(state.deploymentId) !== deploymentId) {
+		throw new Error("Tinybird rollback does not match the seeded deployment");
+	}
+	const artifactPath = options.get("artifact");
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
+	const token = tokens.TINYBIRD_STAGING_DEPLOY_TOKEN;
+	const current = await deploymentList({ origin, token });
+	const previousTarget = resolveOwnedMutationTarget(
+		current.data,
+		previousLiveDeploymentId,
+	);
+	const rejectedTarget = resolveOwnedMutationTarget(current.data, deploymentId);
+	if (previousTarget !== "live") {
+		if (rejectedTarget !== "live" || previousTarget !== "staging") {
+			throw new Error("Tinybird rollback pair is not recoverable");
+		}
+		await switchLiveDeployment({
+			origin,
+			token,
+			fromDeploymentId: deploymentId,
+			toDeploymentId: previousLiveDeploymentId,
+		});
+	}
+	let rollbackEndpointSuite;
+	let retainedIdentityFunnelAvailable = false;
+	try {
+		retainedIdentityFunnelAvailable = await decisionEndpointAvailable({
+			deploymentId: previousLiveDeploymentId,
+			name: "product_identity_funnel",
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+		});
+		rollbackEndpointSuite = await queryDecisionEndpointSuite({
+			deploymentId: previousLiveDeploymentId,
+			includeIdentityFunnel: retainedIdentityFunnelAvailable,
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+		});
+		assertDecisionEndpointSuiteReadable(rollbackEndpointSuite.payloads);
+	} catch (error) {
+		const ownership = await deploymentList({ origin, token });
+		if (
+			resolveOwnedMutationTarget(ownership.data, previousLiveDeploymentId) ===
+				"live" &&
+			resolveOwnedMutationTarget(ownership.data, deploymentId) === "staging"
+		) {
+			await switchLiveDeployment({
+				origin,
+				token,
+				fromDeploymentId: previousLiveDeploymentId,
+				toDeploymentId: deploymentId,
+			});
+		}
+		throw new Error("The Tinybird rollback destination is not usable", {
+			cause: error,
+		});
+	}
+	await deleteRetiredDeployment({
+		origin,
+		token,
+		liveDeploymentId: previousLiveDeploymentId,
+		retiredDeploymentId: deploymentId,
+	});
+	if (artifactPath && fs.existsSync(artifactPath)) {
+		const artifact = readJson(artifactPath);
+		artifact.rollback = {
+			passed: true,
+			dataPlanePassed: true,
+			restoredDeploymentId: previousLiveDeploymentId,
+			rejectedDeploymentId: deploymentId,
+			endpointLatencyMs: rollbackEndpointSuite.latencyMs,
+			retainedIdentityFunnelAvailable,
+			verifiedAt: new Date().toISOString(),
+		};
+		writeJson(artifactPath, artifact);
+	}
 };
 
 const discardOwnedDeployment = async () => {
@@ -442,6 +845,133 @@ const decisionEndpointQuery = async ({ origin, token, name, parameters }) =>
 		token,
 		attempts: 3,
 	});
+
+const decisionEndpointAvailable = async ({
+	deploymentId,
+	name,
+	origin,
+	state,
+	token,
+}) => {
+	const query = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate: state.endTime.slice(0, 10),
+		deploymentId,
+	}).find((candidate) => candidate.name === name);
+	if (!query) throw new Error(`Unknown decision endpoint ${name}`);
+	try {
+		await decisionEndpointQuery({ origin, token, ...query });
+		return true;
+	} catch (error) {
+		if (error instanceof Error && error.status === 404) return false;
+		throw error;
+	}
+};
+
+const queryDecisionEndpointSuite = async ({
+	deploymentId,
+	includeIdentityFunnel = true,
+	origin,
+	state,
+	syntheticRunId = "",
+	token,
+}) => {
+	const endDate = syntheticRunId
+		? state.decisionDate
+		: state.endTime.slice(0, 10);
+	const queries = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate,
+		deploymentId,
+		includeIdentityFunnel,
+		syntheticRunId,
+	});
+	const results = await Promise.all(
+		queries.map((query) => decisionEndpointQuery({ origin, token, ...query })),
+	);
+	return {
+		latencyMs: Object.fromEntries(
+			results.map((result, index) => [queries[index].name, result.latencyMs]),
+		),
+		payloads: Object.fromEntries(
+			results.map((result, index) => [queries[index].name, result.data]),
+		),
+	};
+};
+
+const assertDecisionEndpointSuiteReadable = (payloads) => {
+	for (const [name, payload] of Object.entries(payloads)) {
+		if (!Array.isArray(payload?.data)) {
+			throw new Error(`Tinybird rollback endpoint ${name} was not readable`);
+		}
+	}
+};
+
+const querySyntheticMonetizationFilters = async ({
+	deploymentId,
+	origin,
+	state,
+	token,
+}) => {
+	const queries = syntheticMonetizationFilterQueries({
+		date: state.decisionDate,
+		deploymentId,
+		syntheticRunId: state.decisionRunId,
+	});
+	const results = await Promise.all(
+		queries.map((query) =>
+			decisionEndpointQuery({
+				origin,
+				token,
+				name: "product_events_daily",
+				parameters: query.parameters,
+			}),
+		),
+	);
+	const payloads = Object.fromEntries(
+		results.map((result, index) => [queries[index].label, result.data]),
+	);
+	assertSyntheticMonetizationFilters({ payloads, queries });
+	return {
+		latencyMs: Object.fromEntries(
+			results.map((result, index) => [queries[index].label, result.latencyMs]),
+		),
+		payloads,
+	};
+};
+
+const querySyntheticIdentityFilters = async ({
+	deploymentId,
+	origin,
+	state,
+	token,
+}) => {
+	const queries = syntheticIdentityFilterQueries({
+		date: state.decisionDate,
+		deploymentId,
+		syntheticRunId: state.decisionRunId,
+	});
+	const results = await Promise.all(
+		queries.map((query) =>
+			decisionEndpointQuery({
+				origin,
+				token,
+				name: "product_identity_funnel",
+				parameters: query.parameters,
+			}),
+		),
+	);
+	const payloads = Object.fromEntries(
+		results.map((result, index) => [queries[index].label, result.data]),
+	);
+	assertSyntheticIdentityFilters({ payloads, queries });
+	return {
+		latencyMs: Object.fromEntries(
+			results.map((result, index) => [queries[index].label, result.latencyMs]),
+		),
+		payloads,
+	};
+};
 
 const waitForVercel = async () => {
 	const repository = environment("GITHUB_REPOSITORY");
@@ -544,7 +1074,7 @@ const previewRequest = async (url, init = {}) => {
 				: {}),
 			...init.headers,
 		},
-		signal: AbortSignal.timeout(20_000),
+		signal: init.signal ?? AbortSignal.timeout(20_000),
 	});
 };
 
@@ -735,6 +1265,11 @@ const probePreview = async () => {
 		);
 	}
 	state.previewAcceptedRows = duplicateResponses.length + replayAccepted;
+	state.previewExpectedEvents = Number(state.browserExpectedEvents ?? 0) + 1;
+	state.previewStartTime = new Date(
+		new Date(occurredAt).getTime() - 120_000,
+	).toISOString();
+	state.previewEndTime = new Date(Date.now() + 300_000).toISOString();
 	writeJson(statePath, state, 0o600);
 	artifact.previewApi = {
 		bootstrapPassed: true,
@@ -764,6 +1299,106 @@ const probePreview = async () => {
 	writeJson(artifactPath, artifact);
 };
 
+const probeDurableServerPath = async () => {
+	const statePath = option("state");
+	const artifactPath = option("artifact");
+	const state = readJson(statePath);
+	const artifact = readJson(artifactPath);
+	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
+	const serverRunId = validateSyntheticRunId(`${state.runId}_server`);
+	const url = new URL("/api/analytics/staging-test", artifact.vercel.url);
+	const body = (sha) =>
+		JSON.stringify({
+			scenario: "business_lifecycle",
+			runId: serverRunId,
+			sha,
+		});
+	const send = (authorization, sha = artifact.sha) =>
+		previewRequest(url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(authorization ? { Authorization: authorization } : {}),
+			},
+			body: body(sha),
+		});
+	const unauthorized = await send();
+	if (unauthorized.status !== 401) {
+		throw new Error(
+			`The durable staging route accepted missing authorization with HTTP ${unauthorized.status}`,
+		);
+	}
+	const wrongSha = await send(
+		`Bearer ${secret}`,
+		"0000000000000000000000000000000000000000",
+	);
+	if (wrongSha.status !== 400) {
+		throw new Error(
+			`The durable staging route accepted a wrong SHA with HTTP ${wrongSha.status}`,
+		);
+	}
+	const response = await send(`Bearer ${secret}`);
+	if (!response.ok) {
+		throw new Error(
+			`The durable staging route failed with HTTP ${response.status}`,
+		);
+	}
+	const result = await response.json();
+	if (
+		Number(result.accepted) !== 5 ||
+		Number(result.uniqueEvents) !== 4 ||
+		!Array.isArray(result.workflowRuns) ||
+		result.workflowRuns.length !== 5
+	) {
+		throw new Error(
+			"The durable staging route returned incomplete workflow proof",
+		);
+	}
+	state.serverRunId = serverRunId;
+	state.serverExpectedEvents = 4;
+	state.serverExpectedRows = 5;
+	writeJson(statePath, state, 0o600);
+	const visibility = await waitForCopyVisibility({
+		label: "Durable exact-SHA server delivery",
+		read: async () =>
+			normalizeCiAssertions(
+				(
+					await ciAssertionsQuery({
+						state,
+						deploymentId: state.deploymentId,
+						syntheticRunId: serverRunId,
+					})
+				).data,
+			),
+		assert: (assertions) => {
+			if (
+				assertions.receivedRows < 5 ||
+				assertions.uniqueEvents !== 4 ||
+				assertions.uniquePayloads !== 4 ||
+				assertions.duplicateRows < 1 ||
+				assertions.payloadConflicts !== 0
+			) {
+				throw new Error("Durable server events are not fully visible");
+			}
+		},
+	});
+	artifact.serverDelivery = {
+		acceptedRows: 5,
+		uniqueEvents: 4,
+		duplicateRows: visibility.value.duplicateRows,
+		workflowRuns: 5,
+		visibilityMs: visibility.visibilityMs,
+		unauthorizedRejected: true,
+		wrongShaRejected: true,
+	};
+	artifact.assertions = {
+		...artifact.assertions,
+		durableServerPathPassed: true,
+		serverDuplicateDeliveryPassed: true,
+	};
+	writeJson(artifactPath, artifact);
+};
+
 const seed = async () => {
 	const runId = validateSyntheticRunId(option("run-id"));
 	const deploymentId = option("deployment-id");
@@ -771,6 +1406,7 @@ const seed = async () => {
 	const artifactPath = option("artifact");
 	const sha = environment("EXPECTED_SHA");
 	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 	]);
 	const startedAt = new Date();
@@ -779,11 +1415,25 @@ const seed = async () => {
 		runId,
 		now: startedAt,
 	});
+	const decisionFixture = createSyntheticDecisionEvents({
+		runId,
+		now: startedAt,
+	});
 	const loadFixture = createSyntheticLoadEvents({
 		runId,
 		count: Number(process.env.PERFORMANCE_EVENT_COUNT ?? 1_000),
 		now: startedAt,
 	});
+	const largeLoadFixture = createSyntheticLoadEvents({
+		runId: `${runId}_large`,
+		count: Number(process.env.LARGE_PERFORMANCE_EVENT_COUNT ?? 10_000),
+		now: startedAt,
+	});
+	if (largeLoadFixture.rows.length <= loadFixture.rows.length) {
+		throw new Error(
+			"The large performance corpus must exceed the baseline corpus",
+		);
+	}
 	const previewRunId = validateSyntheticRunId(`${runId}_preview`);
 	const previewAppVersion = `staging-preview-${hashIdentifier(runId).slice(0, 12)}`;
 	const state = {
@@ -795,6 +1445,22 @@ const seed = async () => {
 		loadAppVersion: loadFixture.appVersion,
 		loadRunId: loadFixture.runId,
 		loadEventCount: loadFixture.rows.length,
+		largeLoadAppVersion: largeLoadFixture.appVersion,
+		largeLoadRunId: largeLoadFixture.runId,
+		largeLoadEventCount: largeLoadFixture.rows.length,
+		decisionRunId: decisionFixture.runId,
+		decisionAppVersion: decisionFixture.appVersion,
+		decisionEventCount: decisionFixture.rows.length,
+		decisionDate: decisionFixture.date,
+		decisionHostname: decisionFixture.hostname,
+		decisionPathname: decisionFixture.pathname,
+		erasureLinkedAnonymousIds: [
+			...new Set(
+				decisionFixture.rows
+					.filter((row) => row.user_id === fixture.userId && row.anonymous_id)
+					.map((row) => row.anonymous_id),
+			),
+		].filter((anonymousId) => anonymousId !== fixture.anonymousId),
 		erasureAnonymousId: fixture.anonymousId,
 		erasureOrganizationId: fixture.organizationId,
 		erasureUserId: fixture.userId,
@@ -829,6 +1495,11 @@ const seed = async () => {
 			rowsAttempted: 0,
 			rowsAccepted: 0,
 		},
+		largeLoad: {
+			rowsPlanned: largeLoadFixture.rows.length,
+			rowsAttempted: 0,
+			rowsAccepted: 0,
+		},
 		erasure: {
 			controlRunHash: hashIdentifier(erasureControl.runId),
 			identityHash: hashIdentifier(
@@ -836,6 +1507,11 @@ const seed = async () => {
 			),
 			controlAttempted: false,
 			controlAccepted: false,
+		},
+		decisions: {
+			rowsPlanned: decisionFixture.rows.length,
+			rowsAttempted: 0,
+			rowsAccepted: 0,
 		},
 		assertions: { seedAccepted: false },
 	};
@@ -875,42 +1551,95 @@ const seed = async () => {
 		separateBatchDeliveries.push(await deliver(row, true));
 	}
 	const deliveries = [...concurrentDeliveries, ...separateBatchDeliveries];
-	artifact.load.rowsAttempted = loadFixture.rows.length;
-	writeJson(artifactPath, artifact);
-	const loadStartedAt = performance.now();
-	const loadDelivery = await request(
-		tinybirdUrl(origin, "/v0/events", {
-			name: "product_events_v1",
-			wait: "true",
-			__tb__min_deployment: deploymentId,
-		}),
-		{
-			token: tokens.TINYBIRD_STAGING_INGEST_TOKEN,
-			method: "POST",
-			body: `${loadFixture.rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
-			headers: { "Content-Type": "application/x-ndjson" },
-			attempts: 4,
-		},
+	const sendLoadFixture = async (fixture, artifactKey) => {
+		const batchSize = Number(process.env.PERFORMANCE_INGEST_BATCH_SIZE ?? 500);
+		if (!Number.isInteger(batchSize) || batchSize < 100 || batchSize > 1_000) {
+			throw new Error("Performance ingestion batch size must be 100 to 1000");
+		}
+		artifact[artifactKey].rowsAttempted = fixture.rows.length;
+		writeJson(artifactPath, artifact);
+		const started = performance.now();
+		const latencies = [];
+		let accepted = 0;
+		let retryAttempts = 0;
+		for (let offset = 0; offset < fixture.rows.length; offset += batchSize) {
+			const batch = fixture.rows.slice(offset, offset + batchSize);
+			const delivery = await request(
+				tinybirdUrl(origin, "/v0/events", {
+					name: "product_events_v1",
+					wait: "true",
+					__tb__min_deployment: deploymentId,
+				}),
+				{
+					token: tokens.TINYBIRD_STAGING_INGEST_TOKEN,
+					method: "POST",
+					body: `${batch.map((row) => JSON.stringify(row)).join("\n")}\n`,
+					headers: { "Content-Type": "application/x-ndjson" },
+					attempts: 1,
+				},
+			);
+			latencies.push(delivery.latencyMs);
+			retryAttempts += delivery.attempt - 1;
+			accepted += batch.length;
+		}
+		const elapsedMs = Math.max(1, Math.round(performance.now() - started));
+		artifact[artifactKey] = {
+			rows: fixture.rows.length,
+			rowsPlanned: fixture.rows.length,
+			rowsAttempted: fixture.rows.length,
+			rowsAccepted: accepted,
+			batchSize,
+			batches: latencies.length,
+			batchLatency: latencySummary(latencies),
+			errorRate: 0,
+			retryAttempts,
+			rowsPerSecond: Math.round((fixture.rows.length * 1_000) / elapsedMs),
+		};
+	};
+	await sendLoadFixture(loadFixture, "load");
+	await sendLoadFixture(largeLoadFixture, "largeLoad");
+	const ingestionBatchP95BudgetMs = Number(
+		process.env.INGESTION_BATCH_P95_BUDGET_MS ?? 5_000,
 	);
-	const loadElapsedMs = Math.max(
-		1,
-		Math.round(performance.now() - loadStartedAt),
+	const ingestionMinimumRowsPerSecond = Number(
+		process.env.INGESTION_MINIMUM_ROWS_PER_SECOND ?? 500,
 	);
-	artifact.load = {
-		rows: loadFixture.rows.length,
-		rowsPlanned: loadFixture.rows.length,
-		rowsAttempted: loadFixture.rows.length,
-		rowsAccepted: loadFixture.rows.length,
-		requestLatencyMs: loadDelivery.latencyMs,
-		retryAttempts: loadDelivery.attempt - 1,
-		rowsPerSecond: Math.round(
-			(loadFixture.rows.length * 1_000) / loadElapsedMs,
-		),
+	artifact.ingestionBudget = {
+		batchP95Ms: ingestionBatchP95BudgetMs,
+		minimumRowsPerSecond: ingestionMinimumRowsPerSecond,
+		passed:
+			artifact.load.batchLatency.p95Ms <= ingestionBatchP95BudgetMs &&
+			artifact.largeLoad.batchLatency.p95Ms <= ingestionBatchP95BudgetMs &&
+			artifact.load.rowsPerSecond >= ingestionMinimumRowsPerSecond &&
+			artifact.largeLoad.rowsPerSecond >= ingestionMinimumRowsPerSecond &&
+			artifact.load.errorRate === 0 &&
+			artifact.largeLoad.errorRate === 0,
 	};
 	writeJson(artifactPath, artifact);
+	if (!artifact.ingestionBudget.passed) {
+		throw new Error("Synthetic ingestion performance budget failed");
+	}
 	artifact.erasure.controlAttempted = true;
 	writeJson(artifactPath, artifact);
 	const erasureControlDelivery = await deliver(erasureControl.row);
+	artifact.decisions.rowsAttempted = decisionFixture.rows.length;
+	writeJson(artifactPath, artifact);
+	const decisionDeliveries = [];
+	for (const row of decisionFixture.rows) {
+		decisionDeliveries.push(await deliver(row));
+	}
+	artifact.decisions = {
+		rowsPlanned: decisionFixture.rows.length,
+		rowsAttempted: decisionFixture.rows.length,
+		rowsAccepted: decisionDeliveries.length,
+		requestLatency: latencySummary(
+			decisionDeliveries.map((delivery) => delivery.latencyMs),
+		),
+		retryAttempts: decisionDeliveries.reduce(
+			(total, delivery) => total + delivery.attempts - 1,
+			0,
+		),
+	};
 	artifact.delivery = {
 		rowsPlanned: fixture.rows.length,
 		rowsAttempted: fixture.rows.length,
@@ -963,12 +1692,28 @@ const phaseRunExpectations = ({ state, phase }) => {
 		},
 		{
 			runId: state.loadRunId,
-			canonicalEvents: ["staged", "promoted"].includes(phase)
-				? state.loadEventCount
-				: 0,
-			decisionEvents: ["staged", "promoted"].includes(phase)
-				? state.loadEventCount
-				: 0,
+			canonicalEvents: phase === "cleanup" ? 0 : state.loadEventCount,
+			decisionEvents: phase === "cleanup" ? 0 : state.loadEventCount,
+		},
+		{
+			runId: state.largeLoadRunId,
+			canonicalEvents: phase === "cleanup" ? 0 : state.largeLoadEventCount,
+			decisionEvents: phase === "cleanup" ? 0 : state.largeLoadEventCount,
+		},
+		{
+			runId: state.decisionRunId,
+			canonicalEvents:
+				phase === "cleanup"
+					? 0
+					: phase === "erasure"
+						? 2
+						: state.decisionEventCount,
+			decisionEvents:
+				phase === "cleanup"
+					? 0
+					: phase === "erasure"
+						? 2
+						: state.decisionEventCount,
 		},
 		{
 			runId: state.erasureControlRunId,
@@ -984,8 +1729,19 @@ const phaseRunExpectations = ({ state, phase }) => {
 	if (state.previewRunId && phase !== "staged") {
 		expectations.push({
 			runId: state.previewRunId,
-			canonicalEvents: phase === "cleanup" ? 0 : 1,
-			decisionEvents: phase === "cleanup" ? 0 : 1,
+			canonicalEvents:
+				phase === "cleanup" ? 0 : Number(state.previewExpectedEvents ?? 1),
+			decisionEvents:
+				phase === "cleanup" ? 0 : Number(state.previewExpectedEvents ?? 1),
+		});
+	}
+	if (state.serverRunId && phase !== "staged") {
+		expectations.push({
+			runId: state.serverRunId,
+			canonicalEvents:
+				phase === "cleanup" ? 0 : Number(state.serverExpectedEvents),
+			decisionEvents:
+				phase === "cleanup" ? 0 : Number(state.serverExpectedEvents),
 		});
 	}
 	return expectations;
@@ -1037,12 +1793,17 @@ const assertSingleHealth = (health) => {
 };
 
 const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
-	const [main, load, control, preview] = await Promise.all([
+	const [main, load, largeLoad, control, preview] = await Promise.all([
 		healthQuery({ state, deploymentId }),
 		healthQuery({
 			state,
 			deploymentId,
 			appVersion: state.loadAppVersion,
+		}),
+		healthQuery({
+			state,
+			deploymentId,
+			appVersion: state.largeLoadAppVersion,
 		}),
 		healthQuery({
 			state,
@@ -1060,6 +1821,7 @@ const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 	const health = {
 		main: normalizeHealth(main.data),
 		load: normalizeHealth(load.data),
+		largeLoad: normalizeHealth(largeLoad.data),
 		control: normalizeHealth(control.data),
 		preview: preview ? normalizeHealth(preview.data) : null,
 	};
@@ -1073,9 +1835,18 @@ const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 		) {
 			throw new Error("Synthetic load health is incomplete");
 		}
+		if (
+			health.largeLoad.receivedRows < state.largeLoadEventCount ||
+			health.largeLoad.uniqueEvents !== state.largeLoadEventCount ||
+			health.largeLoad.uniquePayloads !== state.largeLoadEventCount ||
+			health.largeLoad.payloadConflicts !== 0
+		) {
+			throw new Error("Large synthetic load health is incomplete");
+		}
 	} else {
 		assertZeroHealth(health.main);
 		assertZeroHealth(health.load);
+		assertZeroHealth(health.largeLoad);
 	}
 	if (phase === "cleanup") {
 		assertZeroHealth(health.control);
@@ -1096,26 +1867,21 @@ const runCopies = async () => {
 	if (!["staged", "promoted", "erasure", "cleanup"].includes(phase)) {
 		throw new Error("Tinybird copy phase is invalid");
 	}
-	if (!["live", "staging"].includes(requestedTarget)) {
-		throw new Error("Tinybird copy target is invalid");
-	}
-	if (requestedTarget === "staging" && !["staged", "cleanup"].includes(phase)) {
-		throw new Error("Only staged and cleanup copy phases can target staging");
+	if (requestedTarget !== "live") {
+		throw new Error(
+			"Tinybird Copy mutations are allowed only after staging promotion",
+		);
 	}
 	if (String(state.deploymentId) !== option("deployment-id")) {
 		throw new Error("Tinybird copy deployment does not match the seeded run");
 	}
 	const { origin, tokens } = tinybirdEnvironment([
-		"TINYBIRD_STAGING_READ_TOKEN",
+		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 	]);
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
 	const executeCopies = async (target) => {
-		const copyToken =
-			target === "staging"
-				? tokens.TINYBIRD_STAGING_DEPLOY_TOKEN
-				: tokens.TINYBIRD_STAGING_READ_TOKEN;
 		const assertMutationOwnership = async () => {
 			if (
 				(await ownedMutationTarget({
@@ -1129,11 +1895,10 @@ const runCopies = async () => {
 		};
 		const canonicalJobs = await submitTinybirdCopyJobs({
 			origin,
-			token: copyToken,
+			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
 			deploymentId: state.deploymentId,
 			request,
 			pipes: ["snapshot_product_events_canonical_v1"],
-			useDeploymentParameter: target === "staging",
 			assertMutationOwnership,
 		});
 		artifact.copyJobs = {
@@ -1162,14 +1927,7 @@ const runCopies = async () => {
 		const copySteps = [
 			{
 				pipe: "snapshot_product_events_daily_exact",
-				read: () =>
-					readPhaseCiAssertions({
-						state,
-						deploymentId: state.deploymentId,
-						expectations,
-					}),
-				assert: (results) =>
-					assertPhaseCiAssertions(results, ["decisionEvents"]),
+				marker: "decisionMarkers",
 			},
 			{
 				pipe: "snapshot_product_traffic_daily_exact",
@@ -1188,25 +1946,22 @@ const runCopies = async () => {
 				marker: "retentionMarkers",
 			},
 			{
+				pipe: "snapshot_product_identity_funnel_exact",
+				marker: "identityMarkers",
+			},
+			{
 				pipe: "snapshot_product_events_health_hourly",
-				read: () =>
-					readAndAssertPhaseHealth({
-						state,
-						phase,
-						deploymentId: state.deploymentId,
-					}),
-				assert: () => undefined,
+				marker: "healthMarkers",
 			},
 		];
 		for (const copyStep of copySteps) {
 			downstreamJobs.push(
 				...(await submitTinybirdCopyJobs({
 					origin,
-					token: copyToken,
+					token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
 					deploymentId: state.deploymentId,
 					request,
 					pipes: [copyStep.pipe],
-					useDeploymentParameter: target === "staging",
 					copyRunId,
 					assertMutationOwnership,
 				})),
@@ -1298,6 +2053,235 @@ const runCopies = async () => {
 	throw new Error("Tinybird cleanup copies changed target more than once");
 };
 
+const setCopySchedules = async () => {
+	const state = readJson(option("state"));
+	const artifactPath = option("artifact");
+	const artifact = readJson(artifactPath);
+	const action = option("action");
+	if (!["pause", "resume"].includes(action)) {
+		throw new Error("Tinybird Copy schedule action must be pause or resume");
+	}
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
+	]);
+	if (
+		(await ownedMutationTarget({
+			state,
+			origin,
+			token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+		})) !== "live"
+	) {
+		throw new Error(
+			"Copy schedules can change only on the owned live deployment",
+		);
+	}
+	await applyCopyScheduleAction({
+		pipes: COPY_PIPES,
+		action,
+		setSchedule: async (pipe, scheduleAction) => {
+			let mutationError;
+			try {
+				await request(
+					tinybirdUrl(
+						origin,
+						`/v0/pipes/${encodeURIComponent(pipe)}/copy/${scheduleAction === "pause" ? "cancel" : "resume"}`,
+					),
+					{
+						token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+						method: "POST",
+						attempts: 1,
+					},
+				);
+			} catch (error) {
+				mutationError = error;
+			}
+			const pipeState = await request(
+				tinybirdUrl(origin, `/v0/pipes/${encodeURIComponent(pipe)}`),
+				{
+					token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+					attempts: 4,
+				},
+			);
+			if (copyScheduleMatchesAction(pipeState, scheduleAction)) return;
+			if (mutationError) throw mutationError;
+			throw new Error(
+				`Tinybird did not attest the ${scheduleAction} state for ${pipe}`,
+			);
+		},
+	});
+	artifact.copySchedule = {
+		...(artifact.copySchedule ?? {}),
+		[action]: {
+			status: "passed",
+			deploymentId: String(state.deploymentId),
+			pipeCount: COPY_PIPES.length,
+		},
+	};
+	writeJson(artifactPath, artifact);
+};
+
+const rawAssertionMetrics = (assertions) => ({
+	receivedRows: assertions.receivedRows,
+	uniqueEvents: assertions.uniqueEvents,
+	uniquePayloads: assertions.uniquePayloads,
+	duplicateRows: assertions.duplicateRows,
+	payloadConflicts: assertions.payloadConflicts,
+});
+
+const verifyCandidate = async ({ state, artifact, artifactPath }) => {
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+	]);
+	if (
+		(await ownedMutationTarget({
+			state,
+			origin,
+			token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
+		})) !== "staging"
+	) {
+		throw new Error("Candidate validation lost exact deployment ownership");
+	}
+	const visibility = await waitForCopyVisibility({
+		label: "Tinybird candidate raw delivery",
+		read: async () =>
+			Promise.all(
+				[
+					state.runId,
+					state.loadRunId,
+					state.largeLoadRunId,
+					state.decisionRunId,
+					state.erasureControlRunId,
+				].map(async (syntheticRunId) =>
+					normalizeCiAssertions(
+						(
+							await ciAssertionsQuery({
+								state,
+								deploymentId: state.deploymentId,
+								syntheticRunId,
+							})
+						).data,
+					),
+				),
+			),
+		assert: ([main, load, largeLoad, decisions, control]) => {
+			assertSyntheticHealth(main);
+			assertSyntheticLoadHealth(load, state.loadEventCount);
+			assertSyntheticLoadHealth(largeLoad, state.largeLoadEventCount);
+			assertSyntheticLoadHealth(decisions, state.decisionEventCount);
+			assertSingleHealth(control);
+		},
+	});
+	const ingestionVisibilityMs = Date.now() - Date.parse(state.startedAt);
+	const [main, load, largeLoad, decisions, control] = visibility.value;
+	const liveAssertions = await Promise.all(
+		[
+			state.runId,
+			state.loadRunId,
+			state.largeLoadRunId,
+			state.decisionRunId,
+			state.erasureControlRunId,
+		].map(async (syntheticRunId) =>
+			normalizeCiAssertions(
+				(await ciAssertionsQuery({ state, syntheticRunId })).data,
+			),
+		),
+	);
+	if (
+		liveAssertions.some((assertions) =>
+			Object.values(assertions).some((value) => value !== 0),
+		)
+	) {
+		throw new Error("Candidate-only synthetic events affected live analytics");
+	}
+	const queries = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate: state.endTime.slice(0, 10),
+		deploymentId: state.deploymentId,
+	});
+	const samples = Object.fromEntries(queries.map(({ name }) => [name, []]));
+	const fanoutSamples = [];
+	for (let round = 0; round < 5; round += 1) {
+		const startedAt = performance.now();
+		const results = await Promise.all(
+			queries.map((query) =>
+				decisionEndpointQuery({
+					origin,
+					token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+					...query,
+				}),
+			),
+		);
+		fanoutSamples.push(Math.round(performance.now() - startedAt));
+		for (let index = 0; index < results.length; index += 1) {
+			samples[queries[index].name].push(results[index].latencyMs);
+		}
+	}
+	const endpointLatency = Object.fromEntries(
+		Object.entries(samples).map(([name, values]) => [
+			name,
+			latencySummary(values),
+		]),
+	);
+	const dashboardFanoutLatency = latencySummary(fanoutSamples);
+	const endpointP95BudgetMs = Number(
+		process.env.ENDPOINT_P95_BUDGET_MS ?? 2_500,
+	);
+	const fanoutP95BudgetMs = Number(
+		process.env.DASHBOARD_FANOUT_P95_BUDGET_MS ?? 3_500,
+	);
+	const failedEndpoints = Object.entries(endpointLatency)
+		.filter(([, latency]) => latency.p95Ms > endpointP95BudgetMs)
+		.map(([name]) => name);
+	const ingestionSloMs = Number(process.env.INGESTION_SLO_MS ?? 180_000);
+	artifact.candidateValidation = {
+		raw: {
+			main: rawAssertionMetrics(main),
+			load: rawAssertionMetrics(load),
+			largeLoad: rawAssertionMetrics(largeLoad),
+			decisions: rawAssertionMetrics(decisions),
+			control: rawAssertionMetrics(control),
+		},
+		liveIsolated: true,
+		polls: visibility.polls,
+		ingestionVisibilityMs,
+		endpointLatency,
+		dashboardFanoutLatency,
+	};
+	artifact.assertions = {
+		...artifact.assertions,
+		candidateRawDeliveryPassed: true,
+		candidateDuplicateVisible: true,
+		candidatePayloadConflictVisible: true,
+		candidateIsolationPassed: true,
+		candidateEndpointsPassed:
+			failedEndpoints.length === 0 &&
+			dashboardFanoutLatency.p95Ms <= fanoutP95BudgetMs,
+		candidateIngestionSloPassed: ingestionVisibilityMs <= ingestionSloMs,
+	};
+	artifact.visibilityMs = ingestionVisibilityMs;
+	writeJson(artifactPath, artifact);
+	if (ingestionVisibilityMs > ingestionSloMs) {
+		throw new Error(
+			`Candidate events became visible in ${ingestionVisibilityMs}ms, over ${ingestionSloMs}ms`,
+		);
+	}
+	if (
+		failedEndpoints.length > 0 ||
+		dashboardFanoutLatency.p95Ms > fanoutP95BudgetMs
+	) {
+		throw new Error(
+			`Candidate endpoint budgets failed: ${[
+				...failedEndpoints,
+				...(dashboardFanoutLatency.p95Ms <= fanoutP95BudgetMs
+					? []
+					: ["dashboard_fanout"]),
+			].join(", ")}`,
+		);
+	}
+};
+
 const verify = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
@@ -1308,6 +2292,10 @@ const verify = async () => {
 		deploymentId: option("deployment-id"),
 		expectedDeploymentId: String(state.deploymentId),
 	});
+	if (target === "staging") {
+		await verifyCandidate({ state, artifact, artifactPath });
+		return;
+	}
 	const deadline = Date.now() + Number(process.env.INGESTION_SLO_MS ?? 180_000);
 	let result;
 	let health;
@@ -1344,37 +2332,32 @@ const verify = async () => {
 			"Synthetic load health did not match the accepted event set",
 		);
 	}
-	if (target === "staging") {
-		const [liveHealthResult, liveLoadResult, liveControlResult, liveDecisions] =
-			await Promise.all([
-				healthQuery({ state }),
-				healthQuery({ state, appVersion: state.loadAppVersion }),
-				healthQuery({ state, appVersion: state.erasureControlAppVersion }),
-				ciAssertionsQuery({ state }),
-			]);
-		for (const liveHealth of [
-			normalizeHealth(liveHealthResult.data),
-			normalizeHealth(liveLoadResult.data),
-			normalizeHealth(liveControlResult.data),
-		]) {
-			assertZeroHealth(liveHealth);
-		}
-		if (
-			Object.values(normalizeCiAssertions(liveDecisions.data)).some(
-				(value) => value !== 0,
-			)
-		) {
-			throw new Error(
-				"Candidate-only synthetic events affected live decisions",
-			);
-		}
-		artifact.candidateIsolation = {
-			candidateDeploymentId: state.deploymentId,
-			candidateVisible: true,
-			liveVisible: false,
-		};
-		artifact.assertions.candidateIsolationPassed = true;
-	}
+	const loadDecisionResult = await ciAssertionsQuery({
+		state,
+		deploymentId: state.deploymentId,
+		syntheticRunId: state.loadRunId,
+	});
+	const loadDecisionAssertions = normalizeCiAssertions(loadDecisionResult.data);
+	assertSyntheticLoadDecisions(loadDecisionAssertions, state.loadEventCount);
+	const largeLoadResult = await healthQuery({
+		state,
+		deploymentId: state.deploymentId,
+		appVersion: state.largeLoadAppVersion,
+	});
+	const largeLoadHealth = normalizeHealth(largeLoadResult.data);
+	assertSyntheticLoadHealth(largeLoadHealth, state.largeLoadEventCount);
+	const largeLoadDecisionResult = await ciAssertionsQuery({
+		state,
+		deploymentId: state.deploymentId,
+		syntheticRunId: state.largeLoadRunId,
+	});
+	const largeLoadDecisionAssertions = normalizeCiAssertions(
+		largeLoadDecisionResult.data,
+	);
+	assertSyntheticLoadDecisions(
+		largeLoadDecisionAssertions,
+		state.largeLoadEventCount,
+	);
 	const samples = [result.latencyMs];
 	for (let index = 1; index < 20; index += 1) {
 		const sample = await healthQuery({
@@ -1390,23 +2373,91 @@ const verify = async () => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
-	const decisionQueries = decisionEndpointQueries({
+	const baselineDeploymentId =
+		options.get("baseline-deployment-id") || state.deploymentId;
+	if (!/^[0-9]+$/.test(baselineDeploymentId)) {
+		throw new Error(
+			"Tinybird performance baseline must be a numeric deployment",
+		);
+	}
+	const retainedIdentityFunnelAvailable =
+		baselineDeploymentId === state.deploymentId ||
+		(await decisionEndpointAvailable({
+			deploymentId: baselineDeploymentId,
+			name: "product_identity_funnel",
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+		}));
+	const baselineQueries = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate: state.endTime.slice(0, 10),
+		deploymentId: baselineDeploymentId,
+		includeIdentityFunnel: retainedIdentityFunnelAvailable,
+	});
+	const measuredQueries = decisionEndpointQueries({
 		startDate: state.startTime.slice(0, 10),
 		endDate: state.endTime.slice(0, 10),
 		deploymentId: state.deploymentId,
 	});
+	const representativeQueries = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate: state.decisionDate,
+		deploymentId: state.deploymentId,
+		syntheticRunId: state.loadRunId,
+	});
+	const largeQueries = decisionEndpointQueries({
+		startDate: state.startTime.slice(0, 10),
+		endDate: state.decisionDate,
+		deploymentId: state.deploymentId,
+		syntheticRunId: state.largeLoadRunId,
+	});
+	const representativeCoverage = await queryDecisionEndpointSuite({
+		deploymentId: state.deploymentId,
+		origin,
+		state,
+		syntheticRunId: state.loadRunId,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	assertRepresentativeEndpointCoverage({
+		expectedEvents: state.loadEventCount,
+		payloads: representativeCoverage.payloads,
+	});
+	const largeCoverage = await queryDecisionEndpointSuite({
+		deploymentId: state.deploymentId,
+		origin,
+		state,
+		syntheticRunId: state.largeLoadRunId,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	assertRepresentativeEndpointCoverage({
+		expectedEvents: state.largeLoadEventCount,
+		payloads: largeCoverage.payloads,
+	});
 	const baselineSamples = Object.fromEntries(
-		decisionQueries.map(({ name }) => [name, []]),
+		baselineQueries.map(({ name }) => [name, []]),
 	);
 	const measuredSamples = Object.fromEntries(
-		decisionQueries.map(({ name }) => [name, []]),
+		measuredQueries.map(({ name }) => [name, []]),
+	);
+	const representativeSamples = Object.fromEntries(
+		representativeQueries.map(({ name }) => [name, []]),
+	);
+	const largeSamples = Object.fromEntries(
+		largeQueries.map(({ name }) => [name, []]),
 	);
 	const baselineFanoutSamples = [];
 	const measuredFanoutSamples = [];
-	const sampleDecisionRound = async (endpointSamples, fanoutSamples) => {
+	const representativeFanoutSamples = [];
+	const largeFanoutSamples = [];
+	const sampleDecisionRound = async (
+		queries,
+		endpointSamples,
+		fanoutSamples,
+	) => {
 		const startedAt = performance.now();
 		const results = await Promise.all(
-			decisionQueries.map((query) =>
+			queries.map((query) =>
 				decisionEndpointQuery({
 					origin,
 					token: tokens.TINYBIRD_STAGING_READ_TOKEN,
@@ -1416,30 +2467,79 @@ const verify = async () => {
 		);
 		fanoutSamples.push(Math.round(performance.now() - startedAt));
 		for (let index = 0; index < results.length; index += 1) {
-			endpointSamples[decisionQueries[index].name].push(
-				results[index].latencyMs,
-			);
+			endpointSamples[queries[index].name].push(results[index].latencyMs);
 		}
 	};
-	for (let index = 0; index < 5; index += 1) {
-		await sampleDecisionRound(baselineSamples, baselineFanoutSamples);
+	for (let index = 0; index < 10; index += 1) {
+		await sampleDecisionRound(
+			baselineQueries,
+			baselineSamples,
+			baselineFanoutSamples,
+		);
+	}
+	for (let index = 0; index < 10; index += 1) {
+		await sampleDecisionRound(largeQueries, largeSamples, largeFanoutSamples);
 	}
 	for (let index = 0; index < 15; index += 1) {
-		await sampleDecisionRound(measuredSamples, measuredFanoutSamples);
+		await sampleDecisionRound(
+			measuredQueries,
+			measuredSamples,
+			measuredFanoutSamples,
+		);
 	}
-	const regressionFactor = Number(process.env.ENDPOINT_REGRESSION_FACTOR ?? 3);
+	for (let index = 0; index < 10; index += 1) {
+		await sampleDecisionRound(
+			representativeQueries,
+			representativeSamples,
+			representativeFanoutSamples,
+		);
+	}
+	const regressionFactor = Number(process.env.ENDPOINT_REGRESSION_FACTOR ?? 2);
 	const regressionFloorMs = Number(
-		process.env.ENDPOINT_REGRESSION_FLOOR_MS ?? 500,
+		process.env.ENDPOINT_REGRESSION_FLOOR_MS ?? 250,
 	);
 	const decisionEndpointLatency = Object.fromEntries(
-		decisionQueries.map(({ name }) => {
-			const baseline = latencySummary(baselineSamples[name]);
+		measuredQueries.map(({ name }) => {
 			const measured = latencySummary(measuredSamples[name]);
+			const representative = latencySummary(representativeSamples[name]);
+			const large = latencySummary(largeSamples[name]);
+			const largeBudget = {
+				absoluteP95Ms: endpointP95BudgetMs,
+				maximumRepresentativeFactor: 2,
+				passed:
+					large.p95Ms <= endpointP95BudgetMs &&
+					large.p95Ms <= Math.max(representative.p95Ms * 2, 250),
+			};
+			if (!baselineSamples[name]) {
+				return [
+					name,
+					{
+						baseline: null,
+						measured,
+						representative,
+						large,
+						budget: {
+							mode: "new_endpoint_no_baseline",
+							absoluteP95Ms: endpointP95BudgetMs,
+							passed: measured.p95Ms <= endpointP95BudgetMs,
+						},
+						representativeBudget: {
+							mode: "new_endpoint_no_baseline",
+							absoluteP95Ms: endpointP95BudgetMs,
+							passed: representative.p95Ms <= endpointP95BudgetMs,
+						},
+						largeBudget,
+					},
+				];
+			}
+			const baseline = latencySummary(baselineSamples[name]);
 			return [
 				name,
 				{
 					baseline,
 					measured,
+					representative,
+					large,
 					budget: evaluateLatencyBudget({
 						baseline,
 						measured,
@@ -1447,6 +2547,14 @@ const verify = async () => {
 						regressionFactor,
 						regressionFloorMs,
 					}),
+					representativeBudget: evaluateLatencyBudget({
+						baseline,
+						measured: representative,
+						absoluteP95Ms: endpointP95BudgetMs,
+						regressionFactor,
+						regressionFloorMs,
+					}),
+					largeBudget,
 				},
 			];
 		}),
@@ -1456,6 +2564,8 @@ const verify = async () => {
 	);
 	const dashboardBaseline = latencySummary(baselineFanoutSamples);
 	const dashboardMeasured = latencySummary(measuredFanoutSamples);
+	const dashboardRepresentative = latencySummary(representativeFanoutSamples);
+	const dashboardLarge = latencySummary(largeFanoutSamples);
 	const dashboardBudget = evaluateLatencyBudget({
 		baseline: dashboardBaseline,
 		measured: dashboardMeasured,
@@ -1463,25 +2573,72 @@ const verify = async () => {
 		regressionFactor,
 		regressionFloorMs,
 	});
+	const dashboardRepresentativeBudget = evaluateLatencyBudget({
+		baseline: dashboardBaseline,
+		measured: dashboardRepresentative,
+		absoluteP95Ms: fanoutP95BudgetMs,
+		regressionFactor,
+		regressionFloorMs,
+	});
+	const dashboardLargeBudget = {
+		absoluteP95Ms: fanoutP95BudgetMs,
+		maximumRepresentativeFactor: 2,
+		passed:
+			dashboardLarge.p95Ms <= fanoutP95BudgetMs &&
+			dashboardLarge.p95Ms <= Math.max(dashboardRepresentative.p95Ms * 2, 500),
+	};
 	const failedDecisionEndpoints = Object.entries(decisionEndpointLatency)
-		.filter(([, value]) => !value.budget.passed)
+		.filter(
+			([, value]) =>
+				!value.budget.passed ||
+				!value.representativeBudget.passed ||
+				!value.largeBudget.passed,
+		)
 		.map(([name]) => name);
 	artifact.health = health;
 	artifact.decisionAssertions = decisionAssertions;
 	artifact.load.health = loadHealth;
-	artifact.visibilityMs = Date.now() - Date.parse(state.startedAt);
+	artifact.load.decisionAssertions = loadDecisionAssertions;
+	artifact.largeLoad.health = largeLoadHealth;
+	artifact.largeLoad.decisionAssertions = largeLoadDecisionAssertions;
+	const currentVisibilityMs = Date.now() - Date.parse(state.startedAt);
+	artifact.visibilityMs = Math.min(
+		artifact.visibilityMs ?? currentVisibilityMs,
+		currentVisibilityMs,
+	);
 	artifact.endpointLatency = endpointLatency;
 	artifact.decisionEndpointLatency = decisionEndpointLatency;
+	artifact.performanceBaseline = {
+		deploymentId: baselineDeploymentId,
+		mode:
+			baselineDeploymentId === state.deploymentId
+				? "same_deployment_noop"
+				: "retained_deployment",
+		representativeRows: state.loadEventCount,
+		largeRows: state.largeLoadEventCount,
+		newEndpointsWithoutBaseline: retainedIdentityFunnelAvailable
+			? []
+			: ["product_identity_funnel"],
+		representativeCoverageLatencyMs: representativeCoverage.latencyMs,
+		largeCoverageLatencyMs: largeCoverage.latencyMs,
+	};
 	artifact.dashboardFanoutLatency = {
 		baseline: dashboardBaseline,
 		measured: dashboardMeasured,
+		representative: dashboardRepresentative,
+		large: dashboardLarge,
 		budget: dashboardBudget,
+		representativeBudget: dashboardRepresentativeBudget,
+		largeBudget: dashboardLargeBudget,
 	};
 	const ingestionSloMs = Number(process.env.INGESTION_SLO_MS ?? 180_000);
 	const ingestionSloPassed = artifact.visibilityMs <= ingestionSloMs;
 	const endpointBudgetPassed = endpointLatency.p95Ms <= endpointP95BudgetMs;
 	const decisionEndpointBudgetsPassed =
-		failedDecisionEndpoints.length === 0 && dashboardBudget.passed;
+		failedDecisionEndpoints.length === 0 &&
+		dashboardBudget.passed &&
+		dashboardRepresentativeBudget.passed &&
+		dashboardLargeBudget.passed;
 	artifact.budgets = {
 		ingestionVisibilityMs: ingestionSloMs,
 		endpointP95Ms: endpointP95BudgetMs,
@@ -1500,6 +2657,7 @@ const verify = async () => {
 		ingestionSloPassed,
 		endpointBudgetPassed,
 		decisionEndpointBudgetsPassed,
+		representativePerformancePassed: decisionEndpointBudgetsPassed,
 	};
 	writeJson(artifactPath, artifact);
 	if (!ingestionSloPassed) {
@@ -1516,17 +2674,13 @@ const verify = async () => {
 		throw new Error(
 			`Tinybird decision endpoint budgets failed: ${[
 				...failedDecisionEndpoints,
-				...(dashboardBudget.passed ? [] : ["dashboard_fanout"]),
+				...(dashboardBudget.passed &&
+				dashboardRepresentative.p95Ms <= fanoutP95BudgetMs
+					? []
+					: ["dashboard_fanout"]),
 			].join(", ")}`,
 		);
 	}
-};
-
-const safeSyntheticIdentifier = (value, name) => {
-	if (!/^synthetic_[A-Za-z0-9_-]{8,128}$/.test(value)) {
-		throw new Error(`${name} is not a safe synthetic identifier`);
-	}
-	return value;
 };
 
 const deleteProductEventRows = async ({
@@ -1581,43 +2735,44 @@ const eraseSyntheticIdentity = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
-	const userId = safeSyntheticIdentifier(
-		state.erasureUserId,
-		"Synthetic erasure user ID",
-	);
-	const organizationId = safeSyntheticIdentifier(
-		state.erasureOrganizationId,
-		"Synthetic erasure organization ID",
-	);
-	const anonymousId = safeSyntheticIdentifier(
-		state.erasureAnonymousId,
-		"Synthetic erasure anonymous ID",
-	);
-	const { origin, tokens } = tinybirdEnvironment([
-		"TINYBIRD_STAGING_CLEANUP_TOKEN",
-		"TINYBIRD_STAGING_DEPLOY_TOKEN",
-	]);
-	const assertLiveOwnership = async () => {
-		if (
-			(await ownedMutationTarget({
-				state,
-				origin,
-				token: tokens.TINYBIRD_STAGING_DEPLOY_TOKEN,
-			})) !== "live"
-		) {
-			throw new Error("The owned Tinybird deployment is no longer live");
-		}
-	};
-	const rowsAffected = await deleteProductEventRows({
-		origin,
-		token: tokens.TINYBIRD_STAGING_CLEANUP_TOKEN,
-		condition: `organization_id = '${organizationId}' OR user_id = '${userId}' OR (anonymous_id = '${anonymousId}' AND (user_id = '' OR user_id = '${userId}'))`,
-		beforeAttempt: assertLiveOwnership,
-	});
+	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
+	const url = new URL("/api/analytics/staging-test/erase", artifact.vercel.url);
+	const body = JSON.stringify({ runId: state.runId, sha: artifact.sha });
+	const send = (authorization) =>
+		previewRequest(url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(authorization ? { Authorization: authorization } : {}),
+			},
+			body,
+			signal: AbortSignal.timeout(300_000),
+		});
+	const unauthorized = await send();
+	if (unauthorized.status !== 401) {
+		throw new Error(
+			`The deployed erasure path accepted missing authorization with HTTP ${unauthorized.status}`,
+		);
+	}
+	const startedAt = performance.now();
+	const response = await send(`Bearer ${secret}`);
+	if (!response.ok) {
+		throw new Error(
+			`The deployed erasure path failed with HTTP ${response.status}`,
+		);
+	}
+	const result = await response.json();
+	if (result.erased !== true) {
+		throw new Error("The deployed erasure path returned incomplete proof");
+	}
+	state.erasureApplicationPath = true;
+	writeJson(option("state"), state, 0o600);
 	artifact.erasure = {
 		...artifact.erasure,
+		applicationPath: true,
+		unauthorizedRejected: true,
+		durationMs: Math.round(performance.now() - startedAt),
 		deleteJobCompleted: true,
-		rowsAffected,
 	};
 	writeJson(artifactPath, artifact);
 };
@@ -1626,6 +2781,9 @@ const verifySyntheticIdentityErasure = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
+	if (state.erasureApplicationPath !== true) {
+		throw new Error("The deployed application erasure path did not complete");
+	}
 	const erasedHealth = normalizeHealth(
 		(await healthQuery({ state, deploymentId: state.deploymentId })).data,
 	);
@@ -1638,11 +2796,29 @@ const verifySyntheticIdentityErasure = async () => {
 			})
 		).data,
 	);
+	const erasedLargeLoadHealth = normalizeHealth(
+		(
+			await healthQuery({
+				state,
+				deploymentId: state.deploymentId,
+				appVersion: state.largeLoadAppVersion,
+			})
+		).data,
+	);
 	const erasedDecisions = normalizeCiAssertions(
 		(
 			await ciAssertionsQuery({
 				state,
 				deploymentId: state.deploymentId,
+			})
+		).data,
+	);
+	const erasedBusinessDecisions = normalizeCiAssertions(
+		(
+			await ciAssertionsQuery({
+				state,
+				deploymentId: state.deploymentId,
+				syntheticRunId: state.decisionRunId,
 			})
 		).data,
 	);
@@ -1664,22 +2840,106 @@ const verifySyntheticIdentityErasure = async () => {
 			})
 		).data,
 	);
+	const serverDecisions = normalizeCiAssertions(
+		(
+			await ciAssertionsQuery({
+				state,
+				deploymentId: state.deploymentId,
+				syntheticRunId: state.serverRunId,
+			})
+		).data,
+	);
 	if (
 		Object.values(erasedHealth).some((value) => value !== 0) ||
-		Object.values(erasedLoadHealth).some((value) => value !== 0) ||
 		Object.values(erasedDecisions).some((value) => value !== 0)
 	) {
 		throw new Error(
 			"Synthetic identity erasure left raw-health or decision-facing state",
 		);
 	}
+	assertSyntheticLoadHealth(erasedLoadHealth, state.loadEventCount);
+	assertSyntheticLoadHealth(erasedLargeLoadHealth, state.largeLoadEventCount);
+	for (const [syntheticRunId, expectedEvents] of [
+		[state.loadRunId, state.loadEventCount],
+		[state.largeLoadRunId, state.largeLoadEventCount],
+	]) {
+		const decisions = normalizeCiAssertions(
+			(
+				await ciAssertionsQuery({
+					state,
+					deploymentId: state.deploymentId,
+					syntheticRunId,
+				})
+			).data,
+		);
+		assertSyntheticLoadDecisions(decisions, expectedEvents);
+	}
+	const expectedRemainingBusiness = {
+		receivedRows: 2,
+		uniqueEvents: 2,
+		uniquePayloads: 2,
+		duplicateRows: 0,
+		payloadConflicts: 0,
+		canonicalEvents: 2,
+		decisionEvents: 2,
+		decisionRevenueMinor: 0,
+		trafficVisitors: 1,
+		trafficVisits: 1,
+		trafficPageviews: 1,
+		trafficBounces: 1,
+		trafficDurationMs: 0,
+		pageVisitors: 1,
+		pageVisits: 1,
+		pageviews: 1,
+		pageLandings: 1,
+		pageExits: 1,
+		pageEngagedMs: 0,
+		pageScrollDepth: 0,
+		activationSignups: 0,
+		activatedCreators: 0,
+		retentionCreators: 0,
+		retentionOrganizations: 0,
+		identityLinkedVisitors: 0,
+		identityLinkedUsers: 0,
+		identitySignupUsers: 0,
+		identityOrganizations: 0,
+		identityGuestCheckoutVisitors: 1,
+		identityGuestPurchasers: 0,
+		identityAuthenticatedCheckoutUsers: 0,
+		identityWebCheckoutUsers: 0,
+		identityDesktopCheckoutUsers: 0,
+		identityMobileCheckoutUsers: 0,
+		identityCrossDeviceCheckoutUsers: 0,
+		identityTrialUsers: 0,
+		identityPurchasers: 0,
+	};
+	for (const [name, expected] of Object.entries(expectedRemainingBusiness)) {
+		if (erasedBusinessDecisions[name] !== expected) {
+			throw new Error(
+				`Scoped erasure left ${name}=${erasedBusinessDecisions[name]}, expected ${expected}`,
+			);
+		}
+	}
 	assertSingleHealth(previewHealth);
 	if (
-		previewDecisions.canonicalEvents !== 1 ||
-		previewDecisions.decisionEvents !== 1
+		previewDecisions.canonicalEvents !== state.previewExpectedEvents ||
+		previewDecisions.decisionEvents !== state.previewExpectedEvents
 	) {
 		throw new Error(
 			"Synthetic identity erasure corrupted the unrelated preview control",
+		);
+	}
+	if (
+		serverDecisions.receivedRows < state.serverExpectedRows ||
+		serverDecisions.uniqueEvents !== state.serverExpectedEvents ||
+		serverDecisions.canonicalEvents !== state.serverExpectedEvents ||
+		serverDecisions.decisionEvents !== state.serverExpectedEvents ||
+		serverDecisions.decisionRevenueMinor !== 2_500 ||
+		serverDecisions.activationSignups !== 1 ||
+		serverDecisions.activatedCreators !== 1
+	) {
+		throw new Error(
+			"Synthetic identity erasure corrupted the durable server control",
 		);
 	}
 	const controlHealth = normalizeHealth(
@@ -1705,9 +2965,12 @@ const verifySyntheticIdentityErasure = async () => {
 		...artifact.erasure,
 		erasedHealth,
 		erasedLoadHealth,
+		erasedLargeLoadHealth,
 		erasedDecisions,
+		erasedBusinessDecisions,
 		previewHealth,
 		previewDecisions,
+		serverDecisions,
 		controlHealth,
 		passed: true,
 	};
@@ -1740,11 +3003,21 @@ const cleanup = async () => {
 	}
 	validateSyntheticRunId(state.runId);
 	validateSyntheticRunId(state.loadRunId);
+	validateSyntheticRunId(state.largeLoadRunId);
+	validateSyntheticRunId(state.decisionRunId);
 	validateSyntheticRunId(state.erasureControlRunId);
-	const runIds = [state.runId, state.loadRunId, state.erasureControlRunId];
+	if (state.serverRunId) validateSyntheticRunId(state.serverRunId);
+	const runIds = [
+		state.runId,
+		state.loadRunId,
+		state.largeLoadRunId,
+		state.decisionRunId,
+		state.erasureControlRunId,
+	];
 	if (state.previewRunId) {
 		runIds.push(validateSyntheticRunId(state.previewRunId));
 	}
+	if (state.serverRunId) runIds.push(state.serverRunId);
 	if (target === "staging") {
 		writeOutput("target", target);
 		writeOutput("requires_copies", "false");
@@ -1824,6 +3097,9 @@ const verifyPromoted = async () => {
 	const state = readJson(option("state"));
 	const artifactPath = option("artifact");
 	const artifact = readJson(artifactPath);
+	const { origin, tokens } = tinybirdEnvironment([
+		"TINYBIRD_STAGING_READ_TOKEN",
+	]);
 	if (
 		!state.previewAppVersion ||
 		!state.previewAcceptedRows ||
@@ -1864,16 +3140,124 @@ const verifyPromoted = async () => {
 	);
 	if (
 		previewDecisionAssertions.receivedRows < state.previewAcceptedRows ||
-		previewDecisionAssertions.uniqueEvents !== 1 ||
-		previewDecisionAssertions.uniquePayloads !== 1 ||
+		previewDecisionAssertions.uniqueEvents !== state.previewExpectedEvents ||
+		previewDecisionAssertions.uniquePayloads !== state.previewExpectedEvents ||
 		previewDecisionAssertions.duplicateRows !==
-			previewDecisionAssertions.receivedRows - 1 ||
+			previewDecisionAssertions.receivedRows - state.previewExpectedEvents ||
 		previewDecisionAssertions.payloadConflicts !== 0 ||
-		previewDecisionAssertions.canonicalEvents !== 1 ||
-		previewDecisionAssertions.decisionEvents !== 1
+		previewDecisionAssertions.canonicalEvents !== state.previewExpectedEvents ||
+		previewDecisionAssertions.decisionEvents !== state.previewExpectedEvents
 	) {
 		throw new Error(
 			"The promoted preview run did not preserve exact retry-deduplicated decisions",
+		);
+	}
+	if (!state.serverRunId || state.serverExpectedEvents !== 4) {
+		throw new Error("The exact-SHA durable server probe did not complete");
+	}
+	const serverDecisionAssertions = normalizeCiAssertions(
+		(
+			await ciAssertionsQuery({
+				state,
+				deploymentId: state.deploymentId,
+				syntheticRunId: state.serverRunId,
+			})
+		).data,
+	);
+	if (
+		serverDecisionAssertions.receivedRows < state.serverExpectedRows ||
+		serverDecisionAssertions.uniqueEvents !== state.serverExpectedEvents ||
+		serverDecisionAssertions.uniquePayloads !== state.serverExpectedEvents ||
+		serverDecisionAssertions.duplicateRows !==
+			serverDecisionAssertions.receivedRows - state.serverExpectedEvents ||
+		serverDecisionAssertions.payloadConflicts !== 0 ||
+		serverDecisionAssertions.canonicalEvents !== state.serverExpectedEvents ||
+		serverDecisionAssertions.decisionEvents !== state.serverExpectedEvents ||
+		serverDecisionAssertions.decisionRevenueMinor !== 2_500 ||
+		serverDecisionAssertions.activationSignups !== 1 ||
+		serverDecisionAssertions.activatedCreators !== 1
+	) {
+		throw new Error(
+			"The exact-SHA durable server path did not produce deduplicated business decisions",
+		);
+	}
+	const businessDecisionResult = await ciAssertionsQuery({
+		state,
+		deploymentId: state.deploymentId,
+		syntheticRunId: state.decisionRunId,
+	});
+	const businessDecisionAssertions = normalizeCiAssertions(
+		businessDecisionResult.data,
+	);
+	assertSyntheticLoadHealth(
+		businessDecisionAssertions,
+		state.decisionEventCount,
+	);
+	if (
+		businessDecisionAssertions.canonicalEvents !== state.decisionEventCount ||
+		businessDecisionAssertions.decisionEvents !== state.decisionEventCount
+	) {
+		throw new Error(
+			"The promoted decision fixture was not exactly deduplicated before materialization",
+		);
+	}
+	assertSyntheticBusinessDecisions(businessDecisionAssertions);
+	const businessEndpointSuite = await queryDecisionEndpointSuite({
+		deploymentId: state.deploymentId,
+		origin,
+		state,
+		syntheticRunId: state.decisionRunId,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	assertSyntheticEndpointDecisions({
+		appVersion: state.decisionAppVersion,
+		date: state.decisionDate,
+		hostname: state.decisionHostname,
+		pathname: state.decisionPathname,
+		payloads: businessEndpointSuite.payloads,
+	});
+	const monetizationFilterSuite = await querySyntheticMonetizationFilters({
+		deploymentId: state.deploymentId,
+		origin,
+		state,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	const identityFilterSuite = await querySyntheticIdentityFilters({
+		deploymentId: state.deploymentId,
+		origin,
+		state,
+		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+	});
+	const syntheticEndpointParameters = {
+		start_date: state.startTime.slice(0, 10),
+		end_date: state.endTime.slice(0, 10),
+		hostname: state.decisionHostname,
+		__tb__deployment: state.deploymentId,
+	};
+	const [trafficExclusion, pageExclusion] = await Promise.all([
+		decisionEndpointQuery({
+			origin,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			name: "product_traffic_overview",
+			parameters: syntheticEndpointParameters,
+		}),
+		decisionEndpointQuery({
+			origin,
+			token: tokens.TINYBIRD_STAGING_READ_TOKEN,
+			name: "product_traffic_pages",
+			parameters: syntheticEndpointParameters,
+		}),
+	]);
+	const trafficRows = trafficExclusion.data?.data;
+	const pageRows = pageExclusion.data?.data;
+	if (
+		!Array.isArray(trafficRows) ||
+		!Array.isArray(pageRows) ||
+		trafficRows.length !== 0 ||
+		pageRows.length !== 0
+	) {
+		throw new Error(
+			"Synthetic decision rows leaked into normal traffic endpoints",
 		);
 	}
 	artifact.previewApi.health = previewHealth;
@@ -1882,7 +3266,63 @@ const verifyPromoted = async () => {
 		preview: previewDecisionAssertions,
 	};
 	artifact.previewApi.endpointLatencyMs = previewHealthResult.latencyMs;
+	artifact.businessDecisions = {
+		canonicalEvents: businessDecisionAssertions.canonicalEvents,
+		decisionEvents: businessDecisionAssertions.decisionEvents,
+		traffic: {
+			visitors: businessDecisionAssertions.trafficVisitors,
+			visits: businessDecisionAssertions.trafficVisits,
+			pageviews: businessDecisionAssertions.trafficPageviews,
+			bounces: businessDecisionAssertions.trafficBounces,
+			durationMs: businessDecisionAssertions.trafficDurationMs,
+		},
+		pages: {
+			visitors: businessDecisionAssertions.pageVisitors,
+			visits: businessDecisionAssertions.pageVisits,
+			pageviews: businessDecisionAssertions.pageviews,
+			landings: businessDecisionAssertions.pageLandings,
+			exits: businessDecisionAssertions.pageExits,
+			engagedMs: businessDecisionAssertions.pageEngagedMs,
+			scrollDepth: businessDecisionAssertions.pageScrollDepth,
+		},
+		activation: {
+			signups: businessDecisionAssertions.activationSignups,
+			activatedCreators: businessDecisionAssertions.activatedCreators,
+		},
+		retention: {
+			creators: businessDecisionAssertions.retentionCreators,
+			organizations: businessDecisionAssertions.retentionOrganizations,
+		},
+		identity: {
+			linkedVisitors: businessDecisionAssertions.identityLinkedVisitors,
+			linkedUsers: businessDecisionAssertions.identityLinkedUsers,
+			organizations: businessDecisionAssertions.identityOrganizations,
+			guestCheckoutVisitors:
+				businessDecisionAssertions.identityGuestCheckoutVisitors,
+			guestPurchasers: businessDecisionAssertions.identityGuestPurchasers,
+			purchasers: businessDecisionAssertions.identityPurchasers,
+		},
+		revenueMinor: businessDecisionAssertions.decisionRevenueMinor,
+		identityFilterLatencyMs: identityFilterSuite.latencyMs,
+		monetizationFilterLatencyMs: monetizationFilterSuite.latencyMs,
+		normalTrafficExcluded: true,
+		endpointLatencyMs: businessEndpointSuite.latencyMs,
+		exclusionLatencyMs: {
+			overview: trafficExclusion.latencyMs,
+			pages: pageExclusion.latencyMs,
+		},
+	};
+	artifact.serverDelivery.decisionAssertions = {
+		canonicalEvents: serverDecisionAssertions.canonicalEvents,
+		decisionEvents: serverDecisionAssertions.decisionEvents,
+		duplicateRows: serverDecisionAssertions.duplicateRows,
+		revenueMinor: serverDecisionAssertions.decisionRevenueMinor,
+		activationSignups: serverDecisionAssertions.activationSignups,
+		activatedCreators: serverDecisionAssertions.activatedCreators,
+	};
 	artifact.assertions.promotedPreviewDataPassed = true;
+	artifact.assertions.promotedBusinessDecisionsPassed = true;
+	artifact.assertions.syntheticDecisionExclusionPassed = true;
 	writeJson(artifactPath, artifact);
 };
 
@@ -1914,6 +3354,19 @@ const verifyCleanup = async () => {
 			"Synthetic rows still affect Tinybird decision assertions after cleanup",
 		);
 	}
+	const businessDecisionResult = await ciAssertionsQuery({
+		state,
+		deploymentId,
+		syntheticRunId: state.decisionRunId,
+	});
+	const businessDecisionAssertions = normalizeCiAssertions(
+		businessDecisionResult.data,
+	);
+	if (Object.values(businessDecisionAssertions).some((value) => value !== 0)) {
+		throw new Error(
+			"Synthetic business rows still affect decisions after cleanup",
+		);
+	}
 	const loadResult = await healthQuery({
 		state,
 		deploymentId,
@@ -1923,6 +3376,27 @@ const verifyCleanup = async () => {
 	if (Object.values(loadHealth).some((value) => value !== 0)) {
 		throw new Error(
 			"Synthetic load rows still affect Tinybird health after cleanup",
+		);
+	}
+	for (const syntheticRunId of [state.loadRunId, state.largeLoadRunId]) {
+		const decisions = normalizeCiAssertions(
+			(await ciAssertionsQuery({ state, deploymentId, syntheticRunId })).data,
+		);
+		if (Object.values(decisions).some((value) => value !== 0)) {
+			throw new Error(
+				"Synthetic load rows still affect Tinybird decisions after cleanup",
+			);
+		}
+	}
+	const largeLoadResult = await healthQuery({
+		state,
+		deploymentId,
+		appVersion: state.largeLoadAppVersion,
+	});
+	const largeLoadHealth = normalizeHealth(largeLoadResult.data);
+	if (Object.values(largeLoadHealth).some((value) => value !== 0)) {
+		throw new Error(
+			"Large synthetic load rows still affect Tinybird health after cleanup",
 		);
 	}
 	const controlResult = await healthQuery({
@@ -1962,8 +3436,25 @@ const verifyCleanup = async () => {
 			);
 		}
 	}
+	if (state.serverRunId) {
+		const serverDecisionAssertions = normalizeCiAssertions(
+			(
+				await ciAssertionsQuery({
+					state,
+					deploymentId,
+					syntheticRunId: state.serverRunId,
+				})
+			).data,
+		);
+		if (Object.values(serverDecisionAssertions).some((value) => value !== 0)) {
+			throw new Error(
+				"Synthetic server rows still affect decisions after cleanup",
+			);
+		}
+	}
 	artifact.cleanup = {
 		...artifact.cleanup,
+		businessDecisionAssertions,
 		passed: true,
 		verifiedAt: new Date().toISOString(),
 	};
@@ -1997,6 +3488,9 @@ const verifyTokenScopes = async () => {
 	const artifact = readJson(artifactPath);
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_INGEST_TOKEN",
+		"TINYBIRD_STAGING_COPY_TOKEN",
+		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 	]);
@@ -2006,6 +3500,12 @@ const verifyTokenScopes = async () => {
 			end_time: state.endTime,
 		}),
 		{ token: tokens.TINYBIRD_STAGING_READ_TOKEN },
+	);
+	await request(
+		tinybirdUrl(origin, "/v0/sql", {
+			q: "SELECT countIf(user_id != '') AS rows FROM product_events_v1 UNION ALL SELECT countIf(user_id != '') AS rows FROM product_events_canonical_v1",
+		}),
+		{ token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN },
 	);
 	await assertScopeDenied(
 		"The aggregate read token raw identity query",
@@ -2031,6 +3531,45 @@ const verifyTokenScopes = async () => {
 			},
 		),
 	);
+	await assertScopeDenied(
+		"The aggregate read token Copy mutation probe",
+		tokenScopeProbe(
+			tinybirdUrl(
+				origin,
+				"/v0/pipes/snapshot_product_events_canonical_v1/copy",
+				{ _mode: "replace" },
+			),
+			tokens.TINYBIRD_STAGING_READ_TOKEN,
+			{ method: "POST" },
+		),
+	);
+	await assertScopeDenied(
+		"The erasure lookup token append probe",
+		tokenScopeProbe(
+			tinybirdUrl(origin, "/v0/events", {
+				name: "product_events_v1",
+				wait: "true",
+			}),
+			tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN,
+			{
+				method: "POST",
+				body: "\n",
+				headers: { "Content-Type": "application/x-ndjson" },
+			},
+		),
+	);
+	await assertScopeDenied(
+		"The erasure lookup token Copy mutation probe",
+		tokenScopeProbe(
+			tinybirdUrl(
+				origin,
+				"/v0/pipes/snapshot_product_events_canonical_v1/copy",
+				{ _mode: "replace" },
+			),
+			tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN,
+			{ method: "POST" },
+		),
+	);
 	const ingestProbe = await tokenScopeProbe(
 		tinybirdUrl(origin, "/v0/events", {
 			name: "product_events_v1",
@@ -2051,6 +3590,9 @@ const verifyTokenScopes = async () => {
 	for (const [name, token] of [
 		["append-only token", tokens.TINYBIRD_STAGING_INGEST_TOKEN],
 		["cleanup token", tokens.TINYBIRD_STAGING_CLEANUP_TOKEN],
+		["copy-runner token", tokens.TINYBIRD_STAGING_COPY_TOKEN],
+		["erasure lookup token", tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN],
+		["schedule-controller token", tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN],
 	]) {
 		await assertScopeDenied(
 			`The ${name} aggregate read probe`,
@@ -2067,9 +3609,15 @@ const verifyTokenScopes = async () => {
 		aggregateReadPassed: true,
 		rawIdentityReadDenied: true,
 		readTokenAppendDenied: true,
+		readTokenCopyMutationDenied: true,
 		ingestTokenAppendAuthorized: true,
 		ingestTokenAggregateReadDenied: true,
 		cleanupTokenAggregateReadDenied: true,
+		copyTokenAggregateReadDenied: true,
+		erasureLookupRawReadPassed: true,
+		erasureLookupAppendDenied: true,
+		erasureLookupCopyMutationDenied: true,
+		erasureLookupAggregateReadDenied: true,
 	};
 	artifact.assertions = {
 		...artifact.assertions,
@@ -2091,6 +3639,9 @@ const handlers = {
 	"verify-credentials": async () => tinybirdEnvironment(),
 	"verify-token-scopes": verifyTokenScopes,
 	"promote-deployment": promoteOwnedDeployment,
+	"drill-rollback": drillOwnedRollback,
+	"finalize-promotion": finalizeOwnedPromotion,
+	"rollback-promotion": rollbackOwnedPromotion,
 	"discard-deployment": discardOwnedDeployment,
 	"select-deployment": async () => {
 		const createOutput = readJson(option("create-output"));
@@ -2132,8 +3683,10 @@ const handlers = {
 	"wait-vercel": waitForVercel,
 	seed,
 	"run-copies": runCopies,
+	"set-copy-schedules": setCopySchedules,
 	verify,
 	"probe-preview": probePreview,
+	"probe-server": probeDurableServerPath,
 	"verify-promoted": verifyPromoted,
 	"erase-synthetic-identity": eraseSyntheticIdentity,
 	"verify-synthetic-identity-erasure": verifySyntheticIdentityErasure,

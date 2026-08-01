@@ -112,6 +112,9 @@ jobs:
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
@@ -178,24 +181,28 @@ jobs:
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Rebuild staged decision and health copies
+      - name: Rebuild no-op live decision and health copies
         id: staging-copies
+        if: steps.tinybird.outputs.needs_promotion != 'true'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
           --deployment-id "${{ steps.tinybird.outputs.id }}"
           --phase staged
-          --target "${{ steps.tinybird.outputs.needs_promotion == 'true' && 'staging' || 'live' }}"
+          --target live
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Prove staged deduplication, conflict visibility, SLO, and endpoint budget
+      - name: Prove candidate isolation or no-op live decision quality
         id: verify
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify
           --deployment-id "${{ steps.tinybird.outputs.id }}"
@@ -253,13 +260,27 @@ jobs:
         id: token-scopes
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-token-scopes
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Prove the exact-SHA deployed browser tracker
+        id: browser-e2e
+        env:
+          ANALYTICS_PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          ANALYTICS_BROWSER_RUN_ID: ${{ env.ANALYTICS_TEST_RUN_ID }}_preview
+          ANALYTICS_STATE_PATH: ${{ runner.temp }}/analytics-staging-state.json
+          ANALYTICS_ARTIFACT_PATH: ${{ runner.temp }}/analytics-staging-report.json
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          pnpm --dir apps/chrome-extension exec playwright install --with-deps chromium
+          pnpm --dir apps/chrome-extension exec playwright test e2e/analytics-staging.spec.ts
       - name: Probe the exact-SHA Vercel browser collector and staging rate limit
         id: preview-api
         env:
@@ -268,10 +289,22 @@ jobs:
           node scripts/analytics/staging-ci.js probe-preview
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Prove exact-SHA durable server delivery
+        id: server-delivery
+        env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: >-
+          node scripts/analytics/staging-ci.js probe-server
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Rebuild promoted decision and health copies
         id: promoted-copies
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
@@ -281,7 +314,19 @@ jobs:
           --target live
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Prove promoted preview delivery and decision deduplication
+      - name: Measure populated decision endpoint performance
+        id: populated-performance
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js verify
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --baseline-deployment-id "${{ steps.promote.outputs.previous_live_id || steps.tinybird.outputs.id }}"
+          --target live
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Prove promoted delivery, business values, and decision deduplication
         id: verify-promoted
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
@@ -290,38 +335,48 @@ jobs:
           node scripts/analytics/staging-ci.js verify-promoted
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Delete the scoped synthetic user and organization identity
-        id: erase-identity
+      - name: Prove exact staging rollback and restoration
+        id: rollback-drill
+        if: steps.verify-promoted.outcome == 'success' && steps.promote.outputs.promoted == 'true'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js drill-rollback
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --previous-live-id "${{ steps.promote.outputs.previous_live_id }}"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Delete the scoped identity through the exact-SHA application path
+        id: erase-identity
+        env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: >-
           node scripts/analytics/staging-ci.js erase-synthetic-identity
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
-      - name: Retract the erased identity from every derived copy
-        id: erasure-copies
-        if: steps.erase-identity.outcome == 'success'
-        env:
-          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
-          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
-        run: >-
-          node scripts/analytics/staging-ci.js run-copies
-          --deployment-id "${{ steps.tinybird.outputs.id }}"
-          --phase erasure
-          --target live
-          --state "$RUNNER_TEMP/analytics-staging-state.json"
-          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove identity erasure and out-of-scope control preservation
         id: verify-erasure
-        if: steps.erasure-copies.outcome == 'success'
+        if: steps.erase-identity.outcome == 'success'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js verify-synthetic-identity-erasure
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Quiesce scheduled and active Copy jobs before final cleanup
+        id: pause-copies
+        if: always() && steps.seed.outcome != 'skipped'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js set-copy-schedules
+          --action pause
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Delete strictly scoped synthetic raw rows
@@ -347,6 +402,7 @@ jobs:
         if: always() && steps.cleanup.outputs.required == 'true' && steps.cleanup.outcome == 'success' && steps.cleanup.outputs.requires_copies == 'true'
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
         run: >-
@@ -368,9 +424,45 @@ jobs:
           --target "${{ steps.cleanup-copies.outputs.target }}"
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Resume reviewed Copy schedules
+        id: resume-copies
+        if: always() && steps.pause-copies.outcome != 'skipped'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js set-copy-schedules
+          --action resume
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Finalize the fully verified staging promotion
+        id: finalize
+        if: steps.verify-cleanup.outcome == 'success' && steps.rollback-drill.outcome == 'success' && steps.resume-copies.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js finalize-promotion
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --previous-live-id "${{ steps.promote.outputs.previous_live_id }}"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Restore the previous staging deployment on failure
+        id: rollback
+        if: always() && steps.promote.outputs.previous_live_id != '' && steps.finalize.outcome != 'success' && steps.rollback-drill.outputs.rollback_target_usable != 'false'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js rollback-promotion
+          --deployment-id "${{ steps.tinybird.outputs.id }}"
+          --previous-live-id "${{ steps.promote.outputs.previous_live_id }}"
+          --state "$RUNNER_TEMP/analytics-staging-state.json"
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Discard an unpromoted staging deployment after cleanup
         id: discard
-        if: always() && (steps.deployment-state.outputs.discard == 'true' || steps.cleanup.outputs.requires_discard == 'true')
+        if: always() && steps.rollback.outcome != 'success' && (steps.deployment-state.outputs.discard == 'true' || steps.cleanup.outputs.requires_discard == 'true')
         env:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}

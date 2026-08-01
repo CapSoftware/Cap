@@ -34,14 +34,18 @@ Cloud deployment requires:
 - `TINYBIRD_URL`: the regional Tinybird API URL.
 - `TINYBIRD_WORKSPACE_ID`: the production Workspace UUID verified before every cloud check or deployment.
 
-The deployed datafiles create two runtime tokens:
+The deployed datafiles create four runtime tokens:
 
 - `product_events_ingest`: append-only access to `product_events_v1`.
-- `product_events_agent_read`: read-only access to privacy-safe product endpoints and the seven reviewed copy pipes. It has no raw identity datasource scope.
+- `product_events_agent_read`: read-only access to privacy-safe product endpoints. It has no raw identity datasource or Copy Pipe scope.
+- `product_events_copy_runner`: execution-only access to the eight reviewed Copy Pipes. It cannot query endpoints or raw identity data.
+- `product_events_erasure_lookup`: read-only access to `product_events_v1` and `product_events_canonical_v1` for bounded identity erasure. It cannot query decision endpoints, append rows, or execute Copy Pipes.
 
 Set the append token as `PRODUCT_ANALYTICS_TINYBIRD_TOKEN` in the application. Give agents the read token, never the deployment or append token.
 
-The staging workflow triggers reviewed Copy Pipes through Tinybird's direct Copy API. This preserves the resource-scoped `product_events_agent_read` token; `tb copy run` performs a workspace-level lookup that rejects otherwise sufficient per-pipe read scopes. Tinybird does not grant either the resource token or the deployment token access to the resulting Jobs API record, so CI proves terminal completion from canonical, daily, and health state transitions plus a unique zero-valued marker written by every other aggregate Copy. Decision endpoints always exclude those markers. Candidate validation pins the staging deployment parameter, while no-op and post-promotion phases use the already verified live deployment because Tinybird rejects a deployment selector on the Copy service after promotion.
+Staging also requires `TINYBIRD_STAGING_SCHEDULER_TOKEN`, a protected token with schedule-control access only to the eight reviewed Copy Pipes. The destructive erasure phase cancels and pauses those schedules before deleting rows, runs each replacement Copy exactly once, proves completion with scoped state transitions or copy-run markers, and resumes every schedule in an always-run recovery step. A failed or ambiguous Copy submission is never retried automatically.
+
+The staging workflow validates candidate ingestion, duplicate/conflict visibility, live isolation, and every typed endpoint through the exact numeric deployment ID before promotion. Tinybird's Copy service does not reliably route an on-demand Copy mutation to a deployment candidate, so CI refuses that path. After the exact candidate is promoted inside the staging workspace, CI triggers the reviewed Copy Pipes through Tinybird's direct Copy API with the protected `product_events_copy_runner` token. `tb copy run` performs a workspace-level lookup that rejects otherwise sufficient per-pipe read scopes. Tinybird does not grant either the resource token or the deployment token access to the resulting Jobs API record, so CI proves terminal completion from canonical, daily, and health state transitions plus a unique zero-valued marker written by every other aggregate Copy. A real browser drives the exact-SHA preview through reload, shared-tab, inactivity, SPA retry, and unload behavior. A preview-only authenticated route starts durable server workflows for deduplicated activation and paid-purchase facts. Registry-validated synthetic fixtures separately prove exact anonymous-to-authenticated, guest checkout, cross-device checkout, lifecycle revenue, and public endpoint values while remaining excluded from normal queries. Performance compares shared endpoints with the retained deployment, applies absolute budgets to a newly introduced endpoint that has no honest historical baseline, and validates mixed 1,000-row and 10,000-row traffic, activation, retention, identity, adoption, and revenue corpora before timing them. Before the prior deployment can be deleted, CI switches it live, executes the shared typed data plane, proves the exact-SHA admin client gracefully degrades only the identity endpoint absent from that rollback target, restores the candidate, and repeats the full synthetic business and health assertions.
 
 Set `TINYBIRD_AGENT_TOKEN` and `TINYBIRD_URL` for the query command. Set a separate `TINYBIRD_READ_TOKEN` with workspace metadata access when running `pnpm analytics:check`; the append and deployment tokens are intentionally rejected for that task.
 
@@ -56,7 +60,7 @@ The Analytics GitHub workflow runs static tests, Docker Compose validation, a co
 ## Performance boundaries
 
 - `product_events_v1` appends every delivery attempt; the canonical copy deduplicates stable `event_id` values and quarantines conflicting payload hashes.
-- Monthly partitions and a 400-day raw, canonical, and decision horizon keep erasure rebuilds complete for every supported dashboard range.
+- Monthly partitions and a shared 800-day raw, canonical, and decision horizon support complete year-over-year windows while keeping erasure rebuilds complete for every retained contribution. Health detail retains 90 days.
 - Common event trends use `product_events_daily_exact`; they do not scan raw events.
 - Daily counts use unique event states, so retried deliveries cannot inflate the rollup.
 - Raw health queries require explicit start and end times.
@@ -65,4 +69,4 @@ The Analytics GitHub workflow runs static tests, Docker Compose validation, a co
 
 Routine commands refuse destructive deployment, workspace-clear, datasource-delete, and datasource-truncate arguments. Destructive recovery is intentionally outside the normal workflow and requires separate review.
 
-Tinybird row deletion currently requires the general `DATASOURCES:CREATE` scope rather than a resource-scoped delete permission. Keep the dedicated erasure operator in a protected environment, give it no read or deployment scope, and expose it only to the reviewed deletion workflow. This provider limitation means the credential can technically mutate other datasources in its workspace even though Cap's workflow accepts only validated identity and synthetic-run conditions.
+Tinybird row deletion currently requires the general `DATASOURCES:CREATE` scope rather than a resource-scoped delete permission. Keep the dedicated erasure operator in a protected environment, give it no read or deployment scope, and expose it only to the reviewed deletion workflow. The application uses separate protected credentials for bounded raw/canonical identity lookup, reviewed Copy execution, aggregate marker reads, and Copy schedule cancellation/resumption. This provider limitation means the delete credential can technically mutate other datasources in its workspace even though Cap's workflow accepts only validated identity conditions.

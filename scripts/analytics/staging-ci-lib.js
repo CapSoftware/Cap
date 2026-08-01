@@ -10,19 +10,91 @@ export const COPY_PIPES = [
 	"snapshot_product_traffic_pages_daily_exact",
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
+	"snapshot_product_identity_funnel_exact",
 	"snapshot_product_events_health_hourly",
 ];
 const COPY_MARKER_PIPES = new Set([
+	"snapshot_product_events_daily_exact",
 	"snapshot_product_traffic_daily_exact",
 	"snapshot_product_traffic_pages_daily_exact",
 	"snapshot_product_activation_daily_exact",
 	"snapshot_product_creator_retention_exact",
+	"snapshot_product_identity_funnel_exact",
+	"snapshot_product_events_health_hourly",
 ]);
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SYNTHETIC_RUN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const COPY_JOB_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const DEPLOYMENT_ID_PATTERN = /^[0-9]+$/;
+const EVENT_SCHEMA_VERSIONS = new Map([
+	["purchase_completed", 3],
+	["subscription_renewed", 2],
+	["trial_converted", 2],
+	["subscription_changed", 2],
+	["subscription_cancelled", 2],
+	["subscription_refunded", 2],
+	["subscription_payment_failed", 2],
+]);
+
+const eventSchemaVersion = (eventName) =>
+	EVENT_SCHEMA_VERSIONS.get(eventName) ?? 1;
+
+const errorMessage = (error) =>
+	error instanceof Error ? error.message : String(error);
+
+export const applyCopyScheduleAction = async ({
+	pipes,
+	action,
+	setSchedule,
+}) => {
+	if (!["pause", "resume"].includes(action)) {
+		throw new Error("Tinybird Copy schedule action must be pause or resume");
+	}
+	const completed = [];
+	const failures = [];
+	for (const pipe of pipes) {
+		try {
+			await setSchedule(pipe, action);
+			completed.push(pipe);
+		} catch (error) {
+			failures.push({ pipe, error });
+			if (action === "pause") break;
+		}
+	}
+	if (failures.length === 0) return completed;
+	if (action === "pause") {
+		const compensationFailures = [];
+		for (const pipe of completed) {
+			try {
+				await setSchedule(pipe, "resume");
+			} catch (error) {
+				compensationFailures.push({ pipe, error });
+			}
+		}
+		const compensation = compensationFailures.length
+			? `; resume compensation failed for ${compensationFailures
+					.map(({ pipe, error }) => `${pipe}: ${errorMessage(error)}`)
+					.join(", ")}`
+			: "";
+		throw new Error(
+			`Failed to pause ${failures[0].pipe}: ${errorMessage(failures[0].error)}${compensation}`,
+		);
+	}
+	throw new Error(
+		`Failed to resume Copy schedules: ${failures
+			.map(({ pipe, error }) => `${pipe}: ${errorMessage(error)}`)
+			.join(", ")}`,
+	);
+};
+
+export const copyScheduleMatchesAction = (value, action) => {
+	const payload = value?.data ?? value;
+	const status = String(payload?.schedule?.status ?? "").toLowerCase();
+	return action === "pause"
+		? status === "paused"
+		: status === "scheduled" || status === "active";
+};
 
 export const assertExecutionScope = ({
 	eventName,
@@ -430,7 +502,6 @@ export const submitTinybirdCopyJobs = async ({
 	request,
 	now = () => Date.now(),
 	pipes = COPY_PIPES,
-	useDeploymentParameter = false,
 	copyRunId = "",
 	assertMutationOwnership,
 }) => {
@@ -452,9 +523,6 @@ export const submitTinybirdCopyJobs = async ({
 			origin,
 		);
 		copyUrl.searchParams.set("_mode", "replace");
-		if (useDeploymentParameter) {
-			copyUrl.searchParams.set("__tb__deployment", "staging");
-		}
 		if (COPY_MARKER_PIPES.has(pipe)) {
 			if (!copyRunId) {
 				throw new Error(`Tinybird copy marker is required for ${pipe}`);
@@ -466,11 +534,12 @@ export const submitTinybirdCopyJobs = async ({
 			created = await request(copyUrl, {
 				token,
 				method: "POST",
-				attempts: 3,
+				attempts: 1,
 				beforeAttempt: assertMutationOwnership,
 			});
 		} catch (error) {
-			throw new Error(`Tinybird copy submission failed for ${pipe}`, {
+			const detail = error instanceof Error ? `: ${error.message}` : "";
+			throw new Error(`Tinybird copy submission failed for ${pipe}${detail}`, {
 				cause: error,
 			});
 		}
@@ -579,10 +648,13 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 		browser: "synthetic",
 		device: "synthetic",
 		os: "synthetic",
-		channel: "synthetic",
+		channel: "direct",
 		traffic_class: "synthetic",
 		synthetic_run_id: runId,
-		properties: JSON.stringify({ test_case: "staging_delivery" }),
+		properties: JSON.stringify({
+			hostname: "preview.cap.so",
+			is_session_entry: true,
+		}),
 	};
 	const duplicateId = `synthetic_duplicate_${runHash.slice(0, 24)}`;
 	const conflictId = `synthetic_conflict_${runHash.slice(0, 24)}`;
@@ -598,7 +670,15 @@ export const createSyntheticEvents = ({ runId, now = new Date() }) => {
 			{ ...shared, event_id: duplicateId, payload_hash: duplicateHash },
 			{ ...shared, event_id: duplicateId, payload_hash: duplicateHash },
 			{ ...shared, event_id: conflictId, payload_hash: conflictHashA },
-			{ ...shared, event_id: conflictId, payload_hash: conflictHashB },
+			{
+				...shared,
+				event_id: conflictId,
+				payload_hash: conflictHashB,
+				properties: JSON.stringify({
+					hostname: "preview.cap.so",
+					is_session_entry: false,
+				}),
+			},
 		],
 	};
 };
@@ -620,8 +700,455 @@ export const createSyntheticErasureControl = ({ runId, now = new Date() }) => {
 			organization_id: `synthetic_control_org_${controlHash.slice(16, 32)}`,
 			app_version: `staging-erasure-control-${controlHash.slice(0, 12)}`,
 			synthetic_run_id: controlRunId,
-			properties: JSON.stringify({ test_case: "staging_erasure_control" }),
+			properties: JSON.stringify({
+				hostname: fixture.rows[0].hostname,
+				is_session_entry: true,
+			}),
 		},
+	};
+};
+
+export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
+	const fixture = createSyntheticEvents({ runId, now });
+	const decisionRunId = `${runId}_decisions`;
+	validateSyntheticRunId(decisionRunId);
+	const runHash = hashIdentifier(decisionRunId);
+	const appVersion = `staging-decisions-${runHash.slice(0, 12)}`;
+	const hostname = `synthetic-${runHash.slice(0, 12)}.preview.cap.so`;
+	const pathname = `/analytics-synthetic-${runHash.slice(0, 12)}`;
+	const pageViewId = `synthetic_decision_page_${runHash.slice(0, 20)}`;
+	const guestAnonymousId = `synthetic_guest_${runHash.slice(0, 20)}`;
+	const guestSessionId = `synthetic_guest_session_${runHash.slice(0, 16)}`;
+	const abandonedGuestAnonymousId = `synthetic_abandoned_guest_${runHash.slice(0, 16)}`;
+	const abandonedGuestSessionId = `synthetic_abandoned_session_${runHash.slice(0, 16)}`;
+	const sharedAnonymousId = `synthetic_shared_${runHash.slice(0, 20)}`;
+	const sharedSessionId = `synthetic_shared_session_${runHash.slice(0, 16)}`;
+	const event = ({
+		anonymousId = fixture.anonymousId,
+		channel = "direct",
+		device = "desktop",
+		eventName,
+		index,
+		organizationId = fixture.organizationId,
+		platform,
+		properties,
+		referrer = fixture.rows[0].referrer,
+		schemaVersion,
+		sessionId = fixture.rows[0].session_id,
+		source,
+		userId = fixture.userId,
+	}) => {
+		const eventId =
+			index === 0
+				? pageViewId
+				: `synthetic_decision_${index}_${runHash.slice(0, 20)}`;
+		const occurredAt = new Date(now.getTime() + index * 1_000)
+			.toISOString()
+			.replace("T", " ")
+			.replace("Z", "");
+		return {
+			...fixture.rows[0],
+			event_id: eventId,
+			payload_hash: hashIdentifier(`${decisionRunId}:${eventId}`).slice(0, 32),
+			occurred_at: occurredAt,
+			received_at: occurredAt,
+			event_name: eventName,
+			schema_version: schemaVersion ?? eventSchemaVersion(eventName),
+			source,
+			platform,
+			anonymous_id: anonymousId,
+			session_id: sessionId,
+			user_id: userId,
+			organization_id: organizationId,
+			app_version: appVersion,
+			country: "US",
+			referrer,
+			device,
+			browser: "Chrome",
+			os: "macOS",
+			channel,
+			hostname,
+			pathname,
+			synthetic_run_id: decisionRunId,
+			properties: JSON.stringify(properties),
+		};
+	};
+	return {
+		appVersion,
+		hostname,
+		pathname,
+		runId: decisionRunId,
+		date: now.toISOString().slice(0, 10),
+		rows: [
+			event({
+				userId: "",
+				organizationId: "",
+				channel: "paid_search",
+				eventName: "page_view",
+				index: 0,
+				platform: "web",
+				properties: {
+					hostname,
+					is_session_entry: true,
+					session_touch_source: "google",
+					session_touch_medium: "cpc",
+					session_touch_campaign: "synthetic-campaign",
+					session_touch_gclid: "synthetic-click-id",
+				},
+				source: "client",
+			}),
+			event({
+				userId: "",
+				organizationId: "",
+				eventName: "page_engagement",
+				index: 1,
+				platform: "web",
+				properties: {
+					page_view_id: pageViewId,
+					engaged_ms: 15_000,
+					max_scroll_depth: 75,
+				},
+				source: "client",
+			}),
+			event({
+				eventName: "identity_linked",
+				index: 2,
+				platform: "server",
+				properties: {},
+				source: "server",
+			}),
+			event({
+				eventName: "user_signed_up",
+				index: 3,
+				platform: "web",
+				properties: {},
+				source: "server",
+			}),
+			event({
+				eventName: "share_link_created",
+				index: 4,
+				platform: "server",
+				properties: {
+					asset_type: "recording",
+					recording_mode: "screen",
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "recording_completed",
+				index: 5,
+				platform: "desktop",
+				properties: {
+					mode: "screen",
+					status: "success",
+					duration_secs: 30,
+					segment_count: 1,
+					track_failure_count: 0,
+				},
+				source: "client",
+			}),
+			event({
+				anonymousId: guestAnonymousId,
+				channel: "paid_search",
+				eventName: "page_view",
+				index: 6,
+				organizationId: "",
+				platform: "web",
+				properties: {
+					hostname,
+					is_session_entry: true,
+					session_touch_source: "google",
+					session_touch_medium: "cpc",
+					session_touch_campaign: "synthetic-campaign",
+					session_touch_gclid: "synthetic-guest-click-id",
+				},
+				sessionId: guestSessionId,
+				source: "client",
+				userId: "",
+			}),
+			event({
+				anonymousId: guestAnonymousId,
+				eventName: "guest_checkout_started",
+				index: 7,
+				organizationId: "",
+				platform: "web",
+				properties: {
+					price_id: "price_pro_annual",
+					quantity: 1,
+				},
+				source: "server",
+				sessionId: guestSessionId,
+				userId: "",
+			}),
+			event({
+				eventName: "checkout_started",
+				index: 8,
+				platform: "web",
+				properties: {
+					price_id: "price_pro_annual",
+					quantity: 1,
+					is_onboarding: false,
+				},
+				source: "server",
+			}),
+			event({
+				anonymousId: `synthetic_desktop_${runHash.slice(0, 20)}`,
+				eventName: "checkout_started",
+				index: 9,
+				platform: "desktop",
+				properties: {
+					price_id: "price_pro_annual",
+					quantity: 1,
+					is_onboarding: false,
+				},
+				sessionId: `synthetic_desktop_session_${runHash.slice(0, 16)}`,
+				source: "server",
+			}),
+			event({
+				anonymousId: `synthetic_mobile_${runHash.slice(0, 20)}`,
+				device: "mobile",
+				eventName: "checkout_started",
+				index: 10,
+				platform: "mobile",
+				properties: {
+					price_id: "price_pro_annual",
+					quantity: 1,
+					is_onboarding: false,
+				},
+				sessionId: `synthetic_mobile_session_${runHash.slice(0, 16)}`,
+				source: "server",
+			}),
+			event({
+				eventName: "trial_started",
+				index: 11,
+				platform: "web",
+				properties: {
+					subscription_status: "trialing",
+					trial_end_at: 1_900_604_800,
+					price_id: "price_pro_annual",
+					quantity: 1,
+					currency: "gbp",
+					unit_amount_minor: 2_500,
+					billing_interval: "year",
+					billing_interval_count: 1,
+					is_guest_checkout: false,
+					is_onboarding: false,
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "purchase_completed",
+				index: 12,
+				platform: "web",
+				properties: {
+					payment_status: "paid",
+					subscription_status: "active",
+					amount_total_minor: 2_500,
+					amount_subtotal_minor: 2_500,
+					discount_amount_minor: 0,
+					currency: "gbp",
+					unit_amount_minor: 2_500,
+					billing_interval: "year",
+					billing_interval_count: 1,
+					invite_quota: 1,
+					price_id: "price_pro_annual",
+					quantity: 1,
+					is_first_purchase: true,
+					is_guest_checkout: false,
+					is_onboarding: false,
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_renewed",
+				index: 13,
+				platform: "server",
+				properties: {
+					amount_paid_minor: 2_500,
+					currency: "gbp",
+					price_id: "price_pro_annual",
+					billing_reason: "subscription_cycle",
+				},
+				source: "server",
+			}),
+			event({
+				anonymousId: abandonedGuestAnonymousId,
+				eventName: "guest_checkout_started",
+				index: 24,
+				organizationId: "",
+				platform: "web",
+				properties: {
+					price_id: "price_pro_annual",
+					quantity: 1,
+				},
+				sessionId: abandonedGuestSessionId,
+				source: "server",
+				userId: "",
+			}),
+			event({
+				eventName: "trial_converted",
+				index: 14,
+				platform: "server",
+				properties: {
+					previous_status: "trialing",
+					new_status: "active",
+					price_id: "price_pro_annual",
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_changed",
+				index: 15,
+				platform: "server",
+				properties: {
+					change_kind: "plan",
+					previous_price_id: "price_pro_monthly",
+					new_price_id: "price_pro_annual",
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_changed",
+				index: 16,
+				platform: "server",
+				properties: {
+					change_kind: "seats",
+					previous_price_id: "price_pro_annual",
+					new_price_id: "price_pro_annual",
+					previous_quantity: 1,
+					new_quantity: 3,
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_cancelled",
+				index: 17,
+				platform: "server",
+				properties: {
+					status: "canceled",
+					price_id: "price_pro_annual",
+					ended_at: 1_900_000_000,
+					cancel_at_period_end: false,
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_refunded",
+				index: 18,
+				platform: "server",
+				properties: {
+					amount_refunded_minor: 500,
+					currency: "gbp",
+					price_id: "price_pro_annual",
+					fully_refunded: false,
+				},
+				source: "server",
+			}),
+			event({
+				eventName: "subscription_payment_failed",
+				index: 19,
+				platform: "server",
+				properties: {
+					amount_due_minor: 2_500,
+					currency: "gbp",
+					attempt_count: 2,
+					price_id: "price_pro_annual",
+				},
+				source: "server",
+			}),
+			event({
+				anonymousId: sharedAnonymousId,
+				channel: "referral",
+				eventName: "page_view",
+				index: 20,
+				organizationId: "",
+				platform: "web",
+				properties: {
+					hostname,
+					is_session_entry: true,
+					session_touch_source: "synthetic-partner",
+					session_touch_medium: "referral",
+				},
+				referrer: "https://synthetic-partner.example/path",
+				sessionId: sharedSessionId,
+				source: "client",
+				userId: "",
+			}),
+			event({
+				anonymousId: sharedAnonymousId,
+				eventName: "identity_linked",
+				index: 21,
+				platform: "server",
+				properties: {},
+				sessionId: sharedSessionId,
+				source: "server",
+				userId: `synthetic_shared_org_user_${runHash.slice(0, 16)}`,
+			}),
+			event({
+				anonymousId: guestAnonymousId,
+				eventName: "purchase_completed",
+				index: 22,
+				platform: "web",
+				properties: {
+					payment_status: "paid",
+					subscription_status: "active",
+					amount_total_minor: 1_500,
+					amount_subtotal_minor: 1_500,
+					discount_amount_minor: 0,
+					currency: "gbp",
+					unit_amount_minor: 1_500,
+					billing_interval: "month",
+					billing_interval_count: 1,
+					invite_quota: 1,
+					price_id: "price_guest_monthly",
+					quantity: 1,
+					is_first_purchase: true,
+					is_guest_checkout: true,
+					is_onboarding: false,
+				},
+				source: "server",
+				sessionId: guestSessionId,
+			}),
+			event({
+				eventName: "subscription_renewed",
+				index: 23,
+				platform: "server",
+				properties: {
+					amount_paid_minor: 1_000,
+					currency: "gbp",
+					billing_reason: "subscription_cycle",
+				},
+				schemaVersion: 1,
+				source: "server",
+			}),
+			event({
+				eventName: "experiment_exposed",
+				index: 25,
+				platform: "web",
+				properties: {
+					experiment_id: "synthetic-checkout-copy",
+					variant: "treatment",
+					assignment_version: "v1",
+				},
+				source: "client",
+			}),
+			event({
+				eventName: "analytics_delivery_loss",
+				index: 26,
+				platform: "desktop",
+				properties: {
+					failure_class: "queue_overflow_unrecoverable",
+					failed_event_name: "recording_completed",
+					status: null,
+					count: 3,
+					first_sequence: 41,
+					last_sequence: 43,
+					first_failed_at_ms: now.getTime(),
+					last_failed_at_ms: now.getTime() + 2_000,
+				},
+				source: "client",
+			}),
+		],
 	};
 };
 
@@ -630,11 +1157,21 @@ export const createSyntheticLoadEvents = ({
 	count,
 	now = new Date(),
 }) => {
-	if (!Number.isInteger(count) || count < 100 || count > 10_000) {
-		throw new Error("Synthetic load size must be between 100 and 10000 rows");
+	if (
+		!Number.isInteger(count) ||
+		count < 100 ||
+		count > 10_000 ||
+		count % 10 !== 0
+	) {
+		throw new Error(
+			"Synthetic load size must be a multiple of 10 between 100 and 10000 rows",
+		);
 	}
 	const fixture = createSyntheticEvents({ runId, now });
 	const runHash = hashIdentifier(runId);
+	const eventNamespace = runHash
+		.slice(0, 12)
+		.replace(/[0-9]/g, (digit) => String.fromCharCode(103 + Number(digit)));
 	const appVersion = `staging-load-${runHash.slice(0, 12)}`;
 	const loadRunId = `${runId}_load`;
 	validateSyntheticRunId(loadRunId);
@@ -642,14 +1179,162 @@ export const createSyntheticLoadEvents = ({
 		appVersion,
 		runId: loadRunId,
 		rows: Array.from({ length: count }, (_, index) => {
-			const eventId = `synthetic_load_${hashIdentifier(`${runId}:${index}`).slice(0, 24)}`;
+			const cohort = Math.floor(index / 10);
+			const eventKind = index % 10;
+			const eventId = `synthetic_load_${eventNamespace}_${cohort}_${eventKind}`;
+			const pageViewId = `synthetic_load_${eventNamespace}_${cohort}_0`;
+			const hostname = `load-${runHash.slice(0, 8)}-${cohort}.preview.cap.so`;
+			const anonymousId = `synthetic_load_${runHash.slice(0, 8)}_${cohort}`;
+			const userId = `synthetic_load_user_${runHash.slice(0, 8)}_${cohort}`;
+			const organizationId = `synthetic_load_org_${runHash.slice(0, 8)}_${cohort}`;
+			const sessionId = `synthetic_load_session_${runHash.slice(0, 8)}_${cohort}`;
+			const checkoutPlatform = ["web", "desktop", "mobile"][cohort % 3];
+			const occurredAt = new Date(now.getTime() + index * 10)
+				.toISOString()
+				.replace("T", " ")
+				.replace("Z", "");
+			const shapes = [
+				{
+					eventName: "page_view",
+					source: "client",
+					platform: "web",
+					properties: {
+						hostname,
+						is_session_entry: true,
+						session_touch_source: `source-${cohort}`,
+						session_touch_medium: "cpc",
+						session_touch_campaign: `campaign-${cohort}`,
+					},
+					channel: "paid_other",
+				},
+				{
+					eventName: "page_engagement",
+					source: "client",
+					platform: "web",
+					properties: {
+						page_view_id: pageViewId,
+						engaged_ms: 5_000,
+						max_scroll_depth: 60,
+					},
+				},
+				{
+					eventName: "identity_linked",
+					source: "server",
+					platform: "server",
+					properties: {},
+				},
+				{
+					eventName: "user_signed_up",
+					source: "server",
+					platform: "web",
+					properties: {},
+				},
+				{
+					eventName: "share_link_created",
+					source: "server",
+					platform: "server",
+					properties: {
+						asset_type: "recording",
+						recording_mode: "screen",
+					},
+				},
+				{
+					eventName: "recording_completed",
+					source: "client",
+					platform: "desktop",
+					properties: {
+						mode: "screen",
+						status: "success",
+						duration_secs: 30,
+						segment_count: 1,
+						track_failure_count: 0,
+					},
+				},
+				{
+					eventName: "checkout_started",
+					source: "server",
+					platform: checkoutPlatform,
+					properties: {
+						price_id: `price_load_${cohort}`,
+						quantity: 1,
+						is_onboarding: false,
+					},
+				},
+				{
+					eventName: "trial_started",
+					source: "server",
+					platform: checkoutPlatform,
+					properties: {
+						subscription_status: "trialing",
+						price_id: `price_load_${cohort}`,
+						quantity: 1,
+						currency: "usd",
+						unit_amount_minor: 1_000,
+						billing_interval: "month",
+						billing_interval_count: 1,
+						is_guest_checkout: false,
+						is_onboarding: false,
+					},
+				},
+				{
+					eventName: "purchase_completed",
+					source: "server",
+					platform: checkoutPlatform,
+					properties: {
+						payment_status: "paid",
+						subscription_status: "active",
+						amount_total_minor: 1_000,
+						amount_subtotal_minor: 1_000,
+						discount_amount_minor: 0,
+						currency: "usd",
+						unit_amount_minor: 1_000,
+						billing_interval: "month",
+						billing_interval_count: 1,
+						invite_quota: 1,
+						price_id: `price_load_${cohort}`,
+						quantity: 1,
+						is_first_purchase: true,
+						is_guest_checkout: false,
+						is_onboarding: false,
+					},
+				},
+				{
+					eventName: "subscription_renewed",
+					source: "server",
+					platform: "server",
+					properties: {
+						amount_paid_minor: 1_000,
+						currency: "usd",
+						price_id: `price_load_${cohort}`,
+						billing_reason: "subscription_cycle",
+					},
+				},
+			];
+			const shape = shapes[eventKind];
 			return {
 				...fixture.rows[0],
 				event_id: eventId,
 				payload_hash: hashIdentifier(eventId).slice(0, 32),
+				occurred_at: occurredAt,
+				received_at: occurredAt,
+				event_name: shape.eventName,
+				schema_version: eventSchemaVersion(shape.eventName),
+				source: shape.source,
+				platform: shape.platform,
+				anonymous_id: anonymousId,
+				session_id: sessionId,
+				user_id: eventKind < 2 ? "" : userId,
+				organization_id: eventKind < 2 ? "" : organizationId,
 				app_version: appVersion,
+				hostname,
+				pathname: `/analytics-load/${cohort}`,
+				country: "US",
+				device: shape.platform === "mobile" ? "mobile" : "desktop",
+				browser: "Chrome",
+				os: shape.platform === "mobile" ? "iOS" : "macOS",
+				channel: shape.channel ?? "direct",
 				synthetic_run_id: loadRunId,
-				properties: JSON.stringify({ test_case: "staging_load" }),
+				properties: JSON.stringify(shape.properties),
 			};
 		}),
 	};
@@ -678,17 +1363,1011 @@ export const normalizeCiAssertions = (payload) => {
 		payloadConflicts: number(row.payload_conflicts),
 		canonicalEvents: number(row.canonical_events),
 		decisionEvents: number(row.decision_events),
+		decisionRevenueMinor: number(row.decision_revenue_minor),
+		trafficVisitors: number(row.traffic_visitors),
+		trafficVisits: number(row.traffic_visits),
+		trafficPageviews: number(row.traffic_pageviews),
+		trafficBounces: number(row.traffic_bounces),
+		trafficDurationMs: number(row.traffic_duration_ms),
+		pageVisitors: number(row.page_visitors),
+		pageVisits: number(row.page_visits),
+		pageviews: number(row.pageviews),
+		pageLandings: number(row.page_landings),
+		pageExits: number(row.page_exits),
+		pageEngagedMs: number(row.page_engaged_ms),
+		pageScrollDepth: number(row.page_scroll_depth),
+		activationSignups: number(row.activation_signups),
+		activatedCreators: number(row.activated_creators),
+		retentionCreators: number(row.retention_creators),
+		retentionOrganizations: number(row.retention_organizations),
+		identityLinkedVisitors: number(row.identity_linked_visitors),
+		identityLinkedUsers: number(row.identity_linked_users),
+		identitySignupUsers: number(row.identity_signup_users),
+		identityOrganizations: number(row.identity_organizations),
+		identityGuestCheckoutVisitors: number(row.identity_guest_checkout_visitors),
+		identityGuestPurchasers: number(row.identity_guest_purchasers),
+		identityAuthenticatedCheckoutUsers: number(
+			row.identity_authenticated_checkout_users,
+		),
+		identityWebCheckoutUsers: number(row.identity_web_checkout_users),
+		identityDesktopCheckoutUsers: number(row.identity_desktop_checkout_users),
+		identityMobileCheckoutUsers: number(row.identity_mobile_checkout_users),
+		identityCrossDeviceCheckoutUsers: number(
+			row.identity_cross_device_checkout_users,
+		),
+		identityTrialUsers: number(row.identity_trial_users),
+		identityPurchasers: number(row.identity_purchasers),
 	};
+};
+
+export const assertSyntheticBusinessDecisions = (assertions) => {
+	const expected = {
+		trafficVisitors: 3,
+		trafficVisits: 3,
+		trafficPageviews: 3,
+		trafficBounces: 2,
+		trafficDurationMs: 15_000,
+		pageVisitors: 3,
+		pageVisits: 3,
+		pageviews: 3,
+		pageLandings: 3,
+		pageExits: 3,
+		pageEngagedMs: 15_000,
+		pageScrollDepth: 75,
+		activationSignups: 1,
+		activatedCreators: 1,
+		retentionCreators: 1,
+		retentionOrganizations: 1,
+		identityLinkedVisitors: 2,
+		identityLinkedUsers: 2,
+		identitySignupUsers: 1,
+		identityOrganizations: 1,
+		identityGuestCheckoutVisitors: 2,
+		identityGuestPurchasers: 1,
+		identityAuthenticatedCheckoutUsers: 1,
+		identityWebCheckoutUsers: 1,
+		identityDesktopCheckoutUsers: 1,
+		identityMobileCheckoutUsers: 1,
+		identityCrossDeviceCheckoutUsers: 1,
+		identityTrialUsers: 1,
+		identityPurchasers: 1,
+		decisionRevenueMinor: 7_000,
+	};
+	for (const [name, value] of Object.entries(expected)) {
+		if (assertions[name] !== value) {
+			throw new Error(
+				`Synthetic business metric ${name} was ${assertions[name]}, expected ${value}`,
+			);
+		}
+	}
+};
+
+export const assertSyntheticLoadDecisions = (assertions, expectedEvents) => {
+	assertSyntheticLoadHealth(assertions, expectedEvents);
+	const cohorts = expectedEvents / 10;
+	const expected = {
+		canonicalEvents: expectedEvents,
+		decisionEvents: expectedEvents,
+		decisionRevenueMinor: cohorts * 2_000,
+		trafficVisitors: cohorts,
+		trafficVisits: cohorts,
+		trafficPageviews: cohorts,
+		trafficBounces: 0,
+		trafficDurationMs: cohorts * 5_000,
+		pageVisitors: cohorts,
+		pageVisits: cohorts,
+		pageviews: cohorts,
+		pageLandings: cohorts,
+		pageExits: cohorts,
+		pageEngagedMs: cohorts * 5_000,
+		pageScrollDepth: cohorts * 60,
+		activationSignups: cohorts,
+		activatedCreators: cohorts,
+		retentionCreators: cohorts,
+		retentionOrganizations: cohorts,
+		identityLinkedVisitors: cohorts,
+		identityLinkedUsers: cohorts,
+		identitySignupUsers: cohorts,
+		identityOrganizations: cohorts,
+		identityGuestCheckoutVisitors: 0,
+		identityGuestPurchasers: 0,
+		identityAuthenticatedCheckoutUsers: cohorts,
+		identityWebCheckoutUsers: Math.ceil(cohorts / 3),
+		identityDesktopCheckoutUsers: Math.ceil((cohorts - 1) / 3),
+		identityMobileCheckoutUsers: Math.floor(cohorts / 3),
+		identityCrossDeviceCheckoutUsers: 0,
+		identityTrialUsers: cohorts,
+		identityPurchasers: cohorts,
+	};
+	for (const [name, value] of Object.entries(expected)) {
+		if (assertions[name] !== value) {
+			throw new Error(
+				`Synthetic load metric ${name} was ${assertions[name]}, expected ${value}`,
+			);
+		}
+	}
+};
+
+const endpointRows = (payloads, name) => {
+	const rows = payloads[name]?.data;
+	if (!Array.isArray(rows)) {
+		throw new Error(`Synthetic endpoint ${name} returned an invalid payload`);
+	}
+	return rows;
+};
+
+const singleEndpointRow = (payloads, name) => {
+	const rows = endpointRows(payloads, name);
+	if (rows.length !== 1) {
+		throw new Error(
+			`Synthetic endpoint ${name} returned ${rows.length} rows, expected 1`,
+		);
+	}
+	return rows[0];
+};
+
+const assertEndpointFields = (name, row, expected) => {
+	for (const [field, value] of Object.entries(expected)) {
+		const actual = typeof value === "number" ? Number(row[field]) : row[field];
+		if (actual !== value) {
+			throw new Error(
+				`Synthetic endpoint ${name}.${field} was ${actual}, expected ${value}`,
+			);
+		}
+	}
+};
+
+export const assertSyntheticEndpointDecisions = ({
+	appVersion,
+	date,
+	hostname,
+	pathname,
+	payloads,
+}) => {
+	assertEndpointFields(
+		"product_traffic_overview",
+		singleEndpointRow(payloads, "product_traffic_overview"),
+		{
+			date,
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			views_per_visit: 1,
+			bounce_rate: 66.67,
+			visit_duration_ms: 5_000,
+			engaged_ms: 15_000,
+		},
+	);
+	assertEndpointFields(
+		"product_traffic_pages",
+		singleEndpointRow(payloads, "product_traffic_pages"),
+		{
+			pathname,
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+			landings: 3,
+			exits: 3,
+			time_on_page_ms: 5_000,
+			average_scroll_depth: 25,
+		},
+	);
+	const sourceRows = endpointRows(payloads, "product_traffic_sources");
+	if (sourceRows.length !== 2) {
+		throw new Error(
+			`Synthetic endpoint product_traffic_sources returned ${sourceRows.length} rows, expected 2`,
+		);
+	}
+	assertEndpointFields(
+		"product_traffic_sources",
+		sourceRows.find((row) => row.channel === "paid_search") ?? {},
+		{
+			channel: "paid_search",
+			source: "google",
+			medium: "cpc",
+			campaign: "synthetic-campaign",
+			visitors: 2,
+			visits: 2,
+			pageviews: 2,
+			bounce_rate: 50,
+		},
+	);
+	assertEndpointFields(
+		"product_traffic_sources",
+		sourceRows.find((row) => row.channel === "referral") ?? {},
+		{
+			channel: "referral",
+			source: "synthetic-partner",
+			medium: "referral",
+			campaign: "",
+			visitors: 1,
+			visits: 1,
+			pageviews: 1,
+			bounce_rate: 100,
+		},
+	);
+	assertEndpointFields(
+		"product_traffic_countries",
+		singleEndpointRow(payloads, "product_traffic_countries"),
+		{ country: "US", visitors: 3, visits: 3, pageviews: 3 },
+	);
+	assertEndpointFields(
+		"product_traffic_technology",
+		singleEndpointRow(payloads, "product_traffic_technology"),
+		{
+			device: "desktop",
+			browser: "Chrome",
+			os: "macOS",
+			visitors: 3,
+			visits: 3,
+			pageviews: 3,
+		},
+	);
+	assertEndpointFields(
+		"product_activation",
+		singleEndpointRow(payloads, "product_activation"),
+		{
+			cohort_date: date,
+			signups: 1,
+			activated_creators: 1,
+			activation_rate: 100,
+			average_time_to_activation_ms: 1_000,
+		},
+	);
+	assertEndpointFields(
+		"product_creator_activity",
+		singleEndpointRow(payloads, "product_creator_activity"),
+		{
+			as_of_date: date,
+			dau: 1,
+			wau: 1,
+			mau: 1,
+			daily_active_organizations: 1,
+			new_creators: 1,
+			returning_creators: 0,
+			dau_wau_stickiness: 100,
+			dau_mau_stickiness: 100,
+		},
+	);
+	assertEndpointFields(
+		"product_creator_retention",
+		singleEndpointRow(payloads, "product_creator_retention"),
+		{
+			cohort_date: date,
+			activity_date: date,
+			cohort_day: 0,
+			platform: "all",
+			creators: 1,
+			organizations: 1,
+		},
+	);
+	assertEndpointFields(
+		"product_identity_funnel",
+		singleEndpointRow(payloads, "product_identity_funnel"),
+		{
+			linked_visitors: 2,
+			linked_users: 2,
+			signup_users: 1,
+			organizations: 1,
+			guest_checkout_visitors: 2,
+			guest_purchasers: 1,
+			authenticated_checkout_users: 1,
+			web_checkout_users: 1,
+			desktop_checkout_users: 1,
+			mobile_checkout_users: 1,
+			cross_device_checkout_users: 1,
+			trial_users: 1,
+			purchasers: 1,
+			signup_rate: 50,
+			purchase_rate: 50,
+		},
+	);
+	const eventRows = endpointRows(payloads, "product_events_daily");
+	const eventKey = (
+		eventName,
+		platform,
+		changeKind = "",
+		planId = "",
+		channel = "direct",
+		schemaVersion = eventSchemaVersion(eventName),
+	) =>
+		`${eventName}:${platform}:${changeKind}:${planId}:${channel}:${schemaVersion}`;
+	const expectedEvents = new Map(
+		[
+			{
+				eventName: "page_view",
+				source: "client",
+				platform: "web",
+				events: 2,
+				actors: 2,
+				channel: "paid_search",
+				users: 0,
+				organizations: 0,
+			},
+			{
+				eventName: "page_view",
+				source: "client",
+				platform: "web",
+				channel: "referral",
+				users: 0,
+				organizations: 0,
+			},
+			{
+				eventName: "page_engagement",
+				source: "client",
+				platform: "web",
+				users: 0,
+				organizations: 0,
+			},
+			{
+				eventName: "identity_linked",
+				source: "server",
+				platform: "server",
+				events: 2,
+				actors: 2,
+				users: 2,
+			},
+			{ eventName: "user_signed_up", source: "server", platform: "web" },
+			{ eventName: "share_link_created", source: "server", platform: "server" },
+			{
+				eventName: "recording_completed",
+				source: "client",
+				platform: "desktop",
+			},
+			{
+				eventName: "guest_checkout_started",
+				source: "server",
+				platform: "web",
+				planId: "price_pro_annual",
+				events: 2,
+				actors: 2,
+				users: 0,
+				organizations: 0,
+				quantity: 1,
+			},
+			{
+				eventName: "checkout_started",
+				source: "server",
+				platform: "web",
+				planId: "price_pro_annual",
+				quantity: 1,
+				onboarding: "false",
+			},
+			{
+				eventName: "checkout_started",
+				source: "server",
+				platform: "desktop",
+				planId: "price_pro_annual",
+				quantity: 1,
+				onboarding: "false",
+			},
+			{
+				eventName: "checkout_started",
+				source: "server",
+				platform: "mobile",
+				planId: "price_pro_annual",
+				quantity: 1,
+				onboarding: "false",
+			},
+			{
+				eventName: "trial_started",
+				source: "server",
+				platform: "web",
+				planId: "price_pro_annual",
+				subscriptionStatus: "trialing",
+				currency: "GBP",
+				billingInterval: "year",
+				quantity: 1,
+				guestCheckout: "false",
+				onboarding: "false",
+				trialEndAt: 1_900_604_800,
+			},
+			{
+				eventName: "purchase_completed",
+				source: "server",
+				platform: "web",
+				planId: "price_pro_annual",
+				paymentStatus: "paid",
+				subscriptionStatus: "active",
+				currency: "GBP",
+				billingInterval: "year",
+				revenueMinor: 2_500,
+				quantity: 1,
+				firstPurchase: "true",
+				guestCheckout: "false",
+				onboarding: "false",
+			},
+			{
+				eventName: "purchase_completed",
+				source: "server",
+				platform: "web",
+				planId: "price_guest_monthly",
+				paymentStatus: "paid",
+				subscriptionStatus: "active",
+				currency: "GBP",
+				billingInterval: "month",
+				revenueMinor: 1_500,
+				quantity: 1,
+				firstPurchase: "true",
+				guestCheckout: "true",
+				onboarding: "false",
+			},
+			{
+				eventName: "subscription_renewed",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				currency: "GBP",
+				revenueMinor: 2_500,
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_renewed",
+				source: "server",
+				platform: "server",
+				currency: "GBP",
+				revenueMinor: 1_000,
+				schemaVersion: 1,
+			},
+			{
+				eventName: "trial_converted",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				subscriptionStatus: "active",
+				previousStatus: "trialing",
+				newStatus: "active",
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_changed",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				changeKind: "plan",
+				previousPlanId: "price_pro_monthly",
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_changed",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				changeKind: "seats",
+				previousPlanId: "price_pro_annual",
+				previousQuantity: 1,
+				newQuantity: 3,
+				seatDelta: 2,
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_cancelled",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				subscriptionStatus: "canceled",
+				cancelAtPeriodEnd: "false",
+				endedAt: 1_900_000_000,
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_refunded",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				currency: "GBP",
+				revenueMinor: -500,
+				fullyRefunded: "false",
+				schemaVersion: 2,
+			},
+			{
+				eventName: "subscription_payment_failed",
+				source: "server",
+				platform: "server",
+				planId: "price_pro_annual",
+				currency: "GBP",
+				amountDueMinor: 2_500,
+				attemptCount: 2,
+				schemaVersion: 2,
+			},
+			{
+				eventName: "experiment_exposed",
+				source: "client",
+				platform: "web",
+				experimentId: "synthetic-checkout-copy",
+				experimentVariant: "treatment",
+				assignmentVersion: "v1",
+			},
+			{
+				eventName: "analytics_delivery_loss",
+				source: "client",
+				platform: "desktop",
+				deliveryLossCount: 3,
+			},
+		].map((expected) => [
+			eventKey(
+				expected.eventName,
+				expected.platform,
+				expected.changeKind,
+				expected.planId,
+				expected.channel,
+				expected.schemaVersion,
+			),
+			expected,
+		]),
+	);
+	if (eventRows.length !== expectedEvents.size) {
+		throw new Error(
+			`Synthetic endpoint product_events_daily returned ${eventRows.length} rows, expected ${expectedEvents.size}`,
+		);
+	}
+	for (const row of eventRows) {
+		const expected = expectedEvents.get(
+			eventKey(
+				row.event_name,
+				row.platform,
+				row.change_kind,
+				row.plan_id,
+				row.channel,
+				Number(row.schema_version),
+			),
+		);
+		if (!expected) {
+			throw new Error(
+				`Synthetic endpoint product_events_daily returned unexpected event ${row.event_name}`,
+			);
+		}
+		assertEndpointFields("product_events_daily", row, {
+			date,
+			event_name: expected.eventName,
+			source: expected.source,
+			platform: expected.platform,
+			schema_version:
+				expected.schemaVersion ?? eventSchemaVersion(expected.eventName),
+			app_version: appVersion,
+			hostname,
+			channel: expected.channel ?? "direct",
+			events: expected.events ?? 1,
+			actors: expected.actors ?? 1,
+			users: expected.users ?? 1,
+			organizations: expected.organizations ?? 1,
+			plan_id: expected.planId ?? "",
+			payment_status: expected.paymentStatus ?? "",
+			subscription_status: expected.subscriptionStatus ?? "",
+			currency: expected.currency ?? "",
+			billing_interval: expected.billingInterval ?? "",
+			change_kind: expected.changeKind ?? "",
+			previous_status: expected.previousStatus ?? "",
+			new_status: expected.newStatus ?? "",
+			previous_plan_id: expected.previousPlanId ?? "",
+			quantity: expected.quantity ?? 0,
+			previous_quantity: expected.previousQuantity ?? 0,
+			new_quantity: expected.newQuantity ?? 0,
+			seat_delta: expected.seatDelta ?? 0,
+			first_purchase: expected.firstPurchase ?? "",
+			guest_checkout: expected.guestCheckout ?? "",
+			onboarding: expected.onboarding ?? "",
+			cancel_at_period_end: expected.cancelAtPeriodEnd ?? "",
+			fully_refunded: expected.fullyRefunded ?? "",
+			ended_at: expected.endedAt ?? 0,
+			trial_end_at: expected.trialEndAt ?? 0,
+			amount_due_minor: expected.amountDueMinor ?? 0,
+			attempt_count: expected.attemptCount ?? 0,
+			experiment_id: expected.experimentId ?? "",
+			experiment_variant: expected.experimentVariant ?? "",
+			assignment_version: expected.assignmentVersion ?? "",
+			delivery_loss_count: expected.deliveryLossCount ?? 0,
+			revenue_minor: expected.revenueMinor ?? 0,
+		});
+	}
+	const adoptionRows = endpointRows(payloads, "product_feature_adoption");
+	const expectedAdoption = new Map(
+		[
+			["page_view", 3, 0, 0, 3],
+			["page_engagement", 1, 0],
+			["identity_linked", 2, 2, 1],
+			["user_signed_up", 1, 1],
+			["share_link_created", 1, 1],
+			["recording_completed", 1, 1],
+			["guest_checkout_started", 2, 0, 0, 2],
+			["checkout_started", 3, 1],
+			["trial_started", 1, 1],
+			["purchase_completed", 2, 1],
+			["subscription_renewed", 2, 1],
+			["trial_converted", 1, 1],
+			["subscription_changed", 2, 1],
+			["subscription_cancelled", 1, 1],
+			["subscription_refunded", 1, 1],
+			["subscription_payment_failed", 1, 1],
+			["experiment_exposed", 1, 1],
+			["analytics_delivery_loss", 1, 1],
+		].map(
+			([
+				eventName,
+				events,
+				authenticated,
+				organizations = authenticated,
+				actorDays = Math.max(1, authenticated),
+			]) => [eventName, { events, authenticated, organizations, actorDays }],
+		),
+	);
+	if (adoptionRows.length !== expectedAdoption.size) {
+		throw new Error(
+			`Synthetic endpoint product_feature_adoption returned ${adoptionRows.length} rows, expected ${expectedAdoption.size}`,
+		);
+	}
+	for (const row of adoptionRows) {
+		const expected = expectedAdoption.get(row.event_name);
+		if (!expected) {
+			throw new Error(
+				`Synthetic endpoint product_feature_adoption returned unexpected event ${row.event_name}`,
+			);
+		}
+		assertEndpointFields("product_feature_adoption", row, {
+			event_name: row.event_name,
+			events: expected.events,
+			actor_days: expected.actorDays,
+			user_days: expected.authenticated,
+			organization_days: expected.organizations,
+		});
+	}
+	const freshness = singleEndpointRow(payloads, "product_analytics_freshness");
+	for (const field of [
+		"latest_received_hour",
+		"product_calculated_at",
+		"traffic_calculated_at",
+		"retention_calculated_at",
+		"identity_calculated_at",
+	]) {
+		if (typeof freshness[field] !== "string" || freshness[field].length === 0) {
+			throw new Error(
+				`Synthetic endpoint product_analytics_freshness.${field} is missing`,
+			);
+		}
+	}
+};
+
+export const assertRepresentativeEndpointCoverage = ({
+	expectedEvents,
+	payloads,
+}) => {
+	const cohorts = expectedEvents / 10;
+	const sum = (rows, field) =>
+		rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
+	const expectedRows = {
+		product_traffic_overview: 1,
+		product_traffic_pages: cohorts,
+		product_traffic_sources: cohorts,
+		product_traffic_countries: 1,
+		product_traffic_technology: 1,
+		product_activation: 1,
+		product_creator_activity: 1,
+		product_creator_retention: 1,
+		product_identity_funnel: 1,
+		product_events_daily: Math.min(expectedEvents, 1_000),
+		product_feature_adoption: 10,
+		product_analytics_freshness: 1,
+	};
+	for (const [name, count] of Object.entries(expectedRows)) {
+		const rows = endpointRows(payloads, name);
+		if (rows.length !== count) {
+			throw new Error(
+				`Representative endpoint ${name} returned ${rows.length} rows, expected ${count}`,
+			);
+		}
+	}
+	const exactTotals = [
+		["product_traffic_overview", "pageviews", cohorts],
+		["product_traffic_pages", "pageviews", cohorts],
+		["product_traffic_sources", "pageviews", cohorts],
+		["product_activation", "signups", cohorts],
+		["product_creator_activity", "dau", cohorts],
+		["product_creator_retention", "creators", cohorts],
+		["product_identity_funnel", "linked_users", cohorts],
+		["product_identity_funnel", "purchasers", cohorts],
+		["product_events_daily", "events", expectedEvents],
+		["product_events_daily", "revenue_minor", cohorts * 2_000],
+		["product_feature_adoption", "events", expectedEvents],
+	];
+	for (const [name, field, expected] of exactTotals) {
+		const actual = sum(endpointRows(payloads, name), field);
+		if (actual !== expected) {
+			throw new Error(
+				`Representative endpoint ${name}.${field} totaled ${actual}, expected ${expected}`,
+			);
+		}
+	}
+};
+
+export const syntheticMonetizationFilterQueries = ({
+	date,
+	deploymentId,
+	syntheticRunId,
+}) => {
+	const base = {
+		start_date: date,
+		end_date: date,
+		synthetic_run_id: syntheticRunId,
+		__tb__deployment: deploymentId,
+	};
+	return [
+		{
+			label: "authenticated_paid_purchase",
+			parameters: {
+				...base,
+				event_name: "purchase_completed",
+				payment_status: "paid",
+				currency: "gbp",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 2_500,
+		},
+		{
+			label: "guest_paid_purchase",
+			parameters: {
+				...base,
+				event_name: "purchase_completed",
+				payment_status: "paid",
+				currency: "gbp",
+				plan_id: "price_guest_monthly",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 1_500,
+		},
+		{
+			label: "unpaid_checkout_not_purchase",
+			parameters: {
+				...base,
+				event_name: "purchase_completed",
+				payment_status: "unpaid",
+			},
+			expectedRows: 0,
+			expectedEvents: 0,
+			expectedRevenueMinor: 0,
+		},
+		{
+			label: "trial_without_revenue",
+			parameters: {
+				...base,
+				event_name: "trial_started",
+				subscription_status: "trialing",
+				currency: "gbp",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+		},
+		{
+			label: "renewal_revenue",
+			parameters: {
+				...base,
+				event_name: "subscription_renewed",
+				currency: "gbp",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 2_500,
+			expectedFields: { schema_version: 2, plan_id: "price_pro_annual" },
+		},
+		{
+			label: "legacy_renewal_without_plan",
+			parameters: {
+				...base,
+				event_name: "subscription_renewed",
+				schema_version: 1,
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 1_000,
+			expectedFields: { schema_version: 1, plan_id: "" },
+		},
+		{
+			label: "refund_revenue",
+			parameters: {
+				...base,
+				event_name: "subscription_refunded",
+				currency: "gbp",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: -500,
+			expectedFields: { fully_refunded: "false" },
+		},
+		{
+			label: "trial_conversion",
+			parameters: {
+				...base,
+				event_name: "trial_converted",
+				plan_id: "price_pro_annual",
+				previous_status: "trialing",
+				new_status: "active",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+			expectedFields: { subscription_status: "active" },
+		},
+		{
+			label: "plan_change",
+			parameters: {
+				...base,
+				event_name: "subscription_changed",
+				change_kind: "plan",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+			expectedFields: { previous_plan_id: "price_pro_monthly" },
+		},
+		{
+			label: "seat_change",
+			parameters: {
+				...base,
+				event_name: "subscription_changed",
+				change_kind: "seats",
+				plan_id: "price_pro_annual",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+			expectedFields: {
+				previous_quantity: 1,
+				new_quantity: 3,
+				seat_delta: 2,
+			},
+		},
+		{
+			label: "cancellation",
+			parameters: {
+				...base,
+				event_name: "subscription_cancelled",
+				plan_id: "price_pro_annual",
+				subscription_status: "canceled",
+				cancel_at_period_end: "false",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+			expectedFields: { ended_at: 1_900_000_000 },
+		},
+		{
+			label: "payment_failure",
+			parameters: {
+				...base,
+				event_name: "subscription_payment_failed",
+				plan_id: "price_pro_annual",
+				currency: "gbp",
+			},
+			expectedRows: 1,
+			expectedEvents: 1,
+			expectedRevenueMinor: 0,
+			expectedFields: { amount_due_minor: 2_500, attempt_count: 2 },
+		},
+	];
+};
+
+export const syntheticIdentityFilterQueries = ({
+	date,
+	deploymentId,
+	syntheticRunId,
+}) => {
+	const base = {
+		start_date: date,
+		end_date: date,
+		synthetic_run_id: syntheticRunId,
+		__tb__deployment: deploymentId,
+	};
+	return [
+		{
+			label: "paid_search_identity",
+			parameters: { ...base, source: "google" },
+			expected: {
+				linked_visitors: 1,
+				linked_users: 1,
+				signup_users: 1,
+				organizations: 1,
+				guest_checkout_visitors: 1,
+				guest_purchasers: 1,
+				purchasers: 1,
+			},
+		},
+		{
+			label: "referral_identity",
+			parameters: { ...base, source: "synthetic-partner" },
+			expected: {
+				linked_visitors: 1,
+				linked_users: 1,
+				signup_users: 0,
+				organizations: 0,
+				guest_checkout_visitors: 0,
+				guest_purchasers: 0,
+				purchasers: 0,
+			},
+		},
+		{
+			label: "missing_identity_source",
+			parameters: { ...base, source: "does-not-exist" },
+			expected: {
+				linked_visitors: 0,
+				linked_users: 0,
+				signup_users: 0,
+				organizations: 0,
+				guest_checkout_visitors: 0,
+				guest_purchasers: 0,
+				purchasers: 0,
+			},
+		},
+	];
+};
+
+export const assertSyntheticIdentityFilters = ({ payloads, queries }) => {
+	for (const query of queries) {
+		const rows = payloads[query.label]?.data;
+		if (!Array.isArray(rows) || rows.length !== 1) {
+			throw new Error(
+				`Synthetic identity filter ${query.label} did not return one totals row`,
+			);
+		}
+		assertEndpointFields(
+			`synthetic identity filter ${query.label}`,
+			rows[0],
+			query.expected,
+		);
+	}
+};
+
+export const assertSyntheticMonetizationFilters = ({ payloads, queries }) => {
+	for (const query of queries) {
+		const rows = payloads[query.label]?.data;
+		if (!Array.isArray(rows) || rows.length !== query.expectedRows) {
+			throw new Error(
+				`Synthetic monetization filter ${query.label} returned ${Array.isArray(rows) ? rows.length : "invalid"} rows, expected ${query.expectedRows}`,
+			);
+		}
+		const events = rows.reduce(
+			(total, row) => total + Number(row.events ?? 0),
+			0,
+		);
+		const revenueMinor = rows.reduce(
+			(total, row) => total + Number(row.revenue_minor ?? 0),
+			0,
+		);
+		if (
+			events !== query.expectedEvents ||
+			revenueMinor !== query.expectedRevenueMinor
+		) {
+			throw new Error(
+				`Synthetic monetization filter ${query.label} returned ${events} events and ${revenueMinor} revenue minor units`,
+			);
+		}
+		if (query.expectedFields && rows.length === 1) {
+			assertEndpointFields(
+				`synthetic monetization filter ${query.label}`,
+				rows[0],
+				query.expectedFields,
+			);
+		}
+	}
 };
 
 export const normalizeCopyAssertions = (payload) => {
 	const row = payload?.data?.[0] ?? {};
 	const number = (value) => Number(value ?? 0);
 	return {
+		decisionMarkers: number(row.decision_markers),
 		trafficMarkers: number(row.traffic_markers),
 		trafficPageMarkers: number(row.traffic_page_markers),
 		activationMarkers: number(row.activation_markers),
 		retentionMarkers: number(row.retention_markers),
+		identityMarkers: number(row.identity_markers),
+		healthMarkers: number(row.health_markers),
 	};
 };
 
@@ -727,6 +2406,20 @@ export const assertSyntheticHealth = (health) => {
 	}
 };
 
+export const assertSyntheticLoadHealth = (health, expectedEvents) => {
+	if (
+		!Number.isInteger(expectedEvents) ||
+		expectedEvents < 1 ||
+		health.receivedRows < expectedEvents ||
+		health.uniqueEvents !== expectedEvents ||
+		health.uniquePayloads !== expectedEvents ||
+		health.duplicateRows !== health.receivedRows - health.uniquePayloads ||
+		health.payloadConflicts !== 0
+	) {
+		throw new Error("Synthetic load did not match the accepted event set");
+	}
+};
+
 export const percentile = (samples, quantile) => {
 	if (samples.length === 0) {
 		throw new Error("At least one latency sample is required");
@@ -753,6 +2446,7 @@ const DECISION_ENDPOINT_NAMES = [
 	"product_activation",
 	"product_creator_activity",
 	"product_creator_retention",
+	"product_identity_funnel",
 	"product_events_daily",
 	"product_feature_adoption",
 	"product_analytics_freshness",
@@ -762,8 +2456,12 @@ export const decisionEndpointQueries = ({
 	startDate,
 	endDate,
 	deploymentId = "",
+	includeIdentityFunnel = true,
+	syntheticRunId = "",
 }) =>
-	DECISION_ENDPOINT_NAMES.map((name) => ({
+	DECISION_ENDPOINT_NAMES.filter(
+		(name) => includeIdentityFunnel || name !== "product_identity_funnel",
+	).map((name) => ({
 		name,
 		parameters: {
 			...(name === "product_analytics_freshness"
@@ -772,6 +2470,9 @@ export const decisionEndpointQueries = ({
 					? { as_of_date: endDate }
 					: { start_date: startDate, end_date: endDate }),
 			__tb__deployment: deploymentId,
+			...(syntheticRunId && name !== "product_analytics_freshness"
+				? { synthetic_run_id: syntheticRunId }
+				: {}),
 		},
 	}));
 
@@ -822,10 +2523,14 @@ export const assertWorkflowSafety = (workflow) => {
 		"staging-ci.js discard-deployment",
 		"environment: staging",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_COPY_TOKEN",
+		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
+		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 		"TINYBIRD_STAGING_INGEST_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"staging-ci.js run-copies",
+		"staging-ci.js set-copy-schedules",
 		"probe-preview",
 		"verify-promoted",
 	]) {
