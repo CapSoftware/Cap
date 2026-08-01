@@ -41,20 +41,26 @@ export type CommentType = typeof commentsSchema.$inferSelect & {
 
 const SESSION_STORAGE_KEY = "cap_tb_session_id";
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+let volatileAnalyticsSessionId: string | undefined;
 
 const ensureAnalyticsSessionId = () => {
 	if (typeof window === "undefined") return "anonymous";
+	const now = Date.now();
+	const newId =
+		volatileAnalyticsSessionId ??
+		(typeof crypto !== "undefined" && "randomUUID" in crypto
+			? crypto.randomUUID()
+			: `${now}-${Math.random().toString(36).slice(2)}`);
+	volatileAnalyticsSessionId = newId;
 	try {
 		const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-		const now = Date.now();
 		if (raw) {
 			const parsed = JSON.parse(raw) as { value: string; expiry: number };
-			if (parsed?.value && parsed.expiry > now) return parsed.value;
+			if (parsed?.value && parsed.expiry > now) {
+				volatileAnalyticsSessionId = parsed.value;
+				return parsed.value;
+			}
 		}
-		const newId =
-			typeof crypto !== "undefined" && "randomUUID" in crypto
-				? crypto.randomUUID()
-				: Math.random().toString(36).slice(2);
 		window.localStorage.setItem(
 			SESSION_STORAGE_KEY,
 			JSON.stringify({ value: newId, expiry: now + SESSION_TTL_MS }),
@@ -62,7 +68,7 @@ const ensureAnalyticsSessionId = () => {
 		return newId;
 	} catch (error) {
 		console.warn("Failed to persist analytics session id", error);
-		return "anonymous";
+		return newId;
 	}
 };
 

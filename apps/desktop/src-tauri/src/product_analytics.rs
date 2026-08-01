@@ -30,6 +30,7 @@ const PRODUCT_EVENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PRODUCT_EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRODUCT_EVENT_SESSION_STORE_KEY: &str = "product_analytics_session_id";
 const PRODUCT_EVENT_OUTBOX_STORE_KEY: &str = "product_analytics_outbox_v1";
+const PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY: &str = "product_analytics_outbox_recovery_v1";
 const PRODUCT_EVENT_OUTBOX_FALLBACK_KEY_STORE_KEY: &str =
     "product_analytics_outbox_fallback_key_v1";
 const PRODUCT_EVENT_OUTBOX_KEYRING_SERVICE: &str = "so.cap.desktop";
@@ -482,7 +483,7 @@ fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
                     .try_into()
                     .map_err(|_| "invalid_keyring_value".to_string())?
             }
-            Err(_) => {
+            Err(keyring::Error::NoEntry) => {
                 let mut generated = [0_u8; 32];
                 SystemRandom::new()
                     .fill(&mut generated)
@@ -493,6 +494,7 @@ fn outbox_encryption_key(app: &AppHandle) -> Result<&'static [u8; 32], String> {
                     fallback_outbox_encryption_key(app)?
                 }
             }
+            Err(_) => fallback_outbox_encryption_key(app)?,
         },
         Err(_) => fallback_outbox_encryption_key(app)?,
     };
@@ -602,37 +604,80 @@ fn decrypt_outbox_with_key(
     serde_json::from_slice(plaintext).map_err(|_| "outbox_deserialization_failed".to_string())
 }
 
-fn persist_outbox(app: &AppHandle, outbox: &ProductEventOutbox) -> Result<(), String> {
-    ensure_outbox_persistence_allowed(
-        PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.load(Ordering::Acquire),
-    )?;
+fn write_outbox(
+    app: &AppHandle,
+    store_key: &str,
+    outbox: &ProductEventOutbox,
+) -> Result<(), String> {
     let encrypted = encrypt_outbox(app, outbox)?;
     let store = app
         .store("store")
         .map_err(|_| "store_unavailable".to_string())?;
-    store.set(PRODUCT_EVENT_OUTBOX_STORE_KEY, encrypted);
+    store.set(store_key, encrypted);
     store.save().map_err(|_| "store_write_failed".to_string())
 }
 
-fn ensure_outbox_persistence_allowed(restore_blocked: bool) -> Result<(), String> {
-    if restore_blocked {
-        Err("outbox_restore_blocked".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-fn load_outbox(app: &AppHandle) -> Result<ProductEventOutbox, String> {
+fn delete_stored_outbox(app: &AppHandle, store_key: &str) -> Result<(), String> {
     let store = app
         .store("store")
         .map_err(|_| "store_unavailable".to_string())?;
-    let Some(value) = store.get(PRODUCT_EVENT_OUTBOX_STORE_KEY) else {
+    store.delete(store_key);
+    store.save().map_err(|_| "store_write_failed".to_string())
+}
+
+fn load_stored_outbox(app: &AppHandle, store_key: &str) -> Result<ProductEventOutbox, String> {
+    let store = app
+        .store("store")
+        .map_err(|_| "store_unavailable".to_string())?;
+    let Some(value) = store.get(store_key) else {
         return Ok(ProductEventOutbox::default());
     };
     let Some(encrypted) = value.as_str() else {
         return Err("invalid_stored_outbox".to_string());
     };
     decrypt_outbox(app, encrypted)
+}
+
+fn merge_outbox(target: &mut ProductEventOutbox, source: ProductEventOutbox) {
+    let mut known_event_ids = target
+        .pending
+        .iter()
+        .map(|event| event.event_id.clone())
+        .chain(
+            target
+                .dead_letters
+                .iter()
+                .map(|entry| entry.event.event_id.clone()),
+        )
+        .collect::<std::collections::HashSet<_>>();
+    for event in source.pending {
+        if known_event_ids.insert(event.event_id.clone()) {
+            target.pending.push(event);
+        }
+    }
+    for entry in source.dead_letters {
+        if known_event_ids.insert(entry.event.event_id.clone()) {
+            target.dead_letters.push(entry);
+        }
+    }
+}
+
+fn persist_outbox(app: &AppHandle, outbox: &mut ProductEventOutbox) -> Result<(), String> {
+    if !PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.load(Ordering::Acquire) {
+        return write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, outbox);
+    }
+
+    let Ok(mut restored) = load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY) else {
+        return write_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY, outbox);
+    };
+    merge_outbox(&mut restored, outbox.clone());
+    let recovery = load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)?;
+    merge_outbox(&mut restored, recovery);
+    write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &restored)?;
+    delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)?;
+    *outbox = restored;
+    PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
+    Ok(())
 }
 
 fn outbox_guard() -> std::sync::MutexGuard<'static, ProductEventOutbox> {
@@ -643,8 +688,8 @@ fn outbox_guard() -> std::sync::MutexGuard<'static, ProductEventOutbox> {
 }
 
 fn persist_current_outbox(app: &AppHandle) {
-    let outbox = outbox_guard();
-    if let Err(failure_class) = persist_outbox(app, &outbox) {
+    let mut outbox = outbox_guard();
+    if let Err(failure_class) = persist_outbox(app, &mut outbox) {
         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
         warn!(
             failure_class,
@@ -662,7 +707,7 @@ fn remove_delivered_events(app: &AppHandle, delivered: &[ProductEvent]) {
     outbox
         .pending
         .retain(|event| !delivered_ids.contains(event.event_id.as_str()));
-    if let Err(failure_class) = persist_outbox(app, &outbox) {
+    if let Err(failure_class) = persist_outbox(app, &mut outbox) {
         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
         warn!(
             failure_class,
@@ -693,7 +738,7 @@ fn move_to_dead_letters(app: &AppHandle, events: &[ProductEvent], error: &Delive
         });
     }
     PRODUCT_EVENT_DEAD_LETTERS.fetch_add(events.len() as u64, Ordering::Relaxed);
-    if let Err(failure_class) = persist_outbox(app, &outbox) {
+    if let Err(failure_class) = persist_outbox(app, &mut outbox) {
         PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
         warn!(
             failure_class,
@@ -808,8 +853,37 @@ pub fn init_product_session(app: &AppHandle) {
         Err(err) => warn!("Failed to access store for product analytics session: {err}"),
     }
 
-    match load_outbox(app) {
-        Ok(loaded) => {
+    match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY) {
+        Ok(mut loaded) => {
+            match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY) {
+                Ok(recovery) => {
+                    merge_outbox(&mut loaded, recovery);
+                    if let Err(failure_class) =
+                        write_outbox(app, PRODUCT_EVENT_OUTBOX_STORE_KEY, &loaded)
+                    {
+                        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            failure_class,
+                            "Failed to consolidate product analytics recovery outbox"
+                        );
+                    } else if let Err(failure_class) =
+                        delete_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY)
+                    {
+                        PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            failure_class,
+                            "Failed to remove consolidated product analytics recovery outbox"
+                        );
+                    }
+                }
+                Err(failure_class) => {
+                    PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        failure_class,
+                        "Failed to restore product analytics recovery outbox"
+                    );
+                }
+            }
             PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(false, Ordering::Release);
             let has_pending = !loaded.pending.is_empty();
             *outbox_guard() = loaded;
@@ -820,10 +894,23 @@ pub fn init_product_session(app: &AppHandle) {
         Err(failure_class) => {
             PRODUCT_EVENT_OUTBOX_RESTORE_BLOCKED.store(true, Ordering::Release);
             PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            match load_stored_outbox(app, PRODUCT_EVENT_OUTBOX_RECOVERY_STORE_KEY) {
+                Ok(recovery) => *outbox_guard() = recovery,
+                Err(recovery_failure_class) => {
+                    PRODUCT_EVENT_PERSISTENCE_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        failure_class = recovery_failure_class,
+                        "Failed to restore product analytics recovery outbox"
+                    );
+                }
+            }
             warn!(
                 failure_class,
                 "Failed to restore encrypted product analytics outbox"
             );
+            if !outbox_guard().pending.is_empty() {
+                let _ = product_event_sender(app).try_send(());
+            }
         }
     }
 }
@@ -1064,10 +1151,35 @@ mod tests {
 
         assert_eq!(selected_key, valid_key);
         assert_eq!(decrypted.pending[0].event_id, event_id);
-        assert_eq!(
-            ensure_outbox_persistence_allowed(true),
-            Err("outbox_restore_blocked".to_string())
+    }
+
+    #[test]
+    fn recovery_outbox_merge_preserves_unique_events() {
+        let first =
+            product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
+        let mut duplicate = first.clone();
+        duplicate.event_name = "recording_completed".to_string();
+        let second = product_event(
+            &event_data(recording_started()),
+            "second-install-id".to_string(),
+        )
+        .unwrap();
+        let mut target = ProductEventOutbox {
+            pending: vec![first.clone()],
+            dead_letters: Vec::new(),
+        };
+
+        merge_outbox(
+            &mut target,
+            ProductEventOutbox {
+                pending: vec![duplicate, second.clone()],
+                dead_letters: Vec::new(),
+            },
         );
+
+        assert_eq!(target.pending.len(), 2);
+        assert_eq!(target.pending[0].event_name, first.event_name);
+        assert_eq!(target.pending[1].event_id, second.event_id);
     }
 
     #[test]

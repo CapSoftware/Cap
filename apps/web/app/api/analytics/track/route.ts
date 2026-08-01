@@ -81,8 +81,7 @@ export async function POST(request: NextRequest) {
 		trustedVercelProxy: process.env.VERCEL === "1",
 		xVercelForwardedFor:
 			request.headers.get("x-vercel-forwarded-for") ?? undefined,
-		fallbackIdentity:
-			sessionId ?? request.headers.get("user-agent") ?? undefined,
+		fallbackIdentity: sessionId ?? undefined,
 	});
 	if (!rateLimitKey) {
 		return Response.json(
