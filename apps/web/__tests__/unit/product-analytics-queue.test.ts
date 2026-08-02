@@ -55,6 +55,28 @@ describe("ProductAnalyticsQueue", () => {
 		});
 	});
 
+	it("invokes native timer dependencies without binding the queue", async () => {
+		let scheduled: (() => void) | undefined;
+		const schedule = function (
+			this: unknown,
+			handler: Parameters<typeof setTimeout>[0],
+		) {
+			expect(this).toBeUndefined();
+			if (typeof handler === "function") scheduled = handler;
+			return 1 as ReturnType<typeof setTimeout>;
+		} as typeof setTimeout;
+		const transport = vi
+			.fn<ProductAnalyticsTransport>()
+			.mockResolvedValue("success");
+		const queue = new ProductAnalyticsQueue(transport, schedule, clearTimeout);
+
+		queue.enqueue(makeEvent(1));
+		scheduled?.();
+		await queue.flush();
+
+		expect(transport).toHaveBeenCalledTimes(1);
+	});
+
 	it("counts contract rejections as observable drops", () => {
 		const queue = new ProductAnalyticsQueue(vi.fn<ProductAnalyticsTransport>());
 		queue.recordContractRejection();

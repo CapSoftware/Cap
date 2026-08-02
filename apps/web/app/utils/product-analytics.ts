@@ -263,7 +263,8 @@ export class ProductAnalyticsQueue {
 
 	private scheduleFlush(delay: number) {
 		if (this.timer !== undefined) return;
-		this.timer = this.schedule(() => {
+		const schedule = this.schedule;
+		this.timer = schedule(() => {
 			this.timer = undefined;
 			void this.flush();
 		}, delay);
@@ -271,7 +272,8 @@ export class ProductAnalyticsQueue {
 
 	private clearTimer() {
 		if (this.timer === undefined) return;
-		this.cancel(this.timer);
+		const cancel = this.cancel;
+		cancel(this.timer);
 		this.timer = undefined;
 	}
 
