@@ -2125,6 +2125,12 @@ const probeDurableServerPath = async () => {
 			"The durable staging outbox did not expose the expected retry and dead-letter evidence",
 		);
 	}
+	const historicalCleanup = await cleanupPreviewDatabaseState({
+		anonymousIdentityHashes: [],
+		artifact: { ...artifact, sha: "0".repeat(40) },
+		runIds: [validateSyntheticRunId(`${state.runId}_historical_cleanup`)],
+		secret,
+	});
 	const databaseCleanup = await cleanupPreviewDatabaseState({
 		anonymousIdentityHashes: [],
 		artifact,
@@ -2166,6 +2172,7 @@ const probeDurableServerPath = async () => {
 		lostAcknowledgementRetryPassed: true,
 		visibilityMs: visibility.visibilityMs,
 		databaseCleanup,
+		historicalCleanup,
 		outboxHealth: {
 			activeEvents: Number(outboxHealth.activeEvents),
 			deadLetterEvents: Number(outboxHealth.deadLetterEvents),
@@ -2186,6 +2193,7 @@ const probeDurableServerPath = async () => {
 		durableServerPathPassed: true,
 		durableOutboxHealthPassed: true,
 		durableDatabaseCleanupPassed: true,
+		historicalCleanupAuthorizationPassed: true,
 		serverDuplicateDeliveryPassed: true,
 	};
 	writeJson(artifactPath, artifact);
@@ -4445,12 +4453,13 @@ const cleanup = async (parameters = {}) => {
 		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
-	state.recoveredAnonymousIdentityHashes =
-		await recoverAnonymousIdentityHashes({
+	state.recoveredAnonymousIdentityHashes = await recoverAnonymousIdentityHashes(
+		{
 			origin,
 			state,
 			token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN,
-		});
+		},
+	);
 	let target = await waitForOwnedMutationTarget({
 		state,
 		origin,

@@ -390,6 +390,7 @@ const tinybirdTokenNames = [
 ] as const;
 const TINYBIRD_STAGING_ORIGIN = "https://api.us-east.aws.tinybird.co";
 const TINYBIRD_STAGING_WORKSPACE_ID = "37b8fef9-817f-4c3c-b21f-218c36a6077d";
+const STAGING_GIT_COMMIT_REF = "codex/first-party-analytics";
 const STAGING_DATABASE_FINGERPRINT =
 	"fff37a9b160f31bfb82b8c5585829b8ee08f70b3645169dca6e7cb29033a039a";
 
@@ -415,6 +416,9 @@ const configurationAttestation = (runId: string) => {
 	const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
 	const databaseUrl = process.env.DATABASE_URL;
 	if (!host || !sha || !secret || !databaseUrl) return undefined;
+	if (process.env.VERCEL_GIT_COMMIT_REF !== STAGING_GIT_COMMIT_REF) {
+		return undefined;
+	}
 	const databaseFingerprint = createHash("sha256")
 		.update(databaseUrl)
 		.digest("hex");
@@ -577,7 +581,10 @@ const attestDatabaseSchema = async () => {
 	}
 };
 
-const authorize = (payload: { runId: string; sha: string }) =>
+const authorize = (
+	payload: { runId: string; sha: string },
+	options: { allowHistoricalSha?: boolean } = {},
+) =>
 	Effect.gen(function* () {
 		const secret = process.env.CAP_ANALYTICS_STAGING_TEST_SECRET;
 		if (!secret) {
@@ -604,9 +611,10 @@ const authorize = (payload: { runId: string; sha: string }) =>
 		) {
 			return yield* Effect.fail(new HttpApiError.Unauthorized());
 		}
+		const attestation = configurationAttestation(runId);
 		if (
-			payload.sha !== process.env.VERCEL_GIT_COMMIT_SHA ||
-			!configurationAttestation(runId)
+			!attestation ||
+			(!options.allowHistoricalSha && payload.sha !== attestation.sha)
 		) {
 			return yield* Effect.fail(new HttpApiError.BadRequest());
 		}
@@ -758,7 +766,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					)
 					.handle("cleanupDatabase", ({ payload }) =>
 						Effect.gen(function* () {
-							yield* authorize(payload);
+							const authorizedRunId = yield* authorize(payload, {
+								allowHistoricalSha: true,
+							});
 							const runIds = [
 								...new Set(payload.scopeRunIds.map(boundedRunId)),
 							].filter((runId) => runId !== undefined);
@@ -767,6 +777,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							].filter((identityHash) => /^[0-9a-f]{64}$/.test(identityHash));
 							if (
 								runIds.length === 0 ||
+								runIds[0] !== authorizedRunId ||
 								runIds.length !== payload.scopeRunIds.length ||
 								runIds.length > 8 ||
 								anonymousIdentityHashes.length !==

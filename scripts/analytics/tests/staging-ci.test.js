@@ -2638,12 +2638,21 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		route,
 		/const TINYBIRD_STAGING_WORKSPACE_ID =\s*"37b8fef9-817f-4c3c-b21f-218c36a6077d"/,
 	);
-	assert.match(
-		route,
-		/const authorize = [\s\S]*!configurationAttestation\(runId\)/,
-	);
+	assert.match(route, /const authorize = [\s\S]*const attestation =/);
 	assert.doesNotMatch(route, /CAP_ANALYTICS_STAGING_PREVIEW/);
 	assert.doesNotMatch(route, /process\.env\.VERCEL_ENV/);
+	assert.match(
+		route,
+		/process\.env\.VERCEL_GIT_COMMIT_REF !== STAGING_GIT_COMMIT_REF/,
+	);
+	assert.match(
+		route,
+		/!options\.allowHistoricalSha && payload\.sha !== attestation\.sha/,
+	);
+	assert.match(
+		route,
+		/handle\("cleanupDatabase"[\s\S]*allowHistoricalSha: true[\s\S]*runIds\[0\] !== authorizedRunId/,
+	);
 	assert.match(route, /"x-cap-analytics-staging-signature"/);
 	assert.match(
 		route,
@@ -2751,6 +2760,11 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		2,
 	);
 	assert.match(serverProbe, /state\.recoveryPhase = "postserver"/);
+	assert.match(
+		serverProbe,
+		/artifact: \{ \.\.\.artifact, sha: "0"\.repeat\(40\) \}[\s\S]*_historical_cleanup/,
+	);
+	assert.match(serverProbe, /historicalCleanupAuthorizationPassed: true/);
 	assert.match(serverProbe, /Number\(outboxHealth\.activeEvents\) !== 0/);
 	assert.match(serverProbe, /Number\(outboxHealth\.deadLetterEvents\) !== 1/);
 	assert.match(serverProbe, /durableOutboxHealthPassed: true/);
