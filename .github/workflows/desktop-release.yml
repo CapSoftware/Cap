@@ -285,8 +285,9 @@ jobs:
             echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
             echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
             echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
-            echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}'
-            echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}'
+            echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
+            echo 'VITE_OPENPANEL_CLIENT_SECRET=${{ secrets.VITE_OPENPANEL_CLIENT_SECRET }}'
+            echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}'
             echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
             echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}'
           } >> .env
