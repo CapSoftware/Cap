@@ -46,6 +46,7 @@ import {
 	resolveOwnedDiscardTarget,
 	resolveOwnedMutationTarget,
 	STAGING_WORKSPACE_ID,
+	SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS,
 	selectRetiredStagingDeployment,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -2942,13 +2943,13 @@ const phaseRunExpectations = ({ state, phase }) => {
 				phase === "cleanup"
 					? 0
 					: phase === "erasure"
-						? 2
+						? SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS.canonicalEvents
 						: state.decisionEventCount,
 			decisionEvents:
 				phase === "cleanup"
 					? 0
 					: phase === "erasure"
-						? 2
+						? SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS.decisionEvents
 						: state.decisionEventCount,
 		},
 		{
@@ -4466,46 +4467,9 @@ const verifySyntheticIdentityErasure = async () => {
 			dimensionBucketCount,
 		);
 	}
-	const expectedRemainingBusiness = {
-		receivedRows: 2,
-		uniqueEvents: 2,
-		uniquePayloads: 2,
-		duplicateRows: 0,
-		payloadConflicts: 0,
-		canonicalEvents: 2,
-		decisionEvents: 2,
-		decisionRevenueMinor: 0,
-		trafficVisitors: 1,
-		trafficVisits: 1,
-		trafficPageviews: 1,
-		trafficBounces: 1,
-		trafficDurationMs: 0,
-		pageVisitors: 1,
-		pageVisits: 1,
-		pageviews: 1,
-		pageLandings: 1,
-		pageExits: 1,
-		pageEngagedMs: 0,
-		pageScrollDepth: 0,
-		activationSignups: 0,
-		activatedCreators: 0,
-		retentionCreators: 0,
-		retentionOrganizations: 0,
-		identityLinkedVisitors: 0,
-		identityLinkedUsers: 0,
-		identitySignupUsers: 0,
-		identityOrganizations: 0,
-		identityGuestCheckoutVisitors: 1,
-		identityGuestPurchasers: 0,
-		identityAuthenticatedCheckoutUsers: 0,
-		identityWebCheckoutUsers: 0,
-		identityDesktopCheckoutUsers: 0,
-		identityMobileCheckoutUsers: 0,
-		identityCrossDeviceCheckoutUsers: 0,
-		identityTrialUsers: 0,
-		identityPurchasers: 0,
-	};
-	for (const [name, expected] of Object.entries(expectedRemainingBusiness)) {
+	for (const [name, expected] of Object.entries(
+		SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS,
+	)) {
 		if (erasedBusinessDecisions[name] !== expected) {
 			throw new Error(
 				`Scoped erasure left ${name}=${erasedBusinessDecisions[name]}, expected ${expected}`,

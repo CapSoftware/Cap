@@ -54,6 +54,7 @@ import {
 	STAGING_READ_TOKEN_MAXIMUM_LIFETIME_MS,
 	STAGING_READ_TOKEN_MINIMUM_LIFETIME_MS,
 	STAGING_WORKSPACE_ID,
+	SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS,
 	selectRetiredStagingDeployment,
 	selectStagingDeployment,
 	submitTinybirdCopyJobs,
@@ -1315,6 +1316,81 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 	assert.equal(decisions.rows.length, 28);
 	assert.equal(decisions.runId, `${runId}_decisions`);
 	assert.equal(new Set(decisions.rows.map((row) => row.event_id)).size, 28);
+	const allRows = [...decisions.rows, control.row];
+	const erasedAliases = new Set(
+		allRows
+			.filter(
+				(row) =>
+					row.user_id === fixture.userId ||
+					row.organization_id === fixture.organizationId,
+			)
+			.map((row) => row.anonymous_id),
+	);
+	const exclusiveErasedAliases = new Set(
+		[...erasedAliases].filter(
+			(anonymousId) =>
+				!allRows.some(
+					(row) =>
+						row.anonymous_id === anonymousId &&
+						((row.user_id && row.user_id !== fixture.userId) ||
+							(row.organization_id &&
+								row.organization_id !== fixture.organizationId)),
+				),
+		),
+	);
+	const remainingDecisionRows = decisions.rows.filter(
+		(row) =>
+			row.user_id !== fixture.userId &&
+			row.organization_id !== fixture.organizationId &&
+			!exclusiveErasedAliases.has(row.anonymous_id),
+	);
+	assert.equal(
+		remainingDecisionRows.length,
+		SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS.canonicalEvents,
+	);
+	assert.deepEqual(
+		remainingDecisionRows.map((row) => row.event_name),
+		["page_view", "page_engagement", "guest_checkout_started", "page_view"],
+	);
+	assert.deepEqual(SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS, {
+		receivedRows: 4,
+		uniqueEvents: 4,
+		uniquePayloads: 4,
+		duplicateRows: 0,
+		payloadConflicts: 0,
+		canonicalEvents: 4,
+		decisionEvents: 4,
+		decisionRevenueMinor: 0,
+		trafficVisitors: 2,
+		trafficVisits: 2,
+		trafficPageviews: 2,
+		trafficBounces: 1,
+		trafficDurationMs: 15_000,
+		pageVisitors: 2,
+		pageVisits: 2,
+		pageviews: 2,
+		pageLandings: 2,
+		pageExits: 2,
+		pageEngagedMs: 15_000,
+		pageScrollDepth: 75,
+		activationSignups: 0,
+		activatedCreators: 0,
+		retentionCreators: 0,
+		retentionOrganizations: 0,
+		identityLinkedVisitors: 0,
+		identityLinkedUsers: 0,
+		identitySignupUsers: 0,
+		identityOrganizations: 0,
+		identityGuestCheckoutVisitors: 1,
+		identityGuestPurchasers: 0,
+		identityAuthenticatedCheckoutUsers: 0,
+		identityWebCheckoutUsers: 0,
+		identityDesktopCheckoutUsers: 0,
+		identityMobileCheckoutUsers: 0,
+		identityCrossDeviceCheckoutUsers: 0,
+		identityTrialUsers: 0,
+		identityPurchasers: 0,
+	});
 	assert.deepEqual(
 		decisions.rows.map((row) => row.event_name),
 		[

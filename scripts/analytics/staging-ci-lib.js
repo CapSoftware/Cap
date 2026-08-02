@@ -1250,6 +1250,46 @@ export const createSyntheticErasureControl = ({ runId, now = new Date() }) => {
 	};
 };
 
+export const SYNTHETIC_ERASURE_REMAINING_BUSINESS_ASSERTIONS = Object.freeze({
+	receivedRows: 4,
+	uniqueEvents: 4,
+	uniquePayloads: 4,
+	duplicateRows: 0,
+	payloadConflicts: 0,
+	canonicalEvents: 4,
+	decisionEvents: 4,
+	decisionRevenueMinor: 0,
+	trafficVisitors: 2,
+	trafficVisits: 2,
+	trafficPageviews: 2,
+	trafficBounces: 1,
+	trafficDurationMs: 15_000,
+	pageVisitors: 2,
+	pageVisits: 2,
+	pageviews: 2,
+	pageLandings: 2,
+	pageExits: 2,
+	pageEngagedMs: 15_000,
+	pageScrollDepth: 75,
+	activationSignups: 0,
+	activatedCreators: 0,
+	retentionCreators: 0,
+	retentionOrganizations: 0,
+	identityLinkedVisitors: 0,
+	identityLinkedUsers: 0,
+	identitySignupUsers: 0,
+	identityOrganizations: 0,
+	identityGuestCheckoutVisitors: 1,
+	identityGuestPurchasers: 0,
+	identityAuthenticatedCheckoutUsers: 0,
+	identityWebCheckoutUsers: 0,
+	identityDesktopCheckoutUsers: 0,
+	identityMobileCheckoutUsers: 0,
+	identityCrossDeviceCheckoutUsers: 0,
+	identityTrialUsers: 0,
+	identityPurchasers: 0,
+});
+
 export const createSyntheticDecisionEvents = ({ runId, now = new Date() }) => {
 	const fixture = createSyntheticEvents({ runId, now });
 	const decisionRunId = `${runId}_decisions`;
