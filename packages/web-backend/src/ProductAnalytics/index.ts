@@ -377,59 +377,70 @@ export class ProductAnalytics extends Effect.Service<ProductAnalytics>()(
 										const retainUntil = new Date(
 											now.getTime() + PRODUCT_ANALYTICS_RECEIPT_RETENTION_MS,
 										);
+										const receiptRows = rows.map((row) => ({
+											eventIdHash: productAnalyticsEventIdHash(row.event_id),
+											payloadHash: row.payload_hash,
+											anonymousIdentityHash: row.anonymous_id
+												? productAnalyticsIdentityHash(
+														"anonymous",
+														row.anonymous_id,
+													)
+												: null,
+											userIdentityHash: row.user_id
+												? productAnalyticsIdentityHash("user", row.user_id)
+												: null,
+											organizationIdentityHash: row.organization_id
+												? productAnalyticsIdentityHash(
+														"organization",
+														row.organization_id,
+													)
+												: null,
+											retainUntil,
+										}));
+										await tx
+											.insert(Db.productAnalyticsEventReceipts)
+											.values(receiptRows)
+											.onDuplicateKeyUpdate({
+												set: {
+													conflictCount: Dz.sql`IF(${Db.productAnalyticsEventReceipts.payloadHash} <> VALUES(payloadHash), ${Db.productAnalyticsEventReceipts.conflictCount} + 1, ${Db.productAnalyticsEventReceipts.conflictCount})`,
+													lastSeenAt: now,
+													retainUntil: Dz.sql`GREATEST(${Db.productAnalyticsEventReceipts.retainUntil}, VALUES(retainUntil))`,
+												},
+											});
+										const receipts = await tx
+											.select({
+												eventIdHash:
+													Db.productAnalyticsEventReceipts.eventIdHash,
+												payloadHash:
+													Db.productAnalyticsEventReceipts.payloadHash,
+											})
+											.from(Db.productAnalyticsEventReceipts)
+											.where(
+												Dz.inArray(
+													Db.productAnalyticsEventReceipts.eventIdHash,
+													[
+														...new Set(
+															receiptRows.map((receipt) => receipt.eventIdHash),
+														),
+													],
+												),
+											)
+											.for("update");
+										const receiptPayloads = new Map(
+											receipts.map((receipt) => [
+												receipt.eventIdHash,
+												receipt.payloadHash,
+											]),
+										);
 										const admittedRows: ProductEventRow[] = [];
 										const rejectedEventIds: string[] = [];
 										for (const row of rows) {
 											const eventIdHash = productAnalyticsEventIdHash(
 												row.event_id,
 											);
-											const anonymousIdentityHash = row.anonymous_id
-												? productAnalyticsIdentityHash(
-														"anonymous",
-														row.anonymous_id,
-													)
-												: null;
-											const userIdentityHash = row.user_id
-												? productAnalyticsIdentityHash("user", row.user_id)
-												: null;
-											const organizationIdentityHash = row.organization_id
-												? productAnalyticsIdentityHash(
-														"organization",
-														row.organization_id,
-													)
-												: null;
-											await tx
-												.insert(Db.productAnalyticsEventReceipts)
-												.values({
-													eventIdHash,
-													payloadHash: row.payload_hash,
-													anonymousIdentityHash,
-													userIdentityHash,
-													organizationIdentityHash,
-													retainUntil,
-												})
-												.onDuplicateKeyUpdate({
-													set: {
-														conflictCount: Dz.sql`IF(${Db.productAnalyticsEventReceipts.payloadHash} <> ${row.payload_hash}, ${Db.productAnalyticsEventReceipts.conflictCount} + 1, ${Db.productAnalyticsEventReceipts.conflictCount})`,
-														lastSeenAt: now,
-														retainUntil: Dz.sql`GREATEST(${Db.productAnalyticsEventReceipts.retainUntil}, ${retainUntil})`,
-													},
-												});
-											const [receipt] = await tx
-												.select({
-													payloadHash:
-														Db.productAnalyticsEventReceipts.payloadHash,
-												})
-												.from(Db.productAnalyticsEventReceipts)
-												.where(
-													Dz.eq(
-														Db.productAnalyticsEventReceipts.eventIdHash,
-														eventIdHash,
-													),
-												)
-												.limit(1)
-												.for("update");
-											if (receipt?.payloadHash === row.payload_hash) {
+											if (
+												receiptPayloads.get(eventIdHash) === row.payload_hash
+											) {
 												admittedRows.push(row);
 											} else {
 												rejectedEventIds.push(row.event_id);

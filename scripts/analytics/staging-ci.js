@@ -1535,6 +1535,21 @@ const artifactExactDeploymentUrl = (artifact) => artifact.vercel.url;
 const artifactBranchAccessUrl = (artifact) =>
 	artifact.vercel.accessUrl ?? artifactExactDeploymentUrl(artifact);
 
+const stateAnonymousIdentityHashes = (state) => [
+	...new Set(
+		[
+			state.browserAnonymousIdentityHash,
+			state.previewAnonymousIdentityHash,
+			...(Array.isArray(state.recoveredAnonymousIdentityHashes)
+				? state.recoveredAnonymousIdentityHashes
+				: []),
+		].filter(
+			(identityHash) =>
+				typeof identityHash === "string" && /^[0-9a-f]{64}$/.test(identityHash),
+		),
+	),
+];
+
 const attestExactPreviewSha = async ({ previewOrigin, runId }) => {
 	const response = await previewRequest(
 		new URL("/api/analytics/staging-test/attest", previewOrigin),
@@ -1571,7 +1586,7 @@ const cleanupPreviewDatabaseState = async ({
 	const scopedRunIds = [...new Set(runIds)];
 	const url = new URL(
 		"/api/analytics/staging-test/cleanup-database",
-		artifactExactDeploymentUrl(artifact),
+		artifactBranchAccessUrl(artifact),
 	);
 	const response = await previewRequest(url, {
 		method: "POST",
@@ -1868,14 +1883,81 @@ const probePreview = async () => {
 	const collectorEventsPerSecond = Math.round(
 		(collectorAcceptedEvents * 1_000) / collectorElapsedMs,
 	);
-	if (
+	const collectorBudgetPassed = !(
 		collectorErrors !== 0 ||
 		collectorAcceptedEvents !== collectorBatches.length * 20 ||
 		collectorLatency.p95Ms > collectorP95BudgetMs ||
 		collectorLatency.p99Ms > collectorP99BudgetMs ||
 		collectorEventsPerSecond < collectorMinimumEventsPerSecond
-	) {
-		throw new Error("The exact-SHA collector performance budget failed");
+	);
+	const persistPreviewEvidence = ({
+		complete = false,
+		rateLimited = false,
+		rateLimitStatus,
+		replayAccepted = 0,
+	}) => {
+		state.previewAcceptedRows =
+			duplicateResponses.length + replayAccepted + collectorAcceptedEvents;
+		state.previewExpectedEvents =
+			Number(state.browserExpectedEvents ?? 0) + 1 + collectorAcceptedEvents;
+		state.previewAnonymousIdentityHash = previewAnonymousIdentityHash;
+		state.previewStartTime = new Date(
+			new Date(occurredAt).getTime() - 120_000,
+		).toISOString();
+		state.previewEndTime = new Date(Date.now() + 300_000).toISOString();
+		state.recoveryPhase = "postpreview";
+		writeJson(statePath, state, 0o600);
+		artifact.previewApi = {
+			bootstrapPassed: true,
+			missingTokenRejected: true,
+			expiredTokenRejected: true,
+			concurrentDuplicateAccepted: true,
+			collectorPerformance: {
+				acceptedEvents: collectorAcceptedEvents,
+				concurrency: collectorConcurrency,
+				elapsedMs: collectorElapsedMs,
+				errorCount: collectorErrors,
+				eventsPerSecond: collectorEventsPerSecond,
+				latency: collectorLatency,
+				requestCount: collectorRequestCount,
+				budget: {
+					minimumEventsPerSecond: collectorMinimumEventsPerSecond,
+					p95Ms: collectorP95BudgetMs,
+					p99Ms: collectorP99BudgetMs,
+					passed: collectorBudgetPassed,
+				},
+			},
+			replayAcceptedBeforeRateLimit: replayAccepted,
+			rateLimited,
+			rateLimitStatus,
+			rateLimitPassed: rateLimitStatus === "passed",
+			collectorLatency,
+			collectorP95BudgetMs,
+			collectorP99BudgetMs,
+			collectorMinimumEventsPerSecond,
+		};
+		artifact.bundle = {
+			baselineOrigin,
+			baseline: baselineBundle,
+			measured: previewBundle,
+			budget: bundleBudget,
+		};
+		artifact.assertions = {
+			...artifact.assertions,
+			previewApiPassed: complete,
+			invalidTokenRejected: true,
+			expiredTokenRejected: true,
+			tokenReplayBounded: rateLimitStatus === "passed",
+			bundleBudgetPassed: true,
+			collectorBudgetPassed,
+		};
+		writeJson(artifactPath, artifact);
+	};
+	persistPreviewEvidence({ rateLimitStatus: "not_run" });
+	if (!collectorBudgetPassed) {
+		throw new Error(
+			`The exact-SHA collector performance budget failed: ${collectorErrors} errors, ${collectorAcceptedEvents}/${collectorBatches.length * 20} events, p95 ${collectorLatency.p95Ms}/${collectorP95BudgetMs}ms, p99 ${collectorLatency.p99Ms}/${collectorP99BudgetMs}ms, throughput ${collectorEventsPerSecond}/${collectorMinimumEventsPerSecond} events/s`,
+		);
 	}
 	const minimumAccepted = Number(process.env.RATE_LIMIT_MIN_ACCEPTED ?? 20);
 	const maximumAccepted = Number(process.env.RATE_LIMIT_MAX_ACCEPTED ?? 120);
@@ -1888,68 +1970,38 @@ const probePreview = async () => {
 			break;
 		}
 		if (!response.ok) {
+			persistPreviewEvidence({
+				rateLimited,
+				rateLimitStatus: "failed",
+				replayAccepted,
+			});
 			throw new Error(
 				`The preview replay probe failed with HTTP ${response.status}`,
 			);
 		}
 		replayAccepted += 1;
 	}
-	if (!rateLimited || replayAccepted < minimumAccepted) {
+	const rateLimitPassed = rateLimited && replayAccepted >= minimumAccepted;
+	persistPreviewEvidence({
+		rateLimited,
+		rateLimitStatus: rateLimitPassed ? "passed" : "failed",
+		replayAccepted,
+	});
+	if (!rateLimitPassed) {
 		throw new Error(
 			`The preview rate limit accepted ${replayAccepted} replay requests before ${rateLimited ? "limiting too aggressively" : "failing to limit"}`,
 		);
 	}
-	state.previewAcceptedRows =
-		duplicateResponses.length + replayAccepted + collectorAcceptedEvents;
-	state.previewExpectedEvents =
-		Number(state.browserExpectedEvents ?? 0) + 1 + collectorAcceptedEvents;
-	state.previewAnonymousIdentityHash = previewAnonymousIdentityHash;
-	state.previewStartTime = new Date(
-		new Date(occurredAt).getTime() - 120_000,
-	).toISOString();
-	state.previewEndTime = new Date(Date.now() + 300_000).toISOString();
-	writeJson(statePath, state, 0o600);
-	artifact.previewApi = {
-		bootstrapPassed: true,
-		missingTokenRejected: true,
-		expiredTokenRejected: true,
-		concurrentDuplicateAccepted: true,
-		collectorPerformance: {
-			acceptedEvents: collectorAcceptedEvents,
-			concurrency: collectorConcurrency,
-			elapsedMs: collectorElapsedMs,
-			errorCount: collectorErrors,
-			eventsPerSecond: collectorEventsPerSecond,
-			latency: collectorLatency,
-			requestCount: collectorRequestCount,
-		},
-		replayAcceptedBeforeRateLimit: replayAccepted,
-		rateLimitPassed: true,
-		collectorLatency,
-		collectorP95BudgetMs,
-		collectorP99BudgetMs,
-		collectorMinimumEventsPerSecond,
-	};
-	artifact.bundle = {
-		baselineOrigin,
-		baseline: baselineBundle,
-		measured: previewBundle,
-		budget: bundleBudget,
-	};
-	artifact.assertions = {
-		...artifact.assertions,
-		previewApiPassed: true,
-		invalidTokenRejected: true,
-		expiredTokenRejected: true,
-		tokenReplayBounded: true,
-		bundleBudgetPassed: true,
-		collectorBudgetPassed: true,
-	};
 	await attestExactPreviewSha({
 		previewOrigin,
 		runId: `${state.runId}_preview_api_final`,
 	});
-	writeJson(artifactPath, artifact);
+	persistPreviewEvidence({
+		complete: true,
+		rateLimited,
+		rateLimitStatus: "passed",
+		replayAccepted,
+	});
 };
 
 const probeDurableServerPath = async () => {
@@ -1961,7 +2013,7 @@ const probeDurableServerPath = async () => {
 	const serverRunId = validateSyntheticRunId(`${state.runId}_server`);
 	const url = new URL(
 		"/api/analytics/staging-test",
-		artifactExactDeploymentUrl(artifact),
+		artifactBranchAccessUrl(artifact),
 	);
 	const body = (sha) =>
 		JSON.stringify({
@@ -2013,6 +2065,7 @@ const probeDurableServerPath = async () => {
 	state.serverRunId = serverRunId;
 	state.serverExpectedEvents = 4;
 	state.serverExpectedRows = 5;
+	state.recoveryPhase = "postserver";
 	writeJson(statePath, state, 0o600);
 	const visibility = await waitForCopyVisibility({
 		label: "Durable exact-SHA server delivery",
@@ -2040,7 +2093,7 @@ const probeDurableServerPath = async () => {
 	});
 	const healthUrl = new URL(
 		"/api/analytics/staging-test/health",
-		artifactExactDeploymentUrl(artifact),
+		artifactBranchAccessUrl(artifact),
 	);
 	const healthResponse = await previewRequest(healthUrl, {
 		method: "POST",
@@ -4128,7 +4181,7 @@ const eraseSyntheticIdentity = async () => {
 	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
 	const url = new URL(
 		"/api/analytics/staging-test/erase",
-		artifactExactDeploymentUrl(artifact),
+		artifactBranchAccessUrl(artifact),
 	);
 	const body = JSON.stringify({ runId: state.runId, sha: artifact.sha });
 	const send = (authorization) =>
@@ -4389,8 +4442,15 @@ const cleanup = async (parameters = {}) => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
+	state.recoveredAnonymousIdentityHashes =
+		await recoverAnonymousIdentityHashes({
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN,
+		});
 	let target = await waitForOwnedMutationTarget({
 		state,
 		origin,
@@ -4462,13 +4522,7 @@ const cleanup = async (parameters = {}) => {
 	const rawBeforeDelete = await readScopedRawAssertions(rawDeploymentId);
 	{
 		const databaseArtifact = readJson(artifactPath);
-		const anonymousIdentityHashes = [
-			state.browserAnonymousIdentityHash,
-			state.previewAnonymousIdentityHash,
-		].filter(
-			(identityHash) =>
-				typeof identityHash === "string" && /^[0-9a-f]{64}$/.test(identityHash),
-		);
+		const anonymousIdentityHashes = stateAnonymousIdentityHashes(state);
 		const databaseCleanup = await cleanupPreviewDatabaseState({
 			anonymousIdentityHashes,
 			artifact: databaseArtifact,
@@ -5219,7 +5273,7 @@ const markRecoveryReadyToFinalize = async () => {
 	assertRecoveryIdentity(state.recoveryIdentity);
 	if (
 		state.needsPromotion !== true ||
-		state.recoveryPhase !== "postseed" ||
+		state.recoveryPhase !== "postserver" ||
 		artifact.assertions?.cleanupPassed !== true ||
 		artifact.rollbackDrill?.passed !== true ||
 		artifact.copySchedule?.pause?.status !== "passed" ||
@@ -5245,7 +5299,10 @@ const recoveryCheckpoint = (directory) => {
 			preseed: 1,
 			prepromote: 2,
 			postseed: 3,
-			ready_to_finalize: 4,
+			postbrowser: 4,
+			postpreview: 5,
+			postserver: 6,
+			ready_to_finalize: 7,
 		}[state.recoveryPhase];
 		if (!phaseRank) {
 			throw new Error("Recovery checkpoint has an unsupported phase");
@@ -5282,6 +5339,30 @@ const recoveryCheckpoint = (directory) => {
 	return { boundary, kind: "boundary" };
 };
 
+const recoverAnonymousIdentityHashes = async ({ origin, state, token }) => {
+	if (!state.previewRunId) return [];
+	const previewRunId = validateSyntheticRunId(state.previewRunId);
+	const response = await request(
+		tinybirdUrl(origin, "/v0/sql", {
+			q: `SELECT DISTINCT anonymous_id FROM product_events_v1 WHERE synthetic_run_id = '${previewRunId}' AND anonymous_id != '' LIMIT 17 FORMAT JSON`,
+		}),
+		{ token },
+	);
+	const anonymousIds = [
+		...new Set(
+			(response.data.data ?? [])
+				.map((row) => row.anonymous_id)
+				.filter((value) => typeof value === "string" && value.length > 0),
+		),
+	];
+	if (anonymousIds.length > 16) {
+		throw new Error("Recovery found too many scoped browser identities");
+	}
+	return anonymousIds.map((anonymousId) =>
+		hashIdentifier(`anonymous\0${anonymousId}`),
+	);
+};
+
 const recoverStaging = async () => {
 	const recoveryArtifactPath = option("artifact");
 	writeJson(recoveryArtifactPath, {
@@ -5295,6 +5376,7 @@ const recoverStaging = async () => {
 		"TINYBIRD_STAGING_CLEANUP_TOKEN",
 		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
+		"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
 		"TINYBIRD_STAGING_READ_TOKEN",
 		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
 	]);
@@ -5328,6 +5410,13 @@ const recoverStaging = async () => {
 	) {
 		throw new Error("Recovery report does not match its exact-SHA checkpoint");
 	}
+	state.recoveredAnonymousIdentityHashes = await recoverAnonymousIdentityHashes(
+		{
+			origin,
+			state,
+			token: tokens.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN,
+		},
+	);
 	const candidateId = String(state.deploymentId);
 	const previousLiveDeploymentId = String(
 		state.previousLiveDeploymentId ?? state.liveBeforeDeploymentId ?? "",
@@ -5523,14 +5612,7 @@ const recoverStaging = async () => {
 		}
 		if (!syntheticCleanupCompleted) {
 			databaseCleanup = await cleanupPreviewDatabaseState({
-				anonymousIdentityHashes: [
-					state.browserAnonymousIdentityHash,
-					state.previewAnonymousIdentityHash,
-				].filter(
-					(identityHash) =>
-						typeof identityHash === "string" &&
-						/^[0-9a-f]{64}$/.test(identityHash),
-				),
+				anonymousIdentityHashes: stateAnonymousIdentityHashes(state),
 				artifact,
 				runIds: [state.runId, serverRunId],
 				secret: environment("CAP_ANALYTICS_STAGING_TEST_SECRET"),

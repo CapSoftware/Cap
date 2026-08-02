@@ -2518,6 +2518,9 @@ test("the analytics workflow is statically restricted to staging", () => {
 		) < workflow.indexOf("Prove least-privilege staging token scopes"),
 	);
 	assert.match(workflow, /35-postseed/);
+	assert.match(workflow, /36-postbrowser/);
+	assert.match(workflow, /37-postpreview/);
+	assert.match(workflow, /38-postserver/);
 	assert.ok(
 		workflow.indexOf("Prove the exact-SHA deployed browser tracker") <
 			workflow.indexOf(
@@ -2709,6 +2712,21 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		previewProbe,
 		/const previewAnonymousIdentityHash = hashIdentifier\([\s\S]*previewAnonymousIdentityHash !== state\.previewAnonymousIdentityHash/,
 	);
+	assert.match(previewProbe, /state\.recoveryPhase = "postpreview"/);
+	assert.match(
+		previewProbe,
+		/persistPreviewEvidence\(\{ rateLimitStatus: "not_run" \}\);[\s\S]*if \(!collectorBudgetPassed\)/,
+	);
+	assert.match(
+		previewProbe,
+		/collectorPerformance:[\s\S]*budget:[\s\S]*passed: collectorBudgetPassed/,
+	);
+	const cleanupProbe = runner.slice(
+		runner.indexOf("const cleanupPreviewDatabaseState = async"),
+		runner.indexOf("const measurePageBundle = async"),
+	);
+	assert.match(cleanupProbe, /artifactBranchAccessUrl\(artifact\)/);
+	assert.match(cleanupProbe, /sha: artifact\.sha/);
 	const browserProbe = fs.readFileSync(
 		new URL(
 			"../../../apps/chrome-extension/e2e/analytics-staging.spec.ts",
@@ -2729,9 +2747,10 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	);
 	assert.match(serverProbe, /\/api\/analytics\/staging-test\/health/);
 	assert.equal(
-		serverProbe.match(/artifactExactDeploymentUrl\(artifact\)/g)?.length,
+		serverProbe.match(/artifactBranchAccessUrl\(artifact\)/g)?.length,
 		2,
 	);
+	assert.match(serverProbe, /state\.recoveryPhase = "postserver"/);
 	assert.match(serverProbe, /Number\(outboxHealth\.activeEvents\) !== 0/);
 	assert.match(serverProbe, /Number\(outboxHealth\.deadLetterEvents\) !== 1/);
 	assert.match(serverProbe, /durableOutboxHealthPassed: true/);
@@ -2792,6 +2811,21 @@ test("the seed checkpoint is persisted before ingestion", () => {
 			"Upload the immutable post-ingestion recovery checkpoint",
 		) < workflow.indexOf("Verify representative ingestion performance"),
 	);
+	assert.ok(
+		workflow.indexOf("Upload the immutable post-browser recovery checkpoint") <
+			workflow.indexOf(
+				"Probe the exact-SHA Vercel browser collector and staging rate limit",
+			),
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Upload the immutable post-collector recovery checkpoint",
+		) < workflow.indexOf("Prove exact-SHA durable server delivery"),
+	);
+	assert.ok(
+		workflow.indexOf("Upload the immutable post-server recovery checkpoint") <
+			workflow.indexOf("Rebuild promoted decision and health copies"),
+	);
 });
 
 test("candidate validation performs no synthetic writes before promotion", () => {
@@ -2838,6 +2872,12 @@ test("recovery avoids unowned schedule changes and publishes failure evidence", 
 		recoverySource.match(/enforcePerformanceBudget: false/g)?.length,
 		2,
 	);
+	assert.match(source, /const recoverAnonymousIdentityHashes = async/);
+	assert.match(
+		source,
+		/SELECT DISTINCT anonymous_id FROM product_events_v1 WHERE synthetic_run_id/,
+	);
+	assert.match(recoverySource, /TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN/);
 	assert.match(source, /if \(!budget\.passed && enforcePerformanceBudget\)/);
 });
 

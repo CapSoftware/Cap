@@ -560,6 +560,7 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	state.browserAnonymousIdentityHash = createHash("sha256")
 		.update(`anonymous\0${anonymousId}`)
 		.digest("hex");
+	state.recoveryPhase = "postbrowser";
 	fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, {
 		mode: 0o600,
 	});

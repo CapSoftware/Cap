@@ -448,6 +448,16 @@ jobs:
         run: |
           pnpm --dir apps/chrome-extension exec playwright install --with-deps chromium
           pnpm --dir apps/chrome-extension exec playwright test e2e/analytics-staging.spec.ts
+      - name: Upload the immutable post-browser recovery checkpoint
+        if: always() && steps.seed.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-36-postbrowser
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Probe the exact-SHA Vercel browser collector and staging rate limit
         id: preview-api
         env:
@@ -458,6 +468,16 @@ jobs:
           node scripts/analytics/staging-ci.js probe-preview
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Upload the immutable post-collector recovery checkpoint
+        if: always() && steps.preview-api.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-37-postpreview
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Prove exact-SHA durable server delivery
         id: server-delivery
         env:
@@ -470,6 +490,16 @@ jobs:
           node scripts/analytics/staging-ci.js probe-server
           --state "$RUNNER_TEMP/analytics-staging-state.json"
           --artifact "$RUNNER_TEMP/analytics-staging-report.json"
+      - name: Upload the immutable post-server recovery checkpoint
+        if: always() && steps.server-delivery.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-recovery-${{ github.run_id }}-${{ github.run_attempt }}-38-postserver
+          path: |
+            ${{ runner.temp }}/analytics-staging-state.json
+            ${{ runner.temp }}/analytics-staging-report.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Rebuild promoted decision and health copies
         id: promoted-copies
         env:
@@ -561,6 +591,7 @@ jobs:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
@@ -728,6 +759,7 @@ jobs:
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
