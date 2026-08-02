@@ -32,6 +32,7 @@ import {
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
+import { resetUser } from "@/app/utils/analytics";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
@@ -256,6 +257,7 @@ const User = () => {
 				icon: <LogoutIcon />,
 				onClick: () => {
 					setMenuOpen(false);
+					resetUser();
 					signOut();
 				},
 				iconClassName: "text-gray-11 group-hover:text-gray-12",

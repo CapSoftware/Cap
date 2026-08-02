@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { startTransition } from "react";
 import { toast } from "sonner";
+import { resetUser } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 export const Bottom = () => {
@@ -35,7 +36,10 @@ export const Bottom = () => {
 				className="w-fit"
 				variant="outline"
 				size="sm"
-				onClick={() => signOut()}
+				onClick={() => {
+					resetUser();
+					signOut();
+				}}
 			>
 				Sign out
 			</Button>
