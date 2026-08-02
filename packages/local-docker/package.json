@@ -7,9 +7,14 @@
 		"dev": "pnpm docker:up",
 		"docker:up": "docker compose up -d --wait",
 		"docker:stop": "docker compose stop",
-		"docker:clean": "docker compose down -v"
+		"docker:clean": "docker compose down -v",
+		"test": "vitest run"
 	},
 	"engines": {
 		"node": ">=20"
+	},
+	"devDependencies": {
+		"vitest": "~2.1.9",
+		"yaml": "^2.8.1"
 	}
 }
