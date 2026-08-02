@@ -62,6 +62,26 @@ class ProductAnalyticsRequestError extends Error {
 	}
 }
 
+class ProductAnalyticsErasureOperationError extends Error {
+	constructor(errorCode: string, error: Error) {
+		super(error.message, { cause: { errorCode } });
+	}
+}
+
+const productAnalyticsErasureFailureKind = (error: Error) => {
+	if (error instanceof ProductAnalyticsRequestError) {
+		return `provider_${error.status}`;
+	}
+	if (error.name === "TimeoutError" || error.message.includes("timed out")) {
+		return "timeout";
+	}
+	if (error.message.includes("not configured")) return "configuration";
+	if (error.message.includes("fanout exceeded")) return "fanout_bound";
+	if (error.message.includes("lease was fenced")) return "fenced";
+	if (error.message.includes("did not finish")) return "incomplete";
+	return "operation_failed";
+};
+
 const isUnscheduledProductAnalyticsCopyError = (error: Error) => {
 	if (
 		!(error instanceof ProductAnalyticsRequestError) ||
@@ -674,6 +694,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		const runProductAnalyticsErasure = (
 			lease: ProductAnalyticsErasureLease,
 		) => {
+			let currentStage = "initializing";
 			let pausedPipes: Array<(typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number]> =
 				lease.pausedPipes.filter(
 					(name): name is (typeof PRODUCT_ANALYTICS_REBUILD_PIPES)[number] =>
@@ -703,11 +724,14 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			);
 
 			const operation = Effect.gen(function* () {
+				currentStage = "ingestion_quiescence";
 				yield* erasureLeases.waitForIngestionQuiescence();
+				currentStage = "identity_fence";
 				let anonymousIds = yield* erasureLeases.discardPendingEvents(
 					lease.scope,
 				);
 				if (lease.scope.userId) {
+					currentStage = "identity_lookup";
 					const escapedUserId = escapeTinybirdString(lease.scope.userId);
 					const anonymousRows = yield* queryProductAnalyticsSql<{
 						anonymous_id: string;
@@ -730,20 +754,24 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						]),
 					];
 				}
+				currentStage = "identity_fence_aliases";
 				anonymousIds = yield* erasureLeases.discardPendingEvents(
 					lease.scope,
 					anonymousIds,
 				);
 				if (pausedPipes.length > 0) {
+					currentStage = "resume_stale_schedules";
 					yield* advance("resuming");
 					yield* resumeProductAnalyticsCopySchedules(pausedPipes);
 					pausedPipes = [];
 					yield* advance("pausing", []);
 				}
+				currentStage = "pause_schedules";
 				pausedPipes = yield* pauseProductAnalyticsCopySchedules((paused) => {
 					pausedPipes = [...paused];
 					return advance("pausing", paused);
 				});
+				currentStage = "copy_quiescence";
 				yield* waitForProductAnalyticsCopyQuiescence;
 				yield* advance("deleting");
 				const conditions: string[] = [];
@@ -775,31 +803,38 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					queryProductAnalyticsSql<{ matching_rows: number | string }>(
 						`SELECT count() AS matching_rows FROM ${datasource} WHERE ${deleteCondition}`,
 					).pipe(Effect.map((rows) => Number(rows[0]?.matching_rows ?? 0)));
+				currentStage = "raw_count";
 				const rawRows = yield* countRows("product_events_v1");
 				if (rawRows > 0) {
+					currentStage = "raw_delete";
 					yield* advance("deleting");
 					yield* deleteProductAnalyticsData(
 						"product_events_v1",
 						deleteCondition,
 					);
+					currentStage = "raw_visibility";
 					yield* waitForProductAnalytics(
 						"raw erasure visibility",
 						() => countRows("product_events_v1"),
 						(count) => count === 0,
 					);
 				}
+				currentStage = "rebuild_event_ids";
 				yield* advance("rebuilding");
 				yield* runProductAnalyticsCopyPipe(
 					"snapshot_product_event_id_states_v2",
 				);
+				currentStage = "rebuild_event_days";
 				yield* advance("rebuilding");
 				yield* runProductAnalyticsCopyPipe(
 					"snapshot_product_event_day_states_v2",
 				);
+				currentStage = "rebuild_canonical";
 				yield* advance("rebuilding");
 				yield* runProductAnalyticsCopyPipe(
 					"snapshot_product_events_canonical_v1",
 				);
+				currentStage = "canonical_visibility";
 				yield* waitForProductAnalytics(
 					"canonical erasure visibility",
 					() => countRows("product_events_canonical_v1"),
@@ -809,6 +844,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				for (const [pipe, marker] of Object.entries(
 					PRODUCT_ANALYTICS_COPY_MARKERS,
 				)) {
+					currentStage = "rebuild_decisions";
 					yield* advance("rebuilding");
 					yield* runProductAnalyticsCopyPipe(pipe, copyRunId);
 					yield* waitForProductAnalytics(
@@ -817,6 +853,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						(count) => count === 1,
 					);
 				}
+				currentStage = "final_verification";
 				yield* waitForProductAnalytics(
 					"final erasure verification",
 					() =>
@@ -827,7 +864,9 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					([rawCount, canonicalCount]) =>
 						rawCount === 0 && canonicalCount === 0,
 				);
+				currentStage = "final_identity_fence";
 				yield* erasureLeases.discardPendingEvents(lease.scope, anonymousIds);
+				currentStage = "resume_schedules";
 				yield* advance("resuming");
 				yield* resumeProductAnalyticsCopySchedules(pausedPipes);
 				pausedPipes = [];
@@ -838,6 +877,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			const recoverableOperation = Effect.gen(function* () {
 				const outcome = yield* operation.pipe(Effect.either);
 				if (outcome._tag === "Right") return;
+				const errorCode = `${currentStage}_${productAnalyticsErasureFailureKind(outcome.left)}`;
 				const resumed = yield* resumeProductAnalyticsCopySchedules(
 					pausedPipes,
 				).pipe(Effect.either);
@@ -845,14 +885,16 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 				const failed = yield* erasureLeases.fail(
 					lease,
 					pausedPipes,
-					resumed._tag === "Left" ? "resume_failed" : "erase_failed",
+					resumed._tag === "Left" ? `${currentStage}_resume_failed` : errorCode,
 				);
 				if (!failed) {
 					return yield* Effect.fail(
 						new Error("Product analytics erasure lease was fenced"),
 					);
 				}
-				return yield* Effect.fail(outcome.left);
+				return yield* Effect.fail(
+					new ProductAnalyticsErasureOperationError(errorCode, outcome.left),
+				);
 			});
 
 			return Effect.raceFirst(recoverableOperation, heartbeat);

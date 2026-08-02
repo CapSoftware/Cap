@@ -276,6 +276,9 @@ describe.sequential("product analytics erasure", () => {
 		expect(error.message).toBe(
 			"Product analytics Copy schedule control is not configured",
 		);
+		expect(error.cause).toEqual({
+			errorCode: "pause_schedules_configuration",
+		});
 	});
 
 	it("fails closed when the erasure host is missing", async () => {

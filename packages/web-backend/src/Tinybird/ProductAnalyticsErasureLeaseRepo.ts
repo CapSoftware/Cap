@@ -75,7 +75,7 @@ export interface ProductAnalyticsErasureLeaseStore {
 	fail: (
 		lease: ProductAnalyticsErasureLease,
 		pausedPipes: readonly string[],
-		lastErrorCode: "erase_failed" | "resume_failed",
+		lastErrorCode: string,
 	) => Effect.Effect<boolean, Error>;
 }
 
@@ -727,8 +727,11 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 				lease,
 				pausedPipes,
 				lastErrorCode,
-			) =>
-				database.use(async (db) => {
+			) => {
+				const boundedErrorCode = /^[a-z0-9_]{1,64}$/.test(lastErrorCode)
+					? lastErrorCode
+					: "erase_failed";
+				return database.use(async (db) => {
 					const result = await db
 						.update(Db.productAnalyticsErasureLeases)
 						.set({
@@ -736,12 +739,13 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 							leaseExpiresAt: null,
 							phase: "failed",
 							pausedPipes: [...pausedPipes],
-							lastErrorCode,
+							lastErrorCode: boundedErrorCode,
 							updatedAt: new Date(),
 						})
 						.where(ownedFence(lease));
 					return affectedRows(result) > 0;
 				});
+			};
 
 			return {
 				enqueueErasureRequest,

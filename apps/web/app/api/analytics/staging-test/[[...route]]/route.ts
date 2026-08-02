@@ -463,6 +463,17 @@ const resetFailedSyntheticErasureLease = async () => {
 	});
 };
 
+const stagingErasureErrorCode = (error: Error) => {
+	const cause = error.cause;
+	if (typeof cause !== "object" || cause === null || !("errorCode" in cause)) {
+		return "operation_failed";
+	}
+	const errorCode = cause.errorCode;
+	return typeof errorCode === "string" && /^[a-z0-9_]{1,64}$/.test(errorCode)
+		? errorCode
+		: "operation_failed";
+};
+
 const tinybirdTokenNames = [
 	"PRODUCT_ANALYTICS_TINYBIRD_TOKEN",
 	"PRODUCT_ANALYTICS_TINYBIRD_READ_TOKEN",
@@ -914,15 +925,26 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									organizationId,
 								})
 								.pipe(
-									Effect.mapError(() => new HttpApiError.ServiceUnavailable()),
+									Effect.mapError((error) => {
+										console.error("Product analytics staging erasure failed", {
+											errorCode: stagingErasureErrorCode(error),
+										});
+										return new HttpApiError.ServiceUnavailable();
+									}),
 								);
 							if (erasure.queued) {
 								const recovery = yield* tinybird
 									.recoverProductAnalyticsErasureRequest(erasure.requestId)
 									.pipe(
-										Effect.mapError(
-											() => new HttpApiError.ServiceUnavailable(),
-										),
+										Effect.mapError((error) => {
+											console.error(
+												"Product analytics staging erasure failed",
+												{
+													errorCode: stagingErasureErrorCode(error),
+												},
+											);
+											return new HttpApiError.ServiceUnavailable();
+										}),
 									);
 								if (!recovery.recovered) {
 									return yield* Effect.fail(
