@@ -46,6 +46,17 @@ pub struct Microphone {
     cancel: CancellationToken,
 }
 
+// The detached bridge tasks hold clones of the feed lock and only exit via
+// this token. If the pipeline is torn down without stop() (wedged muxer,
+// error paths), a live-but-orphaned lock would keep the feed in State::Locked
+// forever, making RemoveInput a silent no-op and pinning the cpal stream for
+// the rest of the process.
+impl Drop for Microphone {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum MicrophoneSourceError {
     #[error("microphone actor not running")]
