@@ -510,7 +510,7 @@ fn list_input_device_names() -> Vec<String> {
     let default_id = macos_helpers::get_default_device_id(true);
 
     if let Some(name) = default_id
-        .and_then(|id| macos_helpers::get_device_name(id).ok())
+        .and_then(macos_device_name_released)
         .filter(|name| !name.is_empty())
     {
         names.insert(name, ());
@@ -521,7 +521,7 @@ fn list_input_device_names() -> Vec<String> {
             for device_id in device_ids {
                 if macos_helpers::get_audio_device_supports_scope(device_id, Scope::Input)
                     .unwrap_or(false)
-                    && let Ok(name) = macos_helpers::get_device_name(device_id)
+                    && let Some(name) = macos_device_name_released(device_id)
                     && !name.is_empty()
                 {
                     names.entry(name).or_insert(());
@@ -534,6 +534,44 @@ fn list_input_device_names() -> Vec<String> {
     }
 
     names.into_keys().collect()
+}
+
+// coreaudio-rs's get_device_name never releases the CFString it copies out of
+// AudioObjectGetPropertyData (twice on the CFStringGetCStringPtr fallback
+// path), leaking one or two strings per device per call; the devices snapshot
+// emitter calls this every 5s for the process lifetime. This variant hands the
+// +1 ref to core-foundation, which releases it on drop.
+#[cfg(target_os = "macos")]
+fn macos_device_name_released(device_id: coreaudio::sys::AudioDeviceID) -> Option<String> {
+    use core_foundation::{
+        base::TCFType,
+        string::{CFString, CFStringRef},
+    };
+    use coreaudio::sys;
+
+    let property_address = sys::AudioObjectPropertyAddress {
+        mSelector: sys::kAudioDevicePropertyDeviceNameCFString,
+        mScope: sys::kAudioDevicePropertyScopeOutput,
+        mElement: sys::kAudioObjectPropertyElementMaster,
+    };
+
+    let mut device_name: CFStringRef = std::ptr::null();
+    let mut data_size = std::mem::size_of::<CFStringRef>() as u32;
+    let status = unsafe {
+        sys::AudioObjectGetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            std::ptr::null(),
+            &mut data_size,
+            (&mut device_name) as *mut CFStringRef as *mut _,
+        )
+    };
+    if status != sys::kAudioHardwareNoError as i32 || device_name.is_null() {
+        return None;
+    }
+
+    Some(unsafe { CFString::wrap_under_create_rule(device_name) }.to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1333,7 +1371,19 @@ impl Message<RemoveInput> for MicrophoneFeed {
     async fn handle(&mut self, _: RemoveInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("MicrophoneFeed.RemoveInput");
 
-        let state = self.state.try_as_open()?;
+        // Callers routinely discard this reply; a locked feed silently keeps
+        // the cpal stream (and its per-callback allocations) alive, so make
+        // that path visible in logs. debug-level because deselecting the mic
+        // during a studio recording hits this legitimately.
+        let state = match self.state.try_as_open() {
+            Ok(state) => state,
+            Err(err) => {
+                debug!(
+                    "Microphone feed RemoveInput deferred: feed is locked by an active consumer"
+                );
+                return Err(err);
+            }
+        };
 
         state.connecting = None;
 

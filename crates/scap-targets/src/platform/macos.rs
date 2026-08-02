@@ -114,7 +114,11 @@ impl DisplayImpl {
     }
 
     pub fn scale(&self) -> Option<f64> {
-        Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
+        // ar pool: reached from pool-less tokio threads on a polling cadence
+        // (display lists, cursor info); drains the NSScreen temporaries.
+        objc::rc::autoreleasepool(|| {
+            Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
+        })
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -136,19 +140,21 @@ impl DisplayImpl {
         use objc::{msg_send, *};
         use std::ffi::CStr;
 
-        unsafe {
-            if let Some(ns_screen) = self.as_ns_screen() {
-                let name: id = msg_send![ns_screen, localizedName];
-                if !name.is_null() {
-                    let name = CStr::from_ptr(NSString::UTF8String(name))
-                        .to_string_lossy()
-                        .to_string();
-                    return Some(name);
+        objc::rc::autoreleasepool(|| {
+            unsafe {
+                if let Some(ns_screen) = self.as_ns_screen() {
+                    let name: id = msg_send![ns_screen, localizedName];
+                    if !name.is_null() {
+                        let name = CStr::from_ptr(NSString::UTF8String(name))
+                            .to_string_lossy()
+                            .to_string();
+                        return Some(name);
+                    }
                 }
             }
-        }
 
-        None
+            None
+        })
     }
 
     fn as_ns_screen(&self) -> Option<*mut objc::runtime::Object> {
@@ -160,25 +166,28 @@ impl DisplayImpl {
         unsafe {
             let screens = NSScreen::screens(nil);
             let screen_count = NSArray::count(screens);
+            // init_str returns a +1 NSString; without the explicit release it
+            // leaked one key string per screen on every lookup.
+            let screen_number_key = NSString::alloc(nil).init_str("NSScreenNumber");
 
+            let mut found = None;
             for i in 0..screen_count {
                 let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
 
                 let device_description = NSScreen::deviceDescription(screen);
-                let num = NSDictionary::valueForKey_(
-                    device_description,
-                    NSString::alloc(nil).init_str("NSScreenNumber"),
-                ) as id;
+                let num = NSDictionary::valueForKey_(device_description, screen_number_key) as id;
 
                 let num_value: u32 = msg_send![num, unsignedIntValue];
 
                 if num_value == self.0.id {
-                    return Some(screen);
+                    found = Some(screen);
+                    break;
                 }
             }
-        }
 
-        None
+            let _: () = msg_send![screen_number_key, release];
+            found
+        }
     }
 }
 

@@ -56,6 +56,22 @@ impl VolumeMeter {
         self.maxes.push(time, value);
         self.times.push_back(time);
 
+        // The duration-window eviction below stalls permanently when a
+        // device's capture clock is frozen or non-monotonic (duration_since
+        // yields Zero forever or None), and this meter lives for the whole
+        // process; without a hard cap it grows one entry per audio callback
+        // until quit.
+        const MAX_WINDOW_ENTRIES: usize = 512;
+        while self.times.len() > MAX_WINDOW_ENTRIES {
+            // A frozen clock produces duplicate keys that share one `maxes`
+            // entry; only drop that entry once no duplicate remains queued.
+            if let Some(front) = self.times.pop_front()
+                && !self.times.contains(&front)
+            {
+                self.maxes.remove(&front);
+            }
+        }
+
         while let Some(time) = self
             .times
             .back()

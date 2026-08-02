@@ -23,6 +23,13 @@ static MACOS_DOCK_VISIBILITY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MACOS_PENDING_PANEL_WINDOWS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_os = "macos")]
 static MACOS_SCK_PERMISSION_MISMATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_DISPLAYS_VALIDATED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_LAST_VALIDATION_ATTEMPT: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+#[cfg(target_os = "macos")]
+const MACOS_SCK_VALIDATION_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[cfg(target_os = "macos")]
 pub(crate) struct MacosPanelWindowActivationGuard {
@@ -283,42 +290,84 @@ fn macos_permission_status(permission: &OSPermission, initial_check: bool) -> OS
     }
 }
 
+// The SCShareableContent snapshot behind this validation materialises every
+// window/app/display on the system (~1MB+ of ObjC objects per call). Polling
+// callers (devices snapshot emitter every 5s, permission UIs down to 250ms)
+// used to re-run it for the whole process lifetime, leaking the graph on
+// pool-less tokio threads at ~15MB/min until macOS exhausted swap (issue
+// #2023, the 82GB incident). A successful validation is cached for the rest
+// of the process: runtime revocation is caught by the cheap CGPreflight gate,
+// and macOS relaunches the app on screen-recording permission changes anyway.
+// Failed validations retry at most once per MACOS_SCK_VALIDATION_RETRY_INTERVAL.
 #[cfg(target_os = "macos")]
 fn macos_screen_recording_available() -> bool {
     if !scap_screencapturekit::has_permission() {
         return false;
     }
 
-    let future = async {
-        match sc::ShareableContent::current().await {
-            Ok(content) => {
-                let display_count = content.displays().len();
-                if display_count == 0
-                    && !MACOS_SCK_PERMISSION_MISMATCH_LOGGED.swap(true, Ordering::AcqRel)
-                {
-                    tracing::debug!(
-                        window_count = content.windows().len(),
-                        application_count = content.apps().len(),
-                        "ScreenCaptureKit returned no displays despite CoreGraphics screen-recording permission"
-                    );
-                }
-                display_count > 0
-            }
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    "ScreenCaptureKit shareable content unavailable during permission check"
-                );
-                false
-            }
-        }
-    };
-
-    if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| tauri::async_runtime::block_on(future))
-    } else {
-        tauri::async_runtime::block_on(future)
+    if MACOS_SCK_DISPLAYS_VALIDATED.load(Ordering::Acquire) {
+        return true;
     }
+
+    // block_in_place covers the mutex acquisition too: waiters serialised
+    // behind an in-flight validation would otherwise park a tokio worker
+    // without telling the runtime.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(macos_validate_sck_displays)
+    } else {
+        macos_validate_sck_displays()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_validate_sck_displays() -> bool {
+    // Serialise validators: concurrent callers during the first startup check
+    // must wait for the in-flight validation rather than tripping the backoff
+    // and transiently reporting a granted permission as denied.
+    let mut last_attempt = MACOS_SCK_LAST_VALIDATION_ATTEMPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if MACOS_SCK_DISPLAYS_VALIDATED.load(Ordering::Acquire) {
+        return true;
+    }
+    if let Some(attempted_at) = *last_attempt
+        && attempted_at.elapsed() < MACOS_SCK_VALIDATION_RETRY_INTERVAL
+    {
+        return false;
+    }
+    *last_attempt = Some(std::time::Instant::now());
+
+    let validated = objc2::rc::autoreleasepool(|_| {
+        tauri::async_runtime::block_on(async {
+            match sc::ShareableContent::current().await {
+                Ok(content) => {
+                    let display_count = content.displays().len();
+                    if display_count == 0
+                        && !MACOS_SCK_PERMISSION_MISMATCH_LOGGED.swap(true, Ordering::AcqRel)
+                    {
+                        tracing::debug!(
+                            window_count = content.windows().len(),
+                            application_count = content.apps().len(),
+                            "ScreenCaptureKit returned no displays despite CoreGraphics screen-recording permission"
+                        );
+                    }
+                    display_count > 0
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "ScreenCaptureKit shareable content unavailable during permission check"
+                    );
+                    false
+                }
+            }
+        })
+    });
+
+    if validated {
+        MACOS_SCK_DISPLAYS_VALIDATED.store(true, Ordering::Release);
+    }
+    validated
 }
 
 #[cfg(target_os = "macos")]
@@ -374,6 +423,15 @@ where
 
 #[cfg(target_os = "macos")]
 async fn macos_wait_for_permission_update(permission: &OSPermission) -> bool {
+    // The user just interacted with the permission prompt; drop the SCK
+    // validation backoff so this poll loop sees fresh answers instead of a
+    // stale negative from up to 5s ago.
+    if matches!(permission, OSPermission::ScreenRecording) {
+        *MACOS_SCK_LAST_VALIDATION_ATTEMPT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     macos_wait_for_permission_update_with(
         || macos_permission_status(permission, false).permitted(),
         || tokio::time::sleep(Duration::from_millis(200)),
@@ -497,9 +555,12 @@ impl OSPermissionsCheck {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
+    // Pool-wrapped because this runs on tokio/tauri worker threads (which have
+    // no ambient NSAutoreleasePool) from polling callers; without it every
+    // autoreleased AVFoundation/AppKit temporary leaks for the process lifetime.
     #[cfg(target_os = "macos")]
     {
-        OSPermissionsCheck {
+        objc2::rc::autoreleasepool(|_| OSPermissionsCheck {
             screen_recording: macos_permission_status(
                 &OSPermission::ScreenRecording,
                 _initial_check,
@@ -507,7 +568,7 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
             microphone: macos_permission_status(&OSPermission::Microphone, _initial_check),
             camera: macos_permission_status(&OSPermission::Camera, _initial_check),
             accessibility: macos_permission_status(&OSPermission::Accessibility, _initial_check),
-        }
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
