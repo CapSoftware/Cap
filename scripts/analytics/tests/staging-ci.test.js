@@ -1264,6 +1264,23 @@ test("synthetic fixtures are deterministic, isolated, and model duplicates and c
 		new Set(retainedLoad.rows.map((row) => row.event_id)).size,
 		10_000,
 	);
+	const midnightLoad = createSyntheticLoadEvents({
+		runId: `${runId}_midnight`,
+		count: 1_000,
+		daySpan: 30,
+		now: new Date("2026-07-31T00:01:00.000Z"),
+	});
+	assert.equal(
+		new Set(midnightLoad.rows.map((row) => row.occurred_at.slice(0, 10))).size,
+		30,
+	);
+	assert.ok(
+		midnightLoad.rows.every(
+			(row) =>
+				Date.parse(`${row.occurred_at}Z`) <=
+				Date.parse("2026-07-31T00:01:00.000Z"),
+		),
+	);
 	const retainedPrices = new Set(
 		retainedLoad.rows
 			.map((row) => JSON.parse(row.properties).price_id)
@@ -1581,11 +1598,44 @@ test("representative endpoint coverage requires mixed funnel and revenue data", 
 			payloads,
 		}),
 	);
+	const multiDayPayloads = {
+		...payloads,
+		product_traffic_overview: row([
+			{ pageviews: cohorts / 2 },
+			{ pageviews: cohorts / 2 },
+		]),
+		product_activation: row([
+			{ signups: cohorts / 2 },
+			{ signups: cohorts / 2 },
+		]),
+		product_creator_activity: row([{ dau: cohorts / 2 }]),
+		product_creator_retention: row([
+			{ creators: cohorts / 2 },
+			{ creators: cohorts / 2 },
+		]),
+	};
+	assert.doesNotThrow(() =>
+		assertRepresentativeEndpointCoverage({
+			daySpan: 2,
+			dimensionBucketCount: 10,
+			expectedEvents: 100,
+			payloads: multiDayPayloads,
+		}),
+	);
 	assert.throws(() =>
 		assertRepresentativeEndpointCoverage({
 			expectedEvents: 100,
 			payloads: { ...payloads, product_identity_funnel: row([]) },
 		}),
+	);
+	assert.throws(
+		() =>
+			assertRepresentativeEndpointCoverage({
+				daySpan: 0,
+				expectedEvents: 100,
+				payloads,
+			}),
+		/fixture dimensions are invalid/,
 	);
 });
 

@@ -1770,6 +1770,11 @@ export const createSyntheticLoadEvents = ({
 		dimensionBucketCount,
 		count / 10,
 	);
+	const currentUtcDayStartedAt = Date.UTC(
+		now.getUTCFullYear(),
+		now.getUTCMonth(),
+		now.getUTCDate(),
+	);
 	validateSyntheticRunId(loadRunId);
 	return {
 		appVersion,
@@ -1779,8 +1784,13 @@ export const createSyntheticLoadEvents = ({
 		rows: Array.from({ length: count }, (_, index) => {
 			const cohort = Math.floor(index / 10);
 			const dayOffset = cohort % daySpan;
+			const dayStartedAt = currentUtcDayStartedAt - dayOffset * 86_400_000;
+			const availableSeconds =
+				dayOffset === 0
+					? Math.floor((now.getTime() - currentUtcDayStartedAt) / 1_000)
+					: 86_399;
 			const cohortOccurredAt =
-				now.getTime() - dayOffset * 86_400_000 - (cohort % 86_400) * 1_000;
+				dayStartedAt + (cohort % (availableSeconds + 1)) * 1_000;
 			const dimensionBucket = cohort % effectiveDimensionBucketCount;
 			const eventKind = index % 10;
 			const eventId = `synthetic_load_${eventNamespace}_${cohort}_${eventKind}`;
@@ -2761,27 +2771,57 @@ export const assertSyntheticEndpointDecisions = ({
 };
 
 export const assertRepresentativeEndpointCoverage = ({
+	daySpan = 1,
 	dimensionBucketCount,
 	expectedEvents,
 	payloads,
 }) => {
 	const cohorts = expectedEvents / 10;
 	const boundedDimensions = dimensionBucketCount ?? cohorts;
+	if (
+		!Number.isInteger(cohorts) ||
+		cohorts < 1 ||
+		!Number.isInteger(daySpan) ||
+		daySpan < 1 ||
+		daySpan > cohorts ||
+		!Number.isInteger(boundedDimensions) ||
+		boundedDimensions < 1 ||
+		boundedDimensions > cohorts
+	) {
+		throw new Error("Representative endpoint fixture dimensions are invalid");
+	}
+	const activeDays = Math.min(daySpan, cohorts);
+	const greatestCommonDivisor = (left, right) => {
+		let dividend = left;
+		let divisor = right;
+		while (divisor !== 0) {
+			const remainder = dividend % divisor;
+			dividend = divisor;
+			divisor = remainder;
+		}
+		return dividend;
+	};
+	const distinctDateDimensionPairs = Math.min(
+		cohorts,
+		(daySpan * boundedDimensions) /
+			greatestCommonDivisor(daySpan, boundedDimensions),
+	);
+	const completeDailyEventRows = distinctDateDimensionPairs * 10;
 	const sum = (rows, field) =>
 		rows.reduce((total, row) => total + Number(row[field] ?? 0), 0);
 	const expectedRows = {
-		product_traffic_overview: 1,
+		product_traffic_overview: activeDays,
 		product_traffic_totals: 1,
 		product_traffic_pages: boundedDimensions,
 		product_traffic_sources: boundedDimensions,
 		product_attribution: boundedDimensions + 2,
 		product_traffic_countries: 1,
 		product_traffic_technology: 1,
-		product_activation: 1,
+		product_activation: activeDays,
 		product_creator_activity: 1,
-		product_creator_retention: 1,
+		product_creator_retention: activeDays,
 		product_identity_funnel: 1,
-		product_events_daily: boundedDimensions * 10,
+		product_events_daily: Math.min(1_000, completeDailyEventRows),
 		product_feature_adoption: 10,
 		product_experiment_outcomes: boundedDimensions * 3,
 		product_analytics_freshness: 1,
@@ -2801,12 +2841,10 @@ export const assertRepresentativeEndpointCoverage = ({
 		["product_traffic_sources", "pageviews", cohorts],
 		["product_attribution", "pageviews", cohorts * 3],
 		["product_activation", "signups", cohorts],
-		["product_creator_activity", "dau", cohorts],
+		["product_creator_activity", "dau", Math.ceil(cohorts / daySpan)],
 		["product_creator_retention", "creators", cohorts],
 		["product_identity_funnel", "linked_users", cohorts],
 		["product_identity_funnel", "purchasers", cohorts],
-		["product_events_daily", "events", expectedEvents],
-		["product_events_daily", "revenue_minor", cohorts * 2_000],
 		["product_feature_adoption", "events", expectedEvents],
 		["product_experiment_outcomes", "exposed_actors", cohorts * 3],
 		["product_experiment_outcomes", "converted_actors", cohorts],
@@ -2818,6 +2856,27 @@ export const assertRepresentativeEndpointCoverage = ({
 				`Representative endpoint ${name}.${field} totaled ${actual}, expected ${expected}`,
 			);
 		}
+	}
+	const dailyEventRows = endpointRows(payloads, "product_events_daily");
+	if (completeDailyEventRows <= 1_000) {
+		for (const [field, expected] of [
+			["events", expectedEvents],
+			["revenue_minor", cohorts * 2_000],
+		]) {
+			const actual = sum(dailyEventRows, field);
+			if (actual !== expected) {
+				throw new Error(
+					`Representative endpoint product_events_daily.${field} totaled ${actual}, expected ${expected}`,
+				);
+			}
+		}
+	} else if (
+		sum(dailyEventRows, "events") <= 0 ||
+		sum(dailyEventRows, "revenue_minor") <= 0
+	) {
+		throw new Error(
+			"Representative endpoint product_events_daily returned an empty truncated window",
+		);
 	}
 };
 

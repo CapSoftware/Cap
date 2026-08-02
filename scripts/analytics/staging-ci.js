@@ -3922,6 +3922,7 @@ const verify = async () => {
 		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 	});
 	assertRepresentativeEndpointCoverage({
+		daySpan: state.loadDaySpan,
 		dimensionBucketCount: state.loadDimensionBucketCount,
 		expectedEvents: state.loadEventCount,
 		payloads: representativeCoverage.payloads,
@@ -3934,6 +3935,7 @@ const verify = async () => {
 		token: tokens.TINYBIRD_STAGING_READ_TOKEN,
 	});
 	assertRepresentativeEndpointCoverage({
+		daySpan: state.largeLoadDaySpan,
 		dimensionBucketCount: state.largeLoadDimensionBucketCount,
 		expectedEvents: state.largeLoadEventCount,
 		payloads: largeCoverage.payloads,
