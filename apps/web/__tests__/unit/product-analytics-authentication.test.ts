@@ -76,6 +76,23 @@ describe("recordWebAuthenticationSuccess", () => {
 		]);
 	});
 
+	it("uses distinct link events for repeated successful sign-ins", async () => {
+		const { recordWebAuthenticationSuccess } = await import(
+			"@/lib/analytics/authentication-events"
+		);
+
+		await recordWebAuthenticationSuccess("user-1");
+		await recordWebAuthenticationSuccess("user-1");
+
+		const linkEvents = mocks.persist.mock.calls
+			.map((call) => call[1])
+			.filter((event) => event.eventName === "identity_linked");
+		expect(linkEvents).toHaveLength(2);
+		expect(linkEvents[0]?.eventId).not.toBe(linkEvents[1]?.eventId);
+		expect(linkEvents[0]?.occurredAt).not.toBeUndefined();
+		expect(linkEvents[1]?.occurredAt).not.toBeUndefined();
+	});
+
 	it("records authenticated sign-in without inventing an anonymous link", async () => {
 		mocks.cookieValue = undefined;
 		const { recordWebAuthenticationSuccess } = await import(

@@ -292,6 +292,115 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 		);
 	});
 
+	it("retains retry evidence after terminal delivery", async () => {
+		const {
+			markProductAnalyticsOutboxDelivered,
+			markProductAnalyticsOutboxRetrying,
+		} = await import("@/lib/analytics/product-event-outbox-state");
+		const deliveryKey = "00000000-0000-4000-8000-000000000042";
+		const eventId = "staging-retry-evidence";
+		const payloadHash = "b".repeat(32);
+		const verifier = await mysql.createConnection(databaseUrl);
+		await verifier.query(
+			`INSERT INTO product_analytics_outbox
+				(eventId, deliveryKey, payloadHash, eventName, payload)
+			VALUES (?, ?, ?, 'user_signed_up', JSON_OBJECT())`,
+			[eventId, deliveryKey, payloadHash],
+		);
+		await markProductAnalyticsOutboxRetrying(
+			deliveryKey,
+			payloadHash,
+			"staging_timeout_after_accept",
+		);
+		await markProductAnalyticsOutboxDelivered(deliveryKey, payloadHash);
+		const [rows] = await verifier.query<
+			Array<
+				{
+					lastErrorCode: string | null;
+					status: string;
+				} & RowDataPacket
+			>
+		>(
+			"SELECT status, lastErrorCode FROM product_analytics_outbox WHERE eventId = ?",
+			[eventId],
+		);
+		expect(rows[0]).toMatchObject({
+			lastErrorCode: "staging_timeout_after_accept",
+			status: "delivered",
+		});
+		await verifier.query(
+			"DELETE FROM product_analytics_outbox WHERE eventId = ?",
+			[eventId],
+		);
+		await verifier.end();
+	});
+
+	it("accepts repeated sign-in identity links without payload conflicts", async () => {
+		const { productAnalyticsEventIdHash, productAnalyticsIdentityHash } =
+			await import("@cap/analytics");
+		const { db } = await import("@cap/database");
+		const { identityLinkedEvent } = await import(
+			"@/lib/analytics/business-events"
+		);
+		const { persistProductAnalyticsEvent } = await import(
+			"@/lib/analytics/product-event-outbox"
+		);
+		const events = [
+			identityLinkedEvent({
+				anonymousId: "repeated-signin-anonymous",
+				createdAt: "2026-08-01T10:00:00.000Z",
+				linkId: "repeated-signin-auth-a",
+				organizationId: "repeated-signin-org",
+				userId: "repeated-signin-user",
+			}),
+			identityLinkedEvent({
+				anonymousId: "repeated-signin-anonymous",
+				createdAt: "2026-08-01T11:00:00.000Z",
+				linkId: "repeated-signin-auth-b",
+				organizationId: "repeated-signin-org",
+				userId: "repeated-signin-user",
+			}),
+		];
+		for (const event of events) {
+			await db().transaction((tx) => persistProductAnalyticsEvent(tx, event));
+		}
+		const verifier = await mysql.createConnection(databaseUrl);
+		const eventIdHashes = events.map((event) =>
+			productAnalyticsEventIdHash(event.eventId),
+		);
+		const [receipts] = await verifier.query<
+			Array<{ conflictCount: number } & RowDataPacket>
+		>(
+			"SELECT conflictCount FROM product_analytics_event_receipts WHERE eventIdHash IN (?, ?)",
+			eventIdHashes,
+		);
+		expect(receipts).toHaveLength(2);
+		expect(receipts.every(({ conflictCount }) => conflictCount === 0)).toBe(
+			true,
+		);
+		await verifier.query(
+			"DELETE FROM product_analytics_outbox WHERE eventId IN (?, ?)",
+			events.map((event) => event.eventId),
+		);
+		await verifier.query(
+			"DELETE FROM product_analytics_event_receipts WHERE eventIdHash IN (?, ?)",
+			eventIdHashes,
+		);
+		await verifier.query(
+			"DELETE FROM product_analytics_identity_links WHERE anonymousIdentityHash = ?",
+			[productAnalyticsIdentityHash("anonymous", "repeated-signin-anonymous")],
+		);
+		await verifier.query(
+			"DELETE FROM product_analytics_identity_state WHERE identityHash IN (?, ?, ?)",
+			[
+				productAnalyticsIdentityHash("anonymous", "repeated-signin-anonymous"),
+				productAnalyticsIdentityHash("user", "repeated-signin-user"),
+				productAnalyticsIdentityHash("organization", "repeated-signin-org"),
+			],
+		);
+		await verifier.end();
+	});
+
 	it("allows one refresh owner and fences refresh against erasure", async () => {
 		const {
 			acquireProductAnalyticsRefreshLease,

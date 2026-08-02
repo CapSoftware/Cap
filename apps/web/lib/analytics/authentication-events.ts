@@ -29,9 +29,10 @@ export async function recordWebAuthenticationSuccess(userId: string) {
 		(await cookies()).get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
 	);
 	const createdAt = new Date();
+	const authenticationId = randomUUID();
 	const events = [
 		userSignedInEvent({
-			authenticationId: randomUUID(),
+			authenticationId,
 			userId: normalizedUserId,
 			organizationId: user.organizationId,
 			anonymousId,
@@ -44,6 +45,7 @@ export async function recordWebAuthenticationSuccess(userId: string) {
 						organizationId: user.organizationId,
 						anonymousId,
 						createdAt,
+						linkId: authenticationId,
 					}),
 				]
 			: []),

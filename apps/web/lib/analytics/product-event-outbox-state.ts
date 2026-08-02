@@ -65,14 +65,12 @@ export async function releaseProductAnalyticsIngestionLease(leaseId: string) {
 export async function markProductAnalyticsOutboxDelivered(
 	deliveryKey: string,
 	payloadHash: string,
-	errorCode?: "identity_suppressed",
 ) {
 	await db()
 		.update(productAnalyticsOutbox)
 		.set({
 			status: "delivered",
 			deliveredAt: new Date(),
-			lastErrorCode: errorCode ?? null,
 			leaseOwnerId: null,
 			leaseExpiresAt: null,
 		})

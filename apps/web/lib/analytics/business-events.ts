@@ -21,9 +21,12 @@ export const identityLinkedEvent = (input: {
 	organizationId?: string | null;
 	anonymousId: string;
 	createdAt: Date | string;
+	linkId?: string;
 }) =>
 	({
-		eventId: `identity_linked:${input.userId}:${createHash("sha256").update(input.anonymousId).digest("hex").slice(0, 24)}`,
+		eventId: input.linkId
+			? `identity_linked:${input.linkId}`
+			: `identity_linked:${input.userId}:${createHash("sha256").update(input.anonymousId).digest("hex").slice(0, 24)}`,
 		eventName: "identity_linked",
 		occurredAt: occurredAt(input.createdAt),
 		anonymousId: input.anonymousId,

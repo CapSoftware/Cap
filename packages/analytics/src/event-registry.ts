@@ -197,7 +197,7 @@ export const EVENT_REGISTRY = {
 		...criticalServer,
 		platforms: ["server"],
 		semantic:
-			"A successfully authenticated user was linked to the first-party anonymous browser identity present at authentication. Decision metrics use user_id; this event preserves acquisition stitching without changing authoritative account facts.",
+			"A successful authentication or signup linked a user to the first-party anonymous browser identity present at that occurrence. Authentication occurrences use the authentication ID for idempotency; the one-time signup link uses the stable user and anonymous identity pair. Decision metrics use user_id; this event preserves acquisition stitching without changing authoritative account facts.",
 		properties: {},
 	},
 	user_signed_in: {
