@@ -105,6 +105,11 @@ const RequestHeaders = Schema.Struct({
 
 const fallbackRateLimiter = new ProductAnalyticsRateLimiter();
 
+const rejectBadRequest = (reason: string) =>
+	Effect.logWarning("Product analytics request rejected", { reason }).pipe(
+		Effect.zipRight(Effect.fail(new HttpApiError.BadRequest())),
+	);
+
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "events", (handlers) =>
@@ -136,7 +141,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							!browserClaims &&
 							!isAuthenticatedAnalyticsRequestCandidate(requestMetadata)
 						) {
-							return yield* Effect.fail(new HttpApiError.BadRequest());
+							return yield* rejectBadRequest("browser_metadata_or_token");
 						}
 
 						const isVercel = process.env.VERCEL === "1";
@@ -153,7 +158,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								],
 						});
 						if (!rateLimitKey) {
-							return yield* Effect.fail(new HttpApiError.BadRequest());
+							return yield* rejectBadRequest("network_identity");
 						}
 						if (fallbackRateLimiter.isRateLimited(rateLimitKey)) {
 							return yield* Effect.fail(new RateLimited());
@@ -177,7 +182,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 						const events = normalizeProductEventBatch(payload.events);
 						if (!events) {
-							return yield* Effect.fail(new HttpApiError.BadRequest());
+							return yield* rejectBadRequest("event_contract");
 						}
 
 						const actor = yield* resolveProductAnalyticsActor;
@@ -189,7 +194,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								hasSessionCookie: hasAnalyticsSessionCookie(headers.cookie),
 							})
 						) {
-							return yield* Effect.fail(new HttpApiError.BadRequest());
+							return yield* rejectBadRequest("authenticated_actor");
 						}
 						if (
 							!actor &&
@@ -201,7 +206,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									),
 								))
 						) {
-							return yield* Effect.fail(new HttpApiError.BadRequest());
+							return yield* rejectBadRequest("anonymous_event_identity");
 						}
 						const syntheticRunId = normalizeSyntheticRunId(
 							headers["x-cap-analytics-test-run"],
