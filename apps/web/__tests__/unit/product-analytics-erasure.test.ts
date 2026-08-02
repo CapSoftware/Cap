@@ -257,6 +257,13 @@ describe.sequential("product analytics erasure", () => {
 						"Bearer lookup-token",
 				),
 		).toBe(true);
+		expect(
+			requests
+				.filter(({ url }) => url.pathname === "/v0/sql")
+				.every(({ url }) =>
+					(url.searchParams.get("q") ?? "").endsWith(" FORMAT JSON"),
+				),
+		).toBe(true);
 		expect(new Headers(deletion?.init.headers).get("Authorization")).toBe(
 			"Bearer erasure-token",
 		);

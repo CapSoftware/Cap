@@ -75,6 +75,7 @@ const productAnalyticsErasureFailureKind = (error: Error) => {
 	if (error.name === "TimeoutError" || error.message.includes("timed out")) {
 		return "timeout";
 	}
+	if (error instanceof SyntaxError) return "invalid_response";
 	if (error.message.includes("not configured")) return "configuration";
 	if (error.message.includes("fanout exceeded")) return "fanout_bound";
 	if (error.message.includes("lease was fenced")) return "fenced";
@@ -522,7 +523,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 
 		const queryProductAnalyticsSql = <T>(sql: string) =>
 			productAnalyticsRequest<{ data: T[] }>(
-				`/v0/sql?q=${encodeURIComponent(sql)}&format=JSON`,
+				`/v0/sql?q=${encodeURIComponent(`${sql} FORMAT JSON`)}`,
 				{
 					token: productAnalyticsErasureLookupToken,
 					purpose: "erasure lookup",
