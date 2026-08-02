@@ -10,6 +10,9 @@ export const PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT =
 
 const MAX_SENSITIVE_ANALYTICS_SCAN_LENGTH = 1024;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const UUID_IDENTIFIER_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PHONE_ONLY_IDENTIFIER_PATTERN = /^\d[\d.-]{5,}\d$/;
 const SAFE_CATEGORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/-]*$/;
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PHONE_PATTERN = /(?:^|\D)\+?\d[\d ().-]{5,}\d(?:\D|$)/;
@@ -90,6 +93,31 @@ export function normalizeAnalyticsIdentifier(value: unknown, maxLength = 128) {
 	return normalized;
 }
 
+export function normalizeAnalyticsOpaqueIdentifier(
+	value: unknown,
+	maxLength = 128,
+) {
+	if (typeof value !== "string") return undefined;
+	const normalized = value.trim();
+	if (
+		!normalized ||
+		normalized.length > maxLength ||
+		!SAFE_IDENTIFIER_PATTERN.test(normalized)
+	) {
+		return undefined;
+	}
+	if (UUID_IDENTIFIER_PATTERN.test(normalized)) return normalized;
+	if (
+		PHONE_ONLY_IDENTIFIER_PATTERN.test(normalized) ||
+		IP_ADDRESS_PATTERN.test(normalized) ||
+		SECRET_PATTERN.test(normalized) ||
+		containsCustomerFilename(normalized)
+	) {
+		return undefined;
+	}
+	return normalized;
+}
+
 export function normalizeAnalyticsPropertyString(
 	value: string,
 	format: AnalyticsStringFormat,
@@ -112,10 +140,10 @@ export function normalizeAnalyticsPropertyString(
 			? normalized
 			: undefined;
 	}
-	if (containsSensitiveAnalyticsContent(normalized)) return undefined;
 	if (format === "identifier") {
-		return SAFE_IDENTIFIER_PATTERN.test(normalized) ? normalized : undefined;
+		return normalizeAnalyticsOpaqueIdentifier(normalized);
 	}
+	if (containsSensitiveAnalyticsContent(normalized)) return undefined;
 	if (format === "category") {
 		return normalized.length <= 128 && SAFE_CATEGORY_PATTERN.test(normalized)
 			? normalized

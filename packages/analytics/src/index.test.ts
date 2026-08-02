@@ -7,6 +7,7 @@ import {
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeAcquisitionChannel,
+	normalizeAnalyticsOpaqueIdentifier,
 	normalizeProductEventInput,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
@@ -185,6 +186,35 @@ describe("normalizeProductEventInput", () => {
 
 	it("normalizes a valid event", () => {
 		expect(normalizeProductEventInput(baseEvent, now)).toEqual(baseEvent);
+	});
+
+	it("accepts generated UUID identities without admitting phone numbers", () => {
+		const previouslyRejectedUuid = "f6382da1-3a86-46e8-a9cf-d2d5e2658163";
+		expect(normalizeAnalyticsOpaqueIdentifier(previouslyRejectedUuid)).toBe(
+			previouslyRejectedUuid,
+		);
+		for (let index = 0; index < 1_000; index += 1) {
+			expect(
+				normalizeProductEventInput(
+					{
+						...baseEvent,
+						eventId: crypto.randomUUID(),
+						anonymousId: crypto.randomUUID(),
+						sessionId: crypto.randomUUID(),
+					},
+					now,
+				),
+			).not.toBeNull();
+		}
+		expect(normalizeAnalyticsOpaqueIdentifier("447700900123")).toBeUndefined();
+		for (const field of ["eventId", "anonymousId", "sessionId"] as const) {
+			expect(
+				normalizeProductEventInput(
+					{ ...baseEvent, [field]: "447700900123" },
+					now,
+				),
+			).toBeNull();
+		}
 	});
 
 	it("requires a valid session start at or before traffic activity", () => {

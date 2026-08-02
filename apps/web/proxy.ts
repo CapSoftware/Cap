@@ -1,5 +1,5 @@
 import {
-	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsOpaqueIdentifier,
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
 } from "@cap/analytics";
 import { db } from "@cap/database";
@@ -42,7 +42,7 @@ const nextWithAnalyticsToken = (
 		PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE,
 	)?.value;
 	const claims = readProductAnalyticsBrowserTokenClaims(token, secret);
-	const existingAnonymousId = normalizeAnalyticsIdentifier(
+	const existingAnonymousId = normalizeAnalyticsOpaqueIdentifier(
 		request.cookies.get(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE)?.value,
 	);
 	const stagingRunId = request.headers.get("x-cap-analytics-test-run");

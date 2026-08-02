@@ -35,6 +35,14 @@ describe("product analytics browser token", () => {
 		).toBe(true);
 	});
 
+	it("accepts UUID browser identities without phone-number false positives", () => {
+		const anonymousId = "f6382da1-3a86-46e8-a9cf-d2d5e2658163";
+		const token = createProductAnalyticsBrowserToken(secret, anonymousId, now);
+		expect(readProductAnalyticsBrowserTokenClaims(token, secret, now)).toEqual({
+			anonymousId,
+		});
+	});
+
 	it("rejects expired, future, tampered, and malformed tokens", () => {
 		const token = createProductAnalyticsBrowserToken(
 			secret,

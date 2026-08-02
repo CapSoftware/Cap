@@ -4,7 +4,7 @@ import {
 	randomBytes,
 	timingSafeEqual,
 } from "node:crypto";
-import { normalizeAnalyticsIdentifier } from "@cap/analytics";
+import { normalizeAnalyticsOpaqueIdentifier } from "@cap/analytics";
 
 export const PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE =
 	"cap_analytics_browser_token";
@@ -32,7 +32,7 @@ export function createProductAnalyticsBrowserToken(
 	anonymousId = createProductAnalyticsAnonymousId(),
 	now = Date.now(),
 ) {
-	const normalizedAnonymousId = normalizeAnalyticsIdentifier(anonymousId);
+	const normalizedAnonymousId = normalizeAnalyticsOpaqueIdentifier(anonymousId);
 	if (!normalizedAnonymousId) {
 		throw new Error("Analytics anonymous ID is invalid");
 	}
@@ -50,7 +50,7 @@ export function readProductAnalyticsBrowserTokenClaims(
 	if (parts.length !== 4 || parts[0] !== "v1") return undefined;
 	const issuedAt = Number(parts[1]);
 	if (!Number.isSafeInteger(issuedAt)) return undefined;
-	const anonymousId = normalizeAnalyticsIdentifier(parts[2]);
+	const anonymousId = normalizeAnalyticsOpaqueIdentifier(parts[2]);
 	if (!anonymousId) return undefined;
 	const nowSeconds = Math.floor(now / 1000);
 	if (

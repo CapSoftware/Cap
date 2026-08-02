@@ -3,7 +3,7 @@ import {
 	type ClientProductEventNameForPlatform,
 	isCoreEventName,
 	isServerOnlyEventName,
-	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsOpaqueIdentifier,
 	normalizeProductEventInput,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE,
@@ -498,7 +498,7 @@ export function getOrCreateStorageId(
 	createId: () => string,
 ) {
 	try {
-		const existing = normalizeAnalyticsIdentifier(storage?.getItem(key));
+		const existing = normalizeAnalyticsOpaqueIdentifier(storage?.getItem(key));
 		if (existing) return existing;
 	} catch {
 		return createId();
@@ -516,7 +516,7 @@ export function getOrCreateBrowserAnonymousId(
 	cookieId: string | undefined,
 	createId: () => string,
 ) {
-	const normalizedCookieId = normalizeAnalyticsIdentifier(cookieId);
+	const normalizedCookieId = normalizeAnalyticsOpaqueIdentifier(cookieId);
 	if (!normalizedCookieId)
 		return getOrCreateStorageId(storage, ANONYMOUS_ID_KEY, createId);
 	try {

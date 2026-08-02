@@ -14,6 +14,7 @@ import {
 import {
 	isSensitiveAnalyticsPathSegment,
 	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsOpaqueIdentifier,
 	normalizeAnalyticsPropertyString,
 } from "./privacy";
 
@@ -37,6 +38,7 @@ export {
 	containsSensitiveAnalyticsContent,
 	isSensitiveAnalyticsPathSegment,
 	normalizeAnalyticsIdentifier,
+	normalizeAnalyticsOpaqueIdentifier,
 	normalizeAnalyticsPropertyString,
 	PRODUCT_ANALYTICS_ACCOUNT_DELETION_PENDING_SUBJECT,
 } from "./privacy";
@@ -358,8 +360,8 @@ export function normalizeProductEventInput(
 ): ProductEventInput | null {
 	if (!isRecord(value)) return null;
 
-	const eventId = normalizeAnalyticsIdentifier(value.eventId);
-	const anonymousId = normalizeAnalyticsIdentifier(value.anonymousId);
+	const eventId = normalizeAnalyticsOpaqueIdentifier(value.eventId);
+	const anonymousId = normalizeAnalyticsOpaqueIdentifier(value.anonymousId);
 	const sessionId = normalizeOptionalIdentifier(value.sessionId);
 	const eventName = value.eventName;
 	const platform = value.platform;
@@ -368,6 +370,10 @@ export function normalizeProductEventInput(
 	if (
 		!eventId ||
 		!anonymousId ||
+		(value.sessionId !== undefined &&
+			value.sessionId !== null &&
+			value.sessionId !== "" &&
+			!sessionId) ||
 		!occurredAt ||
 		typeof eventName !== "string" ||
 		!isCoreEventName(eventName) ||
@@ -580,7 +586,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeOptionalIdentifier(value: unknown) {
 	if (value === undefined || value === null || value === "") return undefined;
-	return normalizeAnalyticsIdentifier(value) ?? undefined;
+	return normalizeAnalyticsOpaqueIdentifier(value) ?? undefined;
 }
 
 function normalizeOccurredAt(value: unknown, now: number) {
