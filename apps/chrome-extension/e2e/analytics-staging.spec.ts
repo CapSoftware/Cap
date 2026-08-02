@@ -261,6 +261,24 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	const returnedPageView = uniqueCapturedEvents("page_view").at(-1);
 	expect(returnedPageView?.sessionId).not.toBe(firstPageView?.sessionId);
 	expect(returnedPageView?.properties?.is_session_entry).toBe(true);
+	await expect
+		.poll(
+			() =>
+				page.evaluate(() => {
+					const serialized = localStorage.getItem("cap_analytics_queue_v1");
+					if (!serialized) return true;
+					const state = JSON.parse(serialized) as {
+						inFlight?: unknown[];
+						queue?: unknown[];
+					};
+					return (
+						(state.queue?.length ?? 0) === 0 &&
+						(state.inFlight?.length ?? 0) === 0
+					);
+				}),
+			{ timeout: 15_000 },
+		)
+		.toBe(true);
 
 	let abortNextCollectorRequest = true;
 	const abortedEventIds = new Set<string>();
