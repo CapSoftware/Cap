@@ -16,6 +16,8 @@ import {
 	assertSyntheticLoadHealth,
 	assertSyntheticMonetizationFilters,
 	assertWorkflowSafety,
+	classifyTinybirdCopyJobFailure,
+	classifyTinybirdHttpFailure,
 	copyScheduleMatchesAction,
 	createDeploymentBoundary,
 	createSyntheticDecisionEvents,
@@ -26,6 +28,7 @@ import {
 	decisionEndpointQueries,
 	evaluateBundleBudget,
 	evaluateCopyPerformanceBudget,
+	evaluateIngestionPerformanceBudget,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	FEATURE_BRANCH,
@@ -246,6 +249,87 @@ test("Copy quiescence waits until every approved pipe has no active jobs", async
 		quiescenceMs: 2_000,
 		visibleRequiredJobs: 0,
 	});
+});
+
+test("workspace Copy quiescence treats unknown foreign job states as active", async () => {
+	let now = 1_000;
+	let round = 0;
+	const urls = [];
+	const result = await waitForTinybirdCopyPipesQuiescent({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		workspaceWide: true,
+		request: async (url) => {
+			urls.push(String(url));
+			return {
+				data: {
+					jobs:
+						round === 0
+							? [
+									{
+										id: "copy_job_foreign",
+										pipe_name: "unrelated_copy",
+										status: "queued",
+									},
+								]
+							: [],
+				},
+			};
+		},
+		assertMutationOwnership: async () => undefined,
+		now: () => now,
+		wait: async (milliseconds) => {
+			now += milliseconds;
+			round += 1;
+		},
+	});
+	assert.equal(result.polls, 2);
+	assert.ok(urls.every((url) => !url.includes("pipe_name=")));
+});
+
+test("Tinybird failures retry only explicit rate and Copy quota rejections", () => {
+	assert.deepEqual(
+		classifyTinybirdHttpFailure({
+			status: 403,
+			payload: {
+				error: "You have reached the maximum number of copy jobs (3).",
+			},
+			retryAfter: "12",
+			now: 0,
+		}),
+		{
+			status: 403,
+			classification: "copy_quota",
+			definitive: true,
+			retryable: true,
+			retryAfterMs: 12_000,
+		},
+	);
+	assert.equal(
+		classifyTinybirdHttpFailure({ status: 403, payload: {} }).retryable,
+		false,
+	);
+	assert.equal(
+		classifyTinybirdHttpFailure({ status: 429, payload: {} }).retryable,
+		true,
+	);
+	assert.deepEqual(classifyTinybirdHttpFailure({ status: 503, payload: {} }), {
+		status: 503,
+		classification: "provider_failure",
+		definitive: false,
+		retryable: false,
+		retryAfterMs: 0,
+	});
+	assert.equal(
+		classifyTinybirdCopyJobFailure({
+			error: "maximum number of copy jobs reached",
+		}).retryable,
+		true,
+	);
+	assert.equal(
+		classifyTinybirdCopyJobFailure({ error: "query syntax failed" }).retryable,
+		false,
+	);
 });
 
 test("Copy quiescence rejects a malformed Jobs API payload", async () => {
@@ -2083,6 +2167,82 @@ test("latency budgets require both absolute and measured-baseline gates", () => 
 	);
 });
 
+test("ingestion budgets separate startup smoke latency from sustained throughput", () => {
+	const measured = ({ rows, batches, wallClockMs, p95Ms, maxMs = p95Ms }) => ({
+		rowsPlanned: rows,
+		rowsAttempted: rows,
+		rowsAccepted: rows,
+		batchSize: 500,
+		concurrency: 4,
+		batches,
+		batchLatency: { count: batches, p95Ms, maxMs },
+		errorCount: 0,
+		errorRate: 0,
+		retryAttempts: 0,
+		wallClockMs,
+	});
+	const smoke = measured({
+		rows: 1_000,
+		batches: 2,
+		wallClockMs: 3_460,
+		p95Ms: 3_455,
+	});
+	const sustained = measured({
+		rows: 100_000,
+		batches: 200,
+		wallClockMs: 128_700,
+		p95Ms: 4_000,
+		maxMs: 4_743,
+	});
+	const evaluate = (overrides = {}) =>
+		evaluateIngestionPerformanceBudget({
+			smoke,
+			sustained,
+			batchP95BudgetMs: 5_000,
+			smokeWallClockBudgetMs: 10_000,
+			minimumRowsPerSecond: 500,
+			...overrides,
+		});
+	const passed = evaluate();
+	assert.equal(passed.passed, true);
+	assert.equal(passed.smoke.passed, true);
+	assert.ok(passed.sustained.rowsPerSecond > 777);
+	assert.equal(
+		evaluate({ sustained: { ...sustained, wallClockMs: 250_000 } }).passed,
+		false,
+	);
+	assert.equal(
+		evaluate({
+			sustained: {
+				...sustained,
+				batchLatency: { ...sustained.batchLatency, p95Ms: 5_001 },
+			},
+		}).passed,
+		false,
+	);
+	assert.equal(
+		evaluate({ sustained: { ...sustained, rowsAccepted: 99_999 } }).passed,
+		false,
+	);
+	assert.equal(
+		evaluate({ sustained: { ...sustained, retryAttempts: 1 } }).passed,
+		false,
+	);
+	assert.equal(
+		evaluate({
+			sustained: {
+				...sustained,
+				batchLatency: { ...sustained.batchLatency, count: 199 },
+			},
+		}).passed,
+		false,
+	);
+	assert.equal(
+		evaluate({ sustained: { ...sustained, concurrency: 2 } }).passed,
+		false,
+	);
+});
+
 test("Copy performance budgets gate visibility and pipeline regressions", () => {
 	const baseline = {
 		pipelineWallClockMs: 80_000,
@@ -2600,12 +2760,25 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(seedSource, /assertExactLiveOwnership/);
 	assert.match(seedSource, /state\.recoveryPhase = "postseed"/);
 	assert.ok(
+		seedSource.indexOf('state.recoveryPhase = "postseed"') >
+			seedSource.indexOf("artifact.assertions.seedAccepted = true"),
+	);
+	assert.ok(
 		seedSource.indexOf("artifact.delivery.rowsAttempted += 1") <
 			seedSource.indexOf("const result = await request"),
 	);
 	assert.match(
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
+	);
+	const workflow = fs.readFileSync(
+		new URL("../../../.github/workflows/analytics.yml", import.meta.url),
+		"utf8",
+	);
+	assert.ok(
+		workflow.indexOf(
+			"Upload the immutable post-ingestion recovery checkpoint",
+		) < workflow.indexOf("Verify representative ingestion performance"),
 	);
 });
 
@@ -2643,12 +2816,17 @@ test("recovery avoids unowned schedule changes and publishes failure evidence", 
 	);
 	assert.match(
 		recoverySource,
-		/previousLifecycle === "ready"[\s\S]*action: "pause"[\s\S]*await cleanup\([\s\S]*await runCopies\([\s\S]*action: "resume"[\s\S]*await switchLiveDeployment/,
+		/previousLifecycle === "ready"[\s\S]*action: "pause"[\s\S]*await cleanup\([\s\S]*await runCopies\([\s\S]*await verifyCleanup\([\s\S]*action: "resume"[\s\S]*await switchLiveDeployment/,
 	);
 	assert.match(
 		recoverySource,
 		/candidateLifecycle === "ready"[\s\S]*target: "staging"[\s\S]*syntheticCleanupCompleted = true/,
 	);
+	assert.equal(
+		recoverySource.match(/enforcePerformanceBudget: false/g)?.length,
+		2,
+	);
+	assert.match(source, /if \(!budget\.passed && enforcePerformanceBudget\)/);
 });
 
 test("candidate cleanup refuses a live transition before any deletion", () => {
@@ -2684,18 +2862,59 @@ test("event state reaches terminal success before canonical rebuilding", () => {
 		source.indexOf("const verify = async"),
 	);
 	const stateCopy = runCopiesSource.indexOf(
-		'"snapshot_product_event_id_states_v2",\n\t\t\t\t"snapshot_product_event_day_states_v2",',
+		'"snapshot_product_event_id_states_v2"',
 	);
-	const stateWait = runCopiesSource.indexOf("await waitForCopyJobs");
+	const stateWait = runCopiesSource.indexOf(
+		"stateJobCompletions.push(copy.completion)",
+	);
 	const canonicalCopy = runCopiesSource.indexOf(
-		'pipes: ["snapshot_product_events_canonical_v1"]',
+		'pipe: "snapshot_product_events_canonical_v1"',
+	);
+	const cutoffProbe = runCopiesSource.indexOf(
+		'status: "post_cutoff_event_accepted"',
 	);
 	assert.ok(stateCopy >= 0);
 	assert.ok(stateCopy < stateWait);
+	assert.ok(stateWait < cutoffProbe);
+	assert.ok(cutoffProbe < canonicalCopy);
 	assert.ok(stateWait < canonicalCopy);
 	assert.match(
 		runCopiesSource,
+		/preflightQuiescence = await waitForTinybirdCopyPipesQuiescent\([\s\S]*workspaceWide: true/,
+	);
+	const runnerSource = source.slice(
+		source.indexOf("const runTinybirdCopyPipe = async"),
+		source.indexOf("const phaseRunExpectations"),
+	);
+	assert.ok(
+		runnerSource.indexOf("const capacityQuiescence") <
+			runnerSource.indexOf("await submitTinybirdCopyJobs"),
+	);
+	assert.match(runnerSource, /capacityQuiescence[\s\S]*workspaceWide: true/);
+	assert.match(source, /COPY_PIPELINE_DEADLINE_MS = 1_800_000/);
+	assert.match(
+		runnerSource,
+		/timeoutMs: Math\.min\(900_000, remainingCopyPipelineMs\(deadlineMs\)\)/,
+	);
+	assert.match(
+		runnerSource,
+		/backoffMs >= remainingCopyPipelineMs\(deadlineMs\)/,
+	);
+	assert.ok(
+		runnerSource.indexOf("await onUpdate(attempts)") <
+			runnerSource.indexOf("await waitForTinybirdCopyJob"),
+	);
+	assert.match(
+		runCopiesSource,
 		/jobs: \[\.\.\.stateJobs, \.\.\.canonicalJobs, \.\.\.downstreamJobs\]/,
+	);
+	assert.match(runCopiesSource, /cutoffIsolationPassed: true/);
+	assert.match(
+		fs.readFileSync(
+			new URL("../../../.github/workflows/analytics.yml", import.meta.url),
+			"utf8",
+		),
+		/Rebuild promoted decision and health copies[\s\S]*TINYBIRD_STAGING_INGEST_TOKEN/,
 	);
 });
 

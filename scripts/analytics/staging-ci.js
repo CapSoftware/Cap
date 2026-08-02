@@ -16,6 +16,7 @@ import {
 	assertSyntheticLoadHealth,
 	assertSyntheticMonetizationFilters,
 	COPY_PIPES,
+	classifyTinybirdHttpFailure,
 	copyScheduleMatchesAction,
 	createDeploymentBoundary,
 	createSyntheticDecisionEvents,
@@ -26,6 +27,7 @@ import {
 	decisionEndpointQueries,
 	evaluateBundleBudget,
 	evaluateCopyPerformanceBudget,
+	evaluateIngestionPerformanceBudget,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	formatTinybirdDateTime64,
@@ -167,6 +169,7 @@ const PREVIEW_TINYBIRD_TOKEN_ENV = {
 
 const STAGING_PREVIEW_ACCESS_ORIGIN =
 	"https://cap-web-git-codex-first-party-analytics-mc-ilroy.vercel.app";
+const COPY_PIPELINE_DEADLINE_MS = 1_800_000;
 
 const tinybirdEnvironment = (requiredTokenNames = TINYBIRD_TOKEN_NAMES) => {
 	if (environment("TINYBIRD_WORKSPACE_ID") !== STAGING_WORKSPACE_ID) {
@@ -219,16 +222,23 @@ const request = async (
 					attempt,
 				};
 			}
+			const payload = await response.json().catch(() => ({}));
+			const failure = classifyTinybirdHttpFailure({
+				status: response.status,
+				payload,
+				retryAfter: response.headers.get("retry-after"),
+			});
 			if (response.status < 500 && response.status !== 429) {
 				const error = new Error(
 					`Tinybird request was rejected with HTTP ${response.status}`,
 					{ cause: "permanent" },
 				);
-				error.status = response.status;
+				Object.assign(error, failure);
 				throw error;
 			}
-			lastError = new Error(
-				`Tinybird request failed with HTTP ${response.status}`,
+			lastError = Object.assign(
+				new Error(`Tinybird request failed with HTTP ${response.status}`),
+				failure,
 			);
 		} catch (error) {
 			if (error instanceof Error && error.cause === "permanent") {
@@ -2187,6 +2197,11 @@ const prepareSeed = async () => {
 	}
 	const previewRunId = validateSyntheticRunId(`${runId}_preview`);
 	const previewAppVersion = `staging-preview-${hashIdentifier(runId).slice(0, 12)}`;
+	const cutoffRunId = validateSyntheticRunId(`${runId}_cutoff`);
+	const cutoffAppVersion = createSyntheticEvents({
+		runId: cutoffRunId,
+		now: startedAt,
+	}).appVersion;
 	const previewAnonymousId = `synthetic-${hashIdentifier(previewRunId)
 		.match(/.{4}/g)
 		.join("x")}`;
@@ -2194,6 +2209,8 @@ const prepareSeed = async () => {
 		recoveryIdentity: boundary.identity,
 		recoveryPhase: "preseed",
 		runId,
+		cutoffRunId,
+		cutoffAppVersion,
 		previewRunId,
 		previewAppVersion,
 		previewAnonymousIdentityHash: hashIdentifier(
@@ -2470,6 +2487,7 @@ const seed = async () => {
 			errorCount,
 			errorRate: errorCount / batches.length,
 			retryAttempts,
+			wallClockMs: elapsedMs,
 			rowsPerSecond: Math.round((accepted * 1_000) / elapsedMs),
 		};
 		writeJson(artifactPath, artifact);
@@ -2482,21 +2500,16 @@ const seed = async () => {
 	const ingestionMinimumRowsPerSecond = Number(
 		process.env.INGESTION_MINIMUM_ROWS_PER_SECOND ?? 500,
 	);
-	artifact.ingestionBudget = {
-		batchP95Ms: ingestionBatchP95BudgetMs,
+	artifact.ingestionBudget = evaluateIngestionPerformanceBudget({
+		smoke: artifact.load,
+		sustained: artifact.largeLoad,
+		batchP95BudgetMs: ingestionBatchP95BudgetMs,
+		smokeWallClockBudgetMs: Number(
+			process.env.INGESTION_SMOKE_WALL_CLOCK_BUDGET_MS ?? 10_000,
+		),
 		minimumRowsPerSecond: ingestionMinimumRowsPerSecond,
-		passed:
-			artifact.load.batchLatency.p95Ms <= ingestionBatchP95BudgetMs &&
-			artifact.largeLoad.batchLatency.p95Ms <= ingestionBatchP95BudgetMs &&
-			artifact.load.rowsPerSecond >= ingestionMinimumRowsPerSecond &&
-			artifact.largeLoad.rowsPerSecond >= ingestionMinimumRowsPerSecond &&
-			artifact.load.errorRate === 0 &&
-			artifact.largeLoad.errorRate === 0,
-	};
+	});
 	writeJson(artifactPath, artifact);
-	if (!artifact.ingestionBudget.passed) {
-		throw new Error("Synthetic ingestion performance budget failed");
-	}
 	artifact.erasure.controlAttempted = true;
 	writeJson(artifactPath, artifact);
 	const erasureControlDelivery = await deliver(erasureControl.row);
@@ -2543,6 +2556,16 @@ const seed = async () => {
 	writeJson(statePath, state, 0o600);
 };
 
+const verifyIngestionBudget = (parameters = {}) => {
+	const artifact = readJson(parameters.artifactPath ?? option("artifact"));
+	if (artifact.assertions?.seedAccepted !== true) {
+		throw new Error("Ingestion budget verification requires a completed seed");
+	}
+	if (artifact.ingestionBudget?.passed !== true) {
+		throw new Error("Synthetic ingestion performance budget failed");
+	}
+};
+
 const waitForCopyVisibility = async ({ label, read, assert }) => {
 	const startedAt = Date.now();
 	const deadline = startedAt + Number(process.env.INGESTION_SLO_MS ?? 180_000);
@@ -2564,26 +2587,176 @@ const waitForCopyVisibility = async ({ label, read, assert }) => {
 	);
 };
 
-const waitForCopyJobs = async ({
-	jobs,
+const tinybirdCopyFailure = (error) => {
+	const failure =
+		error instanceof Error && error.cause instanceof Error
+			? error.cause
+			: error;
+	return {
+		classification:
+			failure instanceof Error && typeof failure.classification === "string"
+				? failure.classification
+				: "unknown",
+		definitive: failure instanceof Error && failure.definitive === true,
+		retryable: failure instanceof Error && failure.retryable === true,
+		retryAfterMs:
+			failure instanceof Error && Number.isFinite(failure.retryAfterMs)
+				? failure.retryAfterMs
+				: 0,
+		status:
+			failure instanceof Error && Number.isInteger(failure.status)
+				? failure.status
+				: undefined,
+	};
+};
+
+const remainingCopyPipelineMs = (deadlineMs) => {
+	const remainingMs = Math.floor(deadlineMs - Date.now());
+	if (!Number.isFinite(deadlineMs) || remainingMs <= 0) {
+		throw new Error("Tinybird Copy pipeline deadline was exhausted");
+	}
+	return remainingMs;
+};
+
+const runTinybirdCopyPipe = async ({
+	pipe,
 	origin,
-	token,
+	copyToken,
+	schedulerToken,
+	deploymentId,
+	copyRunId,
+	sourceCutoff,
+	deadlineMs,
 	assertMutationOwnership,
+	onUpdate,
 }) => {
-	const completions = [];
-	for (const job of jobs) {
-		completions.push({
-			pipe: job.pipe,
-			...(await waitForTinybirdCopyJob({
+	const attempts = [];
+	for (let attempt = 1; attempt <= 5; attempt += 1) {
+		let job;
+		const capacityQuiescence = await waitForTinybirdCopyPipesQuiescent({
+			origin,
+			token: schedulerToken,
+			request,
+			workspaceWide: true,
+			assertMutationOwnership,
+			timeoutMs: Math.min(120_000, remainingCopyPipelineMs(deadlineMs)),
+		});
+		try {
+			[job] = await submitTinybirdCopyJobs({
 				origin,
-				token,
+				token: copyToken,
+				deploymentId,
+				request,
+				pipes: [pipe],
+				copyRunId,
+				sourceCutoff,
+				assertMutationOwnership,
+			});
+			attempts.push({
+				attempt,
+				jobId: job.jobId,
+				status: "submitted",
+				submissionLatencyMs: job.submissionLatencyMs,
+				capacityQuiescence,
+			});
+			await onUpdate(attempts);
+		} catch (error) {
+			const failure = tinybirdCopyFailure(error);
+			attempts.push({
+				attempt,
+				status: failure.definitive ? "rejected" : "ambiguous",
+				classification: failure.classification,
+				capacityQuiescence,
+				...(failure.status ? { httpStatus: failure.status } : {}),
+			});
+			await onUpdate(attempts);
+			if (!failure.definitive || !failure.retryable || attempt === 5) {
+				throw error;
+			}
+			const backoffMs = Math.max(
+				failure.retryAfterMs,
+				15_000 * 2 ** (attempt - 1),
+			);
+			const quiescence = await waitForTinybirdCopyPipesQuiescent({
+				origin,
+				token: schedulerToken,
+				request,
+				workspaceWide: true,
+				assertMutationOwnership,
+				timeoutMs: Math.min(120_000, remainingCopyPipelineMs(deadlineMs)),
+			});
+			attempts.at(-1).backoffMs = backoffMs;
+			attempts.at(-1).quiescence = quiescence;
+			await onUpdate(attempts);
+			if (backoffMs >= remainingCopyPipelineMs(deadlineMs)) {
+				throw new Error("Tinybird Copy retry exceeded the pipeline deadline");
+			}
+			await delay(backoffMs);
+			await assertMutationOwnership();
+			continue;
+		}
+		try {
+			const completion = await waitForTinybirdCopyJob({
+				origin,
+				token: schedulerToken,
+				pipe,
 				jobId: job.jobId,
 				request,
 				assertMutationOwnership,
-			})),
-		});
+				timeoutMs: Math.min(900_000, remainingCopyPipelineMs(deadlineMs)),
+			});
+			Object.assign(attempts.at(-1), {
+				status: completion.status,
+				polls: completion.polls,
+				completionMs: completion.completionMs,
+			});
+			await onUpdate(attempts);
+			return {
+				jobs: attempts
+					.filter((entry) => entry.jobId)
+					.map((entry) => ({
+						pipe,
+						jobId: entry.jobId,
+						submissionLatencyMs: entry.submissionLatencyMs,
+						attempt: entry.attempt,
+					})),
+				completion: { pipe, ...completion },
+				attempts,
+			};
+		} catch (error) {
+			const failure = tinybirdCopyFailure(error);
+			Object.assign(attempts.at(-1), {
+				status: "failed",
+				classification: failure.classification,
+			});
+			await onUpdate(attempts);
+			if (!failure.definitive || !failure.retryable || attempt === 5) {
+				throw error;
+			}
+			const backoffMs = Math.max(
+				failure.retryAfterMs,
+				15_000 * 2 ** (attempt - 1),
+			);
+			const quiescence = await waitForTinybirdCopyPipesQuiescent({
+				origin,
+				token: schedulerToken,
+				request,
+				workspaceWide: true,
+				assertMutationOwnership,
+				requiredVisibleJobIds: [job.jobId],
+				timeoutMs: Math.min(120_000, remainingCopyPipelineMs(deadlineMs)),
+			});
+			attempts.at(-1).backoffMs = backoffMs;
+			attempts.at(-1).quiescence = quiescence;
+			await onUpdate(attempts);
+			if (backoffMs >= remainingCopyPipelineMs(deadlineMs)) {
+				throw new Error("Tinybird Copy retry exceeded the pipeline deadline");
+			}
+			await delay(backoffMs);
+			await assertMutationOwnership();
+		}
 	}
-	return completions;
+	throw new Error("Tinybird Copy submission attempts were exhausted");
 };
 
 const phaseRunExpectations = ({ state, phase }) => {
@@ -2622,6 +2795,11 @@ const phaseRunExpectations = ({ state, phase }) => {
 			runId: state.erasureControlRunId,
 			canonicalEvents: phase === "cleanup" ? 0 : 1,
 			decisionEvents: phase === "cleanup" ? 0 : 1,
+		},
+		{
+			runId: state.cutoffRunId,
+			canonicalEvents: 0,
+			decisionEvents: 0,
 		},
 	];
 	if (phase !== "staged" && phase !== "cleanup") {
@@ -2766,6 +2944,7 @@ const runCopies = async (parameters = {}) => {
 		parameters.state ?? readJson(parameters.statePath ?? option("state"));
 	const artifactPath = parameters.artifactPath ?? option("artifact");
 	const artifact = readJson(artifactPath);
+	const enforcePerformanceBudget = parameters.enforcePerformanceBudget ?? true;
 	const phase = parameters.phase ?? option("phase");
 	const requestedTarget = parameters.target ?? option("target");
 	const deploymentId = parameters.deploymentId ?? option("deployment-id");
@@ -2780,16 +2959,20 @@ const runCopies = async (parameters = {}) => {
 	if (String(state.deploymentId) !== deploymentId) {
 		throw new Error("Tinybird copy deployment does not match the seeded run");
 	}
-	const { origin, tokens } = tinybirdEnvironment([
+	const requiredTokenNames = [
 		"TINYBIRD_STAGING_COPY_TOKEN",
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 		"TINYBIRD_STAGING_SCHEDULER_TOKEN",
-	]);
+	];
+	if (phase === "promoted") {
+		requiredTokenNames.push("TINYBIRD_STAGING_INGEST_TOKEN");
+	}
+	const { origin, tokens } = tinybirdEnvironment(requiredTokenNames);
 	const copyRunId = validateSyntheticRunId(`${state.runId}_${phase}`);
 	const expectations = phaseRunExpectations({ state, phase });
 	const executeCopies = async (target) => {
 		const pipelineStartedAt = performance.now();
-		const sourceCutoff = new Date().toISOString();
+		const deadlineMs = Date.now() + COPY_PIPELINE_DEADLINE_MS;
 		const assertMutationOwnership = async () => {
 			if (
 				(await ownedMutationTarget({
@@ -2801,44 +2984,114 @@ const runCopies = async (parameters = {}) => {
 				throw new Error("The owned Tinybird deployment target changed");
 			}
 		};
-		const stateJobs = await submitTinybirdCopyJobs({
-			origin,
-			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
-			deploymentId: state.deploymentId,
-			request,
-			pipes: [
-				"snapshot_product_event_id_states_v2",
-				"snapshot_product_event_day_states_v2",
-			],
-			sourceCutoff,
-			assertMutationOwnership,
-		});
-		artifact.copyJobs = {
-			...artifact.copyJobs,
-			[phase]: {
-				status: "state_in_progress",
-				target,
-				copyRunHash: hashIdentifier(copyRunId),
-				sourceCutoff,
-				jobs: stateJobs,
-			},
-		};
-		writeJson(artifactPath, artifact);
-		const stateJobCompletions = await waitForCopyJobs({
-			jobs: stateJobs,
+		const preflightQuiescence = await waitForTinybirdCopyPipesQuiescent({
 			origin,
 			token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
-			assertMutationOwnership,
-		});
-		const canonicalJobs = await submitTinybirdCopyJobs({
-			origin,
-			token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
-			deploymentId: state.deploymentId,
 			request,
-			pipes: ["snapshot_product_events_canonical_v1"],
-			sourceCutoff,
+			workspaceWide: true,
 			assertMutationOwnership,
+			timeoutMs: Math.min(120_000, remainingCopyPipelineMs(deadlineMs)),
 		});
+		const sourceCutoff = new Date().toISOString();
+		const copyAttempts = {};
+		const recordCopyAttempts = (pipe, attempts, status) => {
+			copyAttempts[pipe] = attempts.map((entry) => ({ ...entry }));
+			const jobs = Object.entries(copyAttempts).flatMap(
+				([attemptPipe, entries]) =>
+					entries
+						.filter((entry) => entry.jobId)
+						.map((entry) => ({
+							pipe: attemptPipe,
+							jobId: entry.jobId,
+							submissionLatencyMs: entry.submissionLatencyMs,
+							attempt: entry.attempt,
+						})),
+			);
+			artifact.copyJobs = {
+				...artifact.copyJobs,
+				[phase]: {
+					...artifact.copyJobs?.[phase],
+					status,
+					target,
+					copyRunHash: hashIdentifier(copyRunId),
+					sourceCutoff,
+					preflightQuiescence,
+					jobs,
+					attempts: copyAttempts,
+				},
+			};
+			writeJson(artifactPath, artifact);
+		};
+		const stateJobs = [];
+		const stateJobCompletions = [];
+		for (const pipe of [
+			"snapshot_product_event_id_states_v2",
+			"snapshot_product_event_day_states_v2",
+		]) {
+			const copy = await runTinybirdCopyPipe({
+				pipe,
+				origin,
+				copyToken: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+				schedulerToken: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+				deploymentId: state.deploymentId,
+				sourceCutoff,
+				deadlineMs,
+				assertMutationOwnership,
+				onUpdate: (attempts) =>
+					recordCopyAttempts(pipe, attempts, "state_in_progress"),
+			});
+			stateJobs.push(...copy.jobs);
+			stateJobCompletions.push(copy.completion);
+		}
+		if (phase === "promoted") {
+			const cutoffReceivedAt = new Date(
+				Math.max(Date.now(), Date.parse(sourceCutoff) + 1),
+			);
+			const cutoffFixture = createSyntheticEvents({
+				runId: state.cutoffRunId,
+				now: cutoffReceivedAt,
+			});
+			const delivery = await request(
+				tinybirdUrl(origin, "/v0/events", {
+					name: "product_events_v1",
+					wait: "true",
+					__tb__min_deployment: state.deploymentId,
+				}),
+				{
+					token: tokens.TINYBIRD_STAGING_INGEST_TOKEN,
+					method: "POST",
+					body: `${JSON.stringify(cutoffFixture.rows[0])}\n`,
+					headers: { "Content-Type": "application/x-ndjson" },
+					attempts: 4,
+				},
+			);
+			artifact.cutoffIsolation = {
+				status: "post_cutoff_event_accepted",
+				runHash: hashIdentifier(state.cutoffRunId),
+				sourceCutoff,
+				receivedAt: cutoffReceivedAt.toISOString(),
+				requestLatencyMs: delivery.latencyMs,
+				retryAttempts: delivery.attempt - 1,
+			};
+			writeJson(artifactPath, artifact);
+		}
+		const canonicalCopy = await runTinybirdCopyPipe({
+			pipe: "snapshot_product_events_canonical_v1",
+			origin,
+			copyToken: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+			schedulerToken: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
+			deploymentId: state.deploymentId,
+			sourceCutoff,
+			deadlineMs,
+			assertMutationOwnership,
+			onUpdate: (attempts) =>
+				recordCopyAttempts(
+					"snapshot_product_events_canonical_v1",
+					attempts,
+					"canonical_in_progress",
+				),
+		});
+		const canonicalJobs = canonicalCopy.jobs;
 		artifact.copyJobs = {
 			...artifact.copyJobs,
 			[phase]: {
@@ -2846,17 +3099,14 @@ const runCopies = async (parameters = {}) => {
 				target,
 				copyRunHash: hashIdentifier(copyRunId),
 				sourceCutoff,
+				preflightQuiescence,
 				jobs: [...stateJobs, ...canonicalJobs],
+				attempts: copyAttempts,
 				stateJobCompletions,
 			},
 		};
 		writeJson(artifactPath, artifact);
-		const canonicalJobCompletions = await waitForCopyJobs({
-			jobs: canonicalJobs,
-			origin,
-			token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
-			assertMutationOwnership,
-		});
+		const canonicalJobCompletions = [canonicalCopy.completion];
 		const canonicalVisibility = await waitForCopyVisibility({
 			label: "Tinybird canonical copy",
 			read: () =>
@@ -2910,25 +3160,22 @@ const runCopies = async (parameters = {}) => {
 			},
 		];
 		for (const copyStep of copySteps) {
-			const copyJobs = await submitTinybirdCopyJobs({
+			const copy = await runTinybirdCopyPipe({
+				pipe: copyStep.pipe,
 				origin,
-				token: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+				copyToken: tokens.TINYBIRD_STAGING_COPY_TOKEN,
+				schedulerToken: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
 				deploymentId: state.deploymentId,
-				request,
-				pipes: [copyStep.pipe],
 				copyRunId,
 				sourceCutoff,
+				deadlineMs,
 				assertMutationOwnership,
+				onUpdate: (attempts) =>
+					recordCopyAttempts(copyStep.pipe, attempts, "in_progress"),
 			});
+			const copyJobs = copy.jobs;
 			downstreamJobs.push(...copyJobs);
-			downstreamJobCompletions.push(
-				...(await waitForCopyJobs({
-					jobs: copyJobs,
-					origin,
-					token: tokens.TINYBIRD_STAGING_SCHEDULER_TOKEN,
-					assertMutationOwnership,
-				})),
-			);
+			downstreamJobCompletions.push(copy.completion);
 			const visibility = await waitForCopyVisibility({
 				label: `Tinybird ${copyStep.pipe} copy`,
 				read:
@@ -2958,6 +3205,49 @@ const runCopies = async (parameters = {}) => {
 				...(copyStep.marker ? { marker: copyStep.marker } : {}),
 			};
 		}
+		const decisionVisibility = await waitForCopyVisibility({
+			label: "Tinybird decision copies",
+			read: () =>
+				readPhaseCiAssertions({
+					state,
+					deploymentId: state.deploymentId,
+					expectations,
+				}),
+			assert: (results) => assertPhaseCiAssertions(results, ["decisionEvents"]),
+		});
+		if (phase === "promoted") {
+			const cutoffAssertions = normalizeCiAssertions(
+				(
+					await ciAssertionsQuery({
+						state,
+						deploymentId: state.deploymentId,
+						syntheticRunId: state.cutoffRunId,
+					})
+				).data,
+			);
+			if (
+				cutoffAssertions.receivedRows < 1 ||
+				cutoffAssertions.uniqueEvents !== 1 ||
+				cutoffAssertions.uniquePayloads !== 1 ||
+				cutoffAssertions.payloadConflicts !== 0 ||
+				cutoffAssertions.canonicalEvents !== 0 ||
+				cutoffAssertions.decisionEvents !== 0
+			) {
+				throw new Error("Post-cutoff event leaked into the active generation");
+			}
+			artifact.cutoffIsolation = {
+				...artifact.cutoffIsolation,
+				status: "passed",
+				receivedRows: cutoffAssertions.receivedRows,
+				canonicalEvents: cutoffAssertions.canonicalEvents,
+				decisionEvents: cutoffAssertions.decisionEvents,
+			};
+			artifact.assertions = {
+				...artifact.assertions,
+				cutoffIsolationPassed: true,
+			};
+			writeJson(artifactPath, artifact);
+		}
 		await assertMutationOwnership();
 		const visibility = latencySummary([
 			...stateJobCompletions.map((completion) => completion.completionMs),
@@ -2967,12 +3257,15 @@ const runCopies = async (parameters = {}) => {
 			...Object.values(downstreamVisibility).map(
 				(copyVisibility) => copyVisibility.visibilityMs,
 			),
+			decisionVisibility.visibilityMs,
 		]);
 		return {
 			status: "passed",
 			target,
 			copyRunHash: hashIdentifier(copyRunId),
+			preflightQuiescence,
 			jobs: [...stateJobs, ...canonicalJobs, ...downstreamJobs],
+			attempts: copyAttempts,
 			stateJobCompletions,
 			canonicalJobCompletions,
 			downstreamJobCompletions,
@@ -2981,6 +3274,10 @@ const runCopies = async (parameters = {}) => {
 				visibilityMs: canonicalVisibility.visibilityMs,
 			},
 			downstreamVisibility: { copies: downstreamVisibility },
+			decisionVisibility: {
+				polls: decisionVisibility.polls,
+				visibilityMs: decisionVisibility.visibilityMs,
+			},
 			performance: {
 				pipelineWallClockMs: Math.round(performance.now() - pipelineStartedAt),
 				visibility,
@@ -3012,7 +3309,7 @@ const runCopies = async (parameters = {}) => {
 			});
 			const phasePerformance = {
 				...result.performance,
-				budget,
+				budget: { ...budget, enforced: enforcePerformanceBudget },
 			};
 			artifact.copyPerformance = {
 				providerResourceMetrics: {
@@ -3039,7 +3336,7 @@ const runCopies = async (parameters = {}) => {
 			};
 			if (phase === "cleanup") writeOutput("target", target);
 			writeJson(artifactPath, artifact);
-			if (!budget.passed) {
+			if (!budget.passed && enforcePerformanceBudget) {
 				throw new Error(
 					`Tinybird Copy performance budget failed for ${phase}: pipeline ${result.performance.pipelineWallClockMs}ms, visibility p95 ${result.performance.visibility.p95Ms}ms`,
 				);
@@ -3250,6 +3547,7 @@ const verifyPreSeedDeployment = async ({
 	}
 	const runIds = [
 		state.runId,
+		state.cutoffRunId,
 		state.loadRunId,
 		state.largeLoadRunId,
 		state.decisionRunId,
@@ -4112,6 +4410,7 @@ const cleanup = async (parameters = {}) => {
 		throw new Error("Tinybird cleanup target changed before scoped cleanup");
 	}
 	validateSyntheticRunId(state.runId);
+	validateSyntheticRunId(state.cutoffRunId);
 	validateSyntheticRunId(state.loadRunId);
 	validateSyntheticRunId(state.largeLoadRunId);
 	validateSyntheticRunId(state.decisionRunId);
@@ -4121,6 +4420,7 @@ const cleanup = async (parameters = {}) => {
 	);
 	const runIds = [
 		state.runId,
+		state.cutoffRunId,
 		state.loadRunId,
 		state.largeLoadRunId,
 		state.decisionRunId,
@@ -4515,15 +4815,18 @@ const verifyPromoted = async () => {
 	writeJson(artifactPath, artifact);
 };
 
-const verifyCleanup = async () => {
-	const state = readJson(option("state"));
-	const artifactPath = option("artifact");
+const verifyCleanup = async (parameters = {}) => {
+	const state =
+		parameters.state ?? readJson(parameters.statePath ?? option("state"));
+	const artifactPath = parameters.artifactPath ?? option("artifact");
 	const artifact = readJson(artifactPath);
-	const target = option("target");
+	const target = parameters.target ?? option("target");
 	if (!["live", "staging"].includes(target)) {
 		throw new Error("Tinybird cleanup verification target is invalid");
 	}
-	if (String(state.deploymentId) !== option("deployment-id")) {
+	const requestedDeploymentId =
+		parameters.deploymentId ?? option("deployment-id");
+	if (String(state.deploymentId) !== requestedDeploymentId) {
 		throw new Error(
 			"Tinybird cleanup deployment does not match the seeded run",
 		);
@@ -4567,15 +4870,30 @@ const verifyCleanup = async () => {
 			"Synthetic load rows still affect Tinybird health after cleanup",
 		);
 	}
-	for (const syntheticRunId of [state.loadRunId, state.largeLoadRunId]) {
+	for (const syntheticRunId of [
+		state.cutoffRunId,
+		state.loadRunId,
+		state.largeLoadRunId,
+	]) {
 		const decisions = normalizeCiAssertions(
 			(await ciAssertionsQuery({ state, deploymentId, syntheticRunId })).data,
 		);
 		if (Object.values(decisions).some((value) => value !== 0)) {
 			throw new Error(
-				"Synthetic load rows still affect Tinybird decisions after cleanup",
+				"Synthetic scoped rows still affect Tinybird decisions after cleanup",
 			);
 		}
+	}
+	const cutoffResult = await healthQuery({
+		state,
+		deploymentId,
+		appVersion: state.cutoffAppVersion,
+	});
+	const cutoffHealth = normalizeHealth(cutoffResult.data);
+	if (Object.values(cutoffHealth).some((value) => value !== 0)) {
+		throw new Error(
+			"Post-cutoff rows still affect Tinybird health after cleanup",
+		);
 	}
 	const largeLoadResult = await healthQuery({
 		state,
@@ -5009,7 +5327,14 @@ const recoverStaging = async () => {
 					await runCopies({
 						artifactPath: checkpoint.artifactPath,
 						deploymentId: candidateId,
+						enforcePerformanceBudget: false,
 						phase: "cleanup",
+						state,
+						target: "live",
+					});
+					await verifyCleanup({
+						artifactPath: checkpoint.artifactPath,
+						deploymentId: candidateId,
 						state,
 						target: "live",
 					});
@@ -5116,7 +5441,14 @@ const recoverStaging = async () => {
 			await runCopies({
 				artifactPath: checkpoint.artifactPath,
 				deploymentId: candidateId,
+				enforcePerformanceBudget: false,
 				phase: "cleanup",
+				state,
+				target: "live",
+			});
+			await verifyCleanup({
+				artifactPath: checkpoint.artifactPath,
+				deploymentId: candidateId,
 				state,
 				target: "live",
 			});
@@ -5241,6 +5573,7 @@ const handlers = {
 	"verify-pr-head": verifyFreshPullRequestHead,
 	"attest-preview": attestPreviewTinybird,
 	seed,
+	"verify-ingestion-budget": verifyIngestionBudget,
 	"run-copies": runCopies,
 	"set-copy-schedules": setCopySchedules,
 	"verify-preseed": verifyPreSeed,

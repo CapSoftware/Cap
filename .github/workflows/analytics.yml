@@ -416,6 +416,11 @@ jobs:
             ${{ runner.temp }}/analytics-staging-report.json
           if-no-files-found: error
           retention-days: 30
+      - name: Verify representative ingestion performance
+        id: ingestion-budget
+        run: >-
+          node scripts/analytics/staging-ci.js verify-ingestion-budget
+          --artifact "$RUNNER_TEMP/analytics-staging-report.json"
       - name: Prove least-privilege staging token scopes
         id: token-scopes
         env:
@@ -472,6 +477,7 @@ jobs:
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
@@ -735,6 +741,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: analytics-recovery-result-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/analytics-recovery-report.json
+          path: |
+            ${{ runner.temp }}/analytics-recovery-report.json
+            ${{ runner.temp }}/analytics-recovery-checkpoints/**/analytics-staging-report.json
           if-no-files-found: error
           retention-days: 30

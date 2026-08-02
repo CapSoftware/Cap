@@ -169,10 +169,85 @@ export const tokenScopeProbeWindow = (startTime, endTime) => {
 	};
 };
 
+const tinybirdFailureText = (value) =>
+	[
+		value?.error,
+		value?.message,
+		value?.detail,
+		value?.error?.message,
+		value?.job?.error,
+		value?.job?.error?.message,
+	]
+		.filter((part) => typeof part === "string")
+		.join(" ")
+		.slice(0, 1_000)
+		.toLowerCase();
+
+const tinybirdCopyQuotaPattern =
+	/(maximum number of copy jobs|copy jobs?.*(?:quota|limit|concurren)|(?:quota|limit|concurren).*copy jobs?)/;
+
+const retryAfterMs = (value, now) => {
+	if (!value) return 0;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(300_000, Math.round(seconds * 1_000));
+	}
+	const retryAt = Date.parse(value);
+	return Number.isFinite(retryAt)
+		? Math.min(300_000, Math.max(0, retryAt - now))
+		: 0;
+};
+
+export const classifyTinybirdHttpFailure = ({
+	status,
+	payload,
+	retryAfter,
+	now = Date.now(),
+}) => {
+	const text = tinybirdFailureText(payload);
+	const copyQuota = status === 403 && tinybirdCopyQuotaPattern.test(text);
+	const rateLimited = status === 429;
+	return {
+		status,
+		classification: copyQuota
+			? "copy_quota"
+			: rateLimited
+				? "rate_limit"
+				: status === 401 || status === 403
+					? "permission"
+					: status >= 500
+						? "provider_failure"
+						: "request_rejected",
+		definitive: status < 500,
+		retryable: copyQuota || rateLimited,
+		retryAfterMs: retryAfterMs(retryAfter, now),
+	};
+};
+
+export const classifyTinybirdCopyJobFailure = (value) => {
+	const text = tinybirdFailureText(value);
+	const copyQuota = tinybirdCopyQuotaPattern.test(text);
+	const rateLimited = /rate limit|too many requests/.test(text);
+	const transient = /temporar|service unavailable/.test(text);
+	return {
+		classification: copyQuota
+			? "copy_quota"
+			: rateLimited
+				? "rate_limit"
+				: transient
+					? "provider_failure"
+					: "copy_failed",
+		definitive: true,
+		retryable: copyQuota || rateLimited || transient,
+		retryAfterMs: 0,
+	};
+};
+
 export const waitForTinybirdCopyPipesQuiescent = async ({
 	origin,
 	token,
 	pipes = COPY_PIPES,
+	workspaceWide = false,
 	request,
 	assertMutationOwnership,
 	requiredVisibleJobIds = [],
@@ -192,10 +267,10 @@ export const waitForTinybirdCopyPipesQuiescent = async ({
 	while (now() < deadline) {
 		await assertMutationOwnership();
 		const activeJobs = [];
-		for (const pipe of pipes) {
+		for (const pipe of workspaceWide ? [undefined] : pipes) {
 			const url = new URL("/v0/jobs", origin);
 			url.searchParams.set("kind", "copy");
-			url.searchParams.set("pipe_name", pipe);
+			if (pipe) url.searchParams.set("pipe_name", pipe);
 			const response = await request(url, { token, attempts: 3 });
 			if (!Array.isArray(response.data?.jobs)) {
 				throw new Error("Tinybird Jobs API returned an invalid Copy job list");
@@ -205,9 +280,22 @@ export const waitForTinybirdCopyPipesQuiescent = async ({
 				if (typeof job?.id === "string") visibleJobIds.add(job.id);
 				const status = String(job?.status ?? "").toLowerCase();
 				if (
-					["waiting", "working", "cancelling", "canceling"].includes(status)
+					![
+						"done",
+						"success",
+						"finished",
+						"completed",
+						"failed",
+						"error",
+						"cancelled",
+						"canceled",
+					].includes(status)
 				) {
-					activeJobs.push({ id: String(job?.id ?? ""), pipe, status });
+					activeJobs.push({
+						id: String(job?.id ?? ""),
+						pipe: String(job?.pipe_name ?? pipe ?? ""),
+						status,
+					});
 				}
 			}
 		}
@@ -939,6 +1027,7 @@ export const submitTinybirdCopyJobs = async ({
 export const waitForTinybirdCopyJob = async ({
 	origin,
 	token,
+	pipe,
 	jobId,
 	request,
 	assertMutationOwnership,
@@ -990,7 +1079,12 @@ export const waitForTinybirdCopyJob = async ({
 			};
 		}
 		if (["failed", "error", "cancelled", "canceled"].includes(status)) {
-			throw new Error(`Tinybird Copy job ended in ${status}`);
+			const failure = classifyTinybirdCopyJobFailure(job.data);
+			const error = new Error(`Tinybird Copy job ended in ${status}`);
+			error.pipe = pipe;
+			error.jobId = jobId;
+			Object.assign(error, failure);
+			throw error;
 		}
 		await wait(pollIntervalMs);
 	}
@@ -3074,6 +3168,87 @@ export const latencySummary = (samples) => {
 		p50Ms: percentile(samples, 0.5),
 		p95Ms: percentile(samples, 0.95),
 		p99Ms: percentile(samples, 0.99),
+	};
+};
+
+export const evaluateIngestionPerformanceBudget = ({
+	smoke,
+	sustained,
+	batchP95BudgetMs,
+	smokeWallClockBudgetMs,
+	minimumRowsPerSecond,
+}) => {
+	if (
+		![batchP95BudgetMs, smokeWallClockBudgetMs, minimumRowsPerSecond].every(
+			Number.isFinite,
+		) ||
+		batchP95BudgetMs <= 0 ||
+		smokeWallClockBudgetMs <= 0 ||
+		minimumRowsPerSecond <= 0
+	) {
+		throw new Error("Ingestion performance budget inputs are invalid");
+	}
+	const profile = {
+		batchSize: 500,
+		concurrency: 4,
+		smokeRows: 1_000,
+		smokeBatches: 2,
+		sustainedRows: 100_000,
+		sustainedBatches: 200,
+	};
+	const integrity = (measured, rows, batches) =>
+		measured.rowsPlanned === rows &&
+		measured.rowsAttempted === rows &&
+		measured.rowsAccepted === rows &&
+		measured.batchSize === profile.batchSize &&
+		measured.concurrency === profile.concurrency &&
+		measured.batches === batches &&
+		measured.batchLatency?.count === batches &&
+		measured.errorCount === 0 &&
+		measured.errorRate === 0 &&
+		measured.retryAttempts === 0 &&
+		Number.isFinite(measured.wallClockMs) &&
+		measured.wallClockMs > 0;
+	const smokeIntegrity = integrity(
+		smoke,
+		profile.smokeRows,
+		profile.smokeBatches,
+	);
+	const sustainedIntegrity = integrity(
+		sustained,
+		profile.sustainedRows,
+		profile.sustainedBatches,
+	);
+	const sustainedRowsPerSecond = sustainedIntegrity
+		? (sustained.rowsAccepted * 1_000) / sustained.wallClockMs
+		: 0;
+	const smokePassed =
+		smokeIntegrity &&
+		smoke.wallClockMs <= smokeWallClockBudgetMs &&
+		smoke.batchLatency.maxMs <= batchP95BudgetMs;
+	const sustainedPassed =
+		sustainedIntegrity &&
+		sustained.batchLatency.p95Ms <= batchP95BudgetMs &&
+		sustainedRowsPerSecond >= minimumRowsPerSecond;
+	return {
+		profile,
+		batchP95BudgetMs,
+		smokeWallClockBudgetMs,
+		minimumRowsPerSecond,
+		smoke: {
+			integrityPassed: smokeIntegrity,
+			wallClockMs: smoke.wallClockMs,
+			batchMaxMs: smoke.batchLatency?.maxMs,
+			passed: smokePassed,
+		},
+		sustained: {
+			integrityPassed: sustainedIntegrity,
+			wallClockMs: sustained.wallClockMs,
+			batchP95Ms: sustained.batchLatency?.p95Ms,
+			rowsPerSecond: Number(sustainedRowsPerSecond.toFixed(3)),
+			passed: sustainedPassed,
+		},
+		passed: smokePassed && sustainedPassed,
 	};
 };
 
