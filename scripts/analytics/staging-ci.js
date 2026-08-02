@@ -1631,11 +1631,14 @@ const probePreview = async () => {
 	const state = readJson(statePath);
 	const artifact = readJson(artifactPath);
 	const previewOrigin = new URL(artifactPreviewUrl(artifact)).origin;
+	const previewRunId = validateSyntheticRunId(state.previewRunId);
 	await attestExactPreviewSha({
 		previewOrigin,
 		runId: `${state.runId}_preview_api`,
 	});
-	const landing = await previewRequest(previewOrigin);
+	const landing = await previewRequest(previewOrigin, {
+		headers: { "x-cap-analytics-test-run": previewRunId },
+	});
 	if (!landing.ok) {
 		throw new Error(
 			`The exact-SHA Vercel preview rejected the browser bootstrap with HTTP ${landing.status}`,
@@ -1685,9 +1688,16 @@ const probePreview = async () => {
 			"The Vercel preview did not issue analytics browser cookies",
 		);
 	}
+	const previewAnonymousIdentityHash = hashIdentifier(
+		`anonymous\0${anonymousId}`,
+	);
+	if (previewAnonymousIdentityHash !== state.previewAnonymousIdentityHash) {
+		throw new Error(
+			"The Vercel preview issued an unexpected analytics identity",
+		);
+	}
 	const occurredAt = new Date().toISOString();
 	const runHash = hashIdentifier(state.runId);
-	const previewRunId = validateSyntheticRunId(state.previewRunId);
 	const event = {
 		eventId: `synthetic_preview_${runHash.slice(0, 24)}`,
 		eventName: "page_view",
@@ -1880,9 +1890,7 @@ const probePreview = async () => {
 		duplicateResponses.length + replayAccepted + collectorAcceptedEvents;
 	state.previewExpectedEvents =
 		Number(state.browserExpectedEvents ?? 0) + 1 + collectorAcceptedEvents;
-	state.previewAnonymousIdentityHash = hashIdentifier(
-		`anonymous\0${anonymousId}`,
-	);
+	state.previewAnonymousIdentityHash = previewAnonymousIdentityHash;
 	state.previewStartTime = new Date(
 		new Date(occurredAt).getTime() - 120_000,
 	).toISOString();
@@ -2179,6 +2187,9 @@ const prepareSeed = async () => {
 	}
 	const previewRunId = validateSyntheticRunId(`${runId}_preview`);
 	const previewAppVersion = `staging-preview-${hashIdentifier(runId).slice(0, 12)}`;
+	const previewAnonymousId = `synthetic-${hashIdentifier(previewRunId)
+		.match(/.{4}/g)
+		.join("x")}`;
 	const state = {
 		recoveryIdentity: boundary.identity,
 		recoveryPhase: "preseed",
@@ -2186,7 +2197,7 @@ const prepareSeed = async () => {
 		previewRunId,
 		previewAppVersion,
 		previewAnonymousIdentityHash: hashIdentifier(
-			`anonymous\0synthetic_${previewRunId}`,
+			`anonymous\0${previewAnonymousId}`,
 		),
 		deploymentId,
 		liveBeforeDeploymentId: boundary.tinybird.liveDeploymentId,

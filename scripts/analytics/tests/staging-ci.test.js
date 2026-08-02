@@ -2529,6 +2529,18 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		/pathname !== "\/api\/analytics\/staging-test" &&[\s\S]*!pathname\.startsWith\("\/api\/analytics\/staging-test\/"\)/,
 	);
 	assert.match(runner, /accepted an invalid request signature with HTTP/);
+	const previewProbe = runner.slice(
+		runner.indexOf("const probePreview = async () => {"),
+		runner.indexOf("const probeDurableServerPath = async () => {"),
+	);
+	assert.match(
+		previewProbe,
+		/const previewRunId = validateSyntheticRunId\(state\.previewRunId\)[\s\S]*const landing = await previewRequest\(previewOrigin, \{[\s\S]*"x-cap-analytics-test-run": previewRunId/,
+	);
+	assert.match(
+		previewProbe,
+		/const previewAnonymousIdentityHash = hashIdentifier\([\s\S]*previewAnonymousIdentityHash !== state\.previewAnonymousIdentityHash/,
+	);
 	const browserProbe = fs.readFileSync(
 		new URL(
 			"../../../apps/chrome-extension/e2e/analytics-staging.spec.ts",

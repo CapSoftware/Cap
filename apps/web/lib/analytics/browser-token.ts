@@ -1,4 +1,9 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomBytes,
+	timingSafeEqual,
+} from "node:crypto";
 import { normalizeAnalyticsIdentifier } from "@cap/analytics";
 
 export const PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE =
@@ -7,6 +12,19 @@ export const PRODUCT_ANALYTICS_BROWSER_TOKEN_TTL_SECONDS = 60 * 60;
 
 export function createProductAnalyticsAnonymousId() {
 	return randomBytes(16).toString("base64url");
+}
+
+export function createProductAnalyticsStagingAnonymousId(
+	stagingRunId: string | null,
+) {
+	if (!stagingRunId || !/^[A-Za-z0-9_-]{8,128}$/.test(stagingRunId)) {
+		return undefined;
+	}
+	const digest = createHash("sha256").update(stagingRunId).digest("hex");
+	const encodedDigest = Array.from({ length: 16 }, (_, index) =>
+		digest.slice(index * 4, index * 4 + 4),
+	).join("x");
+	return `synthetic-${encodedDigest}`;
 }
 
 export function createProductAnalyticsBrowserToken(

@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
+import { PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE } from "@cap/analytics";
+import { NextResponse } from "next/server";
 import { describe, expect, it } from "vitest";
 import {
 	createProductAnalyticsBrowserToken,
+	createProductAnalyticsStagingAnonymousId,
 	PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE,
 	PRODUCT_ANALYTICS_BROWSER_TOKEN_TTL_SECONDS,
 	readProductAnalyticsBrowserToken,
@@ -76,6 +79,33 @@ describe("product analytics browser token", () => {
 				now,
 			),
 		).toBeUndefined();
+	});
+
+	it("creates a stable valid identity for an exact-SHA staging run", () => {
+		const runId =
+			"synthetic_run_30712960079_3_53890769e3db23887535579f2c16e46de807ec93_preview";
+		const anonymousId = createProductAnalyticsStagingAnonymousId(runId);
+		if (!anonymousId) throw new Error("Expected a staging anonymous ID");
+		expect(anonymousId).toMatch(/^synthetic-[0-9a-f]{4}(?:x[0-9a-f]{4}){15}$/);
+		expect(createProductAnalyticsStagingAnonymousId(runId)).toBe(anonymousId);
+		expect(
+			readProductAnalyticsBrowserTokenClaims(
+				createProductAnalyticsBrowserToken(secret, anonymousId, now),
+				secret,
+				now,
+			),
+		).toEqual({ anonymousId });
+		expect(
+			createProductAnalyticsStagingAnonymousId("invalid run id"),
+		).toBeUndefined();
+
+		const response = NextResponse.next();
+		response.cookies.set(PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE, anonymousId);
+		const serializedCookie = response.headers.get("set-cookie");
+		const wireAnonymousId = serializedCookie?.match(
+			new RegExp(`${PRODUCT_ANALYTICS_ANONYMOUS_ID_COOKIE}=([^;]+)`),
+		)?.[1];
+		expect(wireAnonymousId).toBe(anonymousId);
 	});
 
 	it("reads only the analytics token cookie", () => {

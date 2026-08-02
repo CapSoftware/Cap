@@ -11,6 +11,7 @@ import { type NextRequest, NextResponse, userAgent } from "next/server";
 import {
 	createProductAnalyticsAnonymousId,
 	createProductAnalyticsBrowserToken,
+	createProductAnalyticsStagingAnonymousId,
 	PRODUCT_ANALYTICS_BROWSER_TOKEN_COOKIE,
 	PRODUCT_ANALYTICS_BROWSER_TOKEN_TTL_SECONDS,
 	readProductAnalyticsBrowserTokenClaims,
@@ -46,10 +47,8 @@ const nextWithAnalyticsToken = (
 	);
 	const stagingRunId = request.headers.get("x-cap-analytics-test-run");
 	const stagingAnonymousId =
-		serverEnv().VERCEL_ENV === "preview" &&
-		stagingRunId &&
-		/^[A-Za-z0-9_-]{8,128}$/.test(stagingRunId)
-			? `synthetic_${stagingRunId}`
+		serverEnv().VERCEL_ENV === "preview"
+			? createProductAnalyticsStagingAnonymousId(stagingRunId)
 			: undefined;
 	const anonymousId =
 		stagingAnonymousId ??
