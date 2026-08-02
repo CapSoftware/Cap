@@ -3336,6 +3336,30 @@ export const evaluateIngestionPerformanceBudget = ({
 	};
 };
 
+export const evaluateIngestionVisibility = ({
+	budgetMs,
+	decisionPipelineMs,
+	rawVisibilityMs,
+}) => {
+	for (const [name, value] of Object.entries({
+		budgetMs,
+		decisionPipelineMs,
+		rawVisibilityMs,
+	})) {
+		if (!Number.isFinite(value) || value < 0) {
+			throw new Error(`${name} must be a non-negative finite number`);
+		}
+	}
+	const visibilityMs = Math.max(rawVisibilityMs, decisionPipelineMs);
+	return {
+		budgetMs,
+		decisionPipelineMs,
+		passed: visibilityMs <= budgetMs,
+		rawVisibilityMs,
+		visibilityMs,
+	};
+};
+
 export const evaluateCopyPerformanceBudget = ({
 	absolutePipelineMs,
 	absoluteVisibilityP95Ms,

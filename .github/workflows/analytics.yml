@@ -400,6 +400,7 @@ jobs:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
           TINYBIRD_STAGING_INGEST_TOKEN: ${{ secrets.TINYBIRD_STAGING_INGEST_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js seed
           --run-id "$ANALYTICS_TEST_RUN_ID"

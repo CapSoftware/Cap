@@ -28,6 +28,7 @@ import {
 	evaluateBundleBudget,
 	evaluateCopyPerformanceBudget,
 	evaluateIngestionPerformanceBudget,
+	evaluateIngestionVisibility,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	formatTinybirdDateTime64,
@@ -2485,6 +2486,7 @@ const seed = async () => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_DEPLOY_TOKEN",
 		"TINYBIRD_STAGING_INGEST_TOKEN",
+		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
 	const assertExactLiveOwnership = async () => {
 		if (
@@ -2672,6 +2674,31 @@ const seed = async () => {
 		controlAccepted: true,
 		controlDeliveryLatencyMs: erasureControlDelivery.latencyMs,
 		controlRetryAttempts: erasureControlDelivery.attempts - 1,
+	};
+	const rawVisibility = await waitForCopyVisibility({
+		label: "Tinybird raw event health",
+		read: async () =>
+			normalizeHealth(
+				(
+					await healthQuery({
+						state,
+						deploymentId: state.deploymentId,
+					})
+				).data,
+			),
+		assert: assertSyntheticHealth,
+	});
+	const ingestionSloMs = Number(process.env.INGESTION_SLO_MS ?? 180_000);
+	artifact.rawVisibility = {
+		budgetMs: ingestionSloMs,
+		passed: rawVisibility.visibilityMs <= ingestionSloMs,
+		polls: rawVisibility.polls,
+		visibilityMs: rawVisibility.visibilityMs,
+	};
+	artifact.ingestionBudget = {
+		...artifact.ingestionBudget,
+		passed: artifact.ingestionBudget.passed && artifact.rawVisibility.passed,
+		rawVisibility: artifact.rawVisibility,
 	};
 	await assertExactLiveOwnership();
 	artifact.assertions.seedAccepted = true;
@@ -4135,11 +4162,15 @@ const verify = async () => {
 	artifact.load.decisionAssertions = loadDecisionAssertions;
 	artifact.largeLoad.health = largeLoadHealth;
 	artifact.largeLoad.decisionAssertions = largeLoadDecisionAssertions;
-	const currentVisibilityMs = Date.now() - Date.parse(state.startedAt);
-	artifact.visibilityMs = Math.min(
-		artifact.visibilityMs ?? currentVisibilityMs,
-		currentVisibilityMs,
-	);
+	const ingestionSloMs = Number(process.env.INGESTION_SLO_MS ?? 180_000);
+	const ingestionVisibility = evaluateIngestionVisibility({
+		budgetMs: ingestionSloMs,
+		decisionPipelineMs:
+			artifact.copyPerformance?.phases?.promoted?.pipelineWallClockMs,
+		rawVisibilityMs: artifact.rawVisibility?.visibilityMs,
+	});
+	artifact.ingestionVisibility = ingestionVisibility;
+	artifact.visibilityMs = ingestionVisibility.visibilityMs;
 	artifact.endpointLatency = endpointLatency;
 	artifact.decisionEndpointLatency = decisionEndpointLatency;
 	artifact.performanceBaseline = {
@@ -4162,8 +4193,7 @@ const verify = async () => {
 		representativeBudget: dashboardRepresentativeBudget,
 		largeBudget: dashboardLargeBudget,
 	};
-	const ingestionSloMs = Number(process.env.INGESTION_SLO_MS ?? 180_000);
-	const ingestionSloPassed = artifact.visibilityMs <= ingestionSloMs;
+	const ingestionSloPassed = ingestionVisibility.passed;
 	const endpointBudgetPassed = endpointLatency.p95Ms <= endpointP95BudgetMs;
 	const decisionEndpointBudgetsPassed =
 		failedDecisionEndpoints.length === 0 &&
@@ -4193,7 +4223,7 @@ const verify = async () => {
 	writeJson(artifactPath, artifact);
 	if (!ingestionSloPassed) {
 		throw new Error(
-			`Synthetic events became visible in ${artifact.visibilityMs}ms, over ${ingestionSloMs}ms`,
+			`Synthetic raw or decision data became visible in ${artifact.visibilityMs}ms, over ${ingestionSloMs}ms`,
 		);
 	}
 	if (!endpointBudgetPassed) {

@@ -29,6 +29,7 @@ import {
 	evaluateBundleBudget,
 	evaluateCopyPerformanceBudget,
 	evaluateIngestionPerformanceBudget,
+	evaluateIngestionVisibility,
 	evaluateLatencyBudget,
 	extractSameOriginNextScriptUrls,
 	FEATURE_BRANCH,
@@ -2332,6 +2333,38 @@ test("ingestion budgets separate startup smoke latency from sustained throughput
 	);
 });
 
+test("ingestion visibility excludes unrelated staging work", () => {
+	assert.deepEqual(
+		evaluateIngestionVisibility({
+			budgetMs: 180_000,
+			decisionPipelineMs: 75_000,
+			rawVisibilityMs: 2_500,
+		}),
+		{
+			budgetMs: 180_000,
+			decisionPipelineMs: 75_000,
+			passed: true,
+			rawVisibilityMs: 2_500,
+			visibilityMs: 75_000,
+		},
+	);
+	assert.equal(
+		evaluateIngestionVisibility({
+			budgetMs: 180_000,
+			decisionPipelineMs: 180_001,
+			rawVisibilityMs: 2_500,
+		}).passed,
+		false,
+	);
+	assert.throws(() =>
+		evaluateIngestionVisibility({
+			budgetMs: 180_000,
+			decisionPipelineMs: undefined,
+			rawVisibilityMs: 2_500,
+		}),
+	);
+});
+
 test("Copy performance budgets gate visibility and pipeline regressions", () => {
 	const baseline = {
 		pipelineWallClockMs: 80_000,
@@ -2906,7 +2939,7 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(prepareSource, /rowsAttempted: 0/);
 	assert.match(
 		seedSource,
-		/tinybirdEnvironment\(\[\s*"TINYBIRD_STAGING_DEPLOY_TOKEN",\s*"TINYBIRD_STAGING_INGEST_TOKEN",?\s*\]\)/,
+		/tinybirdEnvironment\(\[\s*"TINYBIRD_STAGING_DEPLOY_TOKEN",\s*"TINYBIRD_STAGING_INGEST_TOKEN",\s*"TINYBIRD_STAGING_READ_TOKEN",?\s*\]\)/,
 	);
 	assert.doesNotMatch(seedSource, /TINYBIRD_STAGING_COPY_TOKEN/);
 	assert.match(seedSource, /assertExactLiveOwnership/);
@@ -2922,6 +2955,17 @@ test("the seed checkpoint is persisted before ingestion", () => {
 	assert.match(
 		seedSource,
 		/artifact\.delivery\.rowsAccepted \+= 1;[\s\S]*writeJson\(artifactPath, artifact\);/,
+	);
+	assert.ok(
+		seedSource.indexOf('label: "Tinybird raw event health"') <
+			seedSource.indexOf("artifact.assertions.seedAccepted = true"),
+	);
+	assert.doesNotMatch(
+		source.slice(
+			source.indexOf("const verify = async () => {"),
+			source.indexOf("const verifyBusinessDecisions = async () => {"),
+		),
+		/Date\.parse\(state\.startedAt\)/,
 	);
 	const workflow = fs.readFileSync(
 		new URL("../../../.github/workflows/analytics.yml", import.meta.url),
