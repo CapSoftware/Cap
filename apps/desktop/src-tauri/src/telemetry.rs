@@ -14,9 +14,11 @@ use crate::auth::AuthStore;
 
 /// Baked in at compile time so self-built binaries send nothing.
 const CLIENT_ID: Option<&str> = option_env!("VITE_OPENPANEL_CLIENT_ID");
-/// The OpenPanel REST `/track` endpoint requires a `write` or `root` client, so
-/// unlike the browser SDK the secret is part of the contract here.
-const CLIENT_SECRET: Option<&str> = option_env!("VITE_OPENPANEL_CLIENT_SECRET");
+/// `/track` accepts origin-allowlisted requests without a client secret — the
+/// same auth path the webview SDK uses — so no credential ships in the binary.
+/// Must stay on the OpenPanel client's CORS allowlist alongside the webview
+/// origins.
+const ORIGIN: &str = "tauri://localhost";
 const API_URL: Option<&str> = option_env!("VITE_OPENPANEL_API_URL");
 const DEFAULT_API_URL: &str = "https://api.openpanel.dev";
 
@@ -442,12 +444,10 @@ pub fn async_capture_event(app: &AppHandle, event: AnalyticsEvent) {
             },
         };
 
-        let mut req = http_client()
+        let req = http_client()
             .post(track_url())
-            .header("openpanel-client-id", client_id);
-        if let Some(secret) = CLIENT_SECRET {
-            req = req.header("openpanel-client-secret", secret);
-        }
+            .header("openpanel-client-id", client_id)
+            .header("origin", ORIGIN);
 
         // Events are best-effort: log and drop, never retry.
         match req.json(&body).send().await {

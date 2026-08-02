@@ -152,7 +152,6 @@ jobs:
           echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
           echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}' >> .env
-          echo 'VITE_OPENPANEL_CLIENT_SECRET=${{ secrets.VITE_OPENPANEL_CLIENT_SECRET }}' >> .env
           echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
 
@@ -222,7 +221,6 @@ jobs:
           echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
           echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
           echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}' >> .env
-          echo 'VITE_OPENPANEL_CLIENT_SECRET=${{ secrets.VITE_OPENPANEL_CLIENT_SECRET }}' >> .env
           echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
 

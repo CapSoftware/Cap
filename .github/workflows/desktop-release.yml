@@ -286,7 +286,6 @@ jobs:
             echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
             echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
             echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
-            echo 'VITE_OPENPANEL_CLIENT_SECRET=${{ secrets.VITE_OPENPANEL_CLIENT_SECRET }}'
             echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}'
             echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
             echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}'
