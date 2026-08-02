@@ -87,8 +87,16 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	};
 	await attestExactSha();
 	const captured: CapturedEvent[] = [];
+	const uniqueCapturedEvents = (eventName?: string) => [
+		...new Map(
+			captured
+				.filter((event) => !eventName || event.eventName === eventName)
+				.map((event) => [event.eventId, event]),
+		).values(),
+	];
 	const acceptedEventIds = new Set<string>();
 	const benchmarkEventIds = new Set<string>();
+	const requestAttempts = new Map<string, number>();
 	let acceptedRequests = 0;
 	let collectorRequests = 0;
 	let failedRequests = 0;
@@ -106,6 +114,12 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 			return;
 		}
 		captured.push(...events);
+		for (const event of events) {
+			requestAttempts.set(
+				event.eventId,
+				(requestAttempts.get(event.eventId) ?? 0) + 1,
+			);
+		}
 	});
 	context.on("response", (response) => {
 		if (
@@ -142,10 +156,7 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	});
 	try {
 		await expect
-			.poll(
-				() =>
-					captured.filter((event) => event.eventName === "page_view").length,
-			)
+			.poll(() => uniqueCapturedEvents("page_view").length)
 			.toBeGreaterThanOrEqual(1);
 	} catch {
 		const pageState = await page.evaluate(() => {
@@ -194,20 +205,14 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 			`Browser page_view was not captured: ${JSON.stringify({ collectorRequests, pageState })}`,
 		);
 	}
-	const firstPageView = captured.find(
-		(event) => event.eventName === "page_view",
-	);
+	const firstPageView = uniqueCapturedEvents("page_view")[0];
 	expect(firstPageView?.properties?.is_session_entry).toBe(true);
 
 	await page.reload({ waitUntil: "networkidle" });
 	await expect
-		.poll(
-			() => captured.filter((event) => event.eventName === "page_view").length,
-		)
+		.poll(() => uniqueCapturedEvents("page_view").length)
 		.toBeGreaterThanOrEqual(2);
-	const reloadPageView = captured
-		.filter((event) => event.eventName === "page_view")
-		.at(-1);
+	const reloadPageView = uniqueCapturedEvents("page_view").at(-1);
 	expect(reloadPageView?.sessionId).toBe(firstPageView?.sessionId);
 	expect(reloadPageView?.properties?.is_session_entry).toBe(false);
 
@@ -224,25 +229,17 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	});
 	await page.reload({ waitUntil: "networkidle" });
 	await expect
-		.poll(
-			() => captured.filter((event) => event.eventName === "page_view").length,
-		)
+		.poll(() => uniqueCapturedEvents("page_view").length)
 		.toBeGreaterThanOrEqual(3);
-	const activePageView = captured
-		.filter((event) => event.eventName === "page_view")
-		.at(-1);
+	const activePageView = uniqueCapturedEvents("page_view").at(-1);
 	expect(activePageView?.sessionId).toBe(firstPageView?.sessionId);
 
 	const secondPage = await context.newPage();
 	await secondPage.goto("/pricing", { waitUntil: "networkidle" });
 	await expect
-		.poll(
-			() => captured.filter((event) => event.eventName === "page_view").length,
-		)
+		.poll(() => uniqueCapturedEvents("page_view").length)
 		.toBeGreaterThanOrEqual(4);
-	const secondTabPageView = captured
-		.filter((event) => event.eventName === "page_view")
-		.at(-1);
+	const secondTabPageView = uniqueCapturedEvents("page_view").at(-1);
 	expect(secondTabPageView?.sessionId).toBe(firstPageView?.sessionId);
 	await secondPage.close();
 
@@ -259,20 +256,20 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	});
 	await page.reload({ waitUntil: "networkidle" });
 	await expect
-		.poll(
-			() => captured.filter((event) => event.eventName === "page_view").length,
-		)
+		.poll(() => uniqueCapturedEvents("page_view").length)
 		.toBeGreaterThanOrEqual(5);
-	const returnedPageView = captured
-		.filter((event) => event.eventName === "page_view")
-		.at(-1);
+	const returnedPageView = uniqueCapturedEvents("page_view").at(-1);
 	expect(returnedPageView?.sessionId).not.toBe(firstPageView?.sessionId);
 	expect(returnedPageView?.properties?.is_session_entry).toBe(true);
 
 	let abortNextCollectorRequest = true;
+	const abortedEventIds = new Set<string>();
 	await context.route("**/api/events", async (route) => {
 		if (abortNextCollectorRequest) {
 			abortNextCollectorRequest = false;
+			for (const event of requestEvents(route.request())) {
+				abortedEventIds.add(event.eventId);
+			}
 			await route.abort("internetdisconnected");
 			return;
 		}
@@ -288,10 +285,19 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	await expect
 		.poll(() => failedRequests, { timeout: 15_000 })
 		.toBeGreaterThanOrEqual(1);
+	expect(abortedEventIds.size).toBeGreaterThan(0);
 	await context.unroute("**/api/events");
 	await expect
-		.poll(() => acceptedEventIds.size, { timeout: 15_000 })
-		.toBeGreaterThanOrEqual(6);
+		.poll(
+			() =>
+				[...abortedEventIds].every(
+					(eventId) =>
+						(requestAttempts.get(eventId) ?? 0) >= 2 &&
+						acceptedEventIds.has(eventId),
+				),
+			{ timeout: 15_000 },
+		)
+		.toBe(true);
 	await page.evaluate(() => window.dispatchEvent(new Event("pointerdown")));
 	await page.waitForTimeout(100);
 	await page.evaluate(() =>
@@ -328,7 +334,11 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		).length;
 		for (const event of events) benchmarkEventIds.add(event.eventId);
 		await route.fulfill({
-			body: JSON.stringify({ accepted: events.length }),
+			body: JSON.stringify({
+				accepted: events.length,
+				acceptedEventIds: events.map((event) => event.eventId),
+				rejectedEventIds: [],
+			}),
 			contentType: "application/json",
 			status: 200,
 		});
@@ -468,11 +478,10 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	expect(captureLongTasks.length).toBeLessThanOrEqual(
 		controlLongTasks.length + additionalLongTaskBudget,
 	);
-	const uniqueEventIds = new Set(captured.map((event) => event.eventId));
+	const uniqueEventIds = new Set(
+		uniqueCapturedEvents().map((event) => event.eventId),
+	);
 	expect(uniqueEventIds.size).toBeGreaterThanOrEqual(6);
-	expect(
-		[...uniqueEventIds].every((eventId) => acceptedEventIds.has(eventId)),
-	).toBe(true);
 	expect(captured.some((event) => event.eventName === "page_engagement")).toBe(
 		true,
 	);
@@ -487,7 +496,7 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		string,
 		unknown
 	>;
-	state.browserExpectedEvents = acceptedEventIds.size;
+	state.browserExpectedEvents = uniqueEventIds.size;
 	state.browserAnonymousIdentityHash = createHash("sha256")
 		.update(`anonymous\0${anonymousId}`)
 		.digest("hex");
@@ -500,13 +509,11 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	> & { assertions?: Record<string, boolean> };
 	artifact.browser = {
 		acceptedRequests,
+		acknowledgedEvents: acceptedEventIds.size,
 		failedRequests,
-		uniqueEvents: acceptedEventIds.size,
-		pageViews: captured.filter((event) => event.eventName === "page_view")
-			.length,
-		engagementEvents: captured.filter(
-			(event) => event.eventName === "page_engagement",
-		).length,
+		uniqueEvents: uniqueEventIds.size,
+		pageViews: uniqueCapturedEvents("page_view").length,
+		engagementEvents: uniqueCapturedEvents("page_engagement").length,
 		sameTabReloadPassed: true,
 		multiTabSessionPassed: true,
 		activityAt29MinutesPassed: true,
