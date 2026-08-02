@@ -210,25 +210,23 @@ export async function POST(request: NextRequest) {
 			}
 
 			const tenantId = videoRecord.organizationId;
-			const isNewVideo = videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
-			if (isNewVideo) {
-				const claimedAt = firstExternalViewTimestamp();
-				const claimed = yield* Effect.tryPromise(() =>
-					claimFirstExternalView(Video.VideoId.make(body.videoId), claimedAt),
+			const claimedAt = firstExternalViewTimestamp();
+			const claimed = yield* Effect.tryPromise(() =>
+				claimFirstExternalView(Video.VideoId.make(body.videoId), claimedAt),
+			);
+			if (claimed) {
+				yield* Effect.tryPromise(() =>
+					queueServerProductEvent(
+						firstViewReceivedEvent({
+							videoId: body.videoId,
+							userId: videoRecord.ownerId,
+							organizationId: videoRecord.organizationId,
+							createdAt: claimedAt,
+						}),
+					),
 				);
-				if (claimed) {
-					yield* Effect.tryPromise(() =>
-						queueServerProductEvent(
-							firstViewReceivedEvent({
-								videoId: body.videoId,
-								userId: videoRecord.ownerId,
-								organizationId: videoRecord.organizationId,
-								createdAt: claimedAt,
-							}),
-						),
-					);
-				}
 			}
+			const isNewVideo = videoRecord.createdAt >= ANON_NOTIF_CUTOFF;
 
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
