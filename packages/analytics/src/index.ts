@@ -98,11 +98,14 @@ export function canonicalClientProductEventId(
 	return `client:${productAnalyticsEventIdHash(`${anonymousId}\0${eventId}`)}`;
 }
 
+export const PRODUCT_ANALYTICS_CLIENT_SCHEMA_VERSION = 1 as const;
+
 export interface ProductEventInput<Name extends CoreEventName = CoreEventName> {
 	eventId: string;
 	eventName: Name;
 	occurredAt: string;
 	anonymousId: string;
+	schemaVersion: number;
 	sessionId?: string;
 	platform: ProductEventPlatform;
 	appVersion?: string;
@@ -366,6 +369,10 @@ export function normalizeProductEventInput(
 	const eventName = value.eventName;
 	const platform = value.platform;
 	const occurredAt = normalizeOccurredAt(value.occurredAt, now);
+	const schemaVersion =
+		value.schemaVersion === undefined
+			? PRODUCT_ANALYTICS_CLIENT_SCHEMA_VERSION
+			: value.schemaVersion;
 
 	if (
 		!eventId ||
@@ -375,6 +382,7 @@ export function normalizeProductEventInput(
 			value.sessionId !== "" &&
 			!sessionId) ||
 		!occurredAt ||
+		schemaVersion !== PRODUCT_ANALYTICS_CLIENT_SCHEMA_VERSION ||
 		typeof eventName !== "string" ||
 		!isCoreEventName(eventName) ||
 		typeof platform !== "string" ||
@@ -384,6 +392,7 @@ export function normalizeProductEventInput(
 	}
 	const definition = getProductEventDefinition(eventName);
 	if (
+		definition.version !== schemaVersion ||
 		definition.authority === "server" ||
 		!(definition.platforms as readonly ProductEventPlatform[]).includes(
 			platform as ProductEventPlatform,
@@ -414,6 +423,7 @@ export function normalizeProductEventInput(
 		eventName,
 		occurredAt,
 		anonymousId,
+		schemaVersion,
 		...(sessionId ? { sessionId } : {}),
 		platform: platform as ProductEventPlatform,
 		...normalizeOptionalStringField(
@@ -456,7 +466,7 @@ export function createProductEventRows(
 		);
 		const payload = {
 			event_name: event.eventName,
-			schema_version: getProductEventDefinition(event.eventName).version,
+			schema_version: event.schemaVersion,
 			source: context.source,
 			platform: event.platform,
 			occurred_at: event.occurredAt,

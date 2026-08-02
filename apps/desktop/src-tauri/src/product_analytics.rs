@@ -349,10 +349,16 @@ struct ProductEvent {
     event_name: String,
     occurred_at: String,
     anonymous_id: String,
+    #[serde(default = "default_product_event_schema_version")]
+    schema_version: u8,
     session_id: String,
     platform: String,
     app_version: String,
     properties: Map<String, Value>,
+}
+
+fn default_product_event_schema_version() -> u8 {
+    1
 }
 
 #[derive(Serialize)]
@@ -370,6 +376,7 @@ fn product_event(data: &EventData, anonymous_id: String) -> Option<ProductEvent>
         event_name: data.name.to_string(),
         occurred_at: chrono::Utc::now().to_rfc3339(),
         anonymous_id,
+        schema_version: 1,
         session_id: PRODUCT_EVENT_SESSION_ID
             .get_or_init(Uuid::new_v4)
             .to_string(),
@@ -1154,6 +1161,7 @@ fn loss_report_from_summary(summary: ProductEventLossSummary) -> ProductEvent {
         event_name: data.name.to_string(),
         occurred_at,
         anonymous_id: summary.anonymous_id,
+        schema_version: default_product_event_schema_version(),
         session_id: summary.session_id,
         platform: summary.platform,
         app_version: summary.app_version,
@@ -1870,6 +1878,7 @@ pub fn capture_client_product_analytics_event(
             event_name: event_name.to_string(),
             occurred_at,
             anonymous_id,
+            schema_version: default_product_event_schema_version(),
             session_id: PRODUCT_EVENT_SESSION_ID
                 .get_or_init(Uuid::new_v4)
                 .to_string(),
@@ -2007,9 +2016,21 @@ mod tests {
         assert_eq!(serialized["eventName"], "recording_started");
         assert_eq!(serialized["anonymousId"], "install-id");
         assert_eq!(serialized["platform"], "desktop");
+        assert_eq!(serialized["schemaVersion"], 1);
         assert!(serialized.get("occurredAt").is_some());
         assert!(serialized.get("sessionId").is_some());
         assert!(serialized.get("appVersion").is_some());
+    }
+
+    #[test]
+    fn legacy_product_events_default_to_wire_schema_version_one() {
+        let event =
+            product_event(&event_data(recording_started()), "install-id".to_string()).unwrap();
+        let mut value = serde_json::to_value(event).unwrap();
+        value.as_object_mut().unwrap().remove("schemaVersion");
+        let restored = serde_json::from_value::<ProductEvent>(value).unwrap();
+
+        assert_eq!(restored.schema_version, 1);
     }
 
     #[test]

@@ -9,6 +9,7 @@ function productEvent(index: number): ProductEventInput {
 		eventName: "recording_started",
 		occurredAt: "2026-07-12T12:00:00.000Z",
 		anonymousId: "install-id",
+		schemaVersion: 1,
 		sessionId: "session-id",
 		platform: "desktop",
 		appVersion: "0.5.6",

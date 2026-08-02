@@ -18,6 +18,7 @@ const makeEvent = (index: number): ProductEventInput => ({
 	eventName: "page_view",
 	occurredAt: "2026-07-12T12:00:00.000Z",
 	anonymousId: "anonymous-1",
+	schemaVersion: 1,
 	sessionId: "session-1",
 	platform: "web",
 	properties: {

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CLIENT_EVENT_V1_BASELINE } from "./client-schema-v1";
 import {
 	CORE_EVENT_NAMES,
+	type CoreEventName,
 	containsSensitiveAnalyticsContent,
 	createProductEventPayloadHash,
 	createProductEventRows,
+	EVENT_REGISTRY,
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeAcquisitionChannel,
@@ -32,6 +35,69 @@ describe("product analytics contract", () => {
 		expect(isServerOnlyEventName("user_signed_up")).toBe(true);
 		expect(isServerOnlyEventName("page_view")).toBe(false);
 		expect(isServerOnlyEventName("recording_completed")).toBe(false);
+	});
+
+	it("keeps client event evolution on the versioned additive wire contract", () => {
+		for (const [eventName, definition] of Object.entries(EVENT_REGISTRY)) {
+			if (definition.authority === "server") continue;
+			expect(definition.version, eventName).toBe(1);
+		}
+		for (const [eventName, baseline] of Object.entries(
+			CLIENT_EVENT_V1_BASELINE,
+		)) {
+			const definition = EVENT_REGISTRY[eventName as CoreEventName];
+			expect(definition, eventName).toBeDefined();
+			if (!definition) continue;
+			expect(definition.authority, eventName).not.toBe("server");
+			for (const platform of baseline.platforms) {
+				expect(definition.platforms, `${eventName}:${platform}`).toContain(
+					platform,
+				);
+			}
+			const properties = definition.properties as Record<
+				string,
+				{
+					type: string;
+					format?: string;
+					values?: readonly string[];
+					required?: true;
+					nullable?: true;
+				}
+			>;
+			const baselineKeys = new Set<string>();
+			for (const signature of baseline.properties) {
+				const [key, type, format, values, required, nullable] =
+					signature.split(":");
+				if (!key) throw new Error("Client schema baseline key is missing");
+				baselineKeys.add(key);
+				const rule = properties[key];
+				expect(rule, `${eventName}.${key}`).toBeDefined();
+				if (!rule) continue;
+				expect(rule.type, `${eventName}.${key}`).toBe(type);
+				expect(rule.format ?? "", `${eventName}.${key}`).toBe(format);
+				const baselineValues = values ? values.split("|") : [];
+				if (baselineValues.length > 0) {
+					for (const value of baselineValues) {
+						expect(rule.values, `${eventName}.${key}:${value}`).toContain(
+							value,
+						);
+					}
+				} else {
+					expect(rule.values, `${eventName}.${key}`).toBeUndefined();
+				}
+				if (required === "optional") {
+					expect(rule.required, `${eventName}.${key}`).not.toBe(true);
+				}
+				if (nullable === "nullable") {
+					expect(rule.nullable, `${eventName}.${key}`).toBe(true);
+				}
+			}
+			for (const [key, rule] of Object.entries(properties)) {
+				if (!baselineKeys.has(key)) {
+					expect(rule.required, `${eventName}.${key}`).not.toBe(true);
+				}
+			}
+		}
 	});
 });
 
@@ -180,12 +246,21 @@ describe("normalizeProductEventInput", () => {
 		eventName: "export_button_clicked",
 		occurredAt: "2026-07-12T11:59:59.000Z",
 		anonymousId: "anonymous-1",
+		schemaVersion: 1,
 		sessionId: "session-1",
 		platform: "desktop",
 	};
 
 	it("normalizes a valid event", () => {
 		expect(normalizeProductEventInput(baseEvent, now)).toEqual(baseEvent);
+	});
+
+	it("upcasts implicit legacy clients and rejects unsupported wire versions", () => {
+		const { schemaVersion: _schemaVersion, ...legacyEvent } = baseEvent;
+		expect(normalizeProductEventInput(legacyEvent, now)).toEqual(baseEvent);
+		expect(
+			normalizeProductEventInput({ ...baseEvent, schemaVersion: 2 }, now),
+		).toBeNull();
 	});
 
 	it("accepts generated UUID identities without admitting phone numbers", () => {
@@ -223,6 +298,7 @@ describe("normalizeProductEventInput", () => {
 			eventName: "page_view",
 			occurredAt: "2026-07-12T11:59:59.000Z",
 			anonymousId: "anonymous-1",
+			schemaVersion: 1,
 			sessionId: "session-1",
 			platform: "web",
 			properties: {
@@ -422,6 +498,7 @@ describe("createProductEventRows", () => {
 					eventName: "purchase_completed",
 					occurredAt: "2026-07-12T12:00:00.000Z",
 					anonymousId: "guest-checkout",
+					schemaVersion: 3,
 					platform: "server",
 					properties: {
 						payment_status: "paid",
@@ -460,6 +537,7 @@ describe("createProductEventRows", () => {
 			eventName: "page_view" as const,
 			occurredAt: "2026-07-12T12:00:00.000Z",
 			anonymousId: "anonymous-1",
+			schemaVersion: 1,
 			sessionId: "session-1",
 			platform: "web" as const,
 			pathname: "/pricing",

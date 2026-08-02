@@ -1,5 +1,6 @@
 import {
 	createProductEventRows,
+	getProductEventDefinition,
 	normalizeAnalyticsOpaqueIdentifier,
 	normalizeProductEventProperties,
 	PRODUCT_ANALYTICS_LIMITS,
@@ -63,6 +64,7 @@ export function createServerProductEventRows(event: ServerProductEvent) {
 				eventName: event.eventName,
 				occurredAt,
 				anonymousId,
+				schemaVersion: getProductEventDefinition(event.eventName).version,
 				platform: event.platform,
 				...(event.pathname ? { pathname: event.pathname } : {}),
 				...(properties ? { properties } : {}),

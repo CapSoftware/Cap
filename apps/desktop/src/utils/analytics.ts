@@ -3,6 +3,7 @@ import {
 	isCoreEventName,
 	isServerOnlyEventName,
 	normalizeProductEventProperties,
+	PRODUCT_ANALYTICS_CLIENT_SCHEMA_VERSION,
 	type ProductEventArguments,
 	type ProductEventInput,
 } from "@cap/analytics";
@@ -188,6 +189,7 @@ async function enqueueProductEvent(
 		eventName,
 		occurredAt,
 		anonymousId,
+		schemaVersion: PRODUCT_ANALYTICS_CLIENT_SCHEMA_VERSION,
 		sessionId: productSessionId,
 		platform: "desktop",
 		...(appVersion ? { appVersion } : {}),

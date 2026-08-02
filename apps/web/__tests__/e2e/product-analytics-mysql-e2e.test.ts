@@ -359,6 +359,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			[
 				{
 					anonymousId: "collector-anonymous",
+					schemaVersion: 1,
 					eventId: "collector-retry-alpha",
 					eventName: "page_view",
 					occurredAt: "2026-07-31T12:00:00.000Z",
@@ -445,6 +446,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			[
 				{
 					anonymousId: "preclaim-anonymous",
+					schemaVersion: 1,
 					eventId: rawEventId,
 					eventName: "page_view",
 					occurredAt: "2026-07-31T12:00:00.000Z",
@@ -466,6 +468,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			[
 				{
 					anonymousId: "user:preclaim-user",
+					schemaVersion: 1,
 					eventId: rawEventId,
 					eventName: "share_link_created",
 					occurredAt: "2026-07-31T12:00:02.000Z",
@@ -558,6 +561,7 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 			[
 				{
 					anonymousId: "deleted-user:new-alias",
+					schemaVersion: 1,
 					eventId: "deleted-user:late-client-event",
 					eventName: "page_view",
 					occurredAt: "2026-07-31T12:00:00.000Z",

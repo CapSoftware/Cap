@@ -46,6 +46,7 @@ describe("product analytics runtime emitter coverage", () => {
 						eventName,
 						occurredAt,
 						anonymousId: "anonymous-coverage",
+						schemaVersion: 1,
 						sessionId: "session-coverage",
 						platform,
 						...(Object.keys(properties).length > 0 ? { properties } : {}),
