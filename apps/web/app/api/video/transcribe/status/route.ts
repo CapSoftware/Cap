@@ -2,9 +2,9 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Exit } from "effect";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 import type { NextRequest } from "next/server";
 import * as EffectRuntime from "@/lib/server";
 
@@ -35,9 +35,20 @@ export async function GET(request: NextRequest) {
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
 	if (Exit.isFailure(exit)) {
+		const error = Option.getOrUndefined(Cause.failureOption(exit.cause));
+		if (
+			Schema.is(Policy.PolicyDeniedError)(error) ||
+			Schema.is(Video.VerifyVideoPasswordError)(error)
+		) {
+			return Response.json(
+				{ error: true, message: "Video does not exist" },
+				{ status: 404 },
+			);
+		}
+
 		return Response.json(
-			{ error: true, message: "Video does not exist" },
-			{ status: 404 },
+			{ error: true, message: "An unexpected error occurred" },
+			{ status: 500 },
 		);
 	}
 
