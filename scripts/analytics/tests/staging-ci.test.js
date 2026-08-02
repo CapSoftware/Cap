@@ -3347,6 +3347,13 @@ test("staging erasure retries and recovers only its synthetic request", () => {
 		),
 		"utf8",
 	);
+	const browser = fs.readFileSync(
+		new URL(
+			"../../../apps/chrome-extension/e2e/analytics-staging.spec.ts",
+			import.meta.url,
+		),
+		"utf8",
+	);
 	const eraseSource = source.slice(
 		source.indexOf("const eraseSyntheticIdentity"),
 		source.indexOf("const verifySyntheticIdentityErasure"),
@@ -3365,4 +3372,17 @@ test("staging erasure retries and recovers only its synthetic request", () => {
 		route,
 		/update\(productAnalyticsErasureLeases\)[\s\S]*phase: "idle"/,
 	);
+	assert.match(
+		route,
+		/HttpApiEndpoint\.post\([\s\S]*"resetFailedSyntheticErasure"[\s\S]*"\/api\/analytics\/staging-test\/reset-failed-synthetic-erasure"/,
+	);
+	const resetIndex = browser.indexOf(
+		'"/api/analytics/staging-test/reset-failed-synthetic-erasure"',
+	);
+	const navigationIndex = browser.indexOf(
+		'page.goto("/?utm_source=staging-browser',
+	);
+	assert.ok(resetIndex >= 0);
+	assert.ok(navigationIndex >= 0);
+	assert.ok(resetIndex < navigationIndex);
 });

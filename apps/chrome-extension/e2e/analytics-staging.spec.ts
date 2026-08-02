@@ -86,6 +86,22 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		expect(payload.sha).toBe(expectedSha);
 	};
 	await attestExactSha();
+	const resetSignature = createHmac("sha256", stagingSecret)
+		.update(`${runId}:${expectedSha}`)
+		.digest("hex");
+	const resetResponse = await context.request.post(
+		"/api/analytics/staging-test/reset-failed-synthetic-erasure",
+		{
+			data: { runId, sha: expectedSha },
+			headers: {
+				Authorization: `Bearer ${stagingSecret}`,
+				"x-cap-analytics-staging-signature": resetSignature,
+			},
+		},
+	);
+	expect(resetResponse.ok()).toBe(true);
+	const resetPayload = (await resetResponse.json()) as { reset?: unknown };
+	expect(typeof resetPayload.reset).toBe("boolean");
 	const captured: CapturedEvent[] = [];
 	const uniqueCapturedEvents = (eventName?: string) => [
 		...new Map(

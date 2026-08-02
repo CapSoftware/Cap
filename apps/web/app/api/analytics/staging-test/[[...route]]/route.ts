@@ -71,6 +71,23 @@ class Api extends HttpApi.make("AnalyticsStagingTestApi").add(
 				.addError(HttpApiError.ServiceUnavailable),
 		)
 		.add(
+			HttpApiEndpoint.post(
+				"resetFailedSyntheticErasure",
+				"/api/analytics/staging-test/reset-failed-synthetic-erasure",
+			)
+				.setPayload(
+					Schema.Struct({
+						runId: Schema.String,
+						sha: Schema.String,
+					}),
+				)
+				.addSuccess(Schema.Struct({ reset: Schema.Boolean }))
+				.addError(HttpApiError.BadRequest)
+				.addError(HttpApiError.Unauthorized)
+				.addError(HttpApiError.NotFound)
+				.addError(HttpApiError.ServiceUnavailable),
+		)
+		.add(
 			HttpApiEndpoint.post("health", "/api/analytics/staging-test/health")
 				.setPayload(
 					Schema.Struct({
@@ -383,7 +400,7 @@ const cleanupSyntheticDatabaseState = async ({
 };
 
 const resetFailedSyntheticErasureLease = async () => {
-	await db().transaction(async (tx) => {
+	return db().transaction(async (tx) => {
 		const [lease] = await tx
 			.select({
 				organizationId: productAnalyticsErasureLeases.organizationId,
@@ -405,7 +422,7 @@ const resetFailedSyntheticErasureLease = async () => {
 			!lease.organizationId ||
 			!/^synthetic_org_[0-9a-f]{24}$/.test(lease.organizationId)
 		) {
-			return;
+			return false;
 		}
 		await tx
 			.update(productAnalyticsErasureLeases)
@@ -427,6 +444,7 @@ const resetFailedSyntheticErasureLease = async () => {
 					isNull(productAnalyticsErasureLeases.ownerId),
 				),
 			);
+		return true;
 	});
 };
 
@@ -694,6 +712,16 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								...attestation,
 								databaseSchema: "0042_lying_sharon_ventura" as const,
 							};
+						}),
+					)
+					.handle("resetFailedSyntheticErasure", ({ payload }) =>
+						Effect.gen(function* () {
+							yield* authorize(payload);
+							const reset = yield* Effect.tryPromise({
+								try: resetFailedSyntheticErasureLease,
+								catch: () => new HttpApiError.ServiceUnavailable(),
+							});
+							return { reset };
 						}),
 					)
 					.handle("run", ({ payload }) =>
