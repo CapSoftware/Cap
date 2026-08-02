@@ -95,8 +95,15 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		).values(),
 	];
 	const acceptedEventIds = new Set<string>();
+	const rejectedEventIds = new Set<string>();
 	const benchmarkEventIds = new Set<string>();
 	const requestAttempts = new Map<string, number>();
+	const collectorStatusCounts = new Map<number, number>();
+	const collectorRejections: Array<{
+		eventNames: string[];
+		status: number;
+	}> = [];
+	let invalidAcknowledgements = 0;
 	let acceptedRequests = 0;
 	let collectorRequests = 0;
 	let failedRequests = 0;
@@ -121,18 +128,42 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 			);
 		}
 	});
-	context.on("response", (response) => {
+	context.on("response", async (response) => {
 		if (
 			response.url().endsWith("/api/events") &&
 			response.request().method() === "POST"
 		) {
 			const events = requestEvents(response.request());
 			if (events.some((event) => benchmarkEventIds.has(event.eventId))) return;
+			collectorStatusCounts.set(
+				response.status(),
+				(collectorStatusCounts.get(response.status()) ?? 0) + 1,
+			);
 			if (response.ok()) {
-				acceptedRequests += 1;
-				for (const event of events) {
-					acceptedEventIds.add(event.eventId);
+				const payload = (await response.json().catch(() => null)) as {
+					acceptedEventIds?: unknown;
+					rejectedEventIds?: unknown;
+				} | null;
+				if (
+					payload &&
+					Array.isArray(payload.acceptedEventIds) &&
+					Array.isArray(payload.rejectedEventIds)
+				) {
+					acceptedRequests += 1;
+					for (const eventId of payload.acceptedEventIds) {
+						if (typeof eventId === "string") acceptedEventIds.add(eventId);
+					}
+					for (const eventId of payload.rejectedEventIds) {
+						if (typeof eventId === "string") rejectedEventIds.add(eventId);
+					}
+				} else {
+					invalidAcknowledgements += 1;
 				}
+			} else if (collectorRejections.length < 20) {
+				collectorRejections.push({
+					eventNames: [...new Set(events.map((event) => event.eventName))],
+					status: response.status(),
+				});
 			}
 		}
 	});
@@ -305,17 +336,37 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		.toBeGreaterThanOrEqual(1);
 	expect(abortedEventIds.size).toBeGreaterThan(0);
 	await context.unroute("**/api/events");
-	await expect
-		.poll(
-			() =>
-				[...abortedEventIds].every(
-					(eventId) =>
-						(requestAttempts.get(eventId) ?? 0) >= 2 &&
-						acceptedEventIds.has(eventId),
+	try {
+		await expect
+			.poll(
+				() =>
+					[...abortedEventIds].every(
+						(eventId) =>
+							(requestAttempts.get(eventId) ?? 0) >= 2 &&
+							acceptedEventIds.has(eventId),
+					),
+				{ timeout: 15_000 },
+			)
+			.toBe(true);
+	} catch {
+		throw new Error(
+			`Browser retry was not acknowledged: ${JSON.stringify({
+				abortedEventCount: abortedEventIds.size,
+				abortedEventAttempts: [...abortedEventIds].map(
+					(eventId) => requestAttempts.get(eventId) ?? 0,
 				),
-			{ timeout: 15_000 },
-		)
-		.toBe(true);
+				abortedEventsAccepted: [...abortedEventIds].filter((eventId) =>
+					acceptedEventIds.has(eventId),
+				).length,
+				abortedEventsRejected: [...abortedEventIds].filter((eventId) =>
+					rejectedEventIds.has(eventId),
+				).length,
+				collectorRejections,
+				collectorStatusCounts: Object.fromEntries(collectorStatusCounts),
+				invalidAcknowledgements,
+			})}`,
+		);
+	}
 	await page.evaluate(() => window.dispatchEvent(new Event("pointerdown")));
 	await page.waitForTimeout(100);
 	await page.evaluate(() =>

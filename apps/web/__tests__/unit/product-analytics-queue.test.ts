@@ -63,7 +63,7 @@ describe("ProductAnalyticsQueue", () => {
 		) {
 			expect(this).toBeUndefined();
 			if (typeof handler === "function") scheduled = handler;
-			return 1 as ReturnType<typeof setTimeout>;
+			return setTimeout(() => {}, 0);
 		} as typeof setTimeout;
 		const transport = vi
 			.fn<ProductAnalyticsTransport>()
