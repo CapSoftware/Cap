@@ -21,6 +21,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { resetUser } from "@/app/utils/analytics";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../Contexts";
@@ -85,6 +86,7 @@ export const Settings = () => {
 		onSuccess: () => {
 			toast.success("Signed out of all devices");
 			setSignOutAllDevicesOpen(false);
+			resetUser();
 			signOut({ callbackUrl: "/login" });
 		},
 		onError: () => {

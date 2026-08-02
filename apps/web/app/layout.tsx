@@ -1,4 +1,6 @@
 import "@/app/globals.css";
+import { buildEnv } from "@cap/env";
+import { OpenPanelComponent } from "@openpanel/nextjs";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import Script from "next/script";
@@ -99,6 +101,15 @@ export default function RootLayout({ children }: PropsWithChildren) {
 			</head>
 			<body suppressHydrationWarning>
 				<Script src="/theme-script.js" strategy="beforeInteractive" />
+				{buildEnv.NEXT_PUBLIC_OPENPANEL_CLIENT_ID ? (
+					<OpenPanelComponent
+						apiUrl="/api/op"
+						clientId={buildEnv.NEXT_PUBLIC_OPENPANEL_CLIENT_ID}
+						scriptUrl="/api/op/op1.js"
+						trackOutgoingLinks
+						trackScreenViews
+					/>
+				) : null}
 				<main className="w-full">{children}</main>
 			</body>
 		</html>

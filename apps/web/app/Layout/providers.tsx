@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import {
 	TanStackDevtools,
 	type TanStackDevtoolsReactInit,
@@ -11,118 +10,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import type { PostHogConfig } from "posthog-js";
-import { PostHogProvider as PHProvider, usePostHog } from "posthog-js/react";
-import {
-	type PropsWithChildren,
-	useEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
-import type { BootstrapData } from "@/utils/getBootstrapData";
-
-import PostHogPageView from "./PosthogPageView";
-
-type CapPostHogConfig = Partial<PostHogConfig> & {
-	disable_session_recording?: boolean;
-};
-
-export function PostHogProvider({
-	children,
-	bootstrapData,
-}: PropsWithChildren<{ bootstrapData?: BootstrapData }>) {
-	const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
-	const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
-	const initialBootstrap = useRef<BootstrapData | undefined>(undefined);
-
-	if (!initialBootstrap.current && bootstrapData?.distinctID) {
-		initialBootstrap.current = bootstrapData;
-	}
-
-	const options = useMemo(() => {
-		if (!host) return undefined;
-		const base: CapPostHogConfig = {
-			api_host: host,
-			capture_pageview: false,
-			capture_pageleave: true,
-			bootstrap: initialBootstrap.current?.distinctID
-				? initialBootstrap.current
-				: undefined,
-		};
-
-		if (process.env.NEXT_PUBLIC_POSTHOG_DISABLE_SESSION_RECORDING === "true") {
-			base.disable_session_recording = true;
-		}
-
-		return base;
-	}, [host]);
-
-	if (!key || !host || !options) {
-		if (process.env.NODE_ENV !== "production") {
-			console.warn(
-				"Missing PostHog environment variables. Events will not be tracked.",
-			);
-		}
-		return <>{children}</>;
-	}
-
-	return (
-		<PHProvider apiKey={key} options={options}>
-			<PostHogPageView />
-			<PostHogBootstrapSync bootstrapData={bootstrapData} />
-			{children}
-		</PHProvider>
-	);
-}
-
-function PostHogBootstrapSync({
-	bootstrapData,
-}: {
-	bootstrapData?: BootstrapData;
-}) {
-	const posthog = usePostHog();
-	const previousFlags = useRef<Record<string, string | boolean> | undefined>(
-		undefined,
-	);
-
-	useEffect(() => {
-		if (!posthog || !bootstrapData) {
-			return;
-		}
-
-		const nextFlags = bootstrapData.featureFlags ?? {};
-
-		if (areFlagMapsEqual(previousFlags.current, nextFlags)) {
-			return;
-		}
-
-		if (typeof posthog.featureFlags?.override === "function") {
-			posthog.featureFlags.override(nextFlags);
-			previousFlags.current = nextFlags;
-		}
-	}, [posthog, bootstrapData]);
-
-	return null;
-}
-
-function areFlagMapsEqual(
-	left?: Record<string, string | boolean>,
-	right?: Record<string, string | boolean>,
-) {
-	if (left === right) {
-		return true;
-	}
-	if (!left || !right) {
-		return !left && !right;
-	}
-	const leftKeys = Object.keys(left);
-	const rightKeys = Object.keys(right);
-	if (leftKeys.length !== rightKeys.length) {
-		return false;
-	}
-	return leftKeys.every((key) => left[key] === right[key]);
-}
+import { type PropsWithChildren, useEffect, useState } from "react";
 
 export function ReactQueryProvider({
 	children,
