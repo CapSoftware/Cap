@@ -163,10 +163,13 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 														Db.productAnalyticsErasureRequests.status,
 														"pending",
 													),
-													Dz.lte(
-														Db.productAnalyticsErasureRequests.nextAttemptAt,
-														now,
-													),
+													requestId
+														? undefined
+														: Dz.lte(
+																Db.productAnalyticsErasureRequests
+																	.nextAttemptAt,
+																now,
+															),
 												),
 												Dz.and(
 													Dz.eq(

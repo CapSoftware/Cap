@@ -275,6 +275,26 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 		}
 	});
 
+	it("allows an explicit request recovery to bypass the queue backoff", async () => {
+		const requestId = await runRepo((repo) =>
+			repo.enqueueErasureRequest({ userId: "explicit-recovery-user" }),
+		);
+		const initial = await runRepo((repo) =>
+			repo.claimErasureRequest(requestId),
+		);
+		expect(initial).not.toBeNull();
+		if (!initial) return;
+		await runRepo((repo) =>
+			repo.deferErasureRequest(initial, "lease_unavailable"),
+		);
+		expect(await runRepo((repo) => repo.claimErasureRequest())).toBeNull();
+		const recovered = await runRepo((repo) =>
+			repo.claimErasureRequest(requestId),
+		);
+		expect(recovered?.id).toBe(requestId);
+		await runRepo((repo) => repo.completeErasureRequest(requestId));
+	});
+
 	it("admits concurrent ingestion without owning the erasure row lock", async () => {
 		const {
 			acquireProductAnalyticsIngestionLease,

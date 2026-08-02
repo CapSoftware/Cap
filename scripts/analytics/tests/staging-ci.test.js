@@ -3358,6 +3358,10 @@ test("staging erasure retries and recovers only its synthetic request", () => {
 		source.indexOf("const eraseSyntheticIdentity"),
 		source.indexOf("const verifySyntheticIdentityErasure"),
 	);
+	const eraseHandlerSource = route.slice(
+		route.indexOf('.handle("erase"'),
+		route.indexOf("const replay =", route.indexOf('.handle("erase"')),
+	);
 
 	assert.match(eraseSource, /attempt <= 3/);
 	assert.match(eraseSource, /response\.status !== 503/);
@@ -3366,11 +3370,16 @@ test("staging erasure retries and recovers only its synthetic request", () => {
 		route,
 		/recoverProductAnalyticsErasureRequest\(erasure\.requestId\)/,
 	);
+	assert.match(eraseHandlerSource, /resetFailedSyntheticErasureLease/);
 	assert.match(route, /\^synthetic_user_\[0-9a-f\]\{24\}\$/);
 	assert.match(route, /\^synthetic_org_\[0-9a-f\]\{24\}\$/);
 	assert.match(
 		route,
 		/update\(productAnalyticsErasureLeases\)[\s\S]*phase: "idle"/,
+	);
+	assert.match(
+		route,
+		/delete\(productAnalyticsErasureRequests\)[\s\S]*eq\(productAnalyticsErasureRequests\.id, lease\.requestId\)[\s\S]*eq\(productAnalyticsErasureRequests\.userId, lease\.userId\)[\s\S]*productAnalyticsErasureRequests\.organizationId/,
 	);
 	assert.match(
 		route,

@@ -404,6 +404,7 @@ const resetFailedSyntheticErasureLease = async () => {
 		const [lease] = await tx
 			.select({
 				organizationId: productAnalyticsErasureLeases.organizationId,
+				requestId: productAnalyticsErasureLeases.requestId,
 				userId: productAnalyticsErasureLeases.userId,
 			})
 			.from(productAnalyticsErasureLeases)
@@ -423,6 +424,20 @@ const resetFailedSyntheticErasureLease = async () => {
 			!/^synthetic_org_[0-9a-f]{24}$/.test(lease.organizationId)
 		) {
 			return false;
+		}
+		if (lease.requestId) {
+			await tx
+				.delete(productAnalyticsErasureRequests)
+				.where(
+					and(
+						eq(productAnalyticsErasureRequests.id, lease.requestId),
+						eq(productAnalyticsErasureRequests.userId, lease.userId),
+						eq(
+							productAnalyticsErasureRequests.organizationId,
+							lease.organizationId,
+						),
+					),
+				);
 		}
 		await tx
 			.update(productAnalyticsErasureLeases)
@@ -887,6 +902,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					.handle("erase", ({ payload }) =>
 						Effect.gen(function* () {
 							const runId = yield* authorize(payload);
+							yield* Effect.tryPromise({
+								try: resetFailedSyntheticErasureLease,
+								catch: () => new HttpApiError.ServiceUnavailable(),
+							});
 							const { anonymousId, hash, organizationId, userId } =
 								syntheticStagingIdentities(runId);
 							const erasure = yield* tinybird
