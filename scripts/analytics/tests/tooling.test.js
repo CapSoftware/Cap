@@ -143,14 +143,13 @@ test("local setup builds, verifies copied endpoints and writes its deterministic
 	);
 });
 
-test("local fixtures use bounded current dates", () => {
-	const { dates, rows } = prepareLocalFixture(
-		new Date("2026-07-31T12:00:00.000Z"),
-	);
+test("local fixtures use completed UTC dates", () => {
+	const now = new Date("2026-08-02T00:15:00.000Z");
+	const { dates, rows } = prepareLocalFixture(now);
 	assert.deepEqual(dates, {
-		"2099-01-10": "2026-07-29",
-		"2099-01-11": "2026-07-30",
-		"2099-01-12": "2026-07-31",
+		"2099-01-10": "2026-07-30",
+		"2099-01-11": "2026-07-31",
+		"2099-01-12": "2026-08-01",
 	});
 	const fixture = fs.readFileSync(
 		path.join(
@@ -161,30 +160,31 @@ test("local fixtures use bounded current dates", () => {
 		"utf8",
 	);
 	assert.doesNotMatch(fixture, /2099-01-/);
-	assert.match(fixture, /2026-07-31/);
-	assert.ok(rows.every((row) => row.event_id.endsWith("_20260731")));
+	assert.match(fixture, /2026-08-01/);
+	assert.ok(rows.every((row) => row.event_id.endsWith("_20260801")));
 	assert.ok(
 		rows.every(
-			(row) => !row.anonymous_id || row.anonymous_id.endsWith("_20260731"),
+			(row) => !row.anonymous_id || row.anonymous_id.endsWith("_20260801"),
 		),
 	);
 	assert.ok(
 		rows.every(
-			(row) => !row.session_id || row.session_id.endsWith("_20260731"),
+			(row) => !row.session_id || row.session_id.endsWith("_20260801"),
 		),
 	);
 	assert.ok(
-		rows.every((row) => !row.user_id || row.user_id.endsWith("_20260731")),
+		rows.every((row) => !row.user_id || row.user_id.endsWith("_20260801")),
 	);
 	assert.ok(
 		rows.every(
 			(row) =>
-				!row.organization_id || row.organization_id.endsWith("_20260731"),
+				!row.organization_id || row.organization_id.endsWith("_20260801"),
 		),
 	);
+	assert.ok(rows.every((row) => new Date(row.received_at) < now));
 	assert.ok(rows.every((row) => /^[0-9a-f]{32}$/.test(row.payload_hash)));
 	const engagement = rows.find((row) => row.event_name === "page_engagement");
-	assert.match(JSON.parse(engagement.properties).page_view_id, /_20260731$/);
+	assert.match(JSON.parse(engagement.properties).page_view_id, /_20260801$/);
 });
 
 test("local resource discovery returns only the named scoped token", async () => {

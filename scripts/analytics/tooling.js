@@ -1072,7 +1072,7 @@ const prepareLocalFixture = (now = new Date()) => {
 	const dates = Object.fromEntries(
 		["2099-01-10", "2099-01-11", "2099-01-12"].map((template, index) => [
 			template,
-			new Date(currentDay - (2 - index) * 86_400_000)
+			new Date(currentDay - (3 - index) * 86_400_000)
 				.toISOString()
 				.slice(0, 10),
 		]),
