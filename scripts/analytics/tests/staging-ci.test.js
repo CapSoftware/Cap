@@ -1586,9 +1586,9 @@ test("representative endpoint coverage requires mixed funnel and revenue data", 
 		product_experiment_outcomes: row([
 			...repeated(cohorts * 3 - 1, {
 				exposed_actors: 1,
-				converted_actors: 0,
+				converted_actors: 1,
 			}),
-			{ exposed_actors: 1, converted_actors: cohorts },
+			{ exposed_actors: 1, converted_actors: 1 },
 		]),
 		product_analytics_freshness: row([{}]),
 	};

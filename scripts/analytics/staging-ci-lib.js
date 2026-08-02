@@ -2847,7 +2847,7 @@ export const assertRepresentativeEndpointCoverage = ({
 		["product_identity_funnel", "purchasers", cohorts],
 		["product_feature_adoption", "events", expectedEvents],
 		["product_experiment_outcomes", "exposed_actors", cohorts * 3],
-		["product_experiment_outcomes", "converted_actors", cohorts],
+		["product_experiment_outcomes", "converted_actors", cohorts * 3],
 	];
 	for (const [name, field, expected] of exactTotals) {
 		const actual = sum(endpointRows(payloads, name), field);
