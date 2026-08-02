@@ -2186,8 +2186,8 @@ pub async fn start_recording(
                     if let Some((health, mode)) = accumulator_mode.as_ref()
                         && let Some((reason_text, critical)) = health.record_event(&event)
                     {
-                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         use crate::recording_telemetry::{CriticalEvent, mode_label};
+                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         match critical {
                             CriticalEvent::MuxerCrashed {
                                 seconds_into_recording,
@@ -2219,8 +2219,8 @@ pub async fn start_recording(
                     }
 
                     if let Some((_, mode)) = accumulator_mode.as_ref() {
-                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         use crate::recording_telemetry::mode_label;
+                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         let mode_str = mode_label(*mode);
                         match &event {
                             cap_recording::PipelineHealthEvent::DiskSpaceLow {
@@ -4089,8 +4089,8 @@ fn classify_error_message(error: &str) -> String {
 }
 
 async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableState<'_, App>) {
-    use crate::telemetry::{AnalyticsEvent, async_capture_event};
     use crate::recording_telemetry::{mode_label, target_kind_label};
+    use crate::telemetry::{AnalyticsEvent, async_capture_event};
 
     let (mode, recording_mode, target_kind, has_camera, has_mic, has_system_audio) = {
         let state = state_mtx.read().await;
