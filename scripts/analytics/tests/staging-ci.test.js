@@ -346,14 +346,48 @@ test("Copy quiescence rejects a malformed Jobs API payload", async () => {
 });
 
 test("Copy quiescence proves visibility of this run's completed jobs", async () => {
+	let now = 1_000;
+	let round = 0;
+	const result = await waitForTinybirdCopyPipesQuiescent({
+		origin: "https://api.us-east.aws.tinybird.co",
+		token: token(),
+		pipes: ["copy_one"],
+		requiredVisibleJobIds: ["copy_job_expected"],
+		request: async () => ({
+			data: {
+				jobs: round === 0 ? [] : [{ id: "copy_job_expected", status: "done" }],
+			},
+		}),
+		assertMutationOwnership: async () => undefined,
+		now: () => now,
+		wait: async (milliseconds) => {
+			now += milliseconds;
+			round += 1;
+		},
+		timeoutMs: 10_000,
+		pollIntervalMs: 2_000,
+	});
+	assert.deepEqual(result, {
+		activeJobs: 0,
+		polls: 2,
+		quiescenceMs: 2_000,
+		visibleRequiredJobs: 1,
+	});
+
 	await assert.rejects(
 		waitForTinybirdCopyPipesQuiescent({
 			origin: "https://api.us-east.aws.tinybird.co",
 			token: token(),
 			pipes: ["copy_one"],
-			requiredVisibleJobIds: ["copy_job_expected"],
+			requiredVisibleJobIds: ["copy_job_missing"],
 			request: async () => ({ data: { jobs: [] } }),
 			assertMutationOwnership: async () => undefined,
+			now: () => now,
+			wait: async (milliseconds) => {
+				now += milliseconds;
+			},
+			timeoutMs: 4_000,
+			pollIntervalMs: 2_000,
 		}),
 		/could not attest the Copy jobs created by this run/,
 	);
@@ -1482,21 +1516,26 @@ test("load decision assertions require a high-cardinality materialization", () =
 		identityGuestCheckoutVisitors: 0,
 		identityGuestPurchasers: 0,
 		identityAuthenticatedCheckoutUsers: 100,
-		identityWebCheckoutUsers: 34,
-		identityDesktopCheckoutUsers: 33,
-		identityMobileCheckoutUsers: 33,
+		identityWebCheckoutUsers: 35,
+		identityDesktopCheckoutUsers: 34,
+		identityMobileCheckoutUsers: 31,
 		identityCrossDeviceCheckoutUsers: 0,
 		identityTrialUsers: 100,
 		identityPurchasers: 100,
 	};
 	assert.doesNotThrow(() =>
-		assertSyntheticLoadDecisions(assertions, expectedEvents),
+		assertSyntheticLoadDecisions(assertions, expectedEvents, 32),
 	);
 	assert.throws(() =>
 		assertSyntheticLoadDecisions(
 			{ ...assertions, trafficVisits: expectedEvents - 1 },
 			expectedEvents,
+			32,
 		),
+	);
+	assert.throws(
+		() => assertSyntheticLoadDecisions(assertions, expectedEvents, 0),
+		/dimension bucket count is invalid/,
 	);
 });
 

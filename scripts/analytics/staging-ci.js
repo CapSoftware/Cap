@@ -3833,7 +3833,11 @@ const verify = async () => {
 		syntheticRunId: state.loadRunId,
 	});
 	const loadDecisionAssertions = normalizeCiAssertions(loadDecisionResult.data);
-	assertSyntheticLoadDecisions(loadDecisionAssertions, state.loadEventCount);
+	assertSyntheticLoadDecisions(
+		loadDecisionAssertions,
+		state.loadEventCount,
+		state.loadDimensionBucketCount,
+	);
 	const largeLoadResult = await healthQuery({
 		state,
 		deploymentId: state.deploymentId,
@@ -3852,6 +3856,7 @@ const verify = async () => {
 	assertSyntheticLoadDecisions(
 		largeLoadDecisionAssertions,
 		state.largeLoadEventCount,
+		state.largeLoadDimensionBucketCount,
 	);
 	const samples = [result.latencyMs];
 	for (let index = 1; index < 20; index += 1) {
@@ -4373,9 +4378,13 @@ const verifySyntheticIdentityErasure = async () => {
 	}
 	assertSyntheticLoadHealth(erasedLoadHealth, state.loadEventCount);
 	assertSyntheticLoadHealth(erasedLargeLoadHealth, state.largeLoadEventCount);
-	for (const [syntheticRunId, expectedEvents] of [
-		[state.loadRunId, state.loadEventCount],
-		[state.largeLoadRunId, state.largeLoadEventCount],
+	for (const [syntheticRunId, expectedEvents, dimensionBucketCount] of [
+		[state.loadRunId, state.loadEventCount, state.loadDimensionBucketCount],
+		[
+			state.largeLoadRunId,
+			state.largeLoadEventCount,
+			state.largeLoadDimensionBucketCount,
+		],
 	]) {
 		const decisions = normalizeCiAssertions(
 			(
@@ -4386,7 +4395,11 @@ const verifySyntheticIdentityErasure = async () => {
 				})
 			).data,
 		);
-		assertSyntheticLoadDecisions(decisions, expectedEvents);
+		assertSyntheticLoadDecisions(
+			decisions,
+			expectedEvents,
+			dimensionBucketCount,
+		);
 	}
 	const expectedRemainingBusiness = {
 		receivedRows: 2,

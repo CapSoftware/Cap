@@ -263,6 +263,7 @@ export const waitForTinybirdCopyPipesQuiescent = async ({
 	const startedAt = now();
 	const deadline = startedAt + timeoutMs;
 	let polls = 0;
+	let missingRequiredJobs = false;
 	const visibleJobIds = new Set();
 	while (now() < deadline) {
 		await assertMutationOwnership();
@@ -304,19 +305,22 @@ export const waitForTinybirdCopyPipesQuiescent = async ({
 			const missingJobIds = requiredVisibleJobIds.filter(
 				(jobId) => !visibleJobIds.has(jobId),
 			);
-			if (missingJobIds.length > 0) {
-				throw new Error(
-					"Tinybird Jobs API could not attest the Copy jobs created by this run",
-				);
+			missingRequiredJobs = missingJobIds.length > 0;
+			if (!missingRequiredJobs) {
+				return {
+					activeJobs: 0,
+					polls,
+					quiescenceMs: Math.max(0, now() - startedAt),
+					visibleRequiredJobs: requiredVisibleJobIds.length,
+				};
 			}
-			return {
-				activeJobs: 0,
-				polls,
-				quiescenceMs: Math.max(0, now() - startedAt),
-				visibleRequiredJobs: requiredVisibleJobIds.length,
-			};
 		}
 		await wait(pollIntervalMs);
+	}
+	if (missingRequiredJobs) {
+		throw new Error(
+			"Tinybird Jobs API could not attest the Copy jobs created by this run",
+		);
 	}
 	throw new Error("Timed out waiting for Tinybird Copy jobs to quiesce");
 };
@@ -2043,9 +2047,30 @@ export const assertSyntheticBusinessDecisions = (assertions) => {
 	}
 };
 
-export const assertSyntheticLoadDecisions = (assertions, expectedEvents) => {
+export const assertSyntheticLoadDecisions = (
+	assertions,
+	expectedEvents,
+	dimensionBucketCount = expectedEvents / 10,
+) => {
 	assertSyntheticLoadHealth(assertions, expectedEvents);
 	const cohorts = expectedEvents / 10;
+	if (
+		!Number.isInteger(dimensionBucketCount) ||
+		dimensionBucketCount < 1 ||
+		dimensionBucketCount > cohorts
+	) {
+		throw new Error("Synthetic load dimension bucket count is invalid");
+	}
+	const effectiveDimensionBucketCount = Math.min(dimensionBucketCount, cohorts);
+	const platformCohorts = [0, 0, 0];
+	const completeBucketCycles = Math.floor(
+		cohorts / effectiveDimensionBucketCount,
+	);
+	const remainingBuckets = cohorts % effectiveDimensionBucketCount;
+	for (let bucket = 0; bucket < effectiveDimensionBucketCount; bucket += 1) {
+		platformCohorts[bucket % 3] +=
+			completeBucketCycles + (bucket < remainingBuckets ? 1 : 0);
+	}
 	const expected = {
 		canonicalEvents: expectedEvents,
 		decisionEvents: expectedEvents,
@@ -2073,9 +2098,9 @@ export const assertSyntheticLoadDecisions = (assertions, expectedEvents) => {
 		identityGuestCheckoutVisitors: 0,
 		identityGuestPurchasers: 0,
 		identityAuthenticatedCheckoutUsers: cohorts,
-		identityWebCheckoutUsers: Math.ceil(cohorts / 3),
-		identityDesktopCheckoutUsers: Math.ceil((cohorts - 1) / 3),
-		identityMobileCheckoutUsers: Math.floor(cohorts / 3),
+		identityWebCheckoutUsers: platformCohorts[0],
+		identityDesktopCheckoutUsers: platformCohorts[1],
+		identityMobileCheckoutUsers: platformCohorts[2],
 		identityCrossDeviceCheckoutUsers: 0,
 		identityTrialUsers: cohorts,
 		identityPurchasers: cohorts,
