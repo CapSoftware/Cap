@@ -490,6 +490,17 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 									.delete(Db.productAnalyticsEventReceipts)
 									.where(Dz.or(...receiptConditions));
 							}
+							if (organizationIdentityHash) {
+								await tx
+									.update(Db.productAnalyticsIdentityLinks)
+									.set({ organizationIdentityHash: null })
+									.where(
+										Dz.eq(
+											Db.productAnalyticsIdentityLinks.organizationIdentityHash,
+											organizationIdentityHash,
+										),
+									);
+							}
 							if (userIdentityHash) {
 								await tx
 									.delete(Db.productAnalyticsIdentityLinks)
@@ -508,6 +519,22 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 								throw new Error(
 									"Product analytics outbox erasure was incomplete",
 								);
+							}
+							if (organizationIdentityHash) {
+								const [remainingLinks] = await tx
+									.select({ count: Dz.count() })
+									.from(Db.productAnalyticsIdentityLinks)
+									.where(
+										Dz.eq(
+											Db.productAnalyticsIdentityLinks.organizationIdentityHash,
+											organizationIdentityHash,
+										),
+									);
+								if (Number(remainingLinks?.count ?? 0) !== 0) {
+									throw new Error(
+										"Product analytics identity-link erasure was incomplete",
+									);
+								}
 							}
 							return aliases;
 						}),

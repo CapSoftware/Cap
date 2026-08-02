@@ -644,6 +644,76 @@ analyticsMysqlE2e("product analytics MySQL concurrency", () => {
 		expect(remaining.map(({ userId }) => userId)).toEqual(["shared-user-b"]);
 	});
 
+	it("removes organization identity-link state without unlinking the user", async () => {
+		const { productAnalyticsIdentityHash } = await import("@cap/analytics");
+		const { db } = await import("@cap/database");
+		const { identityLinkedEvent } = await import(
+			"@/lib/analytics/business-events"
+		);
+		const { persistProductAnalyticsEvent } = await import(
+			"@/lib/analytics/product-event-outbox"
+		);
+		const anonymousId = "organization-erasure-anonymous";
+		const organizationId = "organization-erasure-org";
+		const userId = "organization-erasure-user";
+		await db().transaction((tx) =>
+			persistProductAnalyticsEvent(
+				tx,
+				identityLinkedEvent({
+					anonymousId,
+					createdAt: "2026-08-01T12:00:00.000Z",
+					organizationId,
+					userId,
+				}),
+			),
+		);
+		expect(
+			await runRepo((repo) => repo.discardPendingEvents({ organizationId })),
+		).toEqual([]);
+		const organizationIdentityHash = productAnalyticsIdentityHash(
+			"organization",
+			organizationId,
+		);
+		const verifier = await mysql.createConnection(databaseUrl);
+		const [links] = await verifier.query<
+			Array<
+				{
+					anonymousId: string;
+					organizationIdentityHash: string | null;
+					userIdentityHash: string;
+				} & RowDataPacket
+			>
+		>(
+			"SELECT anonymousId, userIdentityHash, organizationIdentityHash FROM product_analytics_identity_links WHERE anonymousIdentityHash = ?",
+			[productAnalyticsIdentityHash("anonymous", anonymousId)],
+		);
+		expect(links).toEqual([
+			expect.objectContaining({
+				anonymousId,
+				organizationIdentityHash: null,
+				userIdentityHash: productAnalyticsIdentityHash("user", userId),
+			}),
+		]);
+		const [organizationLinks] = await verifier.query<Array<RowDataPacket>>(
+			"SELECT anonymousIdentityHash FROM product_analytics_identity_links WHERE organizationIdentityHash = ?",
+			[organizationIdentityHash],
+		);
+		expect(organizationLinks).toHaveLength(0);
+		await verifier.query(
+			"DELETE FROM product_analytics_identity_links WHERE anonymousIdentityHash = ?",
+			[productAnalyticsIdentityHash("anonymous", anonymousId)],
+		);
+		await verifier.query(
+			"DELETE FROM product_analytics_identity_state WHERE identityHash IN (?, ?, ?)",
+			[
+				productAnalyticsIdentityHash("anonymous", anonymousId),
+				productAnalyticsIdentityHash("user", userId),
+				organizationIdentityHash,
+			],
+		);
+		await verifier.end();
+	});
+
 	it("does not spread a deleted user's tombstone to a live organization", async () => {
 		const { createProductEventRows } = await import("@cap/analytics");
 		const { db } = await import("@cap/database");
