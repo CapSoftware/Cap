@@ -11,13 +11,13 @@ SQL >
 	{% end %}
 	WITH identity_candidates AS (
 		SELECT synthetic_run_id, anonymous_id, user_id, event_id, occurred_at
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'identity_linked'
 			AND anonymous_id != ''
 			AND user_id != ''
 		UNION ALL
 		SELECT synthetic_run_id, anonymous_id, user_id, event_id, occurred_at
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'purchase_completed'
 			AND JSONExtractString(properties, 'payment_status') = 'paid'
 			AND JSONExtractBool(properties, 'is_guest_checkout')
@@ -47,7 +47,7 @@ SQL >
 			JSONExtractString(exposures.properties, 'variant') AS variant,
 			exposures.platform AS platform,
 			exposures.app_version AS app_version
-		FROM product_events_canonical_current AS exposures
+		FROM product_events_canonical_v1 AS exposures
 		LEFT JOIN identity_links ON exposures.synthetic_run_id = identity_links.synthetic_run_id AND exposures.anonymous_id = identity_links.anonymous_id
 		WHERE exposures.event_name = 'experiment_exposed'
 			AND (exposures.traffic_class = 'external' OR exposures.synthetic_run_id != '')
@@ -75,7 +75,7 @@ SQL >
 			user_id,
 			event_name,
 			occurred_at
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE user_id != ''
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
 			AND event_name IN ('user_signed_up', 'share_link_created', 'purchase_completed')

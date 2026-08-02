@@ -11,13 +11,13 @@ SQL >
 	{% end %}
 	WITH identity_links AS (
 		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, event_id, occurred_at
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'identity_linked'
 			AND user_id != ''
 			AND anonymous_id != ''
 	), paid_guest_links AS (
 		SELECT synthetic_run_id, user_id, anonymous_id, organization_id, event_id, occurred_at
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'purchase_completed'
 			AND JSONExtractString(properties, 'payment_status') = 'paid'
 			AND JSONExtractBool(properties, 'is_guest_checkout')
@@ -54,7 +54,7 @@ SQL >
 			argMin(JSONExtractString(properties, 'session_touch_medium'), tuple(occurred_at, event_id)) AS attribution_medium,
 			argMin(JSONExtractString(properties, 'session_touch_campaign'), tuple(occurred_at, event_id)) AS campaign,
 			argMin(country, tuple(occurred_at, event_id)) AS country
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'page_view'
 			AND anonymous_id != ''
 			AND (traffic_class = 'external' OR synthetic_run_id != '')
@@ -72,7 +72,7 @@ SQL >
 			toUInt64(countIf(event_name = 'trial_started') > 0) AS trial_started,
 			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid') > 0) AS purchased,
 			toUInt64(countIf(event_name = 'purchase_completed' AND JSONExtractString(properties, 'payment_status') = 'paid' AND JSONExtractBool(properties, 'is_guest_checkout')) > 0) AS guest_purchased
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE user_id != ''
 		GROUP BY synthetic_run_id, user_id
 	), guest_checkouts AS (
@@ -81,7 +81,7 @@ SQL >
 			anonymous_id,
 			min(occurred_at) AS checkout_at,
 			toUInt64(count() > 0) AS guest_checkout
-		FROM product_events_canonical_current
+		FROM product_events_canonical_v1
 		WHERE event_name = 'guest_checkout_started'
 			AND anonymous_id != ''
 		GROUP BY synthetic_run_id, anonymous_id

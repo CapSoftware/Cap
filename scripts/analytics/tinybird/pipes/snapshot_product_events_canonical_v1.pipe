@@ -9,11 +9,39 @@ SQL >
 	{% if defined(copy_max_threads) %}
 		{{max_threads(Int32(copy_max_threads))}}
 	{% end %}
-	SELECT *
-	FROM product_events_canonical_current
+	SELECT
+		raw.event_id,
+		argMin(raw.payload_hash, raw.received_at) AS payload_hash,
+		argMin(raw.occurred_at, raw.received_at) AS occurred_at,
+		max(raw.received_at) AS received_at,
+		argMin(toString(raw.event_name), raw.received_at) AS event_name,
+		argMin(raw.schema_version, raw.received_at) AS schema_version,
+		argMin(toString(raw.source), raw.received_at) AS source,
+		argMin(toString(raw.platform), raw.received_at) AS platform,
+		argMin(raw.anonymous_id, raw.received_at) AS anonymous_id,
+		argMin(raw.session_id, raw.received_at) AS session_id,
+		argMin(raw.user_id, raw.received_at) AS user_id,
+		argMin(raw.organization_id, raw.received_at) AS organization_id,
+		argMin(toString(raw.app_version), raw.received_at) AS app_version,
+		argMin(raw.pathname, raw.received_at) AS pathname,
+		argMin(raw.referrer, raw.received_at) AS referrer,
+		argMin(toString(raw.country), raw.received_at) AS country,
+		argMin(toString(raw.region), raw.received_at) AS region,
+		argMin(toString(raw.city), raw.received_at) AS city,
+		argMin(toString(raw.hostname), raw.received_at) AS hostname,
+		argMin(toString(raw.browser), raw.received_at) AS browser,
+		argMin(toString(raw.device), raw.received_at) AS device,
+		argMin(toString(raw.os), raw.received_at) AS os,
+		argMin(toString(raw.channel), raw.received_at) AS channel,
+		argMin(toString(raw.traffic_class), raw.received_at) AS traffic_class,
+		argMin(raw.synthetic_run_id, raw.received_at) AS synthetic_run_id,
+		argMin(raw.properties, raw.received_at) AS properties
+	FROM product_events_v1 AS raw
 	{% if defined(source_cutoff) %}
-	WHERE received_at <= toDateTime64({{DateTime64(source_cutoff)}}, 3)
+	WHERE raw.received_at <= toDateTime64({{DateTime64(source_cutoff)}}, 3)
 	{% end %}
+	GROUP BY raw.event_id
+	HAVING uniqExact(raw.payload_hash) = 1
 
 TYPE COPY
 TARGET_DATASOURCE product_events_canonical_v1

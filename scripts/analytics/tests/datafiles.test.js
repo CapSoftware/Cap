@@ -427,8 +427,14 @@ test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", 
 		),
 		"utf8",
 	);
-	assert.match(canonicalContents, /FROM product_events_canonical_current/);
-	assert.doesNotMatch(canonicalContents, /FROM product_events_v1/);
+	assert.match(canonicalContents, /FROM product_events_v1 AS raw/);
+	assert.match(canonicalContents, /raw\.received_at <=/);
+	assert.match(canonicalContents, /GROUP BY raw\.event_id/);
+	assert.match(canonicalContents, /HAVING uniqExact\(raw\.payload_hash\) = 1/);
+	assert.doesNotMatch(
+		canonicalContents,
+		/FROM product_events_canonical_current/,
+	);
 	assert.match(canonicalContents, /^COPY_MODE replace$/m);
 	const stateContents = fs.readFileSync(
 		path.join(
@@ -462,7 +468,7 @@ test("daily snapshot quarantines payload conflicts and rebuilds exact metrics", 
 	);
 	assert.match(contents, /^TYPE COPY$/m);
 	assert.match(contents, /^COPY_MODE replace$/m);
-	assert.match(contents, /FROM product_events_canonical_current/);
+	assert.match(contents, /FROM product_events_canonical_v1/);
 	assert.match(contents, /toUInt64\(count\(\)\) AS events/);
 	assert.match(contents, /uniqExactState\(/);
 	assert.match(contents, /AS recording_status/);
@@ -581,6 +587,26 @@ test("copy rebuilds are on-demand and require the sequential controller", () => 
 		assert.match(contents, /^TOKEN product_events_copy_runner READ$/m);
 		assert.doesNotMatch(contents, /^TOKEN product_events_agent_read READ$/m);
 		assert.match(contents, /\{\{max_threads\(Int32\(copy_max_threads\)\)\}\}/);
+	}
+});
+
+test("decision snapshots read the completed canonical copy", () => {
+	for (const name of [
+		"snapshot_product_events_daily_exact",
+		"snapshot_product_traffic_daily_exact",
+		"snapshot_product_traffic_pages_daily_exact",
+		"snapshot_product_activation_daily_exact",
+		"snapshot_product_creator_retention_exact",
+		"snapshot_product_identity_funnel_exact",
+		"snapshot_product_attribution_daily_exact",
+		"snapshot_product_experiment_outcomes_exact",
+	]) {
+		const contents = fs.readFileSync(
+			path.join(TINYBIRD_PROJECT_DIR, "pipes", `${name}.pipe`),
+			"utf8",
+		);
+		assert.match(contents, /FROM product_events_canonical_v1/);
+		assert.doesNotMatch(contents, /FROM product_events_canonical_current/);
 	}
 });
 
