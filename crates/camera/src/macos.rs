@@ -5,16 +5,21 @@ use cidre::*;
 use objc2_av_foundation::*;
 
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
-    let devices = cap_camera_avfoundation::list_video_devices();
-    devices
-        .iter()
-        .map(|d| CameraInfo {
-            device_id: d.unique_id().to_string(),
-            model_id: ModelID::from_avfoundation(d),
-            display_name: d.localized_name().to_string(),
-        })
-        .collect::<Vec<_>>()
-        .into_iter()
+    // ar_pool: called from pool-less tokio threads on a polling cadence; the
+    // unique_id/localized_name accessors autorelease NSStrings that would
+    // otherwise accumulate for the process lifetime.
+    objc::ar_pool(|| {
+        let devices = cap_camera_avfoundation::list_video_devices();
+        devices
+            .iter()
+            .map(|d| CameraInfo {
+                device_id: d.unique_id().to_string(),
+                model_id: ModelID::from_avfoundation(d),
+                display_name: d.localized_name().to_string(),
+            })
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
 }
 
 impl CameraInfo {
