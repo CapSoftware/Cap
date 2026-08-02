@@ -1996,12 +1996,72 @@ const probePreview = async () => {
 		previewOrigin,
 		runId: `${state.runId}_preview_api_final`,
 	});
-	persistPreviewEvidence({
-		complete: true,
-		rateLimited,
-		rateLimitStatus: "passed",
-		replayAccepted,
+	const minimumPreviewRows =
+		Number(
+			artifact.browser?.acknowledgedEvents ?? state.browserExpectedEvents ?? 0,
+		) +
+		duplicateResponses.length +
+		replayAccepted +
+		collectorAcceptedEvents;
+	const minimumPreviewEvents =
+		Number(state.browserExpectedEvents ?? 0) + 1 + collectorAcceptedEvents;
+	let previousPreviewSnapshot;
+	let stablePreviewPolls = 0;
+	const previewRawVisibility = await waitForCopyVisibility({
+		label: "Exact-SHA browser and collector delivery",
+		read: async () =>
+			normalizeCiAssertions(
+				(
+					await ciAssertionsQuery({
+						state,
+						deploymentId: state.deploymentId,
+						syntheticRunId: previewRunId,
+					})
+				).data,
+			),
+		assert: (assertions) => {
+			if (
+				assertions.receivedRows < minimumPreviewRows ||
+				assertions.uniqueEvents < minimumPreviewEvents ||
+				assertions.uniquePayloads !== assertions.uniqueEvents ||
+				assertions.duplicateRows !==
+					assertions.receivedRows - assertions.uniqueEvents ||
+				assertions.payloadConflicts !== 0
+			) {
+				throw new Error("Browser and collector rows are incomplete or invalid");
+			}
+			const snapshot = `${assertions.receivedRows}:${assertions.uniqueEvents}:${assertions.uniquePayloads}:${assertions.duplicateRows}`;
+			if (snapshot === previousPreviewSnapshot) {
+				stablePreviewPolls += 1;
+			} else {
+				previousPreviewSnapshot = snapshot;
+				stablePreviewPolls = 1;
+			}
+			if (stablePreviewPolls < 3) {
+				throw new Error("Browser and collector rows have not stabilized");
+			}
+		},
 	});
+	state.previewAcceptedRows = previewRawVisibility.value.receivedRows;
+	state.previewExpectedEvents = previewRawVisibility.value.uniqueEvents;
+	writeJson(statePath, state, 0o600);
+	artifact.previewApi = {
+		...artifact.previewApi,
+		rawVisibility: {
+			receivedRows: previewRawVisibility.value.receivedRows,
+			uniqueEvents: previewRawVisibility.value.uniqueEvents,
+			uniquePayloads: previewRawVisibility.value.uniquePayloads,
+			duplicateRows: previewRawVisibility.value.duplicateRows,
+			payloadConflicts: previewRawVisibility.value.payloadConflicts,
+			polls: previewRawVisibility.polls,
+			visibilityMs: previewRawVisibility.visibilityMs,
+		},
+	};
+	artifact.assertions = {
+		...artifact.assertions,
+		previewApiPassed: true,
+	};
+	writeJson(artifactPath, artifact);
 };
 
 const probeDurableServerPath = async () => {

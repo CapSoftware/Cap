@@ -2630,6 +2630,10 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		),
 		"utf8",
 	);
+	const workflow = fs.readFileSync(
+		new URL("../../../.github/workflows/analytics.yml", import.meta.url),
+		"utf8",
+	);
 	assert.match(
 		route,
 		/const TINYBIRD_STAGING_ORIGIN = "https:\/\/api\.us-east\.aws\.tinybird\.co"/,
@@ -2730,6 +2734,20 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		previewProbe,
 		/collectorPerformance:[\s\S]*budget:[\s\S]*passed: collectorBudgetPassed/,
 	);
+	assert.match(
+		previewProbe,
+		/const previewRawVisibility = await waitForCopyVisibility\([\s\S]*stablePreviewPolls < 3[\s\S]*state\.previewExpectedEvents = previewRawVisibility\.value\.uniqueEvents/,
+	);
+	assert.match(
+		previewProbe,
+		/assertions\.uniquePayloads !== assertions\.uniqueEvents[\s\S]*assertions\.payloadConflicts !== 0/,
+	);
+	const previewStep = workflow.slice(
+		workflow.indexOf("Probe the exact-SHA Vercel browser collector"),
+		workflow.indexOf("Upload the immutable post-collector recovery checkpoint"),
+	);
+	assert.match(previewStep, /TINYBIRD_STAGING_READ_TOKEN/);
+	assert.match(previewStep, /TINYBIRD_STAGING_URL/);
 	const cleanupProbe = runner.slice(
 		runner.indexOf("const cleanupPreviewDatabaseState = async"),
 		runner.indexOf("const measurePageBundle = async"),
