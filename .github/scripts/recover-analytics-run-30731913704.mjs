@@ -28,6 +28,11 @@ const option = (name) => {
 	return value;
 };
 
+const optionalOption = (name) => {
+	const index = process.argv.indexOf(`--${name}`);
+	return index >= 0 ? process.argv[index + 1] : undefined;
+};
+
 const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
 
 const writeJson = (path, value, mode = 0o644) => {
@@ -186,10 +191,7 @@ const cleanupPreviewDatabase = async ({
 
 const statePath = option("state");
 const artifactPath = option("artifact");
-const recoverySha = requiredEnvironment("RECOVERY_SHA");
-if (!/^[0-9a-f]{40}$/.test(recoverySha)) {
-	throw new Error("RECOVERY_SHA must be an exact Git commit SHA");
-}
+const resumeArtifactPath = optionalOption("resume-artifact");
 const state = readJson(statePath);
 const artifact = readJson(artifactPath);
 if (
@@ -212,14 +214,12 @@ if (
 }
 
 const origin = new URL(requiredEnvironment("TINYBIRD_STAGING_URL")).origin;
-const cleanupToken = requiredEnvironment("TINYBIRD_STAGING_CLEANUP_TOKEN");
 const lookupToken = requiredEnvironment(
 	"TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN",
 );
 validateTinybirdCredentials({
 	url: `${origin}/`,
 	tokens: {
-		TINYBIRD_STAGING_CLEANUP_TOKEN: cleanupToken,
 		TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: lookupToken,
 	},
 });
@@ -235,6 +235,55 @@ const runIds = [
 	`${state.runId}_server`,
 ].map(assertRunId);
 const quotedRunIds = runIds.map((runId) => `'${runId}'`).join(", ");
+if (resumeArtifactPath) {
+	const resumeArtifact = readJson(resumeArtifactPath);
+	if (
+		resumeArtifact.sha !== SOURCE_SHA ||
+		String(resumeArtifact.tinybird?.deploymentId) !== CANDIDATE_DEPLOYMENT_ID ||
+		resumeArtifact.cleanup?.database?.cleaned !== true ||
+		Number(resumeArtifact.cleanup.database.remaining) !== 0 ||
+		resumeArtifact.cleanup?.emergencyRecovery?.sourceRunId !== SOURCE_RUN_ID ||
+		resumeArtifact.cleanup?.emergencyRecovery?.candidateDeploymentId !==
+			CANDIDATE_DEPLOYMENT_ID ||
+		Number(resumeArtifact.cleanup?.emergencyRecovery?.rawRowsRemaining) !== 0
+	) {
+		throw new Error("The prior containment artifact is not resumable");
+	}
+	const remaining = await sqlQuery({
+		origin,
+		query: `SELECT count() AS rows FROM product_events_v1 WHERE synthetic_run_id IN (${quotedRunIds})`,
+		token: lookupToken,
+	});
+	if (Number(remaining[0]?.rows ?? Number.NaN) !== 0) {
+		throw new Error(
+			"Scoped Tinybird raw rows reappeared before recovery resume",
+		);
+	}
+	resumeArtifact.cleanup.emergencyRecovery = {
+		...resumeArtifact.cleanup.emergencyRecovery,
+		resumeVerifiedAt: new Date().toISOString(),
+	};
+	writeJson(artifactPath, resumeArtifact);
+	process.stdout.write(
+		`${JSON.stringify({
+			candidateDeploymentId: CANDIDATE_DEPLOYMENT_ID,
+			databaseRemaining: 0,
+			rawRowsRemaining: 0,
+			resumed: true,
+			sourceRunId: SOURCE_RUN_ID,
+		})}\n`,
+	);
+	process.exit(0);
+}
+const recoverySha = requiredEnvironment("RECOVERY_SHA");
+if (!/^[0-9a-f]{40}$/.test(recoverySha)) {
+	throw new Error("RECOVERY_SHA must be an exact Git commit SHA");
+}
+const cleanupToken = requiredEnvironment("TINYBIRD_STAGING_CLEANUP_TOKEN");
+validateTinybirdCredentials({
+	url: `${origin}/`,
+	tokens: { TINYBIRD_STAGING_CLEANUP_TOKEN: cleanupToken },
+});
 const previewRows = await sqlQuery({
 	origin,
 	query: `SELECT anonymous_id, count() AS rows FROM product_events_v1 WHERE synthetic_run_id = '${assertRunId(state.previewRunId)}' AND anonymous_id != '' GROUP BY anonymous_id`,

@@ -27,6 +27,8 @@ jobs:
     env:
       EXPECTED_SHA: ${{ github.sha }}
       SOURCE_SHA: 73c90e8bf64a7793f803bd4488f0bb626b89948e
+      PRIOR_RECOVERY_RUN_ID: "30732625956"
+      PRIOR_RECOVERY_SHA: c55b3114e960a180ac0df03094d3547364cae2fb
       SOURCE_RUN_ID: "30731913704"
       TINYBIRD_WORKSPACE_ID: 37b8fef9-817f-4c3c-b21f-218c36a6077d
     steps:
@@ -61,11 +63,24 @@ jobs:
           [[ -f "$checkpoint_dir/analytics-staging-report.json" ]]
           echo "state=$checkpoint_dir/analytics-staging-state.json" >> "$GITHUB_OUTPUT"
           echo "artifact=$checkpoint_dir/analytics-staging-report.json" >> "$GITHUB_OUTPUT"
-      - name: Wait for the exact recovery SHA Vercel preview
-        id: vercel
+      - name: Download and validate prior cleanup evidence
+        id: prior
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/analytics/staging-ci.js wait-vercel
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prior_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RECOVERY_RUN_ID")"
+          [[ "$(jq -r '.conclusion' <<< "$prior_run")" == "failure" ]]
+          [[ "$(jq -r '.event' <<< "$prior_run")" == "push" ]]
+          [[ "$(jq -r '.head_branch' <<< "$prior_run")" == "codex/first-party-analytics" ]]
+          [[ "$(jq -r '.head_sha' <<< "$prior_run")" == "$PRIOR_RECOVERY_SHA" ]]
+          prior_dir="$RUNNER_TEMP/analytics-containment-30731913704"
+          mkdir -p "$prior_dir"
+          gh run download "$PRIOR_RECOVERY_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name analytics-containment-30731913704-1 \
+            --dir "$prior_dir"
+          [[ -f "$prior_dir/analytics-staging-report.json" ]]
+          echo "artifact=$prior_dir/analytics-staging-report.json" >> "$GITHUB_OUTPUT"
       - name: Pause reviewed Copy schedules
         id: pause
         env:
@@ -82,16 +97,13 @@ jobs:
         id: cleanup
         if: steps.pause.outcome == 'success'
         env:
-          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
-          RECOVERY_SHA: ${{ env.EXPECTED_SHA }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
-          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
-          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
         run: >-
           node .github/scripts/recover-analytics-run-30731913704.mjs
           --state "${{ steps.checkpoint.outputs.state }}"
           --artifact "${{ steps.checkpoint.outputs.artifact }}"
+          --resume-artifact "${{ steps.prior.outputs.artifact }}"
       - name: Rebuild all derived copies without the failed run
         id: copies
         if: steps.cleanup.outcome == 'success'
@@ -99,6 +111,7 @@ jobs:
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
           TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
           TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
         run: >-
           node scripts/analytics/staging-ci.js run-copies
