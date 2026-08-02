@@ -25,6 +25,10 @@ import { Effect, Layer, Schema } from "effect";
 import type Stripe from "stripe";
 import { queueServerProductEvent } from "@/lib/analytics/server";
 import type { ServerProductEvent } from "@/lib/analytics/server-event";
+import {
+	syntheticStagingEventIds,
+	syntheticStagingIdentities,
+} from "@/lib/analytics/staging-test-identities";
 import { subscriptionCheckoutProductEvent } from "@/lib/analytics/stripe-business-events";
 import { apiToHandler } from "@/lib/server";
 
@@ -166,30 +170,9 @@ const boundedRunId = (value: string) =>
 
 const draftSha = (value: string) => /^[0-9a-f]{40}$/.test(value);
 
-const syntheticIdentities = (runId: string) => {
-	const hash = createHash("sha256").update(runId).digest("hex");
-	return {
-		anonymousId: `synthetic_${hash.slice(0, 24)}`,
-		hash,
-		organizationId: `synthetic_org_${hash.slice(24, 48)}`,
-		userId: `synthetic_user_${hash.slice(0, 24)}`,
-	};
-};
-
-const syntheticEventIds = (runId: string) => {
-	const { hash } = syntheticIdentities(runId);
-	return [
-		`staging_signup_${hash.slice(0, 24)}`,
-		`staging_retry_429_${hash.slice(0, 24)}`,
-		`staging_retry_503_${hash.slice(0, 24)}`,
-		`staging_ambiguous_${hash.slice(0, 24)}`,
-		`staging_reject_400_${hash.slice(0, 24)}`,
-		`staging_erasure_replay_${hash.slice(0, 24)}`,
-	];
-};
-
 const syntheticIdentityHashes = (runId: string) => {
-	const { anonymousId, organizationId, userId } = syntheticIdentities(runId);
+	const { anonymousId, organizationId, userId } =
+		syntheticStagingIdentities(runId);
 	return [
 		productAnalyticsIdentityHash("anonymous", anonymousId),
 		productAnalyticsIdentityHash("organization", organizationId),
@@ -198,7 +181,7 @@ const syntheticIdentityHashes = (runId: string) => {
 };
 
 const scopedDatabaseHealth = async (runId: string) => {
-	const eventIds = syntheticEventIds(runId);
+	const eventIds = syntheticStagingEventIds(runId);
 	const eventIdHashes = eventIds.map(productAnalyticsEventIdHash);
 	const [outboxRows, receiptRows] = await Promise.all([
 		db()
@@ -270,8 +253,8 @@ const cleanupSyntheticDatabaseState = async ({
 	anonymousIdentityHashes: readonly string[];
 	runIds: readonly string[];
 }) => {
-	const identities = runIds.map(syntheticIdentities);
-	const eventIds = runIds.flatMap(syntheticEventIds);
+	const identities = runIds.map(syntheticStagingIdentities);
+	const eventIds = runIds.flatMap(syntheticStagingEventIds);
 	const eventIdHashes = eventIds.map(productAnalyticsEventIdHash);
 	const identityHashes = [
 		...new Set([
@@ -659,7 +642,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						Effect.gen(function* () {
 							const runId = yield* authorize(payload);
 							const { anonymousId, hash, organizationId, userId } =
-								syntheticIdentities(runId);
+								syntheticStagingIdentities(runId);
 							const occurredAt = new Date().toISOString();
 							const purchase = subscriptionCheckoutProductEvent({
 								eventId: `staging_ambiguous_${hash.slice(0, 24)}`,
@@ -812,7 +795,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						Effect.gen(function* () {
 							const runId = yield* authorize(payload);
 							const { anonymousId, hash, organizationId, userId } =
-								syntheticIdentities(runId);
+								syntheticStagingIdentities(runId);
 							yield* tinybird
 								.eraseProductAnalytics({
 									userId,

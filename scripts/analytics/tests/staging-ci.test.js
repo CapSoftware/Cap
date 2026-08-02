@@ -2681,7 +2681,11 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	assert.match(runner, /value\.startsWith\("_vercel_jwt="\)/);
 	assert.match(
 		runner,
-		/artifact\.vercel\.accessUrl \?\? artifact\.vercel\.url/,
+		/const artifactExactDeploymentUrl = \(artifact\) => artifact\.vercel\.url/,
+	);
+	assert.match(
+		runner,
+		/artifact\.vercel\.accessUrl \?\? artifactExactDeploymentUrl\(artifact\)/,
 	);
 	assert.match(runner, /"x-cap-analytics-staging-signature"/);
 	assert.match(
@@ -2699,7 +2703,7 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	);
 	assert.match(
 		previewProbe,
-		/const previewRunId = validateSyntheticRunId\(state\.previewRunId\)[\s\S]*const landing = await previewRequest\(previewOrigin, \{[\s\S]*"x-cap-analytics-test-run": previewRunId/,
+		/artifactBranchAccessUrl\(artifact\)[\s\S]*const previewRunId = validateSyntheticRunId\(state\.previewRunId\)[\s\S]*const landing = await previewRequest\(previewOrigin, \{[\s\S]*"x-cap-analytics-test-run": previewRunId/,
 	);
 	assert.match(
 		previewProbe,
@@ -2724,6 +2728,10 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 		runner.indexOf("const seed = async () => {"),
 	);
 	assert.match(serverProbe, /\/api\/analytics\/staging-test\/health/);
+	assert.equal(
+		serverProbe.match(/artifactExactDeploymentUrl\(artifact\)/g)?.length,
+		2,
+	);
 	assert.match(serverProbe, /Number\(outboxHealth\.activeEvents\) !== 0/);
 	assert.match(serverProbe, /Number\(outboxHealth\.deadLetterEvents\) !== 1/);
 	assert.match(serverProbe, /durableOutboxHealthPassed: true/);
@@ -3027,12 +3035,19 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 		source.indexOf("const tokenScopeProbe"),
 	);
 	assert.doesNotMatch(deleteSource, /__tb__min_deployment/);
+	assert.match(deleteSource, /\/v1\/datasources\/product_events_v1\/delete/);
+	assert.match(deleteSource, /wait: "true"/);
+	assert.match(deleteSource, /wait_max_seconds: "60"/);
+	assert.match(deleteSource, /mutation\?\.is_done !== true/);
 	assert.match(verifyCleanupSource, /syntheticRunId: state\.decisionRunId/);
 	assert.match(
 		verifyCleanupSource,
 		/Object\.values\(businessDecisionAssertions\)\.some/,
 	);
-	assert.equal(deleteSource.match(/\.\.\.deploymentParameters/g)?.length, 2);
+	assert.equal(deleteSource.match(/\.\.\.deploymentParameters/g)?.length, 1);
+	assert.match(source, /const rawBeforeDelete = await readScopedRawAssertions/);
+	assert.match(source, /Tinybird synthetic raw cleanup/);
+	assert.match(source, /assert: assertScopedRawRowsDeleted/);
 	assert.match(
 		source,
 		/writeOutput\("discard", resolution\.pending \|\| resolution\.discard\)/,

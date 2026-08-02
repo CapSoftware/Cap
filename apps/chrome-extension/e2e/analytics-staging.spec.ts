@@ -388,7 +388,7 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		Math.round((afterTaskDuration - beforeTaskDuration) * 1_000),
 	);
 
-	const captureSampleCount = 30;
+	const captureSampleCount = 100;
 	let benchmarkCapturedEvents = 0;
 	let benchmarkCapturedEngagementEvents = 0;
 	await context.route("**/api/events", async (route) => {
@@ -538,11 +538,6 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	);
 	expect(captureMeasurements).toHaveLength(captureSampleCount);
 	expect(controlMeasurements).toHaveLength(captureSampleCount);
-	expect(captureP95Ms).toBeLessThanOrEqual(captureP95BudgetMs);
-	expect(captureP99Ms).toBeLessThanOrEqual(captureP99BudgetMs);
-	expect(captureLongTasks.length).toBeLessThanOrEqual(
-		controlLongTasks.length + additionalLongTaskBudget,
-	);
 	const uniqueEventIds = new Set(
 		uniqueCapturedEvents().map((event) => event.eventId),
 	);
@@ -572,6 +567,11 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 		string,
 		unknown
 	> & { assertions?: Record<string, boolean> };
+	const browserMainThreadBudgetPassed =
+		captureP95Ms <= captureP95BudgetMs &&
+		captureP99Ms <= captureP99BudgetMs &&
+		captureLongTasks.length <=
+			controlLongTasks.length + additionalLongTaskBudget;
 	artifact.browser = {
 		acceptedRequests,
 		acknowledgedEvents: acceptedEventIds.size,
@@ -616,9 +616,14 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	artifact.assertions = {
 		...(artifact.assertions ?? {}),
 		deployedBrowserTrackerPassed: true,
-		browserMainThreadBudgetPassed: true,
+		browserMainThreadBudgetPassed,
 	};
 	fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+	expect(captureP95Ms).toBeLessThanOrEqual(captureP95BudgetMs);
+	expect(captureP99Ms).toBeLessThanOrEqual(captureP99BudgetMs);
+	expect(captureLongTasks.length).toBeLessThanOrEqual(
+		controlLongTasks.length + additionalLongTaskBudget,
+	);
 	await attestExactSha();
 	await context.close();
 });

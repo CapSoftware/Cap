@@ -1531,8 +1531,9 @@ const previewRequest = async (url, init = {}) => {
 	return fetch(redirectUrl, requestInit);
 };
 
-const artifactPreviewUrl = (artifact) =>
-	artifact.vercel.accessUrl ?? artifact.vercel.url;
+const artifactExactDeploymentUrl = (artifact) => artifact.vercel.url;
+const artifactBranchAccessUrl = (artifact) =>
+	artifact.vercel.accessUrl ?? artifactExactDeploymentUrl(artifact);
 
 const attestExactPreviewSha = async ({ previewOrigin, runId }) => {
 	const response = await previewRequest(
@@ -1570,7 +1571,7 @@ const cleanupPreviewDatabaseState = async ({
 	const scopedRunIds = [...new Set(runIds)];
 	const url = new URL(
 		"/api/analytics/staging-test/cleanup-database",
-		artifactPreviewUrl(artifact),
+		artifactExactDeploymentUrl(artifact),
 	);
 	const response = await previewRequest(url, {
 		method: "POST",
@@ -1642,7 +1643,7 @@ const probePreview = async () => {
 	const artifactPath = option("artifact");
 	const state = readJson(statePath);
 	const artifact = readJson(artifactPath);
-	const previewOrigin = new URL(artifactPreviewUrl(artifact)).origin;
+	const previewOrigin = new URL(artifactBranchAccessUrl(artifact)).origin;
 	const previewRunId = validateSyntheticRunId(state.previewRunId);
 	await attestExactPreviewSha({
 		previewOrigin,
@@ -1960,7 +1961,7 @@ const probeDurableServerPath = async () => {
 	const serverRunId = validateSyntheticRunId(`${state.runId}_server`);
 	const url = new URL(
 		"/api/analytics/staging-test",
-		artifactPreviewUrl(artifact),
+		artifactExactDeploymentUrl(artifact),
 	);
 	const body = (sha) =>
 		JSON.stringify({
@@ -2039,7 +2040,7 @@ const probeDurableServerPath = async () => {
 	});
 	const healthUrl = new URL(
 		"/api/analytics/staging-test/health",
-		artifactPreviewUrl(artifact),
+		artifactExactDeploymentUrl(artifact),
 	);
 	const healthResponse = await previewRequest(healthUrl, {
 		method: "POST",
@@ -2851,7 +2852,7 @@ const assertPhaseCiAssertions = (results, fieldNames) => {
 		for (const fieldName of fieldNames) {
 			if (result.assertions[fieldName] !== result[fieldName]) {
 				throw new Error(
-					`Synthetic ${fieldName} was ${result.assertions[fieldName]}, expected ${result[fieldName]}`,
+					`Synthetic ${fieldName} for run ${hashIdentifier(result.runId)} was ${result.assertions[fieldName]}, expected ${result[fieldName]}`,
 				);
 			}
 		}
@@ -4094,7 +4095,9 @@ const deleteProductEventRows = async ({
 }) => {
 	const body = new URLSearchParams({ delete_condition: condition });
 	const deletion = await request(
-		tinybirdUrl(origin, "/v0/datasources/product_events_v1/delete", {
+		tinybirdUrl(origin, "/v1/datasources/product_events_v1/delete", {
+			wait: "true",
+			wait_max_seconds: "60",
 			...deploymentParameters,
 		}),
 		{
@@ -4106,31 +4109,16 @@ const deleteProductEventRows = async ({
 			beforeAttempt,
 		},
 	);
-	const jobId =
-		deletion.data.job_id ?? deletion.data.job?.id ?? deletion.data.id;
-	if (!jobId) {
-		throw new Error("Tinybird deletion did not return a cleanup job ID");
+	if (deletion.data.mutation?.is_done !== true) {
+		throw new Error("Tinybird synthetic cleanup mutation did not finish");
 	}
-	const deadline = Date.now() + 180_000;
-	while (Date.now() < deadline) {
-		const job = await request(
-			tinybirdUrl(origin, `/v0/jobs/${encodeURIComponent(jobId)}`, {
-				...deploymentParameters,
-			}),
-			{ token, attempts: 3, beforeAttempt },
-		);
-		const status = String(
-			job.data.status ?? job.data.state ?? job.data.job?.status ?? "",
-		).toLowerCase();
-		if (["done", "success", "finished", "completed"].includes(status)) {
-			return Number(job.data.rows_affected ?? 0);
-		}
-		if (["failed", "error", "cancelled"].includes(status)) {
-			throw new Error(`Tinybird cleanup job ended in ${status}`);
-		}
-		await delay(2_000);
+	const rowsAffected = Number(
+		deletion.data.mutation.rows_affected ?? deletion.data.rows_affected ?? 0,
+	);
+	if (!Number.isFinite(rowsAffected) || rowsAffected < 0) {
+		throw new Error("Tinybird synthetic cleanup returned an invalid row count");
 	}
-	throw new Error("Timed out waiting for Tinybird synthetic cleanup");
+	return rowsAffected;
 };
 
 const eraseSyntheticIdentity = async () => {
@@ -4140,7 +4128,7 @@ const eraseSyntheticIdentity = async () => {
 	const secret = environment("CAP_ANALYTICS_STAGING_TEST_SECRET");
 	const url = new URL(
 		"/api/analytics/staging-test/erase",
-		artifactPreviewUrl(artifact),
+		artifactExactDeploymentUrl(artifact),
 	);
 	const body = JSON.stringify({ runId: state.runId, sha: artifact.sha });
 	const send = (authorization) =>
@@ -4432,6 +4420,46 @@ const cleanup = async (parameters = {}) => {
 		runIds.push(validateSyntheticRunId(state.previewRunId));
 	}
 	runIds.push(serverRunId);
+	const readScopedRawAssertions = async (targetDeploymentId) =>
+		Promise.all(
+			runIds.map(async (syntheticRunId) => {
+				const assertions = normalizeCiAssertions(
+					(
+						await ciAssertionsQuery({
+							state,
+							deploymentId: targetDeploymentId,
+							syntheticRunId,
+						})
+					).data,
+				);
+				return {
+					runHash: hashIdentifier(syntheticRunId),
+					receivedRows: assertions.receivedRows,
+					uniqueEvents: assertions.uniqueEvents,
+					uniquePayloads: assertions.uniquePayloads,
+					duplicateRows: assertions.duplicateRows,
+					payloadConflicts: assertions.payloadConflicts,
+				};
+			}),
+		);
+	const assertScopedRawRowsDeleted = (assertions) => {
+		for (const result of assertions) {
+			if (
+				result.receivedRows !== 0 ||
+				result.uniqueEvents !== 0 ||
+				result.uniquePayloads !== 0 ||
+				result.duplicateRows !== 0 ||
+				result.payloadConflicts !== 0
+			) {
+				throw new Error(`Synthetic raw rows remain for run ${result.runHash}`);
+			}
+		}
+	};
+	const rawDeploymentId =
+		target === "staging"
+			? String(state.liveBeforeDeploymentId)
+			: String(state.deploymentId);
+	const rawBeforeDelete = await readScopedRawAssertions(rawDeploymentId);
 	{
 		const databaseArtifact = readJson(artifactPath);
 		const anonymousIdentityHashes = [
@@ -4450,6 +4478,7 @@ const cleanup = async (parameters = {}) => {
 		databaseArtifact.cleanup = {
 			...databaseArtifact.cleanup,
 			database: databaseCleanup,
+			rawBeforeDelete,
 		};
 		databaseArtifact.assertions = {
 			...databaseArtifact.assertions,
@@ -4578,8 +4607,21 @@ const cleanup = async (parameters = {}) => {
 	const artifact = readJson(artifactPath);
 	artifact.cleanup = {
 		...artifact.cleanup,
-		deleteJobCompleted: true,
+		deleteMutationCompleted: true,
 		rowsAffected,
+	};
+	writeJson(artifactPath, artifact);
+	const rawDeletionVisibility = await waitForCopyVisibility({
+		label: "Tinybird synthetic raw cleanup",
+		read: () => readScopedRawAssertions(String(state.deploymentId)),
+		assert: assertScopedRawRowsDeleted,
+	});
+	artifact.cleanup = {
+		...artifact.cleanup,
+		rawDeletionVisibility: {
+			polls: rawDeletionVisibility.polls,
+			visibilityMs: rawDeletionVisibility.visibilityMs,
+		},
 	};
 	writeJson(artifactPath, artifact);
 };
