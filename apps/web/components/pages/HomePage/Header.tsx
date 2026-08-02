@@ -146,9 +146,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			const result = await sendDownloadLink(email);
 			if (result.success) {
 				setEmailStatus("sent");
-				if (typeof window !== "undefined" && window.bento) {
-					window.bento.identify(email);
-				}
 			} else {
 				setEmailStatus("error");
 				setEmailError(result.error ?? "Something went wrong.");
