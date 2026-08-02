@@ -133,7 +133,8 @@ async function deliverProductAnalyticsRow(
 	const stagingFault =
 		env.VERCEL_ENV === "preview" &&
 		row.synthetic_run_id.endsWith("_server") &&
-		row.event_id.startsWith("staging_");
+		(row.event_id.startsWith("staging_") ||
+			row.event_id.startsWith("stripe:staging_"));
 	const retryFault = row.event_id.startsWith("staging_retry_429_")
 		? {
 				code: "staging_provider_429" as const,
@@ -194,7 +195,8 @@ async function deliverProductAnalyticsRow(
 	if (
 		stagingFault &&
 		row.event_name === "purchase_completed" &&
-		row.event_id.startsWith("staging_ambiguous_") &&
+		row.event_id.startsWith("stripe:staging_ambiguous_") &&
+		row.event_id.endsWith(":purchase_completed") &&
 		lastErrorCode !== "staging_timeout_after_accept"
 	) {
 		await markProductAnalyticsOutboxRetrying(

@@ -203,10 +203,10 @@ describe("durable product analytics delivery", () => {
 		mocks.identityRows = [[], []];
 		mocks.storedRow = {
 			...mocks.storedRow,
-			eventId: "staging_ambiguous_purchase_1",
+			eventId: "stripe:staging_ambiguous_purchase_1:purchase_completed",
 			payload: {
 				...mocks.storedRow.payload,
-				event_id: "staging_ambiguous_purchase_1",
+				event_id: "stripe:staging_ambiguous_purchase_1:purchase_completed",
 				event_name: "purchase_completed",
 				synthetic_run_id: "run_staging_server",
 			},
