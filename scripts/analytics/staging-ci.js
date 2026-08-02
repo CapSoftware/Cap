@@ -269,12 +269,18 @@ const tinybirdUrl = (origin, pathname, parameters = {}) => {
 	return url;
 };
 
-const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
+const healthQuery = async ({
+	state,
+	deploymentId = "",
+	appVersion,
+	syntheticRunId,
+}) => {
 	const { origin, tokens } = tinybirdEnvironment([
 		"TINYBIRD_STAGING_READ_TOKEN",
 	]);
 	const previewWindow =
-		appVersion === state.previewAppVersion &&
+		(appVersion === state.previewAppVersion ||
+			syntheticRunId === state.previewRunId) &&
 		state.previewStartTime &&
 		state.previewEndTime;
 	const allPlatformCorpus = [
@@ -301,7 +307,10 @@ const healthQuery = async ({ state, deploymentId = "", appVersion }) => {
 					start_time: window.startTime,
 					end_time: window.endTime,
 					platform: allPlatformCorpus ? undefined : "web",
-					app_version: appVersion ?? state.appVersion,
+					app_version: syntheticRunId
+						? undefined
+						: (appVersion ?? state.appVersion),
+					synthetic_run_id: syntheticRunId,
 					__tb__deployment: deploymentId,
 				}),
 				{ token: tokens.TINYBIRD_STAGING_READ_TOKEN, attempts: 3 },
@@ -3054,7 +3063,7 @@ const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 			: healthQuery({
 					state,
 					deploymentId,
-					appVersion: state.previewAppVersion,
+					syntheticRunId: state.previewRunId,
 				}),
 	]);
 	const health = {
@@ -4391,7 +4400,7 @@ const verifySyntheticIdentityErasure = async () => {
 			await healthQuery({
 				state,
 				deploymentId: state.deploymentId,
-				appVersion: state.previewAppVersion,
+				syntheticRunId: state.previewRunId,
 			})
 		).data,
 	);
@@ -4828,7 +4837,7 @@ const verifyPromoted = async () => {
 	const previewHealthResult = await healthQuery({
 		state,
 		deploymentId: state.deploymentId,
-		appVersion: state.previewAppVersion,
+		syntheticRunId: state.previewRunId,
 	});
 	const previewHealth = normalizeHealth(previewHealthResult.data);
 	if (
@@ -5151,7 +5160,7 @@ const verifyCleanup = async (parameters = {}) => {
 		const previewResult = await healthQuery({
 			state,
 			deploymentId,
-			appVersion: state.previewAppVersion,
+			syntheticRunId: state.previewRunId,
 		});
 		const previewHealth = normalizeHealth(previewResult.data);
 		if (Object.values(previewHealth).some((value) => value !== 0)) {

@@ -25,6 +25,7 @@ SQL >
 	WHERE copy_run_id = ''
 		AND hour >= toStartOfHour(toDateTime64({{DateTime64(start_time)}}, 3))
 		AND hour <= toDateTime64({{DateTime64(end_time)}}, 3)
+		{% if defined(synthetic_run_id) %} AND synthetic_run_id = {{String(synthetic_run_id)}} {% end %}
 		{% if defined(platform) %} AND platform = {{String(platform)}} {% end %}
 		{% if defined(app_version) %} AND app_version = {{String(app_version)}} {% end %}
 		AND throwIf(toDateTime64({{DateTime64(end_time)}}, 3) < toDateTime64({{DateTime64(start_time)}}, 3), 'end_time must not precede start_time') = 0

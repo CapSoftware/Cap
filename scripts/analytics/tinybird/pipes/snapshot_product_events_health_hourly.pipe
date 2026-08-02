@@ -13,6 +13,7 @@ SQL >
 		toStartOfHour(received_at) AS hour,
 		now64(3) AS calculated_at,
 		'' AS copy_run_id,
+		synthetic_run_id,
 		platform,
 		app_version,
 		count() AS received_rows,
@@ -23,13 +24,14 @@ SQL >
 		countIf(user_id = '' AND anonymous_id = '' AND session_id = '') AS missing_identity_events,
 		quantilesTDigestState(0.5, 0.95, 0.99)(toFloat64(dateDiff('millisecond', occurred_at, received_at))) AS ingestion_lag_ms
 	FROM product_events_v1
-	GROUP BY hour, platform, app_version
+	GROUP BY synthetic_run_id, hour, platform, app_version
 	{% if defined(copy_run_id) %}
 	UNION ALL
 	SELECT
 		toStartOfHour(now()),
 		now64(3),
 		{{String(copy_run_id)}},
+		'',
 		'',
 		'',
 		toUInt64(0),

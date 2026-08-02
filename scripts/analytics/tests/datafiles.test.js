@@ -704,12 +704,44 @@ test("health queries use stable hourly aggregates and a bounded window", () => {
 	assert.match(contents, /FROM product_events_health_hourly_exact/);
 	assert.match(contents, /uniqExactMerge\(unique_events\)/);
 	assert.match(contents, /uniqExactMerge\(unique_payloads\)/);
+	assert.match(
+		contents,
+		/synthetic_run_id = \{\{String\(synthetic_run_id\)\}\}/,
+	);
 	assert.match(contents, /payload_conflicts/);
 	assert.match(contents, /ingestion_lag_ms/);
 	assert.match(contents, /INTERVAL 31 DAY/);
 	assert.match(contents, /throwIf\(/);
 	assert.doesNotMatch(contents, /FROM product_events_v1/);
 	assert.doesNotMatch(contents, /SELECT\s+\*/i);
+});
+
+test("health copy preserves synthetic run scope across app versions", () => {
+	const datasource = fs.readFileSync(
+		path.join(
+			TINYBIRD_PROJECT_DIR,
+			"datasources",
+			"product_events_health_hourly_exact.datasource",
+		),
+		"utf8",
+	);
+	const snapshot = fs.readFileSync(
+		path.join(
+			TINYBIRD_PROJECT_DIR,
+			"pipes",
+			"snapshot_product_events_health_hourly.pipe",
+		),
+		"utf8",
+	);
+	assert.match(datasource, /synthetic_run_id String/);
+	assert.match(
+		datasource,
+		/ENGINE_SORTING_KEY \(copy_run_id, synthetic_run_id, hour, platform, app_version\)/,
+	);
+	assert.match(
+		snapshot,
+		/GROUP BY synthetic_run_id, hour, platform, app_version/,
+	);
 });
 
 test("staging assertions prove canonical decisions without returning raw IDs", () => {

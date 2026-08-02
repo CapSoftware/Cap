@@ -7,6 +7,7 @@ SCHEMA >
 	hour DateTime,
 	calculated_at DateTime64(3),
 	copy_run_id String,
+	synthetic_run_id String,
 	platform LowCardinality(String),
 	app_version LowCardinality(String),
 	received_rows SimpleAggregateFunction(sum, UInt64),
@@ -19,6 +20,6 @@ SCHEMA >
 
 ENGINE AggregatingMergeTree
 ENGINE_PARTITION_KEY toYYYYMM(hour)
-ENGINE_SORTING_KEY (copy_run_id, hour, platform, app_version)
+ENGINE_SORTING_KEY (copy_run_id, synthetic_run_id, hour, platform, app_version)
 ENGINE_TTL hour + INTERVAL 90 DAY
 ENGINE_SETTINGS index_granularity = 256

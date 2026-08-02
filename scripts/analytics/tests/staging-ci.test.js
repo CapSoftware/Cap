@@ -3074,6 +3074,10 @@ test("preview health assertions preserve stabilized event cardinality", () => {
 		new URL("../staging-ci.js", import.meta.url),
 		"utf8",
 	);
+	const healthQuery = source.slice(
+		source.indexOf("const healthQuery = async"),
+		source.indexOf("const ciAssertionsQuery = async"),
+	);
 	const phaseHealth = source.slice(
 		source.indexOf("const readAndAssertPhaseHealth = async"),
 		source.indexOf("const runCopies = async"),
@@ -3098,6 +3102,13 @@ test("preview health assertions preserve stabilized event cardinality", () => {
 		promoted,
 		/previewHealth\.uniqueEvents !== state\.previewExpectedEvents[\s\S]*previewHealth\.uniquePayloads !== state\.previewExpectedEvents[\s\S]*previewHealth\.receivedRows - state\.previewExpectedEvents/,
 	);
+	assert.match(
+		healthQuery,
+		/app_version: syntheticRunId[\s\S]*undefined[\s\S]*synthetic_run_id: syntheticRunId/,
+	);
+	for (const scope of [phaseHealth, erasure, promoted]) {
+		assert.match(scope, /syntheticRunId: state\.previewRunId/);
+	}
 	assert.doesNotMatch(promoted, /previewHealth\.uniqueEvents !== 1/);
 });
 
