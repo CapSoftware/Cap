@@ -1566,6 +1566,8 @@ const cleanupPreviewDatabaseState = async ({
 	runIds,
 	secret,
 }) => {
+	const scopedAnonymousIdentityHashes = [...new Set(anonymousIdentityHashes)];
+	const scopedRunIds = [...new Set(runIds)];
 	const url = new URL(
 		"/api/analytics/staging-test/cleanup-database",
 		artifactPreviewUrl(artifact),
@@ -1577,9 +1579,9 @@ const cleanupPreviewDatabaseState = async ({
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify({
-			anonymousIdentityHashes,
-			runId: runIds[0],
-			scopeRunIds: runIds,
+			anonymousIdentityHashes: scopedAnonymousIdentityHashes,
+			runId: scopedRunIds[0],
+			scopeRunIds: scopedRunIds,
 			sha: artifact.sha,
 		}),
 		signal: AbortSignal.timeout(60_000),
@@ -1593,8 +1595,8 @@ const cleanupPreviewDatabaseState = async ({
 	if (
 		result.cleaned !== true ||
 		Number(result.remaining) !== 0 ||
-		Number(result.runIds) !== runIds.length ||
-		Number(result.identityHashes) < anonymousIdentityHashes.length
+		Number(result.runIds) !== scopedRunIds.length ||
+		Number(result.identityHashes) < scopedAnonymousIdentityHashes.length
 	) {
 		throw new Error("The scoped staging database cleanup was incomplete");
 	}

@@ -2686,6 +2686,10 @@ test("the preview mutation route independently enforces Tinybird staging", () =>
 	assert.match(runner, /"x-cap-analytics-staging-signature"/);
 	assert.match(
 		runner,
+		/const scopedAnonymousIdentityHashes = \[[\s\S]*new Set\(anonymousIdentityHashes\)/,
+	);
+	assert.match(
+		runner,
 		/pathname !== "\/api\/analytics\/staging-test" &&[\s\S]*!pathname\.startsWith\("\/api\/analytics\/staging-test\/"\)/,
 	);
 	assert.match(runner, /accepted an invalid request signature with HTTP/);
