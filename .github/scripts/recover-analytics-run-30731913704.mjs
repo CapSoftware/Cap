@@ -86,6 +86,7 @@ const previewCookies = (headers) => {
 const cleanupPreviewDatabase = async ({
 	anonymousIdentityHashes,
 	artifact,
+	recoverySha,
 	state,
 }) => {
 	const shareSecret = requiredEnvironment("VERCEL_PREVIEW_SHARE_SECRET");
@@ -114,30 +115,51 @@ const cleanupPreviewDatabase = async ({
 	if (!cookie) {
 		throw new Error("The staging alias did not issue a Vercel share cookie");
 	}
+	const request = async ({ path, payload }) => {
+		const body = JSON.stringify(payload);
+		const signature = createHmac("sha256", stagingSecret)
+			.update(`${payload.runId}:${payload.sha}`)
+			.digest("hex");
+		return fetch(new URL(path, artifact.vercel.accessUrl), {
+			body,
+			headers: {
+				Authorization: `Bearer ${stagingSecret}`,
+				"Content-Type": "application/json",
+				Cookie: cookie,
+				"x-cap-analytics-staging-signature": signature,
+			},
+			method: "POST",
+			signal: AbortSignal.timeout(60_000),
+		});
+	};
+	const recoveryRunId = assertRunId(`${state.runId}_recovery`);
+	const attest = async () => {
+		const response = await request({
+			path: "/api/analytics/staging-test/attest",
+			payload: { runId: recoveryRunId, sha: recoverySha },
+		});
+		if (!response.ok) {
+			throw new Error(
+				`The recovery alias attestation failed with HTTP ${response.status}`,
+			);
+		}
+		const result = await response.json();
+		if (result.sha !== recoverySha) {
+			throw new Error(
+				"The recovery alias is not bound to the exact recovery SHA",
+			);
+		}
+	};
+	await attest();
 	const serverRunId = assertRunId(`${state.runId}_server`);
-	const body = JSON.stringify({
-		anonymousIdentityHashes,
-		runId: state.runId,
-		scopeRunIds: [state.runId, serverRunId],
-		sha: artifact.sha,
-	});
-	const signature = createHmac("sha256", stagingSecret)
-		.update(`${state.runId}:${artifact.sha}`)
-		.digest("hex");
-	const cleanupUrl = new URL(
-		"/api/analytics/staging-test/cleanup-database",
-		artifact.vercel.url,
-	);
-	const response = await fetch(cleanupUrl, {
-		body,
-		headers: {
-			Authorization: `Bearer ${stagingSecret}`,
-			"Content-Type": "application/json",
-			Cookie: cookie,
-			"x-cap-analytics-staging-signature": signature,
+	const response = await request({
+		path: "/api/analytics/staging-test/cleanup-database",
+		payload: {
+			anonymousIdentityHashes,
+			runId: state.runId,
+			scopeRunIds: [state.runId, serverRunId],
+			sha: recoverySha,
 		},
-		method: "POST",
-		signal: AbortSignal.timeout(60_000),
 	});
 	if (!response.ok) {
 		throw new Error(
@@ -153,6 +175,7 @@ const cleanupPreviewDatabase = async ({
 	) {
 		throw new Error("The exact-SHA database cleanup was incomplete");
 	}
+	await attest();
 	return {
 		cleaned: true,
 		identityHashes: Number(result.identityHashes),
@@ -163,6 +186,10 @@ const cleanupPreviewDatabase = async ({
 
 const statePath = option("state");
 const artifactPath = option("artifact");
+const recoverySha = requiredEnvironment("RECOVERY_SHA");
+if (!/^[0-9a-f]{40}$/.test(recoverySha)) {
+	throw new Error("RECOVERY_SHA must be an exact Git commit SHA");
+}
 const state = readJson(statePath);
 const artifact = readJson(artifactPath);
 if (
@@ -229,6 +256,7 @@ const anonymousIdentityHashes = previewAnonymousIds.map((anonymousId) =>
 const databaseCleanup = await cleanupPreviewDatabase({
 	anonymousIdentityHashes,
 	artifact,
+	recoverySha,
 	state,
 });
 
@@ -277,6 +305,7 @@ artifact.cleanup = {
 		rawRowsBefore: Number(rawBefore[0]?.rows ?? 0),
 		rawUniqueEventsBefore: Number(rawBefore[0]?.unique_events ?? 0),
 		rawRowsRemaining: 0,
+		recoverySha,
 		sourceRunId: SOURCE_RUN_ID,
 		verifiedAt: new Date().toISOString(),
 	},

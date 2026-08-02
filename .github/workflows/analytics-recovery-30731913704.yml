@@ -11,6 +11,8 @@ on:
 permissions:
   actions: read
   contents: read
+  deployments: read
+  statuses: read
 
 concurrency:
   group: analytics-staging-37b8fef9-817f-4c3c-b21f-218c36a6077d
@@ -23,7 +25,8 @@ jobs:
     timeout-minutes: 40
     environment: staging
     env:
-      EXPECTED_SHA: 73c90e8bf64a7793f803bd4488f0bb626b89948e
+      EXPECTED_SHA: ${{ github.sha }}
+      SOURCE_SHA: 73c90e8bf64a7793f803bd4488f0bb626b89948e
       SOURCE_RUN_ID: "30731913704"
       TINYBIRD_WORKSPACE_ID: 37b8fef9-817f-4c3c-b21f-218c36a6077d
     steps:
@@ -40,7 +43,7 @@ jobs:
           [[ "$(jq -r '.conclusion' <<< "$source_run")" == "failure" ]]
           [[ "$(jq -r '.event' <<< "$source_run")" == "pull_request" ]]
           [[ "$(jq -r '.head_branch' <<< "$source_run")" == "codex/first-party-analytics" ]]
-          [[ "$(jq -r '.head_sha' <<< "$source_run")" == "$EXPECTED_SHA" ]]
+          [[ "$(jq -r '.head_sha' <<< "$source_run")" == "$SOURCE_SHA" ]]
           [[ "$(jq -r '.path' <<< "$source_run")" == ".github/workflows/analytics.yml" ]]
           [[ "$(jq -r '.run_attempt' <<< "$source_run")" == "1" ]]
       - name: Download the immutable post-seed checkpoint
@@ -58,6 +61,11 @@ jobs:
           [[ -f "$checkpoint_dir/analytics-staging-report.json" ]]
           echo "state=$checkpoint_dir/analytics-staging-state.json" >> "$GITHUB_OUTPUT"
           echo "artifact=$checkpoint_dir/analytics-staging-report.json" >> "$GITHUB_OUTPUT"
+      - name: Wait for the exact recovery SHA Vercel preview
+        id: vercel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/analytics/staging-ci.js wait-vercel
       - name: Pause reviewed Copy schedules
         id: pause
         env:
@@ -75,6 +83,7 @@ jobs:
         if: steps.pause.outcome == 'success'
         env:
           CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          RECOVERY_SHA: ${{ env.EXPECTED_SHA }}
           TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
           TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
           TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
