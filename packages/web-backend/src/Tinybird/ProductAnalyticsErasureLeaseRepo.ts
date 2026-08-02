@@ -58,10 +58,9 @@ export interface ProductAnalyticsErasureLeaseStore {
 		scope: ProductAnalyticsErasureScope,
 		requestId?: string,
 	) => Effect.Effect<ProductAnalyticsErasureLease | null, Error>;
-	claimRecovery: () => Effect.Effect<
-		ProductAnalyticsErasureLease | null,
-		Error
-	>;
+	claimRecovery: (
+		requestId?: string,
+	) => Effect.Effect<ProductAnalyticsErasureLease | null, Error>;
 	heartbeat: (
 		lease: ProductAnalyticsErasureLease,
 	) => Effect.Effect<boolean, Error>;
@@ -620,7 +619,7 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 				});
 
 			const claimRecovery: ProductAnalyticsErasureLeaseStore["claimRecovery"] =
-				() =>
+				(requestId) =>
 					Effect.gen(function* () {
 						const ownerId = randomUUID();
 						const result = yield* database.use((db) =>
@@ -636,6 +635,12 @@ export class ProductAnalyticsErasureLeaseRepo extends Effect.Service<ProductAnal
 								.where(
 									Dz.and(
 										Dz.eq(Db.productAnalyticsErasureLeases.name, LEASE_NAME),
+										requestId
+											? Dz.eq(
+													Db.productAnalyticsErasureLeases.requestId,
+													requestId,
+												)
+											: undefined,
 										Dz.ne(Db.productAnalyticsErasureLeases.phase, "idle"),
 										Dz.or(
 											Dz.isNull(Db.productAnalyticsErasureLeases.ownerId),

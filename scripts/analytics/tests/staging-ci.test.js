@@ -3334,3 +3334,35 @@ test("synthetic deletion targets the deployment used for ingestion", () => {
 		/analytics-staging-37b8fef9-817f-4c3c-b21f-218c36a6077d/,
 	);
 });
+
+test("staging erasure retries and recovers only its synthetic request", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const route = fs.readFileSync(
+		new URL(
+			"../../../apps/web/app/api/analytics/staging-test/[[...route]]/route.ts",
+			import.meta.url,
+		),
+		"utf8",
+	);
+	const eraseSource = source.slice(
+		source.indexOf("const eraseSyntheticIdentity"),
+		source.indexOf("const verifySyntheticIdentityErasure"),
+	);
+
+	assert.match(eraseSource, /attempt <= 3/);
+	assert.match(eraseSource, /response\.status !== 503/);
+	assert.match(eraseSource, /retryAttempts/);
+	assert.match(
+		route,
+		/recoverProductAnalyticsErasureRequest\(erasure\.requestId\)/,
+	);
+	assert.match(route, /\^synthetic_user_\[0-9a-f\]\{24\}\$/);
+	assert.match(route, /\^synthetic_org_\[0-9a-f\]\{24\}\$/);
+	assert.match(
+		route,
+		/update\(productAnalyticsErasureLeases\)[\s\S]*phase: "idle"/,
+	);
+});

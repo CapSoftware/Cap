@@ -4328,7 +4328,17 @@ const eraseSyntheticIdentity = async () => {
 		);
 	}
 	const startedAt = performance.now();
-	const response = await send(`Bearer ${secret}`);
+	let response;
+	let retryAttempts = 0;
+	for (let attempt = 1; attempt <= 3; attempt += 1) {
+		response = await send(`Bearer ${secret}`);
+		if (response.ok || response.status !== 503 || attempt === 3) break;
+		retryAttempts += 1;
+		await delay(attempt * 2_000);
+	}
+	if (!response) {
+		throw new Error("The deployed erasure path did not return a response");
+	}
 	if (!response.ok) {
 		throw new Error(
 			`The deployed erasure path failed with HTTP ${response.status}`,
@@ -4346,6 +4356,7 @@ const eraseSyntheticIdentity = async () => {
 		unauthorizedRejected: true,
 		durationMs: Math.round(performance.now() - startedAt),
 		deleteJobCompleted: true,
+		retryAttempts,
 	};
 	writeJson(artifactPath, artifact);
 };

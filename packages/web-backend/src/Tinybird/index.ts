@@ -880,6 +880,29 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			return { recovered: true as const, requestId: request.id };
 		});
 
+		const recoverProductAnalyticsErasureRequest = (requestId: string) =>
+			Effect.gen(function* () {
+				const recoveredLease = yield* erasureLeases.claimRecovery(requestId);
+				if (recoveredLease) {
+					yield* runProductAnalyticsErasure(recoveredLease);
+					yield* erasureLeases.completeErasureRequest(requestId);
+					return { recovered: true as const, requestId };
+				}
+				const request = yield* erasureLeases.claimErasureRequest(requestId);
+				if (!request) return { recovered: false as const, requestId };
+				const lease = yield* erasureLeases.claimNew(request.scope, requestId);
+				if (!lease) {
+					yield* erasureLeases.deferErasureRequest(
+						request,
+						"lease_unavailable",
+					);
+					return { recovered: false as const, requestId };
+				}
+				yield* runProductAnalyticsErasure(lease);
+				yield* erasureLeases.completeErasureRequest(requestId);
+				return { recovered: true as const, requestId };
+			});
+
 		const eraseProductAnalytics = ({
 			userId,
 			organizationId,
@@ -921,6 +944,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 			runProductAnalyticsCopyPipe,
 			eraseProductAnalytics,
 			recoverProductAnalyticsErasure,
+			recoverProductAnalyticsErasureRequest,
 		} as const;
 	}),
 	dependencies: [ProductAnalyticsErasureLeaseRepo.Default],

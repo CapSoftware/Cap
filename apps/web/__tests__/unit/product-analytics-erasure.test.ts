@@ -535,6 +535,31 @@ describe.sequential("product analytics erasure", () => {
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
+	it("recovers only the requested durable erasure", async () => {
+		const claimRecovery = vi.fn(() => Effect.succeed(null));
+		const claimErasureRequest = vi.fn(() => Effect.succeed(null));
+
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
+				return yield* tinybird.recoverProductAnalyticsErasureRequest(
+					"request-scoped",
+				);
+			}).pipe(
+				Effect.provide(
+					tinybirdTestLayer({ claimErasureRequest, claimRecovery }),
+				),
+			),
+		);
+
+		expect(result).toEqual({
+			recovered: false,
+			requestId: "request-scoped",
+		});
+		expect(claimRecovery).toHaveBeenCalledWith("request-scoped");
+		expect(claimErasureRequest).toHaveBeenCalledWith("request-scoped");
+	});
+
 	it("recovers a fenced scope and resumes persisted schedules before rebuilding", async () => {
 		const requests: URL[] = [];
 		const pausedPipes = new Set(["snapshot_product_events_canonical_v1"]);

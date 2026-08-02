@@ -5,6 +5,7 @@ import {
 } from "@cap/analytics";
 import { db } from "@cap/database";
 import {
+	productAnalyticsErasureLeases,
 	productAnalyticsErasureRequests,
 	productAnalyticsEventReceipts,
 	productAnalyticsIdentityLinks,
@@ -20,7 +21,7 @@ import {
 	HttpApiGroup,
 	HttpServerRequest,
 } from "@effect/platform";
-import { inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
 import type Stripe from "stripe";
 import { queueServerProductEvent } from "@/lib/analytics/server";
@@ -267,6 +268,7 @@ const cleanupSyntheticDatabaseState = async ({
 		({ organizationId }) => organizationId,
 	);
 	const userIds = identities.map(({ userId }) => userId);
+	await resetFailedSyntheticErasureLease();
 	await db().transaction(async (tx) => {
 		await tx
 			.delete(productAnalyticsIdentityLinks)
@@ -378,6 +380,54 @@ const cleanupSyntheticDatabaseState = async ({
 			remainingStates.length,
 		runIds: runIds.length,
 	};
+};
+
+const resetFailedSyntheticErasureLease = async () => {
+	await db().transaction(async (tx) => {
+		const [lease] = await tx
+			.select({
+				organizationId: productAnalyticsErasureLeases.organizationId,
+				userId: productAnalyticsErasureLeases.userId,
+			})
+			.from(productAnalyticsErasureLeases)
+			.where(
+				and(
+					eq(productAnalyticsErasureLeases.name, "global"),
+					eq(productAnalyticsErasureLeases.phase, "failed"),
+					isNull(productAnalyticsErasureLeases.ownerId),
+				),
+			)
+			.limit(1)
+			.for("update");
+		if (
+			!lease?.userId ||
+			!/^synthetic_user_[0-9a-f]{24}$/.test(lease.userId) ||
+			!lease.organizationId ||
+			!/^synthetic_org_[0-9a-f]{24}$/.test(lease.organizationId)
+		) {
+			return;
+		}
+		await tx
+			.update(productAnalyticsErasureLeases)
+			.set({
+				fencingToken: sql`${productAnalyticsErasureLeases.fencingToken} + 1`,
+				lastErrorCode: null,
+				leaseExpiresAt: null,
+				organizationId: null,
+				ownerId: null,
+				pausedPipes: [],
+				phase: "idle",
+				requestId: null,
+				userId: null,
+			})
+			.where(
+				and(
+					eq(productAnalyticsErasureLeases.name, "global"),
+					eq(productAnalyticsErasureLeases.phase, "failed"),
+					isNull(productAnalyticsErasureLeases.ownerId),
+				),
+			);
+	});
 };
 
 const tinybirdTokenNames = [
@@ -649,6 +699,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					.handle("run", ({ payload }) =>
 						Effect.gen(function* () {
 							const runId = yield* authorize(payload);
+							yield* Effect.tryPromise({
+								try: resetFailedSyntheticErasureLease,
+								catch: () => new HttpApiError.ServiceUnavailable(),
+							});
 							const { anonymousId, hash, organizationId, userId } =
 								syntheticStagingIdentities(runId);
 							const occurredAt = new Date().toISOString();
@@ -807,7 +861,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							const runId = yield* authorize(payload);
 							const { anonymousId, hash, organizationId, userId } =
 								syntheticStagingIdentities(runId);
-							yield* tinybird
+							const erasure = yield* tinybird
 								.eraseProductAnalytics({
 									userId,
 									organizationId,
@@ -815,6 +869,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								.pipe(
 									Effect.mapError(() => new HttpApiError.ServiceUnavailable()),
 								);
+							if (erasure.queued) {
+								const recovery = yield* tinybird
+									.recoverProductAnalyticsErasureRequest(erasure.requestId)
+									.pipe(
+										Effect.mapError(
+											() => new HttpApiError.ServiceUnavailable(),
+										),
+									);
+								if (!recovery.recovered) {
+									return yield* Effect.fail(
+										new HttpApiError.ServiceUnavailable(),
+									);
+								}
+							}
 							const replay = yield* Effect.tryPromise({
 								try: () =>
 									queueServerProductEvent({
