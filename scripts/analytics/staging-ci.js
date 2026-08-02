@@ -3013,16 +3013,23 @@ const assertZeroHealth = (health) => {
 	}
 };
 
-const assertSingleHealth = (health) => {
+const assertExpectedHealth = (health, expectedEvents, label) => {
+	if (!Number.isInteger(expectedEvents) || expectedEvents < 1) {
+		throw new Error(`${label} expected event count is invalid`);
+	}
 	if (
-		health.receivedRows < 1 ||
-		health.uniqueEvents !== 1 ||
-		health.uniquePayloads !== 1 ||
-		health.payloadConflicts !== 0
+		health.receivedRows < expectedEvents ||
+		health.uniqueEvents !== expectedEvents ||
+		health.uniquePayloads !== expectedEvents ||
+		health.payloadConflicts !== 0 ||
+		health.duplicateRows !== health.receivedRows - expectedEvents
 	) {
-		throw new Error("Synthetic single-event health is incomplete");
+		throw new Error(`${label} health is incomplete`);
 	}
 };
+
+const assertSingleHealth = (health) =>
+	assertExpectedHealth(health, 1, "Synthetic single-event");
 
 const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 	const [main, load, largeLoad, control, preview] = await Promise.all([
@@ -3085,7 +3092,13 @@ const readAndAssertPhaseHealth = async ({ state, phase, deploymentId }) => {
 		if (health.preview) assertZeroHealth(health.preview);
 	} else {
 		assertSingleHealth(health.control);
-		if (health.preview) assertSingleHealth(health.preview);
+		if (health.preview) {
+			assertExpectedHealth(
+				health.preview,
+				Number(state.previewExpectedEvents),
+				"Synthetic preview",
+			);
+		}
 	}
 	return health;
 };
@@ -4479,7 +4492,11 @@ const verifySyntheticIdentityErasure = async () => {
 			);
 		}
 	}
-	assertSingleHealth(previewHealth);
+	assertExpectedHealth(
+		previewHealth,
+		Number(state.previewExpectedEvents),
+		"Synthetic preview erasure control",
+	);
 	if (
 		previewDecisions.canonicalEvents !== state.previewExpectedEvents ||
 		previewDecisions.decisionEvents !== state.previewExpectedEvents
@@ -4816,10 +4833,11 @@ const verifyPromoted = async () => {
 	const previewHealth = normalizeHealth(previewHealthResult.data);
 	if (
 		previewHealth.receivedRows < state.previewAcceptedRows ||
-		previewHealth.uniqueEvents !== 1 ||
-		previewHealth.uniquePayloads !== 1 ||
+		previewHealth.uniqueEvents !== state.previewExpectedEvents ||
+		previewHealth.uniquePayloads !== state.previewExpectedEvents ||
 		previewHealth.payloadConflicts !== 0 ||
-		previewHealth.duplicateRows !== previewHealth.receivedRows - 1
+		previewHealth.duplicateRows !==
+			previewHealth.receivedRows - state.previewExpectedEvents
 	) {
 		throw new Error(
 			"The promoted health snapshot did not preserve preview retry deliveries",

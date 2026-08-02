@@ -3069,6 +3069,38 @@ test("candidate cleanup refuses a live transition before any deletion", () => {
 	);
 });
 
+test("preview health assertions preserve stabilized event cardinality", () => {
+	const source = fs.readFileSync(
+		new URL("../staging-ci.js", import.meta.url),
+		"utf8",
+	);
+	const phaseHealth = source.slice(
+		source.indexOf("const readAndAssertPhaseHealth = async"),
+		source.indexOf("const runCopies = async"),
+	);
+	const erasure = source.slice(
+		source.indexOf("const verifySyntheticIdentityErasure = async"),
+		source.indexOf("const cleanup = async"),
+	);
+	const promoted = source.slice(
+		source.indexOf("const verifyPromoted = async"),
+		source.indexOf("const verifyCleanup = async"),
+	);
+	assert.match(
+		phaseHealth,
+		/assertExpectedHealth\([\s\S]*health\.preview,[\s\S]*Number\(state\.previewExpectedEvents\)/,
+	);
+	assert.match(
+		erasure,
+		/assertExpectedHealth\([\s\S]*previewHealth,[\s\S]*Number\(state\.previewExpectedEvents\)/,
+	);
+	assert.match(
+		promoted,
+		/previewHealth\.uniqueEvents !== state\.previewExpectedEvents[\s\S]*previewHealth\.uniquePayloads !== state\.previewExpectedEvents[\s\S]*previewHealth\.receivedRows - state\.previewExpectedEvents/,
+	);
+	assert.doesNotMatch(promoted, /previewHealth\.uniqueEvents !== 1/);
+});
+
 test("event state reaches terminal success before canonical rebuilding", () => {
 	const source = fs.readFileSync(
 		new URL("../staging-ci.js", import.meta.url),
