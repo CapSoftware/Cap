@@ -1,0 +1,146 @@
+name: Analytics staging recovery 30731913704
+
+on:
+  push:
+    branches:
+      - codex/first-party-analytics
+    paths:
+      - ".github/scripts/recover-analytics-run-30731913704.mjs"
+      - ".github/workflows/analytics-recovery-30731913704.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: analytics-staging-37b8fef9-817f-4c3c-b21f-218c36a6077d
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.repository == 'CapSoftware/Cap' && github.ref == 'refs/heads/codex/first-party-analytics'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    env:
+      EXPECTED_SHA: 73c90e8bf64a7793f803bd4488f0bb626b89948e
+      SOURCE_RUN_ID: "30731913704"
+      TINYBIRD_WORKSPACE_ID: 37b8fef9-817f-4c3c-b21f-218c36a6077d
+    steps:
+      - name: Check out the recovery implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Validate the immutable failed source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          [[ "$(jq -r '.conclusion' <<< "$source_run")" == "failure" ]]
+          [[ "$(jq -r '.event' <<< "$source_run")" == "pull_request" ]]
+          [[ "$(jq -r '.head_branch' <<< "$source_run")" == "codex/first-party-analytics" ]]
+          [[ "$(jq -r '.head_sha' <<< "$source_run")" == "$EXPECTED_SHA" ]]
+          [[ "$(jq -r '.path' <<< "$source_run")" == ".github/workflows/analytics.yml" ]]
+          [[ "$(jq -r '.run_attempt' <<< "$source_run")" == "1" ]]
+      - name: Download the immutable post-seed checkpoint
+        id: checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          checkpoint_dir="$RUNNER_TEMP/analytics-recovery-30731913704"
+          mkdir -p "$checkpoint_dir"
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name analytics-recovery-30731913704-1-35-postseed \
+            --dir "$checkpoint_dir"
+          [[ -f "$checkpoint_dir/analytics-staging-state.json" ]]
+          [[ -f "$checkpoint_dir/analytics-staging-report.json" ]]
+          echo "state=$checkpoint_dir/analytics-staging-state.json" >> "$GITHUB_OUTPUT"
+          echo "artifact=$checkpoint_dir/analytics-staging-report.json" >> "$GITHUB_OUTPUT"
+      - name: Pause reviewed Copy schedules
+        id: pause
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js set-copy-schedules
+          --action pause
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Delete only the failed run database and raw state
+        id: cleanup
+        if: steps.pause.outcome == 'success'
+        env:
+          CAP_ANALYTICS_STAGING_TEST_SECRET: ${{ secrets.CAP_ANALYTICS_STAGING_TEST_SECRET }}
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_CLEANUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_CLEANUP_TOKEN }}
+          TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN: ${{ secrets.TINYBIRD_STAGING_ERASURE_LOOKUP_TOKEN }}
+          VERCEL_PREVIEW_SHARE_SECRET: ${{ secrets.VERCEL_PREVIEW_SHARE_SECRET }}
+        run: >-
+          node .github/scripts/recover-analytics-run-30731913704.mjs
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Rebuild all derived copies without the failed run
+        id: copies
+        if: steps.cleanup.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js run-copies
+          --deployment-id 27
+          --phase cleanup
+          --target live
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Prove the failed run no longer affects raw or derived queries
+        id: verify
+        if: steps.copies.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js verify-cleanup
+          --deployment-id 27
+          --target live
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Resume reviewed Copy schedules
+        id: resume
+        if: always() && steps.pause.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_COPY_TOKEN: ${{ secrets.TINYBIRD_STAGING_COPY_TOKEN }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_SCHEDULER_TOKEN: ${{ secrets.TINYBIRD_STAGING_SCHEDULER_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js set-copy-schedules
+          --action resume
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Roll back and discard only deployment 27
+        id: rollback
+        if: always() && steps.verify.outcome == 'success' && steps.resume.outcome == 'success'
+        env:
+          TINYBIRD_STAGING_URL: ${{ secrets.TINYBIRD_STAGING_URL }}
+          TINYBIRD_STAGING_DEPLOY_TOKEN: ${{ secrets.TINYBIRD_STAGING_DEPLOY_TOKEN }}
+          TINYBIRD_STAGING_READ_TOKEN: ${{ secrets.TINYBIRD_STAGING_READ_TOKEN }}
+        run: >-
+          node scripts/analytics/staging-ci.js rollback-promotion
+          --deployment-id 27
+          --previous-live-id 18
+          --state "${{ steps.checkpoint.outputs.state }}"
+          --artifact "${{ steps.checkpoint.outputs.artifact }}"
+      - name: Upload redacted containment evidence
+        if: always() && steps.checkpoint.outputs.artifact != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: analytics-containment-30731913704-${{ github.run_attempt }}
+          path: ${{ steps.checkpoint.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
