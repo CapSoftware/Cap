@@ -97,6 +97,29 @@ describe("ProductAnalyticsQueue", () => {
 		await first;
 	});
 
+	it("keeps an in-flight page view unload-safe during a fast exit", async () => {
+		let resolveTransport: ((value: "success") => void) | undefined;
+		const transport = vi.fn<ProductAnalyticsTransport>(
+			() =>
+				new Promise((resolve) => {
+					resolveTransport = resolve;
+				}),
+		);
+		const queue = new ProductAnalyticsQueue(transport);
+		queue.enqueue(makeEvent(1));
+		const pageViewFlush = queue.flush("keepalive");
+		const exitFlush = queue.flush("unload");
+
+		expect(exitFlush).toBe(pageViewFlush);
+		expect(transport).toHaveBeenCalledWith(
+			[expect.objectContaining({ eventId: "event-1" })],
+			"keepalive",
+			expect.any(Object),
+		);
+		resolveTransport?.("success");
+		await pageViewFlush;
+	});
+
 	it("retries a failed batch once", async () => {
 		const transport = vi
 			.fn<ProductAnalyticsTransport>()
@@ -433,6 +456,21 @@ describe("browser product analytics transport", () => {
 				sendBeacon: () => false,
 			}),
 		).resolves.toBe("success");
+		expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ keepalive: true });
+	});
+
+	it("keeps an immediate page-view request alive without using a beacon", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(new Response(null, { status: 202 }));
+		const sendBeacon = vi.fn(() => true);
+		await expect(
+			sendBrowserProductAnalytics([makeEvent(1)], "keepalive", {
+				fetchImpl,
+				sendBeacon,
+			}),
+		).resolves.toBe("success");
+		expect(sendBeacon).not.toHaveBeenCalled();
 		expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ keepalive: true });
 	});
 

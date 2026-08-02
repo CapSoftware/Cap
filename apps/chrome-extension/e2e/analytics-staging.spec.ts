@@ -90,12 +90,14 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	const acceptedEventIds = new Set<string>();
 	const benchmarkEventIds = new Set<string>();
 	let acceptedRequests = 0;
+	let collectorRequests = 0;
 	let failedRequests = 0;
 	let benchmarking = false;
 	context.on("request", (request) => {
 		if (!request.url().endsWith("/api/events") || request.method() !== "POST") {
 			return;
 		}
+		collectorRequests += 1;
 		const events = requestEvents(request);
 		if (
 			benchmarking ||
@@ -138,11 +140,60 @@ test("exact-SHA browser tracker preserves sessions, retries, unloads, and matche
 	await page.goto("/?utm_source=staging-browser&utm_medium=e2e", {
 		waitUntil: "networkidle",
 	});
-	await expect
-		.poll(
-			() => captured.filter((event) => event.eventName === "page_view").length,
-		)
-		.toBeGreaterThanOrEqual(1);
+	try {
+		await expect
+			.poll(
+				() =>
+					captured.filter((event) => event.eventName === "page_view").length,
+			)
+			.toBeGreaterThanOrEqual(1);
+	} catch {
+		const pageState = await page.evaluate(() => {
+			let queueState:
+				| {
+						hasState: true;
+						queueLength: number;
+						inFlightLength: number;
+						delivery: Record<string, number>;
+				  }
+				| { hasState: false } = { hasState: false };
+			try {
+				const serialized = window.localStorage.getItem(
+					"cap_analytics_queue_v1",
+				);
+				const parsed = serialized
+					? (JSON.parse(serialized) as {
+							queue?: unknown[];
+							inFlight?: unknown[];
+							delivery?: Record<string, unknown>;
+						})
+					: undefined;
+				if (parsed) {
+					queueState = {
+						hasState: true,
+						queueLength: parsed.queue?.length ?? 0,
+						inFlightLength: parsed.inFlight?.length ?? 0,
+						delivery: Object.fromEntries(
+							Object.entries(parsed.delivery ?? {}).filter(
+								(entry): entry is [string, number] =>
+									typeof entry[1] === "number",
+							),
+						),
+					};
+				}
+			} catch {}
+			return {
+				pathname: window.location.pathname,
+				readyState: document.readyState,
+				visibilityState: document.visibilityState,
+				hasMain: document.querySelector("main") !== null,
+				queueState,
+			};
+		});
+		throw new Error(
+			`Browser page_view was not captured: ${JSON.stringify({ collectorRequests, pageState })}`,
+		);
+	}
 	const firstPageView = captured.find(
 		(event) => event.eventName === "page_view",
 	);

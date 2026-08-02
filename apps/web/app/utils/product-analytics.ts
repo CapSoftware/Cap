@@ -29,7 +29,7 @@ type TransportResult =
 			acceptedEventIds: string[];
 			rejectedEventIds: string[];
 	  };
-type TransportMode = "normal" | "unload";
+type TransportMode = "keepalive" | "normal" | "unload";
 type QueuedEvent = { event: ProductEventInput; attempts: number };
 type QueueStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
 
@@ -467,13 +467,13 @@ export function captureProductPageView(
 		],
 		context,
 	);
-	return eventId
-		? {
-				eventId,
-				sessionId: context.sessionId,
-				sessionStartedAt: context.sessionStartedAt,
-			}
-		: undefined;
+	if (!eventId) return undefined;
+	void flushBrowserProductAnalytics("keepalive");
+	return {
+		eventId,
+		sessionId: context.sessionId,
+		sessionStartedAt: context.sessionStartedAt,
+	};
 }
 
 export function touchProductAnalyticsSession() {
@@ -653,7 +653,7 @@ export const sendBrowserProductAnalytics = async (
 			headers: { "Content-Type": "application/json" },
 			body,
 			credentials: "include",
-			keepalive: mode === "unload",
+			keepalive: mode !== "normal",
 			signal: controller.signal,
 		}).finally(() => clearTimeout(timeout));
 		if (response.ok) {
