@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { db } from "@cap/database";
 import {
 	organizations,
@@ -12,10 +15,11 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
-	type Video,
+	Video,
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
 import { and, eq, sql } from "drizzle-orm";
+import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 import {
@@ -39,6 +43,10 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
+import {
+	downloadConcatenatedSegments,
+	planSegmentsAudioExtraction,
+} from "@/lib/segments-audio";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -46,6 +54,12 @@ interface TranscribeWorkflowPayload {
 	videoId: string;
 	userId: string;
 	aiGenerationEnabled: boolean;
+	/**
+	 * The recording's segments are fully uploaded but the mux into result.mp4
+	 * has not finished; transcribe directly from the segment audio and defer
+	 * back to the normal post-mux queue if that isn't possible.
+	 */
+	earlyFromSegments?: boolean;
 }
 
 interface VideoData {
@@ -88,7 +102,44 @@ export async function transcribeVideoWorkflow(
 	}
 
 	try {
-		const audioUrl = await extractAudio(videoId, userId, videoData.video);
+		let audioUrl: string | null;
+		let videoDurationMs = Math.max(0, (videoData.video.duration ?? 0) * 1000);
+
+		if (payload.earlyFromSegments) {
+			const segments = await extractAudioFromSegmentsStep(
+				videoId,
+				userId,
+				videoData.video,
+			);
+
+			if (segments.status === "no-audio") {
+				await markNoAudio(videoId);
+				return {
+					success: true,
+					message: "Video has no audio track - skipped transcription",
+				};
+			}
+
+			if (segments.status !== "ok" || !segments.audioUrl) {
+				// Give the claim back so the normal post-mux queue re-triggers; the
+				// worst case of the early path must be today's timing, not an ERROR.
+				await deferEarlyTranscription(videoId);
+				await cleanupTempAudio(videoId, userId, videoData.video);
+				return {
+					success: true,
+					message: `Early transcription deferred: ${
+						segments.status === "unavailable" ? segments.reason : "no audio URL"
+					}`,
+				};
+			}
+
+			audioUrl = segments.audioUrl;
+			if (videoDurationMs <= 0 && (segments.durationMs ?? 0) > 0) {
+				videoDurationMs = segments.durationMs ?? 0;
+			}
+		} else {
+			audioUrl = await extractAudio(videoId, userId, videoData.video);
+		}
 
 		if (!audioUrl) {
 			await markNoAudio(videoId);
@@ -101,7 +152,7 @@ export async function transcribeVideoWorkflow(
 		const transcription = await transcribeWithAssemblyAI(
 			audioUrl,
 			videoData.aiGenerationLanguage,
-			Math.max(0, (videoData.video.duration ?? 0) * 1000),
+			videoDurationMs,
 		);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
@@ -320,6 +371,20 @@ async function markError(videoId: string): Promise<void> {
 		);
 }
 
+async function deferEarlyTranscription(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({ transcriptionStatus: null })
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				eq(videos.transcriptionStatus, "PROCESSING"),
+			),
+		);
+}
+
 async function extractAudio(
 	videoId: string,
 	userId: string,
@@ -333,12 +398,37 @@ async function extractAudio(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
 
-	const videoUrl = await resolveVideoSourceUrl(
-		videoId,
-		userId,
-		video,
-		sourceKeyOverride,
-	);
+	let videoUrl: string;
+	try {
+		videoUrl = await resolveVideoSourceUrl(
+			videoId,
+			userId,
+			video,
+			sourceKeyOverride,
+		);
+	} catch (error) {
+		// Instant-mode recordings can be transcribed straight from their uploaded
+		// audio segments when no muxed source exists (self-hosted deployments
+		// without a media server never produce a result.mp4 at all).
+		if (
+			!sourceKeyOverride &&
+			(video.source.type === "desktopSegments" ||
+				video.source.type === "desktopMP4")
+		) {
+			const segments = await extractAudioFromSegmentsImpl(
+				videoId,
+				userId,
+				video,
+				tempAudioFilename,
+			);
+			if (segments.status === "ok") return segments.audioUrl;
+			if (segments.status === "no-audio") return null;
+			console.warn(
+				`[transcribe] Segments audio fallback unavailable for ${videoId}: ${segments.reason}`,
+			);
+		}
+		throw error;
+	}
 
 	const useMediaServer = isMediaServerConfigured();
 	console.log(
@@ -452,6 +542,126 @@ async function resolveVideoSourceUrl(
 	}
 
 	throw new Error("Video file not accessible");
+}
+
+type SegmentsAudioExtraction =
+	| { status: "ok"; audioUrl: string; durationMs: number }
+	| { status: "no-audio" }
+	| { status: "unavailable"; reason: string };
+
+async function extractAudioFromSegmentsStep(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+): Promise<SegmentsAudioExtraction> {
+	"use step";
+
+	return extractAudioFromSegmentsImpl(videoId, userId, video);
+}
+
+/**
+ * Build the transcription audio input straight from the recording's uploaded
+ * fMP4 audio segments (init.mp4 + segment_*.m4s byte-concatenate into a valid
+ * fragmented MP4). Never throws: any failure reports "unavailable" so callers
+ * can fall back to the muxed result.mp4 path instead of erroring the video.
+ */
+async function extractAudioFromSegmentsImpl(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+	tempAudioFilename = "audio-temp.mp3",
+): Promise<SegmentsAudioExtraction> {
+	try {
+		const [bucket] = await Storage.getAccessForVideo(
+			decodeStorageVideo(video),
+		).pipe(runWorkflowPromise);
+
+		const segSource = new Video.SegmentsSource({
+			videoId,
+			ownerId: video.ownerId,
+		});
+
+		const manifestContent = await bucket
+			.getObject(segSource.getManifestKey())
+			.pipe(runWorkflowPromise);
+		const manifestJson = Option.getOrNull(manifestContent);
+		if (!manifestJson) {
+			return { status: "unavailable", reason: "segment manifest not found" };
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(manifestJson);
+		} catch {
+			return { status: "unavailable", reason: "invalid segment manifest JSON" };
+		}
+
+		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(parsed);
+		if (Either.isLeft(decoded)) {
+			return {
+				status: "unavailable",
+				reason: "invalid segment manifest format",
+			};
+		}
+		const manifest = decoded.right;
+
+		const plan = planSegmentsAudioExtraction(manifest);
+		if (plan.status !== "ok") return plan;
+
+		const segmentUrls = await Promise.all([
+			bucket
+				.getInternalSignedObjectUrl(segSource.getAudioInitKey())
+				.pipe(runWorkflowPromise),
+			...plan.entries.map((entry) =>
+				bucket
+					.getInternalSignedObjectUrl(segSource.getAudioSegmentKey(entry.index))
+					.pipe(runWorkflowPromise),
+			),
+		]);
+
+		const concatPath = join(tmpdir(), `segments-audio-${randomUUID()}.mp4`);
+		try {
+			const totalBytes = await downloadConcatenatedSegments(
+				segmentUrls,
+				concatPath,
+			);
+			console.log(
+				`[transcribe] Assembled ${plan.entries.length} audio segments (${totalBytes} bytes) for ${videoId}`,
+			);
+
+			const result = await extractAudioFromUrl(concatPath);
+			let audioBuffer: Buffer;
+			try {
+				audioBuffer = await fs.readFile(result.filePath);
+			} finally {
+				await result.cleanup();
+			}
+
+			const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
+			await bucket
+				.putObject(audioKey, audioBuffer, {
+					contentType: "audio/mpeg",
+				})
+				.pipe(runWorkflowPromise);
+
+			const audioSignedUrl = await bucket
+				.getInternalSignedObjectUrl(audioKey)
+				.pipe(runWorkflowPromise);
+
+			return {
+				status: "ok",
+				audioUrl: audioSignedUrl,
+				durationMs: plan.totalDurationMs,
+			};
+		} finally {
+			await fs.unlink(concatPath).catch(() => {});
+		}
+	} catch (error) {
+		return {
+			status: "unavailable",
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 async function transcribeWithAssemblyAI(

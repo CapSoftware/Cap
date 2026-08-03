@@ -11,6 +11,17 @@ type TranscribeResult = {
 	message: string;
 };
 
+export type TranscribeVideoOptions = {
+	/**
+	 * The recording's segments are fully uploaded but post-processing (the mux
+	 * into result.mp4) has not finished. Skips the active-upload guard — the
+	 * upload row is in "processing" during the mux — and makes the workflow
+	 * transcribe straight from the segment audio, deferring back to the normal
+	 * post-mux queue if that isn't possible.
+	 */
+	earlyFromSegments?: boolean;
+};
+
 const TRANSCRIPTION_ALREADY_HANDLED_MESSAGE =
 	"Transcription already completed, in progress, or awaiting manual retry";
 
@@ -28,6 +39,7 @@ export async function transcribeVideo(
 	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
+	options: TranscribeVideoOptions = {},
 ): Promise<TranscribeResult> {
 	if (!serverEnv().ASSEMBLY_API_KEY) {
 		return {
@@ -106,21 +118,23 @@ export async function transcribeVideo(
 		};
 	}
 
-	const upload = await db()
-		.select({ phase: videoUploads.phase })
-		.from(videoUploads)
-		.where(eq(videoUploads.videoId, videoId))
-		.limit(1);
+	if (!options.earlyFromSegments) {
+		const upload = await db()
+			.select({ phase: videoUploads.phase })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId))
+			.limit(1);
 
-	if (
-		upload[0]?.phase === "uploading" ||
-		upload[0]?.phase === "processing" ||
-		upload[0]?.phase === "generating_thumbnail"
-	) {
-		return {
-			success: true,
-			message: "Video upload is still in progress",
-		};
+		if (
+			upload[0]?.phase === "uploading" ||
+			upload[0]?.phase === "processing" ||
+			upload[0]?.phase === "generating_thumbnail"
+		) {
+			return {
+				success: true,
+				message: "Video upload is still in progress",
+			};
+		}
 	}
 
 	try {
@@ -145,6 +159,7 @@ export async function transcribeVideo(
 				videoId,
 				userId,
 				aiGenerationEnabled,
+				...(options.earlyFromSegments ? { earlyFromSegments: true } : {}),
 			},
 		]);
 
