@@ -183,6 +183,35 @@ app.get(
 				ownedOrganizations,
 				memberOrganizations,
 			);
+
+			// Accounts can end up org-less (e.g. after declining a team invite or
+			// being removed from their last org); provision a personal org like
+			// signup does instead of failing every upload.
+			if (userOrganizations.length === 0) {
+				const organizationId = Organisation.OrganisationId.make(nanoId());
+				await db().transaction(async (tx) => {
+					await tx.insert(organizations).values({
+						id: organizationId,
+						ownerId: user.id,
+						name: "My Organization",
+					});
+					await tx.insert(organizationMembers).values({
+						id: nanoId(),
+						organizationId,
+						userId: user.id,
+						role: "owner",
+					});
+					await tx
+						.update(users)
+						.set({
+							activeOrganizationId: organizationId,
+							defaultOrgId: organizationId,
+						})
+						.where(eq(users.id, user.id));
+				});
+				userOrganizations.push({ id: organizationId, name: "My Organization" });
+			}
+
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
 			let videoOrgId: Organisation.OrganisationId;
