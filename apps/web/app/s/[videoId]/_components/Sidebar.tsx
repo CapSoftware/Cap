@@ -45,6 +45,9 @@ interface SidebarProps {
 	} | null;
 	aiGenerationEnabled?: boolean;
 	isScreenshot?: boolean;
+	/** The owner just stopped this recording and landed here from the desktop
+	 * app — surface the transcript, which is the thing appearing live. */
+	recordingStopped?: boolean;
 }
 
 const TabContent = motion.div;
@@ -86,6 +89,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			aiData,
 			aiGenerationEnabled = false,
 			isScreenshot = false,
+			recordingStopped = false,
 		},
 		ref,
 	) => {
@@ -96,18 +100,22 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			isOwner || (user && data.organizationMembers?.includes(user.id)),
 		);
 
+		const transcriptDisabled =
+			videoSettings?.disableTranscript ?? data.orgSettings?.disableTranscript;
+
 		const defaultTab =
-			isScreenshot ||
-			!(videoSettings?.disableComments ?? data.orgSettings?.disableComments)
-				? "activity"
-				: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
-					? "summary"
-					: !(
-								videoSettings?.disableTranscript ??
-								data.orgSettings?.disableTranscript
-							)
-						? "transcript"
-						: "activity";
+			// Landing right after stopping a recording: the transcript is what's
+			// appearing within seconds — show it instead of empty comments.
+			recordingStopped && !isScreenshot && !transcriptDisabled
+				? "transcript"
+				: isScreenshot ||
+						!(videoSettings?.disableComments ?? data.orgSettings?.disableComments)
+					? "activity"
+					: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
+						? "summary"
+						: !transcriptDisabled
+							? "transcript"
+							: "activity";
 
 		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
 		const [[page, direction], setPage] = useState([0, 0]);

@@ -586,6 +586,7 @@ export const Share = ({
 								videoId={data.id}
 								aiData={aiData}
 								aiGenerationEnabled={aiGenerationAvailable}
+								recordingStopped={recordingStopped}
 								ref={activityRef}
 							/>
 						</div>
