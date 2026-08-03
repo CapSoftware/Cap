@@ -16,6 +16,7 @@ import {
 	Plus,
 	Share2,
 	Shield,
+	ShieldCheck,
 	Sparkles,
 	Video,
 } from "lucide-react";
@@ -137,6 +138,11 @@ const UpgradeModalImpl = ({
 			icon: <Headphones className={iconStyling} />,
 			title: "Priority support",
 			description: "Get help when you need it",
+		},
+		{
+			icon: <ShieldCheck className={iconStyling} />,
+			title: "SOC 2 Type II & ISO 27001",
+			description: "Independently audited security & compliance",
 		},
 	];
 
