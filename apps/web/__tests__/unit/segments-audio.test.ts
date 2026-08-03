@@ -34,19 +34,43 @@ describe("planSegmentsAudioExtraction", () => {
 		expect(plan.status).toBe("ok");
 	});
 
-	it("reports no-audio when the audio track was never uploaded", () => {
-		expect(
-			planSegmentsAudioExtraction({
-				...completeManifest,
-				audio_init_uploaded: false,
-			}),
-		).toEqual({ status: "no-audio" });
+	it("reports no-audio only when no audio segments are listed", () => {
 		expect(
 			planSegmentsAudioExtraction({
 				...completeManifest,
 				audio_segments: [],
 			}),
 		).toEqual({ status: "no-audio" });
+	});
+
+	it("trusts listed segments over the init flag on completed manifests (v1 reality)", () => {
+		// Real version-1 manifests list uploaded audio segments while
+		// audio_init_uploaded stays false; absence must be proven by the object
+		// store, not the flag.
+		const plan = planSegmentsAudioExtraction({
+			version: 1,
+			video_init_uploaded: true,
+			audio_init_uploaded: false,
+			video_segments: [1, 2, 3],
+			audio_segments: [1, 2, 3],
+			is_complete: true,
+		});
+		expect(plan.status).toBe("ok");
+	});
+
+	it("waits for the audio init while the recording is still uploading", () => {
+		const plan = planSegmentsAudioExtraction(
+			{
+				...completeManifest,
+				audio_init_uploaded: false,
+				is_complete: false,
+			},
+			{ requireComplete: false },
+		);
+		expect(plan).toEqual({
+			status: "unavailable",
+			reason: "audio init not uploaded yet",
+		});
 	});
 
 	it("normalizes, sorts and dedupes segment entries and sums their durations", () => {

@@ -90,9 +90,6 @@ function createServerEnv() {
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
-			CAP_LIVE_TRANSCRIPTION: boolString(false).describe(
-				"Transcribe instant-mode recordings live while they upload (needs ASSEMBLY_API_KEY)",
-			),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),

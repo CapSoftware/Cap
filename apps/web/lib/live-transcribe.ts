@@ -20,9 +20,9 @@ export type LiveTranscriptionStart = "started" | "skipped";
 
 /**
  * Kick off provisional live transcription for a just-created instant-mode
- * recording. Feature-flagged, idempotent (an atomic metadata claim allows
- * exactly one live workflow per video) and never throws: any failure means
- * the video simply behaves exactly as it does today.
+ * recording. Idempotent (an atomic metadata claim allows exactly one live
+ * workflow per video) and never throws: any failure means the video simply
+ * behaves exactly as it does today.
  */
 export async function maybeStartLiveTranscription({
 	videoId,
@@ -34,8 +34,7 @@ export async function maybeStartLiveTranscription({
 	orgId: Organisation.OrganisationId;
 }): Promise<LiveTranscriptionStart> {
 	try {
-		const env = serverEnv();
-		if (!env.CAP_LIVE_TRANSCRIPTION || !env.ASSEMBLY_API_KEY) {
+		if (!serverEnv().ASSEMBLY_API_KEY) {
 			return "skipped";
 		}
 

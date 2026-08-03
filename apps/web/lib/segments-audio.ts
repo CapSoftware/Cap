@@ -37,8 +37,18 @@ export function planSegmentsAudioExtraction(
 		return { status: "unavailable", reason: "manifest is not complete" };
 	}
 
-	if (!manifest.audio_init_uploaded || manifest.audio_segments.length === 0) {
+	if (manifest.audio_segments.length === 0) {
 		return { status: "no-audio" };
+	}
+
+	// The init flag can't prove absence when segments are listed: version 1
+	// manifests uploaded audio segments while never setting it (seen in real
+	// data). Mid-recording it only means the init may not have arrived yet;
+	// for completed manifests the object store is the truth — a genuinely
+	// missing init fails the fetch downstream as "unavailable", never as a
+	// false NO_AUDIO.
+	if (!manifest.is_complete && !manifest.audio_init_uploaded) {
+		return { status: "unavailable", reason: "audio init not uploaded yet" };
 	}
 
 	const byIndex = new Map<number, NormalizedSegmentEntry>();
