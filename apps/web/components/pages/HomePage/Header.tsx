@@ -228,8 +228,9 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 								<span className="text-xs font-medium text-gray-12">
 									<span className="font-semibold text-blue-500">New</span>
 									<span className="mx-1.5 text-gray-7">·</span>
-									Cap is now SOC 2<span className="hidden sm:inline"> Type II</span>{" "}
-									&amp; ISO 27001 certified
+									Cap is now SOC 2
+									<span className="hidden sm:inline"> Type II</span> &amp; ISO
+									27001 certified
 								</span>
 								<FontAwesomeIcon
 									icon={faArrowRight}
