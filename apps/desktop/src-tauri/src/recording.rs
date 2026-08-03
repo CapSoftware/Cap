@@ -1631,7 +1631,7 @@ pub async fn start_recording(
                 notify_recording_start_failed(&app, &error);
                 return Err(error);
             };
-            let instant_mode_max_resolution = if auth.is_upgraded() {
+            let mut instant_mode_max_resolution = if auth.is_upgraded() {
                 general_settings
                     .map_or(cap_recording::PRO_INSTANT_MODE_MAX_RESOLUTION, |settings| {
                         settings.instant_mode_max_resolution
@@ -1639,6 +1639,22 @@ pub async fn start_recording(
             } else {
                 cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
             };
+
+            if let Some(upload_health_cap) =
+                crate::upload_health::cached_instant_resolution_cap(&app).await
+            {
+                let capped_resolution = instant_mode_max_resolution.min(upload_health_cap);
+                if capped_resolution < instant_mode_max_resolution {
+                    info!(
+                        configured_resolution = instant_mode_max_resolution,
+                        upload_health_cap = upload_health_cap,
+                        capped_resolution = capped_resolution,
+                        "Capping instant recording resolution based on cached upload health"
+                    );
+                }
+                instant_mode_max_resolution = capped_resolution;
+            }
+
             let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
                 "desktopMP4"
             } else {
