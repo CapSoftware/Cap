@@ -183,13 +183,42 @@ app.get(
 				ownedOrganizations,
 				memberOrganizations,
 			);
+
+			// Accounts can end up org-less (e.g. after declining a team invite or
+			// being removed from their last org); provision a personal org like
+			// signup does instead of failing every upload.
+			if (userOrganizations.length === 0) {
+				const organizationId = Organisation.OrganisationId.make(nanoId());
+				await db().transaction(async (tx) => {
+					await tx.insert(organizations).values({
+						id: organizationId,
+						ownerId: user.id,
+						name: "My Organization",
+					});
+					await tx.insert(organizationMembers).values({
+						id: nanoId(),
+						organizationId,
+						userId: user.id,
+						role: "owner",
+					});
+					await tx
+						.update(users)
+						.set({
+							activeOrganizationId: organizationId,
+							defaultOrgId: organizationId,
+						})
+						.where(eq(users.id, user.id));
+				});
+				userOrganizations.push({ id: organizationId, name: "My Organization" });
+			}
+
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
 			let videoOrgId: Organisation.OrganisationId;
-			if (orgId) {
-				// Hard error if the user requested org is non-existent or they don't have access.
-				if (!userOrgIds.includes(orgId))
-					return c.json({ error: "forbidden_org" }, { status: 403 });
+			// Desktop persists orgId in settings and keeps sending it after the
+			// user leaves the org, so an unknown orgId falls back to the
+			// default/first org below instead of hard-failing every upload.
+			if (orgId && userOrgIds.includes(orgId)) {
 				videoOrgId = orgId;
 			} else if (user.defaultOrgId) {
 				// User's defaultOrgId is no longer valid, switch to first available org
