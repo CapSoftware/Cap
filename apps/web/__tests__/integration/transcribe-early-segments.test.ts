@@ -267,7 +267,12 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		);
 		expect(stored?.durationMs).toBe(4500);
 
-		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "COMPLETE" });
+		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
+		// the provisional live transcript is superseded by the canonical one
+		expect(mocks.deleteObject.mock.calls.map((call) => call[0])).toContain(
+			"user-456/video-123/transcription.live.json",
+		);
 	});
 
 	it("defers back to the post-mux queue when the manifest is missing", async () => {
@@ -349,6 +354,7 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
 		const writtenKeys = mocks.putObject.mock.calls.map((call) => call[0]);
 		expect(writtenKeys).toContain("user-456/video-123/transcription.vtt");
-		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "COMPLETE" });
+		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
 	});
 });

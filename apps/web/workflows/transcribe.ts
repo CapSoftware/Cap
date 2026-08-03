@@ -43,6 +43,7 @@ import {
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
+import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
 import {
 	downloadConcatenatedSegments,
 	planSegmentsAudioExtraction,
@@ -801,6 +802,32 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	// The canonical transcript supersedes the provisional live transcript, so
+	// drop the artifact and its metadata flag. Never fatal: a leftover live
+	// artifact is unused once transcriptionStatus is COMPLETE.
+	if (
+		video.source.type === "desktopSegments" ||
+		video.source.type === "desktopMP4"
+	) {
+		try {
+			await bucket
+				.deleteObject(getLiveTranscriptObjectKey(userId, videoId))
+				.pipe(runWorkflowPromise);
+			await db()
+				.update(videos)
+				.set({
+					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+					updatedAt: sql`${videos.updatedAt}`,
+				})
+				.where(eq(videos.id, videoId as Video.VideoId));
+		} catch (error) {
+			console.warn(
+				`[transcribe] Failed to clean up live transcript for ${videoId}`,
+				error,
+			);
+		}
+	}
 }
 
 async function saveEditTranscriptBackfill(
