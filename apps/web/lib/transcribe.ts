@@ -25,6 +25,11 @@ export type TranscribeVideoOptions = {
 const TRANSCRIPTION_ALREADY_HANDLED_MESSAGE =
 	"Transcription already completed, in progress, or awaiting manual retry";
 
+/** How recently a live-transcription claim must have been stamped to defer
+ * to it. Chunks stamp every ~10s; 3 minutes tolerates long retries without
+ * letting a dead workflow block transcription forever. */
+const LIVE_CLAIM_FRESHNESS_MS = 3 * 60 * 1000;
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
@@ -116,6 +121,27 @@ export async function transcribeVideo(
 			success: true,
 			message: TRANSCRIPTION_ALREADY_HANDLED_MESSAGE,
 		};
+	}
+
+	// A live transcription that is provably still running (its claim is
+	// freshness-stamped every chunk) is seconds away from promoting itself to
+	// canonical; claiming now would race it and transcribe the same audio
+	// twice. A stale stamp means the workflow died - proceed normally. The
+	// live workflow's own full-pass fallback uses earlyFromSegments, which is
+	// exempt so it can never deadlock against its opener.
+	if (!options.earlyFromSegments) {
+		const live = video.metadata?.liveTranscript;
+		const stampedAt = live?.updatedAt ? Date.parse(live.updatedAt) : Number.NaN;
+		if (
+			live?.status === "active" &&
+			Number.isFinite(stampedAt) &&
+			Date.now() - stampedAt < LIVE_CLAIM_FRESHNESS_MS
+		) {
+			return {
+				success: true,
+				message: "Live transcription in progress",
+			};
+		}
 	}
 
 	if (!options.earlyFromSegments) {

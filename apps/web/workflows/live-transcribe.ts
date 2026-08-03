@@ -63,6 +63,10 @@ type ChunkStepResult =
 			lastAudioSegmentIndex: number;
 			transcribedDurationMs: number;
 			languageCode: string | null;
+			/** This chunk was the recording's final one: the manifest is complete
+			 * and coverage is now full, so promotion can start immediately
+			 * without another poll round-trip. */
+			recordingComplete?: boolean;
 	  }
 	| { outcome: "chunk-failed"; failedAtIndex: number; reason: string }
 	| { outcome: "waiting" }
@@ -138,6 +142,10 @@ export async function liveTranscribeWorkflow(
 				chunkCount++;
 				idleSteps = 0;
 				failuresAtIndex = 0;
+				if (result.recordingComplete) {
+					outcome = "done";
+					break;
+				}
 				continue;
 			}
 
@@ -309,6 +317,7 @@ async function processNextLiveChunk(options: {
 	// time costs one held invocation, not hundreds of queued step dispatches.
 	const pollDeadline = Date.now() + LIVE_TRANSCRIBE.MAX_POLL_MS_PER_STEP;
 	let decision: ReturnType<typeof planNextLiveChunk> | null = null;
+	let decodedManifest: Video.SegmentManifestType | null = null;
 
 	while (Date.now() < pollDeadline) {
 		const manifestContent = await bucket
@@ -334,6 +343,7 @@ async function processNextLiveChunk(options: {
 				});
 				if (next.action !== "wait") {
 					decision = next;
+					decodedManifest = decoded.right;
 					break;
 				}
 			}
@@ -396,6 +406,7 @@ async function processNextLiveChunk(options: {
 				}`,
 			};
 		}
+		await touchLiveClaim(videoId);
 		return {
 			outcome: "chunk",
 			lastAudioSegmentIndex: chunkEndIndex,
@@ -490,6 +501,21 @@ async function processNextLiveChunk(options: {
 			.putObject(artifactKey, body, { contentType: "application/json" })
 			.pipe(runWorkflowPromise);
 
+		// Freshness-stamp the claim so other transcription triggers (post-mux
+		// webhook, share-page retries) keep deferring to this workflow.
+		await touchLiveClaim(videoId);
+
+		// If this chunk completed full coverage of a finished recording, tell
+		// the workflow to promote right away instead of paying another poll
+		// round-trip - this latency is the stop-to-final-transcript feel.
+		const next = decodedManifest
+			? planNextLiveChunk({
+					manifest: decodedManifest,
+					lastProcessedIndex: chunkEndIndex,
+					targetSeconds,
+				})
+			: ({ action: "wait" } as const);
+
 		console.log(
 			`[liveTranscribe] ${videoId} chunk ${lastProcessedIndex + 1}..${chunkEndIndex} (${decision.durationMs}ms, ${words.length} words)`,
 		);
@@ -499,6 +525,7 @@ async function processNextLiveChunk(options: {
 			lastAudioSegmentIndex: chunkEndIndex,
 			transcribedDurationMs: updated.transcribedDurationMs,
 			languageCode: updated.languageCode,
+			recordingComplete: next.action === "done",
 		};
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
@@ -510,6 +537,33 @@ async function processNextLiveChunk(options: {
 			failedAtIndex: lastProcessedIndex,
 			reason,
 		};
+	}
+}
+
+/**
+ * Re-stamp the live claim's freshness so other transcription triggers keep
+ * deferring to this workflow (lib/transcribe.ts checks the stamp age). A
+ * no-op once the claim was cleared or finished.
+ */
+async function touchLiveClaim(videoId: string): Promise<void> {
+	try {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript.updatedAt', ${new Date().toISOString()})`,
+				updatedAt: sql`${videos.updatedAt}`,
+			})
+			.where(
+				and(
+					eq(videos.id, videoId as Video.VideoId),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.liveTranscript.status')) = 'active'`,
+				),
+			);
+	} catch (error) {
+		console.warn(
+			`[liveTranscribe] Failed to stamp live claim for ${videoId}`,
+			error,
+		);
 	}
 }
 
