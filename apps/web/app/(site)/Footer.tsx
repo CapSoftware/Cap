@@ -21,6 +21,7 @@ type FooterLink = {
 const footerLinks = {
 	product: [
 		{ label: "Blog", href: "/blog" },
+		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
