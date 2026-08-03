@@ -109,12 +109,14 @@ export async function queueDesktopSegmentsFinalization({
 		// start right away from the segment audio instead of waiting for the mux
 		// into result.mp4. Failures here never block finalization: the workflow
 		// re-queues transcription after the mux exactly as before.
-		await queueEarlySegmentsTranscription({ videoId, userId }).catch((error) => {
-			console.warn(
-				`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
-				error,
-			);
-		});
+		await queueEarlySegmentsTranscription({ videoId, userId }).catch(
+			(error) => {
+				console.warn(
+					`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
+					error,
+				);
+			},
+		);
 		return "queued";
 	} catch (error) {
 		await db()

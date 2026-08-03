@@ -29,7 +29,7 @@ import {
 	parseLiveTranscript,
 	planNextLiveChunk,
 } from "@/lib/live-transcribe-core";
-import { downloadConcatenatedSegments } from "@/lib/segments-audio";
+import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -49,7 +49,12 @@ type InitResult =
 	  };
 
 type ChunkStepResult =
-	| { outcome: "chunk"; lastAudioSegmentIndex: number; transcribedDurationMs: number; languageCode: string | null }
+	| {
+			outcome: "chunk";
+			lastAudioSegmentIndex: number;
+			transcribedDurationMs: number;
+			languageCode: string | null;
+	  }
 	| { outcome: "chunk-failed"; failedAtIndex: number; reason: string }
 	| { outcome: "waiting" }
 	| { outcome: "done" }
@@ -75,7 +80,10 @@ export async function liveTranscribeWorkflow(
 	const init = await initLiveTranscription(videoId, userId);
 	if (!init.ok) {
 		await finishLiveTranscription(videoId, userId, "stopped");
-		return { success: true, message: `Live transcription skipped: ${init.reason}` };
+		return {
+			success: true,
+			message: `Live transcription skipped: ${init.reason}`,
+		};
 	}
 
 	let lastIndex = init.lastAudioSegmentIndex;
@@ -86,55 +94,62 @@ export async function liveTranscribeWorkflow(
 	let failuresAtIndex = 0;
 	let outcome = "chunk-limit";
 
-	while (chunkCount < LIVE_TRANSCRIBE.MAX_CHUNKS) {
-		if (transcribedMs >= LIVE_TRANSCRIBE.MAX_TRANSCRIBED_SECONDS * 1000) {
-			outcome = "budget-exhausted";
-			break;
-		}
-
-		const targetSeconds =
-			chunkCount < LIVE_TRANSCRIBE.GROW_AFTER_CHUNKS
-				? LIVE_TRANSCRIBE.INITIAL_CHUNK_SECONDS
-				: LIVE_TRANSCRIBE.MAX_CHUNK_SECONDS;
-
-		const result = await processNextLiveChunk({
-			videoId,
-			userId,
-			lastProcessedIndex: lastIndex,
-			targetSeconds,
-			language: languageCode ?? init.orgLanguage,
-			// After repeated failures the chunk is skipped: advance past it and
-			// leave a gap for the canonical transcription to fill.
-			skipPastFailedChunk:
-				failuresAtIndex >= LIVE_TRANSCRIBE.MAX_CHUNK_ATTEMPTS,
-		});
-
-		if (result.outcome === "chunk") {
-			lastIndex = result.lastAudioSegmentIndex;
-			transcribedMs = result.transcribedDurationMs;
-			languageCode = languageCode ?? result.languageCode;
-			chunkCount++;
-			idleSteps = 0;
-			failuresAtIndex = 0;
-			continue;
-		}
-
-		if (result.outcome === "chunk-failed") {
-			failuresAtIndex++;
-			continue;
-		}
-
-		if (result.outcome === "waiting") {
-			idleSteps++;
-			if (idleSteps >= LIVE_TRANSCRIBE.MAX_IDLE_STEPS) {
-				outcome = "stalled";
+	try {
+		while (chunkCount < LIVE_TRANSCRIBE.MAX_CHUNKS) {
+			if (transcribedMs >= LIVE_TRANSCRIBE.MAX_TRANSCRIBED_SECONDS * 1000) {
+				outcome = "budget-exhausted";
 				break;
 			}
-			continue;
-		}
 
-		outcome = result.outcome;
-		break;
+			const targetSeconds =
+				chunkCount < LIVE_TRANSCRIBE.GROW_AFTER_CHUNKS
+					? LIVE_TRANSCRIBE.INITIAL_CHUNK_SECONDS
+					: LIVE_TRANSCRIBE.MAX_CHUNK_SECONDS;
+
+			const result = await processNextLiveChunk({
+				videoId,
+				userId,
+				lastProcessedIndex: lastIndex,
+				targetSeconds,
+				language: languageCode ?? init.orgLanguage,
+				// After repeated failures the chunk is skipped: advance past it and
+				// leave a gap for the canonical transcription to fill.
+				skipPastFailedChunk:
+					failuresAtIndex >= LIVE_TRANSCRIBE.MAX_CHUNK_ATTEMPTS,
+			});
+
+			if (result.outcome === "chunk") {
+				lastIndex = result.lastAudioSegmentIndex;
+				transcribedMs = result.transcribedDurationMs;
+				languageCode = languageCode ?? result.languageCode;
+				chunkCount++;
+				idleSteps = 0;
+				failuresAtIndex = 0;
+				continue;
+			}
+
+			if (result.outcome === "chunk-failed") {
+				failuresAtIndex++;
+				continue;
+			}
+
+			if (result.outcome === "waiting") {
+				idleSteps++;
+				if (idleSteps >= LIVE_TRANSCRIBE.MAX_IDLE_STEPS) {
+					outcome = "stalled";
+					break;
+				}
+				continue;
+			}
+
+			outcome = result.outcome;
+			break;
+		}
+	} catch (error) {
+		// A step exhausted its retries; make sure the artifact and metadata
+		// never advertise a live transcription that is no longer running.
+		await finishLiveTranscription(videoId, userId, "stopped");
+		throw error;
 	}
 
 	await finishLiveTranscription(
@@ -210,7 +225,9 @@ async function initLiveTranscription(
 		lastAudioSegmentIndex,
 		transcribedDurationMs,
 		languageCode,
-		orgLanguage: parseAiGenerationLanguage(row.orgSettings?.aiGenerationLanguage),
+		orgLanguage: parseAiGenerationLanguage(
+			row.orgSettings?.aiGenerationLanguage,
+		),
 	};
 }
 

@@ -2,10 +2,8 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-	downloadConcatenatedSegments,
-	planSegmentsAudioExtraction,
-} from "@/lib/segments-audio";
+import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
+import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 
 const completeManifest = {
 	version: 5,

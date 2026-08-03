@@ -81,10 +81,7 @@ export async function maybeStartLiveTranscription({
 
 		return "started";
 	} catch (error) {
-		console.warn(
-			`[maybeStartLiveTranscription] Failed for ${videoId}`,
-			error,
-		);
+		console.warn(`[maybeStartLiveTranscription] Failed for ${videoId}`, error);
 		return "skipped";
 	}
 }

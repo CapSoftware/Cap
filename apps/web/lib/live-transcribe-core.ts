@@ -64,7 +64,9 @@ export function planNextLiveChunk(options: {
 	const maxTakeSeconds =
 		options.maxTakeSeconds ?? LIVE_TRANSCRIBE.MAX_CHUNK_TAKE_SECONDS;
 
-	const plan = planSegmentsAudioExtraction(manifest, { requireComplete: false });
+	const plan = planSegmentsAudioExtraction(manifest, {
+		requireComplete: false,
+	});
 	if (plan.status === "no-audio") {
 		return manifest.is_complete ? { action: "no-audio" } : { action: "wait" };
 	}
@@ -150,8 +152,7 @@ export function offsetChunkWords(
 			text,
 			startMs,
 			endMs,
-			confidence:
-				typeof word.confidence === "number" ? word.confidence : null,
+			confidence: typeof word.confidence === "number" ? word.confidence : null,
 			speaker: typeof word.speaker === "string" ? word.speaker : null,
 			channel: null,
 		});
@@ -179,7 +180,9 @@ export function getLiveTranscriptObjectKey(ownerId: string, videoId: string) {
 	return `${ownerId}/${videoId}/transcription.live.json`;
 }
 
-export function createEmptyLiveTranscript(nowIso: string): LiveTranscriptArtifact {
+export function createEmptyLiveTranscript(
+	nowIso: string,
+): LiveTranscriptArtifact {
 	return {
 		version: LIVE_TRANSCRIPT_VERSION,
 		state: "active",
@@ -218,8 +221,7 @@ export function parseLiveTranscript(
 			transcribedDurationMs: parsed.transcribedDurationMs,
 			words: parsed.words,
 			vtt: parsed.vtt,
-			updatedAt:
-				typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+			updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
 		};
 	} catch {
 		return null;

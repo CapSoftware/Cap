@@ -44,10 +44,8 @@ import {
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
 import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
-import {
-	downloadConcatenatedSegments,
-	planSegmentsAudioExtraction,
-} from "@/lib/segments-audio";
+import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
+import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
