@@ -11,8 +11,8 @@ const baseManifest = {
 	version: 5,
 	video_init_uploaded: true,
 	audio_init_uploaded: true,
-	video_segments: [] as unknown[],
-	audio_segments: [] as unknown[],
+	video_segments: [] as (number | { index: number; duration: number })[],
+	audio_segments: [] as (number | { index: number; duration: number })[],
 	is_complete: false,
 };
 

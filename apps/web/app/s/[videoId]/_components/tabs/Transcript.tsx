@@ -2,6 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLiveTranscript } from "hooks/use-live-transcript";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import {
 	Check,
@@ -230,6 +231,24 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		isLoading: isTranscriptLoading,
 		error: transcriptError,
 	} = useTranscript(data.id, data.transcriptionStatus);
+
+	const isLiveTranscriptEnabled =
+		data.source?.type === "desktopSegments" &&
+		data.metadata?.liveTranscript != null &&
+		data.transcriptionStatus !== "COMPLETE";
+
+	const { data: liveTranscript } = useLiveTranscript(
+		data.id,
+		isLiveTranscriptEnabled,
+	);
+
+	const liveTranscriptData = useMemo(
+		() => (liveTranscript?.content ? parseVTT(liveTranscript.content) : []),
+		[liveTranscript?.content],
+	);
+
+	const showLiveTranscript =
+		isLiveTranscriptEnabled && liveTranscriptData.length > 0;
 
 	const invalidateTranscript = useInvalidateTranscript();
 
@@ -481,6 +500,59 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const canEdit = user?.id === data.owner.id && selectedLanguage === "original";
 
 	if (isTranscriptionProcessing && !hasTimedOut) {
+		if (showLiveTranscript) {
+			const isLiveActive = liveTranscript?.state === "active";
+
+			return (
+				<div className="flex flex-col h-full">
+					<div className="flex flex-none items-center gap-2 border-b border-gray-3 px-4 py-3">
+						{isLiveActive ? (
+							<span className="relative flex size-2">
+								<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+								<span className="relative inline-flex rounded-full size-2 bg-red-500" />
+							</span>
+						) : (
+							<LoaderCircle className="size-3 animate-spin text-gray-9" />
+						)}
+						<span className="text-[11px] font-medium text-gray-12">
+							Live transcript
+						</span>
+						<span className="text-[11px] text-gray-9">
+							{isLiveActive
+								? "updating as the recording uploads"
+								: "processing final transcript…"}
+						</span>
+					</div>
+
+					<div className="overflow-y-auto flex-1">
+						<div className="px-3 py-3">
+							{liveTranscriptData.map((entry) => (
+								<div
+									key={entry.id}
+									className={`flex items-start gap-1 rounded-lg px-2 transition-colors ${
+										selectedEntry === entry.id ? "bg-gray-3" : "hover:bg-gray-2"
+									}`}
+								>
+									<button
+										className="flex min-w-0 flex-1 items-baseline gap-2.5 py-1.5 text-left"
+										onClick={() => handleTranscriptClick(entry)}
+										type="button"
+									>
+										<span className="w-9 shrink-0 font-mono text-[10px] leading-[22px] tabular-nums text-gray-8">
+											{entry.timestamp}
+										</span>
+										<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
+											{entry.text}
+										</span>
+									</button>
+								</div>
+							))}
+						</div>
+					</div>
+				</div>
+			);
+		}
+
 		return (
 			<div className="flex h-full items-center justify-center p-7">
 				<div className="text-center">
