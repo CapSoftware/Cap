@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	applyChunkToLiveTranscript,
 	createEmptyLiveTranscript,
+	isNoSpokenAudioError,
 	offsetChunkWords,
 	parseLiveTranscript,
 	planNextLiveChunk,
@@ -242,5 +243,22 @@ describe("live transcript artifact", () => {
 	it("rejects malformed artifacts", () => {
 		expect(parseLiveTranscript("not json")).toBeNull();
 		expect(parseLiveTranscript(JSON.stringify({ version: 99 }))).toBeNull();
+	});
+});
+
+describe("isNoSpokenAudioError", () => {
+	it("recognizes speech-free chunks as valid empties, not failures", () => {
+		// exact message observed from the real API on a silent recording
+		expect(
+			isNoSpokenAudioError({
+				status: "error",
+				error:
+					"language_detection cannot be performed on files with no spoken audio.",
+			}),
+		).toBe(true);
+		expect(
+			isNoSpokenAudioError({ status: "error", error: "Server error" }),
+		).toBe(false);
+		expect(isNoSpokenAudioError({ status: "completed" })).toBe(false);
 	});
 });

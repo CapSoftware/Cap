@@ -23,6 +23,7 @@ import {
 	applyChunkToLiveTranscript,
 	createEmptyLiveTranscript,
 	getLiveTranscriptObjectKey,
+	isNoSpokenAudioError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
 	type LiveTranscriptState,
@@ -370,15 +371,18 @@ async function processNextLiveChunk(options: {
 			disfluencies: true,
 		});
 
-		if (transcript.status === "error") {
+		const noSpokenAudio = isNoSpokenAudioError(transcript);
+		if (transcript.status === "error" && !noSpokenAudio) {
 			throw new Error(transcript.error ?? "AssemblyAI chunk failed");
 		}
 
-		const words = offsetChunkWords(
-			transcript.words,
-			decision.startMs,
-			decision.durationMs,
-		);
+		const words = noSpokenAudio
+			? []
+			: offsetChunkWords(
+					transcript.words,
+					decision.startMs,
+					decision.durationMs,
+				);
 
 		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
 		const existing = await bucket

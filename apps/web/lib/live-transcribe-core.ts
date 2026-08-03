@@ -161,6 +161,21 @@ export function offsetChunkWords(
 	return result;
 }
 
+/**
+ * AssemblyAI reports speech-free audio as a transcript error when language
+ * detection is enabled. For chunked live transcription that's a valid empty
+ * chunk (pauses in narration are normal), not a failure to retry.
+ */
+export function isNoSpokenAudioError(transcript: {
+	status: string;
+	error?: string | null;
+}): boolean {
+	return (
+		transcript.status === "error" &&
+		/no spoken audio/i.test(transcript.error ?? "")
+	);
+}
+
 export const LIVE_TRANSCRIPT_VERSION = 1;
 
 export type LiveTranscriptState = "active" | "complete" | "stopped";
