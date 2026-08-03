@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	applyChunkToLiveTranscript,
+	canPromoteLiveTranscript,
 	createEmptyLiveTranscript,
 	isNoSpokenAudioError,
+	liveTranscriptToEditTranscript,
 	offsetChunkWords,
 	parseLiveTranscript,
 	planNextLiveChunk,
@@ -243,6 +245,95 @@ describe("live transcript artifact", () => {
 	it("rejects malformed artifacts", () => {
 		expect(parseLiveTranscript("not json")).toBeNull();
 		expect(parseLiveTranscript(JSON.stringify({ version: 99 }))).toBeNull();
+	});
+});
+
+describe("canPromoteLiveTranscript", () => {
+	const fullCoverage = (overrides = {}) => ({
+		...createEmptyLiveTranscript("2026-08-03T00:00:00.000Z"),
+		lastAudioSegmentIndex: 3,
+		transcribedDurationMs: 6000,
+		...overrides,
+	});
+	const completeManifest = {
+		...baseManifest,
+		audio_segments: [seg(1), seg(2), seg(3)],
+		is_complete: true,
+	};
+
+	it("promotes only full gap-free coverage", () => {
+		expect(canPromoteLiveTranscript(fullCoverage(), completeManifest)).toEqual({
+			ok: true,
+		});
+	});
+
+	it("declines incomplete manifests, partial coverage, and skipped chunks", () => {
+		expect(
+			canPromoteLiveTranscript(fullCoverage(), {
+				...completeManifest,
+				is_complete: false,
+			}).ok,
+		).toBe(false);
+		expect(
+			canPromoteLiveTranscript(
+				fullCoverage({ lastAudioSegmentIndex: 2 }),
+				completeManifest,
+			).ok,
+		).toBe(false);
+		expect(
+			canPromoteLiveTranscript(
+				fullCoverage({ hasGaps: true }),
+				completeManifest,
+			).ok,
+		).toBe(false);
+	});
+
+	it("declines manifests with segment index gaps", () => {
+		expect(
+			canPromoteLiveTranscript(fullCoverage({ lastAudioSegmentIndex: 4 }), {
+				...completeManifest,
+				audio_segments: [seg(1), seg(2), seg(4)],
+			}).ok,
+		).toBe(false);
+	});
+
+	it("declines recordings with no audio", () => {
+		expect(
+			canPromoteLiveTranscript(fullCoverage(), {
+				...completeManifest,
+				audio_segments: [],
+			}).ok,
+		).toBe(false);
+	});
+});
+
+describe("liveTranscriptToEditTranscript", () => {
+	it("shapes accumulated words as a canonical v3 edit transcript", () => {
+		const artifact = applyChunkToLiveTranscript(
+			createEmptyLiveTranscript("2026-08-03T00:00:00.000Z"),
+			{
+				startMs: 0,
+				durationMs: 4000,
+				lastAudioSegmentIndex: 2,
+				words: offsetChunkWords(
+					[{ text: "Hello", start: 10, end: 500 }],
+					0,
+					4000,
+				),
+				languageCode: "en",
+				nowIso: "2026-08-03T00:00:05.000Z",
+			},
+		);
+
+		const edit = liveTranscriptToEditTranscript(artifact, "universal-3-5-pro");
+		expect(edit).toMatchObject({
+			version: 3,
+			speechModelUsed: "universal-3-5-pro",
+			durationMs: 4000,
+			languageCode: "en",
+		});
+		expect(edit.words).toHaveLength(1);
+		expect(edit.words[0]).toMatchObject({ text: "Hello", startMs: 10 });
 	});
 });
 

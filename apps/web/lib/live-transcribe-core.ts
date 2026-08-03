@@ -1,5 +1,7 @@
 import type { Video } from "@cap/web-domain";
 import {
+	EDIT_TRANSCRIPT_VERSION,
+	type EditTranscript,
 	type EditTranscriptWord,
 	editTranscriptWordsToCaptionVtt,
 } from "@/lib/edit-transcript";
@@ -191,6 +193,10 @@ export interface LiveTranscriptArtifact {
 	words: EditTranscriptWord[];
 	vtt: string;
 	updatedAt: string;
+	/** A chunk was skipped after repeated failures, so some speech is missing.
+	 * Disqualifies the artifact from being promoted to the canonical
+	 * transcript; the full-pass fallback covers the recording instead. */
+	hasGaps?: boolean;
 }
 
 export function getLiveTranscriptObjectKey(ownerId: string, videoId: string) {
@@ -213,6 +219,7 @@ export function createEmptyLiveTranscript(
 		words: [],
 		vtt: editTranscriptWordsToCaptionVtt([]),
 		updatedAt: nowIso,
+		hasGaps: false,
 	};
 }
 
@@ -243,10 +250,74 @@ export function parseLiveTranscript(
 			words: parsed.words,
 			vtt: parsed.vtt,
 			updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+			hasGaps: parsed.hasGaps === true,
 		};
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Whether the live transcript fully and faithfully covers the recording, so
+ * it can be promoted to the canonical transcript instead of paying for a
+ * second full transcription pass. Anything short of complete gap-free
+ * coverage means the full-pass fallback runs exactly as before.
+ */
+export function canPromoteLiveTranscript(
+	artifact: LiveTranscriptArtifact,
+	manifest: Video.SegmentManifestType,
+): { ok: true } | { ok: false; reason: string } {
+	if (!manifest.is_complete) {
+		return { ok: false, reason: "manifest is not complete" };
+	}
+	if (artifact.hasGaps) {
+		return { ok: false, reason: "live transcript has skipped chunks" };
+	}
+
+	const plan = planSegmentsAudioExtraction(manifest);
+	if (plan.status === "no-audio") {
+		return { ok: false, reason: "recording has no audio" };
+	}
+	if (plan.status !== "ok") {
+		return { ok: false, reason: plan.reason };
+	}
+
+	const lastIndex = plan.entries[plan.entries.length - 1]?.index;
+	if (lastIndex === undefined || artifact.lastAudioSegmentIndex !== lastIndex) {
+		return {
+			ok: false,
+			reason: `covered up to segment ${artifact.lastAudioSegmentIndex} of ${lastIndex}`,
+		};
+	}
+
+	// A manifest index gap means audio the recording had but we never saw.
+	let expected = plan.entries[0]?.index ?? 1;
+	for (const entry of plan.entries) {
+		if (entry.index !== expected) {
+			return { ok: false, reason: `segment gap at index ${expected}` };
+		}
+		expected++;
+	}
+
+	return { ok: true };
+}
+
+/**
+ * Shape the accumulated live words as a canonical edit transcript (v3). The
+ * caption VTT derives from the same words via editTranscriptWordsToCaptionVtt,
+ * exactly as the full-pass path does.
+ */
+export function liveTranscriptToEditTranscript(
+	artifact: LiveTranscriptArtifact,
+	speechModelUsed: string,
+): EditTranscript {
+	return {
+		version: EDIT_TRANSCRIPT_VERSION,
+		speechModelUsed,
+		durationMs: Math.max(0, Math.round(artifact.transcribedDurationMs)),
+		languageCode: artifact.languageCode,
+		words: artifact.words,
+	};
 }
 
 /**

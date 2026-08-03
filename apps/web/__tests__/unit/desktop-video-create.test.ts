@@ -78,6 +78,12 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 	invalidateGoogleDriveStorageQuotaCache: vi.fn(),
 }));
 
+// The live-transcription stack drags in the whole workflow graph
+// (server-only modules included); these tests only care that create works.
+vi.mock("@/lib/live-transcribe", () => ({
+	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
+}));
+
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),

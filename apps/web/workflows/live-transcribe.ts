@@ -3,35 +3,47 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "@cap/database";
-import { organizations, videos } from "@cap/database/schema";
+import { organizations, users, videoEdits, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
+	type User,
 	Video,
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
+	ASSEMBLYAI_SPEECH_MODELS,
 	ASSEMBLYAI_SUPPORTED_LANGUAGES,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
 import { extractAudioFromUrl } from "@/lib/audio-extract";
 import {
+	getEditTranscriptObjectKey,
+	serializeEditTranscript,
+} from "@/lib/edit-transcript";
+import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
+import { startAiGeneration } from "@/lib/generate-ai";
+import {
 	applyChunkToLiveTranscript,
+	canPromoteLiveTranscript,
 	createEmptyLiveTranscript,
 	getLiveTranscriptObjectKey,
 	isNoSpokenAudioError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
+	liveTranscriptToEditTranscript,
 	type LiveTranscriptState,
 	offsetChunkWords,
 	parseLiveTranscript,
 	planNextLiveChunk,
 } from "@/lib/live-transcribe-core";
 import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
+import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -65,12 +77,16 @@ type ChunkStepResult =
 	| { outcome: "gone" };
 
 /**
- * Provisional live transcription for an instant-mode recording. Polls the
- * segment manifest the desktop app continuously re-uploads, transcribes new
- * audio in chunks, and maintains `transcription.live.json` for the share
- * page. Never touches `videos.transcriptionStatus` or any canonical
- * transcription artifact: the post-stop pipeline stays the single source of
- * truth and replaces this artifact entirely.
+ * Live transcription for an instant-mode recording. Polls the segment
+ * manifest the desktop app continuously re-uploads, transcribes new audio in
+ * chunks, and maintains `transcription.live.json` for the share page.
+ *
+ * While recording, this never touches `videos.transcriptionStatus` or any
+ * canonical artifact. At completion, IF the chunks cover the whole recording
+ * gap-free, promoteLiveTranscript claims the canonical slot atomically and
+ * writes the canonical transcript from the accumulated words — skipping the
+ * duplicate full transcription pass. Anything less than perfect coverage
+ * falls back to the normal full-pass pipeline unchanged.
  */
 export async function liveTranscribeWorkflow(
 	payload: LiveTranscribeWorkflowPayload,
@@ -132,6 +148,12 @@ export async function liveTranscribeWorkflow(
 
 			if (result.outcome === "chunk-failed") {
 				failuresAtIndex++;
+				// Skip attempts also count here; if even recording the gap keeps
+				// failing, storage is degraded — stop rather than spin.
+				if (failuresAtIndex >= LIVE_TRANSCRIBE.MAX_CHUNK_ATTEMPTS * 3) {
+					outcome = "chunk-abandoned";
+					break;
+				}
 				continue;
 			}
 
@@ -152,6 +174,22 @@ export async function liveTranscribeWorkflow(
 		// never advertise a live transcription that is no longer running.
 		await finishLiveTranscription(videoId, userId, "stopped");
 		throw error;
+	}
+
+	if (outcome === "done") {
+		// Full gap-free coverage: promote the live transcript to canonical and
+		// skip the duplicate full transcription pass entirely. On any failure
+		// the full-pass fallback is queued so transcription still lands fast.
+		const promotion = await promoteLiveTranscript(videoId, userId);
+		if (promotion.promoted) {
+			return {
+				success: true,
+				message: "Live transcription promoted to canonical",
+			};
+		}
+		console.warn(
+			`[liveTranscribe] Promotion declined for ${videoId}: ${promotion.reason}`,
+		);
 	}
 
 	await finishLiveTranscription(
@@ -323,6 +361,46 @@ async function processNextLiveChunk(options: {
 		console.warn(
 			`[liveTranscribe] Skipping poison chunk ${lastProcessedIndex + 1}..${chunkEndIndex} for ${videoId}`,
 		);
+		// The gap MUST be durably recorded before the cursor advances, or a
+		// later promotion could ship a transcript that silently misses speech.
+		try {
+			const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
+			const existing = await bucket
+				.getObject(artifactKey)
+				.pipe(runWorkflowPromise)
+				.catch(() => Option.none<string>());
+			const artifact =
+				(Option.isSome(existing)
+					? parseLiveTranscript(existing.value)
+					: null) ?? createEmptyLiveTranscript(new Date().toISOString());
+			await bucket
+				.putObject(
+					artifactKey,
+					JSON.stringify({
+						...artifact,
+						hasGaps: true,
+						lastAudioSegmentIndex: Math.max(
+							artifact.lastAudioSegmentIndex,
+							chunkEndIndex,
+						),
+						transcribedDurationMs: Math.max(
+							artifact.transcribedDurationMs,
+							decision.startMs + decision.durationMs,
+						),
+						updatedAt: new Date().toISOString(),
+					}),
+					{ contentType: "application/json" },
+				)
+				.pipe(runWorkflowPromise);
+		} catch (error) {
+			return {
+				outcome: "chunk-failed",
+				failedAtIndex: lastProcessedIndex,
+				reason: `failed to record chunk gap: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			};
+		}
 		return {
 			outcome: "chunk",
 			lastAudioSegmentIndex: chunkEndIndex,
@@ -445,6 +523,237 @@ async function processNextLiveChunk(options: {
 			failedAtIndex: lastProcessedIndex,
 			reason,
 		};
+	}
+}
+
+type PromotionResult = { promoted: boolean; reason?: string };
+
+/**
+ * Promote the completed live transcript to the canonical transcript: write
+ * transcription.vtt + the encrypted edit transcript from the accumulated
+ * words, claim transcriptionStatus, queue AI generation, and clean up the
+ * provisional artifact. Never throws. Any failure releases the claim (if
+ * held) and queues the normal full-pass so the video still transcribes.
+ */
+async function promoteLiveTranscript(
+	videoId: string,
+	userId: string,
+): Promise<PromotionResult> {
+	"use step";
+
+	try {
+		const [video] = await db()
+			.select()
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+
+		if (!video || video.ownerId !== userId) {
+			return { promoted: false, reason: "video not found" };
+		}
+		if (video.transcriptionStatus !== null) {
+			return {
+				promoted: false,
+				reason: `canonical status is ${video.transcriptionStatus}`,
+			};
+		}
+
+		const [bucket] = await Storage.getAccessForVideo(
+			decodeStorageVideo(video),
+		).pipe(runWorkflowPromise);
+		const segSource = new Video.SegmentsSource({
+			videoId,
+			ownerId: video.ownerId,
+		});
+
+		const manifestContent = await bucket
+			.getObject(segSource.getManifestKey())
+			.pipe(runWorkflowPromise);
+		const manifestJson = Option.getOrNull(manifestContent);
+		if (!manifestJson) {
+			return { promoted: false, reason: "manifest missing" };
+		}
+		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(
+			JSON.parse(manifestJson),
+		);
+		if (Either.isLeft(decoded)) {
+			return { promoted: false, reason: "manifest invalid" };
+		}
+
+		const artifactKey = getLiveTranscriptObjectKey(video.ownerId, videoId);
+		const existing = await bucket
+			.getObject(artifactKey)
+			.pipe(runWorkflowPromise);
+		const artifact = Option.isSome(existing)
+			? parseLiveTranscript(existing.value)
+			: null;
+		if (!artifact) {
+			return { promoted: false, reason: "live artifact missing" };
+		}
+
+		const eligible = canPromoteLiveTranscript(artifact, decoded.right);
+		if (!eligible.ok) {
+			await queueFullPassFallback(videoId, userId);
+			return { promoted: false, reason: eligible.reason };
+		}
+
+		const claim = await db()
+			.update(videos)
+			.set({ transcriptionStatus: "PROCESSING" })
+			.where(
+				and(
+					eq(videos.id, videoId as Video.VideoId),
+					isNull(videos.transcriptionStatus),
+				),
+			);
+		const affectedRows = Array.isArray(claim)
+			? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
+			: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+		if (affectedRows === 0) {
+			return { promoted: false, reason: "canonical claim held elsewhere" };
+		}
+
+		try {
+			await bucket
+				.putObject(
+					`${video.ownerId}/${videoId}/transcription.vtt`,
+					artifact.vtt,
+					{ contentType: "text/vtt" },
+				)
+				.pipe(runWorkflowPromise);
+
+			// Same rule as the full-pass save: the word transcript must describe
+			// the original media, so edited videos keep their own.
+			const [edit] = await db()
+				.select({ videoId: videoEdits.videoId })
+				.from(videoEdits)
+				.where(eq(videoEdits.videoId, videoId as Video.VideoId));
+			if (!edit) {
+				await bucket
+					.putObject(
+						getEditTranscriptObjectKey(video.ownerId, videoId),
+						encryptEditTranscriptObject(
+							serializeEditTranscript(
+								liveTranscriptToEditTranscript(
+									artifact,
+									ASSEMBLYAI_SPEECH_MODELS[0],
+								),
+							),
+							video.ownerId,
+							videoId,
+						),
+						{ contentType: "application/octet-stream" },
+					)
+					.pipe(runWorkflowPromise);
+			}
+
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: "COMPLETE" })
+				.where(
+					and(
+						eq(videos.id, videoId as Video.VideoId),
+						eq(videos.transcriptionStatus, "PROCESSING"),
+					),
+				);
+		} catch (error) {
+			// Release the claim so the fallback can transcribe from scratch.
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: null })
+				.where(
+					and(
+						eq(videos.id, videoId as Video.VideoId),
+						eq(videos.transcriptionStatus, "PROCESSING"),
+					),
+				);
+			await queueFullPassFallback(videoId, userId);
+			return {
+				promoted: false,
+				reason: error instanceof Error ? error.message : String(error),
+			};
+		}
+
+		// Post-COMPLETE housekeeping: never fatal, never releases the claim.
+		try {
+			await bucket.deleteObject(artifactKey).pipe(runWorkflowPromise);
+		} catch (error) {
+			console.warn(
+				`[liveTranscribe] Failed to delete promoted artifact for ${videoId}`,
+				error,
+			);
+		}
+		try {
+			await db()
+				.update(videos)
+				.set({
+					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+					updatedAt: sql`${videos.updatedAt}`,
+				})
+				.where(eq(videos.id, videoId as Video.VideoId));
+		} catch (error) {
+			console.warn(
+				`[liveTranscribe] Failed to clear live flag for ${videoId}`,
+				error,
+			);
+		}
+		try {
+			const [owner] = await db()
+				.select({
+					email: users.email,
+					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+				})
+				.from(users)
+				.where(eq(users.id, userId as User.UserId));
+			if (isAiGenerationEnabledForUser(owner)) {
+				await startAiGeneration(videoId as Video.VideoId, userId);
+			}
+		} catch (error) {
+			console.warn(
+				`[liveTranscribe] Failed to queue AI generation for ${videoId}`,
+				error,
+			);
+		}
+
+		return { promoted: true };
+	} catch (error) {
+		return {
+			promoted: false,
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+/**
+ * When promotion can't happen, immediately queue the normal full
+ * transcription (early-from-segments) instead of waiting for the post-mux
+ * queue, so a declined promotion costs seconds, not a minute.
+ */
+async function queueFullPassFallback(
+	videoId: string,
+	userId: string,
+): Promise<void> {
+	try {
+		const [owner] = await db()
+			.select({
+				email: users.email,
+				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			})
+			.from(users)
+			.where(eq(users.id, userId as User.UserId));
+
+		await transcribeVideo(
+			videoId as Video.VideoId,
+			userId,
+			isAiGenerationEnabledForUser(owner),
+			{ earlyFromSegments: true },
+		);
+	} catch (error) {
+		console.warn(
+			`[liveTranscribe] Full-pass fallback queue failed for ${videoId}`,
+			error,
+		);
 	}
 }
 

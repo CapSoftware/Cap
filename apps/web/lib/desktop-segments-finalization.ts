@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { users, videoUploads } from "@cap/database/schema";
+import { users, videos, videoUploads } from "@cap/database/schema";
 import type { User, Video } from "@cap/web-domain";
 import { and, eq, notInArray } from "drizzle-orm";
 import { start } from "workflow/api";
@@ -30,6 +30,20 @@ async function queueEarlySegmentsTranscription({
 	videoId: Video.VideoId;
 	userId: User.UserId;
 }): Promise<void> {
+	// An active live transcription is seconds away from promoting itself to
+	// canonical (or queueing this exact fallback itself); starting a full
+	// pass now would pay for the same audio twice.
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, videoId));
+	if (video?.metadata?.liveTranscript?.status === "active") {
+		console.log(
+			`[queueEarlySegmentsTranscription] Live transcription active for ${videoId}; deferring to promotion`,
+		);
+		return;
+	}
+
 	const [owner] = await db()
 		.select({
 			email: users.email,
