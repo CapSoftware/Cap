@@ -1,7 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { db } from "@cap/database";
 import { organizations, users, videoEdits, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -21,7 +17,6 @@ import {
 	ASSEMBLYAI_SUPPORTED_LANGUAGES,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
-import { extractAudioFromUrl } from "@/lib/audio-extract";
 import {
 	getEditTranscriptObjectKey,
 	serializeEditTranscript,
@@ -36,13 +31,13 @@ import {
 	isNoSpokenAudioError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
-	liveTranscriptToEditTranscript,
 	type LiveTranscriptState,
+	liveTranscriptToEditTranscript,
 	offsetChunkWords,
 	parseLiveTranscript,
 	planNextLiveChunk,
 } from "@/lib/live-transcribe-core";
-import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
+import { downloadConcatenatedSegmentsToBuffer } from "@/lib/segments-audio-download";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -421,19 +416,11 @@ async function processNextLiveChunk(options: {
 			),
 		]);
 
-		const concatPath = join(tmpdir(), `live-chunk-${randomUUID()}.mp4`);
-		let audioBuffer: Buffer;
-		try {
-			await downloadConcatenatedSegments(segmentUrls, concatPath);
-			const extracted = await extractAudioFromUrl(concatPath);
-			try {
-				audioBuffer = await fs.readFile(extracted.filePath);
-			} finally {
-				await extracted.cleanup();
-			}
-		} finally {
-			await fs.unlink(concatPath).catch(() => {});
-		}
+		// init + fragments concatenate into a valid fragmented MP4 that
+		// AssemblyAI ingests directly (verified: full files, mid-stream chunks
+		// with chunk-relative timestamps, and real desktop uploads). No local
+		// ffmpeg — the binary doesn't exist in the serverless runtime.
+		const audioBuffer = await downloadConcatenatedSegmentsToBuffer(segmentUrls);
 
 		const client = new AssemblyAI({
 			apiKey: serverEnv().ASSEMBLY_API_KEY as string,

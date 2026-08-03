@@ -38,13 +38,13 @@ import {
 } from "@/lib/edit-transcript";
 import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
 import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
-import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
 import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
 import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -718,18 +718,17 @@ async function extractAudioFromSegmentsImpl(
 				`[transcribe] Assembled ${plan.entries.length} audio segments (${totalBytes} bytes) for ${videoId}`,
 			);
 
-			const result = await extractAudioFromUrl(concatPath);
-			let audioBuffer: Buffer;
-			try {
-				audioBuffer = await fs.readFile(result.filePath);
-			} finally {
-				await result.cleanup();
-			}
+			// The concatenated init + fragments form a valid fragmented MP4 that
+			// AssemblyAI ingests directly — no transcode, and no ffmpeg binary
+			// (which is not available in the serverless runtime). The temp object
+			// keeps the same key regardless of container so cleanupTempAudio's
+			// contract is untouched.
+			const audioBuffer = await fs.readFile(concatPath);
 
 			const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
 			await bucket
 				.putObject(audioKey, audioBuffer, {
-					contentType: "audio/mpeg",
+					contentType: "audio/mp4",
 				})
 				.pipe(runWorkflowPromise);
 

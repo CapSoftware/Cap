@@ -7,13 +7,64 @@ import { createWriteStream } from "node:fs";
  */
 
 /**
- * Sized so concat fMP4 + extracted mp3 both fit a 512MB serverless /tmp with
- * headroom (~2h of 192kbps AAC). Beyond it the caller gets a clean
- * "unavailable" and defers to the post-mux path instead of ENOSPC/OOM.
+ * Sized to fit a 512MB serverless /tmp (and memory) with plenty of headroom
+ * (~2h of 192kbps AAC). Beyond it the caller gets a clean "unavailable" and
+ * defers to the post-mux path instead of ENOSPC/OOM.
  */
 const MAX_SEGMENTS_AUDIO_BYTES = 192 * 1024 * 1024;
 
 const DEFAULT_DOWNLOAD_CONCURRENCY = 8;
+
+/**
+ * Download objects and byte-concatenate them, in order, into one Buffer. An
+ * fMP4 init segment followed by its fragments concatenates into a valid
+ * fragmented MP4 that AssemblyAI ingests directly — no transcode step, no
+ * ffmpeg binary (which is not available in the serverless runtime). Only for
+ * bounded inputs like live chunks; use the file variant for whole recordings.
+ */
+export async function downloadConcatenatedSegmentsToBuffer(
+	urls: string[],
+	options: {
+		concurrency?: number;
+		maxBytes?: number;
+		fetchImpl?: typeof fetch;
+	} = {},
+): Promise<Buffer> {
+	const concurrency = Math.max(
+		1,
+		options.concurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY,
+	);
+	const maxBytes = options.maxBytes ?? MAX_SEGMENTS_AUDIO_BYTES;
+	const fetchImpl = options.fetchImpl ?? fetch;
+
+	const buffers: Buffer[] = [];
+	let totalBytes = 0;
+
+	for (let start = 0; start < urls.length; start += concurrency) {
+		const batch = urls.slice(start, start + concurrency);
+		const batchBuffers = await Promise.all(
+			batch.map(async (url, offset) => {
+				const response = await fetchImpl(url);
+				if (!response.ok) {
+					throw new Error(
+						`Segment ${start + offset} not accessible: ${response.status}`,
+					);
+				}
+				return Buffer.from(await response.arrayBuffer());
+			}),
+		);
+
+		for (const buffer of batchBuffers) {
+			totalBytes += buffer.length;
+			if (totalBytes > maxBytes) {
+				throw new Error(`Segment audio exceeds ${maxBytes} bytes`);
+			}
+			buffers.push(buffer);
+		}
+	}
+
+	return Buffer.concat(buffers);
+}
 
 /**
  * Download objects and byte-concatenate them, in order, into `outputPath`.

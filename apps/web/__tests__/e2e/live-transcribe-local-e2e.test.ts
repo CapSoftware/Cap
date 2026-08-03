@@ -22,7 +22,6 @@ import { AssemblyAI } from "assemblyai";
 import { Either, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
-import { extractAudioFromUrl } from "@/lib/audio-extract";
 import {
 	createEditTranscript,
 	editTranscriptWordsToCaptionVtt,
@@ -35,7 +34,10 @@ import {
 	planNextLiveChunk,
 } from "@/lib/live-transcribe-core";
 import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
-import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
+import {
+	downloadConcatenatedSegments,
+	downloadConcatenatedSegmentsToBuffer,
+} from "@/lib/segments-audio-download";
 
 const enabled =
 	process.env.CAP_TRANSCRIBE_E2E === "1" &&
@@ -69,15 +71,6 @@ const presign = (client: S3Client, key: string) =>
 	getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), {
 		expiresIn: 3600,
 	});
-
-async function extractMp3(concatPath: string): Promise<Buffer> {
-	const extracted = await extractAudioFromUrl(concatPath);
-	try {
-		return await fs.readFile(extracted.filePath);
-	} finally {
-		await extracted.cleanup();
-	}
-}
 
 async function transcribeBuffer(
 	audio: Buffer,
@@ -139,15 +132,17 @@ describe.skipIf(!enabled)("segments transcription local e2e", () => {
 					`[e2e] concatenated ${plan.entries.length} segments: ${bytes} bytes, expected ~${Math.round(plan.totalDurationMs / 1000)}s audio`,
 				);
 
-				const mp3 = await extractMp3(concatPath);
-				expect(mp3.length).toBeGreaterThan(10_000);
+				// The raw fMP4 concat goes to AssemblyAI directly — the production
+				// path has no transcode step and no ffmpeg.
+				const fmp4 = await fs.readFile(concatPath);
+				expect(fmp4.length).toBeGreaterThan(10_000);
 
-				const full = await transcribeBuffer(mp3, "auto");
+				const full = await transcribeBuffer(fmp4, "auto");
 				const audioDurationMs = (full.audio_duration ?? 0) * 1000;
 				// ffmpeg-decoded duration must match the manifest's segment sum
-				expect(
-					Math.abs(audioDurationMs - plan.totalDurationMs),
-				).toBeLessThan(3000);
+				expect(Math.abs(audioDurationMs - plan.totalDurationMs)).toBeLessThan(
+					3000,
+				);
 
 				const edit = createEditTranscript(full, plan.totalDurationMs);
 				const vtt = editTranscriptWordsToCaptionVtt(edit.words);
@@ -160,9 +155,8 @@ describe.skipIf(!enabled)("segments transcription local e2e", () => {
 				const artifactChunks: string[] = [];
 				let artifact = createEmptyLiveTranscript(new Date().toISOString());
 				let lastIndex = LIVE_TRANSCRIPT_NO_SEGMENTS;
-				let language: Parameters<
-					typeof getAssemblyAITranscriptionOptions
-				>[0] = "auto";
+				let language: Parameters<typeof getAssemblyAITranscriptionOptions>[0] =
+					"auto";
 
 				for (let i = 0; i < 20; i++) {
 					const decision = planNextLiveChunk({
@@ -185,11 +179,10 @@ describe.skipIf(!enabled)("segments transcription local e2e", () => {
 							),
 						),
 					]);
-					const chunkPath = join(tmpdir(), `e2e-chunk-${randomUUID()}.mp4`);
-					try {
-						await downloadConcatenatedSegments(chunkUrls, chunkPath);
-						const chunkMp3 = await extractMp3(chunkPath);
-						const chunkTranscript = await transcribeBuffer(chunkMp3, language);
+					{
+						const chunkFmp4 =
+							await downloadConcatenatedSegmentsToBuffer(chunkUrls);
+						const chunkTranscript = await transcribeBuffer(chunkFmp4, language);
 
 						const words = offsetChunkWords(
 							chunkTranscript.words,
@@ -217,8 +210,6 @@ describe.skipIf(!enabled)("segments transcription local e2e", () => {
 						console.log(
 							`[e2e] CHUNK ${artifactChunks.length}: segments ..${lastIndex}, +${words.length} words @ ${decision.startMs}ms`,
 						);
-					} finally {
-						await fs.unlink(chunkPath).catch(() => {});
 					}
 				}
 
