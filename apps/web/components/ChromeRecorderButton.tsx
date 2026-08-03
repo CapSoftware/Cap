@@ -16,7 +16,8 @@ export function ChromeRecorderButton({
 	size = "sm",
 	variant = "white",
 }: ChromeRecorderButtonProps) {
-	const { isInstalled, openRecorder } = useCapChromeExtension();
+	const { isChromeBrowser, isInstalled, openRecorder } =
+		useCapChromeExtension();
 
 	const handleClick: React.MouseEventHandler<HTMLButtonElement> = (event) => {
 		if (!isInstalled) return;
@@ -24,6 +25,8 @@ export function ChromeRecorderButton({
 		event.preventDefault();
 		openRecorder();
 	};
+
+	if (!isChromeBrowser && !isInstalled) return null;
 
 	return (
 		<ChromeExtensionButton
