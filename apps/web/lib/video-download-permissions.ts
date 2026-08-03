@@ -12,7 +12,7 @@ export async function canUserDownloadVideo({
 	userId,
 	ownerId,
 	videoId,
-	orgId,
+	orgId: _orgId,
 }: {
 	userId: User.UserId;
 	ownerId: User.UserId;
@@ -26,20 +26,22 @@ export async function canUserDownloadVideo({
 		.from(sharedVideos)
 		.where(eq(sharedVideos.videoId, videoId));
 
-	const orgIds = [orgId, ...sharedOrgs.map((org) => org.organizationId)];
+	if (sharedOrgs.length > 0) {
+		const orgIds = sharedOrgs.map((org) => org.organizationId);
 
-	const [orgMembership] = await db()
-		.select({ id: organizationMembers.id })
-		.from(organizationMembers)
-		.where(
-			and(
-				eq(organizationMembers.userId, userId),
-				inArray(organizationMembers.organizationId, orgIds),
-			),
-		)
-		.limit(1);
+		const [orgMembership] = await db()
+			.select({ id: organizationMembers.id })
+			.from(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.userId, userId),
+					inArray(organizationMembers.organizationId, orgIds),
+				),
+			)
+			.limit(1);
 
-	if (orgMembership) return true;
+		if (orgMembership) return true;
+	}
 
 	const sharedSpaces = await db()
 		.select({ spaceId: spaceVideos.spaceId })
