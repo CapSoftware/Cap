@@ -101,9 +101,9 @@ const Links: NavItem[] = [
 				href: "/faq",
 			},
 			{
-				label: "Chat support",
-				sub: "Support via chat",
-				href: "https://discord.gg/y8gdQ3WRN3",
+				label: "Changelog",
+				sub: "New features, improvements, and fixes",
+				href: "/changelog",
 			},
 		],
 	},
