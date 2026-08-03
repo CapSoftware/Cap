@@ -3,6 +3,7 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { useLiveTranscript } from "hooks/use-live-transcript";
 import { useTranscript } from "hooks/use-transcript";
 import { CheckCircle2, Info, Loader2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -21,6 +22,7 @@ import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segme
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { CapVideoPlayer } from "./CapVideoPlayer";
+import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
 	shouldDeferPlaybackSource,
@@ -108,6 +110,7 @@ export const ShareVideo = forwardRef<
 			string | null
 		>(null);
 		const autoFinalizeAttemptedRef = useRef(false);
+		const pendingReadyRefreshRef = useRef(false);
 		const segmentUploadProgress = useUploadProgress(
 			data.id,
 			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
@@ -117,6 +120,21 @@ export const ShareVideo = forwardRef<
 			data.id,
 			data.transcriptionStatus,
 		);
+
+		// Captions straight from the in-progress live transcript, so the player
+		// shows them during and right after recording instead of waiting for the
+		// canonical transcript (which takes over seamlessly when it lands).
+		const isLiveTranscriptEnabled =
+			data.source.type === "desktopSegments" &&
+			data.metadata?.liveTranscript != null &&
+			(data.transcriptionStatus == null ||
+				data.transcriptionStatus === "PROCESSING");
+		const { data: liveTranscript } = useLiveTranscript(
+			data.id,
+			isLiveTranscriptEnabled,
+		);
+		const liveVttContent =
+			liveTranscript?.kind === "ready" ? liveTranscript.content : null;
 
 		// Handle comments data
 		useEffect(() => {
@@ -170,8 +188,16 @@ export const ShareVideo = forwardRef<
 				return;
 			}
 
-			if (data.transcriptionStatus === "COMPLETE" && vttContent) {
-				const blob = new Blob([vttContent], { type: "text/vtt" });
+			const effectiveVtt =
+				data.transcriptionStatus === "COMPLETE" && vttContent
+					? vttContent
+					: // The live transcript only exists in the original language.
+						captionContext.selectedLanguage === "original"
+						? liveVttContent
+						: null;
+
+			if (effectiveVtt) {
+				const blob = new Blob([effectiveVtt], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
 				setSubtitleUrl((prev) => {
 					if (prev) {
@@ -194,6 +220,7 @@ export const ShareVideo = forwardRef<
 			data.transcriptionStatus,
 			captionContext.currentVttContent,
 			captionContext.selectedLanguage,
+			liveVttContent,
 		]);
 
 		useEffect(() => {
@@ -312,19 +339,73 @@ export const ShareVideo = forwardRef<
 					previousSegmentUploadProgressRef.current,
 					segmentUploadProgress,
 					{ includeFetching: true },
-				)
+				) &&
+				!pendingReadyRefreshRef.current
 			) {
-				router.refresh();
+				// Deferred so the player swap never restarts playback mid-view.
+				pendingReadyRefreshRef.current = true;
+				scheduleReadyRefresh({
+					video: videoRef.current,
+					videoId: data.id,
+					refresh: () => router.refresh(),
+				});
 			}
 
 			previousSegmentUploadProgressRef.current = segmentUploadProgress;
 		}, [
 			data.hasActiveUpload,
+			data.id,
 			isSegmentsSource,
 			router,
 			segmentUploadProgress,
 			userConfirmedStopped,
 		]);
+
+		// After the deferred ready-refresh swaps the live HLS player for the MP4
+		// player, resume where the viewer left off instead of restarting.
+		useEffect(() => {
+			if (!isMp4Source) return;
+			let raw: string | null = null;
+			try {
+				raw = sessionStorage.getItem(`cap-playback-resume:${data.id}`);
+				if (raw) sessionStorage.removeItem(`cap-playback-resume:${data.id}`);
+			} catch {}
+			if (!raw) return;
+
+			let resumeAt = 0;
+			try {
+				const parsed = JSON.parse(raw) as { t?: number; savedAt?: number };
+				if (
+					typeof parsed.t === "number" &&
+					Number.isFinite(parsed.t) &&
+					Date.now() - (parsed.savedAt ?? 0) < 10 * 60 * 1000
+				) {
+					resumeAt = parsed.t;
+				}
+			} catch {}
+			if (resumeAt <= 0) return;
+
+			const trySeek = () => {
+				const video = videoRef.current;
+				if (video && video.readyState >= 1) {
+					video.currentTime = Number.isFinite(video.duration)
+						? Math.min(resumeAt, Math.max(0, video.duration - 0.25))
+						: resumeAt;
+					return true;
+				}
+				return false;
+			};
+
+			if (trySeek()) return;
+			const interval = setInterval(() => {
+				if (trySeek()) clearInterval(interval);
+			}, 250);
+			const stop = setTimeout(() => clearInterval(interval), 10_000);
+			return () => {
+				clearInterval(interval);
+				clearTimeout(stop);
+			};
+		}, [isMp4Source, data.id]);
 
 		let videoSrc: string;
 		const rawFallbackSrc =
@@ -418,7 +499,10 @@ export const ShareVideo = forwardRef<
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							hasCaptions={
+								data.transcriptionStatus === "COMPLETE" ||
+								liveVttContent != null
+							}
 							canRetryProcessing={canRetryProcessing}
 						/>
 					) : (
@@ -441,7 +525,10 @@ export const ShareVideo = forwardRef<
 							onCaptionLanguageChange={handleCaptionLanguageChange}
 							availableCaptions={captionContext.availableTranslations}
 							isCaptionLoading={captionContext.isTranslating}
-							hasCaptions={data.transcriptionStatus === "COMPLETE"}
+							hasCaptions={
+								data.transcriptionStatus === "COMPLETE" ||
+								liveVttContent != null
+							}
 							canRetryProcessing={canRetryProcessing}
 						/>
 					)}

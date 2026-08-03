@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -523,6 +524,7 @@ export function HLSVideoPlayer({
 
 	const prevUploadProgress =
 		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
+	const pendingReadyRefreshRef = useRef(false);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
@@ -531,8 +533,13 @@ export function HLSVideoPlayer({
 				{ includeFetching: isLiveSegments },
 			)
 		) {
-			if (isLiveSegments) {
-				router.refresh();
+			if (isLiveSegments && !pendingReadyRefreshRef.current) {
+				pendingReadyRefreshRef.current = true;
+				scheduleReadyRefresh({
+					video: videoRef.current,
+					videoId,
+					refresh: () => router.refresh(),
+				});
 			}
 
 			if (!isLiveSegments || !videoLoadedRef.current) {
@@ -541,7 +548,14 @@ export function HLSVideoPlayer({
 			}
 		}
 		prevUploadProgress.current = uploadProgressRaw;
-	}, [isLiveSegments, router, uploadProgressRaw, reloadPlayback]);
+	}, [
+		isLiveSegments,
+		router,
+		uploadProgressRaw,
+		reloadPlayback,
+		videoRef,
+		videoId,
+	]);
 
 	return (
 		<MediaPlayer
