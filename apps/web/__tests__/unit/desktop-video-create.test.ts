@@ -247,4 +247,92 @@ describe("GET /create", () => {
 			orgId: orgValues?.id,
 		});
 	});
+
+	it("routes a stale explicit orgId to the provisioned org when the user has none", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "grant@cap.test",
+			defaultOrgId: "org-stale",
+			activeOrganizationId: "",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request(
+			"https://cap.test/create?orgId=org-stale",
+		);
+
+		expect(response.status).toBe(200);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+
+		const orgValues = insertedValues(schema.organizations) as
+			| { id: string }
+			| undefined;
+
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: orgValues?.id,
+		});
+
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({ defaultOrgId: orgValues?.id }),
+		);
+	});
+
+	it("falls back to the default org when a stale explicit orgId is sent and the user still has orgs", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request(
+			"https://cap.test/create?orgId=org-stale",
+		);
+
+		expect(response.status).toBe(200);
+		expect(mockDb.transaction).not.toHaveBeenCalled();
+
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-1",
+			ownerId: "user-1",
+		});
+	});
+
+	it("honours an explicit orgId the user belongs to", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([
+				{ id: "org-2", name: "Team", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request("https://cap.test/create?orgId=org-2");
+
+		expect(response.status).toBe(200);
+		expect(mockDb.transaction).not.toHaveBeenCalled();
+
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-2",
+			ownerId: "user-1",
+		});
+	});
 });
