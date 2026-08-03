@@ -3,11 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import { getLiveTranscript } from "@/actions/videos/get-live-transcript";
 import type { LiveTranscriptState } from "@/lib/live-transcribe-core";
 
-export interface LiveTranscriptData {
-	content: string;
-	state: LiveTranscriptState;
-	updatedAt?: string;
-}
+export type LiveTranscriptData =
+	| {
+			kind: "ready";
+			content: string;
+			state: LiveTranscriptState;
+			updatedAt?: string;
+	  }
+	/** No artifact yet — the first chunk hasn't landed; keep polling. */
+	| { kind: "pending" }
+	/** The server said nothing will ever appear for us — stop polling. */
+	| { kind: "stopped" };
 
 /** Live transcription is still appending; poll often enough to feel live. */
 const ACTIVE_POLL_INTERVAL = 5000;
@@ -24,12 +30,14 @@ const SETTLED_POLL_INTERVAL = 15000;
 export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
 	return useQuery({
 		queryKey: ["liveTranscript", videoId],
-		queryFn: async (): Promise<LiveTranscriptData | null> => {
+		queryFn: async (): Promise<LiveTranscriptData> => {
 			const result = await getLiveTranscript(videoId);
 
-			if (!result.success || !result.content) return null;
+			if (result.stop) return { kind: "stopped" };
+			if (!result.success || !result.content) return { kind: "pending" };
 
 			return {
+				kind: "ready",
 				content: result.content,
 				state: result.state ?? "active",
 				updatedAt: result.updatedAt,
@@ -37,10 +45,12 @@ export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
 		},
 		enabled,
 		refetchInterval: (query) => {
-			const state = query.state.data?.state;
-			return state === "complete" || state === "stopped"
-				? SETTLED_POLL_INTERVAL
-				: ACTIVE_POLL_INTERVAL;
+			const data = query.state.data;
+			if (data?.kind === "stopped") return false;
+			if (data?.kind === "ready" && data.state !== "active") {
+				return SETTLED_POLL_INTERVAL;
+			}
+			return ACTIVE_POLL_INTERVAL;
 		},
 		refetchIntervalInBackground: false,
 		staleTime: 0,

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	getObject: vi.fn(),
 	getInternalSignedObjectUrl: vi.fn(),
 	startAiGeneration: vi.fn(),
+	startWorkflow: vi.fn(),
 	updates: [] as Record<string, unknown>[],
 }));
 
@@ -90,6 +91,7 @@ vi.mock("@cap/database", () => ({
 vi.mock("drizzle-orm", () => ({
 	and: (...conditions: unknown[]) => ({ conditions }),
 	eq: (field: unknown, value: unknown) => ({ field, value }),
+	isNull: (field: unknown) => ({ isNull: field }),
 	sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
 		strings,
 		values,
@@ -100,6 +102,10 @@ vi.mock("server-only", () => ({}));
 
 vi.mock("workflow", () => ({
 	FatalError: class FatalError extends Error {},
+}));
+
+vi.mock("workflow/api", () => ({
+	start: mocks.startWorkflow,
 }));
 
 vi.mock("assemblyai", () => ({
@@ -171,8 +177,14 @@ const manifest = {
 	version: 5,
 	video_init_uploaded: true,
 	audio_init_uploaded: true,
-	video_segments: [{ index: 1, duration: 2 }, { index: 2, duration: 2 }],
-	audio_segments: [{ index: 1, duration: 2 }, { index: 2, duration: 2.5 }],
+	video_segments: [
+		{ index: 1, duration: 2 },
+		{ index: 2, duration: 2 },
+	],
+	audio_segments: [
+		{ index: 1, duration: 2 },
+		{ index: 2, duration: 2.5 },
+	],
 	is_complete: true,
 };
 
@@ -183,6 +195,8 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		videoRow.duration = null;
 		videoRow.source = { type: "desktopSegments" };
 		mocks.transcribe.mockReset();
+		mocks.startWorkflow.mockReset();
+		mocks.startWorkflow.mockResolvedValue(undefined);
 		mocks.transcribe.mockResolvedValue({
 			...assemblyAIEditResponse,
 			audio_duration: 4,
@@ -233,9 +247,7 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		const signedKeys = mocks.getInternalSignedObjectUrl.mock.calls.map(
 			(call) => call[0],
 		);
-		expect(signedKeys).toContain(
-			"user-456/video-123/segments/audio/init.mp4",
-		);
+		expect(signedKeys).toContain("user-456/video-123/segments/audio/init.mp4");
 		expect(signedKeys).toContain(
 			"user-456/video-123/segments/audio/segment_001.m4s",
 		);
@@ -262,8 +274,11 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 			(call) => call[0] === "user-456/video-123/transcription.edit.v3.json",
 		);
 		const stored = parseEditTranscript(
-			decryptEditTranscriptObject(write?.[1] as string, "user-456", "video-123") ??
-				"",
+			decryptEditTranscriptObject(
+				write?.[1] as string,
+				"user-456",
+				"video-123",
+			) ?? "",
 		);
 		expect(stored?.durationMs).toBe(4500);
 
@@ -295,11 +310,19 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 		expect(mocks.updates).not.toContainEqual({
 			transcriptionStatus: "COMPLETE",
 		});
+		// and the video is re-offered to the normal (non-early) path, because
+		// the post-mux queue may already have run and been rejected by the claim
+		expect(mocks.startWorkflow).toHaveBeenCalledTimes(1);
+		expect(mocks.startWorkflow.mock.calls[0]?.[1]).toEqual([
+			{ videoId: "video-123", userId: "user-456", aiGenerationEnabled: false },
+		]);
 	});
 
 	it("defers when the manifest exists but is not complete", async () => {
 		mocks.getObject.mockImplementation(() =>
-			pipeValue(Option.some(JSON.stringify({ ...manifest, is_complete: false }))),
+			pipeValue(
+				Option.some(JSON.stringify({ ...manifest, is_complete: false })),
+			),
 		);
 
 		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
@@ -338,7 +361,8 @@ describe("transcribeVideoWorkflow earlyFromSegments", () => {
 
 		expect(result.success).toBe(true);
 		expect(mocks.transcribe).not.toHaveBeenCalled();
-		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "NO_AUDIO" });
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
+		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
 	});
 
 	it("falls back to segment audio in the normal path when no muxed source exists", async () => {

@@ -180,6 +180,10 @@ export function getLiveTranscriptObjectKey(ownerId: string, videoId: string) {
 	return `${ownerId}/${videoId}/transcription.live.json`;
 }
 
+/** Sentinel for "nothing processed yet": 0 is a legitimate segment index in
+ * 0-based manifests, so the cursor starts below every real index. */
+export const LIVE_TRANSCRIPT_NO_SEGMENTS = -1;
+
 export function createEmptyLiveTranscript(
 	nowIso: string,
 ): LiveTranscriptArtifact {
@@ -187,7 +191,7 @@ export function createEmptyLiveTranscript(
 		version: LIVE_TRANSCRIPT_VERSION,
 		state: "active",
 		languageCode: null,
-		lastAudioSegmentIndex: 0,
+		lastAudioSegmentIndex: LIVE_TRANSCRIPT_NO_SEGMENTS,
 		transcribedDurationMs: 0,
 		words: [],
 		vtt: editTranscriptWordsToCaptionVtt([]),

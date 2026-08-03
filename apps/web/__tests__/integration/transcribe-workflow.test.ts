@@ -89,6 +89,7 @@ vi.mock("@cap/database", () => ({
 vi.mock("drizzle-orm", () => ({
 	and: (...conditions: unknown[]) => ({ conditions }),
 	eq: (field: unknown, value: unknown) => ({ field, value }),
+	isNull: (field: unknown) => ({ isNull: field }),
 	sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
 		strings,
 		values,
@@ -99,6 +100,10 @@ vi.mock("server-only", () => ({}));
 
 vi.mock("workflow", () => ({
 	FatalError: class FatalError extends Error {},
+}));
+
+vi.mock("workflow/api", () => ({
+	start: vi.fn(),
 }));
 
 vi.mock("assemblyai", () => ({

@@ -18,9 +18,10 @@ import {
 	Video,
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
+import { start } from "workflow/api";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -120,10 +121,14 @@ export async function transcribeVideoWorkflow(
 			}
 
 			if (segments.status !== "ok" || !segments.audioUrl) {
-				// Give the claim back so the normal post-mux queue re-triggers; the
-				// worst case of the early path must be today's timing, not an ERROR.
-				await deferEarlyTranscription(videoId);
+				// The early path must never end worse than today's timing: clean up
+				// while we still hold the claim, release it, then explicitly re-offer
+				// the video to the normal path — the post-mux queue may have already
+				// run and been rejected by our claim, so we cannot rely on it firing
+				// again.
 				await cleanupTempAudio(videoId, userId, videoData.video);
+				await deferEarlyTranscription(videoId);
+				await requeueAfterEarlyDefer(videoId, userId, aiGenerationEnabled);
 				return {
 					success: true,
 					message: `Early transcription deferred: ${
@@ -338,6 +343,33 @@ async function validateEditTranscriptBackfill(
 	return video;
 }
 
+/**
+ * Every terminal transcription outcome must clear the live-transcription
+ * metadata flag, or share pages keep polling for a live transcript that can
+ * never resolve. Guarded so videos without the flag see a 0-row update.
+ */
+async function clearLiveTranscriptFlag(videoId: string): Promise<void> {
+	try {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+				updatedAt: sql`${videos.updatedAt}`,
+			})
+			.where(
+				and(
+					eq(videos.id, videoId as Video.VideoId),
+					sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript') IS NOT NULL`,
+				),
+			);
+	} catch (error) {
+		console.warn(
+			`[transcribe] Failed to clear live transcript flag for ${videoId}`,
+			error,
+		);
+	}
+}
+
 async function markSkipped(videoId: string): Promise<void> {
 	"use step";
 
@@ -345,6 +377,7 @@ async function markSkipped(videoId: string): Promise<void> {
 		.update(videos)
 		.set({ transcriptionStatus: "SKIPPED" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+	await clearLiveTranscriptFlag(videoId);
 }
 
 async function markNoAudio(videoId: string): Promise<void> {
@@ -354,6 +387,7 @@ async function markNoAudio(videoId: string): Promise<void> {
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+	await clearLiveTranscriptFlag(videoId);
 }
 
 async function markError(videoId: string): Promise<void> {
@@ -368,6 +402,7 @@ async function markError(videoId: string): Promise<void> {
 				eq(videos.transcriptionStatus, "PROCESSING"),
 			),
 		);
+	await clearLiveTranscriptFlag(videoId);
 }
 
 async function deferEarlyTranscription(videoId: string): Promise<void> {
@@ -382,6 +417,61 @@ async function deferEarlyTranscription(videoId: string): Promise<void> {
 				eq(videos.transcriptionStatus, "PROCESSING"),
 			),
 		);
+}
+
+/**
+ * After an early-path deferral, put the video back on the normal
+ * transcription path. Mirrors lib/transcribe.ts semantics without importing
+ * it (that would be a module cycle): no-op while the mux still owns the
+ * upload row — its completion queues transcription — otherwise claim and
+ * start a normal (non-early) workflow right away.
+ */
+async function requeueAfterEarlyDefer(
+	videoId: string,
+	userId: string,
+	aiGenerationEnabled: boolean,
+): Promise<void> {
+	"use step";
+
+	const upload = await db()
+		.select({ phase: videoUploads.phase })
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
+		.limit(1);
+
+	if (
+		upload[0]?.phase === "uploading" ||
+		upload[0]?.phase === "processing" ||
+		upload[0]?.phase === "generating_thumbnail"
+	) {
+		return;
+	}
+
+	const claim = await db()
+		.update(videos)
+		.set({ transcriptionStatus: "PROCESSING" })
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				isNull(videos.transcriptionStatus),
+			),
+		);
+	const affectedRows = Array.isArray(claim)
+		? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
+		: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+	if (affectedRows === 0) return;
+
+	try {
+		await start(transcribeVideoWorkflow, [
+			{ videoId, userId, aiGenerationEnabled },
+		]);
+	} catch (error) {
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: null })
+			.where(eq(videos.id, videoId as Video.VideoId));
+		throw error;
+	}
 }
 
 async function extractAudio(
@@ -812,19 +902,13 @@ async function saveTranscription(
 			await bucket
 				.deleteObject(getLiveTranscriptObjectKey(userId, videoId))
 				.pipe(runWorkflowPromise);
-			await db()
-				.update(videos)
-				.set({
-					metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
-					updatedAt: sql`${videos.updatedAt}`,
-				})
-				.where(eq(videos.id, videoId as Video.VideoId));
 		} catch (error) {
 			console.warn(
 				`[transcribe] Failed to clean up live transcript for ${videoId}`,
 				error,
 			);
 		}
+		await clearLiveTranscriptFlag(videoId);
 	}
 }
 

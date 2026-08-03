@@ -24,6 +24,7 @@ import {
 	createEmptyLiveTranscript,
 	getLiveTranscriptObjectKey,
 	LIVE_TRANSCRIBE,
+	LIVE_TRANSCRIPT_NO_SEGMENTS,
 	type LiveTranscriptState,
 	offsetChunkWords,
 	parseLiveTranscript,
@@ -195,7 +196,7 @@ async function initLiveTranscription(
 
 	// Resume from a previous run's artifact after a crash/redeploy so already
 	// paid-for chunks are never re-transcribed.
-	let lastAudioSegmentIndex = 0;
+	let lastAudioSegmentIndex = LIVE_TRANSCRIPT_NO_SEGMENTS;
 	let transcribedDurationMs = 0;
 	let languageCode: string | null = null;
 	try {
@@ -399,6 +400,21 @@ async function processNextLiveChunk(options: {
 					: null,
 			nowIso: new Date().toISOString(),
 		});
+
+		// Polling + the AssemblyAI round trip can take minutes; re-check that the
+		// canonical pipeline didn't complete meanwhile, or this write would
+		// re-create the artifact it just deleted (an orphan billed forever).
+		const [current] = await db()
+			.select({ transcriptionStatus: videos.transcriptionStatus })
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId));
+		if (
+			current?.transcriptionStatus === "COMPLETE" ||
+			current?.transcriptionStatus === "SKIPPED" ||
+			current?.transcriptionStatus === "NO_AUDIO"
+		) {
+			return { outcome: "canonical-done" };
+		}
 
 		const body = JSON.stringify(updated);
 		await bucket

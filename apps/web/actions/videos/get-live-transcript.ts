@@ -21,6 +21,8 @@ export type GetLiveTranscriptResult = {
 	content?: string;
 	state?: LiveTranscriptState;
 	updatedAt?: string;
+	/** Nothing will ever become available for this caller — stop polling. */
+	stop?: boolean;
 };
 
 /**
@@ -44,18 +46,29 @@ export async function getLiveTranscript(
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
 	if (Exit.isFailure(exit)) {
-		return { success: false, message: "Video not found" };
+		return { success: false, stop: true, message: "Video not found" };
 	}
 
 	const video = exit.value[0]?.video;
 	if (!video) {
-		return { success: false, message: "Video not found" };
+		return { success: false, stop: true, message: "Video not found" };
 	}
 
-	// Once the canonical transcript exists the live one is superseded (and
-	// normally already deleted); send clients to getTranscript instead.
+	// Once the canonical transcription resolved — successfully or not — the
+	// live transcript is superseded; polling can never produce anything new.
 	if (video.transcriptionStatus === "COMPLETE") {
-		return { success: false, message: "Transcript is ready" };
+		return { success: false, stop: true, message: "Transcript is ready" };
+	}
+	if (
+		video.transcriptionStatus === "ERROR" ||
+		video.transcriptionStatus === "SKIPPED" ||
+		video.transcriptionStatus === "NO_AUDIO"
+	) {
+		return {
+			success: false,
+			stop: true,
+			message: "Transcript is not available",
+		};
 	}
 
 	try {

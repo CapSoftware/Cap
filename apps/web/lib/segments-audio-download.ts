@@ -6,8 +6,12 @@ import { createWriteStream } from "node:fs";
  * Node.js modules in) can import the planners; only step code imports this.
  */
 
-/** Segment fetches beyond this are almost certainly a bug, not a recording. */
-const MAX_SEGMENTS_AUDIO_BYTES = 1_536 * 1024 * 1024;
+/**
+ * Sized so concat fMP4 + extracted mp3 both fit a 512MB serverless /tmp with
+ * headroom (~2h of 192kbps AAC). Beyond it the caller gets a clean
+ * "unavailable" and defers to the post-mux path instead of ENOSPC/OOM.
+ */
+const MAX_SEGMENTS_AUDIO_BYTES = 192 * 1024 * 1024;
 
 const DEFAULT_DOWNLOAD_CONCURRENCY = 8;
 

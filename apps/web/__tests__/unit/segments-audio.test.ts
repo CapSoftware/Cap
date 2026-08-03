@@ -53,7 +53,12 @@ describe("planSegmentsAudioExtraction", () => {
 		const plan = planSegmentsAudioExtraction({
 			...completeManifest,
 			// bare numbers use the 3.0s fallback duration, matching /api/playlist
-			audio_segments: [{ index: 2, duration: 1.5 }, 3, { index: 2, duration: 9 }, 1],
+			audio_segments: [
+				{ index: 2, duration: 1.5 },
+				3,
+				{ index: 2, duration: 9 },
+				1,
+			],
 		});
 
 		expect(plan).toEqual({

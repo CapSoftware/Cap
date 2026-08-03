@@ -88,7 +88,15 @@ describe("planNextLiveChunk", () => {
 			manifest: {
 				...baseManifest,
 				// segment 3 missing: only 1..2 may be considered
-				audio_segments: [seg(1), seg(2), seg(4), seg(5), seg(6), seg(7), seg(8)],
+				audio_segments: [
+					seg(1),
+					seg(2),
+					seg(4),
+					seg(5),
+					seg(6),
+					seg(7),
+					seg(8),
+				],
 				is_complete: true,
 			},
 			lastProcessedIndex: 0,
@@ -101,6 +109,26 @@ describe("planNextLiveChunk", () => {
 		});
 		if (decision.action === "chunk") {
 			expect(decision.entries.map((entry) => entry.index)).toEqual([1, 2]);
+		}
+	});
+
+	it("transcribes segment 0 of a 0-based manifest from the fresh-cursor sentinel", () => {
+		const decision = planNextLiveChunk({
+			manifest: {
+				...baseManifest,
+				audio_segments: [seg(0), seg(1), seg(2)],
+				is_complete: true,
+			},
+			lastProcessedIndex: -1,
+			targetSeconds: 15,
+		});
+		expect(decision).toMatchObject({
+			action: "chunk",
+			startMs: 0,
+			durationMs: 6000,
+		});
+		if (decision.action === "chunk") {
+			expect(decision.entries.map((entry) => entry.index)).toEqual([0, 1, 2]);
 		}
 	});
 
@@ -174,11 +202,7 @@ describe("live transcript artifact", () => {
 			startMs: 0,
 			durationMs: 4000,
 			lastAudioSegmentIndex: 2,
-			words: offsetChunkWords(
-				[{ text: "First", start: 0, end: 900 }],
-				0,
-				4000,
-			),
+			words: offsetChunkWords([{ text: "First", start: 0, end: 900 }], 0, 4000),
 			languageCode: "en",
 			nowIso: "2026-08-03T00:00:05.000Z",
 		});

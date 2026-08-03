@@ -19,6 +19,7 @@ import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
+import { after } from "next/server";
 import { z } from "zod";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
@@ -153,11 +154,15 @@ app.get(
 						!video.isScreenshot &&
 						!isScreenshot
 					) {
-						await maybeStartLiveTranscription({
-							videoId: video.id,
-							ownerId: user.id,
-							orgId: video.orgId,
-						});
+						// Off the response path: this endpoint gates recording start on
+						// the desktop, so workflow dispatch must never delay it.
+						after(() =>
+							maybeStartLiveTranscription({
+								videoId: video.id,
+								ownerId: user.id,
+								orgId: video.orgId,
+							}),
+						);
 					}
 
 					return c.json({
@@ -326,11 +331,15 @@ app.get(
 				});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
-				await maybeStartLiveTranscription({
-					videoId: idToUse,
-					ownerId: user.id,
-					orgId: videoOrgId,
-				});
+				// Off the response path: this endpoint gates recording start on the
+				// desktop, so workflow dispatch must never delay it.
+				after(() =>
+					maybeStartLiveTranscription({
+						videoId: idToUse,
+						ownerId: user.id,
+						orgId: videoOrgId,
+					}),
+				);
 			}
 
 			try {

@@ -235,16 +235,21 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 	const isLiveTranscriptEnabled =
 		data.source?.type === "desktopSegments" &&
 		data.metadata?.liveTranscript != null &&
-		data.transcriptionStatus !== "COMPLETE";
+		// Only while the canonical transcription is unresolved; terminal states
+		// (COMPLETE, ERROR, SKIPPED, NO_AUDIO) can never produce live content.
+		(data.transcriptionStatus == null ||
+			data.transcriptionStatus === "PROCESSING");
 
 	const { data: liveTranscript } = useLiveTranscript(
 		data.id,
 		isLiveTranscriptEnabled,
 	);
 
+	const liveTranscriptContent =
+		liveTranscript?.kind === "ready" ? liveTranscript.content : null;
 	const liveTranscriptData = useMemo(
-		() => (liveTranscript?.content ? parseVTT(liveTranscript.content) : []),
-		[liveTranscript?.content],
+		() => (liveTranscriptContent ? parseVTT(liveTranscriptContent) : []),
+		[liveTranscriptContent],
 	);
 
 	const showLiveTranscript =
@@ -501,7 +506,8 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
 	if (isTranscriptionProcessing && !hasTimedOut) {
 		if (showLiveTranscript) {
-			const isLiveActive = liveTranscript?.state === "active";
+			const isLiveActive =
+				liveTranscript?.kind === "ready" && liveTranscript.state === "active";
 
 			return (
 				<div className="flex flex-col h-full">
