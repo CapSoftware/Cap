@@ -15,18 +15,20 @@ import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
  */
 
 export const LIVE_TRANSCRIBE = {
-	/** Chunk window while the recording is young — favors low latency. */
-	INITIAL_CHUNK_SECONDS: 15,
-	/** Chunk window after GROW_AFTER_CHUNKS — favors fewer, cheaper calls. */
-	MAX_CHUNK_SECONDS: 30,
-	GROW_AFTER_CHUNKS: 6,
+	/** First chunk fires fast so a transcript exists almost immediately. */
+	INITIAL_CHUNK_SECONDS: 5,
+	/** Steady-state window. Small on purpose: the untranscribed tail at stop
+	 * averages half this, and that tail is all that stands between "stop" and
+	 * a complete transcript on the share page. */
+	MAX_CHUNK_SECONDS: 10,
+	GROW_AFTER_CHUNKS: 2,
 	/** Catch-up bound: one chunk never covers more audio than this. */
 	MAX_CHUNK_TAKE_SECONDS: 60,
 	/** Hard cost cap: stop live-transcribing after this much audio; the
 	 * canonical post-stop transcription covers the full recording anyway. */
 	MAX_TRANSCRIBED_SECONDS: 60 * 60,
-	/** Hard backstop on chunk count (MAX_TRANSCRIBED / INITIAL implies ~240). */
-	MAX_CHUNKS: 300,
+	/** Hard backstop on chunk count (1h at 10s windows = 360). */
+	MAX_CHUNKS: 420,
 	POLL_INTERVAL_MS: 3_000,
 	/** One waiting step holds its invocation at most this long. */
 	MAX_POLL_MS_PER_STEP: 120_000,

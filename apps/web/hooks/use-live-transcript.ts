@@ -15,6 +15,9 @@ export type LiveTranscriptData =
 	/** The server said nothing will ever appear for us — stop polling. */
 	| { kind: "stopped" };
 
+/** No content yet — the viewer just landed, likely right after recording
+ * stop; poll fast so the transcript appears the moment the tail chunk lands. */
+const PENDING_POLL_INTERVAL = 2000;
 /** Live transcription is still appending; poll often enough to feel live. */
 const ACTIVE_POLL_INTERVAL = 5000;
 /** Live transcription finished; the canonical transcript supersedes it
@@ -47,10 +50,12 @@ export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
 		refetchInterval: (query) => {
 			const data = query.state.data;
 			if (data?.kind === "stopped") return false;
-			if (data?.kind === "ready" && data.state !== "active") {
-				return SETTLED_POLL_INTERVAL;
+			if (data?.kind === "ready") {
+				return data.state === "active"
+					? ACTIVE_POLL_INTERVAL
+					: SETTLED_POLL_INTERVAL;
 			}
-			return ACTIVE_POLL_INTERVAL;
+			return PENDING_POLL_INTERVAL;
 		},
 		refetchIntervalInBackground: false,
 		staleTime: 0,
