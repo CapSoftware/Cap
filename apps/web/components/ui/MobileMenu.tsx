@@ -23,6 +23,7 @@ const primaryLinks: NavLink[] = [
 	{ href: "/pricing", text: "Pricing" },
 	{ href: "/download", text: "Download" },
 	{ href: "/blog", text: "Blog" },
+	{ href: "/changelog", text: "Changelog" },
 	{ href: "/about", text: "About" },
 	{ href: "/testimonials", text: "Testimonials" },
 	{ href: "/faq", text: "FAQs" },
