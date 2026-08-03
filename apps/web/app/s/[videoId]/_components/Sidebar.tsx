@@ -109,7 +109,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			recordingStopped && !isScreenshot && !transcriptDisabled
 				? "transcript"
 				: isScreenshot ||
-						!(videoSettings?.disableComments ?? data.orgSettings?.disableComments)
+						!(
+							videoSettings?.disableComments ??
+							data.orgSettings?.disableComments
+						)
 					? "activity"
 					: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
 						? "summary"
