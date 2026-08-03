@@ -482,8 +482,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</motion.div>
 					<Image
 						src="/illustrations/app.webp"
-						width={1000}
-						height={1000}
+						width={2108}
+						height={1284}
 						quality={75}
 						priority
 						sizes="(min-width: 1536px) 1200px, (min-width: 1280px) 1000px, 100vw"
