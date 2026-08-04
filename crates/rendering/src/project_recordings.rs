@@ -91,6 +91,12 @@ pub struct Audio {
 impl Audio {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
         fn inner(path: &Path, start_time: f64) -> Result<Audio, String> {
+            if let Ok(metadata) = std::fs::metadata(path) {
+                if metadata.len() == 0 {
+                    return Err("Audio file is 0 bytes (empty)".to_string());
+                }
+            }
+
             let input =
                 ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {e}"))?;
             let stream = input
@@ -131,12 +137,18 @@ impl ProjectRecordingsMeta {
                     Video::new(camera.path.to_path(recording_path), 0.0)
                         .expect("Failed to read camera video")
                 });
-                let mic = s
+                let mic = match s
                     .audio
                     .as_ref()
                     .map(|audio| Audio::new(audio.path.to_path(recording_path), 0.0))
                     .transpose()
-                    .expect("Failed to read audio");
+                {
+                    Ok(audio) => audio,
+                    Err(e) => {
+                        tracing::warn!("Failed to load audio for single segment, treating as no audio: {e}");
+                        None
+                    }
+                };
 
                 vec![SegmentRecordings {
                     display,
@@ -182,6 +194,16 @@ impl ProjectRecordingsMeta {
                         })
                     };
 
+                    let mic = match Option::map(s.mic.as_ref(), load_audio).transpose() {
+                        Ok(audio) => audio,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to load mic audio for segment, treating as no audio: {e}"
+                            );
+                            None
+                        }
+                    };
+
                     let system_audio = match Option::map(s.system_audio.as_ref(), load_audio)
                         .transpose()
                     {
@@ -199,9 +221,7 @@ impl ProjectRecordingsMeta {
                         camera: Option::map(s.camera.as_ref(), load_video)
                             .transpose()
                             .map_err(|e| format!("camera / {e}"))?,
-                        mic: Option::map(s.mic.as_ref(), load_audio)
-                            .transpose()
-                            .map_err(|e| format!("mic / {e}"))?,
+                        mic,
                         system_audio,
                     })
                 })
