@@ -12,6 +12,7 @@ import {
 	createAnonymousViewNotification,
 	sendFirstViewEmail,
 } from "@/lib/Notification";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 
 interface TrackPayload {
@@ -42,6 +43,17 @@ const decodeUrlEncodedHeaderValue = (value?: string | null) => {
 };
 
 export async function POST(request: NextRequest) {
+	if (
+		await isRateLimited(RATE_LIMIT_IDS.ANALYTICS_TRACK, {
+			headers: request.headers,
+		})
+	) {
+		return Response.json(
+			{ error: "Too many tracking requests. Please try again later." },
+			{ status: 429 },
+		);
+	}
+
 	let body: TrackPayload;
 	try {
 		body = (await request.json()) as TrackPayload;
