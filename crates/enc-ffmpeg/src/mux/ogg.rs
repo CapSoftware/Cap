@@ -103,7 +103,9 @@ mod tests {
                 .enumerate()
             {
                 let t = (written + i) as f32 / input_rate as f32;
-                value.copy_from_slice(&(0.5 * (t * 440.0 * std::f32::consts::TAU).sin()).to_ne_bytes());
+                value.copy_from_slice(
+                    &(0.5 * (t * 440.0 * std::f32::consts::TAU).sin()).to_ne_bytes(),
+                );
             }
 
             let timestamp = Duration::from_secs_f64(written as f64 / input_rate as f64);
@@ -163,11 +165,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audio-input.ogg");
 
-        let info = AudioInfo::new_raw(
-            format::Sample::F32(format::sample::Type::Packed),
-            48_000,
-            1,
-        );
+        let info = AudioInfo::new_raw(format::Sample::F32(format::sample::Type::Packed), 48_000, 1);
         let mut file = OggFile::init(path.clone(), OpusEncoder::factory(info)).unwrap();
         file.finish().unwrap().unwrap();
 
