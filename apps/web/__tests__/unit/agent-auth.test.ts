@@ -5,11 +5,13 @@ import {
 } from "@cap/web-backend";
 import { describe, expect, it } from "vitest";
 import {
+	agentScopeProfiles,
 	buildAgentCallbackUrl,
 	createAgentAccessToken,
 	hashAgentSecret,
 	isAgentCodeVerifier,
 	isAgentLoopbackRedirectUri,
+	isAgentScopeProfile,
 	parseAgentAuthorizationRequest,
 	parseAgentScopes,
 	verifyAgentCodeChallenge,
@@ -108,6 +110,32 @@ describe("agent browser authorization", () => {
 		expect(hashAgentSecret(token)).not.toContain(token);
 	});
 });
+describe("agent scope profiles", () => {
+	it("mirrors the CLI login profiles incrementally", () => {
+		const { creator, admin, full } = agentScopeProfiles;
+		expect(creator).toContain("caps:upload");
+		expect(creator).not.toContain("organizations:manage");
+		expect(admin).toContain("organizations:manage");
+		expect(admin).not.toContain("developer:secrets");
+		expect(full).toContain("developer:secrets");
+		expect(admin).toEqual(expect.arrayContaining(creator));
+		expect(full).toEqual(expect.arrayContaining(admin));
+	});
+
+	it("every profile passes scope validation as sent by the CLI", () => {
+		for (const scopes of Object.values(agentScopeProfiles)) {
+			expect(parseAgentScopes(scopes.join(" "))).toEqual(scopes);
+		}
+	});
+
+	it("rejects unknown profile names", () => {
+		expect(isAgentScopeProfile("creator")).toBe(true);
+		expect(isAgentScopeProfile("full")).toBe(true);
+		expect(isAgentScopeProfile("root")).toBe(false);
+		expect(isAgentScopeProfile("")).toBe(false);
+	});
+});
+
 describe("legacy agent credentials", () => {
 	it("accepts desktop-era keys without extending mobile or extension keys", () => {
 		expect(isLegacyAgentKeySource("desktop")).toBe(true);
