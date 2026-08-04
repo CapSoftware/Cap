@@ -109,8 +109,7 @@ export async function listCliApiKeys(): Promise<CliApiKeySummary[]> {
 				isNull(agentApiKeys.revokedAt),
 			),
 		)
-		.orderBy(desc(agentApiKeys.createdAt))
-		.limit(100);
+		.orderBy(desc(agentApiKeys.createdAt));
 
 	return keys.map((key) => ({
 		id: key.id,
