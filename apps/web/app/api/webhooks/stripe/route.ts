@@ -1,4 +1,6 @@
 import { db } from "@cap/database";
+import { sendEmail } from "@cap/database/emails/config";
+import { PaymentFailed } from "@cap/database/emails/payment-failed";
 import { nanoId } from "@cap/database/helpers";
 import { developerCreditTransactions, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -15,6 +17,7 @@ const relevantEvents = new Set([
 	"checkout.session.async_payment_succeeded",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
+	"invoice.payment_failed",
 ]);
 
 async function grantDeveloperCredits(
@@ -420,22 +423,29 @@ export const POST = async (req: Request) => {
 
 				const subscriptions = await stripe().subscriptions.list({
 					customer: customer.id,
-					status: "active",
+					status: "all",
+					limit: 100,
 				});
 
-				console.log("Retrieved all active subscriptions:", {
+				console.log("Retrieved all subscriptions:", {
 					count: subscriptions.data.length,
 				});
 
-				const inviteQuota = subscriptions.data.reduce((total, sub) => {
-					return (
-						total +
-						sub.items.data.reduce(
-							(subTotal, item) => subTotal + (item.quantity || 1),
-							0,
-						)
-					);
-				}, 0);
+				// Quota follows entitlement: past_due keeps its seats during the
+				// dunning window instead of collapsing the org to zero while
+				// Stripe retries the card.
+				const entitledStatuses = new Set(["active", "trialing", "past_due"]);
+				const inviteQuota = subscriptions.data
+					.filter((sub) => entitledStatuses.has(sub.status))
+					.reduce((total, sub) => {
+						return (
+							total +
+							sub.items.data.reduce(
+								(subTotal, item) => subTotal + (item.quantity || 1),
+								0,
+							)
+						);
+					}, 0);
 
 				console.log("Updating user in database with:", {
 					subscriptionId: subscription.id,
@@ -458,6 +468,86 @@ export const POST = async (req: Request) => {
 					"Successfully updated user in database with new invite quota:",
 					inviteQuota,
 				);
+			}
+
+			if (event.type === "invoice.payment_failed") {
+				const invoice = event.data.object as Stripe.Invoice;
+				console.log("Processing invoice.payment_failed event", {
+					invoiceId: invoice.id,
+					customerId: invoice.customer,
+					billingReason: invoice.billing_reason,
+					attemptCount: invoice.attempt_count,
+					nextPaymentAttempt: invoice.next_payment_attempt,
+				});
+
+				// Checkout-time failures surface in the checkout UI itself; only
+				// dun renewals and plan changes.
+				if (
+					invoice.billing_reason !== "subscription_cycle" &&
+					invoice.billing_reason !== "subscription_update"
+				) {
+					return NextResponse.json({ received: true });
+				}
+
+				const finalAttempt = invoice.next_payment_attempt === null;
+				// Email on the first failure and the final attempt only; the
+				// retries in between would just be noise.
+				if (invoice.attempt_count !== 1 && !finalAttempt) {
+					return NextResponse.json({ received: true });
+				}
+
+				const customer = await stripe().customers.retrieve(
+					invoice.customer as string,
+				);
+
+				let foundUserId: User.UserId | undefined;
+				let customerEmail: string | null | undefined;
+				if ("metadata" in customer) {
+					foundUserId = customer.metadata.userId
+						? User.UserId.make(customer.metadata.userId)
+						: undefined;
+				}
+				if ("email" in customer) {
+					customerEmail = customer.email;
+				}
+
+				const dbUser = await findUserWithRetry(
+					customerEmail as string,
+					foundUserId,
+				);
+
+				if (!dbUser?.email) {
+					console.log(
+						"No user found for failed invoice; skipping dunning email",
+					);
+					return NextResponse.json({ received: true });
+				}
+
+				const nextRetryDate = invoice.next_payment_attempt
+					? new Date(invoice.next_payment_attempt * 1000).toLocaleDateString(
+							"en-US",
+							{ month: "long", day: "numeric" },
+						)
+					: null;
+
+				await sendEmail({
+					email: dbUser.email,
+					subject: finalAttempt
+						? "Last chance to keep your Cap Pro subscription"
+						: "Your Cap Pro payment didn't go through",
+					react: PaymentFailed({
+						email: dbUser.email,
+						billingUrl: `${serverEnv().WEB_URL}/dashboard/settings/organization`,
+						nextRetryDate,
+						finalAttempt,
+					}),
+					idempotencyKey: `payment-failed-${invoice.id}-${invoice.attempt_count}`,
+				});
+
+				console.log("Dunning email sent", {
+					userId: dbUser.id,
+					finalAttempt,
+				});
 			}
 
 			if (event.type === "customer.subscription.deleted") {
