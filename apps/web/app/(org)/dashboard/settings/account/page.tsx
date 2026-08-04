@@ -8,13 +8,16 @@ export const metadata: Metadata = {
 };
 
 export default async function SettingsPage() {
-	// The key list is an enhancement to the settings page, not a dependency: if the session is
-	// mid-redirect or the query hiccups, render the page with an empty list instead of a 500.
-	const cliApiKeys = await listCliApiKeys().catch(() => []);
+	// A failed key query must not 500 the whole settings page, but it also must not render as
+	// an empty list, which would hide still-active keys the user may need to revoke.
+	const cliApiKeys = await listCliApiKeys().catch(() => null);
 	return (
 		<>
 			<Settings />
-			<CliApiKeys initialKeys={cliApiKeys} />
+			<CliApiKeys
+				initialKeys={cliApiKeys ?? []}
+				loadFailed={cliApiKeys === null}
+			/>
 		</>
 	);
 }

@@ -56,8 +56,10 @@ const formatDate = (iso: string) =>
 
 export const CliApiKeys = ({
 	initialKeys,
+	loadFailed = false,
 }: {
 	initialKeys: CliApiKeySummary[];
+	loadFailed?: boolean;
 }) => {
 	const router = useRouter();
 	const [keys, setKeys] = useState(initialKeys);
@@ -126,6 +128,12 @@ export const CliApiKeys = ({
 					Create API key
 				</Button>
 			</div>
+			{loadFailed && (
+				<div className="rounded-xl border border-red-4 bg-red-2 px-4 py-3 text-sm text-red-11">
+					Your API keys could not be loaded. Refresh the page to try again.
+					Existing keys are still active and can be revoked once the list loads.
+				</div>
+			)}
 			{keys.length > 0 && (
 				<div className="flex flex-col divide-y divide-gray-3 rounded-xl border border-gray-4">
 					{keys.map((key) => {
