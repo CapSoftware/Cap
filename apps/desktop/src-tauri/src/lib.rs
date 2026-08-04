@@ -435,7 +435,73 @@ fn spawn_process_memory_sampler(app: AppHandle) {
     });
 }
 
+static RESTART_REQUESTED_ON_EXIT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+// tauri's relaunch() contract is "exit with RESTART_EXIT_CODE, respawn after
+// the event loop unwinds" — but every macOS exit here funnels into
+// force_exit's hard _exit(), so the loop never unwinds and tauri's respawn
+// never runs: the onboarding "Restart Required" prompt quit without
+// restarting (observed on the official 0.5.7 build, exit code 2147483647 with
+// no relaunch). The intent is recorded at ExitRequested and honored at the
+// force_exit choke point, which also covers the exit watchdog's hard exit.
+pub(crate) fn note_exit_requested_code(code: Option<i32>) {
+    if code == Some(tauri::RESTART_EXIT_CODE) {
+        // Logged here, not in force_exit: the non-blocking appender drops
+        // records emitted microseconds before _exit().
+        info!("Relaunch requested; will respawn after exit");
+        // A deliberate relaunch is a clean shutdown. tauri exempts restart
+        // requests from prevent_exit, so the runtime exits before the async
+        // cleanup (which normally disarms the crash sentinel) can finish —
+        // without this, every relaunch reports a phantom crash on next boot.
+        crash_sentinel::mark_clean_exit();
+        RESTART_REQUESTED_ON_EXIT.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn spawn_relauncher_if_requested() {
+    #[cfg(target_os = "macos")]
+    {
+        // swap: exactly one relauncher even if the exit watchdog and the main
+        // exit path race into force_exit together.
+        if !RESTART_REQUESTED_ON_EXIT.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        // eprintln below, not tracing: the non-blocking appender drops records
+        // this close to _exit(), stderr writes are synchronous.
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("cap relaunch: current_exe() failed; not respawning");
+            return;
+        };
+        match exit_shutdown::relaunch_target(&exe) {
+            Some(bundle) => {
+                let path = bundle.display().to_string();
+                if path.contains('\'') {
+                    eprintln!("cap relaunch: bundle path contains a quote; not respawning: {path}");
+                    return;
+                }
+                // A detached shell survives this process (reparented to
+                // launchd). The delay lets the old instance die completely
+                // first, so the single-instance plugin in the fresh one never
+                // meets a live listener; `open` goes through LaunchServices so
+                // the new instance keeps normal app context (TCC, dock).
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!("sleep 0.7; /usr/bin/open '{path}'"))
+                    .spawn();
+            }
+            None => {
+                // Dev / non-bundle run: open(1) would route a bare Mach-O to
+                // Terminal and re-attribute TCC to it — spawn the executable
+                // directly instead, like tauri's own process::restart does.
+                let _ = std::process::Command::new(&exe).spawn();
+            }
+        }
+    }
+}
+
 fn force_exit(code: i32) -> ! {
+    spawn_relauncher_if_requested();
     unsafe extern "C" {
         fn _exit(code: i32) -> !;
     }
@@ -6039,6 +6105,7 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
         }
         tauri::RunEvent::ExitRequested { code, api, .. } => {
             info!(?code, "App exit requested");
+            note_exit_requested_code(code);
 
             match handle_exit_requested(
                 _handle
@@ -6828,5 +6895,28 @@ mod screenshot_share_cache_tests {
         let link = screenshot_share_link_for_hash(Some(&sharing(None)), "hash-a");
 
         assert!(link.is_none());
+    }
+}
+
+#[cfg(test)]
+mod relaunch_intent_tests {
+    use super::*;
+
+    #[test]
+    fn restart_exit_code_sets_relaunch_intent() {
+        RESTART_REQUESTED_ON_EXIT.store(false, std::sync::atomic::Ordering::Release);
+        note_exit_requested_code(None);
+        note_exit_requested_code(Some(0));
+        note_exit_requested_code(Some(1));
+        assert!(
+            !RESTART_REQUESTED_ON_EXIT.load(std::sync::atomic::Ordering::Acquire),
+            "ordinary exits must not schedule a relaunch"
+        );
+        note_exit_requested_code(Some(tauri::RESTART_EXIT_CODE));
+        assert!(
+            RESTART_REQUESTED_ON_EXIT.load(std::sync::atomic::Ordering::Acquire),
+            "tauri relaunch() exits with RESTART_EXIT_CODE and must respawn"
+        );
+        RESTART_REQUESTED_ON_EXIT.store(false, std::sync::atomic::Ordering::Release);
     }
 }

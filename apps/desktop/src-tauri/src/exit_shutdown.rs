@@ -1,5 +1,17 @@
 use tokio::task::JoinHandle;
 
+// The .app bundle for a relaunch via LaunchServices, derived from the running
+// executable (…/Cap.app/Contents/MacOS/<binary>). None outside a bundle (dev
+// runs) — callers must NOT hand a bare Mach-O to open(1), which would route it
+// to Terminal and re-attribute TCC to Terminal.
+pub(crate) fn relaunch_target(current_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    current_exe
+        .ancestors()
+        .nth(3)
+        .filter(|p| p.extension().is_some_and(|e| e == "app"))
+        .map(std::path::Path::to_path_buf)
+}
+
 pub(crate) fn run_while_active<T, FExit, F>(is_exiting: FExit, operation: F) -> Option<T>
 where
     FExit: Fn() -> bool,
@@ -149,5 +161,47 @@ pub(crate) fn abort_join_handles<T>(
 
     if let Some(task) = task {
         task.abort();
+    }
+}
+
+#[cfg(test)]
+mod relaunch_target_tests {
+    use super::relaunch_target;
+    use std::path::Path;
+
+    #[test]
+    fn bundle_layouts_resolve_to_the_app() {
+        for (exe, want) in [
+            (
+                "/Applications/Cap.app/Contents/MacOS/Cap",
+                "/Applications/Cap.app",
+            ),
+            (
+                "/Applications/Cap.app/Contents/MacOS/Cap - Development",
+                "/Applications/Cap.app",
+            ),
+            (
+                "/Volumes/Cap 0.5.7/Cap.app/Contents/MacOS/Cap",
+                "/Volumes/Cap 0.5.7/Cap.app",
+            ),
+        ] {
+            assert_eq!(
+                relaunch_target(Path::new(exe)).as_deref(),
+                Some(Path::new(want)),
+                "exe: {exe}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_bundle_layouts_are_refused() {
+        for exe in [
+            "/repo/src-tauri/target/debug/cap-desktop",
+            "/usr/local/bin/cap",
+            "/a/b",
+            "/",
+        ] {
+            assert_eq!(relaunch_target(Path::new(exe)), None, "exe: {exe}");
+        }
     }
 }
