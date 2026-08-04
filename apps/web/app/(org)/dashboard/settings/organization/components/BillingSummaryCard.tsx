@@ -127,8 +127,8 @@ export function BillingSummaryCard() {
 						</p>
 						{pastDue ? (
 							<p className="text-red-700">
-								Your last payment failed. Update your payment method to keep
-								Pro active; we'll keep retrying in the meantime.
+								Your last payment failed. Update your payment method to keep Pro
+								active; we'll keep retrying in the meantime.
 							</p>
 						) : (
 							<p>Next billing date: {nextBillingDate}</p>

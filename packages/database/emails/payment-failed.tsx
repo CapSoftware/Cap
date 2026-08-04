@@ -58,8 +58,8 @@ export function PaymentFailed({
 							<Text className="text-sm leading-6 text-black">
 								This was our last automatic retry. If the payment can't be
 								collected, your subscription will be canceled and you'll lose
-								Pro features like unlimited recording length, Cap AI, and
-								custom domains.
+								Pro features like unlimited recording length, Cap AI, and custom
+								domains.
 							</Text>
 						) : (
 							<Text className="text-sm leading-6 text-black">
