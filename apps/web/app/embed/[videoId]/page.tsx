@@ -92,6 +92,16 @@ export default async function EmbedVideoPage(
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
 	const minimal = searchParams.slack === "true";
+	// `?t=` mirrors the share page, so an embed snippet copied "at 1:23" opens
+	// there too. Repeated params arrive as an array; take the first.
+	const startTimeParam = Array.isArray(searchParams.t)
+		? searchParams.t[0]
+		: searchParams.t;
+	const parsedStartTime = Number.parseInt(startTimeParam ?? "", 10);
+	const startTime =
+		Number.isFinite(parsedStartTime) && parsedStartTime > 0
+			? parsedStartTime
+			: null;
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -166,6 +176,7 @@ export default async function EmbedVideoPage(
 					<EmbedContent
 						video={data.video}
 						autoplay={autoplay}
+						startTime={startTime}
 						minimal={minimal}
 					/>
 				)}
@@ -183,6 +194,7 @@ export default async function EmbedVideoPage(
 async function EmbedContent({
 	video,
 	autoplay,
+	startTime,
 	minimal,
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
@@ -191,6 +203,7 @@ async function EmbedContent({
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
 	};
 	autoplay: boolean;
+	startTime: number | null;
 	minimal: boolean;
 }) {
 	const user = await getCurrentUser();
@@ -273,6 +286,9 @@ async function EmbedContent({
 			createdAt: comments.createdAt,
 			updatedAt: comments.updatedAt,
 			parentCommentId: comments.parentCommentId,
+			mediaKey: comments.mediaKey,
+			mediaDuration: comments.mediaDuration,
+			mediaMeta: comments.mediaMeta,
 			authorName: users.name,
 		})
 		.from(comments)
@@ -297,6 +313,7 @@ async function EmbedContent({
 			}
 			ownerName={videoOwner[0]?.name || null}
 			autoplay={autoplay}
+			startTime={startTime}
 			minimal={minimal}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}

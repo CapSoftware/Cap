@@ -58,6 +58,8 @@ export const EmbedVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		autoplay?: boolean;
+		/** Seconds to open at, from the embed URL's `?t=`. */
+		startTime?: number | null;
 		minimal?: boolean;
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
@@ -71,6 +73,7 @@ export const EmbedVideo = forwardRef<
 			chapters = [],
 			ownerName,
 			autoplay = false,
+			startTime = null,
 			minimal = false,
 			viewerSettings,
 			showPlaybackStatusBadge = false,
@@ -78,6 +81,7 @@ export const EmbedVideo = forwardRef<
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
+		const seekedToStart = useRef(false);
 		const playerContainerRef = useRef<HTMLDivElement>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 		usePlayerJsReceiver({ playerContainerRef, videoRef });
@@ -210,10 +214,24 @@ export const EmbedVideo = forwardRef<
 			const player = videoRef.current;
 			const handleLoadedMetadata = () => {
 				setLongestDuration(player.duration);
+
+				// Once only. HLS level switches and source swaps fire this again, and
+				// yanking a viewer who has since scrubbed back to the start offset
+				// would be worse than ignoring the deep link.
+				if (startTime === null || seekedToStart.current) return;
+				seekedToStart.current = true;
+				const limit = Number.isFinite(player.duration)
+					? Math.max(player.duration - 0.001, 0)
+					: startTime;
+				try {
+					player.currentTime = Math.min(startTime, limit);
+				} catch (error) {
+					console.warn("Failed to seek embed to start time", error);
+				}
 			};
 
 			if (player.readyState >= 1) {
-				setLongestDuration(player.duration);
+				handleLoadedMetadata();
 			} else {
 				player.addEventListener("loadedmetadata", handleLoadedMetadata);
 			}
@@ -221,7 +239,7 @@ export const EmbedVideo = forwardRef<
 			return () => {
 				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
 			};
-		}, []);
+		}, [startTime]);
 
 		return (
 			<>
