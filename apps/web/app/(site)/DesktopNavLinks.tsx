@@ -53,7 +53,7 @@ const Links: NavItem[] = [
 			},
 			{
 				label: "Download App",
-				sub: "Downloads for macOS & Windows",
+				sub: "Downloads for macOS, Windows & Linux",
 				href: "/download",
 			},
 			{
