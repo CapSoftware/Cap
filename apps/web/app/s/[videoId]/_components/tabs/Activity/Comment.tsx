@@ -4,7 +4,7 @@ import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
 import clsx from "clsx";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -12,6 +12,8 @@ import { LinkifiedText } from "@/components/LinkifiedText";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
+import { MediaCommentBody } from "../../media-comment/MediaCommentBody";
+import { isMediaComment } from "../../media-comment/media-comment-types";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
@@ -127,9 +129,20 @@ const CommentComponent: React.FC<{
 							)}
 						</div>
 					</div>
-					<p className="mt-2 text-sm text-gray-11">
-						<LinkifiedText text={comment.content} />
-					</p>
+					{isMediaComment(comment) ? (
+						<div className="mt-2 space-y-2">
+							<MediaCommentBody comment={comment} compact />
+							{comment.content && (
+								<p className="text-sm text-gray-11">
+									<LinkifiedText text={comment.content} />
+								</p>
+							)}
+						</div>
+					) : (
+						<p className="mt-2 text-sm text-gray-11">
+							<LinkifiedText text={comment.content} />
+						</p>
+					)}
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
 							<Tooltip content="Reply">
