@@ -78,6 +78,9 @@ export async function newComment(data: {
 		videoId: videoId,
 		timestamp: timestamp ?? null,
 		parentCommentId: parentCommentId,
+		mediaKey: null,
+		mediaDuration: null,
+		mediaMeta: null,
 		createdAt: new Date(),
 		updatedAt: new Date(),
 	};

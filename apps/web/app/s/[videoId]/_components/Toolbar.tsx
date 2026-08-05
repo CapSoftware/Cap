@@ -72,6 +72,9 @@ export const Toolbar = ({
 			type: "emoji",
 			timestamp: currentTime,
 			updatedAt: new Date(),
+			mediaKey: null,
+			mediaDuration: null,
+			mediaMeta: null,
 			sending: true,
 		};
 
@@ -117,6 +120,9 @@ export const Toolbar = ({
 			type: "text",
 			timestamp: currentTime,
 			updatedAt: new Date(),
+			mediaKey: null,
+			mediaDuration: null,
+			mediaMeta: null,
 			sending: true,
 		};
 
