@@ -4,7 +4,6 @@ import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
 import {
 	BarChart3,
 	Database,
@@ -20,6 +19,7 @@ import {
 	Sparkles,
 	Video,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
@@ -45,7 +45,7 @@ const modalVariants = {
 		scale: 1,
 		y: 0,
 		transition: {
-			type: "spring",
+			type: "spring" as const,
 			duration: 0.4,
 			damping: 25,
 			stiffness: 500,
