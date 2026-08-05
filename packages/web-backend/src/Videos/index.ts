@@ -328,13 +328,19 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				if (allObjects.Contents)
 					yield* Effect.all(
 						EffectArray.filterMap(allObjects.Contents, (obj) =>
-							Option.map(Option.fromNullable(obj.Key), (key) => {
-								const newKey = key.replace(prefix, newPrefix);
-								return bucket.copyObject(
-									`${bucket.bucketName}/${obj.Key}`,
-									newKey,
-								);
-							}),
+							Option.fromNullable(obj.Key).pipe(
+								// Comment media belongs to the original video's comments,
+								// which aren't duplicated — copying the bytes would leave
+								// orphans no row points at.
+								Option.filter((key) => !key.includes("/comments/")),
+								Option.map((key) => {
+									const newKey = key.replace(prefix, newPrefix);
+									return bucket.copyObject(
+										`${bucket.bucketName}/${obj.Key}`,
+										newKey,
+									);
+								}),
+							),
 						),
 						{ concurrency: 1 },
 					);
