@@ -7,6 +7,7 @@ describe("existing recording picker", () => {
 		expect(
 			getExistingRecordingPickerOptions("windows", "C:\\Cap\\recordings"),
 		).toEqual({
+			title: "Select Cap Recording Directory (.cap)",
 			defaultPath: "C:\\Cap\\recordings",
 			directory: true,
 			multiple: false,
@@ -19,6 +20,7 @@ describe("existing recording picker", () => {
 			expect(
 				getExistingRecordingPickerOptions(platform, "/Cap/recordings"),
 			).toEqual({
+				title: "Select Cap Recording",
 				defaultPath: "/Cap/recordings",
 				filters: [{ name: "Cap Recording", extensions: ["cap"] }],
 				multiple: false,

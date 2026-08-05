@@ -7,6 +7,7 @@ export const getExistingRecordingPickerOptions = (
 ): OpenDialogOptions => {
 	if (platform === "windows") {
 		return {
+			title: "Select Cap Recording Directory (.cap)",
 			defaultPath,
 			directory: true,
 			multiple: false,
@@ -14,6 +15,7 @@ export const getExistingRecordingPickerOptions = (
 	}
 
 	return {
+		title: "Select Cap Recording",
 		defaultPath,
 		filters: [{ name: "Cap Recording", extensions: ["cap"] }],
 		multiple: false,
