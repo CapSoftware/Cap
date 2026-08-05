@@ -670,7 +670,7 @@ function Inner(props: {
 						/>
 						<ToggleSettingItem
 							label="Draw the MacBook notch on screen recordings"
-							description="Screen capture records straight through the notch, so recordings show an unbroken menu bar. This draws it back on by default for new screen and area recordings; window recordings are left alone. Each recording can override it in the editor."
+							description="Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
 							value={!!settings.macbookNotchOverlay}
 							onChange={(value) => handleChange("macbookNotchOverlay", value)}
 						/>

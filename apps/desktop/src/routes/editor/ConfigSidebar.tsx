@@ -1652,6 +1652,11 @@ function BackgroundConfig(props: {
 }) {
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
+	const notchXMax = () => {
+		const width =
+			project.background.notch?.width ?? editorInstance.notchBase.width;
+		return 1 - Math.min(Math.max(width, 0), 1);
+	};
 	const isNoneBackground = () =>
 		project.background.padding === 0 && project.background.rounding === 0;
 	const initialCurrentDesktopBackgroundPath = () => {
@@ -2727,8 +2732,14 @@ function BackgroundConfig(props: {
 								>
 									<Slider
 										value={[
-											project.background.notch?.[field.key] ??
-												editorInstance.notchBase[field.key],
+											field.key === "x"
+												? Math.min(
+														project.background.notch?.x ??
+															editorInstance.notchBase.x,
+														notchXMax(),
+													)
+												: (project.background.notch?.[field.key] ??
+													editorInstance.notchBase[field.key]),
 										]}
 										onChange={(v) => {
 											const base = editorInstance.notchBase;
@@ -2737,7 +2748,11 @@ function BackgroundConfig(props: {
 												...prev,
 												enabled: true,
 											};
-											next[field.key] = v[0];
+											if (field.key === "x") {
+												next.x = Math.min(v[0], notchXMax());
+											} else {
+												next[field.key] = v[0];
+											}
 
 											if (field.key === "width") {
 												// Resize about the centre rather than dragging the
@@ -2753,7 +2768,7 @@ function BackgroundConfig(props: {
 											setProject("background", "notch", next);
 										}}
 										minValue={0}
-										maxValue={field.max}
+										maxValue={field.key === "x" ? notchXMax() : field.max}
 										step={0.001}
 										formatTooltip={(value) => `${(value * 100).toFixed(1)}%`}
 									/>

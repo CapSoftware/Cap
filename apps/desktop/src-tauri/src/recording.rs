@@ -3853,13 +3853,11 @@ fn project_config_from_recording(
         Vec::new()
     };
 
-    // Screen captures only; the editor's toggle is there for anyone who wants a
-    // notch over a window recording anyway.
-    let captured_screen = matches!(
+    if should_enable_notch_overlay(
         capture_target,
-        Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. })
-    );
-    if captured_screen && settings.macbook_notch_overlay.unwrap_or(false) {
+        settings.macbook_notch_overlay.unwrap_or(false),
+        completed_recording.meta.display_notch().is_some(),
+    ) {
         config.background.notch = Some(cap_project::NotchConfiguration {
             enabled: true,
             ..Default::default()
@@ -3879,6 +3877,19 @@ fn project_config_from_recording(
     });
 
     config
+}
+
+fn should_enable_notch_overlay(
+    capture_target: Option<&ScreenCaptureTarget>,
+    setting_enabled: bool,
+    has_recorded_notch: bool,
+) -> bool {
+    setting_enabled
+        && has_recorded_notch
+        && matches!(
+            capture_target,
+            Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. })
+        )
 }
 
 fn apply_recording_presentation_defaults(
@@ -4334,6 +4345,31 @@ mod tests {
         assert!(!desktop_background_source_requires_user_prompt_for_home(
             Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
             home
+        ));
+    }
+
+    #[test]
+    fn notch_overlay_requires_recorded_geometry_on_screen_target() {
+        let display = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        let area = ScreenCaptureTarget::Area {
+            screen: "1".parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(0.0, 0.0),
+                scap_targets::bounds::LogicalSize::new(100.0, 100.0),
+            ),
+        };
+
+        assert!(should_enable_notch_overlay(Some(&display), true, true));
+        assert!(should_enable_notch_overlay(Some(&area), true, true));
+        assert!(!should_enable_notch_overlay(Some(&display), true, false));
+        assert!(!should_enable_notch_overlay(Some(&area), true, false));
+        assert!(!should_enable_notch_overlay(Some(&display), false, true));
+        assert!(!should_enable_notch_overlay(
+            Some(&ScreenCaptureTarget::CameraOnly),
+            true,
+            true
         ));
     }
 

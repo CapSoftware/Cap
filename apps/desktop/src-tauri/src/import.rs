@@ -1021,7 +1021,7 @@ fn copy_source_segment(
         system_audio,
         cursor,
         keyboard,
-        display_notch: None,
+        display_notch: source_segment.display_notch,
     })
 }
 

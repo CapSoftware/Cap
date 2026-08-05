@@ -11,6 +11,7 @@ pub struct NotchUniforms {
     /// Unzoomed notch size in output px. Zoom scales the texture rather than
     /// re-rasterizing it, so an animating zoom doesn't thrash the cache.
     pub raster_size: [f64; 2],
+    pub source_crop: [f32; 4],
 }
 
 /// Redraws the recording device's physical notch over the screen capture.
@@ -127,7 +128,12 @@ impl NotchLayer {
 
         let mut composite = notch.composite;
         composite.frame_size = [tex_w as f32, tex_h as f32];
-        composite.crop_bounds = [0.0, 0.0, tex_w as f32, tex_h as f32];
+        composite.crop_bounds = [
+            notch.source_crop[0] * tex_w as f32,
+            notch.source_crop[1] * tex_h as f32,
+            notch.source_crop[2] * tex_w as f32,
+            notch.source_crop[3] * tex_h as f32,
+        ];
         composite.write_to_buffer(queue, &self.uniforms_buffer);
         self.ready = true;
     }
@@ -188,16 +194,17 @@ mod tests {
                 (BOUNDS[2] - BOUNDS[0]) as f64,
                 (BOUNDS[3] - BOUNDS[1]) as f64,
             ],
+            source_crop: [0.0, 0.0, 1.0, 1.0],
         }
     }
 
     /// Renders the notch over a white frame and returns the RGBA pixels.
-    fn render() -> Option<Vec<u8>> {
+    fn render_with_uniforms(uniforms: NotchUniforms) -> Option<Vec<u8>> {
         let (device, queue) = device()?;
 
         let mut layer =
             NotchLayer::new(&device, Arc::new(CompositeVideoFramePipeline::new(&device)));
-        layer.prepare(&device, &queue, Some(uniforms()));
+        layer.prepare(&device, &queue, Some(uniforms));
         assert!(layer.has_content());
 
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -273,6 +280,10 @@ mod tests {
         Some(pixels)
     }
 
+    fn render() -> Option<Vec<u8>> {
+        render_with_uniforms(uniforms())
+    }
+
     fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
         let i = ((y * OUTPUT + x) * 4) as usize;
         [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
@@ -333,6 +344,34 @@ mod tests {
             is_white(pixel(&pixels, OUTPUT - 10, height / 2)),
             "spilled right of the notch"
         );
+    }
+
+    #[test]
+    fn source_crop_preserves_the_uncropped_shape() {
+        let Some(full) = render() else {
+            return;
+        };
+        let mut cropped_uniforms = uniforms();
+        cropped_uniforms.source_crop = [0.5, 0.0, 1.0, 1.0];
+        cropped_uniforms.composite.target_bounds = [128.0, 0.0, 192.0, 48.0];
+        cropped_uniforms.composite.target_size = [64.0, 48.0];
+        let Some(cropped) = render_with_uniforms(cropped_uniforms) else {
+            return;
+        };
+
+        for y in 1..47 {
+            for x in 129..191 {
+                let cropped_pixel = pixel(&cropped, x, y);
+                let full_pixel = pixel(&full, x, y);
+                assert!(
+                    cropped_pixel
+                        .iter()
+                        .zip(full_pixel)
+                        .all(|(cropped, full)| cropped.abs_diff(full) <= 32),
+                    "{x},{y}: {cropped_pixel:?} != {full_pixel:?}"
+                );
+            }
+        }
     }
 
     #[test]
