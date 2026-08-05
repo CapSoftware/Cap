@@ -14,8 +14,8 @@ import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
-import { motion } from "framer-motion";
 import { Check, Globe2, Lock, Search } from "lucide-react";
+import { motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
@@ -28,6 +28,7 @@ import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import type { CurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import { buildEmbedCode } from "@/lib/embed-code";
 import { usePublicEnv } from "@/utils/public-env";
 
 interface SharingDialogProps {
@@ -642,23 +643,7 @@ function useEmbedCode(capId: Video.VideoId) {
 	const publicEnv = usePublicEnv();
 
 	return useMemo(
-		() =>
-			`
-	<div style="position: relative; padding-bottom: 56.25%; height: 0;">
-			<iframe
-			src="${publicEnv.webUrl}/embed/${capId}"
-			frameborder="0"
-			webkitallowfullscreen
-			mozallowfullscreen
-			allowfullscreen
-			style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
-		></iframe>
-	</div>
-`
-				.trim()
-				.replace(/[\n\t]+/g, " ")
-				.replace(/>\s+</g, "><")
-				.replace(/"\s+>/g, '">'),
+		() => buildEmbedCode({ webUrl: publicEnv.webUrl, videoId: capId }),
 		[publicEnv.webUrl, capId],
 	);
 }
