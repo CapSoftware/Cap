@@ -25,20 +25,25 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
+import clsx from "clsx";
 import {
 	Check,
 	Clock,
 	Copy,
+	Download,
 	Globe2,
 	LayoutDashboard,
+	Lock,
 	Pencil,
 	Scissors,
+	Users,
 	X,
 } from "lucide-react";
 import moment from "moment";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, use, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	hideShareableLinkCapLogo,
@@ -54,6 +59,7 @@ import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDial
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import {
@@ -63,7 +69,38 @@ import {
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
+import { describeShareAudience } from "./share-audience";
+import { useVideoDownload } from "./use-video-download";
 import { VideoDownloadMenu } from "./VideoDownloadMenu";
+
+/**
+ * Off the header's critical path: brand SVGs and the embed snippet are dead
+ * weight for the (many) viewers who never open the share sheet. Hovering the
+ * button warms the chunk, so the click still feels instant.
+ */
+const importShareLinkDialog = () => import("./ShareLinkDialog");
+const ShareLinkDialog = dynamic(importShareLinkDialog, { ssr: false });
+
+/**
+ * Where a signed-out viewer can go next. Three, not the full site nav: this
+ * shares the row with the video's title and has to stay out of its way.
+ */
+const SIGNED_OUT_LINKS = [
+	{ label: "Download", href: "/download" },
+	{ label: "Blog", href: "/blog" },
+	{ label: "Pricing", href: "/pricing" },
+];
+
+/**
+ * Shared by the heading and the rename field. Renaming is meant to read as a
+ * caret appearing in the title, so both have to render the same glyphs at the
+ * same size on the same baseline — the line heights are spelled out because a
+ * bare `h1` and a bare `input` each pick up a different one from the base layer.
+ */
+const TITLE_TEXT_CLASS =
+	"text-xl leading-7 font-normal sm:text-2xl sm:leading-8";
+
+const TITLE_PLACEHOLDER = "Cap title";
 
 export const ShareHeader = ({
 	data,
@@ -76,6 +113,7 @@ export const ShareHeader = ({
 	canManageSharePageBranding = false,
 	canDownload = false,
 	hasEdits = false,
+	views,
 }: {
 	data: VideoData;
 	customDomain?: string | null;
@@ -103,6 +141,12 @@ export const ShareHeader = ({
 	canManageSharePageBranding?: boolean;
 	canDownload?: boolean;
 	hasEdits?: boolean;
+	/**
+	 * Shown to every viewer, not just the owner. The sidebar's analytics row is
+	 * members-only, which left a shared link with no sense of reach at all.
+	 * Resolves late and never blocks the header (see `ViewCount`).
+	 */
+	views?: MaybePromise<number | null>;
 }) => {
 	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
@@ -117,6 +161,10 @@ export const ShareHeader = ({
 	const [isTitleRevealing, setIsTitleRevealing] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [isShareLinkDialogOpen, setIsShareLinkDialogOpen] = useState(false);
+	// Latched so the lazy chunk is only ever pulled in once, and so the dialog
+	// keeps its exit animation instead of being torn out of the tree on close.
+	const [shareLinkDialogMounted, setShareLinkDialogMounted] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -130,7 +178,16 @@ export const ShareHeader = ({
 	const [isOpeningBrandingSettings, setIsOpeningBrandingSettings] =
 		useState(false);
 	const copyOptionsRef = useRef<HTMLDivElement>(null);
-	const suppressTitleRevealRef = useRef(false);
+	const titleInputRef = useRef<HTMLInputElement>(null);
+	const titleButtonRef = useRef<HTMLButtonElement>(null);
+	/**
+	 * The name a rename put on screen before the server had it. Held until the
+	 * server agrees, so the effect below can't shimmer the stale title back in
+	 * over the one the owner just typed.
+	 */
+	const pendingTitleRef = useRef<string | null>(null);
+	const cancelTitleEditRef = useRef(false);
+	const restoreTitleFocusRef = useRef(false);
 	const titleSwapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
 		null,
 	);
@@ -184,6 +241,7 @@ export const ShareHeader = ({
 	});
 
 	const { webUrl } = usePublicEnv();
+	const { download, isDownloading } = useVideoDownload(data.id);
 
 	const resolvedTitle = videoStatus?.name ?? data.name;
 	const effectivePasswordProtected =
@@ -195,13 +253,15 @@ export const ShareHeader = ({
 
 	useEffect(() => {
 		if (isEditing) return;
-		if (resolvedTitle === displayTitle) return;
 
-		if (suppressTitleRevealRef.current) {
-			suppressTitleRevealRef.current = false;
-			setDisplayTitle(resolvedTitle);
-			return;
+		if (pendingTitleRef.current !== null) {
+			// Hold the owner's own edit until the server echoes it back; anything
+			// else arriving in the meantime is a value we already know is stale.
+			if (resolvedTitle !== pendingTitleRef.current) return;
+			pendingTitleRef.current = null;
 		}
+
+		if (resolvedTitle === displayTitle) return;
 
 		const prefersReducedMotion =
 			typeof window !== "undefined" &&
@@ -240,31 +300,76 @@ export const ShareHeader = ({
 		setIsEditing(true);
 	};
 
-	const handleBlur = async () => {
+	/**
+	 * Opening the field focuses and selects it — clicking a title is a request to
+	 * rename it, not to go hunting for the caret. Closing it hands focus back to
+	 * the title, but only when the keyboard closed it: a click elsewhere has
+	 * already chosen where focus should land.
+	 */
+	useEffect(() => {
+		if (isEditing) {
+			titleInputRef.current?.focus();
+			titleInputRef.current?.select();
+			return;
+		}
+		if (!restoreTitleFocusRef.current) return;
+		restoreTitleFocusRef.current = false;
+		titleButtonRef.current?.focus();
+	}, [isEditing]);
+
+	const setTitleEverywhere = (name: string) => {
+		setDisplayTitle(name);
+		queryClient.setQueryData<VideoStatusResult>(
+			["videoStatus", data.id],
+			(old) => (old ? { ...old, name } : old),
+		);
+	};
+
+	const commitTitle = async () => {
 		setIsEditing(false);
 		const next = editValue.trim();
 		if (next === "" || next === displayTitle) return;
+
+		// The new name lands on the heading immediately and the write catches up
+		// behind it. A rename that waits on a round-trip before showing anything
+		// (and then announces itself with a toast) feels like a form submission,
+		// not like editing the title in place.
+		const previous = displayTitle;
+		pendingTitleRef.current = next;
+		setTitleEverywhere(next);
+
 		try {
 			await editTitle(data.id, next);
-			toast.success("Video title updated");
-			suppressTitleRevealRef.current = true;
-			queryClient.setQueryData<VideoStatusResult>(
-				["videoStatus", data.id],
-				(old) => (old ? { ...old, name: next } : old),
-			);
 			refresh();
 		} catch (error) {
-			if (error instanceof Error) {
-				toast.error(error.message);
-			} else {
-				toast.error("Failed to update title - please try again.");
-			}
+			pendingTitleRef.current = null;
+			setTitleEverywhere(previous);
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to update title - please try again.",
+			);
 		}
 	};
 
-	const handleKeyDown = async (event: { key: string }) => {
-		if (event.key === "Enter") {
-			handleBlur();
+	// Blur is the only path that writes, so Enter and the click-away it causes
+	// can't both fire the same rename.
+	const handleTitleBlur = () => {
+		if (cancelTitleEditRef.current) {
+			cancelTitleEditRef.current = false;
+			setEditValue(displayTitle);
+			setIsEditing(false);
+			return;
+		}
+		void commitTitle();
+	};
+
+	const handleTitleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (event.key === "Enter" || event.key === "Escape") {
+			event.preventDefault();
+			cancelTitleEditRef.current = event.key === "Escape";
+			restoreTitleFocusRef.current = true;
+			titleInputRef.current?.blur();
 		}
 	};
 
@@ -330,6 +435,11 @@ export const ShareHeader = ({
 		setTimeout(() => setLinkCopied(false), 2000);
 	};
 
+	const openShareLinkDialog = () => {
+		setShareLinkDialogMounted(true);
+		setIsShareLinkDialogOpen(true);
+	};
+
 	const handleSharingUpdated = () => {
 		refresh();
 	};
@@ -339,38 +449,22 @@ export const ShareHeader = ({
 		refresh();
 	};
 
-	const renderSharedStatus = () => {
-		if (isOwner) {
-			const hasSpaceSharing =
-				sharedOrganizations?.length > 0 || effectiveSharedSpaces?.length > 0;
-			const isPublic = data.public;
+	/**
+	 * Who can actually watch this, in words. "Shared" on its own told the owner
+	 * nothing: not whether the link is public, not who it reaches. The label
+	 * names the widest audience and the tooltip spells out what that means.
+	 */
+	const audience = describeShareAudience({
+		isPublic: Boolean(data.public),
+		passwordProtected: effectivePasswordProtected,
+		audienceNames: [
+			...(sharedOrganizations ?? []).map((org) => org.name),
+			...(effectiveSharedSpaces ?? []).map((space) => space.name),
+		],
+	});
 
-			if (!hasSpaceSharing && !isPublic) {
-				return (
-					<Button
-						className="px-3 w-fit"
-						size="xs"
-						variant="outline"
-						onClick={() => setIsSharingDialogOpen(true)}
-					>
-						Not shared{" "}
-						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-					</Button>
-				);
-			} else {
-				return (
-					<Button
-						className="px-3 w-fit"
-						size="xs"
-						variant="outline"
-						onClick={() => setIsSharingDialogOpen(true)}
-					>
-						Shared{" "}
-						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-					</Button>
-				);
-			}
-		} else {
+	const renderSharedStatus = () => {
+		if (!isOwner) {
 			return (
 				<Button
 					className="px-3 pointer-events-none w-fit"
@@ -381,7 +475,58 @@ export const ShareHeader = ({
 				</Button>
 			);
 		}
+
+		const AudienceIcon =
+			audience.kind === "public"
+				? Globe2
+				: audience.kind === "spaces"
+					? Users
+					: Lock;
+
+		return (
+			<Tooltip content={audience.tooltip} position="bottom">
+				<Button
+					className="gap-1.5 px-3 w-fit"
+					size="xs"
+					variant="outline"
+					aria-label={`Sharing: ${audience.label}. Click to manage access.`}
+					onClick={() => setIsSharingDialogOpen(true)}
+				>
+					<AudienceIcon className="size-3.5 text-gray-11" />
+					{audience.label}
+					<FontAwesomeIcon
+						className="size-2.5 text-gray-10"
+						icon={faChevronDown}
+					/>
+				</Button>
+			</Tooltip>
+		);
 	};
+
+	/**
+	 * Distribution, next to the audience pill that says who it can reach. The
+	 * pill answers "who can see this"; this answers "get it in front of them".
+	 * Signed-out viewers get it too on a public Cap — passing a link on is the
+	 * one thing they can usefully do here.
+	 */
+	const renderShareButton = () => (
+		<Button
+			className="gap-1.5 px-3 w-fit"
+			size="xs"
+			variant="blue"
+			aria-label="Share this Cap"
+			onClick={openShareLinkDialog}
+			onPointerEnter={() => {
+				void importShareLinkDialog();
+			}}
+			onFocus={() => {
+				void importShareLinkDialog();
+			}}
+		>
+			<FontAwesomeIcon className="size-3" icon={faShare} />
+			Share
+		</Button>
+	);
 
 	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
 	const canEditVideo =
@@ -438,6 +583,54 @@ export const ShareHeader = ({
 			);
 			setIsOpeningBrandingSettings(false);
 		}
+	};
+
+	/**
+	 * A quiet way out for signed-out viewers. A shared Cap is often someone's
+	 * first sight of the product, and until now the page offered them nowhere
+	 * to go. Deliberately understated: muted text links and one small button,
+	 * not a marketing bar competing with the video.
+	 *
+	 * Only shown alongside Cap's own logo. An org paying to white-label or hide
+	 * the branding has bought the right not to be advertised at.
+	 */
+	const renderSignedOutNav = () => {
+		if (user !== null || branding?.type !== "cap") return null;
+
+		return (
+			<nav
+				aria-label="Cap"
+				className="flex shrink-0 flex-wrap items-center justify-end gap-x-5 gap-y-2"
+			>
+				<div className="hidden items-center gap-5 md:flex">
+					{SIGNED_OUT_LINKS.map((link) => (
+						<a
+							key={link.href}
+							href={`${link.href}?ref=video_${data.id}`}
+							className="text-[13px] text-gray-10 transition-colors hover:text-gray-12"
+						>
+							{link.label}
+						</a>
+					))}
+				</div>
+				<div className="flex items-center gap-3">
+					<a
+						href="/login"
+						className="text-[13px] text-gray-11 transition-colors hover:text-gray-12"
+					>
+						Log in
+					</a>
+					<Button
+						variant="dark"
+						size="xs"
+						href={`/signup?ref=video_${data.id}`}
+						className="h-8 rounded-full px-3 text-xs"
+					>
+						Get Cap free
+					</Button>
+				</div>
+			</nav>
+		);
 	};
 
 	const renderBranding = () => {
@@ -532,6 +725,21 @@ export const ShareHeader = ({
 				user={user}
 				onUpgradeRequest={setUpgradeModalOpen}
 			/>
+			{shareLinkDialogMounted && (
+				<ShareLinkDialog
+					open={isShareLinkDialogOpen}
+					onOpenChange={setIsShareLinkDialogOpen}
+					videoId={data.id}
+					videoTitle={displayTitle}
+					shareUrl={getVideoLink()}
+					isPublic={Boolean(data.public)}
+					canManageAccess={Boolean(isOwner)}
+					onManageAccess={() => {
+						setIsShareLinkDialogOpen(false);
+						setIsSharingDialogOpen(true);
+					}}
+				/>
+			)}
 			{isOwner && (
 				<>
 					<SettingsDialog
@@ -564,53 +772,109 @@ export const ShareHeader = ({
 					/>
 				</>
 			)}
-			<div className="mt-8">
+			{/* Sits in the page bar above both panes, so the spacing is the bar's
+			    own padding rather than a top margin against the video. */}
+			<div className="py-4">
 				<div className="flex flex-col gap-4">
 					<div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-						<div className="flex min-w-0 items-center gap-3 lg:min-w-[400px]">
+						{/* The title takes the row's slack rather than splitting it with
+						    the link button: `justify-between` on two shrinkable items had
+						    both of them truncating at once, so the title ran out of room
+						    while there was still empty header to its right. */}
+						<div className="flex min-w-0 items-center gap-3 lg:min-w-[400px] lg:flex-1">
 							{renderBranding()}
 							{branding && <div className="h-7 w-px shrink-0 bg-gray-6" />}
 							<div className="min-w-0 flex-1">
-								{isEditing ? (
-									<input
-										value={editValue}
-										onChange={(e) => setEditValue(e.target.value)}
-										onBlur={handleBlur}
-										onKeyDown={handleKeyDown}
-										className="w-full min-w-0 text-xl sm:text-2xl"
-									/>
-								) : (
-									<div className="relative inline-flex min-w-0 max-w-full align-middle">
-										<h1
-											role={isOwner ? "button" : undefined}
-											tabIndex={isOwner ? 0 : undefined}
-											className="truncate text-xl sm:text-2xl"
-											onClick={() => {
-												if (isOwner) {
-													startEditing();
-												}
-											}}
-											onKeyDown={(event) => {
-												if (
-													isOwner &&
-													(event.key === "Enter" || event.key === " ")
-												) {
-													event.preventDefault();
-													startEditing();
-												}
-											}}
-										>
-											{displayTitle}
-										</h1>
-										{isTitleRevealing && (
-											<span aria-hidden className="ai-title-skeleton" />
+								{/*
+								 * Heading and rename field are the same box: same width, same
+								 * type, same position, so opening the field changes nothing on
+								 * screen but the caret.
+								 *
+								 * The box is as wide as the words and no wider, and it grows as
+								 * you type until it runs out of header — `minmax(0, max-content)`
+								 * is what caps it there, and the hidden sizer is what gives it
+								 * its width. The field can't size itself: an input is 20
+								 * characters wide whatever it holds, which is what collapsed the
+								 * title into a stub the moment you clicked it.
+								 *
+								 * The negative margins let the surface behind the text breathe
+								 * without moving the text off the header's alignment.
+								 */}
+								<div
+									className={clsx(
+										"relative -ml-2 -my-1 inline-grid min-w-0 max-w-full grid-cols-[minmax(0,max-content)] items-center rounded-lg px-2 py-1 align-middle ring-1 ring-transparent transition duration-150",
+										isEditing
+											? "bg-gray-1 ring-blue-500/50"
+											: isOwner &&
+													"cursor-text hover:bg-gray-3 has-[:focus-visible]:bg-gray-3 has-[:focus-visible]:ring-blue-500/50",
+									)}
+								>
+									<span
+										aria-hidden
+										className={clsx(
+											TITLE_TEXT_CLASS,
+											"invisible col-start-1 row-start-1 overflow-hidden whitespace-pre",
 										)}
-									</div>
-								)}
+									>
+										{(isEditing ? editValue : displayTitle) ||
+											TITLE_PLACEHOLDER}
+									</span>
+									{isEditing ? (
+										<input
+											ref={titleInputRef}
+											value={editValue}
+											// Sized by the grid track, not by this — but the browser's
+											// 20-character default would otherwise be the track's floor
+											// and short titles would get a box far wider than the word.
+											size={1}
+											maxLength={255}
+											spellCheck={false}
+											autoComplete="off"
+											aria-label="Cap title"
+											placeholder={TITLE_PLACEHOLDER}
+											onChange={(e) => setEditValue(e.target.value)}
+											onBlur={handleTitleBlur}
+											onKeyDown={handleTitleKeyDown}
+											className={clsx(
+												TITLE_TEXT_CLASS,
+												"col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent p-0 outline-none placeholder:text-gray-9",
+											)}
+										/>
+									) : (
+										<h1
+											className={clsx(
+												TITLE_TEXT_CLASS,
+												"col-start-1 row-start-1 min-w-0 truncate",
+											)}
+										>
+											{isOwner ? (
+												<button
+													ref={titleButtonRef}
+													type="button"
+													// `leading-[inherit]`: the base layer gives every bare
+													// button a 1.5rem line height, which would leave the
+													// heading stubbier than the field and bump the text
+													// every time you clicked it.
+													className="block w-full cursor-text truncate text-left leading-[inherit] outline-none"
+													onClick={startEditing}
+												>
+													{displayTitle}
+												</button>
+											) : (
+												displayTitle
+											)}
+										</h1>
+									)}
+									{isTitleRevealing && (
+										<span aria-hidden className="ai-title-skeleton" />
+									)}
+								</div>
 							</div>
 						</div>
 						{user !== null && (
-							<div>
+							// Holds its own width so the title, not this, absorbs what the
+							// row has left over. Its own link label already truncates.
+							<div className="lg:shrink-0">
 								<div className="flex gap-2 items-center">
 									{(data.hasPassword || data.hasInheritedPassword) && (
 										<FontAwesomeIcon
@@ -654,13 +918,6 @@ export const ShareHeader = ({
 											</div>
 										)}
 									</div>
-									{canDownload && (
-										<VideoDownloadMenu
-											videoId={data.id}
-											hasEdits={hasEdits}
-											triggerClassName="size-11 rounded-full border border-gray-5 bg-gray-3 text-gray-12 transition hover:border-gray-6 hover:bg-gray-6"
-										/>
-									)}
 								</div>
 								{userIsOwnerAndNotPro && (
 									<button
@@ -674,8 +931,12 @@ export const ShareHeader = ({
 								)}
 							</div>
 						)}
+						{renderSignedOutNav()}
 					</div>
-					<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					{/* One row at every width. On phones the owner's side of it is a
+					    single "Manage Cap" button, so it sits alongside the byline
+					    instead of claiming a row of its own. */}
+					<div className="flex flex-wrap gap-3 items-center justify-between">
 						<div className="flex flex-wrap gap-x-7 gap-y-2 items-center">
 							<div className="flex gap-2 items-center">
 								{data.name && (
@@ -690,20 +951,39 @@ export const ShareHeader = ({
 									<p className="text-sm text-gray-12">{data.owner.name}</p>
 									<p className="text-xs text-gray-10">
 										{moment(data.createdAt).fromNow()}
+										{views !== undefined && (
+											<Suspense fallback={null}>
+												<ViewCount views={views} />
+											</Suspense>
+										)}
 									</p>
 								</div>
 							</div>
-							{user && renderSharedStatus()}
+							{/*
+							 * Share survives every width — it's the point of the page.
+							 * The audience pill doesn't: on phones its readout moves into
+							 * the "Sharing & access" row of "Manage Cap", and the viewer's
+							 * version of it was inert anyway.
+							 */}
+							<div className="flex flex-wrap gap-2 items-center">
+								{user && (
+									<div className="hidden sm:flex">{renderSharedStatus()}</div>
+								)}
+								{(user || data.public) && renderShareButton()}
+							</div>
 						</div>
 						{user !== null && (
-							<div className="flex flex-wrap items-center gap-2 sm:justify-end">
+							// `ml-auto` rather than relying on the parent's justify-between:
+							// when this wraps onto its own line on a phone, a lone flex item
+							// would otherwise sit left, orphaned under the byline.
+							<div className="flex flex-wrap items-center gap-2 ml-auto justify-end">
 								{isOwner && (
 									<>
 										{canEditVideo && (
 											<Button
 												variant="gray"
 												size="xs"
-												className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
+												className="hidden h-8 gap-1.5 rounded-full px-2.5 text-xs sm:flex"
 												onClick={handleEditVideo}
 											>
 												<Scissors className="size-3.5 text-gray-12" />
@@ -713,7 +993,7 @@ export const ShareHeader = ({
 										<Button
 											variant="gray"
 											size="xs"
-											className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
+											className="hidden h-8 gap-1.5 rounded-full px-2.5 text-xs sm:flex"
 											onClick={() => {
 												push(`/dashboard/analytics?capId=${data.id}`);
 											}}
@@ -739,6 +1019,31 @@ export const ShareHeader = ({
 												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent align="end" sideOffset={5}>
+												{/* The header buttons phones don't show. Hidden from
+												    `sm` up so nothing is offered twice. Share isn't
+												    among them: it keeps its own button at every width. */}
+												{canEditVideo && (
+													<DropdownMenuItem
+														onClick={handleEditVideo}
+														className="flex items-center gap-2 rounded-lg sm:hidden"
+													>
+														<Scissors className="size-3.5" />
+														<p className="text-sm text-gray-12">Edit video</p>
+													</DropdownMenuItem>
+												)}
+												<DropdownMenuItem
+													onClick={() => {
+														push(`/dashboard/analytics?capId=${data.id}`);
+													}}
+													className="flex items-center gap-2 rounded-lg sm:hidden"
+												>
+													<FontAwesomeIcon
+														className="size-3"
+														icon={faChartSimple}
+													/>
+													<p className="text-sm text-gray-12">View analytics</p>
+												</DropdownMenuItem>
+												<DropdownMenuSeparator className="sm:hidden" />
 												<DropdownMenuItem
 													onClick={() => setIsSharingDialogOpen(true)}
 													className="flex items-center gap-2 rounded-lg"
@@ -747,6 +1052,11 @@ export const ShareHeader = ({
 													<p className="text-sm text-gray-12">
 														Sharing & access
 													</p>
+													{/* The audience pill is desktop-only, so its readout
+													    has to live here on phones. */}
+													<span className="ml-auto max-w-[9rem] truncate pl-3 text-xs text-gray-10 sm:hidden">
+														{audience.label}
+													</span>
 												</DropdownMenuItem>
 												<DropdownMenuItem
 													onClick={() => setIsSettingsDialogOpen(true)}
@@ -788,6 +1098,38 @@ export const ShareHeader = ({
 															: "Duplicate Cap"}
 													</p>
 												</DropdownMenuItem>
+												{/* Downloads used to live behind a second dots button next to
+												    the link. There is one "everything else about this Cap"
+												    menu, and this is it. */}
+												{canDownload && (
+													<>
+														<DropdownMenuSeparator />
+														<DropdownMenuItem
+															onClick={() => download("current")}
+															disabled={isDownloading}
+															className="flex items-center gap-2 rounded-lg"
+														>
+															<Download className="size-3.5" />
+															<p className="text-sm text-gray-12">
+																{hasEdits
+																	? "Download current video"
+																	: "Download video"}
+															</p>
+														</DropdownMenuItem>
+														{hasEdits && (
+															<DropdownMenuItem
+																onClick={() => download("original")}
+																disabled={isDownloading}
+																className="flex items-center gap-2 rounded-lg"
+															>
+																<Download className="size-3.5" />
+																<p className="text-sm text-gray-12">
+																	Download original video
+																</p>
+															</DropdownMenuItem>
+														)}
+													</>
+												)}
 												<DropdownMenuSeparator />
 												<DropdownMenuItem
 													onClick={() => push("/dashboard/caps?page=1")}
@@ -810,15 +1152,46 @@ export const ShareHeader = ({
 									</>
 								)}
 								{!isOwner && (
-									<Button
-										size="xs"
-										className="h-8 rounded-full px-2.5 text-xs"
-										onClick={() => {
-											push("/dashboard/caps?page=1");
-										}}
-									>
-										Go to dashboard
-									</Button>
+									<>
+										{/* Space and org members can download someone else's Cap,
+										    and they never see "Manage Cap" — so the action has to
+										    stand on its own for them. */}
+										{canDownload &&
+											(hasEdits ? (
+												<VideoDownloadMenu
+													videoId={data.id}
+													hasEdits
+													triggerLabel="Download"
+													triggerClassName="h-8 gap-1.5 rounded-full border border-gray-5 bg-gray-3 px-2.5 text-xs text-gray-12 transition hover:bg-gray-6"
+													trigger={
+														<>
+															<Download className="size-3.5" aria-hidden />
+															Download
+														</>
+													}
+												/>
+											) : (
+												<Button
+													variant="gray"
+													size="xs"
+													className="h-8 gap-1.5 rounded-full px-2.5 text-xs"
+													disabled={isDownloading}
+													onClick={() => download("current")}
+												>
+													<Download className="size-3.5 text-gray-12" />
+													Download
+												</Button>
+											))}
+										<Button
+											size="xs"
+											className="h-8 rounded-full px-2.5 text-xs"
+											onClick={() => {
+												push("/dashboard/caps?page=1");
+											}}
+										>
+											Go to dashboard
+										</Button>
+									</>
 								)}
 							</div>
 						)}
@@ -832,3 +1205,14 @@ export const ShareHeader = ({
 		</>
 	);
 };
+
+/**
+ * Suspends on the count alone, inside the meta line, so the rest of the header
+ * paints immediately. A failed lookup resolves to null and simply says nothing
+ * rather than taking the header down with it.
+ */
+function ViewCount({ views }: { views: MaybePromise<number | null> }) {
+	const count = views instanceof Promise ? use(views) : views;
+	if (count === null || count === undefined) return null;
+	return <>{` · ${count} ${count === 1 ? "view" : "views"}`}</>;
+}
