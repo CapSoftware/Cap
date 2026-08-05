@@ -480,7 +480,10 @@ export const comments = mysqlTable(
 	"comments",
 	{
 		id: nanoId("id").notNull().primaryKey().$type<Comment.CommentId>(),
-		type: varchar("type", { length: 6, enum: ["emoji", "text"] }).notNull(),
+		type: varchar("type", {
+			length: 6,
+			enum: ["emoji", "text", "video", "audio"],
+		}).notNull(),
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
 		authorId: nanoId("authorId").notNull().$type<User.UserId>(),
@@ -489,6 +492,12 @@ export const comments = mysqlTable(
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		parentCommentId:
 			nanoIdNullable("parentCommentId").$type<Comment.CommentId>(),
+		// Media comments ("video"/"audio" type): object key under the parent
+		// video's prefix (`${ownerId}/${videoId}/comments/${commentId}/...`),
+		// served via /api/storage/object which asserts that prefix.
+		mediaKey: varchar("mediaKey", { length: 512 }),
+		mediaDuration: float("mediaDuration"),
+		mediaMeta: json("mediaMeta").$type<Comment.MediaMeta>(),
 	},
 	(table) => ({
 		videoTypeCreatedIndex: index("video_type_created_idx").on(
