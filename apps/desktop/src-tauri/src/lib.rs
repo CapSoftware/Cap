@@ -3018,6 +3018,10 @@ struct SerializedEditorInstance {
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordingsMeta>,
     path: PathBuf,
+    /// Notch geometry the overlay uses when the project sets no manual
+    /// placement: this recording's own measurements where the recorder took
+    /// them, else a stock MacBook notch for the editor to start from.
+    notch_base: cap_project::DisplayNotch,
 }
 
 #[tauri::command]
@@ -3051,6 +3055,11 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
+        notch_base: editor_instance
+            .render_constants
+            .meta
+            .display_notch()
+            .unwrap_or(cap_project::DEFAULT_MACBOOK_NOTCH),
     })
 }
 
@@ -4787,44 +4796,10 @@ fn configure_camera_blur_recovery(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
-    // Arm the unexpected-termination sentinel before anything else can crash, and
-    // report any previous session that died without a clean shutdown.
-    let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
-    configure_windows_graphics_recovery(previous_termination);
-
-    // Keep the sentinel's blur marker in sync with live BlurProcessor instances
-    // (camera preview and editor render alike), so a native blur crash is
-    // attributable on the next launch.
-    cap_camera_effects::set_blur_session_observer(|active| {
-        if active {
-            crash_sentinel::enter_blur_session();
-        } else {
-            crash_sentinel::exit_blur_session();
-        }
-    });
-
-    ffmpeg::init()
-        .map_err(|e| {
-            error!("Failed to initialize ffmpeg: {e}");
-        })
-        .ok();
-
-    // Detect the camera-preview quality profile once from total RAM. On low-RAM
-    // machines (<= 8GB) this opts the preview into a cheaper profile (smaller
-    // textures, 30fps, no background blur); higher-spec machines keep the exact
-    // current behaviour. Only the preview is affected — recording is untouched.
-    {
-        let mut system = sysinfo::System::new();
-        system.refresh_memory();
-        camera::init_preview_profile(system.total_memory());
-    }
-
-    telemetry::init();
-
-    let tauri_context = tauri::generate_context!();
-
-    let specta_builder = tauri_specta::Builder::new()
+/// Extracted so the TypeScript bindings can be regenerated without booting
+/// the app, which would otherwise ask for camera and microphone access.
+fn create_specta_builder() -> tauri_specta::Builder {
+    tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
@@ -5040,21 +5015,63 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .typ::<cap_automation::ClipboardSource>()
         .typ::<cap_automation::ExportFormat>()
         .typ::<cap_automation::AutomationExportCompression>()
-        .typ::<cap_automation::ExportDestination>();
+        .typ::<cap_automation::ExportDestination>()
+}
+
+#[cfg(debug_assertions)]
+fn export_typescript_bindings(builder: &tauri_specta::Builder) {
+    let bindings_path = std::path::Path::new("../src/utils/tauri.ts");
+    if !bindings_path.parent().is_some_and(|parent| parent.exists()) {
+        debug!("Skipping TypeScript bindings export outside source checkout");
+        return;
+    }
+
+    if let Err(err) = builder.export(specta_typescript::Typescript::default(), bindings_path) {
+        warn!(error = %err, "Failed to export TypeScript bindings");
+    }
+}
+
+pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    // Arm the unexpected-termination sentinel before anything else can crash, and
+    // report any previous session that died without a clean shutdown.
+    let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
+    configure_windows_graphics_recovery(previous_termination);
+
+    // Keep the sentinel's blur marker in sync with live BlurProcessor instances
+    // (camera preview and editor render alike), so a native blur crash is
+    // attributable on the next launch.
+    cap_camera_effects::set_blur_session_observer(|active| {
+        if active {
+            crash_sentinel::enter_blur_session();
+        } else {
+            crash_sentinel::exit_blur_session();
+        }
+    });
+
+    ffmpeg::init()
+        .map_err(|e| {
+            error!("Failed to initialize ffmpeg: {e}");
+        })
+        .ok();
+
+    // Detect the camera-preview quality profile once from total RAM. On low-RAM
+    // machines (<= 8GB) this opts the preview into a cheaper profile (smaller
+    // textures, 30fps, no background blur); higher-spec machines keep the exact
+    // current behaviour. Only the preview is affected — recording is untouched.
+    {
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        camera::init_preview_profile(system.total_memory());
+    }
+
+    telemetry::init();
+
+    let tauri_context = tauri::generate_context!();
+
+    let specta_builder = create_specta_builder();
 
     #[cfg(debug_assertions)]
-    {
-        let bindings_path = std::path::Path::new("../src/utils/tauri.ts");
-        if bindings_path.parent().is_some_and(|parent| parent.exists()) {
-            if let Err(err) =
-                specta_builder.export(specta_typescript::Typescript::default(), bindings_path)
-            {
-                warn!(error = %err, "Failed to export TypeScript bindings");
-            }
-        } else {
-            debug!("Skipping TypeScript bindings export outside source checkout");
-        }
-    }
+    export_typescript_bindings(&specta_builder);
 
     let (camera_preview_state_tx, camera_preview_state_rx) =
         tokio::sync::watch::channel(CameraPreviewState::default());
@@ -6828,5 +6845,16 @@ mod screenshot_share_cache_tests {
         let link = screenshot_share_link_for_hash(Some(&sharing(None)), "hash-a");
 
         assert!(link.is_none());
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod bindings_tests {
+    /// Regenerates `apps/desktop/src/utils/tauri.ts`, which is committed and
+    /// which CI typechecks against. Running the app in debug does the same, but
+    /// that needs camera and microphone access; this does not.
+    #[test]
+    fn export_typescript_bindings() {
+        super::export_typescript_bindings(&super::create_specta_builder());
     }
 }

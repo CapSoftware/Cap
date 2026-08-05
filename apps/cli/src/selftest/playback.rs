@@ -869,6 +869,7 @@ mod fixture {
             }),
             cursor: None,
             keyboard: None,
+            display_notch: None,
         };
         // Clip offsets exactly as the studio recorder persists them.
         let offsets = segment.calculate_audio_offsets();

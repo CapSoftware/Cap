@@ -1914,6 +1914,7 @@ dependencies = [
  "log",
  "metal 0.31.0",
  "objc2 0.6.2",
+ "pollster",
  "pretty_assertions",
  "rayon",
  "reactive_graph",

@@ -66,6 +66,7 @@ import {
 	type CursorType,
 	commands,
 	type KeyboardTrackSegment,
+	type NotchConfiguration,
 	type SceneMode,
 	type SceneSegment,
 	type SplitLayout,
@@ -80,6 +81,7 @@ import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
+import IconLucideLaptop from "~icons/lucide/laptop";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
 import IconLucideMusic from "~icons/lucide/music";
@@ -271,6 +273,15 @@ const WALLPAPER_NAMES = [
 	"orange/8",
 	"orange/9",
 ] as const;
+
+// Null placement means "use the recording's own measurements", so untouched
+// sliders must stay null rather than being written out at their displayed value.
+const UNPLACED_NOTCH = {
+	enabled: false,
+	x: null,
+	width: null,
+	height: null,
+} satisfies NotchConfiguration;
 
 const CURRENT_DESKTOP_BACKGROUND_ID = "current-desktop-background";
 const CURRENT_DESKTOP_BACKGROUND_BASENAME = "current-desktop-background";
@@ -2674,6 +2685,81 @@ function BackgroundConfig(props: {
 								formatTooltip="%"
 							/>
 						</Field>
+					</div>
+				</KCollapsible.Content>
+			</KCollapsible>
+			<Field
+				name="MacBook notch"
+				icon={<IconLucideLaptop class="size-4" />}
+				value={
+					<Toggle
+						checked={project.background.notch?.enabled ?? false}
+						onChange={(enabled) =>
+							setProject("background", "notch", {
+								...(project.background.notch ?? UNPLACED_NOTCH),
+								enabled,
+							})
+						}
+					/>
+				}
+			/>
+			<KCollapsible open={project.background.notch?.enabled ?? false}>
+				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+					<div class="flex flex-col gap-6 pb-6">
+						<p class="text-xs text-gray-11">
+							Draws a MacBook notch over the recording. Recordings made on a Mac
+							with a notch use their own measurements; otherwise start from the
+							size below and adjust to match.
+						</p>
+						<For
+							each={
+								[
+									{ key: "width", name: "Notch Width", max: 0.4 },
+									{ key: "height", name: "Notch Height", max: 0.15 },
+									{ key: "x", name: "Notch Position", max: 1 },
+								] as const
+							}
+						>
+							{(field) => (
+								<Field
+									name={field.name}
+									icon={<IconCapEnlarge class="size-4" />}
+								>
+									<Slider
+										value={[
+											project.background.notch?.[field.key] ??
+												editorInstance.notchBase[field.key],
+										]}
+										onChange={(v) => {
+											const base = editorInstance.notchBase;
+											const prev = project.background.notch ?? UNPLACED_NOTCH;
+											const next: NotchConfiguration = {
+												...prev,
+												enabled: true,
+											};
+											next[field.key] = v[0];
+
+											if (field.key === "width") {
+												// Resize about the centre rather than dragging the
+												// left edge along with the width.
+												const centre =
+													(prev.x ?? base.x) + (prev.width ?? base.width) / 2;
+												next.x = Math.min(
+													Math.max(centre - v[0] / 2, 0),
+													1 - v[0],
+												);
+											}
+
+											setProject("background", "notch", next);
+										}}
+										minValue={0}
+										maxValue={field.max}
+										step={0.001}
+										formatTooltip={(value) => `${(value * 100).toFixed(1)}%`}
+									/>
+								</Field>
+							)}
+						</For>
 					</div>
 				</KCollapsible.Content>
 			</KCollapsible>

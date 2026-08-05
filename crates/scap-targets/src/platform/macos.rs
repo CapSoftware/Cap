@@ -19,6 +19,7 @@ use core_graphics::{
     },
 };
 
+use crate::NotchGeometry;
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 #[derive(Clone, Copy)]
@@ -154,6 +155,45 @@ impl DisplayImpl {
             }
 
             None
+        })
+    }
+
+    pub fn notch(&self) -> Option<NotchGeometry> {
+        use cocoa::appkit::NSScreen;
+        use cocoa::foundation::NSRect;
+        use objc::runtime::YES;
+        use objc::{msg_send, *};
+
+        objc::rc::autoreleasepool(|| unsafe {
+            let screen = self.as_ns_screen()?;
+
+            let responds: runtime::BOOL =
+                msg_send![screen, respondsToSelector: sel!(auxiliaryTopLeftArea)];
+            if responds != YES {
+                return None;
+            }
+
+            let frame = NSScreen::frame(screen);
+            if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+                return None;
+            }
+
+            let left: NSRect = msg_send![screen, auxiliaryTopLeftArea];
+            let right: NSRect = msg_send![screen, auxiliaryTopRightArea];
+
+            // Both auxiliary rects are NSZeroRect on displays with no camera
+            // housing, which makes `height` zero and rejects them below.
+            let width = frame.size.width - left.size.width - right.size.width;
+            let height = left.size.height;
+            if width <= 0.0 || height <= 0.0 {
+                return None;
+            }
+
+            Some(NotchGeometry {
+                x: left.size.width / frame.size.width,
+                width: width / frame.size.width,
+                height: height / frame.size.height,
+            })
         })
     }
 

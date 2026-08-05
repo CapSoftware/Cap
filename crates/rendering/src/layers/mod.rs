@@ -7,6 +7,7 @@ mod display;
 mod frame;
 mod keyboard;
 mod mask;
+mod notch;
 mod text;
 
 use std::sync::OnceLock;
@@ -69,6 +70,7 @@ pub use display::*;
 pub use frame::*;
 pub use keyboard::*;
 pub use mask::*;
+pub use notch::*;
 pub use text::*;
 
 #[cfg(test)]

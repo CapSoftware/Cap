@@ -3853,6 +3853,19 @@ fn project_config_from_recording(
         Vec::new()
     };
 
+    // Screen captures only; the editor's toggle is there for anyone who wants a
+    // notch over a window recording anyway.
+    let captured_screen = matches!(
+        capture_target,
+        Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. })
+    );
+    if captured_screen && settings.macbook_notch_overlay.unwrap_or(false) {
+        config.background.notch = Some(cap_project::NotchConfiguration {
+            enabled: true,
+            ..Default::default()
+        });
+    }
+
     config.timeline = Some(TimelineConfiguration {
         segments: timeline_segments,
         transitions: Vec::new(),

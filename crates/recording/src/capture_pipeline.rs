@@ -546,6 +546,56 @@ pub fn target_to_display_and_crop(
     Ok((display, crop_bounds))
 }
 
+/// Locates the recording display's physical notch within the frames this target
+/// will produce.
+///
+/// Window captures get `None`: they record the window's own surface rather than
+/// a screen region, and the window moves, so there is no stable position.
+pub fn resolve_display_notch(target: &ScreenCaptureTarget) -> Option<cap_project::DisplayNotch> {
+    let display = target.display()?;
+    let notch = display.notch()?;
+
+    match target {
+        ScreenCaptureTarget::Display { .. } => Some(cap_project::DisplayNotch {
+            x: notch.x,
+            width: notch.width,
+            height: notch.height,
+        }),
+        // Cropped at capture time, so the notch is rebased onto the crop and
+        // dropped when it falls outside.
+        ScreenCaptureTarget::Area { bounds, .. } => {
+            let display_size = display.logical_size()?;
+            let notch_left = notch.x * display_size.width();
+            let notch_right = notch_left + notch.width * display_size.width();
+            let notch_bottom = notch.height * display_size.height();
+
+            let area_left = bounds.position().x();
+            let area_top = bounds.position().y();
+            let area_width = bounds.size().width();
+            let area_height = bounds.size().height();
+
+            if area_width <= 0.0 || area_height <= 0.0 {
+                return None;
+            }
+
+            let left = notch_left.max(area_left);
+            let right = notch_right.min(area_left + area_width);
+            let bottom = notch_bottom.min(area_top + area_height);
+
+            if right <= left || bottom <= area_top {
+                return None;
+            }
+
+            Some(cap_project::DisplayNotch {
+                x: (left - area_left) / area_width,
+                width: (right - left) / area_width,
+                height: (bottom - area_top) / area_height,
+            })
+        }
+        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::CameraOnly => None,
+    }
+}
+
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {

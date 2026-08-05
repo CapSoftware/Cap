@@ -668,6 +668,12 @@ function Inner(props: {
 							value={!!settings.captureKeyboardEvents}
 							onChange={(value) => handleChange("captureKeyboardEvents", value)}
 						/>
+						<ToggleSettingItem
+							label="Draw the MacBook notch on screen recordings"
+							description="Screen capture records straight through the notch, so recordings show an unbroken menu bar. This draws it back on by default for new screen and area recordings; window recordings are left alone. Each recording can override it in the editor."
+							value={!!settings.macbookNotchOverlay}
+							onChange={(value) => handleChange("macbookNotchOverlay", value)}
+						/>
 						<SelectSettingItem
 							label="Max capture framerate"
 							description={

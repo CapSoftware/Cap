@@ -286,6 +286,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                     system_audio: None,
                     cursor: segment.cursor,
                     keyboard: None,
+                    display_notch: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
@@ -844,6 +845,7 @@ fn single_segment_to_multiple(segment: &SingleSegment) -> MultipleSegment {
         system_audio: None,
         cursor: segment.cursor.clone(),
         keyboard: None,
+        display_notch: None,
     }
 }
 
@@ -1019,6 +1021,7 @@ fn copy_source_segment(
         system_audio,
         cursor,
         keyboard,
+        display_notch: None,
     })
 }
 
@@ -1425,6 +1428,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                     system_audio: None,
                     cursor: None,
                     keyboard: None,
+                    display_notch: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
@@ -1520,6 +1524,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                                     system_audio,
                                     cursor: None,
                                     keyboard: None,
+                                    display_notch: None,
                                 }],
                                 cursors: Cursors::default(),
                                 status: Some(StudioRecordingStatus::Complete),
@@ -1694,6 +1699,7 @@ async fn append_mp4_to_editor_project(
         system_audio,
         cursor: None,
         keyboard: None,
+        display_notch: None,
     };
 
     {
