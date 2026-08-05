@@ -3018,6 +3018,10 @@ struct SerializedEditorInstance {
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordingsMeta>,
     path: PathBuf,
+    /// Notch geometry the overlay uses when the project sets no manual
+    /// placement: this recording's own measurements where the recorder took
+    /// them, else a stock MacBook notch for the editor to start from.
+    notch_base: cap_project::DisplayNotch,
 }
 
 #[tauri::command]
@@ -3051,6 +3055,11 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
+        notch_base: editor_instance
+            .render_constants
+            .meta
+            .display_notch()
+            .unwrap_or(cap_project::DEFAULT_MACBOOK_NOTCH),
     })
 }
 

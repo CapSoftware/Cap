@@ -45,6 +45,8 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		enableNotifications: true,
 		enableNativeCameraPreview: false,
 		autoZoomOnClicks: false,
+		// Off until the backend seeds it from whether this machine has a notch.
+		macbookNotchOverlay: false,
 		captureKeyboardEvents: true,
 		custom_cursor_capture2: true,
 		excludedWindows: [],
