@@ -1978,9 +1978,17 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 			.from(Db.comments)
 			.leftJoin(Db.users, eq(Db.comments.authorId, Db.users.id))
 			.where(
-				commentId
-					? and(eq(Db.comments.videoId, videoId), eq(Db.comments.id, commentId))
-					: eq(Db.comments.videoId, videoId),
+				and(
+					// MobileComment's response schema only decodes text/emoji; a media
+					// comment row here would ParseError the whole response.
+					inArray(Db.comments.type, ["text", "emoji"]),
+					commentId
+						? and(
+								eq(Db.comments.videoId, videoId),
+								eq(Db.comments.id, commentId),
+							)
+						: eq(Db.comments.videoId, videoId),
+				),
 			)
 			.orderBy(Db.comments.createdAt),
 	);
@@ -2010,7 +2018,9 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 	return visibleRows.map((row) => ({
 		id: row.id,
 		videoId: row.videoId,
-		type: row.type,
+		// Safe: the query filters to these two types (media comments are hidden
+		// from the mobile API until its schema learns about them).
+		type: row.type as "text" | "emoji",
 		content: row.content,
 		timestamp: row.timestamp,
 		parentCommentId: row.parentCommentId,
