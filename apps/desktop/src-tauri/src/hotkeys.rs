@@ -218,8 +218,13 @@ pub fn init(app: &AppHandle) {
     };
 
     let global_shortcut = app.global_shortcut();
-    for hotkey in store.hotkeys.values() {
-        global_shortcut.register(Shortcut::from(*hotkey)).ok();
+    for (action, hotkey) in store.hotkeys.iter() {
+        // A shortcut stored on a previous run can stop being registrable, e.g.
+        // another application claimed it since. Surface it in the log rather
+        // than starting up with a binding the user believes is active.
+        if let Err(e) = global_shortcut.register(Shortcut::from(*hotkey)) {
+            tracing::warn!(?action, ?hotkey, "failed to register stored hotkey: {e}");
+        }
     }
 
     app.manage(Mutex::new(store));
@@ -339,27 +344,63 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
 #[tauri::command(async)]
 #[specta::specta]
 #[instrument(skip(app))]
-pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) -> Result<(), ()> {
+pub fn set_hotkey(
+    app: AppHandle,
+    action: HotkeyAction,
+    hotkey: Option<Hotkey>,
+) -> Result<(), String> {
     let global_shortcut = app.global_shortcut();
     let state = app.state::<HotkeysState>();
     let mut store = state.lock().unwrap();
 
     let prev = store.hotkeys.get(&action).cloned();
 
+    // Apply to the store first so the "is this combination still used by
+    // another action?" check below sees the post-change state, then reconcile
+    // the OS registrations.
     if let Some(hotkey) = hotkey {
         store.hotkeys.insert(action, hotkey);
     } else {
         store.hotkeys.remove(&action);
     }
 
+    // Release the previous combination before registering the new one: the
+    // underlying global-hotkey layer rejects a shortcut that is already
+    // registered, so re-binding an action to a combination another action just
+    // gave up would otherwise fail.
     if let Some(prev) = prev
         && !store.hotkeys.values().any(|h| h == &prev)
     {
-        global_shortcut.unregister(Shortcut::from(prev)).ok();
+        if let Err(e) = global_shortcut.unregister(Shortcut::from(prev)) {
+            // Not fatal on its own; log it so a stale registration that keeps
+            // firing the old combination is diagnosable.
+            tracing::warn!(?action, prev = ?prev, "failed to unregister previous hotkey: {e}");
+        }
     }
 
     if let Some(hotkey) = hotkey {
-        global_shortcut.register(Shortcut::from(hotkey)).ok();
+        // The OS can refuse a shortcut: reserved by the system (PrintScreen on
+        // Windows) or already claimed by another application. Previously this
+        // was `.ok()`, so the binding was stored and shown in Settings while
+        // pressing it did nothing.
+        if let Err(e) = global_shortcut.register(Shortcut::from(hotkey)) {
+            tracing::warn!(?action, ?hotkey, "failed to register hotkey: {e}");
+
+            // Roll the store back so it matches what is actually registered.
+            match prev {
+                Some(prev) => {
+                    store.hotkeys.insert(action, prev);
+                    global_shortcut.register(Shortcut::from(prev)).ok();
+                }
+                None => {
+                    store.hotkeys.remove(&action);
+                }
+            }
+
+            return Err(format!(
+                "Could not register this shortcut. It may already be in use by another application, or reserved by the system. ({e})"
+            ));
+        }
     }
 
     Ok(())
