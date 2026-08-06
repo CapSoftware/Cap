@@ -2930,9 +2930,7 @@ fn compute_studio_duration_secs(recording_dir: &std::path::Path) -> f64 {
     let Some(studio_meta) = meta.studio_meta() else {
         return 0.0;
     };
-    ProjectRecordingsMeta::new(&recording_dir.to_path_buf(), studio_meta)
-        .map(|r| r.duration())
-        .unwrap_or(0.0)
+    ProjectRecordingsMeta::duration_secs_for_meta(&recording_dir.to_path_buf(), studio_meta)
 }
 
 async fn apply_post_studio_editor_behaviour(
@@ -3585,16 +3583,17 @@ fn project_config_from_recording(
             Vec::new()
         };
 
-    config.timeline = Some(TimelineConfiguration {
-        segments: timeline_segments,
-        zoom_segments,
-        scene_segments: Vec::new(),
-        mask_segments: Vec::new(),
-        text_segments: Vec::new(),
-        caption_segments: Vec::new(),
-        keyboard_segments: Vec::new(),
-        audio_segments: Vec::new(),
-    });
+        config.timeline = Some(TimelineConfiguration {
+            segments: timeline_segments,
+            zoom_segments,
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+        });
+    }
 
     config
 }

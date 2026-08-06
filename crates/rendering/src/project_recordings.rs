@@ -230,6 +230,47 @@ impl ProjectRecordingsMeta {
     pub fn get_source_duration(&self, path: &PathBuf) -> Result<f64, String> {
         Video::new(path, 0.0).map(|v| v.duration)
     }
+
+    /// Returns the total duration for any studio recording, including audio-only ones
+    /// where `ProjectRecordingsMeta::new` would fail due to a missing display track.
+    pub fn duration_secs_for_meta(
+        recording_path: &PathBuf,
+        meta: &StudioRecordingMeta,
+    ) -> f64 {
+        let has_display = match meta {
+            StudioRecordingMeta::SingleSegment { segment } => segment.display.is_some(),
+            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                inner.segments.iter().any(|s| s.display.is_some())
+            }
+        };
+
+        if has_display {
+            return Self::new(recording_path, meta)
+                .map(|r| r.duration())
+                .unwrap_or(0.0);
+        }
+
+        // Audio-only: sum durations from mic/audio files directly
+        match meta {
+            StudioRecordingMeta::SingleSegment { segment } => segment
+                .audio
+                .as_ref()
+                .and_then(|a| Audio::new(a.path.to_path(recording_path), 0.0).ok())
+                .map(|a| a.duration)
+                .unwrap_or(0.0),
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+                .segments
+                .iter()
+                .map(|s| {
+                    s.mic
+                        .as_ref()
+                        .and_then(|a| Audio::new(a.path.to_path(recording_path), 0.0).ok())
+                        .map(|a| a.duration)
+                        .unwrap_or(0.0)
+                })
+                .sum(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
