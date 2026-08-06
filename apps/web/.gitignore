@@ -10,6 +10,9 @@
 
 # next.js
 /.next/
+# isolated build checks (next build with a redirected distDir, so a check
+# can't clobber the live dev server's .next)
+/.next-buildcheck/
 /out/
 
 # production
