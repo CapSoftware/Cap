@@ -385,6 +385,8 @@ struct RecordingsArgs {
 enum RecordingsCommands {
     /// List '.cap' recordings discovered on disk
     List(RecordingsListArgs),
+    /// Fetch AI summary, title, and chapters from a share link or video ID
+    Info(RecordingsInfoArgs),
 }
 
 #[derive(Args)]
@@ -392,6 +394,14 @@ struct RecordingsListArgs {
     /// Directory to scan (defaults to the desktop recordings library)
     #[arg(long)]
     dir: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Args)]
+struct RecordingsInfoArgs {
+    /// Share URL or video ID (e.g. https://cap.so/s/abc123xyz or abc123xyz)
+    target: String,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 }
@@ -584,7 +594,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             None => args.run(json).await,
         },
         Commands::Screenshot(s) => s.run(json).await,
-        Commands::Recordings(args) => args.run(json),
+        Commands::Recordings(args) => args.run(json).await,
         Commands::Upload(args) => args.run(json).await,
         Commands::Update(args) => {
             let format = resolve_format(json, args.format);
@@ -724,11 +734,15 @@ impl ProjectArgs {
 }
 
 impl RecordingsArgs {
-    fn run(self, json: bool) -> Result<(), String> {
+    async fn run(self, json: bool) -> Result<(), String> {
         match self.command {
             RecordingsCommands::List(args) => {
                 let format = resolve_format(json, args.format);
                 finish_json(format, recordings::list(args.dir, format))
+            }
+            RecordingsCommands::Info(args) => {
+                let format = resolve_format(json, args.format);
+                finish_json(format, recordings::info(args.target, format).await)
             }
         }
     }

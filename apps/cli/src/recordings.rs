@@ -106,3 +106,58 @@ pub fn list(dir: Option<PathBuf>, format: OutputFormat) -> Result<(), String> {
         }
     }
 }
+
+pub async fn info(url_or_id: String, format: OutputFormat) -> Result<(), String> {
+    let video_id = if url_or_id.contains('/') {
+        url_or_id
+            .rsplit('/')
+            .next()
+            .unwrap_or(&url_or_id)
+            .to_string()
+    } else {
+        url_or_id
+    };
+
+    let server_url = std::env::var("CAP_SERVER_URL")
+        .unwrap_or_else(|_| "https://cap.so".to_string());
+
+    let endpoint = format!("{}/api/video/metadata?videoId={}", server_url.trim_end_matches('/'), video_id);
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&endpoint)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch video info: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Server returned error status: {}", response.status()));
+    }
+
+    let val: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
+
+    match format {
+        OutputFormat::Json => write_json(&val),
+        OutputFormat::Text => {
+            if let Some(title) = val.get("title").and_then(|v| v.as_str()) {
+                println!("Title: {}", title);
+            }
+            if let Some(summary) = val.get("summary").and_then(|v| v.as_str()) {
+                println!("Summary:\n{}", summary);
+            }
+            if let Some(chapters) = val.get("chapters").and_then(|v| v.as_array()) {
+                if !chapters.is_empty() {
+                    println!("\nChapters:");
+                    for chapter in chapters {
+                        let t = chapter.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        let s = chapter.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        println!(" - [{:.1}s] {}", s, t);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
