@@ -130,7 +130,10 @@ const refreshStandalonePanelFlag = (): Promise<void> =>
 			resolve();
 		}
 	});
-const standaloneFlagReady = refreshStandalonePanelFlag();
+let isStandaloneFlagReady = false;
+const standaloneFlagReady = refreshStandalonePanelFlag().then(() => {
+	isStandaloneFlagReady = true;
+});
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
@@ -1922,14 +1925,14 @@ chrome.runtime.onInstalled.addListener((details) => {
 	}
 });
 
-chrome.action.onClicked.addListener(async (tab) => {
-	// Wait for the startup panel-flag refresh so that a click arriving
-	// immediately after an MV3 worker restart reads the correct value.
-	// standaloneFlagReady resolves as a microtask when already settled
-	// (the common case), preserving Chrome's click-gesture window for
-	// sidePanel.open.
-	await standaloneFlagReady;
+chrome.action.onClicked.addListener((tab) => {
+	// If the startup flag-refresh hasn't settled yet, the standalonePanelOpen
+	// value may be stale (worker restarted while panel was visible). Fall back
+	// to openRecorderPanel so Chrome's click gesture is never voided by an
+	// async wait — the cost is one extra popup open on a cold-restart race,
+	// which is far better than a dead icon click.
 	if (
+		isStandaloneFlagReady &&
 		chrome.sidePanel &&
 		!canInjectIntoTab(tab) &&
 		!isCapturingRecordingStatus(recordingStatus) &&
