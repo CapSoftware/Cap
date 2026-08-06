@@ -106,26 +106,31 @@ const closeStandalonePanel = () => {
 // Rebuild the flag after a worker restart: the panel outlives this worker's
 // memory, and without the flag the next icon click would re-open instead of
 // toggling the visible recorder closed.
-const refreshStandalonePanelFlag = () => {
-	try {
-		chrome.runtime.getContexts(
-			{
-				contextTypes: [
-					"SIDE_PANEL",
-					"TAB",
-				] as chrome.runtime.ContextType[],
-				documentUrls: [chrome.runtime.getURL(POPUP_URL)],
-			},
-			(contexts) => {
-				if (chrome.runtime.lastError) return;
-				standalonePanelOpen = (contexts ?? []).length > 0;
-			},
-		);
-	} catch {
-		// Fall back to the message-driven flag alone.
-	}
-};
-refreshStandalonePanelFlag();
+const refreshStandalonePanelFlag = (): Promise<void> =>
+	new Promise<void>((resolve) => {
+		try {
+			chrome.runtime.getContexts(
+				{
+					contextTypes: [
+						"SIDE_PANEL",
+						"TAB",
+					] as chrome.runtime.ContextType[],
+					documentUrls: [chrome.runtime.getURL(POPUP_URL)],
+				},
+				(contexts) => {
+					if (!chrome.runtime.lastError) {
+						standalonePanelOpen = (contexts ?? []).length > 0;
+					}
+					resolve();
+				},
+			);
+		} catch {
+			// getContexts is unavailable in older Chrome — fall back to the
+			// message-driven flag alone.
+			resolve();
+		}
+	});
+const standaloneFlagReady = refreshStandalonePanelFlag();
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
