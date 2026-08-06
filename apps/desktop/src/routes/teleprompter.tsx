@@ -278,9 +278,11 @@ export default function Teleprompter() {
 			return;
 		}
 
-		resizeEditor();
 		const element = scrollElement;
 		if (!element || !hasScript()) return;
+		const currentScrollTop = element.scrollTop;
+		resizeEditor();
+		element.scrollTop = currentScrollTop;
 		const maximumScroll = Math.max(
 			0,
 			element.scrollHeight - element.clientHeight,

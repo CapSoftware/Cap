@@ -84,9 +84,13 @@ export function TeleprompterOverlay({
 	};
 
 	const onTextLayout = (event: LayoutChangeEvent) => {
-		cancelAnimation(progress);
-		progress.value = 0;
-		setTextHeight(event.nativeEvent.layout.height);
+		const newHeight = event.nativeEvent.layout.height;
+		setTextHeight((prev) => {
+			if (prev === 0) {
+				progress.value = 0;
+			}
+			return newHeight;
+		});
 	};
 
 	return (
