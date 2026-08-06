@@ -149,49 +149,6 @@ export function AnchorLine() {
 	);
 }
 
-/** The card a node opens: what the reader would see on hover in the product. */
-export function CommentCard({
-	comments,
-	className,
-}: {
-	comments: DemoComment[];
-	className?: string;
-}) {
-	return (
-		<div
-			className={clsx(
-				"w-64 rounded-xl border border-gray-4 bg-white p-3 shadow-[0_8px_24px_rgba(18,22,31,0.10)] sm:w-72",
-				className,
-			)}
-		>
-			<div className="flex flex-col gap-2.5">
-				{comments.map((comment) => (
-					<div key={comment.id} className="flex gap-2.5">
-						<Avatar comment={comment} />
-						<div className="min-w-0 flex-1">
-							<div className="flex items-baseline gap-1.5">
-								<span className="truncate text-[13px] font-medium text-gray-12">
-									{comment.author}
-								</span>
-								<span className="text-[11px] text-gray-10">
-									{formatClock(comment.t)}
-								</span>
-							</div>
-							<div className="mt-0.5 text-[13px] leading-snug text-gray-11">
-								{comment.kind === "voice"
-									? `Voice note · ${formatClock(comment.mediaDuration ?? 0)}`
-									: comment.kind === "video"
-										? `Video reply · ${formatClock(comment.mediaDuration ?? 0)}`
-										: comment.text}
-							</div>
-						</div>
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
-
 /** Play/pause, in either tone. */
 export function TransportButton({
 	playing,
@@ -256,8 +213,7 @@ export function Clock({
 
 /**
  * The seek bar every video player has: a track, a fill, a knob, and no
- * information about the recording whatsoever. Half this post is about what it
- * costs you.
+ * information about the recording whatsoever. The classic side of the demo.
  */
 export function PlainSeekBar({
 	time,
@@ -319,46 +275,5 @@ export function PlainSeekBar({
 				/>
 			</div>
 		</div>
-	);
-}
-
-/** The list a comment sidebar gives you: a row per comment, sorted by time. */
-export function CommentRow({
-	comment,
-	active,
-	onClick,
-}: {
-	comment: DemoComment;
-	active?: boolean;
-	onClick?: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			className={clsx(
-				"flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
-				active ? "bg-blue-9/10" : "hover:bg-gray-3",
-			)}
-		>
-			<Avatar comment={comment} />
-			<span className="min-w-0 flex-1">
-				<span className="flex items-baseline gap-1.5">
-					<span className="truncate text-[13px] font-medium text-gray-12">
-						{comment.author}
-					</span>
-					<span className="shrink-0 rounded bg-gray-3 px-1 py-px font-mono text-[11px] text-gray-11">
-						{formatClock(comment.t)}
-					</span>
-				</span>
-				<span className="mt-0.5 block text-[13px] leading-snug text-gray-11">
-					{comment.kind === "voice"
-						? `Voice note · ${formatClock(comment.mediaDuration ?? 0)}`
-						: comment.kind === "emoji"
-							? `Reacted ${comment.text}`
-							: comment.text}
-				</span>
-			</span>
-		</button>
 	);
 }
