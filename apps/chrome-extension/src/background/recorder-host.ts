@@ -2,6 +2,12 @@
 // enumeration, the mic probe and the camera-preview relay. On Chrome it runs
 // as an offscreen document; this module owns its lifecycle so the rest of the
 // service worker never touches chrome.offscreen directly.
+//
+// On Firefox there is no offscreen document API; hasRecorderHost and
+// ensureRecorderHost return early so the service worker can import this module
+// on both targets without reaching Chrome-only APIs at runtime.
+import { capabilities } from "../platform/capabilities";
+
 export const RECORDER_URL = "recorder.html";
 
 let recorderDocumentCreation: Promise<void> | null = null;
@@ -19,8 +25,10 @@ const getRecorderContexts = async () => {
 	});
 };
 
-export const hasRecorderHost = async () =>
-	(await getRecorderContexts()).length > 0;
+export const hasRecorderHost = async () => {
+	if (!capabilities.supportsOffscreen) return false;
+	return (await getRecorderContexts()).length > 0;
+};
 
 const createOffscreenDocument = () =>
 	new Promise<void>((resolve, reject) => {
@@ -49,6 +57,7 @@ const createOffscreenDocument = () =>
 	});
 
 export const ensureRecorderHost = async () => {
+	if (!capabilities.supportsOffscreen) return;
 	const contexts = await getRecorderContexts();
 	if (contexts.length > 0) return;
 
