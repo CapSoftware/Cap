@@ -65,39 +65,3 @@ export function DemoPanel({
 		</div>
 	);
 }
-
-/** Small neutral button, used for resets and mode switches inside demos. */
-export function DemoButton({
-	onClick,
-	children,
-	variant = "ghost",
-	disabled,
-	className,
-	title,
-}: {
-	onClick: () => void;
-	children: ReactNode;
-	variant?: "ghost" | "solid";
-	disabled?: boolean;
-	className?: string;
-	title?: string;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			title={title}
-			className={clsx(
-				"inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
-				variant === "solid"
-					? "bg-gray-12 text-white hover:bg-gray-12/90"
-					: "border border-gray-5 bg-white text-gray-12 hover:bg-gray-3",
-				disabled && "cursor-not-allowed opacity-50",
-				className,
-			)}
-		>
-			{children}
-		</button>
-	);
-}
