@@ -1300,7 +1300,7 @@ function Inner() {
 									await commands.captureOcrText(target);
 									setOptions({
 										targetMode: null,
-										targetModeDismissal: "screenshot",
+										targetModeDismissal: "ocr",
 									});
 									await commands.closeTargetSelectOverlays();
 								} catch (e) {

@@ -212,15 +212,19 @@ pub fn init(app: &AppHandle) {
     .unwrap();
 
     let mut store = match HotkeysStore::get(app) {
-        Ok(Some(s)) => s,
-        Ok(None) => HotkeysStore::default(),
+        Ok(Some(s)) => Some(s),
+        Ok(None) => Some(HotkeysStore::default()),
         Err(e) => {
             eprintln!("Failed to load hotkeys store: {e}");
-            HotkeysStore::default()
+            None
         }
     };
 
-    seed_default_hotkeys(app, &mut store);
+    if let Some(store) = &mut store {
+        seed_default_hotkeys(app, store);
+    }
+
+    let store = store.unwrap_or_default();
 
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {

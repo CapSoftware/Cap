@@ -2845,7 +2845,7 @@ pub async fn capture_ocr_text(
         error!("Failed to save OCR screenshot: {e}");
     }
 
-    if settings.ocr_show_notification {
+    if settings.enable_notifications && settings.ocr_show_notification {
         use tauri_plugin_notification::NotificationExt;
 
         let preview: String = text.chars().take(120).collect();
