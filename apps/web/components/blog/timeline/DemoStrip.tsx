@@ -23,8 +23,8 @@ import { clamp, DEMO_DURATION, speechEnergy } from "./scene";
  * count comes from the product's own `filmstripTileCount`), minus everything
  * that needs a video element.
  *
- * Controlled: the parent owns `time` and the zoom window, so every demo can put
- * its own chrome around the same strip.
+ * Controlled: the parent owns `time` and the visible window, and puts its own
+ * chrome around the strip.
  */
 
 /**
@@ -168,9 +168,8 @@ export function DemoStrip({
 	const tileCount = filmstripTileCount(width);
 	const progress = clamp(fractionInWindow(time, window), 0, 1) * 100;
 
-	// A strip with nothing to seek (the zoom and reply demos use one as a
-	// backdrop) is decoration, so it announces itself as nothing at all rather
-	// than as a slider that ignores you.
+	// A strip with nothing to seek is decoration, so it announces itself as
+	// nothing at all rather than as a slider that ignores you.
 	const semantics = onSeek
 		? {
 				role: "slider" as const,
