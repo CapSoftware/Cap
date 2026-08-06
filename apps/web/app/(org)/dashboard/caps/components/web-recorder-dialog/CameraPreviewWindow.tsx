@@ -11,7 +11,15 @@ import {
 	Square,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	forwardRef,
+	useCallback,
+	useEffect,
+	useImperativeHandle,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 type CameraPreviewSize = "sm" | "lg";
@@ -74,15 +82,19 @@ const getPreviewMetrics = (
 	};
 };
 
+export interface CameraPreviewWindowHandle {
+	stopStream: () => void;
+}
+
 interface CameraPreviewWindowProps {
 	cameraId: string;
 	onClose: () => void;
 }
 
-export const CameraPreviewWindow = ({
-	cameraId,
-	onClose,
-}: CameraPreviewWindowProps) => {
+export const CameraPreviewWindow = forwardRef<
+	CameraPreviewWindowHandle,
+	CameraPreviewWindowProps
+>(({ cameraId, onClose }, ref) => {
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
 	const [shape, setShape] = useState<CameraPreviewShape>("round");
 	const [mirrored, setMirrored] = useState(false);
@@ -125,6 +137,27 @@ export const CameraPreviewWindow = ({
 
 		return "autoPictureInPicture" in proto;
 	}, []);
+
+	const stopStream = useCallback(() => {
+		if (streamRef.current) {
+			streamRef.current.getTracks().forEach((track) => {
+				track.stop();
+			});
+			streamRef.current = null;
+		}
+
+		if (videoRef.current) {
+			videoRef.current.srcObject = null;
+		}
+	}, []);
+
+	useImperativeHandle(
+		ref,
+		() => ({
+			stopStream,
+		}),
+		[stopStream],
+	);
 
 	useEffect(() => {
 		if (!canUseAutoPiPAttribute) {
@@ -190,14 +223,9 @@ export const CameraPreviewWindow = ({
 		startCamera();
 
 		return () => {
-			if (streamRef.current) {
-				streamRef.current.getTracks().forEach((track) => {
-					track.stop();
-				});
-				streamRef.current = null;
-			}
+			stopStream();
 		};
-	}, [cameraId]);
+	}, [cameraId, stopStream]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
@@ -628,4 +656,6 @@ export const CameraPreviewWindow = ({
 		</div>,
 		document.body,
 	);
-};
+});
+
+CameraPreviewWindow.displayName = "CameraPreviewWindow";

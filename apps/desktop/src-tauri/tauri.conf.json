@@ -12,7 +12,7 @@
 	"app": {
 		"macOSPrivateApi": true,
 		"security": {
-			"csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
+			"csp": "default-src 'self' ws: ipc: http://ipc.localhost; connect-src 'self' ws: wss: ipc: http://ipc.localhost https://t.cap.so; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
 			"assetProtocol": {
 				"enable": true,
 				"scope": [
@@ -99,8 +99,17 @@
 					"libgtk-3-0",
 					"libayatana-appindicator3-1",
 					"libva2",
-					"libva-drm2"
-				]
+					"libva-drm2",
+					"libpipewire-0.3-0",
+					"libasound2t64 | libasound2"
+				],
+				"files": {
+					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-default-symbolic.svg": "icons/linux/so.cap.desktop-tray-default-symbolic.svg",
+					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-instant-symbolic.svg": "icons/linux/so.cap.desktop-tray-instant-symbolic.svg",
+					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-screenshot-symbolic.svg": "icons/linux/so.cap.desktop-tray-screenshot-symbolic.svg",
+					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-studio-symbolic.svg": "icons/linux/so.cap.desktop-tray-studio-symbolic.svg",
+					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-stop-symbolic.svg": "icons/linux/so.cap.desktop-tray-stop-symbolic.svg"
+				}
 			}
 		},
 		"fileAssociations": [

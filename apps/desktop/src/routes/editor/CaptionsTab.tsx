@@ -9,6 +9,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
@@ -30,6 +31,7 @@ import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import IconLucideDownload from "~icons/lucide/download";
 import IconLucideInfo from "~icons/lucide/info";
+import IconLucideTrash2 from "~icons/lucide/trash-2";
 import {
 	applyCaptionResultToProject,
 	CAPTION_MODEL_FOLDER,
@@ -79,6 +81,8 @@ interface LanguageOption {
 	code: string;
 	label: string;
 }
+
+const MODEL_DOWNLOAD_STATUS_POLL_MS = 1000;
 
 const MODEL_OPTIONS: ModelOption[] = [
 	{
@@ -169,6 +173,10 @@ function hexToRgba(hex: string, opacityPercent: number) {
 	const g = Number.parseInt(value.slice(2, 4), 16);
 	const b = Number.parseInt(value.slice(4, 6), 16);
 	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function clampDownloadProgress(progress: number) {
+	return Math.min(Math.max(progress, 0), 100);
 }
 
 function CaptionPresetPreview(props: { preset: CaptionStylePreset }) {
@@ -274,15 +282,20 @@ export function CaptionsTab(props: {
 				if (!source) return;
 
 				const recordingSegments = editorInstance.recordings.segments;
+				const sourceRange = { start: source.start, end: source.end };
 				const start = mapEditedTimeToSource(
 					timelineSegment.start,
 					timeline.segments,
 					recordingSegments,
+					timeline.transitions ?? [],
+					sourceRange,
 				);
 				const end = mapEditedTimeToSource(
 					timelineSegment.end,
 					timeline.segments,
 					recordingSegments,
+					timeline.transitions ?? [],
+					sourceRange,
 				);
 				if (start !== null) source.start = start;
 				if (end !== null) source.end = end;
@@ -375,6 +388,10 @@ export function CaptionsTab(props: {
 	);
 	const [selectedLanguage, setSelectedLanguage] = createSignal("auto");
 	const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
+	const [deletingModel, setDeletingModel] = createSignal<string | null>(null);
+	const [downloadMessage, setDownloadMessage] = createSignal("");
+	let downloadStatusPoll: ReturnType<typeof setInterval> | undefined;
+	let unlistenDownloadProgress: (() => void) | undefined;
 
 	const isDownloading = () => editorState.captions.isDownloading;
 	const setIsDownloading = (value: boolean) =>
@@ -382,6 +399,9 @@ export function CaptionsTab(props: {
 	const downloadProgress = () => editorState.captions.downloadProgress;
 	const setDownloadProgress = (value: number) =>
 		setEditorState("captions", "downloadProgress", value);
+	const downloadPercent = createMemo(() =>
+		Math.round(clampDownloadProgress(downloadProgress())),
+	);
 	const downloadingModel = () => editorState.captions.downloadingModel;
 	const setDownloadingModel = (value: string | null) =>
 		setEditorState("captions", "downloadingModel", value);
@@ -399,6 +419,12 @@ export function CaptionsTab(props: {
 			availableModelOptions().find((model) => model.name === selectedModel()) ??
 			null,
 	);
+	const downloadingModelOption = createMemo(
+		() =>
+			availableModelOptions().find(
+				(model) => model.name === downloadingModel(),
+			) ?? selectedModelOption(),
+	);
 
 	createEffect(
 		on(
@@ -415,8 +441,125 @@ export function CaptionsTab(props: {
 		),
 	);
 
+	const getModelDownloadTargetPath = async (modelName: string) => {
+		if (PARAKEET_DIR_MODELS.has(modelName))
+			return await getModelPath(modelName);
+
+		const appDataDirPath = await appLocalDataDir();
+		const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
+		return await join(modelsPath, `${modelName}.bin`);
+	};
+
+	const checkModelExists = async (modelName: string) => {
+		if (PARAKEET_DIR_MODELS.has(modelName)) {
+			const modelPath = await getModelDownloadTargetPath(modelName);
+			return await commands.checkParakeetModelExists(modelPath);
+		}
+		const modelPath = await getModelDownloadTargetPath(modelName);
+		return await commands.checkModelExists(modelPath);
+	};
+
+	const getModelDownloadStatus = async (modelName: string) => {
+		const targetPath = await getModelDownloadTargetPath(modelName);
+		return await commands.getModelDownloadStatus(targetPath);
+	};
+
+	const addDownloadedModel = (modelName: string) => {
+		setDownloadedModels((prev) =>
+			prev.includes(modelName) ? prev : [...prev, modelName],
+		);
+	};
+
+	const removeDownloadedModel = (modelName: string) => {
+		setDownloadedModels((prev) => prev.filter((name) => name !== modelName));
+	};
+
+	const refreshDownloadedModels = async () => {
+		const models = await Promise.all(
+			availableModelOptions().map(async (model) => {
+				const downloaded = await checkModelExists(model.name);
+				return { name: model.name, downloaded };
+			}),
+		);
+
+		setDownloadedModels(
+			models.filter((model) => model.downloaded).map((model) => model.name),
+		);
+	};
+
+	const stopDownloadStatusPolling = () => {
+		if (!downloadStatusPoll) return;
+		clearInterval(downloadStatusPoll);
+		downloadStatusPoll = undefined;
+	};
+
+	const syncModelDownloadStatus = async (modelName: string) => {
+		const status = await getModelDownloadStatus(modelName);
+		if (!status) return false;
+
+		const progress = clampDownloadProgress(status.progress);
+		setDownloadMessage(status.message);
+
+		if (status.state === "downloading") {
+			setDownloadingModel(modelName);
+			setDownloadProgress(progress);
+			setIsDownloading(true);
+			return true;
+		}
+
+		if (status.state === "completed") {
+			addDownloadedModel(modelName);
+			setDownloadProgress(100);
+			setIsDownloading(false);
+			setDownloadingModel(null);
+			setDownloadMessage("");
+			return false;
+		}
+
+		setDownloadProgress(0);
+		setIsDownloading(false);
+		setDownloadingModel(null);
+		return false;
+	};
+
+	const syncAnyActiveDownloadStatus = async () => {
+		for (const model of availableModelOptions()) {
+			const active = await syncModelDownloadStatus(model.name);
+			if (active) return true;
+		}
+
+		return false;
+	};
+
+	const pollDownloadStatus = async () => {
+		const model = downloadingModel();
+		const active = model
+			? await syncModelDownloadStatus(model)
+			: await syncAnyActiveDownloadStatus();
+
+		if (!active) {
+			stopDownloadStatusPolling();
+			await refreshDownloadedModels();
+		}
+	};
+
+	const startDownloadStatusPolling = () => {
+		if (downloadStatusPoll) return;
+		downloadStatusPoll = setInterval(() => {
+			void pollDownloadStatus();
+		}, MODEL_DOWNLOAD_STATUS_POLL_MS);
+	};
+
 	onMount(async () => {
 		try {
+			unlistenDownloadProgress = await events.downloadProgress.listen(
+				(event) => {
+					if (!downloadingModel()) return;
+					setDownloadProgress(clampDownloadProgress(event.payload.progress));
+					setDownloadMessage(event.payload.message);
+				},
+			);
+
 			const appDataDirPath = await appLocalDataDir();
 			const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
 
@@ -424,17 +567,7 @@ export function CaptionsTab(props: {
 				await commands.createDir(modelsPath, true);
 			}
 
-			const models = await Promise.all(
-				availableModelOptions().map(async (model) => {
-					const downloaded = await checkModelExists(model.name);
-					return { name: model.name, downloaded };
-				}),
-			);
-
-			const downloadedModelNames = models
-				.filter((m) => m.downloaded)
-				.map((m) => m.name);
-			setDownloadedModels(downloadedModelNames);
+			await refreshDownloadedModels();
 
 			const savedModel = resolveCaptionModel(
 				localStorage.getItem("selectedTranscriptionModel"),
@@ -467,37 +600,20 @@ export function CaptionsTab(props: {
 				setHasAudio(hasAudioTrack);
 			}
 
-			const downloadState = localStorage.getItem("modelDownloadState");
-			if (downloadState) {
-				const { model, progress } = JSON.parse(downloadState);
-				if (model && progress < 100) {
-					setDownloadingModel(model);
-					setDownloadProgress(progress);
-					setIsDownloading(true);
-				} else {
-					localStorage.removeItem("modelDownloadState");
-				}
+			localStorage.removeItem("modelDownloadState");
+
+			if (await syncAnyActiveDownloadStatus()) {
+				startDownloadStatusPolling();
 			}
 		} catch (error) {
 			console.error("Error checking models:", error);
 		}
 	});
 
-	createEffect(
-		on(
-			() => [isDownloading(), downloadingModel(), downloadProgress()] as const,
-			([downloading, model, progress]) => {
-				if (downloading && model) {
-					localStorage.setItem(
-						"modelDownloadState",
-						JSON.stringify({ model, progress }),
-					);
-				} else {
-					localStorage.removeItem("modelDownloadState");
-				}
-			},
-		),
-	);
+	onCleanup(() => {
+		if (unlistenDownloadProgress) unlistenDownloadProgress();
+		stopDownloadStatusPolling();
+	});
 
 	createEffect(
 		on(
@@ -520,30 +636,17 @@ export function CaptionsTab(props: {
 		),
 	);
 
-	const checkModelExists = async (modelName: string) => {
-		if (PARAKEET_DIR_MODELS.has(modelName)) {
-			const modelPath = await getModelPath(modelName);
-			return await commands.checkParakeetModelExists(modelPath);
-		}
-		const appDataDirPath = await appLocalDataDir();
-		const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
-		const path = await join(modelsPath, `${modelName}.bin`);
-		return await commands.checkModelExists(path);
-	};
-
 	const downloadModel = async () => {
+		const modelToDownload = selectedModel();
 		try {
-			const modelToDownload = selectedModel();
 			setIsDownloading(true);
 			setDownloadProgress(0);
 			setDownloadingModel(modelToDownload);
-
-			const unlisten = await events.downloadProgress.listen((event) => {
-				setDownloadProgress(event.payload.progress);
-			});
+			setDownloadMessage("Preparing model download");
+			startDownloadStatusPolling();
 
 			if (PARAKEET_DIR_MODELS.has(modelToDownload)) {
-				const modelDir = await getModelPath(modelToDownload);
+				const modelDir = await getModelDownloadTargetPath(modelToDownload);
 				try {
 					await commands.createDir(modelDir, true);
 				} catch (err) {
@@ -553,7 +656,7 @@ export function CaptionsTab(props: {
 			} else {
 				const appDataDirPath = await appLocalDataDir();
 				const modelsPath = await join(appDataDirPath, CAPTION_MODEL_FOLDER);
-				const modelPath = await join(modelsPath, `${modelToDownload}.bin`);
+				const modelPath = await getModelDownloadTargetPath(modelToDownload);
 
 				try {
 					await commands.createDir(modelsPath, true);
@@ -563,16 +666,45 @@ export function CaptionsTab(props: {
 				await commands.downloadWhisperModel(modelToDownload, modelPath);
 			}
 
-			unlisten();
-
-			setDownloadedModels((prev) => [...prev, modelToDownload]);
-			toast.success("Transcription model downloaded successfully!");
+			await syncModelDownloadStatus(modelToDownload);
+			addDownloadedModel(modelToDownload);
+			toast.success("Caption model downloaded");
 		} catch (error) {
 			console.error("Error downloading model:", error);
-			toast.error("Failed to download transcription model");
+			const active = await syncModelDownloadStatus(modelToDownload).catch(
+				() => false,
+			);
+			if (!active) {
+				toast.error("Failed to download caption model");
+				setDownloadProgress(0);
+				setIsDownloading(false);
+				setDownloadingModel(null);
+			}
 		} finally {
-			setIsDownloading(false);
-			setDownloadingModel(null);
+			void pollDownloadStatus();
+		}
+	};
+
+	const deleteModel = async () => {
+		const modelToDelete = selectedModel();
+		setDeletingModel(modelToDelete);
+
+		try {
+			const modelPath = await getModelDownloadTargetPath(modelToDelete);
+			if (PARAKEET_DIR_MODELS.has(modelToDelete)) {
+				await commands.deleteParakeetModel(modelPath);
+			} else {
+				await commands.deleteWhisperModel(modelPath);
+			}
+
+			removeDownloadedModel(modelToDelete);
+			toast.success("Caption model deleted");
+		} catch (error) {
+			console.error("Error deleting model:", error);
+			toast.error("Failed to delete caption model");
+			await refreshDownloadedModels();
+		} finally {
+			setDeletingModel(null);
 		}
 	};
 
@@ -742,6 +874,10 @@ export function CaptionsTab(props: {
 							</p>
 						</Show>
 
+						<p class="text-xs leading-relaxed text-gray-10">
+							One time download to your system. All captions are stored locally.
+						</p>
+
 						<Subfield name="Language">
 							<KSelect<string>
 								options={LANGUAGE_OPTIONS.map((l) => l.code)}
@@ -818,33 +954,76 @@ export function CaptionsTab(props: {
 													</>
 												}
 											>
-												Downloading... {Math.round(downloadProgress())}%
+												{`Downloading ${
+													downloadingModelOption()?.label ?? "model"
+												}... ${downloadPercent()}%`}
 											</Show>
 										</Button>
 										<Show when={isDownloading()}>
-											<div class="w-full bg-gray-3 rounded-full h-1.5 overflow-hidden">
+											<div class="space-y-1.5">
 												<div
-													class="bg-blue-9 h-1.5 rounded-full transition-all duration-300"
-													style={{ width: `${downloadProgress()}%` }}
-												/>
+													class="w-full bg-gray-3 rounded-full h-1.5 overflow-hidden"
+													role="progressbar"
+													aria-valuemin="0"
+													aria-valuemax="100"
+													aria-valuenow={downloadPercent()}
+												>
+													<div
+														class="bg-blue-9 h-1.5 rounded-full transition-all duration-300"
+														style={{
+															width: `${clampDownloadProgress(downloadProgress())}%`,
+														}}
+													/>
+												</div>
+												<p class="text-xs leading-relaxed text-gray-10">
+													{downloadMessage() ||
+														"Keep Cap open while the model downloads. Editor reloads will reconnect automatically."}
+												</p>
 											</div>
 										</Show>
 									</div>
 								}
 							>
-								<Show when={hasAudio()}>
-									<Button
-										onClick={generateCaptions}
-										disabled={isGenerating()}
-										class="w-full"
-									>
-										{isGenerating()
-											? "Generating..."
-											: hasCaptions()
-												? "Regenerate Captions"
-												: "Generate Captions"}
-									</Button>
-								</Show>
+								<div class="space-y-2">
+									<Show when={hasAudio()}>
+										<Button
+											onClick={generateCaptions}
+											disabled={isGenerating() || deletingModel() !== null}
+											class="w-full"
+										>
+											{isGenerating()
+												? "Generating..."
+												: hasCaptions()
+													? "Regenerate Captions"
+													: "Generate Captions"}
+										</Button>
+									</Show>
+									<div class="flex items-center justify-between gap-2 text-xs text-gray-10">
+										<span class="flex min-w-0 items-center gap-1.5">
+											<IconCapCircleCheck class="size-3.5 shrink-0 text-gray-9" />
+											<span class="truncate">
+												{selectedModelOption()?.label ?? "Caption"} model
+												downloaded
+											</span>
+										</span>
+										<Button
+											variant="gray"
+											size="sm"
+											class="shrink-0 gap-1.5 px-2"
+											onClick={deleteModel}
+											disabled={
+												isGenerating() ||
+												isDownloading() ||
+												deletingModel() === selectedModel()
+											}
+										>
+											<IconLucideTrash2 class="size-3.5" />
+											{deletingModel() === selectedModel()
+												? "Deleting..."
+												: "Delete"}
+										</Button>
+									</div>
+								</div>
 							</Show>
 						</div>
 					</div>

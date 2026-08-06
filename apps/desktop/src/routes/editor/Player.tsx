@@ -11,6 +11,10 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
+import {
+	CanvasElementsOverlay,
+	SnapGuidesOverlay,
+} from "./CanvasElementsOverlay";
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
@@ -20,6 +24,7 @@ import {
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
+import { FrameButton } from "./FrameButton";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
@@ -103,6 +108,7 @@ export function PlayerContent() {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							transitions: [],
 						}),
 						captionSegments: createCaptionTrackSegments(captionSegments),
 					};
@@ -290,6 +296,7 @@ export function PlayerContent() {
 					>
 						Crop
 					</EditorButton>
+					<FrameButton />
 				</div>
 				<div class="flex items-center gap-2">
 					<span class="text-xs font-medium text-gray-11">Preview quality</span>
@@ -626,10 +633,12 @@ function PreviewCanvas() {
 						id="canvas"
 					/>
 					<Show when={hasFrame()}>
+						<CanvasElementsOverlay size={size()} />
 						<MaskOverlay size={size()} />
 						<CaptionOverlay size={size()} />
 						<TextOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
+						<SnapGuidesOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>

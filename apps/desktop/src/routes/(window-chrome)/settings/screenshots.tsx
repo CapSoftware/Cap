@@ -16,7 +16,13 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
+import toast from "solid-toast";
 import { Input } from "~/routes/editor/ui";
+import {
+	createScreenshotShareLinkFromProjectPath,
+	type ScreenshotExportStatus,
+	screenshotShareStatusText,
+} from "~/routes/screenshot-editor/screenshotExport";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { importImageFromPicker, showImportError } from "~/utils/importMedia";
@@ -27,6 +33,7 @@ import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideEdit from "~icons/lucide/edit";
 import IconLucideFolder from "~icons/lucide/folder";
 import IconLucideImport from "~icons/lucide/import";
+import IconLucideLink from "~icons/lucide/link";
 import IconLucideSearch from "~icons/lucide/search";
 import { Section, SettingsPageContent } from "./Setting";
 
@@ -50,6 +57,9 @@ export default function Screenshots() {
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedSearch = createMemo(() => trimmedSearch().toLowerCase());
 	const [visibleCount, setVisibleCount] = createSignal(PAGE_SIZE);
+	const [sharingPath, setSharingPath] = createSignal<string | null>(null);
+	const [shareStatus, setShareStatus] =
+		createSignal<ScreenshotExportStatus>("idle");
 
 	const screenshots = createQuery(() => screenshotsQuery);
 
@@ -113,6 +123,32 @@ export default function Screenshots() {
 	const handleCopyImageToClipboard = (path: string) => {
 		trackEvent("screenshot_copy_clicked");
 		commands.copyScreenshotToClipboard(path);
+	};
+
+	const handleCreateShareableLink = async (path: string) => {
+		if (sharingPath()) return;
+
+		trackEvent("screenshot_share_clicked");
+		setSharingPath(path);
+		setShareStatus("rendering");
+		const toastId = toast.loading(screenshotShareStatusText("rendering"));
+
+		try {
+			await createScreenshotShareLinkFromProjectPath(path, (status) => {
+				setShareStatus(status);
+				if (status !== "idle") {
+					toast.loading(screenshotShareStatusText(status), { id: toastId });
+				}
+			});
+			toast.success("Share link copied to clipboard", { id: toastId });
+		} catch (error) {
+			console.error("Failed to create screenshot share link:", error);
+			const message = error instanceof Error ? error.message : String(error);
+			toast.error(message || "Failed to create share link", { id: toastId });
+		} finally {
+			setSharingPath(null);
+			setShareStatus("idle");
+		}
 	};
 
 	const handleImportImage = async () => {
@@ -193,6 +229,15 @@ export default function Screenshots() {
 											onCopyImageToClipboard={() =>
 												handleCopyImageToClipboard(screenshot.path)
 											}
+											onCreateShareableLink={() =>
+												handleCreateShareableLink(screenshot.path)
+											}
+											isSharing={sharingPath() === screenshot.path}
+											shareTooltipText={
+												sharingPath() === screenshot.path
+													? screenshotShareStatusText(shareStatus())
+													: screenshotShareStatusText("idle")
+											}
 										/>
 									)}
 								</For>
@@ -229,6 +274,9 @@ function ScreenshotItem(props: {
 	onOpenEditor: () => void;
 	onOpenFolder: () => void;
 	onCopyImageToClipboard: () => void;
+	onCreateShareableLink: () => void;
+	isSharing: boolean;
+	shareTooltipText: string;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
 	const queryClient = useQueryClient();
@@ -236,7 +284,7 @@ function ScreenshotItem(props: {
 	return (
 		<li
 			onClick={props.onClick}
-			class="flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full cursor-pointer hover:bg-gray-3 transition-colors duration-200"
+			class="flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full hover:bg-gray-3 transition-colors duration-200"
 		>
 			<div class="flex gap-5 items-center">
 				<Show
@@ -274,6 +322,14 @@ function ScreenshotItem(props: {
 					onClick={props.onCopyImageToClipboard}
 				>
 					<IconLucideCopy class="size-4" />
+				</TooltipIconButton>
+
+				<TooltipIconButton
+					tooltipText={props.shareTooltipText}
+					onClick={props.onCreateShareableLink}
+					disabled={props.isSharing}
+				>
+					<IconLucideLink class="size-4" />
 				</TooltipIconButton>
 
 				<TooltipIconButton

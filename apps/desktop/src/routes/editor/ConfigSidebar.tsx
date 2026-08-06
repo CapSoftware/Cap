@@ -31,6 +31,7 @@ import {
 	createSignal,
 	For,
 	Index,
+	lazy,
 	on,
 	onMount,
 	Show,
@@ -60,10 +61,12 @@ import {
 	type CameraYPosition,
 	type CaptionTrackSegment,
 	type ClipOffsets,
+	type ClipSpeedAudioMode,
 	type CursorAnimationStyle,
 	type CursorType,
 	commands,
 	type KeyboardTrackSegment,
+	type NotchConfiguration,
 	type SceneMode,
 	type SceneSegment,
 	type SplitLayout,
@@ -75,10 +78,10 @@ import {
 import IconLucideBoxSelect from "~icons/lucide/box-select";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
-import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
+import IconLucideLaptop from "~icons/lucide/laptop";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
 import IconLucideMusic from "~icons/lucide/music";
@@ -98,13 +101,19 @@ import {
 	MIN_VOLUME_DB,
 } from "./audio";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
-import { CaptionsTab } from "./CaptionsTab";
 import { syncCaptionWordsWithText } from "./captions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
-import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
+import {
+	encodeMaskEffect,
+	getMaskEffect,
+	getMaskEffectAmount,
+	type MaskEffect,
+	type MaskKind,
+	type MaskSegment,
+} from "./masks";
 import {
 	DEFAULT_BACKGROUND_PADDING,
 	DEFAULT_BACKGROUND_ROUNDING,
@@ -116,7 +125,11 @@ import {
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
-import type { TextSegment } from "./text";
+import {
+	TEXT_FONT_SIZE_MAX,
+	TEXT_FONT_SIZE_MIN,
+	type TextSegment,
+} from "./text";
 import {
 	ComingSoonTooltip,
 	EditorButton,
@@ -130,6 +143,14 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+
+// Split out of the sidebar chunk: the captions tab is not visible at first
+// paint (Kobalte only mounts the selected tab), and its code is heavy. The
+// render site wraps it in a local <Suspense> so the chunk load stays inside
+// the tab instead of bubbling to the editor's top-level Suspense.
+const CaptionsTab = lazy(() =>
+	import("./CaptionsTab").then((m) => ({ default: m.CaptionsTab })),
+);
 
 type BackgroundSourceTab = BackgroundSource["type"] | "desktop" | "none";
 
@@ -253,6 +274,15 @@ const WALLPAPER_NAMES = [
 	"orange/9",
 ] as const;
 
+// Null placement means "use the recording's own measurements", so untouched
+// sliders must stay null rather than being written out at their displayed value.
+const UNPLACED_NOTCH = {
+	enabled: false,
+	x: null,
+	width: null,
+	height: null,
+} satisfies NotchConfiguration;
+
 const CURRENT_DESKTOP_BACKGROUND_ID = "current-desktop-background";
 const CURRENT_DESKTOP_BACKGROUND_BASENAME = "current-desktop-background";
 const getCurrentDesktopBackgroundLabel = () => {
@@ -323,7 +353,7 @@ type CursorPresetValues = {
 	friction: number;
 };
 
-const DEFAULT_MOTION_BLUR = 0.5;
+const DEFAULT_MOTION_BLUR = 1.0;
 
 const CURSOR_TYPE_OPTIONS = [
 	{
@@ -343,7 +373,7 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		value: "slow",
 		label: "Slow",
 		description: "Relaxed easing with a gentle follow and higher inertia.",
-		preset: { tension: 65, mass: 1.8, friction: 16 },
+		preset: { tension: 200, mass: 2.25, friction: 40 },
 	},
 	{
 		value: "smooth",
@@ -355,7 +385,7 @@ const CURSOR_ANIMATION_STYLE_OPTIONS = [
 		value: "mellow",
 		label: "Mellow",
 		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
-		preset: { tension: 120, mass: 1.1, friction: 18 },
+		preset: { tension: 470, mass: 3, friction: 70 },
 	},
 	{
 		value: "fast",
@@ -738,7 +768,7 @@ export function ConfigSidebar() {
 										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 									>
 										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
 											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 											<div class="flex flex-col text-left">
 												<span class="text-sm font-medium text-gray-12">
@@ -822,7 +852,7 @@ export function ConfigSidebar() {
 										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 									>
 										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
 											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 											<div class="flex flex-col text-left">
 												<span class="text-sm font-medium text-gray-12">
@@ -858,7 +888,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.tension]}
 											onChange={(v) => setCursorPhysics("tension", v[0])}
 											minValue={1}
-											maxValue={500}
+											maxValue={600}
 											step={1}
 										/>
 									</Field>
@@ -867,7 +897,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.friction]}
 											onChange={(v) => setCursorPhysics("friction", v[0])}
 											minValue={0}
-											maxValue={50}
+											maxValue={200}
 											step={0.1}
 										/>
 									</Field>
@@ -876,7 +906,7 @@ export function ConfigSidebar() {
 											value={[project.cursor.mass]}
 											onChange={(v) => setCursorPhysics("mass", v[0])}
 											minValue={0.1}
-											maxValue={10}
+											maxValue={15}
 											step={0.01}
 										/>
 									</Field>
@@ -956,7 +986,9 @@ export function ConfigSidebar() {
 					value={TAB_IDS.captions}
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
-					<CaptionsTab brandColorSwatches={brandColorSwatches()} />
+					<Suspense>
+						<CaptionsTab brandColorSwatches={brandColorSwatches()} />
+					</Suspense>
 				</KTabs.Content>
 				<KTabs.Content
 					value={TAB_IDS.keyboard}
@@ -1620,6 +1652,11 @@ function BackgroundConfig(props: {
 }) {
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
+	const notchXMax = () => {
+		const width =
+			project.background.notch?.width ?? editorInstance.notchBase.width;
+		return 1 - Math.min(Math.max(width, 0), 1);
+	};
 	const isNoneBackground = () =>
 		project.background.padding === 0 && project.background.rounding === 0;
 	const initialCurrentDesktopBackgroundPath = () => {
@@ -2157,7 +2194,7 @@ function BackgroundConfig(props: {
 											ensureBackgroundPresentation();
 										}}
 										class={cx(
-											"overflow-hidden relative w-full h-48 rounded-lg border transition cursor-pointer group",
+											"overflow-hidden relative w-full h-48 rounded-lg border transition group",
 											project.background.source.type === "wallpaper" &&
 												project.background.source.path === photo().rawPath
 												? "border-blue-9 ring-2 ring-blue-9"
@@ -2271,7 +2308,7 @@ function BackgroundConfig(props: {
 											class="relative aspect-square group"
 										>
 											<KRadioGroup.ItemInput class="peer" />
-											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
+											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 												<img
 													src={photo.url}
 													loading="eager"
@@ -2292,7 +2329,7 @@ function BackgroundConfig(props: {
 														class="relative aspect-square group"
 													>
 														<KRadioGroup.ItemInput class="peer" />
-														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
+														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
 															<img
 																src={photo.url}
 																alt="Wallpaper option"
@@ -2445,7 +2482,7 @@ function BackgroundConfig(props: {
 													}}
 												/>
 												<div
-													class="rounded-lg transition-all duration-200 cursor-pointer size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+													class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
 													style={{
 														background:
 															color === "#00000000"
@@ -2500,6 +2537,18 @@ function BackgroundConfig(props: {
 					step={0.1}
 					formatTooltip="%"
 				/>
+				<Show when={project.background.displayPosition}>
+					<div class="flex justify-between items-center mt-3">
+						<span class="text-xs text-gray-11">
+							Custom screen position (dragged on canvas)
+						</span>
+						<EditorButton
+							onClick={() => setProject("background", "displayPosition", null)}
+						>
+							Reset
+						</EditorButton>
+					</div>
+				</Show>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
@@ -2644,6 +2693,91 @@ function BackgroundConfig(props: {
 					</div>
 				</KCollapsible.Content>
 			</KCollapsible>
+			<Field
+				name="MacBook notch"
+				icon={<IconLucideLaptop class="size-4" />}
+				value={
+					<Toggle
+						checked={project.background.notch?.enabled ?? false}
+						onChange={(enabled) =>
+							setProject("background", "notch", {
+								...(project.background.notch ?? UNPLACED_NOTCH),
+								enabled,
+							})
+						}
+					/>
+				}
+			/>
+			<KCollapsible open={project.background.notch?.enabled ?? false}>
+				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+					<div class="flex flex-col gap-6 pb-6">
+						<p class="text-xs text-gray-11">
+							Draws a MacBook notch over the recording. Recordings made on a Mac
+							with a notch use their own measurements; otherwise start from the
+							size below and adjust to match.
+						</p>
+						<For
+							each={
+								[
+									{ key: "width", name: "Notch Width", max: 0.4 },
+									{ key: "height", name: "Notch Height", max: 0.15 },
+									{ key: "x", name: "Notch Position", max: 1 },
+								] as const
+							}
+						>
+							{(field) => (
+								<Field
+									name={field.name}
+									icon={<IconCapEnlarge class="size-4" />}
+								>
+									<Slider
+										value={[
+											field.key === "x"
+												? Math.min(
+														project.background.notch?.x ??
+															editorInstance.notchBase.x,
+														notchXMax(),
+													)
+												: (project.background.notch?.[field.key] ??
+													editorInstance.notchBase[field.key]),
+										]}
+										onChange={(v) => {
+											const base = editorInstance.notchBase;
+											const prev = project.background.notch ?? UNPLACED_NOTCH;
+											const next: NotchConfiguration = {
+												...prev,
+												enabled: true,
+											};
+											if (field.key === "x") {
+												next.x = Math.min(v[0], notchXMax());
+											} else {
+												next[field.key] = v[0];
+											}
+
+											if (field.key === "width") {
+												// Resize about the centre rather than dragging the
+												// left edge along with the width.
+												const centre =
+													(prev.x ?? base.x) + (prev.width ?? base.width) / 2;
+												next.x = Math.min(
+													Math.max(centre - v[0] / 2, 0),
+													1 - v[0],
+												);
+											}
+
+											setProject("background", "notch", next);
+										}}
+										minValue={0}
+										maxValue={field.key === "x" ? notchXMax() : field.max}
+										step={0.001}
+										formatTooltip={(value) => `${(value * 100).toFixed(1)}%`}
+									/>
+								</Field>
+							)}
+						</For>
+					</div>
+				</KCollapsible.Content>
+			</KCollapsible>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<Slider
 					value={[project.background.shadow ?? 0]}
@@ -2726,8 +2860,12 @@ function BackgroundConfig(props: {
 
 function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	const { project, setProject } = useEditorContext();
-	const cameraPositionValue = createMemo(
-		() => `${project.camera.position.x}:${project.camera.position.y}`,
+	// A camera dragged on the preview canvas has a manual position; none of
+	// the preset dots match until it is reset.
+	const cameraPositionValue = createMemo(() =>
+		project.camera.manualPosition
+			? "custom"
+			: `${project.camera.position.x}:${project.camera.position.y}`,
 	);
 
 	return (
@@ -2750,9 +2888,12 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 									(position) => position === y,
 								);
 								if (!xPosition || !yPosition) return;
-								setProject("camera", "position", {
-									x: xPosition,
-									y: yPosition,
+								batch(() => {
+									setProject("camera", "position", {
+										x: xPosition,
+										y: yPosition,
+									});
+									setProject("camera", "manualPosition", null);
 								});
 							}}
 							class="mt-3 rounded-lg border border-gray-3 bg-gray-2 w-full h-30 relative"
@@ -2775,7 +2916,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 											<RadioGroup.ItemInput class="peer" />
 											<RadioGroup.ItemControl
 												class={cx(
-													"cursor-pointer size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
+													"size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
 													selected() ? "bg-blue-9" : "bg-gray-5",
 													item.x === "left"
 														? "left-2"
@@ -2792,6 +2933,18 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								}}
 							</For>
 						</KRadioGroup>
+						<Show when={project.camera.manualPosition}>
+							<div class="flex justify-between items-center mt-3">
+								<span class="text-xs text-gray-11">
+									Custom position (dragged on canvas)
+								</span>
+								<EditorButton
+									onClick={() => setProject("camera", "manualPosition", null)}
+								>
+									Reset
+								</EditorButton>
+							</div>
+						</Show>
 					</div>
 					<Subfield name="Hide Camera">
 						<Toggle
@@ -3143,7 +3296,7 @@ function HexColorInput(props: {
 				<div class="relative">
 					<button
 						type="button"
-						class="size-[2rem] rounded-[0.5rem] cursor-pointer transition-[box-shadow]"
+						class="size-[2rem] rounded-[0.5rem] transition-[box-shadow]"
 						style={{
 							"background-color": text(),
 							"box-shadow": `inset 0 0 0 1px ${getColorPreviewBorderColor(
@@ -3157,7 +3310,7 @@ function HexColorInput(props: {
 							colorInput = el;
 						}}
 						type="color"
-						class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+						class="absolute inset-0 w-full h-full opacity-0"
 						value={text()}
 						onInput={(e) => {
 							const next = e.currentTarget.value;
@@ -3200,7 +3353,7 @@ function TextSegmentConfig(props: {
 }) {
 	const { setProject } = useEditorContext();
 	const clampNumber = (value: number, min: number, max: number) =>
-		Math.min(Math.max(Number.isFinite(value) ? value : min), max);
+		Math.min(Math.max(Number.isFinite(value) ? value : min, min), max);
 
 	const updateSegment = (fn: (segment: TextSegment) => void) => {
 		setProject(
@@ -3245,28 +3398,39 @@ function TextSegmentConfig(props: {
 			</Field>
 			<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
 				<Slider
-					value={[clampNumber(props.segment.fontSize, 8, 200)]}
+					value={[
+						clampNumber(
+							props.segment.fontSize,
+							TEXT_FONT_SIZE_MIN,
+							TEXT_FONT_SIZE_MAX,
+						),
+					]}
 					onChange={([value]) =>
 						updateSegment((segment) => {
-							const newFontSize = clampNumber(value, 8, 200);
+							const newFontSize = clampNumber(
+								value,
+								TEXT_FONT_SIZE_MIN,
+								TEXT_FONT_SIZE_MAX,
+							);
 							const oldFontSize = segment.fontSize || 48;
 							const scale = newFontSize / oldFontSize;
 
 							segment.fontSize = newFontSize;
 
-							if (
-								segment.size &&
-								segment.size.x > 0.025 &&
-								segment.size.y > 0.025
-							) {
-								const maxSize = 0.95;
-								segment.size.x = Math.min(segment.size.x * scale, maxSize);
-								segment.size.y = Math.min(segment.size.y * scale, maxSize);
+							// Scale the box with the font so line wrapping is
+							// preserved; keep the top edge fixed since the renderer
+							// anchors text at the top of the box (the canvas overlay
+							// re-hugs the box to the exact glyph bounds when visible).
+							if (segment.size && segment.center) {
+								const topEdge = segment.center.y - segment.size.y / 2;
+								segment.size.x = Math.min(segment.size.x * scale, 1);
+								segment.size.y = segment.size.y * scale;
+								segment.center.y = topEdge + segment.size.y / 2;
 							}
 						})
 					}
-					minValue={8}
-					maxValue={200}
+					minValue={TEXT_FONT_SIZE_MIN}
+					maxValue={TEXT_FONT_SIZE_MAX}
 					step={1}
 				/>
 			</Field>
@@ -3640,7 +3804,7 @@ function CaptionSegmentConfig(props: {
 	return (
 		<div class="space-y-4">
 			<Field
-				name={`Transcript ${props.segmentIndex + 1}`}
+				name={`Caption ${props.segmentIndex + 1}`}
 				icon={<IconCapMessageBubble />}
 			>
 				<textarea
@@ -3724,7 +3888,7 @@ function MaskSegmentConfig(props: {
 	segmentIndex: number;
 	segment: MaskSegment;
 }) {
-	const { setProject, editorState } = useEditorContext();
+	const { setProject } = useEditorContext();
 
 	const updateSegment = (fn: (segment: MaskSegment) => void) => {
 		setProject(
@@ -3753,32 +3917,24 @@ function MaskSegmentConfig(props: {
 		});
 	});
 
-	const currentAbsoluteTime = () =>
-		editorState.previewTime ?? editorState.playbackTime ?? props.segment.start;
-	const _maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
+	const maskEffect = () => getMaskEffect(props.segment);
+	const maskEffectAmount = () => getMaskEffectAmount(props.segment);
 
-	const clearKeyframes = (segment: MaskSegment) => {
-		segment.keyframes.position = [];
-		segment.keyframes.size = [];
-		segment.keyframes.intensity = [];
-	};
-
-	const _setPosition = (value: { x: number; y: number }) =>
+	const setMaskEffect = (effect: MaskEffect) =>
 		updateSegment((segment) => {
-			segment.center = value;
-			clearKeyframes(segment);
+			segment.pixelation = encodeMaskEffect(
+				effect,
+				getMaskEffectAmount(segment),
+			);
+			segment.opacity = 1;
+			segment.keyframes.intensity = [];
 		});
 
-	const _setSize = (value: { x: number; y: number }) =>
+	const setMaskEffectAmount = (amount: number) =>
 		updateSegment((segment) => {
-			segment.size = value;
-			clearKeyframes(segment);
-		});
-
-	const setIntensity = (value: number) =>
-		updateSegment((segment) => {
-			segment.opacity = value;
-			clearKeyframes(segment);
+			segment.pixelation = encodeMaskEffect(getMaskEffect(segment), amount);
+			segment.opacity = 1;
+			segment.keyframes.intensity = [];
 		});
 
 	return (
@@ -3813,7 +3969,7 @@ function MaskSegmentConfig(props: {
 								class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 							>
 								<RadioGroup.ItemInput class="sr-only" />
-								<RadioGroup.ItemLabel class="flex cursor-pointer items-center gap-2 p-2 text-sm text-gray-12">
+								<RadioGroup.ItemLabel class="flex items-center gap-2 p-2 text-sm text-gray-12">
 									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 									{option.label}
 								</RadioGroup.ItemLabel>
@@ -3834,29 +3990,48 @@ function MaskSegmentConfig(props: {
 				</div>
 			</Field>
 			<Show when={props.segment.maskType === "sensitive"}>
-				<Field name="Intensity" icon={<IconLucideGauge class="size-4" />}>
-					<Slider
-						value={[props.segment.opacity]}
-						onChange={([v]) => setIntensity(v)}
-						minValue={0}
-						maxValue={1}
-						step={0.01}
-						formatTooltip="%"
-					/>
+				<Field name="Effect" icon={<IconLucideEyeOff class="size-4" />}>
+					<RadioGroup
+						class="grid grid-cols-2 gap-2"
+						value={maskEffect()}
+						onChange={(value) => setMaskEffect(value as MaskEffect)}
+					>
+						{[
+							{ value: "blur", label: "Blur" },
+							{ value: "pixelate", label: "Pixelate" },
+						].map((option) => (
+							<RadioGroup.Item
+								value={option.value}
+								class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
+							>
+								<RadioGroup.ItemInput class="sr-only" />
+								<RadioGroup.ItemLabel class="flex items-center gap-2 p-2 text-sm text-gray-12">
+									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
+									{option.label}
+								</RadioGroup.ItemLabel>
+							</RadioGroup.Item>
+						))}
+					</RadioGroup>
 				</Field>
 			</Show>
 			<Show when={props.segment.maskType === "sensitive"}>
-				<Field name="Pixelation" icon={<IconLucideGrid class="size-4" />}>
+				<Field
+					name={maskEffect() === "blur" ? "Blur" : "Pixel Size"}
+					icon={
+						maskEffect() === "blur" ? (
+							<IconLucideWind class="size-4" />
+						) : (
+							<IconLucideGrid class="size-4" />
+						)
+					}
+				>
 					<Slider
-						value={[props.segment.pixelation]}
-						onChange={([v]) =>
-							updateSegment((segment) => {
-								segment.pixelation = v;
-							})
-						}
-						minValue={1}
+						value={[maskEffectAmount()]}
+						onChange={([v]) => setMaskEffectAmount(v)}
+						minValue={4}
 						maxValue={80}
 						step={1}
+						formatTooltip="px"
 					/>
 				</Field>
 			</Show>
@@ -4321,6 +4496,8 @@ function ClipSegmentConfig(props: {
 	const clipConfig = () =>
 		project.clips?.find((c) => c.index === props.segmentIndex);
 	const offsets = () => clipConfig()?.offsets || {};
+	const offsetsAutoCalculated = () =>
+		clipConfig()?.offsetsAutoCalculated === true;
 
 	function setOffset(type: keyof ClipOffsets, offset: number) {
 		if (Number.isNaN(offset)) return;
@@ -4338,8 +4515,22 @@ function ClipSegmentConfig(props: {
 				}
 
 				clip.offsets[type] = offset / 1000;
+				clip.offsetsAutoCalculated = false;
 			}),
 		);
+	}
+
+	function setSpeedAudioMode(value: string) {
+		if (
+			value === "mute" ||
+			value === "maintainPitch" ||
+			value === "matchSpeed"
+		) {
+			projectActions.setClipSegmentSpeedAudioMode(
+				props.segmentIndex,
+				value satisfies ClipSpeedAudioMode,
+			);
+		}
 	}
 
 	return (
@@ -4373,10 +4564,6 @@ function ClipSegmentConfig(props: {
 			</div>
 
 			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
-				<p class="text-gray-11 -mt-3">
-					Modifying speed will mute this segment's audio.
-				</p>
-
 				<KRadioGroup
 					class="flex flex-row gap-1.5 -mt-1"
 					value={props.segment.timescale.toString()}
@@ -4397,6 +4584,36 @@ function ClipSegmentConfig(props: {
 						)}
 					</For>
 				</KRadioGroup>
+
+				<Show when={props.segment.timescale !== 1}>
+					<div class="space-y-2 pt-2">
+						<p class="text-gray-11">
+							Mute is fastest. Maintain pitch keeps voices natural, while Match
+							speed raises or lowers pitch with playback speed.
+						</p>
+						<KRadioGroup
+							class="grid grid-cols-3 gap-1.5"
+							value={props.segment.speedAudioMode ?? "mute"}
+							onChange={setSpeedAudioMode}
+						>
+							<For
+								each={[
+									{ value: "mute", label: "Mute" },
+									{ value: "maintainPitch", label: "Maintain pitch" },
+									{ value: "matchSpeed", label: "Match speed" },
+								]}
+							>
+								{(option) => (
+									<KRadioGroup.Item value={option.value}>
+										<KRadioGroup.ItemControl class="w-full px-2 py-1.5 text-xs text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md data-checked:bg-gray-3 data-checked:border-gray-4 data-checked:text-gray-12">
+											{option.label}
+										</KRadioGroup.ItemControl>
+									</KRadioGroup.Item>
+								)}
+							</For>
+						</KRadioGroup>
+					</div>
+				</Show>
 			</Field>
 
 			<div class="space-y-0.5 pt-2">
@@ -4404,12 +4621,19 @@ function ClipSegmentConfig(props: {
 				<p class="text-gray-11">
 					These settings apply to all segments for the current clip
 				</p>
+				<Show when={offsetsAutoCalculated()}>
+					<p class="text-gray-11">
+						Cap calculated these offsets automatically to keep audio in sync
+						with the video. Adjust them if anything still sounds off.
+					</p>
+				</Show>
 			</div>
 
 			{meta().hasSystemAudio && (
 				<SourceOffsetField
 					name="System Audio Offset"
 					value={offsets().system_audio}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("system_audio", offset);
 					}}
@@ -4419,6 +4643,7 @@ function ClipSegmentConfig(props: {
 				<SourceOffsetField
 					name="Microphone Offset"
 					value={offsets().mic}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("mic", offset);
 					}}
@@ -4428,6 +4653,7 @@ function ClipSegmentConfig(props: {
 				<SourceOffsetField
 					name="Camera Offset"
 					value={offsets().camera}
+					autoCalculated={offsetsAutoCalculated()}
 					onChange={(offset) => {
 						setOffset("camera", offset);
 					}}
@@ -4452,6 +4678,7 @@ function SourceOffsetField(props: {
 	name: string;
 	// seconds
 	value?: number;
+	autoCalculated?: boolean;
 	onChange: (value: number) => void;
 }) {
 	const rawValue = () => Math.round((props.value ?? 0) * 1000);
@@ -4459,7 +4686,10 @@ function SourceOffsetField(props: {
 	const [value, setValue] = createSignal(rawValue().toString());
 
 	return (
-		<Field name={props.name}>
+		<Field
+			name={props.name}
+			badge={props.autoCalculated ? "Auto-synced" : undefined}
+		>
 			<div class="flex flex-row justify-between items-center -mt-2 w-full">
 				<div class="flex flex-row items-end space-x-1">
 					<NumberField.Root
@@ -4576,6 +4806,8 @@ function SceneSegmentConfig(props: {
 				return "Shows only the screen recording";
 			case "splitScreen":
 				return "Screen and camera side by side (auto-stacks in portrait)";
+			case "floating":
+				return "Screen and camera float side by side as rounded cards over the background";
 			default:
 				return "Shows both screen and camera";
 		}
@@ -4625,7 +4857,10 @@ function SceneSegmentConfig(props: {
 							);
 							// Seed identity overrides so the new split segment renders
 							// correctly and the fine-tune controls have values to bind to.
-							if (mode === "splitScreen" && !props.segment.splitLayout)
+							if (
+								(mode === "splitScreen" || mode === "floating") &&
+								!props.segment.splitLayout
+							)
 								setProject(
 									"timeline",
 									"sceneSegments",
@@ -4656,6 +4891,14 @@ function SceneSegmentConfig(props: {
 						>
 							<IconLucideColumns2 class="size-3.5" />
 							Split Screen
+						</KTabs.Trigger>
+						<KTabs.Trigger
+							value="floating"
+							disabled={!hasCamera()}
+							class={SCENE_MODE_TRIGGER_CLASS}
+						>
+							<IconLucidePanelRight class="size-3.5" />
+							Floating
 						</KTabs.Trigger>
 					</KTabs.List>
 					<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
@@ -4707,7 +4950,12 @@ function SceneSegmentConfig(props: {
 				</div>
 			</Field>
 
-			<Show when={props.segment.mode === "splitScreen"}>
+			<Show
+				when={
+					props.segment.mode === "splitScreen" ||
+					props.segment.mode === "floating"
+				}
+			>
 				<div class="w-full border-t border-dashed border-gray-5" />
 				<Field name="Screen Zoom" icon={<IconCapEnlarge class="size-4" />}>
 					<Slider

@@ -22,6 +22,10 @@ interface ActivityProps {
 	isOwnerOrMember: boolean;
 	isOwner: boolean;
 	commentsDisabled: boolean;
+	/** Whose video this is, for the composer's placeholder. */
+	ownerName?: string | null;
+	/** Owner is on Pro and the viewer is signed in; uploads re-check server-side. */
+	canRecordMedia?: boolean;
 }
 
 export const Activity = Object.assign(
@@ -37,6 +41,8 @@ export const Activity = Object.assign(
 				setOptimisticComments,
 				setComments,
 				commentsDisabled,
+				ownerName,
+				canRecordMedia,
 				...props
 			},
 			ref,
@@ -67,6 +73,8 @@ export const Activity = Object.assign(
 							setShowAuthOverlay={setShowAuthOverlay}
 							onSeek={props.onSeek}
 							commentsDisabled={commentsDisabled}
+							ownerName={ownerName}
+							canRecordMedia={canRecordMedia}
 						/>
 					)}
 				</Activity.Shell>

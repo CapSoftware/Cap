@@ -1,98 +1,59 @@
 ---
-title: "Cap Apps: S3 Config (Cloudflare R2)"
-summary: "Connect your own Cloudflare R2 bucket to Cap Desktop and maintain 100% ownership over your data."
-tags: Cap Apps, Cloudflare R2, S3-compatible storage, Cloud storage configuration
+title: "Cloudflare R2"
+summary: "Use a Cloudflare R2 bucket for new Cap uploads"
+tags: "Storage, Cloudflare R2, S3"
 image: "/docs/s3-config/cloudflare-r2.jpg"
 ---
 
-# How to Connect Your Cloudflare R2 Bucket to Cap Desktop
+Cap Pro can use Cloudflare R2 through its S3-compatible API. New shareable-link uploads use the active R2 configuration; existing recordings remain on their current provider.
 
-Looking to take full control of your data storage within Cap? Integrating your Cloudflare R2 bucket gives you ownership, flexible scalability, and reduced latency, all while keeping your workflow smooth and secure. In this guide, you'll learn how to quickly set up and configure Cloudflare R2 with Cap Desktop—no complicated steps or robotic instructions, just straightforward guidance.
+## Prepare R2
 
-> **TL;DR**:
->
-> 1. Open Cap Desktop → Cap Apps → S3 Config → Configure
-> 2. Select Cloudflare R2 → Enter your R2 credentials
-> 3. Adjust bucket permissions and test the connection
-> 4. Save settings and start using your R2 bucket for seamless content delivery.
+1. Create or choose an R2 bucket.
+2. Create a dedicated R2 API token with read and write access to that bucket.
+3. Copy the access-key ID, secret access key, bucket name, and S3 endpoint shown by Cloudflare.
+4. Configure CORS for every Cap web origin that will upload directly to the bucket.
 
-> **Note**: While this tutorial focuses on Cloudflare R2, Cap Desktop supports any S3-compatible storage service. If you use another provider, just substitute the endpoint and credentials accordingly.
+Multipart browser uploads need `PUT` requests and access to the `ETag` response header. A representative CORS policy is:
 
-## Step 1: Open Cap Desktop and Access the Cap Apps Tab
+```json
+[
+  {
+    "AllowedOrigins": ["https://cap.so"],
+    "AllowedMethods": ["GET", "HEAD", "PUT"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
 
-1. **Open the Cap Desktop App**: Click the Cap icon on your desktop or launch it from your applications folder.
-2. **Go to Cap Apps**: Once the app is open, look for the "Cap Apps" tab in the Settings menu.
+Add your custom or self-hosted Cap origin when applicable. Do not add unrelated origins.
 
-## Step 2: Choose S3 Config and Start Configuration
+## Connect Cap Desktop
 
-1. **Click on S3 Config**: Within the Cap Apps section, locate "S3 Config."
-2. **Begin Configuration**: Click "Configure."
-3. **Select Cloudflare R2**: From the list of storage services, pick "Cloudflare R2."
+1. Open **Settings > Integrations > S3 Config**.
+2. Select **Cloudflare R2**.
+3. Enter the R2 access-key ID and secret access key.
+4. Enter the account endpoint, usually `https://<account-id>.r2.cloudflarestorage.com`.
+5. Enter the bucket name and the region value required by your R2 credentials, commonly `auto`.
+6. Click **Test Connection**.
+7. Save after the test succeeds.
 
-## Step 3: Set Up Your Cloudflare R2 Bucket
+The connection test confirms Cap can reach the bucket. Verify a real upload as well because object operations and browser CORS use additional permissions.
 
-Before connecting to Cap, ensure you have a Cloudflare R2 bucket ready:
+## Organization-managed storage
 
-1. **Create or Access Your R2 Bucket**:
+Organization owners and admins can manage an S3-compatible provider centrally. Members cannot override an organization-managed configuration from Cap Desktop.
 
-   - Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com).
-   - Navigate to **Storage → R2**.
-   - If you don’t have a bucket yet, click "Create Bucket."
-   - Provide a unique bucket name (e.g., `my-cap-uploads`) and select a region (`auto` or your preferred option).
-   - Click "Create Bucket."
+Switching from R2 to Google Drive, another S3 provider, or Cap-managed storage changes future uploads only. Existing files are not automatically copied.
 
-2. **Generate R2 Access Keys**:
+## Verify before rollout
 
-   - In the R2 dashboard, find the "Access Keys" section.
-   - Click "Create Access Key" and name it (e.g., `cap-app-user`).
-   - Copy both the **Access Key ID** and **Secret Access Key** immediately. You won’t be able to view the secret key again later.
+1. Upload a non-sensitive sample.
+2. Confirm it is stored in the expected R2 bucket.
+3. Play it through its Cap link as an allowed viewer.
+4. Confirm the browser reports no CORS failure.
+5. Keep the previous storage provider available until the sample succeeds.
 
-3. **Configure Bucket Permissions**:
-   By default, Cloudflare R2 keys come with broad permissions. If you need more controlled access:
-
-   - Check Cloudflare’s [R2 documentation](https://developers.cloudflare.com/r2/) for guidance on applying custom access policies.
-   - Ensure that your R2 keys have at least **Read**, **Write**, and **List** permissions for the selected bucket.
-
-4. **Set CORS Rules (Optional)**:
-   If you’re serving content directly from the bucket via a browser (e.g., sharing publicly accessible links):
-   - Go to your R2 bucket’s settings and locate **CORS Rules**.
-   - Add rules that allow `GET`, `HEAD`, and `PUT` from domains like `https://cap.so`, `https://www.cap.so`, `https://cap.link`, and `https://www.cap.link`.
-   - This ensures that assets load smoothly if accessed directly from a browser.
-
-## Step 4: Enter Your Cloudflare R2 Details in Cap Desktop
-
-1. Return to the "R2 Config" section in Cap Desktop.
-2. Fill in the following information:
-   - **Access Key ID**: Paste the key ID from the R2 dashboard.
-   - **Secret Access Key**: Paste the corresponding secret key.
-   - **Endpoint**: Usually follows `https://<accountid>.r2.cloudflarestorage.com`. Find the exact endpoint in your R2 bucket details.
-   - **Bucket Name**: The name of your R2 bucket (e.g., `my-cap-uploads`).
-   - **Region**: R2 often uses `auto`. Check your bucket details to confirm.
-
-## Step 5: Test and Save Your Connection
-
-1. **Test Connection**: Click "Test Connection" in Cap Desktop to verify that it can communicate with your R2 bucket successfully.
-2. **Save Configuration**: Once you see a successful connection message, save your settings.
-
-With these steps completed, Cap Desktop will now use your Cloudflare R2 bucket to store and serve assets, giving you full control over how and where your content is hosted.
-
----
-
-## Benefits of Using Cloudflare R2 with Cap Desktop
-
-- **Full Data Ownership**: Your files stay under your control, not locked into a third-party platform.
-- **S3-Compatible & Scalable**: R2 is designed to be S3-compatible, making it simple to use with Cap or other tools.
-- **Global Performance**: Cloudflare’s extensive network ensures quick, reliable access to your files worldwide.
-- **Cost-Effective**: R2 often provides competitive pricing compared to traditional cloud storage solutions.
-
----
-
-## Accessing Your R2 Files in Cap
-
-After setting up Cloudflare R2 in Cap Desktop, any new shareable links you create will be served from your R2 bucket. This means:
-
-- Faster load times for your images and videos.
-- Greater flexibility to scale as you grow.
-- Improved ownership and long-term cost savings.
-
-With your Cloudflare R2 integration complete, you can enjoy seamless, secure, and efficient content delivery directly within Cap Desktop—no extra steps, no compromises.
+Never paste R2 credentials into an agent chat. An agent may guide and verify the configuration, but secret entry belongs in Cap's protected settings UI or another approved secret channel.

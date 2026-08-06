@@ -17,7 +17,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, SyncSender},
     },
     time::{Duration, Instant},
@@ -502,6 +502,104 @@ struct AttachedState {
     done_tx: mpsc::SyncSender<()>,
 }
 
+#[cfg(target_os = "macos")]
+fn list_input_device_names() -> Vec<String> {
+    use coreaudio::audio_unit::{Scope, macos_helpers};
+
+    let mut names = IndexMap::new();
+    let default_id = macos_helpers::get_default_device_id(true);
+
+    if let Some(name) = default_id
+        .and_then(macos_device_name_released)
+        .filter(|name| !name.is_empty())
+    {
+        names.insert(name, ());
+    }
+
+    match macos_helpers::get_audio_device_ids_for_scope(Scope::Input) {
+        Ok(device_ids) => {
+            for device_id in device_ids {
+                if macos_helpers::get_audio_device_supports_scope(device_id, Scope::Input)
+                    .unwrap_or(false)
+                    && let Some(name) = macos_device_name_released(device_id)
+                    && !name.is_empty()
+                {
+                    names.entry(name).or_insert(());
+                }
+            }
+        }
+        Err(error) => {
+            error!("Could not access audio input devices: {}", error);
+        }
+    }
+
+    names.into_keys().collect()
+}
+
+// coreaudio-rs's get_device_name never releases the CFString it copies out of
+// AudioObjectGetPropertyData (twice on the CFStringGetCStringPtr fallback
+// path), leaking one or two strings per device per call; the devices snapshot
+// emitter calls this every 5s for the process lifetime. This variant hands the
+// +1 ref to core-foundation, which releases it on drop.
+#[cfg(target_os = "macos")]
+fn macos_device_name_released(device_id: coreaudio::sys::AudioDeviceID) -> Option<String> {
+    use core_foundation::{
+        base::TCFType,
+        string::{CFString, CFStringRef},
+    };
+    use coreaudio::sys;
+
+    let property_address = sys::AudioObjectPropertyAddress {
+        mSelector: sys::kAudioDevicePropertyDeviceNameCFString,
+        mScope: sys::kAudioDevicePropertyScopeOutput,
+        mElement: sys::kAudioObjectPropertyElementMaster,
+    };
+
+    let mut device_name: CFStringRef = std::ptr::null();
+    let mut data_size = std::mem::size_of::<CFStringRef>() as u32;
+    let status = unsafe {
+        sys::AudioObjectGetPropertyData(
+            device_id,
+            &property_address,
+            0,
+            std::ptr::null(),
+            &mut data_size,
+            (&mut device_name) as *mut CFStringRef as *mut _,
+        )
+    };
+    if status != sys::kAudioHardwareNoError as i32 || device_name.is_null() {
+        return None;
+    }
+
+    Some(unsafe { CFString::wrap_under_create_rule(device_name) }.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_input_device_names() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut names = IndexMap::new();
+
+    if let Some(name) = host
+        .default_input_device()
+        .and_then(|device| device.name().ok())
+    {
+        names.insert(name, ());
+    }
+
+    match host.input_devices() {
+        Ok(devices) => {
+            for name in devices.filter_map(|device| device.name().ok()) {
+                names.entry(name).or_insert(());
+            }
+        }
+        Err(error) => {
+            error!("Could not access audio input devices: {}", error);
+        }
+    }
+
+    names.into_keys().collect()
+}
+
 impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
@@ -525,6 +623,10 @@ impl MicrophoneFeed {
 
     pub fn list() -> MicrophonesMap {
         Self::list_with_settings(None)
+    }
+
+    pub fn list_names() -> Vec<String> {
+        list_input_device_names()
     }
 
     pub fn list_with_settings(settings: Option<&MicrophoneDeviceSettings>) -> MicrophonesMap {
@@ -633,6 +735,24 @@ impl MicrophoneFeed {
                     CallbackSampleRateEstimator::new(callback_sample_rate);
                 let mut pending_samples = VecDeque::new();
 
+                let latency_info = estimate_input_latency(
+                    callback_sample_rate,
+                    buffer_size_frames.unwrap_or(1024),
+                    Some(&label),
+                );
+                let capture_latency = Duration::from_secs_f64(
+                    latency_info
+                        .device_latency_secs
+                        .clamp(0.0, MAX_CAPTURE_LATENCY_COMPENSATION_SECS),
+                );
+                if !capture_latency.is_zero() {
+                    info!(
+                        "🎤 Compensating capture timestamps by {:.1}ms input pipeline latency (transport: {:?})",
+                        capture_latency.as_secs_f64() * 1000.0,
+                        latency_info.transport
+                    );
+                }
+
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
                     sample_format,
@@ -666,7 +786,8 @@ impl MicrophoneFeed {
                                 sample_rate: effective_sample_rate.sample_rate,
                                 channels: callback_channels,
                                 info: info.clone(),
-                                timestamp: Timestamp::from_cpal(input_timestamp.capture),
+                                timestamp: Timestamp::from_cpal(input_timestamp.capture)
+                                    - capture_latency,
                             };
 
                             if !effective_sample_rate.settled {
@@ -726,8 +847,8 @@ impl MicrophoneFeed {
                 let _ = ready_tx.send(Ok(buffer_size_frames));
 
                 match done_rx.recv() {
-                    Ok(_) => info!("Microphone actor shut down, ending stream"),
-                    Err(_) => info!("Microphone actor unreachable, ending stream"),
+                    Ok(_) => debug!("Microphone actor shut down, ending stream"),
+                    Err(_) => debug!("Microphone shutdown signal channel closed, ending stream"),
                 }
             }
         });
@@ -742,7 +863,12 @@ fn get_usable_device(
 ) -> Option<(String, Device, SupportedStreamConfig)> {
     let device_name_for_logging = device.name().ok();
 
-    let preferred_rate = cpal::SampleRate(48_000);
+    let native_rate = device
+        .default_input_config()
+        .ok()
+        .map(|c| c.sample_rate().0)
+        .unwrap_or(48_000);
+    let preferred_rate = cpal::SampleRate(native_rate);
 
     let result = device
         .supported_input_configs()
@@ -845,6 +971,14 @@ const WIRELESS_TARGET_LATENCY_MS: u32 = 80;
 const WIRELESS_MIN_LATENCY_MS: u32 = 50;
 const WIRELESS_MAX_LATENCY_MS: u32 = 200;
 
+// The cpal capture timestamp (mHostTime / QPC) marks when samples left the
+// audio HAL, not when the sound reached the microphone. The gap between the
+// two is the input pipeline latency (device latency + safety offset + stream
+// latency), which otherwise lands in the recording as the mic track running
+// late relative to video. Buffer latency is deliberately excluded: the
+// callback timestamp already refers to the first frame of the buffer.
+const MAX_CAPTURE_LATENCY_COMPENSATION_SECS: f64 = 0.5;
+
 fn stream_config_with_latency(
     config: &SupportedStreamConfig,
     device_name: Option<&str>,
@@ -915,6 +1049,11 @@ pub struct MicrophoneFeedLock {
     buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
     device_name: String,
+    // Recording-scoped mute. The stream keeps flowing at its normal cadence —
+    // the recording source zeroes sample payloads while this is set — so
+    // timestamps, resampler state, and the muxer timeline are untouched by
+    // muting. A fresh lock (i.e. every new recording) always starts unmuted.
+    recording_muted: Arc<AtomicBool>,
     _token: Arc<()>,
 }
 
@@ -937,6 +1076,18 @@ impl MicrophoneFeedLock {
 
     pub async fn dropped_message_count(&self) -> u64 {
         self.actor.ask(GetDroppedMessageCount).await.unwrap_or(0)
+    }
+
+    pub fn set_recording_muted(&self, muted: bool) {
+        self.recording_muted.store(muted, Ordering::Relaxed);
+    }
+
+    pub fn is_recording_muted(&self) -> bool {
+        self.recording_muted.load(Ordering::Relaxed)
+    }
+
+    pub fn recording_muted_handle(&self) -> Arc<AtomicBool> {
+        self.recording_muted.clone()
     }
 }
 
@@ -1220,7 +1371,19 @@ impl Message<RemoveInput> for MicrophoneFeed {
     async fn handle(&mut self, _: RemoveInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("MicrophoneFeed.RemoveInput");
 
-        let state = self.state.try_as_open()?;
+        // Callers routinely discard this reply; a locked feed silently keeps
+        // the cpal stream (and its per-callback allocations) alive, so make
+        // that path visible in logs. debug-level because deselecting the mic
+        // during a studio recording hits this legitimately.
+        let state = match self.state.try_as_open() {
+            Ok(state) => state,
+            Err(err) => {
+                debug!(
+                    "Microphone feed RemoveInput deferred: feed is locked by an active consumer"
+                );
+                return Err(err);
+            }
+        };
 
         state.connecting = None;
 
@@ -1304,14 +1467,14 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
                     }
                 }
                 Err(TrySendError::Disconnected(_)) => {
-                    warn!("Audio sender {} disconnected, will be removed", i);
+                    debug!("Audio sender {} closed, will be removed", i);
                     to_remove.push(i);
                 }
             }
         }
 
         if !to_remove.is_empty() {
-            debug!("Removing {} disconnected audio senders", to_remove.len());
+            debug!("Removing {} closed audio senders", to_remove.len());
             for i in to_remove.into_iter().rev() {
                 self.senders.swap_remove(i);
             }
@@ -1385,6 +1548,7 @@ impl Message<Lock> for MicrophoneFeed {
             buffer_size_frames,
             drop_tx: Some(drop_tx),
             device_name,
+            recording_muted: Arc::new(AtomicBool::new(false)),
             _token: token,
         })
     }

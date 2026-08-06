@@ -1,6 +1,6 @@
 use super::core::{
     BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
-    wait_for_blocking_thread_finish,
+    frame_timing_log_threshold_ms, wait_for_blocking_thread_finish,
 };
 use super::macos_frame_convert::{
     FramePool, ffmpeg_pixel_format_for_cap, fill_frame_from_sample_buf,
@@ -389,7 +389,7 @@ impl OutOfProcessFragmentedM4SMuxer {
                 let mut keyframe_emitted = false;
                 let mut encoder_rebuild_attempts: u32 = 0;
                 const MAX_ENCODER_REBUILD_ATTEMPTS: u32 = 1;
-                const SLOW_THRESHOLD_MS: u128 = 5;
+                let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
                     last_timestamp = Some(timestamp);
@@ -417,14 +417,14 @@ impl OutOfProcessFragmentedM4SMuxer {
                     let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
+                    if convert_elapsed_ms > slow_threshold_ms {
                         slow_convert_count += 1;
                         if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = convert_elapsed_ms,
                                 count = slow_convert_count,
                                 "OOP fill_frame_from_sample_buf exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
+                                slow_threshold_ms
                             );
                         }
                     }
@@ -446,14 +446,14 @@ impl OutOfProcessFragmentedM4SMuxer {
                                 },
                             );
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                            if encode_elapsed_ms > slow_threshold_ms {
                                 slow_encode_count += 1;
                                 if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                                     debug!(
                                         elapsed_ms = encode_elapsed_ms,
                                         count = slow_encode_count,
                                         "OOP encode_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
+                                        slow_threshold_ms
                                     );
                                 }
                             }

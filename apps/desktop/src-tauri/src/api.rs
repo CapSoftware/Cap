@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::collections::HashMap;
 use tauri::AppHandle;
 use tracing::{instrument, trace};
 
@@ -188,20 +189,23 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedUploadTarget {
+    pub url: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+}
+
 #[instrument(skip(app))]
 pub async fn upload_signed(
     app: &AppHandle,
     body: PresignedS3PutRequest,
-) -> Result<String, AuthedApiError> {
-    #[derive(Deserialize)]
-    struct Data {
-        url: String,
-    }
-
+) -> Result<SignedUploadTarget, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Response {
-        presigned_put_data: Data,
+        presigned_put_data: SignedUploadTarget,
     }
 
     let resp = app
@@ -223,7 +227,7 @@ pub async fn upload_signed(
     resp.json::<Response>()
         .await
         .map_err(|err| format!("api/upload_signed/response: {err}").into())
-        .map(|data| data.presigned_put_data.url)
+        .map(|data| data.presigned_put_data)
 }
 
 #[instrument(skip(app))]

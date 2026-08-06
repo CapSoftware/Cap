@@ -1,5 +1,3 @@
-"use client";
-
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -21,7 +19,7 @@ export const howToScreenRecordContent: SeoPageContent = {
 		{
 			title: "How to Screen Record with Audio on Mac",
 			description:
-				"One of the most common questions is how to screen record with audio on Mac. By default, the macOS built-in screen recorder does not capture internal system audio, which frustrates many users. Cap solves this problem completely. When you record with Cap on Mac, it captures both your microphone audio and system audio simultaneously without any extra configuration. Simply toggle the audio sources you want in Cap before you start recording. This makes Cap ideal for recording presentations with narration, capturing video calls, creating software tutorials with sound effects, or recording gameplay audio. If you need to screen record on Mac with internal audio using the built-in tool, you would need to install a third-party audio routing extension, which adds complexity. Cap eliminates this hassle entirely by handling audio capture natively on macOS.",
+				"One of the most common questions is how to screen record with audio on Mac. By default, the macOS built-in screen recorder does not capture internal system audio, which frustrates many users. Cap solves this problem completely. When you record with Cap on Mac, it captures both your microphone audio and system audio simultaneously without any extra configuration. Simply toggle the audio sources you want in Cap before you start recording. This makes Cap ideal for recording presentations with narration, capturing video calls, creating software tutorials with sound effects, or recording gameplay audio. If you need to screen record on Mac with internal audio using the built-in tool, you would need to install a third-party audio routing extension, which adds complexity. Cap eliminates this hassle entirely by handling audio capture natively on macOS. For a step-by-step walkthrough, see our <a href='/blog/record-screen-mac-system-audio'>guide to recording a Mac screen with audio</a>.",
 		},
 		{
 			title: "How to Screen Record on Windows with Cap",
@@ -204,7 +202,7 @@ export const howToScreenRecordContent: SeoPageContent = {
 		{
 			question: "How long can I screen record?",
 			answer:
-				"With Cap's desktop app, there are no time limits on screen recordings. You can record for as long as you need, whether it is a 30-second quick demo or a 2-hour training session. Cap's Instant Mode (browser-based) supports recordings up to 5 minutes on the free plan. For unlimited browser-based recording length, Cap Pro is available at an affordable monthly price. The macOS built-in recorder and Windows Game Bar also have no strict time limits, though they lack the sharing and editing features that Cap provides.",
+				"Cap's Studio Mode records locally with no time limit, so you can capture anything from a 30-second demo to a 2-hour training session. On the free plan, Instant Mode — the instantly shareable links — is capped at 5 minutes per recording, and Cap Pro lifts that cap. The macOS built-in recorder and Windows Game Bar have no strict time limits either, though they lack the sharing and editing features that Cap provides.",
 		},
 		{
 			question: "What format do screen recordings save in?",

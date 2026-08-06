@@ -4,9 +4,9 @@ import Script from "next/script";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 
 export const screenRecordMacContent = {
-	title: "Best Screen Recorder for Mac | High-Quality, Free & Easy (2025)",
+	title: "Best Screen Recorder for Mac | High-Quality, Free & Easy (2026)",
 	description:
-		"Cap is the best free screen recorder for Mac, offering HD quality, unlimited recording, and easy export. Ideal for tutorials, presentations, and educational videos.",
+		"Cap is the best free screen recorder for Mac, with HD quality, no time limit in Studio Mode, and easy export. Ideal for tutorials, presentations, and educational videos.",
 
 	featuresTitle: "Why Cap is the Best Screen Recorder for Mac",
 	featuresDescription:
@@ -29,9 +29,9 @@ export const screenRecordMacContent = {
 				"Designed for ease of use on Mac, Cap offers an intuitive setup and simple recording options. Follow our <a href='/how-to-screen-record'>step-by-step screen recording guide</a> to start capturing your screen in minutes.",
 		},
 		{
-			title: "Unlimited Recording Time",
+			title: "No Time Limit in Studio Mode",
 			description:
-				"Record for as long as you need with no restrictions on recording time, ideal for extended presentations.",
+				"Record locally for as long as you need — Studio Mode has no time cap, so it's ideal for extended presentations and long tutorials. Need the audio too? Here's <a href='/mac-screen-recording-with-audio'>how to record your Mac screen with audio</a>.",
 		},
 		{
 			title: "Easy Export and Sharing",
@@ -82,7 +82,7 @@ export const screenRecordMacContent = {
 		{
 			question: "Can I record my screen with audio on Mac?",
 			answer:
-				"Yes, Cap allows you to record high-quality screen videos with audio, making it perfect for presentations and tutorials.",
+				"Yes. Cap records system audio and your microphone together on macOS natively — no BlackHole or extra drivers needed. See <a href='/mac-screen-recording-with-audio'>Mac screen recording with audio</a>, or follow our <a href='/blog/record-screen-mac-system-audio'>step-by-step guide</a>.",
 		},
 		{
 			question: "How do I export recordings from Cap on my Mac?",
@@ -92,7 +92,7 @@ export const screenRecordMacContent = {
 		{
 			question: "Can I use Cap for free on Mac?",
 			answer:
-				"Yes, Cap offers a free version with powerful features for Mac users, including unlimited recording time and high-quality video capture.",
+				"Yes. Cap is free for Mac, including Studio Mode recording with no time limit and high-quality capture. Free Instant Mode share links are capped at 5 minutes per recording.",
 		},
 		{
 			question: "What are the best uses for Cap on Mac?",

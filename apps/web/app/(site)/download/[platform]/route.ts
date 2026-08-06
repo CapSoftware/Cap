@@ -86,16 +86,8 @@ export async function GET(
 			fallback: "windows",
 		},
 		linux: {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
-			fallback: "linux-appimage",
-		},
-		"linux-appimage": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
-			fallback: "linux-appimage",
-		},
-		appimage: {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
-			fallback: "linux-appimage",
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
+			fallback: "linux-deb",
 		},
 		"linux-deb": {
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
@@ -112,18 +104,6 @@ export async function GET(
 		ubuntu: {
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
 			fallback: "linux-deb",
-		},
-		"linux-rpm": {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
-			fallback: "linux-rpm",
-		},
-		rpm: {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
-			fallback: "linux-rpm",
-		},
-		fedora: {
-			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
-			fallback: "linux-rpm",
 		},
 	};
 

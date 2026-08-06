@@ -1,144 +1,188 @@
 ---
 title: "Studio Mode"
-summary: "Professional recordings with advanced editing capabilities"
+summary: "Record locally, edit with Cap's full timeline and canvas tools, then export or share"
 tags: "Recording, Editing"
 ---
 
-Studio Mode gives you a professional recording and editing workflow inside Cap. Unlike Instant Mode, Studio Mode saves your recording locally first, letting you edit, polish, and customize before sharing. This is ideal for product demos, tutorials, presentations, and any content that benefits from a professional touch.
+Studio Mode creates a local, editable Cap project. Use it when the recording needs polishing, privacy edits, branded presentation, captions, multiple clips, or a reviewed export before it is shared.
 
-## How Studio Mode Works
+Nothing is uploaded just because you record or edit in Studio Mode. The project stays local until you choose **Shareable Link** from the export screen.
 
-Studio Mode separates recording from sharing:
+## Record a Studio project
 
-1. **Record** your screen, camera, and microphone. The footage is saved locally on your machine.
-2. **Edit** in the Cap Studio editor. Trim, add effects, customize the background, and more.
-3. **Share** when you are satisfied. Upload to Cap cloud and get your shareable link.
+1. Open Cap Desktop and select **Studio**.
+2. Choose a display, window, area, or camera-only target.
+3. Select the camera, microphone, and supported system-audio options you want to capture.
+4. Click **Record**.
+5. Pause, resume, restart, or stop from the recording controls.
 
-This workflow gives you full creative control over the final result without sacrificing the simplicity Cap is known for.
+After you stop, Cap opens the local project in the editor and keeps it in the desktop recording library. The `.cap` project retains the source media and editable configuration; exporting creates a rendered output without replacing that project.
 
-## Starting a Studio Mode Recording
+## Work with clips
 
-1. Open Cap Desktop.
-2. Switch to **Studio Mode** in the recording mode selector.
-3. Choose your capture source (full screen or specific window).
-4. Optionally enable your camera and microphone.
-5. Click **Record** to begin.
+The clip timeline is the foundation of a Studio project. You can:
 
-Recording works the same as Instant Mode. The difference is what happens after you stop.
+- Trim the beginning or end of a segment, split at the playhead, delete sections, and reorder clips.
+- Rename clips and add another Studio capture directly from the editor.
+- Import an existing Cap recording or an MP4 into the current project.
+- Change an individual segment to 0.25x, 0.5x, 1x, 1.5x, 2x, 4x, or 8x speed.
+- Choose whether sped-up or slowed-down audio is muted, maintains natural voice pitch, or changes pitch with the playback speed.
+- Adjust microphone, system-audio, and camera offsets when a source needs manual synchronization.
+- Add a crossfade or fade-through-black transition between adjacent clips and control its duration.
 
-## During Recording
+Undo and redo cover editor changes, so you can experiment without modifying the original capture files.
 
-While in Studio Mode, you have the same recording experience as Instant Mode:
+## Add automatic or manual zooms
 
-- A recording indicator shows that capture is active
-- Use your computer normally while everything is recorded
-- Pause and resume as needed
-- Stop with the toolbar button or keyboard shortcut
+The dedicated **Zoom** track supports both generated and hand-authored zoom segments.
 
-The key difference is that your recording is saved locally rather than streamed to the cloud.
+### Automatic zooms
 
-## Opening the Editor
+For Studio recordings that contain Cap's recorded cursor and click data, select **Click to generate zoom segments** to create zooms around recorded clicks. Each generated segment uses **Auto** mode so the focal point follows the recorded action.
 
-After stopping a recording in Studio Mode, Cap will present you with the option to open the recording in the Studio editor. You can also access any of your local recordings from the Cap Desktop library.
+Automatic generation is not available when the project does not contain the required cursor metadata. Imported MP4s, for example, do not gain click data during import.
 
-The Studio editor opens in a dedicated window where you can preview and edit your recording before sharing.
+### Manual zooms
 
-## Editing Tools
+Click or drag on the Zoom track to create a segment manually. Select the segment to:
 
-### Trimming
+- Set the zoom amount from 1x to 4.5x.
+- Switch between **Auto** and **Manual** mode when recorded cursor data is available.
+- Pick the exact focal point for a manual zoom from a preview of the captured screen.
+- Move the segment or resize it to control when the zoom begins and ends.
 
-Remove unwanted sections from the beginning and end of your recording:
+Manual zooms do not require click metadata, so they also work for imported or older footage.
 
-- Drag the **start handle** on the timeline to trim the beginning.
-- Drag the **end handle** to trim the ending.
-- Preview your trimmed result with the play button.
+## Change screen and camera layouts with scenes
 
-### Background Customization
+When the project includes camera footage, add the **Scene** track to change the composition for selected parts of the timeline. A scene can use:
 
-Replace the default background with something more polished:
+- **Default** to show the normal screen-and-camera composition.
+- **Camera Only** to make the camera the focus.
+- **Hide Camera** to show only the screen recording.
+- **Split Screen** to place screen and camera side by side. Portrait output stacks the panes automatically.
+- **Floating** to show the screen and camera as separate rounded cards over the background.
 
-- **Solid colors** - Choose from preset colors or pick a custom one.
-- **Gradients** - Select from a library of gradient backgrounds.
-- **Wallpapers** - Use built-in wallpaper images.
-- **Custom images** - Upload your own background image.
+Each scene has independent transition-in and transition-out durations. Split Screen and Floating scenes also let you zoom and reposition the screen and camera panes separately, either on the canvas or with the position controls.
 
-The background is visible around your screen recording when padding is applied, creating a professional framing effect.
+The Scene track is unavailable when no clip in the project contains camera footage.
 
-### Padding and Rounding
+## Mask private or important areas
 
-Control how your screen recording sits within the frame:
+Add one or more **Mask** tracks when part of the capture should be hidden or emphasized. Drag and resize each rectangular mask directly on the canvas, then set its duration on the timeline.
 
-- **Padding** - Add space around your recording to reveal the background. More padding creates a more stylized look.
-- **Border radius** - Round the corners of your screen recording for a softer, modern appearance.
+Two mask types are available:
 
-### Zoom Effects
+| Mask type | What it does | Controls |
+|---|---|---|
+| **Sensitive** | Obscures the selected area | Blur or pixelate, with adjustable blur or pixel size |
+| **Highlight** | Keeps the selected area visible while darkening the rest of the screen | Outside darkness and fade duration |
 
-Add zoom effects to draw attention to specific parts of your screen:
+Masks are fixed to the region you place for that segment. They do not automatically follow a moving window, field, or person, so extend or divide the mask into the timeline sections where that region remains correct.
 
-- Click on the timeline to set a zoom keyframe.
-- Define the zoom area by selecting the region you want to focus on.
-- Cap smoothly animates into and out of the zoom.
-- Stack multiple zoom effects throughout your recording to guide the viewer's attention.
+## Add text tracks
 
-### Camera Overlay Adjustments
+Text is a first-class timeline track, not a caption workaround. You can stack multiple text lanes for titles, callouts, labels, or steps that overlap in time.
 
-If you recorded with a camera, you can adjust the overlay in the editor:
+For each text segment, you can:
 
-- Reposition the camera overlay anywhere in the frame.
-- Resize the overlay to be larger or smaller.
-- Change the shape and style of the overlay.
+- Type or edit the text directly on the canvas.
+- Drag it into position and resize it with the canvas handles.
+- Set the font size, weight, italic style, and color.
+- Use organization brand-color swatches when they are available.
+- Set a fade duration, move the segment, trim its timing, split it, or disable it without deleting it.
 
-## Previewing
+## Generate and edit captions
 
-Use the playback controls in the editor to preview your recording with all edits applied:
+The **Captions** tool is a beta, local transcription workflow for projects with recorded audio.
 
-- **Play/Pause** - Preview the full edited recording.
-- **Scrub** - Drag the playhead along the timeline to jump to any point.
-- **Timeline zoom** - Zoom into the timeline for precise editing.
+1. Choose a transcription model and language, or use automatic language detection.
+2. Download the model once. Model availability depends on the computer; Intel Macs use the available Whisper models rather than Parakeet.
+3. Generate captions from the project audio. The generated caption data remains stored locally in the project.
+4. Correct the text and start/end timing for individual caption segments.
 
-All edits are non-destructive. Your original recording is preserved, and you can adjust or undo changes at any time.
+Caption presentation includes style presets plus controls for font, size, weight, uppercase text, foreground and background colors, background opacity, position, active-word highlighting, highlight color, animation, and fade duration.
 
-## Sharing Your Studio Recording
+Turn on **Export with Subtitles** to render captions into the video. The Transcript view can also save the edited timeline captions as SRT or WebVTT (VTT) files.
 
-When you are happy with your edits:
+## Show recorded keyboard input
 
-1. Click the **Share** or **Export** button in the editor.
-2. Cap will process the video with your edits applied.
-3. The recording is uploaded to Cap cloud (or your self-hosted instance).
-4. A shareable link is generated and copied to your clipboard.
+The beta **Keyboard** track can generate on-screen keystroke segments from keyboard data recorded by Cap. It does not reconstruct keystrokes from an imported MP4.
 
-From there, sharing works exactly like Instant Mode. Paste the link anywhere, and viewers see your polished recording.
+You can control the font, size, weight, text and background colors, background opacity, screen position, fade and linger timing, and how nearby key presses are grouped. You can also choose whether to show modifier keys, special keys, or uppercase labels, then override the text and timing of individual generated segments.
 
-## Exporting Locally
+## Add music and other audio
 
-In addition to sharing via link, you can export your edited recording as a local video file:
+Audio tracks are separate from the captured microphone and system audio. Add multiple audio lanes to layer music or other sounds over the edit.
 
-- Export as MP4 for maximum compatibility.
-- Choose your preferred resolution and quality settings.
-- Save the file anywhere on your machine.
+- Preview and add tracks from Cap's built-in audio library.
+- Import MP3, WAV, M4A, OGG, FLAC, or AAC files.
+- Move, trim, split, rename, replace, disable, or remove an audio segment.
+- Adjust a segment's volume and fade-in or fade-out.
+- Separately mute the capture or adjust its microphone and system-audio volumes. Stereo microphone recordings can also select stereo, left-channel mono, or right-channel mono handling.
 
-This is useful if you need to upload the video to YouTube, include it in a presentation, or archive it locally.
+## Style the canvas and screen
 
-## When to Use Studio Mode
+Studio Mode can reframe the raw capture without changing the source recording:
 
-Studio Mode is the right choice when:
+- Choose Auto, Wide (16:9), Vertical (9:16), Square (1:1), Classic (4:3), or Tall (3:4) output.
+- Crop the recorded screen and reposition it on the canvas.
+- Use a solid color, gradient, built-in wallpaper, or custom image as the background.
+- Adjust background blur, screen padding, rounded corners and corner style, motion blur, border width/color/opacity, and shadow size/opacity/blur.
+- Add no frame, a macOS or Windows window frame, browser chrome with editable URL and title, or a MacBook bezel.
 
-- **Quality matters** - Product demos, client presentations, and marketing content benefit from the editing tools.
-- **You need to trim** - Remove mistakes, long pauses, or irrelevant sections.
-- **Visual polish is important** - Custom backgrounds, rounded corners, and zoom effects make recordings look professional.
-- **You want to review before sharing** - Preview the final result before anyone else sees it.
-- **Offline recording** - Record without an internet connection and share later.
+This is where a single source capture can be adapted for landscape documentation, square social posts, or vertical output without recording it again.
 
-## Studio Mode vs Instant Mode
+## Refine the cursor
 
-| Feature | Studio Mode | Instant Mode |
-|---------|-------------|-------------|
-| Saves locally | Yes | No (streams to cloud) |
-| Editing tools | Full suite | None |
-| Background customization | Yes | No |
-| Zoom effects | Yes | No |
-| Trimming | Yes | No |
-| Share speed | After editing and upload | Instant |
-| Best for | Polished content | Quick communication |
+For recordings with Cap cursor data, the editor can:
 
-For quick, informal recordings where speed is the priority, [Instant Mode](/docs/recording/instant-mode) is the better choice. For everything that benefits from a professional look, Studio Mode delivers.
+- Show or hide the cursor, change its size and tilt, or render it as Cap's circular cursor.
+- Hide it after a configurable period of inactivity.
+- Use recorded raw movement or smooth it with Slow, Smooth, Mellow, Fast, or custom motion settings.
+- Fine-tune smooth motion with tension, friction, and mass controls.
+- Render supported cursors as higher-quality SVG artwork.
+
+Cursor-specific controls depend on cursor metadata captured by Cap; importing a finished video cannot recreate that data.
+
+## Refine the camera
+
+When camera footage exists, you can drag it to a custom canvas position or use a preset corner/edge position. Additional controls include:
+
+- Hide or mirror the camera.
+- Apply light or heavy camera-background blur.
+- Choose a square or source-shaped camera frame.
+- Change camera size, rounded corners, corner style, and shadow.
+- Control camera size during screen zooms or keep its original size.
+
+For composition changes that should only apply to part of the video, use the Scene track instead of changing the project-wide camera settings.
+
+## Reuse a look with presets
+
+Presets save editor configuration for reuse. You can create and rename presets, apply one to a project, update a preset from the current settings, and choose a default. Applying a preset preserves the current project's timeline and clips while applying the saved visual configuration.
+
+## Export or share
+
+Open **Export** when the edit is ready. The available choices depend on the format:
+
+| Output | Available controls and limits |
+|---|---|
+| **MP4** | 720p, 1080p, or 4K; 15, 30, or 60 FPS; quality presets, custom bits per pixel, and optional file-size optimization |
+| **GIF** | 720p or 1080p; 10, 15, 20, 25, or 30 FPS |
+| **Cursor-only MOV** | Advanced transparent export containing the recorded cursor motion and clicks; file or clipboard only |
+
+The destination can be a local file, the clipboard, or a shareable Cap link. A shareable link requires sign-in, uses MP4, uploads the rendered video to the selected organization and its active storage provider, and does not support a transparent-background or cursor-only export.
+
+A transparent-background export can be saved to a file or clipboard, but MP4 and shareable-link destinations are disabled because they do not support that workflow.
+
+## Instant compared with Studio
+
+| | Instant | Studio |
+|---|---|---|
+| Primary result | Shareable Cap | Local editable project |
+| Upload | During and after recording | Only when you choose a shareable-link export |
+| Editor before sharing | No | Full timeline and canvas editor |
+| Local file export | Not the primary workflow | MP4, GIF, or specialized MOV export |
+| Best for | Fast async communication | Polished, private, branded, or reviewed output |
+
+Use [Instant Mode](/docs/recording/instant-mode) when the shortest path to a share link is the priority.

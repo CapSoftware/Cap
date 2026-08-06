@@ -30,6 +30,20 @@ fn legacy_static_video_fps() -> u32 {
     30
 }
 
+/// Where the recording device's physical notch sits within the captured video.
+///
+/// macOS captures the pixels behind the notch, so without this the recording
+/// shows an unbroken menu bar where the recorder saw a cutout. Fractions of the
+/// captured frame rather than of the display, so area recordings, which are
+/// cropped at capture time, need no extra context to interpret.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
+pub struct DisplayNotch {
+    /// Distance from the left edge of the video to the notch.
+    pub x: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AudioMeta {
     #[specta(type = String)]
@@ -63,6 +77,8 @@ pub struct AudioGapSummary {
 pub struct SharingMeta {
     pub id: String,
     pub link: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -335,6 +351,18 @@ pub enum StudioRecordingMeta {
 }
 
 impl StudioRecordingMeta {
+    /// Notch captured with this recording. Every segment shares one display, so
+    /// the first segment speaks for all of them. `None` for recordings made
+    /// before Cap started capturing this, and for every non-macOS recording.
+    pub fn display_notch(&self) -> Option<DisplayNotch> {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => None,
+            StudioRecordingMeta::MultipleSegments { inner } => {
+                inner.segments.first().and_then(|s| s.display_notch)
+            }
+        }
+    }
+
     pub fn status(&self) -> StudioRecordingStatus {
         match self {
             StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Complete,
@@ -505,6 +533,8 @@ pub struct MultipleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[specta(type = Option<String>)]
     pub keyboard: Option<RelativePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_notch: Option<DisplayNotch>,
 }
 
 impl MultipleSegment {
@@ -744,5 +774,157 @@ mod test {
 	          ]
 	        }"#,
         );
+    }
+
+    mod audio_offsets {
+        use crate::{AudioMeta, MultipleSegment, VideoMeta};
+        use relative_path::RelativePathBuf;
+
+        fn video(start_time: Option<f64>) -> VideoMeta {
+            VideoMeta {
+                path: RelativePathBuf::from("display.mp4"),
+                fps: 30,
+                start_time,
+                device_id: None,
+            }
+        }
+
+        fn audio(start_time: Option<f64>) -> AudioMeta {
+            AudioMeta {
+                path: RelativePathBuf::from("audio.ogg"),
+                start_time,
+                device_id: None,
+                gap_summary: None,
+            }
+        }
+
+        fn segment(
+            display_start: f64,
+            mic_start: Option<f64>,
+            system_start: Option<f64>,
+        ) -> MultipleSegment {
+            MultipleSegment {
+                display: video(Some(display_start)),
+                camera: None,
+                mic: mic_start.map(|s| audio(Some(s))),
+                system_audio: system_start.map(|s| audio(Some(s))),
+                cursor: None,
+                keyboard: None,
+                display_notch: None,
+            }
+        }
+
+        // The recorder anchors system audio at the recording epoch
+        // (start_time ~ 0.0), which keeps it from ever being the latest
+        // start_time: the mic/display anchor — and therefore where playback
+        // starts and how the mic aligns to video — must be identical with
+        // and without a system audio track.
+        #[test]
+        fn epoch_anchored_system_audio_does_not_move_the_anchor() {
+            let without = segment(0.58, Some(0.55), None);
+            let with = segment(0.58, Some(0.55), Some(0.0));
+
+            assert_eq!(without.latest_start_time(), Some(0.58));
+            assert_eq!(with.latest_start_time(), Some(0.58));
+
+            let offsets_without = without.calculate_audio_offsets();
+            let offsets_with = with.calculate_audio_offsets();
+            assert_eq!(offsets_without.mic, offsets_with.mic);
+            assert!((offsets_with.mic - 0.03).abs() < 1e-6);
+            // System audio positions itself by its own start.
+            assert!((offsets_with.system_audio - 0.58).abs() < 1e-6);
+        }
+
+        // Legacy recordings (pre-epoch-anchor) stamped system audio with its
+        // first packet time; those files keep their historical alignment:
+        // a later system start is still the anchor for them.
+        #[test]
+        fn legacy_first_packet_system_audio_keeps_historical_anchor() {
+            let legacy = segment(0.5824678, Some(0.5559852), Some(0.6586015));
+            assert_eq!(legacy.latest_start_time(), Some(0.6586015));
+            let offsets = legacy.calculate_audio_offsets();
+            assert!((offsets.mic - (0.6586015 - 0.5559852) as f32).abs() < 1e-6);
+            assert_eq!(offsets.system_audio, 0.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use crate::{DisplayNotch, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+
+    fn multiple_segments(display_notch: &str) -> String {
+        format!(
+            r#"{{
+              "pretty_name": "Cap",
+              "segments": [
+                {{
+                  "display": {{ "path": "content/segments/segment-0/display.mp4", "fps": 30 }}
+                  {display_notch}
+                }}
+              ]
+            }}"#
+        )
+    }
+
+    fn studio(meta: &RecordingMeta) -> &StudioRecordingMeta {
+        match &meta.inner {
+            RecordingMetaInner::Studio(studio) => studio,
+            RecordingMetaInner::Instant(_) => panic!("expected a studio recording"),
+        }
+    }
+
+    /// Every recording made before this field existed must still load.
+    #[test]
+    fn absent_notch_loads_as_none() {
+        let meta: RecordingMeta = serde_json::from_str(&multiple_segments("")).unwrap();
+
+        assert_eq!(studio(&meta).display_notch(), None);
+    }
+
+    #[test]
+    fn notch_round_trips() {
+        let notch = DisplayNotch {
+            x: 0.4384920634920635,
+            width: 0.12235449735449735,
+            height: 0.032586558044806514,
+        };
+
+        let meta: RecordingMeta = serde_json::from_str(&multiple_segments(
+            r#", "display_notch": { "x": 0.4384920634920635, "width": 0.12235449735449735, "height": 0.032586558044806514 }"#,
+        ))
+        .unwrap();
+        assert_eq!(studio(&meta).display_notch(), Some(notch));
+
+        let reparsed: RecordingMeta =
+            serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(studio(&reparsed).display_notch(), Some(notch));
+    }
+
+    /// Recordings without a notch shouldn't gain a null key in their metadata.
+    #[test]
+    fn absent_notch_is_not_serialized() {
+        let meta: RecordingMeta = serde_json::from_str(&multiple_segments("")).unwrap();
+
+        assert!(
+            !serde_json::to_string(&meta)
+                .unwrap()
+                .contains("display_notch")
+        );
+    }
+
+    /// Single-segment recordings predate the field entirely.
+    #[test]
+    fn legacy_single_segment_has_no_notch() {
+        let meta: RecordingMeta = serde_json::from_str(
+            r#"{
+              "pretty_name": "Cap",
+              "display": { "path": "content/display.mp4" },
+              "segments": [{ "start": 0.0, "end": 1.0 }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(studio(&meta).display_notch(), None);
     }
 }

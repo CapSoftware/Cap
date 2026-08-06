@@ -139,8 +139,8 @@ pub fn cameras() -> Vec<CameraTarget> {
 }
 
 pub fn mics() -> Vec<MicTarget> {
-    cap_recording::MicrophoneFeed::list()
-        .into_keys()
+    cap_recording::MicrophoneFeed::list_names()
+        .into_iter()
         .enumerate()
         .map(|(index, name)| MicTarget { index, name })
         .collect()

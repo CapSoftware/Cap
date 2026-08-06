@@ -1,12 +1,16 @@
 use std::{
+    collections::BTreeMap,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
+    sync::LazyLock,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
+
+use crate::DisplayNotch;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -228,6 +232,113 @@ pub struct BorderConfiguration {
     pub opacity: f32,
 }
 
+/// Decorative frame drawn around the screen recording (browser window,
+/// macOS window, MacBook bezel, ...). The video is inset inside the frame's
+/// chrome; the framed card as a whole follows padding / position / zoom
+/// exactly like the bare video does today.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FrameStyle {
+    /// No frame: the video renders bare, exactly as before this feature.
+    #[default]
+    None,
+    /// A macOS window title bar with traffic-light buttons.
+    MacOS,
+    /// A Windows 11 window title bar with minimize/maximize/close controls.
+    Windows,
+    /// A browser toolbar: traffic lights plus a centered URL pill.
+    Browser,
+    /// A MacBook mockup: black bezel, aluminum body and deck.
+    Macbook,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FrameTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FrameConfiguration {
+    pub style: FrameStyle,
+    pub theme: FrameTheme,
+    /// Text shown in the browser style's URL pill.
+    pub url: String,
+    /// Text shown in the macOS window style's title bar.
+    pub title: String,
+}
+
+impl Default for FrameConfiguration {
+    fn default() -> Self {
+        Self {
+            style: FrameStyle::None,
+            theme: FrameTheme::default(),
+            url: "Cap.so".to_string(),
+            title: String::new(),
+        }
+    }
+}
+
+impl FrameConfiguration {
+    pub fn active_style(config: Option<&FrameConfiguration>) -> FrameStyle {
+        config.map(|f| f.style).unwrap_or(FrameStyle::None)
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.style != FrameStyle::None
+    }
+}
+
+/// Draws a MacBook notch over the recording. Nothing here is inferred from the
+/// video: a finished recording carries no evidence of the panel it came from.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotchConfiguration {
+    pub enabled: bool,
+    /// Manual placement, as fractions of the video. Each `None` falls back to
+    /// the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+    pub x: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+/// Notch of a 14" MacBook Pro, measured via `NSScreen` on a 1512x982pt display.
+///
+/// Only a starting point for placing one by hand on recordings that carry no
+/// measurements of their own. The cutout is physically the same size across
+/// MacBook models but the panels are not, so this reads a little wide on
+/// 15"/16" machines until adjusted.
+pub const DEFAULT_MACBOOK_NOTCH: DisplayNotch = DisplayNotch {
+    x: 0.438_492_063_492_063_5,
+    width: 0.122_354_497_354_497_35,
+    height: 0.032_586_558_044_806_514,
+};
+
+impl NotchConfiguration {
+    /// Notch rect to draw, in fractions of the recorded video, or `None` when
+    /// the overlay is switched off.
+    pub fn resolve(&self, recorded: Option<DisplayNotch>) -> Option<DisplayNotch> {
+        if !self.enabled {
+            return None;
+        }
+
+        let base = recorded.unwrap_or(DEFAULT_MACBOOK_NOTCH);
+
+        let width = self.width.unwrap_or(base.width).clamp(0.0, 1.0);
+        let height = self.height.unwrap_or(base.height).clamp(0.0, 1.0);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+
+        let x = self.x.unwrap_or(base.x).clamp(0.0, 1.0 - width);
+
+        Some(DisplayNotch { x, width, height })
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BackgroundConfiguration {
@@ -238,9 +349,20 @@ pub struct BackgroundConfiguration {
     pub rounding_type: CornerStyle,
     pub inset: u32,
     pub crop: Option<Crop>,
+    /// Normalized (0-1) center of the display rect in output-frame space.
+    /// `None` keeps the display centered. When a frame is active this is the
+    /// center of the framed card (chrome included), not the bare video.
+    pub display_position: Option<XY<f64>>,
     pub shadow: f32,
     pub advanced_shadow: Option<ShadowConfiguration>,
     pub border: Option<BorderConfiguration>,
+    /// Decorative frame around the recording. `None` (or `FrameStyle::None`)
+    /// renders the bare video exactly as before the feature existed.
+    pub frame: Option<FrameConfiguration>,
+    /// Redraws the recording device's physical notch over the capture. Distinct
+    /// from `frame`: the decorative MacBook style is a mockup, this restores
+    /// something the capture really did hide, and the two are independent.
+    pub notch: Option<NotchConfiguration>,
 }
 
 impl Default for BorderConfiguration {
@@ -264,9 +386,12 @@ impl Default for BackgroundConfiguration {
             rounding_type: CornerStyle::default(),
             inset: 0,
             crop: None,
+            display_position: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
+            frame: None,  // No decorative frame by default
+            notch: None,
         }
     }
 }
@@ -330,6 +455,9 @@ pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
     pub position: CameraPosition,
+    /// Normalized (0-1) center of the camera rect in output-frame space.
+    /// Overrides `position` when set.
+    pub manual_position: Option<XY<f64>>,
     pub size: f32,
     #[serde(alias = "zoom_size")]
     pub zoom_size: Option<f32>,
@@ -374,6 +502,7 @@ impl Default for Camera {
             hide: false,
             mirror: false,
             position: CameraPosition::default(),
+            manual_position: None,
             size: 30.0,
             zoom_size: Some(Self::default_zoom_size()),
             rounding: Self::default_rounding(),
@@ -563,7 +692,9 @@ impl Default for CursorConfiguration {
             mass: 3.0,
             friction: 70.0,
             raw: false,
-            motion_blur: 0.5,
+            // Matches default_screen_motion_blur (the editor drives both
+            // fields with one slider, and load() re-couples them).
+            motion_blur: 1.0,
             use_svg: true,
             rotation_amount: Self::default_rotation_amount(),
             base_rotation: 0.0,
@@ -614,6 +745,17 @@ pub struct TimelineSegment {
     pub end: f64,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_audio_mode: Option<ClipSpeedAudioMode>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipSpeedAudioMode {
+    #[default]
+    Mute,
+    MaintainPitch,
+    MatchSpeed,
 }
 
 impl TimelineSegment {
@@ -683,6 +825,24 @@ pub enum MaskKind {
     Highlight,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskEffectContract {
+    pub blur_encoding_offset: f64,
+    pub default_amount: f64,
+    pub min_amount: f64,
+    pub max_amount: f64,
+}
+
+static MASK_EFFECT_CONTRACT: LazyLock<MaskEffectContract> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../mask-effects.json"))
+        .expect("embedded mask effect contract must be valid JSON")
+});
+
+pub fn mask_effect_contract() -> &'static MaskEffectContract {
+    &MASK_EFFECT_CONTRACT
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MaskScalarKeyframe {
@@ -725,7 +885,7 @@ pub struct MaskSegment {
     pub feather: f64,
     #[serde(default = "MaskSegment::default_opacity")]
     pub opacity: f64,
-    #[serde(default)]
+    #[serde(default = "MaskSegment::default_pixelation")]
     pub pixelation: f64,
     #[serde(default)]
     pub darkness: f64,
@@ -742,6 +902,10 @@ impl MaskSegment {
 
     fn default_opacity() -> f64 {
         1.0
+    }
+
+    fn default_pixelation() -> f64 {
+        mask_effect_contract().default_amount
     }
 
     fn default_fade_duration() -> f64 {
@@ -824,6 +988,10 @@ pub enum SceneMode {
     CameraOnly,
     HideCamera,
     SplitScreen,
+    /// Like [`SceneMode::SplitScreen`], but the screen and camera render as
+    /// padded, rounded, shadowed cards floating over the background instead
+    /// of full-bleed halves. Shares [`SplitLayout`] for per-pane pan/zoom.
+    Floating,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
@@ -904,10 +1072,47 @@ impl AudioTrackSegment {
     }
 }
 
+pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClipTransitionType {
+    #[default]
+    CrossFade,
+    FadeThroughBlack,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTransition {
+    pub segment_index: u32,
+    #[serde(rename = "type")]
+    pub kind: ClipTransitionType,
+    pub duration: f64,
+}
+
+fn deserialize_clip_transitions<'de, D>(deserializer: D) -> Result<Vec<ClipTransition>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let transitions = Vec::<ClipTransition>::deserialize(deserializer)?;
+    let mut by_segment = BTreeMap::new();
+    for transition in transitions {
+        by_segment.insert(transition.segment_index, transition);
+    }
+    Ok(by_segment.into_values().collect())
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_clip_transitions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub transitions: Vec<ClipTransition>,
     pub zoom_segments: Vec<ZoomSegment>,
     #[serde(default)]
     pub scene_segments: Vec<SceneSegment>,
@@ -921,6 +1126,29 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub audio_segments: Vec<AudioTrackSegment>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TimelineSource<'a> {
+    pub source_time: f64,
+    pub segment_index: usize,
+    pub segment: &'a TimelineSegment,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TimelineFrameMapping<'a> {
+    Single {
+        source: TimelineSource<'a>,
+        output_end: f64,
+    },
+    Transition {
+        outgoing: TimelineSource<'a>,
+        incoming: TimelineSource<'a>,
+        kind: ClipTransitionType,
+        progress: f64,
+        duration: f64,
+        output_end: f64,
+    },
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -947,14 +1175,150 @@ pub struct CaptionTrackSegment {
 }
 
 impl TimelineConfiguration {
+    pub fn effective_transition(&self, segment_index: usize) -> Option<ClipTransition> {
+        if segment_index == 0 || segment_index >= self.segments.len() {
+            return None;
+        }
+
+        debug_assert!(
+            self.transitions.windows(2).all(|transitions| {
+                transitions[0].segment_index <= transitions[1].segment_index
+            })
+        );
+
+        let transition_position = self
+            .transitions
+            .partition_point(|transition| transition.segment_index as usize <= segment_index);
+        let transition = self.transitions.get(transition_position.checked_sub(1)?)?;
+        if transition.segment_index as usize != segment_index {
+            return None;
+        }
+        if !transition.duration.is_finite() || transition.duration <= 0.0 {
+            return None;
+        }
+
+        let maximum = self.segments[segment_index - 1]
+            .duration()
+            .min(self.segments[segment_index].duration())
+            / 2.0;
+        if !maximum.is_finite() || maximum < MIN_CLIP_TRANSITION_DURATION {
+            return None;
+        }
+
+        Some(ClipTransition {
+            duration: transition
+                .duration
+                .clamp(MIN_CLIP_TRANSITION_DURATION, maximum),
+            ..*transition
+        })
+    }
+
+    pub fn get_frame_mapping(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
+        if self.transitions.is_empty() {
+            return self.get_segment_time_without_transitions(frame_time).map(
+                |(source_time, segment, segment_index, output_end)| TimelineFrameMapping::Single {
+                    source: TimelineSource {
+                        source_time,
+                        segment_index,
+                        segment,
+                    },
+                    output_end,
+                },
+            );
+        }
+
+        let mut segment_start = 0.0;
+
+        for (segment_index, segment) in self.segments.iter().enumerate() {
+            let incoming = self.effective_transition(segment_index);
+            let incoming_duration = incoming.as_ref().map_or(0.0, |value| value.duration);
+
+            if let Some(transition) = incoming {
+                let output_end = segment_start + transition.duration;
+                if frame_time >= segment_start && frame_time < output_end {
+                    let elapsed = frame_time - segment_start;
+                    let outgoing_segment = &self.segments[segment_index - 1];
+                    let outgoing_time = outgoing_segment.interpolate_time(
+                        outgoing_segment.duration() - transition.duration + elapsed,
+                    )?;
+                    let incoming_time = segment.interpolate_time(elapsed)?;
+
+                    return Some(TimelineFrameMapping::Transition {
+                        outgoing: TimelineSource {
+                            source_time: outgoing_time,
+                            segment_index: segment_index - 1,
+                            segment: outgoing_segment,
+                        },
+                        incoming: TimelineSource {
+                            source_time: incoming_time,
+                            segment_index,
+                            segment,
+                        },
+                        kind: transition.kind,
+                        progress: (elapsed / transition.duration).clamp(0.0, 1.0),
+                        duration: transition.duration,
+                        output_end,
+                    });
+                }
+            }
+
+            let next_transition = self.effective_transition(segment_index + 1);
+            let next_duration = next_transition.as_ref().map_or(0.0, |value| value.duration);
+            let single_start = segment_start + incoming_duration;
+            let output_end = segment_start + segment.duration() - next_duration;
+
+            if frame_time >= single_start && frame_time < output_end {
+                let source_time = segment.interpolate_time(frame_time - segment_start)?;
+                return Some(TimelineFrameMapping::Single {
+                    source: TimelineSource {
+                        source_time,
+                        segment_index,
+                        segment,
+                    },
+                    output_end,
+                });
+            }
+
+            segment_start += segment.duration() - next_duration;
+        }
+
+        None
+    }
+
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
+        if !self.transitions.is_empty() {
+            return match self.get_frame_mapping(frame_time)? {
+                TimelineFrameMapping::Single { source, .. } => {
+                    Some((source.source_time, source.segment))
+                }
+                TimelineFrameMapping::Transition { incoming, .. } => {
+                    Some((incoming.source_time, incoming.segment))
+                }
+            };
+        }
+
+        self.get_segment_time_without_transitions(frame_time)
+            .map(|(source_time, segment, _, _)| (source_time, segment))
+    }
+
+    fn get_segment_time_without_transitions(
+        &self,
+        frame_time: f64,
+    ) -> Option<(f64, &TimelineSegment, usize, f64)> {
         let mut accum_duration = 0.0;
 
-        for segment in self.segments.iter() {
+        for (segment_index, segment) in self.segments.iter().enumerate() {
             if frame_time < accum_duration + segment.duration() {
                 return segment
                     .interpolate_time(frame_time - accum_duration)
-                    .map(|t| (t, segment));
+                    .map(|time| {
+                        (
+                            time,
+                            segment,
+                            segment_index,
+                            accum_duration + segment.duration(),
+                        )
+                    });
             }
 
             accum_duration += segment.duration();
@@ -964,7 +1328,16 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
-        self.segments.iter().map(|s| s.duration()).sum()
+        let segment_duration = self.segments.iter().map(TimelineSegment::duration).sum();
+        if self.transitions.is_empty() {
+            return segment_duration;
+        }
+
+        segment_duration
+            - (1..self.segments.len())
+                .filter_map(|segment_index| self.effective_transition(segment_index))
+                .map(|transition| transition.duration)
+                .sum::<f64>()
     }
 }
 
@@ -1183,6 +1556,11 @@ pub struct ClipOffsets {
 pub struct ClipConfiguration {
     pub index: u32,
     pub offsets: ClipOffsets,
+    /// Whether `offsets` were computed automatically (recording start-time
+    /// alignment + device sync calibration) rather than entered by the user.
+    /// Cleared by the editor UI once the user edits an offset.
+    #[serde(default)]
+    pub offsets_auto_calculated: bool,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -1326,7 +1704,17 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// How text segment font sizes are interpreted. 0 (legacy): the renderer
+    /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
+    /// box. 1: `font_size` alone determines glyph size (1080p-relative);
+    /// legacy configs are migrated on load by baking the box factor into
+    /// `font_size`. The field-level default keeps old files at 0 while
+    /// `Default::default()` produces the current version.
+    #[serde(default)]
+    pub text_size_version: u32,
 }
+
+pub const TEXT_SIZE_VERSION: u32 = 1;
 
 fn camera_config_needs_migration(value: &Value) -> bool {
     value
@@ -1356,13 +1744,17 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            text_size_version: TEXT_SIZE_VERSION,
         }
     }
 }
 
 impl ProjectConfiguration {
     fn default_screen_motion_blur() -> f32 {
-        0.5
+        // Screen Studio's default blur amount is 1.0; with length-based blur
+        // semantics (amount scales the smear length, output fully blurred)
+        // 1.0 reproduces its out-of-the-box look.
+        1.0
     }
 
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
@@ -1402,11 +1794,34 @@ impl ProjectConfiguration {
         } else {
             config.screen_motion_blur = screen_motion_blur;
         }
+
+        // Legacy text configs coupled glyph size to the box: the renderer
+        // multiplied font_size by size.y / 0.2. Bake that factor into
+        // font_size so the new decoupled law renders them identically.
+        let mut needs_text_size_migration = false;
+        if config.text_size_version == 0 {
+            if let Some(timeline) = config.timeline.as_mut() {
+                for segment in &mut timeline.text_segments {
+                    let scale = (segment.size.y / 0.2).clamp(0.25, 4.0) as f32;
+                    let migrated = (segment.font_size * scale).clamp(1.0, 480.0);
+                    if (migrated - segment.font_size).abs() > f32::EPSILON {
+                        segment.font_size = migrated;
+                        needs_text_size_migration = true;
+                    }
+                }
+            }
+            config.text_size_version = TEXT_SIZE_VERSION;
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
-        if needs_camera_migration || needs_motion_blur_clamp || needs_screen_motion_blur_migration {
+        if needs_camera_migration
+            || needs_motion_blur_clamp
+            || needs_screen_motion_blur_migration
+            || needs_text_size_migration
+        {
             match config.write(project_path) {
                 Ok(_) => {
                     eprintln!("Updated project-config.json migrated settings");
@@ -1455,8 +1870,265 @@ pub const REGULAR_VELOCITY_THRESHOLD: f64 = 0.008;
 pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;
 
 #[cfg(test)]
+mod notch_tests {
+    use super::*;
+
+    const RECORDED: DisplayNotch = DisplayNotch {
+        x: 0.4,
+        width: 0.2,
+        height: 0.04,
+    };
+
+    fn enabled() -> NotchConfiguration {
+        NotchConfiguration {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn disabled_by_default() {
+        assert_eq!(NotchConfiguration::default().resolve(Some(RECORDED)), None);
+    }
+
+    #[test]
+    fn prefers_geometry_measured_at_capture_time() {
+        assert_eq!(enabled().resolve(Some(RECORDED)), Some(RECORDED));
+    }
+
+    /// Recordings the recorder could not measure still get a notch on request;
+    /// it just starts from the stock MacBook rect for the user to adjust.
+    #[test]
+    fn unmeasured_recordings_start_from_the_default_rect() {
+        assert_eq!(enabled().resolve(None), Some(DEFAULT_MACBOOK_NOTCH));
+    }
+
+    /// Each field falls back independently, so resizing without repositioning
+    /// leaves the notch where it was measured. Keeping the notch centred as it
+    /// resizes is the editor's job, which lets its sliders show the real value.
+    #[test]
+    fn each_field_falls_back_on_its_own() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.1),
+            height: Some(0.02),
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.width, 0.1);
+        assert_eq!(resolved.height, 0.02);
+        assert_eq!(resolved.x, RECORDED.x);
+    }
+
+    #[test]
+    fn explicit_x_overrides_the_centring() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.1),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.x, 0.1);
+    }
+
+    #[test]
+    fn placement_stays_inside_the_video() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.95),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert!(resolved.x + resolved.width <= 1.0, "{resolved:?}");
+    }
+
+    #[test]
+    fn zero_sized_override_draws_nothing() {
+        let config = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.0),
+            height: None,
+        };
+
+        assert_eq!(config.resolve(Some(RECORDED)), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timeline_with_transitions(transitions: Vec<ClipTransition>) -> TimelineConfiguration {
+        TimelineConfiguration {
+            segments: vec![
+                TimelineSegment {
+                    recording_clip: 0,
+                    timescale: 1.0,
+                    start: 0.0,
+                    end: 4.0,
+                    name: None,
+                    speed_audio_mode: None,
+                },
+                TimelineSegment {
+                    recording_clip: 1,
+                    timescale: 1.0,
+                    start: 10.0,
+                    end: 16.0,
+                    name: None,
+                    speed_audio_mode: None,
+                },
+            ],
+            transitions,
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn timeline_without_transitions_keeps_legacy_mapping() {
+        let timeline = timeline_with_transitions(Vec::new());
+
+        assert_eq!(timeline.duration(), 10.0);
+        let (time, segment) = timeline.get_segment_time(4.5).unwrap();
+        assert_eq!(time, 10.5);
+        assert_eq!(segment.recording_clip, 1);
+        assert!(matches!(
+            timeline.get_frame_mapping(4.5),
+            Some(TimelineFrameMapping::Single { source, output_end: 10.0 })
+                if source.segment_index == 1 && source.source_time == 10.5
+        ));
+        assert!(
+            serde_json::to_value(&timeline)
+                .unwrap()
+                .get("transitions")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn timeline_maps_both_sources_inside_transition() {
+        let timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 1.0,
+        }]);
+
+        assert_eq!(timeline.duration(), 9.0);
+        assert_eq!(
+            serde_json::to_value(&timeline).unwrap()["transitions"][0]["type"],
+            "cross-fade"
+        );
+        assert!(matches!(
+            timeline.get_frame_mapping(3.5),
+            Some(TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind: ClipTransitionType::CrossFade,
+                progress,
+                duration: 1.0,
+                output_end: 4.0,
+            }) if outgoing.segment_index == 0
+                && outgoing.source_time == 3.5
+                && incoming.segment_index == 1
+                && incoming.source_time == 10.5
+                && progress == 0.5
+        ));
+    }
+
+    #[test]
+    fn timeline_segment_speed_audio_mode_is_backward_compatible() {
+        let legacy: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0
+        }))
+        .unwrap();
+        assert_eq!(legacy.speed_audio_mode, None);
+
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("speedAudioMode").is_none());
+
+        let maintain_pitch: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 2.0,
+            "start": 0.0,
+            "end": 4.0,
+            "speedAudioMode": "maintainPitch"
+        }))
+        .unwrap();
+        assert_eq!(
+            maintain_pitch.speed_audio_mode,
+            Some(ClipSpeedAudioMode::MaintainPitch)
+        );
+    }
+
+    #[test]
+    fn timeline_clamps_transition_to_half_the_shorter_clip() {
+        let timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::FadeThroughBlack,
+            duration: 9.0,
+        }]);
+
+        let transition = timeline.effective_transition(1).unwrap();
+        assert_eq!(transition.duration, 2.0);
+        assert_eq!(timeline.duration(), 8.0);
+    }
+
+    #[test]
+    fn legacy_timeline_json_defaults_to_no_transitions() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+
+        assert!(timeline.transitions.is_empty());
+        assert_eq!(timeline.duration(), 4.0);
+    }
+
+    #[test]
+    fn transition_json_is_normalized_by_segment_index() {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 8.0 },
+                { "recordingSegment": 0, "timescale": 1.0, "start": 8.0, "end": 12.0 }
+            ],
+            "transitions": [
+                { "segmentIndex": 2, "type": "cross-fade", "duration": 0.5 },
+                { "segmentIndex": 1, "type": "cross-fade", "duration": 0.25 },
+                { "segmentIndex": 2, "type": "fade-through-black", "duration": 1.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+
+        assert_eq!(timeline.transitions.len(), 2);
+        assert_eq!(timeline.transitions[0].segment_index, 1);
+        assert_eq!(timeline.transitions[1].segment_index, 2);
+        assert_eq!(
+            timeline.transitions[1].kind,
+            ClipTransitionType::FadeThroughBlack
+        );
+    }
 
     fn write_config_with_motion_blur_values(
         project_path: &std::path::Path,
@@ -1488,11 +2160,28 @@ mod tests {
     }
 
     #[test]
-    fn default_motion_blur_is_half() {
+    fn default_motion_blur_is_full() {
+        // 1.0 matches Screen Studio's default amount under length-based blur
+        // semantics; the two fields must agree because the editor drives them
+        // with one slider and load() re-couples them.
         let config = ProjectConfiguration::default();
 
-        assert_eq!(config.cursor.motion_blur, 0.5);
-        assert_eq!(config.screen_motion_blur, 0.5);
+        assert_eq!(config.cursor.motion_blur, 1.0);
+        assert_eq!(config.screen_motion_blur, 1.0);
+    }
+
+    #[test]
+    fn mask_without_pixelation_uses_a_visible_safe_default() {
+        let segment: MaskSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+            "maskType": "sensitive",
+            "center": { "x": 0.5, "y": 0.5 },
+            "size": { "x": 0.25, "y": 0.25 }
+        }))
+        .unwrap();
+
+        assert_eq!(segment.pixelation, 16.0);
     }
 
     #[test]
@@ -1526,5 +2215,230 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 1.0);
         assert_eq!(config.screen_motion_blur, 1.0);
+    }
+
+    #[test]
+    fn load_without_manual_positions_defaults_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object
+            .get_mut("camera")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("manualPosition");
+        object
+            .get_mut("background")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("displayPosition");
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert!(config.camera.manual_position.is_none());
+        assert!(config.background.display_position.is_none());
+    }
+
+    #[test]
+    fn manual_positions_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut config = ProjectConfiguration::default();
+        config.camera.manual_position = Some(XY::new(0.25, 0.75));
+        config.background.display_position = Some(XY::new(0.5, 0.4));
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
+        assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    fn write_config_with_text_segment(
+        project_path: &std::path::Path,
+        font_size: f32,
+        size_y: f64,
+        text_size_version: Option<u32>,
+    ) {
+        let config = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: vec![TextSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    track: 0,
+                    enabled: true,
+                    content: "Text".to_string(),
+                    center: XY::new(0.5, 0.5),
+                    size: XY::new(0.35, size_y),
+                    font_family: "sans-serif".to_string(),
+                    font_size,
+                    font_weight: 700.0,
+                    italic: false,
+                    color: "#ffffff".to_string(),
+                    fade_duration: 0.15,
+                }],
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+            }),
+            ..Default::default()
+        };
+
+        let mut value = serde_json::to_value(&config).unwrap();
+        let object = value.as_object_mut().unwrap();
+        match text_size_version {
+            Some(version) => {
+                object.insert("textSizeVersion".to_string(), Value::from(version));
+            }
+            None => {
+                object.remove("textSizeVersion");
+            }
+        }
+        std::fs::write(
+            project_path.join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_text_segment_bakes_box_scale_into_font_size() {
+        let dir = tempfile::tempdir().unwrap();
+        // Legacy renderer drew this at 96 * (0.4 / 0.2) = 2x glyph scale.
+        write_config_with_text_segment(dir.path(), 96.0, 0.4, None);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 192.0);
+        assert_eq!(config.text_size_version, TEXT_SIZE_VERSION);
+
+        // The migration must persist so it never runs twice.
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let segment = &reloaded.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 192.0);
+    }
+
+    #[test]
+    fn legacy_text_segment_at_base_height_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_segment(dir.path(), 48.0, 0.2, None);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 48.0);
+        assert_eq!(config.text_size_version, TEXT_SIZE_VERSION);
+    }
+
+    #[test]
+    fn current_text_config_is_not_rebaked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_segment(dir.path(), 96.0, 0.4, Some(TEXT_SIZE_VERSION));
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.font_size, 96.0);
+    }
+
+    #[test]
+    fn legacy_config_without_motion_rework_fields_resolves_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Hand-written pre-rework project-config.json: zoom segments carry
+        // only start/end/amount/mode (no glideDirection / glideSpeed /
+        // instantAnimation / edgeSnapRatio), the cursor uses the old spring
+        // triple, and the camera uses the position enum.
+        let legacy_json = r#"{
+            "camera": {
+                "hide": false,
+                "mirror": false,
+                "position": { "x": "left", "y": "top" },
+                "size": 25.0
+            },
+            "cursor": {
+                "animationStyle": "custom",
+                "tension": 120.0,
+                "mass": 2.0,
+                "friction": 32.0
+            },
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": [
+                    { "start": 1.0, "end": 3.0, "amount": 2.0, "mode": "auto" },
+                    {
+                        "start": 5.0,
+                        "end": 7.0,
+                        "amount": 1.5,
+                        "mode": { "manual": { "x": 0.25, "y": 0.75 } }
+                    }
+                ]
+            }
+        }"#;
+        std::fs::write(dir.path().join("project-config.json"), legacy_json).unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let timeline = config.timeline.as_ref().expect("timeline should load");
+        assert_eq!(timeline.zoom_segments.len(), 2);
+        for segment in &timeline.zoom_segments {
+            assert_eq!(segment.glide_direction, GlideDirection::None);
+            assert_eq!(segment.glide_speed, 0.5);
+            assert!(!segment.instant_animation);
+            assert_eq!(segment.edge_snap_ratio, 0.25);
+        }
+        assert!(matches!(timeline.zoom_segments[0].mode, ZoomMode::Auto));
+        assert!(matches!(
+            timeline.zoom_segments[1].mode,
+            ZoomMode::Manual { x, y }
+                if (x - 0.25).abs() < f32::EPSILON && (y - 0.75).abs() < f32::EPSILON
+        ));
+
+        // The old cursor spring triple survives untouched.
+        assert_eq!(config.cursor.animation_style, CursorAnimationStyle::Custom);
+        assert_eq!(config.cursor.tension, 120.0);
+        assert_eq!(config.cursor.mass, 2.0);
+        assert_eq!(config.cursor.friction, 32.0);
+
+        // The camera position enum still parses.
+        assert!(matches!(config.camera.position.x, CameraXPosition::Left));
+        assert!(matches!(config.camera.position.y, CameraYPosition::Top));
+
+        // Config written back by the load migration must round-trip with the
+        // resolved defaults intact.
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let reloaded_timeline = reloaded.timeline.as_ref().unwrap();
+        assert_eq!(reloaded_timeline.zoom_segments.len(), 2);
+        assert_eq!(reloaded_timeline.zoom_segments[0].glide_speed, 0.5);
+        assert_eq!(reloaded_timeline.zoom_segments[0].edge_snap_ratio, 0.25);
+        assert!(!reloaded_timeline.zoom_segments[0].instant_animation);
+
+        // The screen movement spring (which drives the new zoom timeline)
+        // resolves to its default for legacy configs.
+        let spring = config.screen_movement_spring;
+        let default_spring = ScreenMovementSpring::default();
+        assert_eq!(spring.stiffness, default_spring.stiffness);
+        assert_eq!(spring.damping, default_spring.damping);
+        assert_eq!(spring.mass, default_spring.mass);
     }
 }

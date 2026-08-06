@@ -119,10 +119,10 @@ export function MaskTrack(props: {
 
 	const addSegmentAt = (time: number) => {
 		const length = Math.min(minDuration(), totalDuration());
-		if (length <= 0) return;
+		if (length <= 0) return false;
 
 		const placement = findPlacement(time, length);
-		if (!placement) return;
+		if (!placement) return false;
 
 		setProject(
 			"timeline",
@@ -136,6 +136,22 @@ export function MaskTrack(props: {
 				sortTrackSegments(segments);
 			}),
 		);
+
+		// Select the new segment right away so its canvas handles and config
+		// sidebar appear without an extra click.
+		const newIndex = (project.timeline?.maskSegments ?? []).findIndex(
+			(segment) =>
+				segment.start === placement.start &&
+				getSegmentTrack(segment) === props.laneIndex,
+		);
+		if (newIndex !== -1) {
+			setEditorState("timeline", "selection", {
+				type: "mask",
+				indices: [newIndex],
+			});
+		}
+
+		return true;
 	};
 
 	const newSegmentDetails = createMemo(() => {
@@ -161,7 +177,13 @@ export function MaskTrack(props: {
 			editorState.previewTime ??
 			editorState.playbackTime ??
 			secsPerPixel() * (e.clientX - (timelineBounds.left ?? 0));
-		addSegmentAt(timelineTime);
+		if (!addSegmentAt(timelineTime)) return;
+		// This click created and selected a segment — stop it reaching the
+		// timeline container, whose mouseup handler would immediately clear
+		// the selection again. Take over its playhead update instead.
+		e.stopPropagation();
+		setEditorState("timeline", "audioPicker", null);
+		props.handleUpdatePlayhead(e);
 	};
 
 	const syncPreviewTimeToSegment = (

@@ -43,10 +43,18 @@ interface LoomUrlResponse {
 	url?: string;
 }
 
+type LoomDownloadMode = "direct-download" | "browser-conversion";
+
 interface LoomDownloadResult {
 	success: boolean;
 	videoId?: string;
 	videoName?: string;
+	downloadUrl?: string;
+	downloadMode?: LoomDownloadMode;
+	durationSeconds?: number;
+	width?: number;
+	height?: number;
+	requiresProxy?: boolean;
 	error?: string;
 }
 
@@ -204,6 +212,11 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
+function isDirectMp4Url(url: string): boolean {
+	const path = (url.split("?")[0] ?? "").toLowerCase();
+	return path.endsWith(".mp4");
+}
+
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
 	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
 		{ endpoint: "transcoded-url", includeBody: true },
@@ -274,11 +287,22 @@ export async function downloadLoomVideo(
 			};
 		}
 
-		const videoName = await fetchVideoName(videoId);
+		const [videoName, oembedMeta] = await Promise.all([
+			fetchVideoName(videoId),
+			fetchLoomOEmbed(videoId),
+		]);
 		return {
 			success: true,
 			videoId,
 			videoName: videoName ?? undefined,
+			downloadUrl,
+			downloadMode: isDirectMp4Url(downloadUrl)
+				? "direct-download"
+				: "browser-conversion",
+			durationSeconds: oembedMeta?.duration,
+			width: oembedMeta?.width,
+			height: oembedMeta?.height,
+			requiresProxy: false,
 		};
 	} catch {
 		return {
@@ -293,10 +317,12 @@ async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
 	ownerId,
+	isRateLimited,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
+	isRateLimited?: () => Promise<boolean>;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -331,6 +357,13 @@ async function importLoomVideoForOwner({
 		return {
 			success: false,
 			error: "This Loom video has already been imported.",
+		};
+	}
+
+	if (isRateLimited && (await isRateLimited())) {
+		return {
+			success: false,
+			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
 		};
 	}
 
@@ -417,7 +450,6 @@ async function importLoomVideoForOwner({
 			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
-			loomDownloadUrl: downloadUrl,
 			loomVideoId,
 		},
 	]);
@@ -768,22 +800,12 @@ export async function importFromLoomCsv({
 			}
 		}
 
-		if (await isRateLimited()) {
-			results.push({
-				rowNumber: row.rowNumber,
-				userEmail: row.userEmail,
-				spaceName: row.spaceName || undefined,
-				success: false,
-				error: LOOM_IMPORT_RATE_LIMIT_ERROR,
-			});
-			continue;
-		}
-
 		try {
 			const result = await importLoomVideoForOwner({
 				loomUrl: row.loomUrl,
 				orgId,
 				ownerId: member.userId,
+				isRateLimited,
 			});
 
 			let spaceName = row.spaceName || undefined;

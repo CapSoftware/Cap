@@ -527,7 +527,7 @@ impl FragmentManifestTracker {
                 let file_size = metadata.len();
                 if file_size < 100 {
                     tracing::debug!(
-                        "Skipping tiny orphaned segment {} ({} bytes)",
+                        "Skipping tiny unlisted segment {} ({} bytes)",
                         segment_path.display(),
                         file_size
                     );
@@ -547,7 +547,7 @@ impl FragmentManifestTracker {
                 };
 
                 tracing::info!(
-                    "Recovered orphaned segment {} with {} bytes, estimated duration {:?}",
+                    "Finalized unlisted segment {} with {} bytes, estimated duration {:?}",
                     segment_path.display(),
                     file_size,
                     duration

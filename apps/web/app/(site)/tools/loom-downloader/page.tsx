@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { LoomDownloader } from "@/components/tools/LoomDownloader";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Download Loom videos",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -36,10 +42,10 @@ export const metadata: Metadata = {
 		type: "website",
 		images: [
 			{
-				url: "/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap — Free Loom Video Downloader",
+				alt: "Download Loom videos",
 			},
 		],
 	},
@@ -48,7 +54,7 @@ export const metadata: Metadata = {
 		title: "Loom Video Downloader — Free Download + Migrate to Cap",
 		description:
 			"Download any Loom video for free — then migrate your whole library to Cap with 20% off using MIGRATE20.",
-		images: ["/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/loom-downloader",
@@ -133,7 +139,7 @@ const pageContent: ToolPageContent = {
 		{
 			question: "Do you store my downloaded videos?",
 			answer:
-				"No. We never store, cache, or process your videos. Our server simply fetches the direct download URL from Loom and passes it to your browser. The video downloads directly from Loom's servers to your device.",
+				"No. The free downloader resolves public Loom videos in your browser and saves the MP4 to your device. Cap Pro's Loom importer uses Cap's server-side import pipeline when you choose to migrate videos into your Cap workspace.",
 		},
 		{
 			question: "What is Cap?",
@@ -165,12 +171,9 @@ const breadcrumbSchema = createBreadcrumbSchema([
 export default function LoomDownloaderPage() {
 	return (
 		<>
-			<script
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(breadcrumbSchema),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(breadcrumbSchema)}
+			</script>
 			<ToolsPageTemplate
 				content={pageContent}
 				toolComponent={<LoomDownloader />}

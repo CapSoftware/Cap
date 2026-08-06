@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
-    RendererLayers, ZoomFocusInterpolator,
+    RendererLayers, ZoomTransformTimeline,
 };
 use image::{
     GenericImageView, ImageEncoder, RgbImage, buffer::ConvertBuffer, codecs::png::PngEncoder,
@@ -102,7 +102,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowScreenshotEditorInstance {
 }
 
 impl ScreenshotEditorInstances {
-    async fn create_instance(
+    async fn create_standalone_instance(
         app_handle: &AppHandle,
         path: PathBuf,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
@@ -267,14 +267,30 @@ impl ScreenshotEditorInstances {
             )
         } else {
             let instance = cap_rendering::create_wgpu_instance().await;
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                })
-                .await
-                .map_err(|_| "No GPU adapter found".to_string())?;
+            let force_software_adapter = cap_rendering::force_software_wgpu_adapter();
+            let hardware_adapter = if force_software_adapter {
+                None
+            } else {
+                instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::HighPerformance,
+                        force_fallback_adapter: false,
+                        compatible_surface: None,
+                    })
+                    .await
+                    .ok()
+            };
+            let adapter = match hardware_adapter {
+                Some(adapter) => adapter,
+                None => instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::LowPower,
+                        force_fallback_adapter: true,
+                        compatible_surface: None,
+                    })
+                    .await
+                    .map_err(|_| "No GPU adapter found".to_string())?,
+            };
             let adapter_info = adapter.get_info();
             let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter_info);
 
@@ -383,18 +399,13 @@ impl ScreenshotEditorInstances {
                     ProjectUniforms::get_base_size(&constants.options, &current_config);
 
                 let cursor_events = cap_project::CursorEvents::default();
-                let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+                let mut zoom_timeline = ZoomTransformTimeline::from_project(
+                    &current_config,
                     &cursor_events,
-                    None,
-                    current_config.cursor.click_spring_config(),
-                    current_config.screen_movement_spring,
                     0.0,
-                    current_config
-                        .timeline
-                        .as_ref()
-                        .map(|t| t.zoom_segments.as_slice())
-                        .unwrap_or(&[]),
+                    constants.options.screen_size,
                 );
+                zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
 
                 let uniforms = ProjectUniforms::new(
                     &constants,
@@ -405,7 +416,7 @@ impl ScreenshotEditorInstances {
                     &cursor_events,
                     &segment_frames,
                     0.0,
-                    &zoom_focus_interpolator,
+                    &zoom_timeline,
                 );
 
                 let render_started = Instant::now();
@@ -502,7 +513,7 @@ impl ScreenshotEditorInstances {
                     }
                 }
 
-                let instance = Self::create_instance(window.app_handle(), path).await?;
+                let instance = Self::create_standalone_instance(window.app_handle(), path).await?;
                 entry.insert(instance.clone());
                 Ok(instance)
             }
@@ -582,7 +593,7 @@ impl PendingScreenshotEditorInstances {
         }
 
         tokio::spawn(async move {
-            let result = ScreenshotEditorInstances::create_instance(&app, path).await;
+            let result = ScreenshotEditorInstances::create_standalone_instance(&app, path).await;
             tx.send(Some(result)).ok();
         });
     }
@@ -684,6 +695,15 @@ pub struct SerializedScreenshotEditorInstance {
     pub path: PathBuf,
     pub config: Option<ProjectConfiguration>,
     pub pretty_name: String,
+    pub image_width: u32,
+    pub image_height: u32,
+}
+
+#[derive(Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotProjectExport {
+    pub image_bytes: Vec<u8>,
+    pub config: ProjectConfiguration,
     pub image_width: u32,
     pub image_height: u32,
 }
@@ -845,14 +865,15 @@ pub async fn prewarm_screenshot_renderer() {
 
     let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, &config);
     let cursor_events = cap_project::CursorEvents::default();
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
-        &cursor_events,
+    let mut zoom_timeline = ZoomTransformTimeline::new(
+        &[],
         None,
-        config.cursor.click_spring_config(),
+        &cursor_events,
         config.screen_movement_spring,
         0.0,
-        &[],
+        None,
     );
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
         &config,
@@ -862,7 +883,7 @@ pub async fn prewarm_screenshot_renderer() {
         &cursor_events,
         &segment_frames,
         0.0,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
 
     match frame_renderer
@@ -1439,6 +1460,30 @@ pub async fn render_screenshot_for_export(
     render_screenshot_png(&instance).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn render_screenshot_project_for_export(
+    app: AppHandle,
+    path: PathBuf,
+) -> Result<ScreenshotProjectExport, String> {
+    let instance = ScreenshotEditorInstances::create_standalone_instance(&app, path).await?;
+    let config = instance.config_tx.borrow().config.clone();
+    let image_width = instance.image_width;
+    let image_height = instance.image_height;
+
+    let result =
+        render_screenshot_png(&instance)
+            .await
+            .map(|image_bytes| ScreenshotProjectExport {
+                image_bytes,
+                config,
+                image_width,
+                image_height,
+            });
+    instance.dispose().await;
+    result
+}
+
 pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Result<Vec<u8>, String> {
     let path = instance.path.clone();
     let config = instance.config_tx.borrow().config.clone();
@@ -1508,14 +1553,30 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         )
     } else {
         let instance = cap_rendering::create_wgpu_instance().await;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .map_err(|_| "No GPU adapter found".to_string())?;
+        let force_software_adapter = cap_rendering::force_software_wgpu_adapter();
+        let hardware_adapter = if force_software_adapter {
+            None
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .ok()
+        };
+        let adapter = match hardware_adapter {
+            Some(adapter) => adapter,
+            None => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|_| "No GPU adapter found".to_string())?,
+        };
         let adapter_info = adapter.get_info();
         let is_software_adapter = cap_rendering::is_software_wgpu_adapter(&adapter_info);
         let (device, queue) = adapter
@@ -1604,18 +1665,13 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         segment_has_camera: false,
     };
     let cursor_events = cap_project::CursorEvents::default();
-    let zoom_focus_interpolator = ZoomFocusInterpolator::new(
+    let mut zoom_timeline = ZoomTransformTimeline::from_project(
+        &config,
         &cursor_events,
-        None,
-        config.cursor.click_spring_config(),
-        config.screen_movement_spring,
         0.0,
-        config
-            .timeline
-            .as_ref()
-            .map(|timeline| timeline.zoom_segments.as_slice())
-            .unwrap_or(&[]),
+        constants.options.screen_size,
     );
+    zoom_timeline.ensure_precomputed_until(1.0 / 30.0);
     let uniforms = ProjectUniforms::new(
         &constants,
         &config,
@@ -1625,7 +1681,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         &cursor_events,
         &segment_frames,
         0.0,
-        &zoom_focus_interpolator,
+        &zoom_timeline,
     );
     let rendered_frame = frame_renderer
         .render_immediate(

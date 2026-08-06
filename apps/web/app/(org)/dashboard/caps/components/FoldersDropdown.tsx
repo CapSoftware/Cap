@@ -7,6 +7,7 @@ import {
 import {
 	faCopy,
 	faEllipsis,
+	faFolderTree,
 	faGlobe,
 	faPencil,
 	faTrash,
@@ -23,6 +24,8 @@ interface FoldersDropdownProps {
 	public: boolean;
 	onPublicToggle: () => void;
 	onCopyPublicLink: () => void;
+	canMove: boolean;
+	onMove: () => void;
 }
 
 export const FoldersDropdown = ({
@@ -32,6 +35,8 @@ export const FoldersDropdown = ({
 	public: isPublic,
 	onPublicToggle,
 	onCopyPublicLink,
+	canMove,
+	onMove,
 }: FoldersDropdownProps) => {
 	return (
 		<DropdownMenu>
@@ -80,6 +85,15 @@ export const FoldersDropdown = ({
 										label: "Copy public link",
 										icon: faCopy,
 										onClick: onCopyPublicLink,
+									},
+								]
+							: []),
+						...(canMove
+							? [
+									{
+										label: "Move",
+										icon: faFolderTree,
+										onClick: onMove,
 									},
 								]
 							: []),

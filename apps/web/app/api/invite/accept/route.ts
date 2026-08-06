@@ -10,7 +10,10 @@ import {
 import { and, eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { normalizeAssignableOrganizationRole } from "@/lib/permissions/roles";
-import { calculateProSeats } from "@/utils/organization";
+import {
+	calculateProSeats,
+	hasActiveDirectSubscription,
+} from "@/utils/organization";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
@@ -83,14 +86,16 @@ export async function POST(request: NextRequest) {
 			if (org && memberId && !existingMembership) {
 				const [owner] = await tx
 					.select({
+						id: users.id,
 						inviteQuota: users.inviteQuota,
 						stripeSubscriptionId: users.stripeSubscriptionId,
+						stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 					})
 					.from(users)
 					.where(eq(users.id, org.ownerId))
 					.limit(1);
 
-				if (owner?.stripeSubscriptionId) {
+				if (owner?.stripeSubscriptionId && hasActiveDirectSubscription(owner)) {
 					const allMembers = await tx
 						.select({
 							id: organizationMembers.id,

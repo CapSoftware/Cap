@@ -1,0 +1,68 @@
+---
+title: "Google Drive"
+summary: "Store new Cap uploads in a private Google Drive location"
+tags: "Teams, Storage, Google Drive"
+---
+
+Cap Pro can use Google Drive as the storage provider for new shareable-link uploads. Viewers still watch through Cap, and Cap still applies the recording's normal access checks.
+
+Google Drive is a storage integration, not a general Drive sync or import tool. Connecting it does not copy existing Caps into Drive and does not import arbitrary videos from Drive into Cap.
+
+## What changes when you connect Drive
+
+- New uploads use the connected Google Drive location.
+- Existing Cap-hosted and S3-backed recordings stay on their current storage provider.
+- Share links, embeds, passwords, private access, comments, and analytics continue to use Cap.
+- Disconnecting or switching providers does not automatically move files that already exist.
+
+## Connect Google Drive for yourself
+
+1. Open Cap Desktop.
+2. Open **Settings > Integrations**.
+3. Select **Google Drive** and click **Configure**.
+4. Start the connection and complete Google's authorization in your browser.
+5. Return to Cap Desktop. Cap checks the connection and shows the available Drive quota.
+6. Use **Test Connection** before relying on the integration for an upload.
+
+Personal connections store new uploads in a private Cap folder in the connected Drive.
+
+## Manage Drive for an organization
+
+Organization owners and admins can configure storage centrally from the organization's integration settings. The organization flow can browse writable folders, including supported shared-drive locations, and select the exact folder Cap should use.
+
+Once the organization manages storage, members see that the integration is managed by their organization and cannot replace it with a personal setting in Cap Desktop.
+
+Choose a location that:
+
+- The connected Google account is expected to retain access to
+- Has enough quota for the team's recording volume
+- Matches the organization's retention and data-governance policies
+- Is writable by the account completing the connection
+
+## Switch between Drive and S3
+
+If both integrations are configured, Cap lets an authorized user select the active provider for new uploads. Switching affects future uploads only. It does not bulk-copy older objects between providers.
+
+Test the destination after a provider change, then upload and play a small sample Cap before rolling it out to the full team.
+
+## Configure it with an agent
+
+An agent can inspect and configure organization storage through Cap's CLI or MCP surface. Because this changes where future files are stored and opens a Google authorization flow, the agent must preview the organization, target folder, and provider change before asking for confirmation.
+
+Use a prompt like:
+
+> Run `cap guide --json`, inspect our current organization storage without changing it, and show me the Google Drive connection plan. After I approve, open the authorization flow, list writable Drive folders, and ask me to confirm the exact destination before setting it as the provider. Test the connection and report the final provider. Never ask me to paste Google credentials or tokens into chat.
+
+The browser authorization must be completed by a person. The agent should treat folder selection and provider activation as separate confirmed changes and re-read the storage configuration afterward.
+
+## Before a team rollout
+
+1. Confirm whether the integration is personal or organization-managed.
+2. Confirm the connected Google account and exact destination folder.
+3. Test the connection.
+4. Upload one non-sensitive sample.
+5. Open its Cap share link as an allowed viewer.
+6. Confirm the file appears in the intended Drive location.
+7. Keep the previous provider configured until the sample is verified.
+
+For moving an existing library rather than changing storage for new uploads, read [Migrating to Cap](/docs/migrating-to-cap).

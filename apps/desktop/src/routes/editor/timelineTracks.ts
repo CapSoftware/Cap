@@ -47,6 +47,35 @@ export function getUsedTrackCount<T extends TrackSegment>(segments: T[]) {
 	return maxTrack + 1;
 }
 
+// Fits a new segment of `length` into the free gap that contains `time`,
+// keeping it as centred on `time` as the gap allows. Returns null when `time`
+// sits inside an existing segment or the surrounding gap is too small —
+// callers fall back to another lane in that case.
+export function placeSegmentAtTime<T extends TrackSegment>(
+	segments: T[],
+	time: number,
+	length: number,
+	totalDuration: number,
+): { start: number; end: number } | null {
+	if (length <= 0 || totalDuration <= 0) return null;
+
+	let gapStart = 0;
+	let gapEnd = totalDuration;
+	for (const segment of segments) {
+		if (segment.start <= time && time < segment.end) return null;
+		if (segment.end <= time) gapStart = Math.max(gapStart, segment.end);
+		else gapEnd = Math.min(gapEnd, segment.start);
+	}
+
+	if (gapEnd - gapStart < length) return null;
+
+	const start = Math.min(
+		Math.max(time - length / 2, gapStart),
+		gapEnd - length,
+	);
+	return { start, end: start + length };
+}
+
 export function getTrackRowsWithCount<T extends TrackSegment>(
 	segments: T[],
 	count: number,

@@ -286,6 +286,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                     system_audio: None,
                     cursor: segment.cursor,
                     keyboard: None,
+                    display_notch: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
@@ -323,6 +324,7 @@ fn full_timeline_for_segments(
                 start: 0.0,
                 end: duration,
                 name: None,
+                speed_audio_mode: None,
             })
         })
         .collect()
@@ -359,6 +361,7 @@ fn full_timeline_for_source_segments(
                 start: 0.0,
                 end: duration,
                 name: None,
+                speed_audio_mode: None,
             })
         })
         .collect()
@@ -372,6 +375,7 @@ fn ensure_project_timeline<'a>(
     if config.timeline.is_none() {
         config.timeline = Some(TimelineConfiguration {
             segments: full_timeline_for_segments(project_path, segments)?,
+            transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
             mask_segments: Vec::new(),
@@ -399,8 +403,13 @@ fn add_clip_configs(
 
         if let Some(existing) = config.clips.iter_mut().find(|clip| clip.index == index) {
             existing.offsets = offsets;
+            existing.offsets_auto_calculated = true;
         } else {
-            config.clips.push(ClipConfiguration { index, offsets });
+            config.clips.push(ClipConfiguration {
+                index,
+                offsets,
+                offsets_auto_calculated: true,
+            });
         }
     }
 }
@@ -844,6 +853,7 @@ fn single_segment_to_multiple(segment: &SingleSegment) -> MultipleSegment {
         system_audio: None,
         cursor: segment.cursor.clone(),
         keyboard: None,
+        display_notch: None,
     }
 }
 
@@ -922,6 +932,7 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
+            speed_audio_mode: None,
         });
     }
 
@@ -1030,6 +1041,7 @@ fn copy_source_segment(
         system_audio,
         cursor,
         keyboard,
+        display_notch: source_segment.display_notch,
     })
 }
 
@@ -1368,11 +1380,7 @@ fn transcode_video(
 pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<PathBuf, String> {
     info!("Starting video import from: {:?}", source_path);
 
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
+    let recordings_dir = crate::general_settings::GeneralSettingsStore::recordings_dir(&app);
 
     let project_name = generate_project_name(&source_path);
     let sanitized_name = sanitize_filename(&project_name);
@@ -1440,6 +1448,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                     system_audio: None,
                     cursor: None,
                     keyboard: None,
+                    display_notch: None,
                 }],
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
@@ -1536,6 +1545,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                                     system_audio,
                                     cursor: None,
                                     keyboard: None,
+                                    display_notch: None,
                                 }],
                                 cursors: Cursors::default(),
                                 status: Some(StudioRecordingStatus::Complete),
@@ -1711,6 +1721,7 @@ async fn append_mp4_to_editor_project(
         system_audio,
         cursor: None,
         keyboard: None,
+        display_notch: None,
     };
 
     {
@@ -1727,6 +1738,7 @@ async fn append_mp4_to_editor_project(
             start: 0.0,
             end: duration,
             name: None,
+            speed_audio_mode: None,
         });
     add_clip_configs(
         &mut config,
@@ -1857,6 +1869,7 @@ async fn append_cap_project_to_editor_project(
                 start: source_segment.start,
                 end: source_segment.end,
                 name: None,
+                speed_audio_mode: source_segment.speed_audio_mode,
             });
         }
     }

@@ -4,12 +4,11 @@ use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
-    TimelineSegment, XY,
+    TimelineFrameMapping, TimelineSegment, XY,
 };
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomFocusInterpolator, get_duration,
-    spring_mass_damper::SpringMassDamperSimulationConfig,
+    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
 };
 use std::{
     path::{Path, PathBuf},
@@ -21,6 +20,9 @@ use std::{
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
+
+const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
+const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 
 fn get_video_duration_fallback(path: &Path) -> Option<f64> {
     tracing::debug!("get_video_duration_fallback called for: {:?}", path);
@@ -103,14 +105,35 @@ pub struct EditorInstance {
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
     runtime_handle: tokio::runtime::Handle,
+    audio_output: Arc<crate::AudioOutput>,
 }
 
 impl EditorInstance {
     pub async fn new(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-        frame_cb: Box<dyn FnMut(editor::EditorFrameOutput) + Send>,
+        frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            Arc::new(crate::AudioOutput::new()),
+        )
+        .await
+    }
+
+    /// Like [`EditorInstance::new`] but with a caller-provided audio output,
+    /// letting harnesses substitute a headless sink while everything else
+    /// (decoders, renderer, playback) runs the production path.
+    pub async fn new_with_audio_output(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        audio_output: Arc<crate::AudioOutput>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
@@ -153,6 +176,7 @@ impl EditorInstance {
                                 end: duration,
                                 timescale: 1.0,
                                 name: None,
+                                speed_audio_mode: None,
                             }],
                             _ => {
                                 warn!(
@@ -189,6 +213,7 @@ impl EditorInstance {
                             end: duration,
                             timescale: 1.0,
                             name: None,
+                            speed_audio_mode: None,
                         })
                     })
                     .collect(),
@@ -197,6 +222,7 @@ impl EditorInstance {
             if !timeline_segments.is_empty() {
                 project.timeline = Some(TimelineConfiguration {
                     segments: timeline_segments,
+                    transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
@@ -231,6 +257,7 @@ impl EditorInstance {
                                 index: i as u32,
                                 offsets: segment
                                     .calculate_audio_offsets_with_calibration(calibration_offset),
+                                offsets_auto_calculated: true,
                             }
                         })
                         .collect();
@@ -239,6 +266,7 @@ impl EditorInstance {
                     project.clips = vec![cap_project::ClipConfiguration {
                         index: 0,
                         offsets: cap_project::ClipOffsets::default(),
+                        offsets_auto_calculated: false,
                     }];
                 }
             }
@@ -246,6 +274,43 @@ impl EditorInstance {
             if let Err(e) = project.write(&recording_meta.project_path) {
                 warn!("Failed to save auto-generated clip offsets: {}", e);
             }
+        }
+
+        // Segment setup (decoder init + kicking off audio decodes) is
+        // independent of the GPU/render setup below, so run it concurrently on
+        // its own task.
+        // The env override lets headless harnesses on runners whose
+        // VideoToolbox is too slow for real-time playback fall back to the
+        // FFmpeg decoder.
+        let force_ffmpeg_for_editor = cfg!(target_os = "windows")
+            || std::env::var_os("CAP_EDITOR_FORCE_FFMPEG_DECODER").is_some();
+        if force_ffmpeg_for_editor {
+            tracing::info!("Using FFmpeg decoder for editor preview");
+        }
+
+        let segments_task = tokio::spawn({
+            let recording_meta = recording_meta.clone();
+            let studio_meta = (**meta).clone();
+            async move { create_segments(&recording_meta, &studio_meta, force_ffmpeg_for_editor).await }
+        });
+
+        // Open the session's audio output stream now (in the background) so
+        // the first play press doesn't wait on the device — Bluetooth outputs
+        // in particular can take seconds to wake.
+        let has_declared_audio = match meta.as_ref() {
+            StudioRecordingMeta::SingleSegment { segment } => segment.audio.is_some(),
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .any(|s| s.mic.is_some() || s.system_audio.is_some()),
+        };
+        let has_music = project
+            .timeline
+            .as_ref()
+            .map(|t| !t.audio_segments.is_empty())
+            .unwrap_or(false);
+        if has_declared_audio || has_music {
+            audio_output.prewarm();
         }
 
         let recordings = Arc::new(ProjectRecordingsMeta::new(
@@ -275,7 +340,9 @@ impl EditorInstance {
 
         let layers_rx = editor::start_renderer_layers_creation(&render_constants, &project);
 
-        let segments = create_segments(&recording_meta, meta.as_ref(), false).await?;
+        let segments = segments_task
+            .await
+            .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
         let renderer = Arc::new(editor::Renderer::spawn(
@@ -308,6 +375,7 @@ impl EditorInstance {
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
             runtime_handle: tokio::runtime::Handle::current(),
+            audio_output,
         });
 
         this.state.lock().await.preview_task =
@@ -330,11 +398,17 @@ impl EditorInstance {
         if let Some(task) = state.preview_task.take() {
             task.abort();
             if let Err(e) = task.await {
-                tracing::warn!("preview task abort await failed: {e}");
+                if e.is_cancelled() {
+                    tracing::debug!("preview task cancelled during editor disposal");
+                } else {
+                    tracing::warn!("preview task abort await failed: {e}");
+                }
             }
         }
 
         self.renderer.stop().await;
+
+        self.audio_output.shutdown();
 
         tokio::task::yield_now().await;
 
@@ -379,6 +453,7 @@ impl EditorInstance {
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
+                audio_output: self.audio_output.clone(),
                 telemetry: None,
             })
             .start(fps, resolution_base)
@@ -459,10 +534,23 @@ impl EditorInstance {
                     }
 
                     let project = self.project_config.1.borrow().clone();
+                    let frame_time = frame_number as f64 / fps as f64;
+                    let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
+                        if timeline.transitions.is_empty() {
+                            return None;
+                        }
+                        match timeline.get_frame_mapping(frame_time) {
+                            Some(TimelineFrameMapping::Transition {
+                                outgoing,
+                                kind,
+                                progress,
+                                ..
+                            }) => Some((outgoing, kind, progress)),
+                            _ => None,
+                        }
+                    });
 
-                    let Some((segment_time, segment)) =
-                        project.get_segment_time(frame_number as f64 / fps as f64)
-                    else {
+                    let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
                         warn!(
                             "Preview renderer: no segment found for frame {}",
                             frame_number
@@ -479,48 +567,6 @@ impl EditorInstance {
 
                     let new_cancel_token = CancellationToken::new();
                     prefetch_cancel_token = Some(new_cancel_token.clone());
-
-                    let playback_is_active = *self.playback_active_rx.borrow();
-                    let export_preview_is_active =
-                        self.export_preview_active.load(Ordering::Acquire);
-                    let export_is_active = self.export_active.load(Ordering::Acquire);
-                    if !playback_is_active && !export_preview_is_active && !export_is_active {
-                        let prefetch_frames_count = 15u32;
-                        let hide_camera = project.camera.hide;
-                        let playback_rx = self.playback_active_rx.clone();
-                        for offset in 1..=prefetch_frames_count {
-                            let prefetch_frame = frame_number + offset;
-                            if let Some((prefetch_segment_time, prefetch_segment)) =
-                                project.get_segment_time(prefetch_frame as f64 / fps as f64)
-                                && let Some(prefetch_segment_media) = self
-                                    .segment_medias
-                                    .get(prefetch_segment.recording_clip as usize)
-                            {
-                                let prefetch_clip_offsets = project
-                                    .clips
-                                    .iter()
-                                    .find(|v| v.index == prefetch_segment.recording_clip)
-                                    .map(|v| v.offsets)
-                                    .unwrap_or_default();
-                                let decoders = prefetch_segment_media.decoders.clone();
-                                let cancel_token = new_cancel_token.clone();
-                                let playback_rx = playback_rx.clone();
-                                tokio::spawn(async move {
-                                    if cancel_token.is_cancelled() || *playback_rx.borrow() {
-                                        return;
-                                    }
-                                    let _ = decoders
-                                        .get_frames(
-                                            prefetch_segment_time as f32,
-                                            !hide_camera,
-                                            true,
-                                            prefetch_clip_offsets,
-                                        )
-                                        .await;
-                                });
-                            }
-                        }
-                    }
 
                     tokio::select! {
                         biased;
@@ -539,29 +585,103 @@ impl EditorInstance {
                                 continue;
                             }
 
-                            if let Some(segment_frames) = segment_frames_opt {
-                                let total_duration = project
-                                    .timeline
-                                    .as_ref()
-                                    .map(|t| t.duration())
-                                    .unwrap_or(0.0);
+                            if segment_frames_opt.is_none() {
+                                warn!("Preview renderer: no frames returned for frame {}", frame_number);
+                                break;
+                            }
 
-                                let cursor_smoothing = (!project.cursor.raw).then_some(
-                                    SpringMassDamperSimulationConfig {
-                                        tension: project.cursor.tension,
-                                        mass: project.cursor.mass,
-                                        friction: project.cursor.friction,
-                                    },
-                                );
+                            let total_duration = project
+                                .timeline
+                                .as_ref()
+                                .map(|t| t.duration())
+                                .unwrap_or(0.0);
 
-                                let zoom_focus_interpolator = ZoomFocusInterpolator::new_arc(
-                                    segment_medias.cursor.clone(),
-                                    cursor_smoothing,
-                                    project.cursor.click_spring_config(),
-                                    project.screen_movement_spring,
-                                    total_duration,
-                                    project.timeline.as_ref().map(|t| t.zoom_segments.as_slice()).unwrap_or(&[]),
-                                );
+                            // Scrub renders sample the same precomputed spring
+                            // timeline playback and export use (the old focus
+                            // interpolator was never precomputed here and fell
+                            // back to a divergent direct interpolation).
+                            let mut zoom_timeline =
+                                ZoomTransformTimeline::from_project_for_clip(
+                                &project,
+                                &segment_medias.cursor,
+                                total_duration,
+                                self.render_constants.options.screen_size,
+                                segment.recording_clip,
+                            );
+                            zoom_timeline
+                                .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
+
+                            let outgoing_transition = if let Some((outgoing, kind, progress)) =
+                                transition_mapping
+                            {
+                                let outgoing_media =
+                                    &self.segment_medias[outgoing.segment.recording_clip as usize];
+                                let outgoing_offsets = project
+                                    .clips
+                                    .iter()
+                                    .find(|clip| clip.index == outgoing.segment.recording_clip)
+                                    .map(|clip| clip.offsets)
+                                    .unwrap_or_default();
+                                let outgoing_frames = tokio::select! {
+                                    biased;
+                                    _ = preview_rx.changed() => {
+                                        continue;
+                                    }
+                                    frames = outgoing_media.decoders.get_frames_initial(
+                                        outgoing.source_time as f32,
+                                        !project.camera.hide,
+                                        true,
+                                        outgoing_offsets,
+                                    ) => frames,
+                                };
+                                if let Some(outgoing_frames) = outgoing_frames {
+                                    let mut outgoing_zoom =
+                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                            &project,
+                                            &outgoing_media.cursor,
+                                            total_duration,
+                                            self.render_constants.options.screen_size,
+                                            outgoing.segment.recording_clip,
+                                        );
+                                    outgoing_zoom.ensure_precomputed_until(
+                                        (frame_number as f32 + 1.0) / fps as f32,
+                                    );
+                                    let outgoing_uniforms = ProjectUniforms::new(
+                                        &self.render_constants,
+                                        &project,
+                                        frame_number,
+                                        fps,
+                                        resolution_base,
+                                        &outgoing_media.cursor,
+                                        &outgoing_frames,
+                                        total_duration,
+                                        &outgoing_zoom,
+                                    );
+                                    Some((
+                                        outgoing_frames,
+                                        outgoing_uniforms,
+                                        outgoing_media.cursor.clone(),
+                                        kind,
+                                        progress as f32,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            if preview_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
+
+                            let mut next_segment_frames = segment_frames_opt;
+                            let mut rendered = false;
+
+                            for attempt in 0..PREVIEW_RENDER_MAX_ATTEMPTS {
+                                let Some(segment_frames) = next_segment_frames.take() else {
+                                    break;
+                                };
 
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
@@ -572,12 +692,135 @@ impl EditorInstance {
                                     &segment_medias.cursor,
                                     &segment_frames,
                                     total_duration,
-                                    &zoom_focus_interpolator,
+                                    &zoom_timeline,
                                 );
-                                self.renderer
-                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone());
-                            } else {
-                                warn!("Preview renderer: no frames returned for frame {}", frame_number);
+
+                                let render_confirmed = if let Some((
+                                    outgoing_frames,
+                                    outgoing_uniforms,
+                                    outgoing_cursor,
+                                    kind,
+                                    progress,
+                                )) = &outgoing_transition
+                                {
+                                    self.renderer
+                                        .render_transition_frame_confirmed(
+                                            editor::RendererTransitionInput {
+                                                segment_frames: outgoing_frames.clone(),
+                                                uniforms: outgoing_uniforms.clone(),
+                                                cursor: outgoing_cursor.clone(),
+                                            },
+                                            editor::RendererTransitionInput {
+                                                segment_frames,
+                                                uniforms,
+                                                cursor: segment_medias.cursor.clone(),
+                                            },
+                                            *kind,
+                                            *progress,
+                                        )
+                                        .await
+                                } else {
+                                    self.renderer
+                                        .render_frame_confirmed(
+                                            segment_frames,
+                                            uniforms,
+                                            segment_medias.cursor.clone(),
+                                        )
+                                        .await
+                                };
+                                if render_confirmed {
+                                    rendered = true;
+                                    break;
+                                }
+
+                                if preview_rx.has_changed().unwrap_or(false) {
+                                    break;
+                                }
+
+                                if attempt + 1 < PREVIEW_RENDER_MAX_ATTEMPTS {
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        PREVIEW_RENDER_RETRY_DELAY_MS,
+                                    ))
+                                    .await;
+                                    next_segment_frames = segment_medias
+                                        .decoders
+                                        .get_frames(
+                                            segment_time as f32,
+                                            !project.camera.hide,
+                                            true,
+                                            clip_offsets,
+                                        )
+                                        .await;
+                                }
+                            }
+
+                            if !rendered && !preview_rx.has_changed().unwrap_or(false) {
+                                warn!(
+                                    frame_number,
+                                    attempts = PREVIEW_RENDER_MAX_ATTEMPTS,
+                                    "Preview renderer: frame render failed"
+                                );
+                            }
+
+                            if rendered
+                                && !preview_rx.has_changed().unwrap_or(true)
+                                && !*self.playback_active_rx.borrow()
+                                && !self.export_preview_active.load(Ordering::Acquire)
+                                && !self.export_active.load(Ordering::Acquire)
+                            {
+                                let this = self.clone();
+                                let project = project.clone();
+                                let cancel_token = new_cancel_token.clone();
+                                let playback_rx = self.playback_active_rx.clone();
+                                tokio::spawn(async move {
+                                    for offset in 1..=15u32 {
+                                        if cancel_token.is_cancelled()
+                                            || *playback_rx.borrow()
+                                            || this.export_preview_active.load(Ordering::Acquire)
+                                            || this.export_active.load(Ordering::Acquire)
+                                        {
+                                            break;
+                                        }
+
+                                        let prefetch_frame =
+                                            frame_number.saturating_add(offset);
+                                        let Some((prefetch_segment_time, prefetch_segment)) =
+                                            project.get_segment_time(
+                                                prefetch_frame as f64 / fps as f64,
+                                            )
+                                        else {
+                                            continue;
+                                        };
+                                        let Some(prefetch_segment_media) = this
+                                            .segment_medias
+                                            .get(prefetch_segment.recording_clip as usize)
+                                        else {
+                                            continue;
+                                        };
+                                        let prefetch_clip_offsets = project
+                                            .clips
+                                            .iter()
+                                            .find(|v| {
+                                                v.index == prefetch_segment.recording_clip
+                                            })
+                                            .map(|v| v.offsets)
+                                            .unwrap_or_default();
+                                        tokio::select! {
+                                            biased;
+                                            _ = cancel_token.cancelled() => break,
+                                            _ = prefetch_segment_media.decoders.get_frames(
+                                                prefetch_segment_time as f32,
+                                                !project.camera.hide,
+                                                true,
+                                                prefetch_clip_offsets,
+                                            ) => {}
+                                        }
+
+                                        if cancel_token.is_cancelled() {
+                                            break;
+                                        }
+                                    }
+                                });
                             }
                         }
                     }
@@ -642,12 +885,64 @@ pub struct EditorState {
 }
 
 pub struct SegmentMedia {
-    pub audio: Option<Arc<AudioData>>,
-    pub system_audio: Option<Arc<AudioData>>,
+    pub audio: AudioLoader,
+    pub system_audio: AudioLoader,
     pub audio_timing_repair: SegmentAudioTimingRepair,
     pub cursor: Arc<CursorEvents>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
+}
+
+/// Shared handle to an audio track that decodes in the background.
+///
+/// Editor startup doesn't block on decoding entire audio files into memory;
+/// consumers that actually need samples (playback, export, waveforms) await
+/// [`AudioLoader::get`], which resolves as soon as the background decode
+/// completes.
+#[derive(Clone)]
+pub struct AudioLoader {
+    rx: watch::Receiver<Option<Result<Option<Arc<AudioData>>, String>>>,
+}
+
+impl AudioLoader {
+    /// A loader for a segment with no audio track.
+    pub fn none() -> Self {
+        Self::ready(None)
+    }
+
+    /// A loader wrapping already-decoded audio.
+    pub fn ready(audio: Option<Arc<AudioData>>) -> Self {
+        // The sender is dropped immediately; `get` still resolves because the
+        // value is already present when it first borrows the channel.
+        let (_tx, rx) = watch::channel(Some(Ok(audio)));
+        Self { rx }
+    }
+
+    /// Starts decoding `path` on the blocking pool.
+    pub fn spawn(path: PathBuf, label: String) -> Self {
+        let (tx, rx) = watch::channel(None);
+        tokio::task::spawn_blocking(move || {
+            let result = AudioData::from_file(&path)
+                .map(|data| Some(Arc::new(data)))
+                .map_err(|e| format!("{label} / {e}"));
+            let _ = tx.send(Some(result));
+        });
+        Self { rx }
+    }
+
+    /// Waits for the background decode to finish. Returns `Ok(None)` when the
+    /// segment has no audio track.
+    pub async fn get(&self) -> Result<Option<Arc<AudioData>>, String> {
+        let mut rx = self.rx.clone();
+        loop {
+            if let Some(result) = rx.borrow_and_update().clone() {
+                return result;
+            }
+            if rx.changed().await.is_err() {
+                return Err("Audio load task was dropped".to_string());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -807,15 +1102,20 @@ pub async fn create_segments(
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
     let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
+    let legacy_timing_repair = &legacy_timing_repair;
 
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
-            let audio_task = s.audio.as_ref().map(|audio_meta| {
-                spawn_audio_load(
-                    recording_meta.path(&audio_meta.path),
-                    "SingleSegment Audio".to_string(),
-                )
-            });
+            let audio = s
+                .audio
+                .as_ref()
+                .map(|audio_meta| {
+                    AudioLoader::spawn(
+                        recording_meta.path(&audio_meta.path),
+                        "SingleSegment Audio".to_string(),
+                    )
+                })
+                .unwrap_or_else(AudioLoader::none);
 
             let cursor = Arc::new(
                 s.cursor
@@ -859,13 +1159,11 @@ pub async fn create_segments(
                 force_ffmpeg,
             )
             .await
-            .map_err(|e| format!("SingleSegment / {e}"));
-            let audio = collect_audio_task(audio_task, "SingleSegment Audio").await?;
-            let decoders = decoders?;
+            .map_err(|e| format!("SingleSegment / {e}"))?;
 
             Ok(vec![SegmentMedia {
                 audio,
-                system_audio: None,
+                system_audio: AudioLoader::none(),
                 audio_timing_repair: SegmentAudioTimingRepair {
                     mic_offset_secs: legacy_timing_repair.offset(
                         0,
@@ -880,19 +1178,31 @@ pub async fn create_segments(
             }])
         }
         cap_project::StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            let mut segments = vec![];
-
-            for (i, s) in inner.segments.iter().enumerate() {
-                let audio_label = format!("MultipleSegments {i} Audio");
-                let audio_task = s
+            // Segments initialize concurrently: decoder setup dominates and is
+            // independent per segment, while audio decodes lazily in the
+            // background via AudioLoader.
+            let segment_futures = inner.segments.iter().enumerate().map(|(i, s)| async move {
+                let audio = s
                     .mic
                     .as_ref()
-                    .map(|audio| spawn_audio_load(recording_meta.path(&audio.path), audio_label));
+                    .map(|audio| {
+                        AudioLoader::spawn(
+                            recording_meta.path(&audio.path),
+                            format!("MultipleSegments {i} Audio"),
+                        )
+                    })
+                    .unwrap_or_else(AudioLoader::none);
 
-                let system_audio_label = format!("MultipleSegments {i} System Audio");
-                let system_audio_task = s.system_audio.as_ref().map(|audio| {
-                    spawn_audio_load(recording_meta.path(&audio.path), system_audio_label)
-                });
+                let system_audio = s
+                    .system_audio
+                    .as_ref()
+                    .map(|audio| {
+                        AudioLoader::spawn(
+                            recording_meta.path(&audio.path),
+                            format!("MultipleSegments {i} System Audio"),
+                        )
+                    })
+                    .unwrap_or_else(AudioLoader::none);
 
                 let cursor = Arc::new(s.cursor_events(recording_meta));
 
@@ -918,19 +1228,11 @@ pub async fn create_segments(
                     force_ffmpeg,
                 )
                 .await
-                .map_err(|e| format!("MultipleSegments {i} / {e}"));
+                .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
                 let keyboard = Arc::new(s.keyboard_events(recording_meta));
-                let audio =
-                    collect_audio_task(audio_task, &format!("MultipleSegments {i} Audio")).await?;
-                let system_audio = collect_audio_task(
-                    system_audio_task,
-                    &format!("MultipleSegments {i} System Audio"),
-                )
-                .await?;
-                let decoders = decoders?;
 
-                segments.push(SegmentMedia {
+                Ok::<SegmentMedia, String>(SegmentMedia {
                     audio,
                     system_audio,
                     audio_timing_repair: SegmentAudioTimingRepair {
@@ -948,35 +1250,11 @@ pub async fn create_segments(
                     cursor,
                     keyboard,
                     decoders,
-                });
-            }
+                })
+            });
 
-            Ok(segments)
+            futures::future::try_join_all(segment_futures).await
         }
-    }
-}
-
-fn spawn_audio_load(
-    path: PathBuf,
-    label: String,
-) -> tokio::task::JoinHandle<Result<AudioData, String>> {
-    tokio::task::spawn_blocking(move || {
-        AudioData::from_file(path).map_err(|e| format!("{label} / {e}"))
-    })
-}
-
-async fn collect_audio_task(
-    task: Option<tokio::task::JoinHandle<Result<AudioData, String>>>,
-    label: &str,
-) -> Result<Option<Arc<AudioData>>, String> {
-    match task {
-        Some(task) => {
-            let audio = task
-                .await
-                .map_err(|e| format!("{label} task failed: {e}"))??;
-            Ok(Some(Arc::new(audio)))
-        }
-        None => Ok(None),
     }
 }
 

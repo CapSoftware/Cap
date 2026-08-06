@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { ScreenRecordWindowsPage } from "@/components/pages/seo/ScreenRecordWindowsPage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "Free screen recorder for Windows 10 & 11",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
@@ -13,7 +19,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Best Free Screen Recorder for Windows",
@@ -27,7 +33,7 @@ export const metadata: Metadata = {
 		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
 		description:
 			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/screen-recorder-windows",

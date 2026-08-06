@@ -382,7 +382,7 @@ export default function Page() {
 										</div>
 										<div
 											onClick={() => setIsCommercialAnnual((v) => !v)}
-											class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
+											class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 bg-gray-5 hover:border-gray-400"
 										>
 											<p class="text-xs text-gray-12">
 												Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}
@@ -429,7 +429,7 @@ export default function Page() {
 									</Button>
 									<p
 										onClick={() => setOpenLicenseDialog(true)}
-										class="mb-2 text-sm transition-colors cursor-pointer text-gray-11 hover:text-gray-12"
+										class="mb-2 text-sm transition-colors text-gray-11 hover:text-gray-12"
 									>
 										Already have a license key?
 									</p>
@@ -487,7 +487,7 @@ export default function Page() {
 										</div>
 										<div
 											onClick={() => setIsProAnnual((v) => !v)}
-											class="px-3 py-2 text-center bg-blue-500 rounded-full border border-transparent transition-all duration-200 cursor-pointer hover:border-blue-400"
+											class="px-3 py-2 text-center bg-blue-500 rounded-full border border-transparent transition-all duration-200 hover:border-blue-400"
 										>
 											<p class="text-xs text-solid-white">
 												Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
@@ -563,7 +563,7 @@ const ActivateLicenseDialog = ({ open, onOpenChange }: Props) => {
 					licenseKey: value.licenseKey,
 				},
 			});
-			await queryClient.refetchQueries({ queryKey: ["bruh"] });
+			await queryClient.refetchQueries({ queryKey: ["licenseQuery"] });
 		},
 	}));
 	return (

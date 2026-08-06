@@ -50,7 +50,7 @@ export async function toggleProSeat(
 			throw new Error("Cannot toggle Pro seat for the organization owner");
 		}
 
-		if (member.hasProSeat === enable) {
+		if (member.hasProSeat === enable && !enable) {
 			return { success: true };
 		}
 
@@ -82,26 +82,33 @@ export async function toggleProSeat(
 				owner,
 				actorCanManageProSeats: true,
 			});
-
-			const { proSeatsRemaining } = calculateProSeats({
-				inviteQuota: seatProvider?.inviteQuota ?? 1,
-				ownerId: actor.ownerId,
-				ownerIsPro: hasActiveDirectSubscription(owner),
-				members: allMembers,
-			});
-
-			if (proSeatsRemaining <= 0) {
+			if (!seatProvider) {
 				throw new Error(
-					"No Pro seats remaining. Purchase more seats to continue.",
+					"An active Cap Pro subscription is required before assigning seats.",
 				);
 			}
 
-			await tx
-				.update(organizationMembers)
-				.set({ hasProSeat: true })
-				.where(eq(organizationMembers.id, memberId));
+			if (!member.hasProSeat) {
+				const { proSeatsRemaining } = calculateProSeats({
+					inviteQuota: seatProvider.inviteQuota ?? 1,
+					ownerId: actor.ownerId,
+					ownerIsPro: hasActiveDirectSubscription(owner),
+					members: allMembers,
+				});
 
-			if (seatProvider?.stripeSubscriptionId) {
+				if (proSeatsRemaining <= 0) {
+					throw new Error(
+						"No Pro seats remaining. Purchase more seats to continue.",
+					);
+				}
+
+				await tx
+					.update(organizationMembers)
+					.set({ hasProSeat: true })
+					.where(eq(organizationMembers.id, memberId));
+			}
+
+			if (seatProvider.stripeSubscriptionId) {
 				await tx
 					.update(users)
 					.set({

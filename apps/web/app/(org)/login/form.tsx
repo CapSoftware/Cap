@@ -15,7 +15,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Suspense, useEffect, useId, useState } from "react";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
@@ -42,9 +49,22 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const mobileAppleSignInStarted = useRef(false);
+	const mobileGoogleSignInStarted = useRef(false);
+	const mobileWorkosSignInStarted = useRef(false);
+	const loginFormMounted = useRef(false);
 	const theme = Cookies.get("theme") || "light";
-	const getNextPath = () =>
-		next ? getSafeNextPath(next, window.location.origin) : null;
+	const getNextPath = useCallback(
+		() => (next ? getSafeNextPath(next, window.location.origin) : null),
+		[next],
+	);
+
+	useEffect(() => {
+		loginFormMounted.current = true;
+		return () => {
+			loginFormMounted.current = false;
+		};
+	}, []);
 
 	useEffect(() => {
 		document.body.className = theme === "dark" ? "dark" : "light";
@@ -105,7 +125,7 @@ export function LoginForm() {
 		}
 	}, [emailSent]);
 
-	const handleGoogleSignIn = () => {
+	const handleGoogleSignIn = useCallback(() => {
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
@@ -115,7 +135,67 @@ export function LoginForm() {
 		signIn("google", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
 		});
-	};
+	}, [getNextPath]);
+
+	const handleAppleSignIn = useCallback(() => {
+		const nextPath = getNextPath();
+		trackEvent("auth_started", {
+			method: "apple",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		signIn("apple", {
+			...(nextPath ? { callbackUrl: nextPath } : {}),
+		});
+	}, [getNextPath]);
+
+	const handleWorkosSignIn = useCallback(
+		async (orgId: string) => {
+			const nextPath = getNextPath();
+			const data = await getOrganizationSSOData(
+				Organisation.OrganisationId.make(orgId),
+			);
+			setOrganizationName(data.name);
+
+			signIn("workos", nextPath ? { callbackUrl: nextPath } : undefined, {
+				organization: data.organizationId,
+				connection: data.connectionId,
+			});
+		},
+		[getNextPath],
+	);
+
+	useEffect(() => {
+		if (searchParams?.get("mobileProvider") === "apple") {
+			if (mobileAppleSignInStarted.current) return;
+			mobileAppleSignInStarted.current = true;
+			handleAppleSignIn();
+			return;
+		}
+
+		if (searchParams?.get("mobileProvider") === "google") {
+			if (mobileGoogleSignInStarted.current) return;
+			mobileGoogleSignInStarted.current = true;
+			handleGoogleSignIn();
+			return;
+		}
+
+		if (searchParams?.get("mobileProvider") !== "workos") return;
+		const mobileOrganizationId = searchParams.get("organizationId");
+		if (!mobileOrganizationId) {
+			setShowOrgInput(true);
+			return;
+		}
+		if (mobileWorkosSignInStarted.current) return;
+		mobileWorkosSignInStarted.current = true;
+
+		handleWorkosSignIn(mobileOrganizationId).catch(() => {
+			if (!loginFormMounted.current) return;
+			setOrganizationId(mobileOrganizationId);
+			setShowOrgInput(true);
+			toast.error("Organization not found or SSO not configured");
+		});
+	}, [handleAppleSignIn, handleGoogleSignIn, handleWorkosSignIn, searchParams]);
 
 	const handleOrganizationLookup = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -125,15 +205,7 @@ export function LoginForm() {
 		}
 
 		try {
-			const data = await getOrganizationSSOData(
-				Organisation.OrganisationId.make(organizationId),
-			);
-			setOrganizationName(data.name);
-
-			signIn("workos", undefined, {
-				organization: data.organizationId,
-				connection: data.connectionId,
-			});
+			await handleWorkosSignIn(organizationId);
 		} catch (error) {
 			console.error("Lookup Error:", error);
 			toast.error("Organization not found or SSO not configured");

@@ -12,7 +12,10 @@ import { MonitorIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
-import { CameraPreviewWindow } from "./CameraPreviewWindow";
+import {
+	CameraPreviewWindow,
+	type CameraPreviewWindowHandle,
+} from "./CameraPreviewWindow";
 import { CameraSelector } from "./CameraSelector";
 import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
@@ -42,6 +45,16 @@ const recoveredRecordingTimeFormatter = new Intl.DateTimeFormat(undefined, {
 	timeStyle: "short",
 });
 
+const waitForNextFrame = () =>
+	new Promise<void>((resolve) => {
+		if (typeof window === "undefined") {
+			resolve();
+			return;
+		}
+
+		window.requestAnimationFrame(() => resolve());
+	});
+
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -53,6 +66,7 @@ export const WebRecorderDialog = () => {
 	const dialogContentRef = useRef<HTMLDivElement>(null);
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
+	const cameraPreviewRef = useRef<CameraPreviewWindowHandle>(null);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -136,6 +150,7 @@ export const WebRecorderDialog = () => {
 		errorDownload,
 		completedShareUrl,
 		recoveredDownloads,
+		isSettingUp,
 		isRecording,
 		isBusy,
 		isRestarting,
@@ -219,6 +234,15 @@ export const WebRecorderDialog = () => {
 		});
 	};
 
+	const handleStartClick = useCallback(async () => {
+		if (recordingMode === "camera") {
+			cameraPreviewRef.current?.stopStream();
+			await waitForNextFrame();
+		}
+
+		await startRecording();
+	}, [recordingMode, startRecording]);
+
 	const handleClose = () => {
 		if (!isBusy) {
 			handleOpenChange(false);
@@ -236,6 +260,9 @@ export const WebRecorderDialog = () => {
 	};
 
 	const showInProgressBar = isRecording || isBusy || phase === "error";
+	const showCameraPreview =
+		selectedCameraId &&
+		(recordingMode !== "camera" || (!isSettingUp && !isBusy));
 	const recordingTimerDisplayMs = user.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
@@ -335,7 +362,7 @@ export const WebRecorderDialog = () => {
 								<RecordingButton
 									isRecording={isRecording}
 									disabled={!canStartRecording || (isBusy && !isRecording)}
-									onStart={startRecording}
+									onStart={handleStartClick}
 									onStop={handleStopClick}
 								/>
 								{!isBrowserSupported && unsupportedReason && (
@@ -429,8 +456,9 @@ export const WebRecorderDialog = () => {
 					isRestarting={isRestarting}
 				/>
 			)}
-			{selectedCameraId && (
+			{showCameraPreview && (
 				<CameraPreviewWindow
+					ref={cameraPreviewRef}
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
 				/>

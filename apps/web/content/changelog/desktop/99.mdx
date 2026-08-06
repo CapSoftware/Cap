@@ -1,0 +1,25 @@
+---
+title: Mic Mute for Instant Recordings, Nightly Builds & Multi-Monitor Fixes
+app: Cap Desktop
+publishedAt: "2026-07-09"
+version: 0.5.6
+image:
+---
+
+This release adds microphone muting during instant recordings, an optional nightly update channel, and important fixes for recordings stopping early, lost start clicks, slow-motion recordings on high-refresh monitors, and windows on multi-monitor setups.
+
+## Features
+
+- **Mute your mic mid-recording** - The mic icon in the recording bar is now a mute toggle during instant recordings, so you can silence your microphone without stopping the recording. System audio keeps recording as normal.
+- **Nightly update channel** - Opt into nightly builds from Settings to get the newest changes early. Nightly updates install automatically in the background and prompt you to restart when ready, and switching back to stable returns you to the latest stable release.
+- **24 and 25 FPS capture options** - The max capture framerate setting now includes 24 and 25 FPS for film and PAL-friendly workflows.
+
+## Fixes
+
+- **Recordings no longer stop after a few seconds** - Reopening the recording bar for a new instant recording could carry over stale state from a previous session and trip the recording limit almost immediately. The bar now fully resets between recordings.
+- **Recording start clicks no longer vanish** - Clicking record from the target picker could silently do nothing while the windows closed around it. The click is now handled reliably, and if a recording fails to start, the main window reappears with a clear error message.
+- **Slow-motion recordings repaired** - Recordings on high-refresh-rate Windows monitors could come out stretched and out of sync with their audio. New recordings capture at the correct speed, and affected existing recordings are automatically repaired when opened in the editor, keeping the original file as a backup.
+- **Better mic sync** - Microphone timestamps now account for measured input latency, macOS resolves the correct input device when measuring it, and a macOS timestamp conversion bug affecting audio alignment has been fixed.
+- **Multi-monitor and mixed-DPI fixes** - Windows now restore, center, and follow correctly across monitors with different display scaling, overlays size correctly on HiDPI Windows setups, and moving a window between monitors with different scaling no longer breaks its layout.
+- **Update toast fits the window** - The "update installed, restart to apply" toast no longer overflows the main window and clips its text and buttons.
+- **Integrations page when signed out** - The integrations settings page no longer errors when you are not signed in.

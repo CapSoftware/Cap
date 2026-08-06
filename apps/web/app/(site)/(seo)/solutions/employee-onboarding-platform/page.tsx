@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { EmployeeOnboardingPlatformPage } from "@/components/pages/seo/EmployeeOnboardingPlatformPage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "Employee onboarding with video",
+	tag: "Solutions",
+});
 
 export const metadata: Metadata = {
 	title: "Employee Onboarding Platform: Streamline New-Hire Training with Cap",
@@ -14,7 +20,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Employee Onboarding Platform",
@@ -28,7 +34,7 @@ export const metadata: Metadata = {
 		title: "Employee Onboarding Platform | Cap Screen Recorder",
 		description:
 			"Discover how Cap's open-source screen recorder simplifies new-hire training with asynchronous video and built-in feedback.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/solutions/employee-onboarding-platform",

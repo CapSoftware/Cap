@@ -3,13 +3,26 @@ import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { start } from "workflow/api";
 import { generateAiWorkflow } from "@/workflows/generate-ai";
 
 type GenerateAiResult = {
 	success: boolean;
 	message: string;
+};
+
+const LEGACY_AI_SUMMARY_FALLBACK =
+	"The AI was unable to generate a proper summary for this content.";
+
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
 export async function startAiGeneration(
@@ -63,6 +76,7 @@ export async function startAiGeneration(
 	if (
 		metadata.aiGenerationStatus === "COMPLETE" &&
 		metadata.summary &&
+		metadata.summary !== LEGACY_AI_SUMMARY_FALLBACK &&
 		metadata.chapters
 	) {
 		return {
@@ -72,7 +86,7 @@ export async function startAiGeneration(
 	}
 
 	try {
-		await db()
+		const transitionResult = await db()
 			.update(videos)
 			.set({
 				metadata: {
@@ -80,7 +94,20 @@ export async function startAiGeneration(
 					aiGenerationStatus: "QUEUED",
 				},
 			})
-			.where(eq(videos.id, videoId));
+			.where(
+				and(
+					eq(videos.id, videoId),
+					eq(videos.updatedAt, video.updatedAt),
+					eq(videos.transcriptionStatus, "COMPLETE"),
+				),
+			);
+
+		if (getAffectedRows(transitionResult) === 0) {
+			return {
+				success: true,
+				message: "AI generation already in progress",
+			};
+		}
 
 		await start(generateAiWorkflow, [{ videoId, userId }]);
 
@@ -92,12 +119,14 @@ export async function startAiGeneration(
 		await db()
 			.update(videos)
 			.set({
-				metadata: {
-					...metadata,
-					aiGenerationStatus: "ERROR",
-				},
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'ERROR')`,
 			})
-			.where(eq(videos.id, videoId));
+			.where(
+				and(
+					eq(videos.id, videoId),
+					sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.aiGenerationStatus')) = 'QUEUED'`,
+				),
+			);
 
 		return {
 			success: false,

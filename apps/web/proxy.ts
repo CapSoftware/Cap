@@ -4,6 +4,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
+import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
 const addHttps = (s?: string) => {
 	if (!s) return s;
@@ -38,6 +39,18 @@ export async function proxy(request: NextRequest) {
 		return response;
 	}
 
+	const shareIframeRedirectUrl = getShareIframeRedirectUrl({
+		method: request.method,
+		requestUrl: request.url,
+		fetchDestination: request.headers.get("sec-fetch-dest"),
+	});
+	if (shareIframeRedirectUrl) {
+		const response = NextResponse.redirect(shareIframeRedirectUrl);
+		response.headers.set("Cache-Control", "private, no-store");
+		response.headers.set("Vary", "Sec-Fetch-Dest");
+		return response;
+	}
+
 	const hostname = url.hostname;
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
@@ -45,6 +58,7 @@ export async function proxy(request: NextRequest) {
 			!(
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
+				path.startsWith("/cli/") ||
 				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
@@ -55,7 +69,9 @@ export async function proxy(request: NextRequest) {
 				path.startsWith("/self-hosting") ||
 				path.startsWith("/download") ||
 				path.startsWith("/terms") ||
-				path.startsWith("/verify-otp")
+				path.startsWith("/verify-otp") ||
+				path.startsWith("/embed/") ||
+				path.startsWith("/.well-known/workflow/")
 			) &&
 			process.env.NODE_ENV !== "development"
 		)

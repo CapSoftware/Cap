@@ -3,7 +3,13 @@ import {
 	HowToScreenRecordPage,
 	howToScreenRecordContent,
 } from "@/components/pages/seo/HowToScreenRecordPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema, createHowToSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "How to screen record on Mac, Windows & Chrome",
+	tag: "Guide",
+});
 
 export const metadata: Metadata = {
 	title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
@@ -17,7 +23,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "How to Screen Record — Complete 2026 Guide by Cap",
@@ -31,7 +37,7 @@ export const metadata: Metadata = {
 		title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
 		description:
 			"Learn how to screen record with audio on Mac, Windows, and Chrome. Free step-by-step guide.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/how-to-screen-record",

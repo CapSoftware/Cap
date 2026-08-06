@@ -1,0 +1,86 @@
+export const syntheticAgentCaps = [
+	{
+		name: "owner-ready",
+		access: "owned",
+		public: true,
+		protected: false,
+		transcriptionStatus: "COMPLETE",
+		aiGenerationStatus: "COMPLETE",
+		durationMs: 188_000,
+		comments: 2,
+		reactions: 1,
+	},
+	{
+		name: "organization-share",
+		access: "shared",
+		public: false,
+		protected: false,
+		transcriptionStatus: "COMPLETE",
+		aiGenerationStatus: "COMPLETE",
+		durationMs: 420_000,
+		comments: 4,
+		reactions: 3,
+	},
+	{
+		name: "space-share",
+		access: "shared",
+		public: false,
+		protected: false,
+		transcriptionStatus: "PROCESSING",
+		aiGenerationStatus: "QUEUED",
+		durationMs: 94_000,
+		comments: 0,
+		reactions: 0,
+	},
+	{
+		name: "public-direct",
+		access: "shared",
+		public: true,
+		protected: false,
+		transcriptionStatus: "SKIPPED",
+		aiGenerationStatus: "SKIPPED",
+		durationMs: 42_000,
+		comments: 1,
+		reactions: 0,
+	},
+	{
+		name: "password-protected",
+		access: "shared",
+		public: true,
+		protected: true,
+		transcriptionStatus: "COMPLETE",
+		aiGenerationStatus: "COMPLETE",
+		durationMs: 610_000,
+		comments: 3,
+		reactions: 2,
+	},
+	{
+		name: "content-disabled",
+		access: "shared",
+		public: true,
+		protected: false,
+		transcriptionStatus: "COMPLETE",
+		aiGenerationStatus: "COMPLETE",
+		durationMs: 215_000,
+		comments: 0,
+		reactions: 0,
+	},
+	{
+		name: "processing-error",
+		access: "owned",
+		public: false,
+		protected: false,
+		transcriptionStatus: "ERROR",
+		aiGenerationStatus: "ERROR",
+		durationMs: 19_800_000,
+		comments: 0,
+		reactions: 0,
+	},
+] as const;
+
+export const makeSyntheticVtt = (targetBytes: number) => {
+	const header = "WEBVTT\n\n";
+	const cue =
+		"1\n00:00:00.000 --> 00:00:02.000\nSynthetic transcript content only.\n\n";
+	return `${header}${cue.repeat(Math.max(1, Math.ceil(targetBytes / cue.length)))}`;
+};

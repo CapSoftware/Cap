@@ -10,7 +10,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+use std::time::Duration;
 use tokio::sync::oneshot;
+
+const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 struct CameraFrameScaler {
     context: ffmpeg::software::scaling::Context,
@@ -86,10 +89,13 @@ impl VideoSource for Camera {
         let original_height = original_video_info.height;
         let original_format = original_video_info.pixel_format;
 
-        feed_lock
-            .ask(camera::AddSender(tx))
-            .await
-            .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+        tokio::time::timeout(
+            CAMERA_SENDER_ATTACH_TIMEOUT,
+            feed_lock.ask(camera::AddSender(tx)),
+        )
+        .await
+        .map_err(|_| anyhow!("Timed out adding camera sender"))?
+        .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));

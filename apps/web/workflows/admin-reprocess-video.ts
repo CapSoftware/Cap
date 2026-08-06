@@ -5,13 +5,14 @@ import {
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { AwsCredentials, Storage } from "@cap/web-backend";
+import { AwsCredentials } from "@cap/web-backend/src/Aws";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface AdminReprocessVideoWorkflowPayload {
 	videoId: string;
@@ -268,7 +269,7 @@ async function processExistingResultOnMediaServer(
 
 	const videoDomain = decodeStorageVideo(video);
 	const [bucket] =
-		await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
+		await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
 
 	const resultKey = `${video.ownerId}/${video.id}/result.mp4`;
 	const thumbnailKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
@@ -278,7 +279,7 @@ async function processExistingResultOnMediaServer(
 		.getInternalSignedObjectUrl(resultKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -288,7 +289,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -298,7 +299,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -309,7 +310,7 @@ async function processExistingResultOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -408,7 +409,7 @@ async function invalidateResultCache(
 	try {
 		const cloudfront = new CloudFrontClient({
 			region: serverEnv().CAP_AWS_REGION || "us-east-1",
-			credentials: await runPromise(
+			credentials: await runWorkflowPromise(
 				Effect.map(AwsCredentials, (c) => c.credentials),
 			),
 		});

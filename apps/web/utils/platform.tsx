@@ -1,3 +1,4 @@
+import Image from "next/image";
 import type React from "react";
 import { trackEvent } from "@/app/utils/analytics";
 
@@ -10,7 +11,7 @@ export const getDownloadUrl = (
 	} else if (platform === "macos") {
 		return isIntel ? "/download/apple-intel" : "/download/apple-silicon";
 	} else if (platform === "linux") {
-		return "/download/linux";
+		return "/download/linux-deb";
 	} else {
 		return "/download/apple-silicon";
 	}
@@ -59,14 +60,13 @@ export const getPlatformIcon = (platform: string | null): React.ReactNode => {
 		);
 	} else if (platform === "linux") {
 		return (
-			<svg
-				aria-hidden="true"
-				className="mr-2 w-5 h-5"
-				viewBox="0 0 24 24"
-				fill="currentColor"
-			>
-				<path d="M12 2a4.5 4.5 0 0 0-4.5 4.5c0 1.35.4 2.4.84 3.52.24.62.5 1.27.7 2.02C6.53 13.5 5 16.14 5 19.5 5 21.16 6.34 22 8 22c1.16 0 2.26-.5 3.06-1.28.58.18 1.3.28 2.06.28s1.48-.1 2.06-.28C15.98 21.5 17.08 22 18.24 22 19.9 22 21 21.16 21 19.5c0-3.36-1.53-6-4.04-7.46.2-.75.46-1.4.7-2.02.44-1.12.84-2.17.84-3.52A4.5 4.5 0 0 0 14 2h-2Zm-1.5 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm4.5 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.2 9h3.6c-.27.47-.92 1-1.8 1s-1.53-.53-1.8-1ZM8 20.5c-.92 0-1.5-.36-1.5-1 0-2.5 1.02-4.55 2.76-5.72.2 1.66.58 3.6 1.24 5.08-.56.94-1.52 1.64-2.5 1.64Zm10.24 0c-.98 0-1.94-.7-2.5-1.64.66-1.48 1.04-3.42 1.24-5.08 1.74 1.17 2.52 3.22 2.52 5.72 0 .64-.34 1-1.26 1Z" />
-			</svg>
+			<Image
+				src="/logos/os/linux.svg"
+				width={20}
+				height={20}
+				alt=""
+				className="mr-2 block size-5 shrink-0 object-contain"
+			/>
 		);
 	} else {
 		return null;
@@ -79,7 +79,7 @@ export const getVersionText = (platform: string | null): React.ReactNode => {
 	} else if (platform === "windows") {
 		return "Windows 10+ recommended";
 	} else if (platform === "linux") {
-		return "Linux x86_64 AppImage recommended";
+		return "Linux x86_64 .deb recommended";
 	} else {
 		return "macOS 13.1+ recommended";
 	}
@@ -93,7 +93,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 	source = "unknown",
 }) => {
 	return (
-		<div className="flex relative z-10 gap-3 mt-5">
+		<div className="flex relative z-10 items-center gap-3 mt-5">
 			<div>
 				<button
 					type="button"
@@ -106,7 +106,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 						});
 						window.location.href = "/download/apple-silicon";
 					}}
-					className="focus:outline-none"
+					className="inline-flex size-6 items-center justify-center focus:outline-none"
 					aria-label="Download for free"
 				>
 					<svg
@@ -133,7 +133,7 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 							target_url: "/download/windows",
 						})
 					}
-					className="focus:outline-none"
+					className="inline-flex size-6 items-center justify-center focus:outline-none"
 					aria-label="Download for Windows"
 				>
 					<svg
@@ -153,29 +153,25 @@ export const PlatformIcons: React.FC<PlatformIconsProps> = ({
 			</div>
 			<div>
 				<a
-					href="/download/linux"
+					href="/download/linux-deb"
 					onClick={() =>
 						trackEvent("download_cta_clicked", {
 							source_page: source,
 							cta_location: "platform_icons",
 							target: "linux",
-							target_url: "/download/linux",
+							target_url: "/download/linux-deb",
 						})
 					}
-					className="focus:outline-none"
+					className="inline-flex size-6 items-center justify-center focus:outline-none"
 					aria-label="Download for Linux"
 				>
-					<svg
-						aria-hidden="true"
-						xmlns="http://www.w3.org/2000/svg"
-						width="1em"
-						height="1em"
-						fill="currentColor"
-						className="size-[24px] text-gray-12 opacity-90"
-						viewBox="0 0 24 24"
-					>
-						<path d="M12 2a4.5 4.5 0 0 0-4.5 4.5c0 1.35.4 2.4.84 3.52.24.62.5 1.27.7 2.02C6.53 13.5 5 16.14 5 19.5 5 21.16 6.34 22 8 22c1.16 0 2.26-.5 3.06-1.28.58.18 1.3.28 2.06.28s1.48-.1 2.06-.28C15.98 21.5 17.08 22 18.24 22 19.9 22 21 21.16 21 19.5c0-3.36-1.53-6-4.04-7.46.2-.75.46-1.4.7-2.02.44-1.12.84-2.17.84-3.52A4.5 4.5 0 0 0 14 2h-2Zm-1.5 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm4.5 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0ZM10.2 9h3.6c-.27.47-.92 1-1.8 1s-1.53-.53-1.8-1ZM8 20.5c-.92 0-1.5-.36-1.5-1 0-2.5 1.02-4.55 2.76-5.72.2 1.66.58 3.6 1.24 5.08-.56.94-1.52 1.64-2.5 1.64Zm10.24 0c-.98 0-1.94-.7-2.5-1.64.66-1.48 1.04-3.42 1.24-5.08 1.74 1.17 2.52 3.22 2.52 5.72 0 .64-.34 1-1.26 1Z" />
-					</svg>
+					<Image
+						src="/logos/os/linux.svg"
+						width={24}
+						height={24}
+						alt=""
+						className="block size-[24px] object-contain opacity-90"
+					/>
 					<span className="sr-only">Download for Linux</span>
 				</a>
 			</div>

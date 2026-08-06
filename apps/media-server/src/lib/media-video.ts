@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type BunFile, file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
@@ -24,6 +24,7 @@ const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
+const FFMPEG_HLS_CAPABILITY_TIMEOUT_MS = 10_000;
 const UPLOAD_MAX_RETRIES = 4;
 const UPLOAD_RETRY_BASE_MS = 250;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -32,6 +33,32 @@ const MAX_LEVEL_4_2_WIDTH = 2048;
 const MAX_LEVEL_4_2_HEIGHT = 1088;
 const MAX_LEVEL_5_1_WIDTH = 4096;
 const MAX_LEVEL_5_1_HEIGHT = 2304;
+const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
+const MULTIPART_MAX_PARTS = 10_000;
+const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
+
+export type StorageUploadTarget =
+	| {
+			type: "put";
+			url: string;
+	  }
+	| {
+			type: "multipart";
+			videoId: string;
+			key: string;
+			uploadId: string;
+			partSize: number;
+			signPartUrl: string;
+			completeUrl: string;
+			abortUrl: string;
+			webhookSecret?: string;
+	  };
+
+type UploadedPart = {
+	partNumber: number;
+	etag: string;
+	size: number;
+};
 
 export interface VideoProcessingOptions {
 	maxWidth?: number;
@@ -96,6 +123,18 @@ interface DashRepresentationPlaylist {
 	path: string;
 }
 
+export interface FfmpegHlsCapabilities {
+	allowedSegmentExtensions: boolean;
+	extensionPicky: boolean;
+}
+
+const LEGACY_FFMPEG_HLS_CAPABILITIES: FfmpegHlsCapabilities = {
+	allowedSegmentExtensions: false,
+	extensionPicky: false,
+};
+
+let ffmpegHlsCapabilitiesPromise: Promise<FfmpegHlsCapabilities> | undefined;
+
 const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	maxWidth: 1920,
 	maxHeight: 1080,
@@ -157,11 +196,21 @@ function resolveResourceUrl(
 	baseUrl: string,
 	query: string,
 ): string {
-	if (resource.startsWith("http://") || resource.startsWith("https://")) {
-		return withQuery(resource, query);
+	const resolved = new URL(resource, baseUrl);
+	if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+		throw new Error(
+			`Unsupported media resource protocol: ${resolved.protocol}`,
+		);
 	}
 
-	return withQuery(new URL(resource, baseUrl).toString(), query);
+	return withQuery(resolved.toString(), query);
+}
+
+function getFetchSignal(timeoutMs: number, abortSignal?: AbortSignal) {
+	const timeoutSignal = AbortSignal.timeout(timeoutMs);
+	return abortSignal
+		? AbortSignal.any([abortSignal, timeoutSignal])
+		: timeoutSignal;
 }
 
 function redactUrl(value: string): string {
@@ -201,12 +250,13 @@ export async function materializeHlsPlaylist(
 	playlistUrl: string,
 	dirPath: string,
 	cache = new Map<string, string>(),
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const cached = cache.get(playlistUrl);
 	if (cached) return cached;
 
 	const response = await fetch(playlistUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -232,7 +282,7 @@ export async function materializeHlsPlaylist(
 			if (!trimmed.startsWith("#")) {
 				const resolved = resolveResourceUrl(trimmed, baseUrl, query);
 				return isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache)
+					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
 					: resolved;
 			}
 
@@ -247,7 +297,7 @@ export async function materializeHlsPlaylist(
 
 				const resolved = resolveResourceUrl(original, baseUrl, query);
 				const replacement = isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache)
+					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
 					: resolved;
 
 				rewritten = rewritten.replace(
@@ -267,9 +317,10 @@ export async function materializeHlsPlaylist(
 export async function materializeMpdManifest(
 	manifestUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -283,11 +334,26 @@ export async function materializeMpdManifest(
 	const baseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
 	const filePath = join(dirPath, `${randomUUID()}.mpd`);
+	const rewrittenElements = content.replace(
+		/<(BaseURL|Location)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
+		(_, tag: string, attributes: string, resource: string) => {
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute(resource.trim()),
+				baseUrl,
+				query,
+			);
+			return `<${tag}${attributes}>${escapeXmlAttribute(resolved)}</${tag}>`;
+		},
+	);
 
-	const rewritten = content.replace(
-		/(initialization|media)="([^"]+)"/g,
+	const rewritten = rewrittenElements.replace(
+		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
 		(_, attribute: string, resource: string) => {
-			const resolved = resolveResourceUrl(resource, baseUrl, query);
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute(resource),
+				baseUrl,
+				query,
+			);
 			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
@@ -434,11 +500,11 @@ function getDashResourceBaseUrl(
 		"BaseURL",
 	);
 	const baseUrl = adaptationBaseUrl
-		? new URL(adaptationBaseUrl, manifestBaseUrl).toString()
+		? resolveResourceUrl(adaptationBaseUrl, manifestBaseUrl, "")
 		: manifestBaseUrl;
 
 	return representationBaseUrl
-		? new URL(representationBaseUrl, baseUrl).toString()
+		? resolveResourceUrl(representationBaseUrl, baseUrl, "")
 		: baseUrl;
 }
 
@@ -630,9 +696,10 @@ function shouldFallbackToGenericMpd(error: unknown): boolean {
 export async function materializeMpdAsHlsPlaylist(
 	manifestUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const response = await fetch(manifestUrl, {
-		signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
 	if (!response.ok) {
@@ -795,21 +862,41 @@ export async function materializeMpdAsHlsPlaylist(
 export async function materializeStreamingInput(
 	videoUrl: string,
 	dirPath: string,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
-	if (isHlsUrl(videoUrl)) {
-		return await materializeHlsPlaylist(videoUrl, dirPath);
-	}
+	let inputPath: string;
 
-	if (isMpdUrl(videoUrl)) {
+	if (isHlsUrl(videoUrl)) {
+		inputPath = await materializeHlsPlaylist(
+			videoUrl,
+			dirPath,
+			undefined,
+			abortSignal,
+		);
+	} else if (isMpdUrl(videoUrl)) {
 		try {
-			return await materializeMpdAsHlsPlaylist(videoUrl, dirPath);
+			inputPath = await materializeMpdAsHlsPlaylist(
+				videoUrl,
+				dirPath,
+				abortSignal,
+			);
 		} catch (err) {
 			if (!shouldFallbackToGenericMpd(err)) throw err;
-			return await materializeMpdManifest(videoUrl, dirPath);
+			inputPath = await materializeMpdManifest(videoUrl, dirPath, abortSignal);
+		}
+	} else {
+		return videoUrl;
+	}
+
+	for (const entry of await readdir(dirPath)) {
+		if (!entry.endsWith(".m3u8") && !entry.endsWith(".mpd")) continue;
+		const content = await file(join(dirPath, entry)).text();
+		if (/\b(?:file|data):/i.test(content)) {
+			throw new Error("Unsupported manifest resource protocol");
 		}
 	}
 
-	return videoUrl;
+	return inputPath;
 }
 
 async function drainStream(
@@ -856,6 +943,19 @@ async function readStreamWithLimit(
 	return chunks
 		.map((chunk) => decoder.decode(chunk, { stream: true }))
 		.join("");
+}
+
+async function storageResponseError(
+	prefix: string,
+	response: Response,
+): Promise<Error> {
+	const body = response.body
+		? await readStreamWithLimit(response.body, STORAGE_ERROR_BODY_LIMIT_BYTES)
+		: "";
+	const details = body.trim();
+	return new Error(
+		`${prefix}: ${response.status} ${response.statusText}${details ? ` ${details}` : ""}`,
+	);
 }
 
 function parseProgressFromStderr(
@@ -917,6 +1017,96 @@ async function runFfmpegCommand(
 	}
 }
 
+export function parseFfmpegHlsCapabilities(
+	helpText: string,
+): FfmpegHlsCapabilities {
+	return {
+		allowedSegmentExtensions: helpText.includes("-allowed_segment_extensions"),
+		extensionPicky: helpText.includes("-extension_picky"),
+	};
+}
+
+async function detectFfmpegHlsCapabilities(): Promise<FfmpegHlsCapabilities> {
+	const proc = registerSubprocess(
+		spawn({
+			cmd: ["ffmpeg", "-hide_banner", "-h", "demuxer=hls"],
+			stdout: "pipe",
+			stderr: "pipe",
+		}),
+	);
+
+	try {
+		const [stdoutText, stderrText, exitCode] = await withTimeout(
+			Promise.all([
+				readStreamWithLimit(
+					proc.stdout as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				),
+				readStreamWithLimit(
+					proc.stderr as ReadableStream<Uint8Array>,
+					MAX_STDERR_BYTES,
+				),
+				proc.exited,
+			]),
+			FFMPEG_HLS_CAPABILITY_TIMEOUT_MS,
+			() => terminateProcess(proc),
+		);
+
+		if (exitCode !== 0) {
+			throw new Error(
+				`Failed to inspect FFmpeg HLS options: ${stderrText.slice(-1000)}`,
+			);
+		}
+
+		return parseFfmpegHlsCapabilities(`${stdoutText}\n${stderrText}`);
+	} finally {
+		await terminateProcess(proc);
+	}
+}
+
+export async function getFfmpegHlsCapabilities(): Promise<FfmpegHlsCapabilities> {
+	const capabilitiesPromise =
+		ffmpegHlsCapabilitiesPromise ?? detectFfmpegHlsCapabilities();
+	ffmpegHlsCapabilitiesPromise = capabilitiesPromise;
+
+	try {
+		return await capabilitiesPromise;
+	} catch (error) {
+		if (ffmpegHlsCapabilitiesPromise === capabilitiesPromise) {
+			ffmpegHlsCapabilitiesPromise = undefined;
+		}
+		throw error;
+	}
+}
+
+export function buildStreamingDownloadFfmpegArgs(
+	inputPath: string,
+	outputPath: string,
+	capabilities: FfmpegHlsCapabilities = LEGACY_FFMPEG_HLS_CAPABILITIES,
+): string[] {
+	return [
+		"ffmpeg",
+		"-threads",
+		"2",
+		"-protocol_whitelist",
+		"file,http,https,tcp,tls,crypto,data",
+		"-allowed_extensions",
+		"ALL",
+		...(capabilities.allowedSegmentExtensions
+			? ["-allowed_segment_extensions", "ALL"]
+			: []),
+		...(capabilities.extensionPicky ? ["-extension_picky", "0"] : []),
+		"-i",
+		inputPath,
+		"-map",
+		"0",
+		"-c",
+		"copy",
+		"-y",
+		outputPath,
+	];
+}
+
 async function downloadStreamingVideoToTemp(
 	videoUrl: string,
 	abortSignal?: AbortSignal,
@@ -930,24 +1120,19 @@ async function downloadStreamingVideoToTemp(
 	};
 
 	try {
-		const inputPath = await materializeStreamingInput(videoUrl, manifestDir);
+		const ffmpegHlsCapabilities = await getFfmpegHlsCapabilities();
+		const inputPath = await materializeStreamingInput(
+			videoUrl,
+			manifestDir,
+			abortSignal,
+		);
 
 		await runFfmpegCommand(
-			[
-				"ffmpeg",
-				"-threads",
-				"2",
-				"-protocol_whitelist",
-				"file,http,https,tcp,tls,crypto,data",
-				"-i",
+			buildStreamingDownloadFfmpegArgs(
 				inputPath,
-				"-map",
-				"0",
-				"-c",
-				"copy",
-				"-y",
 				tempFile.path,
-			],
+				ffmpegHlsCapabilities,
+			),
 			DOWNLOAD_TIMEOUT_MS,
 			abortSignal,
 		);
@@ -1709,7 +1894,7 @@ async function uploadWithRetry(
 	presignedUrl: string,
 	contentType: string,
 	contentLength: number,
-	bodyFactory: () => Blob | Uint8Array | ArrayBuffer | BunFile,
+	bodyFactory: () => Blob | BunFile,
 ): Promise<void> {
 	let lastError: Error | undefined;
 
@@ -1748,8 +1933,9 @@ async function uploadWithRetry(
 			return;
 		}
 
-		const responseError = new Error(
-			`Storage upload failed: ${response.status} ${response.statusText}`,
+		const responseError = await storageResponseError(
+			"Storage upload failed",
+			response,
 		);
 
 		if (
@@ -1789,6 +1975,226 @@ export async function uploadFileToS3(
 	await uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
 		file(filePath),
 	);
+}
+
+async function postMultipartJson<TBody extends Record<string, unknown>>(
+	url: string,
+	body: TBody,
+	webhookSecret: string | undefined,
+): Promise<Response> {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (webhookSecret) {
+		headers["x-media-server-secret"] = webhookSecret;
+	}
+
+	return await fetch(url, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+	});
+}
+
+async function getMultipartPartUrl(
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+	partNumber: number,
+	contentLength: number,
+): Promise<string> {
+	const response = await postMultipartJson(
+		target.signPartUrl,
+		{
+			videoId: target.videoId,
+			key: target.key,
+			uploadId: target.uploadId,
+			partNumber,
+			contentLength,
+		},
+		target.webhookSecret,
+	);
+
+	if (!response.ok) {
+		throw await storageResponseError("Multipart part signing failed", response);
+	}
+
+	const data = await response.json().catch(() => null);
+	const url = (data as { url?: unknown } | null)?.url;
+	if (typeof url !== "string" || !url) {
+		throw new Error("Multipart part signing returned an invalid URL");
+	}
+
+	return url;
+}
+
+async function uploadMultipartPart(
+	url: string,
+	body: Blob,
+	contentLength: number,
+	partNumber: number,
+): Promise<string> {
+	let lastError: Error | undefined;
+
+	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+		let response: Response;
+		try {
+			response = await fetch(url, {
+				method: "PUT",
+				headers: {
+					"Content-Length": contentLength.toString(),
+				},
+				body,
+				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+			});
+		} catch (err) {
+			const uploadError = err instanceof Error ? err : new Error(String(err));
+
+			if (attempt === UPLOAD_MAX_RETRIES) {
+				throw uploadError;
+			}
+
+			lastError = uploadError;
+			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+			continue;
+		}
+
+		if (response.ok) {
+			const etag = response.headers.get("etag");
+			if (!etag) {
+				throw new Error(`Multipart upload part ${partNumber} missing ETag`);
+			}
+			return etag;
+		}
+
+		const responseError = await storageResponseError(
+			`Multipart upload part ${partNumber} failed`,
+			response,
+		);
+
+		if (
+			!isRetryableUploadStatus(response.status) ||
+			attempt === UPLOAD_MAX_RETRIES
+		) {
+			throw responseError;
+		}
+
+		lastError = responseError;
+		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+	}
+
+	throw lastError ?? new Error(`Multipart upload part ${partNumber} failed`);
+}
+
+async function completeMultipartUpload(
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+	parts: UploadedPart[],
+): Promise<void> {
+	const response = await postMultipartJson(
+		target.completeUrl,
+		{
+			videoId: target.videoId,
+			key: target.key,
+			uploadId: target.uploadId,
+			parts,
+		},
+		target.webhookSecret,
+	);
+
+	if (!response.ok) {
+		throw await storageResponseError(
+			"Multipart upload completion failed",
+			response,
+		);
+	}
+}
+
+async function abortMultipartUpload(
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+): Promise<void> {
+	const response = await postMultipartJson(
+		target.abortUrl,
+		{
+			videoId: target.videoId,
+			key: target.key,
+			uploadId: target.uploadId,
+		},
+		target.webhookSecret,
+	);
+
+	if (!response.ok) {
+		throw await storageResponseError("Multipart upload abort failed", response);
+	}
+}
+
+async function uploadFileMultipart(
+	filePath: string,
+	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+): Promise<void> {
+	const fileHandle = file(filePath);
+	const contentLength = fileHandle.size;
+	const partSize = Math.floor(target.partSize);
+	const parts: UploadedPart[] = [];
+
+	try {
+		if (contentLength <= 0) {
+			throw new Error("Multipart upload requires a non-empty file");
+		}
+
+		if (partSize < MULTIPART_MIN_PART_SIZE_BYTES) {
+			throw new Error("Multipart upload part size is too small");
+		}
+
+		const partCount = Math.ceil(contentLength / partSize);
+		if (partCount > MULTIPART_MAX_PARTS) {
+			throw new Error(
+				`Multipart upload would require too many parts: ${partCount}/${MULTIPART_MAX_PARTS}`,
+			);
+		}
+
+		for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+			const start = (partNumber - 1) * partSize;
+			const end = Math.min(start + partSize, contentLength);
+			const partLength = end - start;
+			const url = await getMultipartPartUrl(target, partNumber, partLength);
+			const etag = await uploadMultipartPart(
+				url,
+				fileHandle.slice(start, end),
+				partLength,
+				partNumber,
+			);
+			parts.push({ partNumber, etag, size: partLength });
+		}
+
+		await completeMultipartUpload(target, parts);
+	} catch (error) {
+		await abortMultipartUpload(target).catch((abortError) => {
+			console.warn(
+				"Multipart upload abort failed:",
+				abortError instanceof Error ? abortError.message : abortError,
+			);
+		});
+		throw error;
+	}
+}
+
+export async function abortStorageUploadTarget(
+	target: StorageUploadTarget,
+): Promise<void> {
+	if (target.type === "put") return;
+	await abortMultipartUpload(target);
+}
+
+export async function uploadFileToStorage(
+	filePath: string,
+	target: StorageUploadTarget,
+	contentType: string,
+): Promise<void> {
+	if (target.type === "put") {
+		await uploadFileToS3(filePath, target.url, contentType);
+		return;
+	}
+
+	await uploadFileMultipart(filePath, target);
 }
 
 export async function copyFileToMp4(

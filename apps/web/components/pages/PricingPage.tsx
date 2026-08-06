@@ -95,7 +95,7 @@ export const PricingPage = () => {
 								icon={faHeart}
 							/>
 							<span className="text-sm font-medium text-gray-12">
-								Trusted by 40,000+ teams, builders and creators
+								Trusted by 50,000+ teams, builders and creators
 							</span>
 						</motion.button>
 					</motion.div>

@@ -123,12 +123,14 @@ impl ExporterBuilder {
                         end: duration,
                         timescale: 1.0,
                         name: None,
+                        speed_audio_mode: None,
                     })
                 })
                 .collect();
             if !segments.is_empty() {
                 project_config.timeline = Some(TimelineConfiguration {
                     segments,
+                    transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
@@ -154,6 +156,13 @@ impl ExporterBuilder {
             cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
                 .await
                 .map_err(Error::MediaLoad)?;
+
+        // Audio decodes in the background after create_segments; exports must
+        // not silently drop a track, so fail loudly if any decode failed.
+        for segment in &segments {
+            segment.audio.get().await.map_err(Error::MediaLoad)?;
+            segment.system_audio.get().await.map_err(Error::MediaLoad)?;
+        }
 
         let output_path = self
             .output_path

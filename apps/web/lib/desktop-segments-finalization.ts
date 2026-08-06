@@ -1,8 +1,10 @@
 import { db } from "@cap/database";
-import { videoUploads } from "@cap/database/schema";
+import { users, videos, videoUploads } from "@cap/database/schema";
 import type { User, Video } from "@cap/web-domain";
 import { and, eq, notInArray } from "drizzle-orm";
 import { start } from "workflow/api";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { transcribeVideo } from "@/lib/transcribe";
 import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-recording";
 
 export { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
@@ -20,6 +22,50 @@ const getAffectedRows = (result: unknown) => {
 
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
+
+async function queueEarlySegmentsTranscription({
+	videoId,
+	userId,
+}: {
+	videoId: Video.VideoId;
+	userId: User.UserId;
+}): Promise<void> {
+	// An active live transcription is seconds away from promoting itself to
+	// canonical (or queueing this exact fallback itself); starting a full
+	// pass now would pay for the same audio twice.
+	const [video] = await db()
+		.select({ metadata: videos.metadata })
+		.from(videos)
+		.where(eq(videos.id, videoId));
+	if (video?.metadata?.liveTranscript?.status === "active") {
+		console.log(
+			`[queueEarlySegmentsTranscription] Live transcription active for ${videoId}; deferring to promotion`,
+		);
+		return;
+	}
+
+	const [owner] = await db()
+		.select({
+			email: users.email,
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(users)
+		.where(eq(users.id, userId));
+
+	const result = await transcribeVideo(
+		videoId,
+		userId,
+		isAiGenerationEnabledForUser(owner),
+		{ earlyFromSegments: true },
+	);
+
+	if (!result.success) {
+		console.warn(
+			`[queueEarlySegmentsTranscription] Not queued for ${videoId}: ${result.message}`,
+		);
+	}
+}
 
 export async function queueDesktopSegmentsFinalization({
 	videoId,
@@ -73,6 +119,18 @@ export async function queueDesktopSegmentsFinalization({
 				userId,
 			},
 		]);
+		// The segments are fully uploaded at this point, so transcription can
+		// start right away from the segment audio instead of waiting for the mux
+		// into result.mp4. Failures here never block finalization: the workflow
+		// re-queues transcription after the mux exactly as before.
+		await queueEarlySegmentsTranscription({ videoId, userId }).catch(
+			(error) => {
+				console.warn(
+					`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
+					error,
+				);
+			},
+		);
 		return "queued";
 	} catch (error) {
 		await db()

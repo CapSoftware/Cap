@@ -35,6 +35,7 @@ outputs
 *.sln
 *.sw?
 .turbo
+bun.lock
 pnpm-lock.yaml
 .zed
 .output
@@ -69,6 +70,7 @@ scripts/releases-backfill-data.txt
 
 # SEO agent state (machine-local, contains sensitive ranking data)
 /seo/
+scripts/seo/
 /docs/
 /.growth-agent/
 

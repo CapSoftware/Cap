@@ -8,9 +8,18 @@ interface MediaServerError {
 
 const MAX_RETRIES = 5;
 const INITIAL_RETRY_DELAY_MS = 2000;
+const DEFAULT_RETRYABLE_STATUSES = new Set([502, 503, 504]);
 
-function isRetryableStatus(status: number): boolean {
-	return status === 503 || status === 504 || status === 502;
+interface FetchRetryOptions {
+	maxRetries?: number;
+	retryableStatuses?: Set<number>;
+}
+
+function isRetryableStatus(
+	status: number,
+	retryableStatuses: Set<number>,
+): boolean {
+	return retryableStatuses.has(status);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -46,15 +55,18 @@ function getMediaServerHeaders(
 async function fetchWithRetry(
 	url: string,
 	options: RequestInit,
-	maxRetries = MAX_RETRIES,
+	retryOptions: FetchRetryOptions = {},
 ): Promise<Response> {
 	let lastError: Error | undefined;
+	const maxRetries = retryOptions.maxRetries ?? MAX_RETRIES;
+	const retryableStatuses =
+		retryOptions.retryableStatuses ?? DEFAULT_RETRYABLE_STATUSES;
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		try {
 			const response = await fetch(url, options);
 
-			if (!isRetryableStatus(response.status)) {
+			if (!isRetryableStatus(response.status, retryableStatuses)) {
 				return response;
 			}
 
@@ -177,16 +189,25 @@ export interface MediaServerProbeResult {
 	fileSize: number;
 }
 
+export interface ProbeVideoViaMediaServerOptions {
+	maxRetries?: number;
+}
+
 export async function probeVideoViaMediaServer(
 	videoUrl: string,
+	options: ProbeVideoViaMediaServerOptions = {},
 ): Promise<MediaServerProbeResult> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
-	const response = await fetchWithRetry(`${mediaServerUrl}/video/probe`, {
-		method: "POST",
-		headers: getMediaServerHeaders(mediaServerSecret),
-		body: JSON.stringify({ videoUrl }),
-	});
+	const response = await fetchWithRetry(
+		`${mediaServerUrl}/video/probe`,
+		{
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({ videoUrl }),
+		},
+		{ maxRetries: options.maxRetries },
+	);
 
 	if (!response.ok) {
 		let errorData: MediaServerError;
@@ -245,12 +266,16 @@ export async function fetchConvertedVideoViaMediaServer(
 ): Promise<Response> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
-	return await fetchWithRetry(`${mediaServerUrl}/video/convert`, {
-		method: "POST",
-		headers: getMediaServerHeaders(mediaServerSecret),
-		body: JSON.stringify({
-			videoUrl,
-			...(inputExtension ? { inputExtension } : {}),
-		}),
-	});
+	return await fetchWithRetry(
+		`${mediaServerUrl}/video/convert`,
+		{
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({
+				videoUrl,
+				...(inputExtension ? { inputExtension } : {}),
+			}),
+		},
+		{ maxRetries: 0 },
+	);
 }

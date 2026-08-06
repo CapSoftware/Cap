@@ -11,6 +11,7 @@ import {
 	type SegmentRecordings,
 	type TimelineSegment,
 } from "~/utils/tauri";
+import { type ClipTransition, clipTimelineOffsets } from "./clip-transitions";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -74,13 +75,15 @@ export function getSelectedTranscriptionSettings() {
 }
 
 interface SourceToEditedMapping {
+	segmentIndex: number;
 	sourceStart: number;
 	sourceEnd: number;
 	editedStart: number;
 	timescale: number;
 }
 
-interface MappedTimeRange {
+export interface MappedTimeRange {
+	segmentIndex: number;
 	start: number;
 	end: number;
 }
@@ -88,6 +91,7 @@ interface MappedTimeRange {
 function buildSourceToEditedMappings(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
 ): SourceToEditedMapping[] {
 	const recordingOffsets: number[] = [];
 	let cumulativeOffset = 0;
@@ -97,20 +101,20 @@ function buildSourceToEditedMappings(
 	}
 
 	const mappings: SourceToEditedMapping[] = [];
-	let editedOffset = 0;
+	const editedOffsets = clipTimelineOffsets(timelineSegments, transitions);
 
-	for (const seg of timelineSegments) {
+	for (let index = 0; index < timelineSegments.length; index++) {
+		const seg = timelineSegments[index];
 		const recIdx = seg.recordingSegment ?? 0;
 		const recOff = recordingOffsets[recIdx] ?? 0;
 
 		mappings.push({
+			segmentIndex: index,
 			sourceStart: recOff + seg.start,
 			sourceEnd: recOff + seg.end,
-			editedStart: editedOffset,
+			editedStart: editedOffsets[index],
 			timescale: seg.timescale,
 		});
-
-		editedOffset += (seg.end - seg.start) / seg.timescale;
 	}
 
 	return mappings;
@@ -127,6 +131,7 @@ function mapTimeRangeWithinMapping(
 	if (overlapStart >= overlapEnd) return null;
 
 	return {
+		segmentIndex: mapping.segmentIndex,
 		start:
 			mapping.editedStart +
 			(overlapStart - mapping.sourceStart) / mapping.timescale,
@@ -160,6 +165,7 @@ export function mapCaptionsToEditedTimeline(
 	rawSegments: CaptionSegment[],
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
 ): CaptionSegment[] {
 	const sanitizedSegments = rawSegments.map(clampCaptionSegmentWords);
 
@@ -170,6 +176,7 @@ export function mapCaptionsToEditedTimeline(
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	);
 
 	const result: CaptionSegment[] = [];
@@ -296,6 +303,7 @@ export function deriveCaptionTrackSegments(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 	previousTrack: CaptionTrackSegment[] = [],
+	transitions: ClipTransition[] = [],
 ): CaptionTrackSegment[] {
 	const overridesBySourceId = new Map<string, CaptionTrackOverrides>();
 	for (const segment of previousTrack) {
@@ -316,6 +324,7 @@ export function deriveCaptionTrackSegments(
 		sourceSegments,
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	);
 
 	return mapped
@@ -340,10 +349,12 @@ export function mapSourceTimeToEdited(
 	sourceTime: number,
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
 ): number | null {
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	);
 	for (const mapping of mappings) {
 		if (sourceTime >= mapping.sourceStart && sourceTime <= mapping.sourceEnd) {
@@ -366,10 +377,12 @@ export function mapSourceRangeToEdited(
 	sourceEnd: number,
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
 ): MappedTimeRange[] {
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	);
 	const ranges: MappedTimeRange[] = [];
 	for (const mapping of mappings) {
@@ -388,23 +401,37 @@ export function mapEditedTimeToSource(
 	editedTime: number,
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
+	transitions: ClipTransition[] = [],
+	sourceRange?: { start: number; end: number },
+	overlapPreference: "outgoing" | "incoming" = "outgoing",
 ): number | null {
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,
+		transitions,
 	);
+	let fallback: number | null = null;
 	for (const mapping of mappings) {
 		const editedEnd =
 			mapping.editedStart +
 			(mapping.sourceEnd - mapping.sourceStart) / mapping.timescale;
 		if (editedTime >= mapping.editedStart && editedTime <= editedEnd) {
-			return (
+			const sourceTime =
 				mapping.sourceStart +
-				(editedTime - mapping.editedStart) * mapping.timescale
-			);
+				(editedTime - mapping.editedStart) * mapping.timescale;
+			if (
+				sourceRange &&
+				sourceRange.start < mapping.sourceEnd &&
+				sourceRange.end > mapping.sourceStart
+			) {
+				return sourceTime;
+			}
+			if (fallback === null || overlapPreference === "incoming") {
+				fallback = sourceTime;
+			}
 		}
 	}
-	return null;
+	return fallback;
 }
 
 export function applyCaptionResultToProject<
@@ -419,6 +446,7 @@ export function applyCaptionResultToProject<
 			| ({
 					segments: TimelineSegment[];
 					captionSegments?: CaptionTrackSegment[] | null;
+					transitions?: ClipTransition[] | null;
 			  } & Record<string, unknown>)
 			| null;
 	},
@@ -460,6 +488,7 @@ export function applyCaptionResultToProject<
 		timeline.segments,
 		recordingSegments,
 		timeline.captionSegments ?? [],
+		timeline.transitions ?? [],
 	);
 }
 
@@ -788,6 +817,42 @@ if (import.meta.vitest) {
 			);
 
 			expect(rederived.find((s) => s.id === "capA")?.fontSizeOverride).toBe(42);
+		});
+	});
+
+	describe("mapEditedTimeToSource", () => {
+		it("selects overlap sources explicitly and honors a caption source hint", () => {
+			const segments: TimelineSegment[] = [
+				{ start: 4, end: 6, timescale: 1, recordingSegment: 0 },
+				{ start: 0, end: 2, timescale: 1, recordingSegment: 1 },
+			];
+			const recordings = [
+				{ display: { duration: 10 } } as SegmentRecordings,
+				{ display: { duration: 10 } } as SegmentRecordings,
+			];
+			const transitions: ClipTransition[] = [
+				{ segmentIndex: 1, type: "cross-fade", duration: 0.5 },
+			];
+
+			expect(
+				mapEditedTimeToSource(1.75, segments, recordings, transitions),
+			).toBeCloseTo(5.75);
+			expect(
+				mapEditedTimeToSource(
+					1.75,
+					segments,
+					recordings,
+					transitions,
+					undefined,
+					"incoming",
+				),
+			).toBeCloseTo(10.25);
+			expect(
+				mapEditedTimeToSource(1.75, segments, recordings, transitions, {
+					start: 5,
+					end: 6,
+				}),
+			).toBeCloseTo(5.75);
 		});
 	});
 }

@@ -1,0 +1,41 @@
+---
+title: Faster Editing, Manual Layouts, Better Zooms & A/V Sync Fixes
+app: Cap Desktop
+publishedAt: "2026-07-06"
+version: 0.5.4
+image:
+---
+
+This release makes Cap Desktop faster to open, smoother to edit in, and more reliable across recording, playback, uploads, screenshots, licensing, and camera handling.
+
+## Features
+
+- **Custom recordings folder** - Choose where Cap saves local recordings from Settings.
+- **Manual scene layout** - Drag and resize the screen, camera, text, masks, and captions directly on the canvas, with snapping guides for cleaner placement.
+- **Floating scene mode** - Build layouts where screen and camera elements can float independently instead of being locked to the previous scene presets.
+- **Decorative frames** - Add frame styling around recordings and adjust frame settings from the player toolbar.
+- **Better text editing** - Text boxes resize more naturally, preserve font sizing separately from the box, choose readable colors automatically, and open inline editing right after you add a text segment.
+- **Faster timeline edits** - New text and track segments are created at the playhead, selected immediately, and placed with fewer extra clicks.
+- **Clearer zoom editing** - Automatic and manual zoom segments are labeled, locked zoom areas explain how to edit them, and zoom behavior is easier to tune.
+- **Smoother cursor, zoom, and motion blur** - Zooms now use spring-based motion, re-aim more accurately from cursor movement, reach screen corners better, and render cursor and display motion blur more naturally.
+
+## Fixes
+
+- **A/V sync fixes** - Recording, encoding, playback, and editor preview timestamps have been hardened so audio and video stay aligned more reliably.
+- **System audio fixes** - Windows system audio stays on the recording timeline even when audio is intermittent or silent.
+- **macOS microphone fix** - 96 kHz microphones on macOS no longer produce incorrect audio duration in recordings.
+- **Windows recording fixes** - The target picker no longer leaves ghost overlays after recording, preview sync is more accurate, and hardware H.264 encoders are tested before recording uses them.
+- **Screenshot clipboard fix** - Copied screenshots on Windows use a white background when needed instead of showing transparency artifacts.
+- **Upload recovery fixes** - Desktop upload finalization can retry final segment manifests, recover Google Drive uploads more reliably, and rotate failed recovery candidates.
+- **Changelog and license fixes** - Settings pages now handle API responses more reliably, refresh license state correctly, and keep changelog rendering errors contained.
+- **Camera and GPU recovery fixes** - macOS camera capture can fall back when the system returns no frames, graphics recovery only runs for relevant startup failures, and restarting after a discarded recording stays responsive.
+- **Camera privacy fix** - Opening the editor releases the idle camera feed so the OS camera indicator does not stay on unnecessarily.
+- **Mic error UX** - Missing microphone errors now show a toast instead of blocking the recording flow.
+- **Editor interaction fixes** - The playhead snaps cleanly to the timeline origin, masks no longer show unwanted fill tints, and add-track popovers close and restore focus correctly.
+
+## Performance
+
+- **Faster editor launch** - App windows show earlier with the right background color, the first frame is pre-rendered, waveforms lazy-load, and editor layout handshakes are warmed before opening.
+- **Faster playback start** - Background audio decoding, persistent audio output, progressive audio pre-rendering, and bounded buffering reduce the wait after pressing play.
+- **Faster rendering and export setup** - Screen and camera decoders initialize together, background audio decodes finish before export, and file exports skip unnecessary transparency scans.
+- **Smoother app startup** - Fonts and emoji warm at app mount, bundled fonts render more consistently, and window-open fade animations were removed to avoid slow-looking transitions.

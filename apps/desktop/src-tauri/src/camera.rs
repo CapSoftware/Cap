@@ -279,7 +279,7 @@ impl CameraPreviewManager {
             store_save_generation: Arc::new(AtomicU64::new(0)),
             preview: None,
             preview_session_id: Arc::new(AtomicU64::new(0)),
-            wgpu_instance: wgpu::Instance::default(),
+            wgpu_instance: cap_rendering::create_wgpu_instance_sync(),
         }
     }
 
@@ -560,10 +560,11 @@ impl InitializedCameraPreview {
             .with_context(|| "Failed to receive initialized wgpu surface")?;
         let surface = surface.with_context(|| "Failed to initialize wgpu surface")?;
 
+        let force_software_adapter = cap_rendering::force_software_wgpu_adapter();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: false,
+                force_fallback_adapter: force_software_adapter,
                 compatible_surface: Some(&surface),
             })
             .await

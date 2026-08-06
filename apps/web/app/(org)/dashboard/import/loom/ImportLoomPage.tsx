@@ -602,7 +602,7 @@ export const ImportLoomPage = () => {
 									variant="dark"
 									disabled={!isValidLoomUrl || isImporting}
 								>
-									{isImporting ? "Importing..." : "Import Video"}
+									{isImporting ? "Importing..." : "Import Loom"}
 								</Button>
 							</div>
 						</div>

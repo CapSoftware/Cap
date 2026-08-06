@@ -1,13 +1,11 @@
-"use client";
-
 import { Clapperboard, Zap } from "lucide-react";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
 export const macScreenRecordingWithAudioContent: SeoPageContent = {
-	title: "Mac Screen Recording with Audio — Capture System Sound & Mic | Cap",
+	title: "Record Your Mac Screen With Audio — System Sound and Mic, Built In",
 	description:
-		"Record your Mac screen with both system audio and microphone using Cap. The free, open-source solution to macOS's missing internal audio recording. No plugins, no setup — just press record.",
+		"Record your Mac screen with both system audio and microphone using Cap. The free, open-source fix for macOS's missing internal audio recording. No plugins, no setup — just press record.",
 
 	featuresTitle: "Everything You Need for Mac Screen Recording with Audio",
 	featuresDescription:
@@ -196,7 +194,7 @@ export const macScreenRecordingWithAudioContent: SeoPageContent = {
 		{
 			title: "Software Tutorials and Walkthroughs",
 			description:
-				"Create step-by-step tutorials where narration and application sounds both matter. Cap records your Mac screen with microphone and system audio so viewers hear exactly what you hear as you demonstrate software.",
+				"Create step-by-step tutorials where narration and application sounds both matter. Cap records your Mac screen with microphone and system audio so viewers hear exactly what you hear as you demonstrate software. New to it? Our <a href='/blog/record-screen-mac-system-audio'>step-by-step guide to screen recording on Mac with audio</a> walks through every click.",
 		},
 		{
 			title: "Recording Video Calls and Presentations",

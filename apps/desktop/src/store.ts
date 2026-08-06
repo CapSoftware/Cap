@@ -2,13 +2,37 @@ import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
 import type { AutomationsStore } from "~/utils/automations";
-import type { GeneralSettingsStore } from "~/utils/general-settings";
+import {
+	type GeneralSettingsStore,
+	RECORDING_START_SAFETY_DEFAULTS,
+	type RecordingStartSafetySettings,
+} from "~/utils/general-settings";
 import type {
 	AuthStore,
 	HotkeysStore,
 	PresetsStore,
 	RecordingSettingsStore,
 } from "~/utils/tauri";
+
+export type TeleprompterStore = {
+	script: string;
+	fontSize: number;
+	wordsPerMinute: number;
+	lineHeight: number;
+	showCueMarkers: boolean;
+	mirror: boolean;
+	windowOpacityPercent: number;
+};
+
+export const teleprompterDefaults: TeleprompterStore = {
+	script: "",
+	fontSize: 30,
+	wordsPerMinute: 150,
+	lineHeight: 1.5,
+	showCueMarkers: true,
+	mirror: false,
+	windowOpacityPercent: 92,
+};
 
 export type UserProfileStore = {
 	userId: string | null;
@@ -18,6 +42,10 @@ export type UserProfileStore = {
 		imageUrl: string | null;
 	};
 	updatedAt: number;
+};
+
+export type MainWindowUIStore = {
+	expanded: boolean;
 };
 
 let _store: Promise<Store> | undefined;
@@ -76,9 +104,18 @@ export const presetsStore = declareStore<PresetsStore>("presets");
 export const authStore = declareStore<AuthStore>("auth");
 export const automationsStore = declareStore<AutomationsStore>("automations");
 export const userProfileStore = declareStore<UserProfileStore>("user_profile");
+export const mainWindowUIStore = declareStore<MainWindowUIStore>(
+	"main_window_ui",
+	{ expanded: false },
+);
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
+export const recordingStartSafetyStore =
+	declareStore<RecordingStartSafetySettings>(
+		"recording_start_safety",
+		RECORDING_START_SAFETY_DEFAULTS,
+	);
 export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
 	"recording_settings",
 	{
@@ -91,4 +128,8 @@ export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
 		cameraDeviceSettings: {},
 		microphoneDeviceSettings: {},
 	},
+);
+export const teleprompterStore = declareStore<TeleprompterStore>(
+	"teleprompter",
+	teleprompterDefaults,
 );

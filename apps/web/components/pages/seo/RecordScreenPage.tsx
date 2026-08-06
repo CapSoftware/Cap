@@ -1,5 +1,3 @@
-"use client";
-
 import { Clapperboard, Zap } from "lucide-react";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";

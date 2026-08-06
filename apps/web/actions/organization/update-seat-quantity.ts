@@ -153,6 +153,7 @@ export async function updateSeatQuantity(
 	validateQuantity(newQuantity);
 	const { subscription, subscriptionItem, proSeatsUsed, user } =
 		await getOwnerSubscription(organizationId);
+	const currentQuantity = subscriptionItem.quantity ?? 1;
 
 	if (newQuantity < proSeatsUsed) {
 		throw new Error(
@@ -160,15 +161,30 @@ export async function updateSeatQuantity(
 		);
 	}
 
-	await stripe().subscriptions.update(subscription.id, {
-		items: [
-			{
-				id: subscriptionItem.id,
-				quantity: newQuantity,
-			},
-		],
-		proration_behavior: "create_prorations",
-	});
+	const isSeatIncrease = newQuantity > currentQuantity;
+	const updatedSubscription = await stripe().subscriptions.update(
+		subscription.id,
+		{
+			items: [
+				{
+					id: subscriptionItem.id,
+					quantity: newQuantity,
+				},
+			],
+			proration_behavior: isSeatIncrease
+				? "always_invoice"
+				: "create_prorations",
+			...(isSeatIncrease
+				? { payment_behavior: "pending_if_incomplete" as const }
+				: {}),
+		},
+	);
+
+	if (isSeatIncrease && updatedSubscription.pending_update) {
+		throw new Error(
+			"Payment for the added seats could not be completed. Update your payment method and try again.",
+		);
+	}
 
 	try {
 		await db()

@@ -4,7 +4,6 @@ import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
 import {
 	BarChart3,
 	Database,
@@ -16,9 +15,11 @@ import {
 	Plus,
 	Share2,
 	Shield,
+	ShieldCheck,
 	Sparkles,
 	Video,
 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
@@ -44,7 +45,7 @@ const modalVariants = {
 		scale: 1,
 		y: 0,
 		transition: {
-			type: "spring",
+			type: "spring" as const,
 			duration: 0.4,
 			damping: 25,
 			stiffness: 500,
@@ -137,6 +138,11 @@ const UpgradeModalImpl = ({
 			icon: <Headphones className={iconStyling} />,
 			title: "Priority support",
 			description: "Get help when you need it",
+		},
+		{
+			icon: <ShieldCheck className={iconStyling} />,
+			title: "SOC 2 Type II & ISO 27001",
+			description: "Independently audited security & compliance",
 		},
 	];
 

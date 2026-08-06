@@ -172,42 +172,17 @@ export const DownloadPage = () => {
 						)}
 						{platform !== "linux" && (
 							<a
-								href="/download/linux"
+								href="/download/linux-deb"
 								onClick={() =>
-									trackDownloadClick("other_option_linux", "/download/linux")
+									trackDownloadClick(
+										"other_option_linux_deb",
+										"/download/linux-deb",
+									)
 								}
 								className="text-sm transition-all text-gray-10 hover:underline"
 							>
-								Linux AppImage
+								Linux .deb
 							</a>
-						)}
-						{platform === "linux" && (
-							<>
-								<a
-									href="/download/linux-deb"
-									onClick={() =>
-										trackDownloadClick(
-											"other_option_linux_deb",
-											"/download/linux-deb",
-										)
-									}
-									className="text-sm transition-all text-gray-10 hover:underline"
-								>
-									Debian/Ubuntu
-								</a>
-								<a
-									href="/download/linux-rpm"
-									onClick={() =>
-										trackDownloadClick(
-											"other_option_linux_rpm",
-											"/download/linux-rpm",
-										)
-									}
-									className="text-sm transition-all text-gray-10 hover:underline"
-								>
-									Fedora/RHEL
-								</a>
-							</>
 						)}
 						{platform === "macos" && isIntel && (
 							<a
@@ -299,6 +274,13 @@ export const DownloadPage = () => {
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Mac Screen Recorder
+						</Link>
+						<span className="hidden md:inline">•</span>
+						<Link
+							href="/mac-screen-recording-with-audio"
+							className="text-xs hover:text-gray-8 hover:underline"
+						>
+							Mac Audio Recording
 						</Link>
 						<span className="hidden md:inline">•</span>
 						<Link

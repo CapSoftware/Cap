@@ -22,6 +22,10 @@ struct Uniforms {
     _padding1b: f32,
     _padding1c: f32,
     border_color: vec4<f32>,
+    // Per-corner multipliers on rounding_px: (tl, tr, bl, br). All 1s keeps
+    // the uniform rounding; the display squares its top corners against
+    // decorative frame chrome with (0, 0, 1, 1).
+    corner_radii: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -47,6 +51,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
+// Safety ceiling on the radial zoom-blur ray length in card-UV. Real zoom
+// springs produce rays around 0.03-0.05 at the far corners; this only guards
+// synthetic or pathological amounts.
+const MAX_ZOOM_RAY_UV: f32 = 0.10;
+
+// Per-pixel random phase used to dither the fixed 13-tap zoom kernel
+// (deterministic in the fragment position, so renders stay reproducible).
+fn interleaved_noise(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
 fn superellipse_norm(p: vec2<f32>, power: f32) -> f32 {
     let x = pow(abs(p.x), power);
     let y = pow(abs(p.y), power);
@@ -60,6 +75,16 @@ fn rounded_corner_norm(p: vec2<f32>, rounding_type: f32) -> f32 {
 
     let power = 4.0;
     return superellipse_norm(p, power);
+}
+
+// Radius for the corner of the quadrant `p` (center-relative) falls in.
+fn corner_radius_for(p: vec2<f32>) -> f32 {
+    let multiplier = select(
+        select(uniforms.corner_radii.w, uniforms.corner_radii.z, p.x < 0.0),
+        select(uniforms.corner_radii.y, uniforms.corner_radii.x, p.x < 0.0),
+        p.y < 0.0
+    );
+    return uniforms.rounding_px * multiplier;
 }
 
 fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
@@ -127,7 +152,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let center = (uniforms.target_bounds.xy + uniforms.target_bounds.zw) * 0.5;
     let size = (uniforms.target_bounds.zw - uniforms.target_bounds.xy) * 0.5;
     
-    let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+    let dist = sdf_rounded_rect(p - center, size, corner_radius_for(p - center), uniforms.rounding_type);
 
     let min_frame_size = min(size.x, size.y);
     let shadow_enabled = uniforms.shadow > 0.0;
@@ -165,10 +190,24 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let edge_padding = max(2.0, uniforms.border_width + 2.0);
     let edge_padding_uv = edge_padding / uniforms.target_size;
 
-    if target_uv.x < -edge_padding_uv.x ||
-        target_uv.x > 1.0 + edge_padding_uv.x ||
-        target_uv.y < -edge_padding_uv.y ||
-        target_uv.y > 1.0 + edge_padding_uv.y
+    // How far outside the card the motion smear can land (card-UV). Zero when
+    // blur is inactive so the early-outs below stay as tight as before.
+    let blur_mode = uniforms.motion_blur_params.x;
+    let blur_strength = uniforms.motion_blur_params.y;
+    let blur_active = blur_mode >= 0.5 && blur_strength >= 0.001;
+    var blur_reach_uv = vec2<f32>(0.0);
+    if blur_active {
+        if blur_mode < 1.5 {
+            blur_reach_uv = abs(uniforms.motion_blur_vector);
+        } else {
+            blur_reach_uv = vec2<f32>(MAX_ZOOM_RAY_UV);
+        }
+    }
+
+    if target_uv.x < -edge_padding_uv.x - blur_reach_uv.x ||
+        target_uv.x > 1.0 + edge_padding_uv.x + blur_reach_uv.x ||
+        target_uv.y < -edge_padding_uv.y - blur_reach_uv.y ||
+        target_uv.y > 1.0 + edge_padding_uv.y + blur_reach_uv.y
     {
         return shadow_color;
     }
@@ -177,13 +216,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let border_outer_coverage = rounded_rect_coverage(
             p - center,
             size + vec2<f32>(uniforms.border_width),
-            uniforms.rounding_px + uniforms.border_width,
+            corner_radius_for(p - center) + uniforms.border_width,
             uniforms.rounding_type
         );
         let border_inner_coverage = rounded_rect_coverage(
             p - center,
             size,
-            uniforms.rounding_px,
+            corner_radius_for(p - center),
             uniforms.rounding_type
         );
         let border_coverage = clamp(border_outer_coverage - border_inner_coverage, 0.0, 1.0);
@@ -200,11 +239,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let shape_coverage = rounded_rect_coverage(
         p - center,
         size,
-        uniforms.rounding_px,
+        corner_radius_for(p - center),
         uniforms.rounding_type
     );
-    
-    if shape_coverage <= 0.001 {
+
+    // Outside the card the blur can still land content (the smear escapes the
+    // card edge along the motion), so only take the fast exit when inactive.
+    if shape_coverage <= 0.001 && !blur_active {
         return shadow_color;
     }
 
@@ -212,78 +253,86 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var base_color = sample_texture(sample_target_uv, crop_bounds_uv);
     base_color.a = base_color.a * shape_coverage * uniforms.opacity;
 
-    let blur_mode = uniforms.motion_blur_params.x;
-    let blur_strength = uniforms.motion_blur_params.y;
     let zoom_amount = uniforms.motion_blur_params.z;
 
-    if blur_mode < 0.5 || blur_strength < 0.001 {
+    if !blur_active {
         return composite_source_over(base_color, shadow_color);
     }
 
-    let base_weight = max(base_color.a, 0.001);
-    var accum = base_color * base_weight;
-    var weight_sum = base_weight;
-
+    // Screen Studio semantics: the user amount is baked into the LENGTH of
+    // the kernel (velocity vector / zoom ray) on the CPU side, and the output
+    // is the fully blurred result — never a crossfade with the sharp frame
+    // (a sharp copy mixed over a smear reads as ghosting, not motion). Alpha
+    // is accumulated with the same kernel so the card edge smears along the
+    // motion instead of staying crisp around streaked content. A zero-length
+    // kernel is the identity, so blur fades in and out with velocity
+    // continuously and needs no strength ramp.
     if blur_mode < 1.5 {
-        let motion_vec = uniforms.motion_blur_vector;
-        let motion_len = length(motion_vec);
-        if motion_len < 1e-4 {
+        let velocity_uv = uniforms.motion_blur_vector;
+        if length(velocity_uv) < 1e-5 {
             return composite_source_over(base_color, shadow_color);
         }
 
-        let velocity_uv = motion_vec;
-        let offset_base = 0.0;
-        let k = 20;
+        // 21-tap box along [0, +v]: matches the reference directional filter
+        // (kernel 21 with offset -|v|/2, which anchors the span at the pixel).
+        var accum = vec3<f32>(0.0);
+        var alpha_sum = 0.0;
+        let k = 20.0;
 
-        for (var i = 0; i < 20; i = i + 1) {
-            let bias = velocity_uv * (f32(i) / f32(k) + offset_base);
-            let sample_uv = target_uv + bias;
-
-            if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
-                var sample_color = sample_texture(sample_uv, crop_bounds_uv);
-                sample_color = apply_rounded_corners(sample_color, sample_uv);
-                let sample_weight = sample_color.a;
-                if sample_weight > 1e-6 {
-                    accum += sample_color * sample_weight;
-                    weight_sum += sample_weight;
-                }
-            }
-        }
-    } else {
-        let center = uniforms.motion_blur_zoom_center;
-        let dir = center - target_uv;
-        let dist = length(dir);
-        if dist < 1e-4 || zoom_amount < 1e-4 {
-            return composite_source_over(base_color, shadow_color);
+        for (var i = 0; i <= 20; i = i + 1) {
+            let sample_uv = target_uv + velocity_uv * (f32(i) / k);
+            var tap = sample_texture(sample_uv, crop_bounds_uv);
+            tap = apply_rounded_corners(tap, sample_uv);
+            accum += tap.rgb * tap.a;
+            alpha_sum += tap.a;
         }
 
-        let max_zoom_offset = 0.035;
-        let zoom_scale = min(zoom_amount, 1.0);
-        let scaled_dir = dir / dist * min(dist * zoom_scale, max_zoom_offset);
-        let max_kernel = 13.0;
-
-        for (var i = 0; i < 13; i = i + 1) {
-            let percent = (f32(i) + 0.5) / max_kernel;
-            let weight = 4.0 * (percent - percent * percent);
-            let sample_uv = target_uv + scaled_dir * percent;
-
-            if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
-                var sample_color = sample_texture(sample_uv, crop_bounds_uv);
-                sample_color = apply_rounded_corners(sample_color, sample_uv);
-                let sample_weight = weight * sample_color.a;
-                if sample_weight > 1e-6 {
-                    accum += sample_color * sample_weight;
-                    weight_sum += sample_weight;
-                }
-            }
+        let out_alpha = (alpha_sum / 21.0) * uniforms.opacity;
+        if out_alpha <= 0.0001 || alpha_sum <= 0.0001 {
+            return shadow_color;
         }
+        return composite_source_over(vec4(accum / alpha_sum, out_alpha), shadow_color);
     }
 
-    let final_color = accum / weight_sum;
-    let blurred = vec4(final_color.rgb, base_color.a);
-    let blur_mix = clamp(blur_strength, 0.0, 1.0);
-    let blended = mix(base_color, blurred, blur_mix);
-    return composite_source_over(blended, shadow_color);
+    let zoom_center = uniforms.motion_blur_zoom_center;
+    let dir = zoom_center - target_uv;
+    let center_dist = length(dir);
+    if center_dist < 1e-4 || zoom_amount < 1e-4 {
+        return composite_source_over(base_color, shadow_color);
+    }
+
+    // Radial blur toward the scale origin: ray length grows with distance
+    // from the center (ray = center_dist * amount), parabolic weights peaked
+    // mid-ray, and a per-pixel random phase to dither the 13-tap banding —
+    // all matching the reference zoom filter.
+    let scaled_dir = dir / center_dist * min(center_dist * min(zoom_amount, 1.0), MAX_ZOOM_RAY_UV);
+    let max_kernel = 13.0;
+    let dither = interleaved_noise(p);
+
+    var accum = vec3<f32>(0.0);
+    var alpha_sum = 0.0;
+    var weight_sum = 0.0;
+
+    for (var i = 0; i < 13; i = i + 1) {
+        let percent = (f32(i) + dither) / max_kernel;
+        let weight = 4.0 * (percent - percent * percent);
+        let sample_uv = target_uv + scaled_dir * percent;
+
+        var tap = sample_texture(sample_uv, crop_bounds_uv);
+        tap = apply_rounded_corners(tap, sample_uv);
+        accum += tap.rgb * tap.a * weight;
+        alpha_sum += tap.a * weight;
+        weight_sum += weight;
+    }
+
+    if weight_sum <= 0.0001 || alpha_sum <= 0.0001 {
+        return shadow_color;
+    }
+    let out_alpha = (alpha_sum / weight_sum) * uniforms.opacity;
+    if out_alpha <= 0.0001 {
+        return shadow_color;
+    }
+    return composite_source_over(vec4(accum / alpha_sum, out_alpha), shadow_color);
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
@@ -393,7 +442,7 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
     let coverage = rounded_rect_coverage(
         centered_uv,
         half_size,
-        uniforms.rounding_px,
+        corner_radius_for(centered_uv),
         uniforms.rounding_type
     );
 

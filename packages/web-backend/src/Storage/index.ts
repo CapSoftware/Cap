@@ -244,6 +244,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 				Contents: result.Contents?.map((object) => ({
 					Key: object.Key,
 					Size: object.Size,
+					LastModified: object.LastModified,
 				})),
 				KeyCount: result.KeyCount,
 				IsTruncated: result.IsTruncated,
@@ -488,10 +489,15 @@ const makeGoogleDriveAccess = ({
 			continuationToken?: string;
 		}) =>
 			mapStorageError(
-				repo.listObjectsByPrefix(integrationId, input.prefix, input.maxKeys),
+				repo.listObjectsByPrefix(
+					integrationId,
+					input.prefix,
+					input.maxKeys,
+					input.continuationToken,
+				),
 			).pipe(
-				Effect.map((objects) => ({
-					Contents: objects
+				Effect.map(({ objects, nextContinuationToken }) => {
+					const contents = objects
 						.filter(
 							(object) =>
 								object.contentType !== GOOGLE_DRIVE_FOLDER_MIME_TYPE &&
@@ -501,16 +507,15 @@ const makeGoogleDriveAccess = ({
 						.map((object) => ({
 							Key: object.objectKey,
 							Size: object.contentLength ?? undefined,
-						})),
-					KeyCount: objects.filter(
-						(object) =>
-							object.contentType !== GOOGLE_DRIVE_FOLDER_MIME_TYPE &&
-							!object.objectKey.startsWith(".cap-folders/") &&
-							!object.objectKey.startsWith(".cap-warnings/"),
-					).length,
-					IsTruncated: false,
-					NextContinuationToken: undefined,
-				})),
+							LastModified: object.updatedAt,
+						}));
+					return {
+						Contents: contents,
+						KeyCount: contents.length,
+						IsTruncated: nextContinuationToken !== undefined,
+						NextContinuationToken: nextContinuationToken,
+					};
+				}),
 			),
 		headObject: (key: string) =>
 			getObjectRecord(key).pipe(
@@ -556,12 +561,14 @@ const makeGoogleDriveAccess = ({
 					},
 					tokenStore,
 				).pipe(mapStorageError);
+				const uploadBody =
+					body instanceof Uint8Array ? new Uint8Array(body).buffer : body;
 				const response = yield* Effect.tryPromise({
 					try: () =>
 						fetch(uploadUrl, {
 							method: "PUT",
 							headers: getGoogleDriveUploadHeaders(contentType, contentLength),
-							body,
+							body: uploadBody,
 						}),
 					catch: (cause) => new StorageDomain.StorageError({ cause }),
 				});

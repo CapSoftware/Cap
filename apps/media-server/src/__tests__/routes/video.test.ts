@@ -3,6 +3,11 @@ import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
+import {
+	getMaxConcurrentDirectVideoProcesses,
+	tryAcquireDirectVideoProcessSlot,
+	type VideoProcessSlot,
+} from "../../lib/video-capacity";
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -40,6 +45,8 @@ describe("GET /video/status", () => {
 		const data = await response.json();
 		expect(data).toHaveProperty("activeVideoProcesses");
 		expect(data).toHaveProperty("activeProbeProcesses");
+		expect(data).toHaveProperty("activeDirectVideoProcesses");
+		expect(data).toHaveProperty("maxConcurrentDirectVideoProcesses");
 		expect(data).toHaveProperty("canAcceptNewVideoProcess");
 		expect(data).toHaveProperty("canAcceptNewProbeProcess");
 		expect(data).toHaveProperty("jobCount");
@@ -292,6 +299,40 @@ describe("POST /video/convert", () => {
 		expect(response.status).toBe(400);
 		const data = await response.json();
 		expect(data.code).toBe("INVALID_REQUEST");
+	});
+
+	test("returns 503 before downloading when video capacity is exhausted", async () => {
+		const slots: VideoProcessSlot[] = [];
+		try {
+			const directLimit = getMaxConcurrentDirectVideoProcesses();
+			for (let i = 0; i < directLimit; i++) {
+				const slot = tryAcquireDirectVideoProcessSlot(
+					jobManager.canAcceptNewVideoProcess,
+				);
+				expect(slot).not.toBeNull();
+				if (slot) slots.push(slot);
+			}
+
+			expect(slots.length).toBe(directLimit);
+
+			const response = await app.fetch(
+				videoPostRequest("/video/convert", {
+					videoUrl: "https://example.com/video.m3u8",
+					inputExtension: ".m3u8",
+				}),
+			);
+
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("15");
+			const data = await response.json();
+			expect(data.code).toBe("SERVER_BUSY");
+			expect(data.activeDirectVideoProcesses).toBe(directLimit);
+			expect(data.maxConcurrentDirectVideoProcesses).toBe(directLimit);
+		} finally {
+			for (const slot of slots) {
+				slot.release();
+			}
+		}
 	});
 
 	test("returns mp4 when conversion succeeds", async () => {
@@ -577,6 +618,62 @@ describe("POST /video/edit", () => {
 		const data = await response.json();
 		expect(data.jobId).toBe("edit-job-id");
 		expect(data.status).toBe("queued");
+	});
+});
+
+describe("POST /video/mux-segments", () => {
+	beforeEach(() => {
+		mock.restore();
+	});
+
+	const baseMuxBody = {
+		videoId: "test-id",
+		userId: "user-id",
+		videoInitUrl: "https://example.com/video/init.mp4",
+		videoSegmentUrls: ["https://example.com/video/segment-1.m4s"],
+	};
+
+	test("returns 400 when output upload target is missing", async () => {
+		const response = await app.fetch(
+			videoPostRequest("/video/mux-segments", baseMuxBody),
+		);
+
+		expect(response.status).toBe(400);
+		const data = await response.json();
+		expect(data.error).toBe("Invalid request");
+	});
+
+	test("accepts multipart output upload target", async () => {
+		mock.module("../../lib/job-manager", () => ({
+			...jobManager,
+			canAcceptNewVideoProcess: () => false,
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/mux-segments", {
+				...baseMuxBody,
+				outputUpload: {
+					type: "multipart",
+					videoId: "test-id",
+					key: "user-id/test-id/result.mp4",
+					uploadId: "upload-id",
+					partSize: 5 * 1024 * 1024,
+					signPartUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/sign-part",
+					completeUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/complete",
+					abortUrl:
+						"https://cap.example.com/api/webhooks/media-server/multipart/abort",
+					webhookSecret: MEDIA_SERVER_SECRET,
+				},
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		const data = await response.json();
+		expect(data.code).toBe("SERVER_BUSY");
 	});
 });
 

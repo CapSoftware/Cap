@@ -573,6 +573,12 @@ function App() {
 	return (
 		<div
 			className="camera-preview-root"
+			onPointerEnter={() => {
+				postParent({ type: "pointer-presence", inside: true });
+			}}
+			onPointerLeave={() => {
+				postParent({ type: "pointer-presence", inside: false });
+			}}
 			onPointerDown={(event) => {
 				if ((event.target as HTMLElement).closest("[data-pip-control]")) {
 					return;

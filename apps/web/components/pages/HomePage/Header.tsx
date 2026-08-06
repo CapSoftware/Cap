@@ -146,9 +146,6 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			const result = await sendDownloadLink(email);
 			if (result.success) {
 				setEmailStatus("sent");
-				if (typeof window !== "undefined" && window.bento) {
-					window.bento.identify(email);
-				}
 			} else {
 				setEmailStatus("error");
 				setEmailError(result.error ?? "Something went wrong.");
@@ -223,6 +220,24 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-0">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
 					<div className="flex flex-col text-center md:text-left w-full max-w-[650px]">
+						<div className="flex justify-center mb-4 md:justify-start">
+							<Link
+								href="/blog/soc2-type-ii-iso-27001"
+								className="inline-flex gap-2 items-center px-3.5 py-1.5 rounded-full border transition-colors group bg-gray-2 border-gray-4 hover:bg-gray-3 hover:border-gray-5"
+							>
+								<span className="text-xs font-medium text-gray-12">
+									<span className="font-semibold text-blue-500">New</span>
+									<span className="mx-1.5 text-gray-7">·</span>
+									Cap is now SOC 2
+									<span className="hidden sm:inline"> Type II</span> &amp; ISO
+									27001 certified
+								</span>
+								<FontAwesomeIcon
+									icon={faArrowRight}
+									className="size-2.5 text-gray-10 transition-transform group-hover:translate-x-0.5"
+								/>
+							</Link>
+						</div>
 						<div className="flex justify-center mb-5 md:justify-start">
 							<div className="inline-flex gap-1 p-1 rounded-full border border-gray-4 bg-gray-2">
 								{heroModes.map((mode, index) => {
@@ -445,7 +460,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 
 					<div className="mt-14">
 						<p className="mb-4 text-sm italic text-gray-10 text-center md:text-left">
-							Trusted by <strong>40,000+</strong> teams, builders and creators
+							Trusted by <strong>50,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
 					</div>
@@ -467,8 +482,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</motion.div>
 					<Image
 						src="/illustrations/app.webp"
-						width={1000}
-						height={1000}
+						width={2108}
+						height={1284}
 						quality={75}
 						priority
 						sizes="(min-width: 1536px) 1200px, (min-width: 1280px) 1000px, 100vw"

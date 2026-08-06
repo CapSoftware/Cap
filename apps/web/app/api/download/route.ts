@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 		clientPlatform.includes("linux") ||
 		(userAgent.includes("linux") && !userAgent.includes("android"))
 	) {
-		platform = "linux";
+		platform = "linux-deb";
 	}
 
 	return NextResponse.redirect(new URL(`/download/${platform}`, request.url));

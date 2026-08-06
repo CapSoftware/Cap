@@ -10,8 +10,8 @@ import {
 import { faTrashCan } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
-import { useRouter } from "next/navigation";
-import { startTransition, useId, useState } from "react";
+import { signOut } from "next-auth/react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../../Contexts";
@@ -22,11 +22,11 @@ interface DeleteOrgDialogProps {
 }
 
 const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
-	const { activeOrganization, organizationData } = useDashboardContext();
+	const { activeOrganization } = useDashboardContext();
 	const [organizationName, setOrganizationName] = useState("");
 	const rpc = useRpcClient();
 	const inputId = useId();
-	const router = useRouter();
+	const organizationNameToConfirm = activeOrganization?.organization.name ?? "";
 	const softDeleteOrg = useEffectMutation({
 		mutationFn: Effect.fn(function* () {
 			if (!activeOrganization) return;
@@ -37,10 +37,7 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 		onSuccess: () => {
 			toast.success("Organization deleted successfully");
 			onOpenChange(false);
-			startTransition(() => {
-				router.push("/dashboard/caps");
-				router.refresh();
-			});
+			void signOut({ callbackUrl: "/" });
 		},
 		onError: (error) => {
 			console.error(error);
@@ -53,11 +50,18 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 			<DialogContent>
 				<DialogHeader
 					icon={<FontAwesomeIcon className="size-3.5" icon={faTrashCan} />}
-					description="Removing your organization will delete all associated data, including videos, and cannot be undone."
+					description="Removing your organization will delete its memberships, invites, spaces, shared videos, analytics, and Cap-hosted media. Custom storage files are not deleted."
 				>
 					<DialogTitle>Delete Organization</DialogTitle>
 				</DialogHeader>
-				<div className="p-5">
+				<div className="p-5 space-y-3">
+					<div className="text-sm text-gray-11">
+						Type{" "}
+						<span className="font-medium text-gray-12">
+							{organizationNameToConfirm}
+						</span>{" "}
+						to confirm.
+					</div>
 					<Input
 						id={inputId}
 						value={organizationName}
@@ -75,8 +79,7 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 						onClick={() => softDeleteOrg.mutate()}
 						spinner={softDeleteOrg.isPending}
 						disabled={
-							organizationData?.length === 1 ||
-							organizationName !== activeOrganization?.organization.name ||
+							organizationName.trim() !== organizationNameToConfirm ||
 							softDeleteOrg.isPending
 						}
 					>

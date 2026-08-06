@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
+import { buildMarketingMetadata } from "@/lib/og/url";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildMarketingMetadata({
 	title: "Data Processing Agreement - Cap",
 	description:
 		"Cap's Data Processing Agreement for GDPR, UK GDPR, and related data protection laws.",
-};
+	path: "/dpa",
+	ogTitle: "Data processing agreement",
+	ogTag: "Legal",
+});
 
 export default function DataProcessingAgreementPage() {
 	return (

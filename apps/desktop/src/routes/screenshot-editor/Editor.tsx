@@ -177,7 +177,7 @@ export function Editor() {
 				<Header />
 				<AnnotationConfigBar />
 			</div>
-			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in">
+			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5">
 				<Show when={layersPanelOpen()}>
 					<LayersPanel />
 				</Show>

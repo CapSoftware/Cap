@@ -19,6 +19,7 @@ use core_graphics::{
     },
 };
 
+use crate::NotchGeometry;
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 #[derive(Clone, Copy)]
@@ -30,9 +31,14 @@ impl DisplayImpl {
     }
 
     pub fn list() -> Vec<Self> {
-        CGDisplay::active_displays()
+        let active_displays: Vec<_> = CGDisplay::active_displays().into_iter().flatten().collect();
+
+        if active_displays.is_empty() {
+            return vec![Self(CGDisplay::main())];
+        }
+
+        active_displays
             .into_iter()
-            .flatten()
             .map(|v| Self(CGDisplay::new(v)))
             .collect()
     }
@@ -109,7 +115,11 @@ impl DisplayImpl {
     }
 
     pub fn scale(&self) -> Option<f64> {
-        Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
+        // ar pool: reached from pool-less tokio threads on a polling cadence
+        // (display lists, cursor info); drains the NSScreen temporaries.
+        objc::rc::autoreleasepool(|| {
+            Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
+        })
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -131,19 +141,60 @@ impl DisplayImpl {
         use objc::{msg_send, *};
         use std::ffi::CStr;
 
-        unsafe {
-            if let Some(ns_screen) = self.as_ns_screen() {
-                let name: id = msg_send![ns_screen, localizedName];
-                if !name.is_null() {
-                    let name = CStr::from_ptr(NSString::UTF8String(name))
-                        .to_string_lossy()
-                        .to_string();
-                    return Some(name);
+        objc::rc::autoreleasepool(|| {
+            unsafe {
+                if let Some(ns_screen) = self.as_ns_screen() {
+                    let name: id = msg_send![ns_screen, localizedName];
+                    if !name.is_null() {
+                        let name = CStr::from_ptr(NSString::UTF8String(name))
+                            .to_string_lossy()
+                            .to_string();
+                        return Some(name);
+                    }
                 }
             }
-        }
 
-        None
+            None
+        })
+    }
+
+    pub fn notch(&self) -> Option<NotchGeometry> {
+        use cocoa::appkit::NSScreen;
+        use cocoa::foundation::NSRect;
+        use objc::runtime::YES;
+        use objc::{msg_send, *};
+
+        objc::rc::autoreleasepool(|| unsafe {
+            let screen = self.as_ns_screen()?;
+
+            let responds: runtime::BOOL =
+                msg_send![screen, respondsToSelector: sel!(auxiliaryTopLeftArea)];
+            if responds != YES {
+                return None;
+            }
+
+            let frame = NSScreen::frame(screen);
+            if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+                return None;
+            }
+
+            let left: NSRect = msg_send![screen, auxiliaryTopLeftArea];
+            let right: NSRect = msg_send![screen, auxiliaryTopRightArea];
+
+            // Both auxiliary rects are NSZeroRect on displays with no camera
+            // housing, which makes `height` zero and rejects them below.
+            let width = frame.size.width - left.size.width - right.size.width;
+            let height = left.size.height;
+            if width <= 0.0 || height <= 0.0 {
+                return None;
+            }
+
+            Some(NotchGeometry {
+                x: left.size.width / frame.size.width,
+                width: width / frame.size.width,
+                height: height / frame.size.height,
+            })
+        })
     }
 
     fn as_ns_screen(&self) -> Option<*mut objc::runtime::Object> {
@@ -155,25 +206,28 @@ impl DisplayImpl {
         unsafe {
             let screens = NSScreen::screens(nil);
             let screen_count = NSArray::count(screens);
+            // init_str returns a +1 NSString; without the explicit release it
+            // leaked one key string per screen on every lookup.
+            let screen_number_key = NSString::alloc(nil).init_str("NSScreenNumber");
 
+            let mut found = None;
             for i in 0..screen_count {
                 let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
 
                 let device_description = NSScreen::deviceDescription(screen);
-                let num = NSDictionary::valueForKey_(
-                    device_description,
-                    NSString::alloc(nil).init_str("NSScreenNumber"),
-                ) as id;
+                let num = NSDictionary::valueForKey_(device_description, screen_number_key) as id;
 
                 let num_value: u32 = msg_send![num, unsignedIntValue];
 
                 if num_value == self.0.id {
-                    return Some(screen);
+                    found = Some(screen);
+                    break;
                 }
             }
-        }
 
-        None
+            let _: () = msg_send![screen_number_key, release];
+            found
+        }
     }
 }
 
@@ -370,6 +424,33 @@ impl WindowImpl {
                     .to_string_lossy()
                     .into_owned(),
             )
+        })
+    }
+
+    pub fn is_accessory_application(&self) -> bool {
+        let Some(pid) = self.owner_pid() else {
+            return false;
+        };
+
+        use objc::rc::autoreleasepool;
+
+        autoreleasepool(|| unsafe {
+            use cocoa::appkit::{
+                NSApplicationActivationPolicy, NSApplicationActivationPolicyAccessory,
+            };
+            use cocoa::base::id;
+            use objc::{class, msg_send, sel, sel_impl};
+
+            let app: id = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            if app.is_null() {
+                return false;
+            }
+
+            let activation_policy: NSApplicationActivationPolicy = msg_send![app, activationPolicy];
+            activation_policy == NSApplicationActivationPolicyAccessory
         })
     }
 

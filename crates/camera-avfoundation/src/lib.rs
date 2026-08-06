@@ -11,36 +11,41 @@ use std::{
 };
 use tracing::warn;
 
+// Pool-wrapped: device polling calls this every few seconds from tokio threads
+// that have no ambient NSAutoreleasePool, so the discovery session's
+// autoreleased temporaries would otherwise leak for the process lifetime.
 pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
-    let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
+    objc::ar_pool(|| {
+        let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
 
-    if api::macos_available("13.0")
-        && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
-    {
-        device_types.push(typ);
-    }
-
-    if api::macos_available("14.0") {
-        if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+        if api::macos_available("13.0")
+            && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
+        {
             device_types.push(typ);
         }
-        if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
-            device_types.push(typ);
+
+        if api::macos_available("14.0") {
+            if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+                device_types.push(typ);
+            }
+            if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
+                device_types.push(typ);
+            }
+        } else {
+            device_types.push(av::CaptureDeviceType::external_unknown());
         }
-    } else {
-        device_types.push(av::CaptureDeviceType::external_unknown());
-    }
 
-    let device_types = ns::Array::from_slice(&device_types);
+        let device_types = ns::Array::from_slice(&device_types);
 
-    let video_discovery_session =
-        av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
-            &device_types,
-            Some(av::MediaType::video()),
-            av::CaptureDevicePos::Unspecified,
-        );
+        let video_discovery_session =
+            av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
+                &device_types,
+                Some(av::MediaType::video()),
+                av::CaptureDevicePos::Unspecified,
+            );
 
-    video_discovery_session.devices()
+        video_discovery_session.devices()
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +91,7 @@ pub type OutputDelegateCallback = Box<dyn FnMut(CallbackData)>;
 pub struct CallbackOutputDelegateInner {
     callback: OutputDelegateCallback,
     stream_start: Option<(Instant, Duration)>,
+    dropped_frames: u64,
 }
 
 impl CallbackOutputDelegateInner {
@@ -93,6 +99,7 @@ impl CallbackOutputDelegateInner {
         Self {
             callback,
             stream_start: None,
+            dropped_frames: 0,
         }
     }
 }
@@ -146,6 +153,39 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
 
         if result.is_err() {
             warn!("Suppressed panic in AVFoundation output delegate");
+        }
+    }
+
+    extern "C" fn impl_capture_output_did_drop_sample_buf_from_connection(
+        &mut self,
+        _cmd: Option<&cidre::objc::Sel>,
+        _output: &av::CaptureOutput,
+        sample_buf: &cm::SampleBuf,
+        _connection: &av::CaptureConnection,
+    ) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let inner = self.inner_mut();
+            inner.dropped_frames += 1;
+
+            if inner.dropped_frames == 1 || inner.dropped_frames.is_multiple_of(100) {
+                let reason = sample_buf
+                    .attach(
+                        cm::sample_buffer::buf_attach_keys::dropped_frame_reason(),
+                        std::ptr::null_mut(),
+                    )
+                    .map(|value| value.desc().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                warn!(
+                    count = inner.dropped_frames,
+                    reason = %reason,
+                    "AVFoundation dropped camera sample buffer(s)"
+                );
+            }
+        }));
+
+        if result.is_err() {
+            warn!("Suppressed panic in AVFoundation drop delegate");
         }
     }
 }

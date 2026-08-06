@@ -1,6 +1,6 @@
 # Cap — Open-Source Screen Recorder & Loom Alternative (Full Reference)
 
-> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS and Windows (built on Tauri + Rust, not Electron), a Linux AppImage, and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
+> Cap is a free, open-source screen recorder and async video messaging platform — a privacy-first alternative to Loom, Vidyard, and OBS. Record your screen, camera, and audio, then share an instant link or edit locally in a professional studio editor. Native desktop apps for macOS and Windows (built on Tauri + Rust, not Electron), a Linux .deb package, and a web viewer. Bring your own storage (Google Drive, any S3-compatible bucket, or fully local) so you own every recording. Website: https://cap.so · Source: https://github.com/CapSoftware/Cap
 
 This is the full-detail reference for LLMs and agents. For a concise overview, see https://cap.so/llms.txt.
 
@@ -71,7 +71,7 @@ Core principles:
 
 - Auto-generated titles, summaries, and clickable chapters for every recording.
 - Automatic transcriptions and a fully searchable transcript; editable captions with translation support.
-- Providers: Deepgram (cloud transcription), Groq with model `openai/gpt-oss-120b` and OpenAI fallback (titles/summaries/chapters), Whisper + Parakeet (on-device desktop captions).
+- Providers: AssemblyAI (cloud transcription), Groq with model `openai/gpt-oss-120b` and OpenAI fallback (titles/summaries/chapters), Whisper + Parakeet (on-device desktop captions).
 - Marketed as "coming soon": Auto-Edit, Noise Reduction, AI Video Search.
 
 ## Sharing & Collaboration
@@ -154,10 +154,10 @@ A REST API and webhooks are also available — see https://cap.so/docs/api/rest-
 
 - macOS: Apple Silicon & Intel; recommended 13.1+ (system audio requires 13.0+).
 - Windows: Windows 10 (build 18362 / 1903+) and Windows 11.
-- Linux: x86_64 AppImage (X11/Wayland capture).
+- Linux: x86_64 .deb for Debian/Ubuntu (X11/Wayland capture).
 - Web: shareable links and embeds play in any modern browser; no install for viewers.
 
-Current desktop app version: 0.5.2.
+Current desktop app version: 0.5.3.
 
 ## Pricing
 
@@ -167,7 +167,7 @@ Current desktop app version: 0.5.2.
 - **Enterprise** — Custom. SLAs & priority support, SAML SSO & SCIM provisioning, managed self-hosting, volume discounts, advanced security controls, dedicated onboarding.
 - **Discounts** — STUDENT50 (30% off, students), MIGRATE20 (20% off first year, Loom switchers); volume discounts for teams over 10 users.
 
-Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 40,000+ users, teams, and creators.
+Early-adopter pricing is locked in for the lifetime of the subscription. Trusted by 50,000+ users, teams, and creators.
 
 ## How Cap Compares
 
@@ -198,7 +198,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - Desktop: Tauri 2.5 (Rust) + SolidJS / SolidStart; WGPU rendering; FFmpeg; ScreenCaptureKit (macOS) and Direct3D / Media Foundation (Windows); whisper-rs and Parakeet for local captions; `@ts-rest/core` API client; Effect.
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
-- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, PostHog, Resend; Deepgram + Groq/OpenAI for AI.
+- Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
 - Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools
@@ -207,7 +207,7 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 
 ## Installation
 
-- Desktop: https://cap.so/download (macOS Apple Silicon/Intel, Windows, Linux AppImage).
+- Desktop: https://cap.so/download (macOS Apple Silicon/Intel, Windows, Linux .deb).
 - CLI: `curl -fsSL https://cap.so/install-cli.sh | sh` or `cap desktop install-cli`.
 - Self-host: https://cap.so/docs/self-hosting.
 - Viewers: open any Cap share link in a browser — no install required.
@@ -263,7 +263,7 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - **Is Cap free?** Yes — 100% free for personal use with Studio Mode and the local editor. Paid plans add commercial rights and cloud features.
 - **Is Cap a good Loom alternative?** Yes — it's the leading open-source Loom alternative, with instant sharing, AI summaries, custom storage, and a built-in Loom importer at a lower price ($8.16 vs $18/user/month).
 - **Can I self-host Cap?** Yes — Cap is open source (AGPLv3) and fully self-hostable.
-- **Does Cap work on Mac and Windows?** Yes — native apps for macOS (Apple Silicon & Intel) and Windows, plus a Linux AppImage and a browser viewer.
+- **Does Cap work on Mac and Windows?** Yes — native apps for macOS (Apple Silicon & Intel) and Windows, plus a Linux .deb package and a browser viewer.
 - **Can I use my own storage?** Yes — connect your own Google Drive or any S3-compatible bucket, use Cap Cloud, or keep recordings entirely local.
 - **Does Cap record system audio and 4K?** Yes — system audio plus screen, camera, and mic, up to 4K at 60fps.
 - **Is there an API/CLI?** Yes — a `cap` CLI built for AI agents (`--json`, `cap guide --json`), a REST API, and webhooks.

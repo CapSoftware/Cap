@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::oneshot;
@@ -7,6 +8,27 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 use crate::{ProjectUniforms, RenderingError};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
+const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
+
+/// Whether this process has selected a software (CPU rasterizer) wgpu adapter.
+/// Software adapters like Windows WARP legitimately take tens of seconds for the
+/// first cold render (pipeline compilation + full-frame rasterization on the CPU),
+/// so readback waits get a much longer deadline before being treated as failures —
+/// timing out the first frame is what used to leave the editor on a blank screen.
+static SOFTWARE_ADAPTER_IN_USE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn note_software_adapter_in_use() {
+    SOFTWARE_ADAPTER_IN_USE.store(true, Ordering::Release);
+}
+
+fn gpu_buffer_wait_timeout() -> std::time::Duration {
+    let secs = if SOFTWARE_ADAPTER_IN_USE.load(Ordering::Acquire) {
+        SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS
+    } else {
+        GPU_BUFFER_WAIT_TIMEOUT_SECS
+    };
+    std::time::Duration::from_secs(secs)
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FinishEncoderTimings {
@@ -416,7 +438,7 @@ impl PendingNv12Readback {
 
         let mut poll_count = 0u32;
         let start_time = Instant::now();
-        let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
+        let timeout_duration = gpu_buffer_wait_timeout();
 
         loop {
             if start_time.elapsed() > timeout_duration {
@@ -545,7 +567,7 @@ impl PendingReadback {
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
         let mut poll_count = 0u32;
         let start_time = Instant::now();
-        let timeout_duration = std::time::Duration::from_secs(GPU_BUFFER_WAIT_TIMEOUT_SECS);
+        let timeout_duration = gpu_buffer_wait_timeout();
 
         loop {
             if start_time.elapsed() > timeout_duration {
@@ -554,7 +576,7 @@ impl PendingReadback {
                     elapsed_secs = start_time.elapsed().as_secs(),
                     poll_count = poll_count,
                     "GPU buffer mapping timed out after {}s",
-                    GPU_BUFFER_WAIT_TIMEOUT_SECS
+                    timeout_duration.as_secs()
                 );
                 return Err(self.cancel());
             }

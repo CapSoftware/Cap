@@ -1,6 +1,6 @@
 import { Popover } from "@kobalte/core/popover";
 import { cx } from "cva";
-import { For, type JSX, Show } from "solid-js";
+import { createSignal, For, type JSX, Show } from "solid-js";
 import type { TimelineTrackType } from "../context";
 import { CAP_TRACK_FILL_CLASS } from "./Track";
 
@@ -152,6 +152,7 @@ export function TrackManager(props: {
 	onAdd(type: TimelineTrackType): void;
 }) {
 	const selectable = () => props.options.filter((option) => !option.locked);
+	const [open, setOpen] = createSignal(false);
 
 	// The timeline sits at the bottom of the editor, so the popover always flips
 	// upward; the large overflowPadding keeps its top edge clear of the 56px
@@ -163,6 +164,8 @@ export function TrackManager(props: {
 			gutter={8}
 			overflowPadding={64}
 			fitViewport
+			open={open()}
+			onOpenChange={setOpen}
 		>
 			<Popover.Trigger
 				class={cx(
@@ -182,6 +185,10 @@ export function TrackManager(props: {
 			<Popover.Portal>
 				<Popover.Content
 					onMouseDown={(e) => e.stopPropagation()}
+					// Selecting a track hands focus to the new element (e.g. the
+					// inline text editor on the canvas); returning focus to the
+					// trigger on close would steal it back.
+					onCloseAutoFocus={(e) => e.preventDefault()}
 					class={cx(
 						"z-50 flex w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-gray-3 bg-gray-1 shadow-[0_24px_48px_-20px_rgba(0,0,0,0.55)] outline-hidden",
 						"origin-[var(--kb-popover-content-transform-origin)] data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
@@ -206,6 +213,7 @@ export function TrackManager(props: {
 										} else {
 											props.onToggle(option.type, !option.active);
 										}
+										setOpen(false);
 									}}
 								/>
 							)}

@@ -27,6 +27,22 @@ type OverlayModule = {
 const UI_PHASES = new Set(["creating", "recording", "paused"]);
 
 const BOOTSTRAP_FLAG = "__capExtensionContentBootstrap";
+const INSTALLED_ATTRIBUTE = "data-cap-chrome-extension-installed";
+const READY_EVENT = "cap-chrome-extension-ready";
+const OPEN_EVENT = "cap-chrome-extension-open";
+
+const isCapWebOrigin = () => {
+	const { hostname, protocol } = window.location;
+	if (protocol !== "http:" && protocol !== "https:") return false;
+
+	return (
+		hostname === "cap.so" ||
+		hostname.endsWith(".cap.so") ||
+		hostname === "localhost" ||
+		hostname === "127.0.0.1" ||
+		hostname === "::1"
+	);
+};
 
 const readPhase = (value: unknown): string | null => {
 	if (!value || typeof value !== "object") return null;
@@ -127,6 +143,19 @@ const bootstrap = () => {
 
 	chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 	chrome.storage.onChanged.addListener(handleStorageChange);
+
+	if (isCapWebOrigin()) {
+		document.documentElement.setAttribute(INSTALLED_ATTRIBUTE, "true");
+		window.dispatchEvent(new CustomEvent(READY_EVENT));
+		window.addEventListener(OPEN_EVENT, () => {
+			chrome.runtime.sendMessage(
+				{ target: "service-worker", type: "open-recorder-panel" },
+				() => {
+					void chrome.runtime.lastError;
+				},
+			);
+		});
+	}
 
 	// One cheap session-storage read decides whether this page needs UI right
 	// away: a recording in progress or the recorder panel open (the panel

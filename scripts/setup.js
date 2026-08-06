@@ -24,6 +24,10 @@ const FFMPEG_CARGO_ENV = `[env]
 FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }
 `;
 
+function cargoConfigPath(value) {
+	return value.replaceAll("\\", "/");
+}
+
 async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
@@ -189,6 +193,11 @@ async function main() {
 			},
 		);
 		console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+
+		const onnxRuntimePath = await setupWindowsOnnxRuntime();
+		cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
+			path.relative(__root, onnxRuntimePath),
+		)}" }\n`;
 
 		const { stdout: vcInstallDir } = await exec(
 			// biome-ignore lint/suspicious/noTemplateCurlyInString: PowerShell syntax, not JS template literal
@@ -399,6 +408,81 @@ async function setupMacOSOnnxRuntime() {
 		console.log("Using cached ONNX Runtime dylib");
 		if (env.APPLE_SIGNING_IDENTITY) await signMacOSDylib(outputPath);
 	}
+
+	return outputPath;
+}
+
+async function setupWindowsOnnxRuntime() {
+	const assets = {
+		x86_64: {
+			version: "1.24.2",
+			name: "onnxruntime-win-x64-1.24.2.zip",
+		},
+		aarch64: {
+			version: "1.24.2",
+			name: "onnxruntime-win-arm64-1.24.2.zip",
+		},
+	};
+	const asset = assets[arch];
+	if (!asset)
+		throw new Error(`Unsupported Windows arch for ONNX Runtime: ${arch}`);
+
+	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
+	const archivePath = path.join(targetDir, asset.name);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
+	const outputPath = path.join(outputDir, "onnxruntime.dll");
+	const markerPath = path.join(outputDir, "asset.txt");
+	const marker = await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+
+	if (!(await fileExists(archivePath))) {
+		console.log(`Downloading ${asset.name}`);
+		const bytes = await fetch(url)
+			.then((r) => r.blob())
+			.then((b) => b.arrayBuffer());
+		await fs.writeFile(archivePath, Buffer.from(bytes));
+		console.log(`Downloaded ${asset.name}`);
+	} else console.log(`Using cached ${asset.name}`);
+
+	if (!(await fileExists(outputPath)) || marker !== asset.name) {
+		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+		await exec(
+			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
+			{ shell: "powershell.exe" },
+		);
+		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+		await fs.mkdir(outputDir, { recursive: true });
+		const libDir = path.join(extractDir, "lib");
+		const dllNames = (await fs.readdir(libDir)).filter((name) =>
+			name.toLowerCase().endsWith(".dll"),
+		);
+		if (!dllNames.includes("onnxruntime.dll"))
+			throw new Error(`ONNX Runtime archive is missing onnxruntime.dll`);
+
+		for (const name of dllNames) {
+			await fs.copyFile(path.join(libDir, name), path.join(outputDir, name));
+		}
+		await fs.writeFile(markerPath, asset.name);
+		console.log("Prepared ONNX Runtime DLLs");
+	} else console.log("Using cached ONNX Runtime DLLs");
+
+	const dllNames = (await fs.readdir(outputDir)).filter((name) =>
+		name.toLowerCase().endsWith(".dll"),
+	);
+	for (const profile of ["debug", "release"]) {
+		const profileDir = path.join(targetDir, profile);
+		await fs.mkdir(profileDir, { recursive: true });
+		for (const name of dllNames) {
+			await fs.copyFile(
+				path.join(outputDir, name),
+				path.join(profileDir, name),
+			);
+		}
+	}
+	console.log("Copied ONNX Runtime DLLs to target/debug and target/release");
 
 	return outputPath;
 }

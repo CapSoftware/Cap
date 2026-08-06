@@ -20,11 +20,27 @@ impl PlaybackTelemetry {
 
 #[derive(Debug, Clone)]
 pub enum PlaybackTelemetryEvent {
+    /// The background audio decodes awaited by `Playback::start` resolved.
+    AudioSegmentsResolved {
+        elapsed: Duration,
+    },
     WarmupComplete {
         elapsed: Duration,
         buffered_frames: usize,
         target_frames: usize,
         start_frame_number: u32,
+    },
+    /// The audio output pipeline finished setup (mix render, stream build,
+    /// first device callback). `elapsed` is how long the playback thread was
+    /// blocked on it.
+    AudioPipelineReady {
+        elapsed: Duration,
+        has_audio: bool,
+    },
+    /// The playback clock started; `elapsed` is the total latency from the
+    /// `Playback::start` call — the user-perceived press-play delay.
+    ClockStarted {
+        elapsed: Duration,
     },
     FrameSubmitted {
         frame_number: u32,

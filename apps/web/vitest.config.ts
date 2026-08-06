@@ -2,6 +2,9 @@ import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+	esbuild: {
+		jsx: "automatic",
+	},
 	test: {
 		environment: "node",
 		include: ["__tests__/**/*.test.ts"],
@@ -33,6 +36,7 @@ export default defineConfig({
 			"@/data": join(process.cwd(), "data"),
 			"@/services": join(process.cwd(), "services"),
 			"@/workflows": join(process.cwd(), "workflows"),
+			hooks: join(process.cwd(), "hooks"),
 		},
 	},
 });

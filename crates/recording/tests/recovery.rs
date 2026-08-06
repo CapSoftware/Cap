@@ -109,9 +109,16 @@ impl TestRecording {
     }
 
     fn write_recording_meta(&self, status: StudioRecordingStatus) -> std::io::Result<()> {
+        Self::write_recording_meta_at(&self.project_path, status)
+    }
+
+    fn write_recording_meta_at(
+        project_path: &Path,
+        status: StudioRecordingStatus,
+    ) -> std::io::Result<()> {
         let meta = RecordingMeta {
             platform: None,
-            project_path: self.project_path.clone(),
+            project_path: project_path.to_path_buf(),
             pretty_name: "Test Recording".to_string(),
             sharing: None,
             upload: None,
@@ -129,6 +136,7 @@ impl TestRecording {
                         system_audio: None,
                         cursor: None,
                         keyboard: None,
+                        display_notch: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
@@ -137,7 +145,7 @@ impl TestRecording {
             audio_only: false,
         };
 
-        let meta_path = self.project_path.join("recording-meta.json");
+        let meta_path = project_path.join("recording-meta.json");
         std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
         Ok(())
     }
@@ -477,26 +485,34 @@ fn test_should_not_check_for_recovery_complete() {
 }
 
 #[test]
-fn test_should_check_for_recovery_failed_with_other_error() {
+fn test_failed_recording_is_terminal_for_startup_recovery() {
     test_utils::init_tracing();
 
     let recording = TestRecording::new().unwrap();
+    let display_dir = recording.create_display_dir(0).unwrap();
+    recording
+        .write_manifest(
+            0,
+            "display",
+            &[("segment_001.m4s", true, 150)],
+            Some("init.mp4"),
+        )
+        .unwrap();
+    std::fs::write(display_dir.join("init.mp4"), create_minimal_mp4_data()).unwrap();
+    std::fs::write(display_dir.join("segment_001.m4s"), vec![1u8; 150]).unwrap();
     recording
         .write_recording_meta(StudioRecordingStatus::Failed {
             error: "Some other error".to_string(),
         })
         .unwrap();
 
-    let meta = RecordingMeta::load_for_project(recording.path()).unwrap();
-    let studio_meta = meta.studio_meta().unwrap();
-    let status = studio_meta.status();
+    let inspected = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    assert_eq!(inspected.recoverable_segments.len(), 1);
 
-    match status {
-        StudioRecordingStatus::Failed { error } => {
-            assert_eq!(error, "Some other error");
-        }
-        _ => panic!("Status should be Failed"),
-    }
+    assert!(
+        RecoveryManager::find_incomplete_single(recording.path()).is_none(),
+        "Failed recordings should not be startup recovery candidates"
+    );
 }
 
 #[test]
@@ -537,6 +553,39 @@ fn test_find_incomplete_with_no_segments_directory() {
         incomplete.is_empty(),
         "Should not find incomplete recordings without segments directory"
     );
+}
+
+#[test]
+fn test_find_incomplete_preserves_failed_error_without_segments() {
+    test_utils::init_tracing();
+
+    let recordings_dir = TempDir::new().unwrap();
+    let project_path = recordings_dir.path().join("failed-start.cap");
+    std::fs::create_dir_all(&project_path).unwrap();
+    let original_error =
+        "RefreshShareableContent: The user declined TCCs for application, window, display capture";
+
+    TestRecording::write_recording_meta_at(
+        &project_path,
+        StudioRecordingStatus::Failed {
+            error: original_error.to_string(),
+        },
+    )
+    .unwrap();
+
+    let incomplete = RecoveryManager::find_incomplete(recordings_dir.path());
+
+    assert!(
+        incomplete.is_empty(),
+        "Should not find incomplete recordings without segments directory"
+    );
+
+    let meta = RecordingMeta::load_for_project(&project_path).unwrap();
+    let studio_meta = meta.studio_meta().unwrap();
+    match studio_meta.status() {
+        StudioRecordingStatus::Failed { error } => assert_eq!(error, original_error),
+        _ => panic!("Status should preserve original failed-start error"),
+    }
 }
 
 #[test]
@@ -1048,8 +1097,7 @@ fn test_status_transition_logic() {
     let should_check = |status: &StudioRecordingStatus| -> bool {
         match status {
             StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux => true,
-            StudioRecordingStatus::Failed { error } => error != "No recoverable segments found",
-            StudioRecordingStatus::Complete => false,
+            StudioRecordingStatus::Failed { .. } | StudioRecordingStatus::Complete => false,
         }
     };
 
@@ -1066,10 +1114,10 @@ fn test_status_transition_logic() {
         "Complete should not be checked"
     );
     assert!(
-        should_check(&StudioRecordingStatus::Failed {
+        !should_check(&StudioRecordingStatus::Failed {
             error: "Some error".to_string()
         }),
-        "Failed with other error should be checked"
+        "Failed with other error should not be checked"
     );
     assert!(
         !should_check(&StudioRecordingStatus::Failed {

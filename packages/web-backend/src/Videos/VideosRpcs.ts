@@ -11,50 +11,42 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 		return {
 			VideoDelete: (videoId) =>
 				videos.delete(videoId).pipe(
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"StorageError",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("StorageError", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
 			VideoDuplicate: (videoId) =>
 				videos.duplicate(videoId).pipe(
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"StorageError",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("StorageError", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
 			GetUploadProgress: (videoId) =>
 				videos.getUploadProgress(videoId).pipe(
 					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("UnknownException", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
 			VideoInstantCreate: (input) =>
 				videos.createInstantRecording(input).pipe(
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"StorageError",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("StorageError", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
@@ -62,26 +54,22 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 				videos
 					.updateUploadProgress(input)
 					.pipe(
-						Effect.catchTag(
-							"DatabaseError",
-							() => new InternalError({ type: "database" }),
+						Effect.catchTag("DatabaseError", () =>
+							Effect.fail(new InternalError({ type: "database" })),
 						),
 					),
 
 			VideoGetDownloadInfo: (videoId) =>
 				videos.getDownloadInfo(videoId).pipe(
 					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("UnknownException", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
-					Effect.catchTag(
-						"StorageError",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("StorageError", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
@@ -89,13 +77,11 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 				Effect.all(
 					videoIds.map((id) =>
 						videos.getThumbnailURL(id).pipe(
-							Effect.catchTag(
-								"DatabaseError",
-								() => new InternalError({ type: "database" }),
+							Effect.catchTag("DatabaseError", () =>
+								Effect.fail(new InternalError({ type: "database" })),
 							),
-							Effect.catchTag(
-								"StorageError",
-								() => new InternalError({ type: "unknown" }),
+							Effect.catchTag("StorageError", () =>
+								Effect.fail(new InternalError({ type: "unknown" })),
 							),
 							Effect.matchEffect({
 								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
@@ -110,13 +96,11 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					{ concurrency: 10 },
 				).pipe(
 					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("UnknownException", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 
@@ -147,13 +131,11 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 							>[],
 					),
 					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
+					Effect.catchTag("DatabaseError", () =>
+						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
+					Effect.catchTag("UnknownException", () =>
+						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
 		};

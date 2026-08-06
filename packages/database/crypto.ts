@@ -32,7 +32,7 @@ const ENCRYPTION_KEY = () => {
 	return key;
 };
 
-async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(salt: BufferSource): Promise<CryptoKey> {
 	const key = ENCRYPTION_KEY();
 	if (!key) throw new Error("Encryption key is not available");
 

@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { videoEdits, videos } from "@cap/database/schema";
+import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -12,6 +12,16 @@ import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export type VideoDownloadVariant = "current" | "original";
+export type VideoDownloadInfo =
+	| {
+			success: true;
+			downloadUrl: string;
+			filename: string;
+	  }
+	| {
+			success: false;
+			error: string;
+	  };
 
 export async function downloadVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
@@ -63,7 +73,7 @@ export async function downloadVideo(videoId: Video.VideoId) {
 export async function getVideoDownloadInfo(
 	videoId: Video.VideoId,
 	variant: VideoDownloadVariant = "current",
-) {
+): Promise<VideoDownloadInfo> {
 	const user = await getCurrentUser();
 	if (!user || !videoId) {
 		throw new Error("Missing required data for downloading video");
@@ -80,11 +90,34 @@ export async function getVideoDownloadInfo(
 		userId: user.id,
 		ownerId: video.ownerId,
 		videoId,
-		orgId: video.orgId,
 	});
 
 	if (!allowed) {
 		throw new Error("You don't have permission to download this video");
+	}
+
+	if (variant === "current") {
+		const [activeUpload] = await db()
+			.select({ phase: videoUploads.phase })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId));
+
+		if (video.source?.type === "desktopSegments") {
+			return {
+				success: false,
+				error: "Video is still processing. Try again once it has finished.",
+			};
+		}
+
+		if (activeUpload && activeUpload.phase !== "complete") {
+			return {
+				success: false,
+				error:
+					activeUpload.phase === "error"
+						? "Video processing failed before the MP4 was ready."
+						: "Video is still processing. Try again once it has finished.",
+			};
+		}
 	}
 
 	let downloadKey = `${video.ownerId}/${videoId}/result.mp4`;
@@ -97,7 +130,10 @@ export async function getVideoDownloadInfo(
 			.where(eq(videoEdits.videoId, videoId));
 
 		if (!existingEdit) {
-			throw new Error("Original video is no longer available");
+			return {
+				success: false,
+				error: "Original video is no longer available.",
+			};
 		}
 
 		downloadKey = existingEdit.sourceKey;
@@ -118,18 +154,21 @@ export async function getVideoDownloadInfo(
 		}).pipe(runPromise);
 
 		if (!downloadUrl) {
-			throw new Error(
-				variant === "original"
-					? "Original video is no longer available"
-					: "Video file is not available for download",
-			);
+			return {
+				success: false,
+				error:
+					variant === "original"
+						? "Original video is no longer available."
+						: "Video file is not available for download yet.",
+			};
 		}
 
 		return { success: true as const, downloadUrl, filename };
 	} catch (error) {
 		console.error("Error generating download URL:", error);
-		throw error instanceof Error
-			? error
-			: new Error("Failed to generate download URL");
+		return {
+			success: false,
+			error: "Failed to prepare the video download.",
+		};
 	}
 }

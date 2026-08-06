@@ -1,9 +1,10 @@
 use crate::{
-    RequestOpenRecordingPicker, RequestStartRecording, recording,
+    App, ArcLock, RequestOpenRecordingPicker, RequestStartRecording, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     tray,
     windows::ShowCapWindow,
 };
+use cap_recording::feeds::microphone::MicrophoneFeed;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use specta::Type;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
@@ -87,6 +89,93 @@ impl HotkeysStore {
 pub struct OnEscapePress;
 
 pub type HotkeysState = Mutex<HotkeysStore>;
+
+const RECORDING_START_SAFETY_STORE_KEY: &str = "recording_start_safety";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RecordingStartSafetySettings {
+    confirm_before_recording_without_microphone: bool,
+}
+
+impl Default for RecordingStartSafetySettings {
+    fn default() -> Self {
+        Self {
+            confirm_before_recording_without_microphone: true,
+        }
+    }
+}
+
+fn should_confirm_without_microphone(enabled: bool, microphone_available: bool) -> bool {
+    enabled && !microphone_available
+}
+
+fn should_confirm_direct_recording(app: &AppHandle) -> bool {
+    let enabled = app
+        .store("store")
+        .ok()
+        .and_then(|store| store.get(RECORDING_START_SAFETY_STORE_KEY))
+        .and_then(|value| serde_json::from_value::<RecordingStartSafetySettings>(value).ok())
+        .unwrap_or_default()
+        .confirm_before_recording_without_microphone;
+
+    if !enabled {
+        return false;
+    }
+
+    let microphone_name = RecordingSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.mic_name);
+    let microphone_available = microphone_name
+        .as_deref()
+        .is_some_and(|name| MicrophoneFeed::list().contains_key(name));
+
+    should_confirm_without_microphone(enabled, microphone_available)
+}
+
+async fn confirm_direct_recording_without_microphone(app: &AppHandle) -> bool {
+    if !should_confirm_direct_recording(app) {
+        return true;
+    }
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message("This recording will not include your voice.")
+        .title("No microphone detected")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Record without microphone".to_string(),
+            "Cancel".to_string(),
+        ))
+        .show(move |confirmed| {
+            let _ = sender.send(confirmed);
+        });
+
+    receiver.await.unwrap_or(false)
+}
+
+async fn start_recording_from_hotkey(
+    app: AppHandle,
+    mode: cap_recording::RecordingMode,
+) -> Result<(), String> {
+    if app
+        .state::<ArcLock<App>>()
+        .read()
+        .await
+        .is_recording_active_or_pending()
+    {
+        let _ = RequestStartRecording { mode }.emit(&app);
+        return Ok(());
+    }
+
+    if confirm_direct_recording_without_microphone(&app).await {
+        let _ = RequestStartRecording { mode }.emit(&app);
+    }
+
+    Ok(())
+}
+
 pub fn init(app: &AppHandle) {
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
@@ -139,18 +228,10 @@ pub fn init(app: &AppHandle) {
 async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
     match action {
         HotkeyAction::StartStudioRecording => {
-            let _ = RequestStartRecording {
-                mode: cap_recording::RecordingMode::Studio,
-            }
-            .emit(&app);
-            Ok(())
+            start_recording_from_hotkey(app, cap_recording::RecordingMode::Studio).await
         }
         HotkeyAction::StartInstantRecording => {
-            let _ = RequestStartRecording {
-                mode: cap_recording::RecordingMode::Instant,
-            }
-            .emit(&app);
-            Ok(())
+            start_recording_from_hotkey(app, cap_recording::RecordingMode::Instant).await
         }
         HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
         HotkeyAction::RestartRecording => recording::restart_recording(app.clone(), app.state())
@@ -282,4 +363,24 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_confirm_without_microphone;
+
+    #[test]
+    fn confirms_when_enabled_without_microphone() {
+        assert!(should_confirm_without_microphone(true, false));
+    }
+
+    #[test]
+    fn skips_confirmation_with_selected_microphone() {
+        assert!(!should_confirm_without_microphone(true, true));
+    }
+
+    #[test]
+    fn skips_confirmation_when_disabled() {
+        assert!(!should_confirm_without_microphone(false, false));
+    }
 }

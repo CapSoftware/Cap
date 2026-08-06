@@ -534,16 +534,24 @@ impl MP4Encoder {
         let effective_last_pts = self.effective_video_pts();
 
         if let Some(last_pts) = effective_last_pts
-            && pts_duration <= last_pts.saturating_add(self.minimum_video_pts_step())
+            && pts_duration <= last_pts
         {
-            let frame_duration = self.video_frame_duration();
-            let adjusted_pts = last_pts + frame_duration;
+            // Only true monotonicity violations (ties/backwards) are
+            // corrected, and only by the smallest amount the mp4 timescale
+            // needs. Anything larger re-times legitimate content: a bump
+            // window scaled from the nominal rate treated every frame of a
+            // faster-than-nominal source as an anomaly (a 1000fps camera on
+            // a 30fps config has 1ms deltas), and a large bump outruns the
+            // incoming timestamps so every subsequent frame needs correcting
+            // too, stretching the recording. A tie carries no time — advance
+            // one tick and let the real timestamps take over again.
+            let step = Duration::from_micros(1);
+            let adjusted_pts = last_pts + step;
 
             trace!(
                 ?timestamp,
                 ?last_pts,
                 adjusted_pts = ?adjusted_pts,
-                frame_duration_ns = frame_duration.as_nanos(),
                 "Monotonic video pts correction",
             );
 
@@ -861,11 +869,6 @@ impl MP4Encoder {
         let nanos = (numerator / denominator).max(1);
 
         Duration::from_nanos(nanos as u64)
-    }
-
-    fn minimum_video_pts_step(&self) -> Duration {
-        let nanos = (self.video_frame_duration().as_nanos() / 4).max(1);
-        Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
     }
 
     pub fn pause(&mut self) {
@@ -1637,6 +1640,147 @@ mod tests {
                 })
                 .unwrap()
         }
+    }
+
+    fn container_duration_secs(path: &PathBuf) -> f64 {
+        let input = ffmpeg::format::input(path).expect("open encoded output");
+        let duration = input.duration();
+        assert!(duration > 0, "container has no duration");
+        duration as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
+    }
+
+    /// A source delivering 60fps into a pipeline that believes 30fps used to
+    /// reach the encoder as a non-monotonic sawtooth (the smoothing ladder
+    /// re-timed 4 of every 5 frames to the nominal cadence, then dropped back
+    /// to the source clock). The encoder's monotonic pts correction then
+    /// bumped every "backwards" frame a full nominal frame duration forward,
+    /// locking into nominal-CFR output and doubling the recording's length.
+    /// The encoder must keep the written duration close to the real span even
+    /// for such inputs.
+    #[test]
+    fn non_monotonic_sawtooth_input_does_not_stretch_duration() {
+        let output = test_output_path("sawtooth_duration");
+        let config = VideoInfo::from_raw(RawVideoFormat::Nv12, 640, 360, 30);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(640, 360);
+
+        const REAL_DELTA_US: i64 = 16_667; // 60fps delivery
+        const NOMINAL_DELTA_US: i64 = 33_333; // 30fps belief
+        const FRAMES: i64 = 300; // 5s of real time
+
+        let mut expected: Option<i64> = None;
+        for i in 0..FRAMES {
+            let raw_us = i * REAL_DELTA_US;
+            // Reproduce the legacy smoothing ladder's output.
+            let ts_us = match expected {
+                Some(exp) if (exp - raw_us).abs() < 70_000 => exp,
+                _ => raw_us,
+            };
+            expected = Some(ts_us + NOMINAL_DELTA_US);
+
+            let frame = create_test_video_frame(&pool, ts_us, REAL_DELTA_US);
+            let timestamp = Duration::from_micros(ts_us.max(0) as u64);
+            loop {
+                match encoder.queue_video_frame(frame.clone(), timestamp) {
+                    Ok(()) => break,
+                    Err(QueueFrameError::NotReadyForMore) => {
+                        std::thread::sleep(Duration::from_micros(500));
+                    }
+                    Err(e) => panic!("queue failed at frame {i}: {e}"),
+                }
+            }
+        }
+
+        let real_span_secs = (FRAMES * REAL_DELTA_US) as f64 / 1_000_000.0;
+        encoder
+            .finish(Some(Duration::from_micros((FRAMES * REAL_DELTA_US) as u64)))
+            .unwrap();
+
+        let duration_secs = container_duration_secs(&output);
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            duration_secs < real_span_secs * 1.25,
+            "encoded duration {duration_secs:.2}s stretched beyond real span {real_span_secs:.2}s"
+        );
+        assert!(
+            duration_secs > real_span_secs * 0.75,
+            "encoded duration {duration_secs:.2}s collapsed below real span {real_span_secs:.2}s"
+        );
+    }
+
+    /// Encodes `span_secs` of clean `actual_fps` timestamps into an encoder
+    /// configured for `config_fps` and asserts the written duration matches
+    /// the real span — the configured rate only sizes bitrate/keyframes, it
+    /// must never re-time content delivered at a different rate.
+    fn assert_duration_tracks_input(actual_fps: f64, config_fps: u32, span_secs: f64) {
+        let output = test_output_path(&format!(
+            "duration_tracks_{}fps_in_{}cfg",
+            actual_fps.round() as u64,
+            config_fps
+        ));
+        let config = VideoInfo::from_raw(RawVideoFormat::Nv12, 640, 360, config_fps);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(640, 360);
+
+        let real_delta_us = 1_000_000.0 / actual_fps;
+        let frames = (span_secs * actual_fps) as i64;
+
+        for i in 0..frames {
+            let ts_us = (i as f64 * real_delta_us) as i64;
+            let frame = create_test_video_frame(&pool, ts_us, real_delta_us as i64);
+            loop {
+                match encoder.queue_video_frame(frame.clone(), Duration::from_micros(ts_us as u64))
+                {
+                    Ok(()) => break,
+                    Err(QueueFrameError::NotReadyForMore) => {
+                        std::thread::sleep(Duration::from_micros(500));
+                    }
+                    Err(e) => panic!(
+                        "[{actual_fps}fps into {config_fps}cfg] queue failed at frame {i}: {e}"
+                    ),
+                }
+            }
+        }
+
+        let real_span_secs = (frames as f64 * real_delta_us) / 1_000_000.0;
+        encoder
+            .finish(Some(Duration::from_secs_f64(real_span_secs)))
+            .unwrap();
+
+        let duration_secs = container_duration_secs(&output);
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            (duration_secs - real_span_secs).abs() < real_span_secs * 0.1,
+            "[{actual_fps}fps into {config_fps}cfg] encoded duration {duration_secs:.2}s \
+             should match real span {real_span_secs:.2}s"
+        );
+    }
+
+    /// Clean 60fps timestamps with a 30fps-configured encoder must be written
+    /// at their real times.
+    #[test]
+    fn faster_than_nominal_monotonic_input_keeps_real_duration() {
+        assert_duration_tracks_input(60.0, 30, 5.0);
+    }
+
+    /// Whatever rate frames actually arrive at — down to slow trickles and up
+    /// to a 1000fps camera — the encoder must write them at their real times.
+    #[test]
+    fn encoder_duration_tracks_input_across_fps_matrix() {
+        assert_duration_tracks_input(15.0, 30, 3.0);
+        assert_duration_tracks_input(24.0, 30, 3.0);
+        assert_duration_tracks_input(120.0, 30, 2.0);
+        assert_duration_tracks_input(240.0, 30, 1.5);
+        assert_duration_tracks_input(1000.0, 30, 1.2);
+        assert_duration_tracks_input(1000.0, 60, 1.2);
+        // Seeded-random rate: an arbitrary camera cadence nothing was tuned
+        // for.
+        let random_fps = 5.0
+            + (0x5EEDu64.wrapping_mul(6364136223846793005) >> 11) as f64 / (1u64 << 53) as f64
+                * 995.0;
+        assert_duration_tracks_input(random_fps, 30, 1.5);
     }
 
     #[test]

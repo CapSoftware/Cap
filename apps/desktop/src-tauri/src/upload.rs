@@ -4,7 +4,7 @@ use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     http_client::{HttpClient, RetryableHttpClient},
-    posthog::{PostHogEvent, async_capture_event},
+    telemetry::{AnalyticsEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
@@ -112,6 +112,8 @@ fn content_type_for_upload_subpath(subpath: &str) -> &'static str {
         "video/mp4"
     } else if subpath.ends_with(".jpg") || subpath.ends_with(".jpeg") {
         "image/jpeg"
+    } else if subpath.ends_with(".png") {
+        "image/png"
     } else if subpath.ends_with(".aac") {
         "audio/aac"
     } else if subpath.ends_with(".webm") {
@@ -215,7 +217,7 @@ pub async fn upload_video(
     async_capture_event(
         app,
         match &video_result {
-            Ok(meta) => PostHogEvent::MultipartUploadComplete {
+            Ok(meta) => AnalyticsEvent::MultipartUploadComplete {
                 duration: start.elapsed(),
                 length: meta
                     .as_ref()
@@ -225,7 +227,7 @@ pub async fn upload_video(
                     .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
                     .unwrap_or_default(),
             },
-            Err(err) => PostHogEvent::MultipartUploadFailed {
+            Err(err) => AnalyticsEvent::MultipartUploadFailed {
                 duration: start.elapsed(),
                 error: err.to_string(),
             },
@@ -254,25 +256,72 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
-#[instrument(skip(app))]
-pub async fn upload_image(
+fn screenshot_upload_subpath(content_type: &str) -> &'static str {
+    if content_type.eq_ignore_ascii_case("image/png") {
+        "screenshot/screen-capture.png"
+    } else {
+        "screenshot/screen-capture.jpg"
+    }
+}
+
+fn screenshot_content_type_from_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        _ => "image/jpeg",
+    }
+}
+
+pub async fn upload_screenshot_bytes(
     app: &AppHandle,
-    file_path: PathBuf,
+    image_bytes: Vec<u8>,
+    content_type: &str,
+    video_id: Option<String>,
+    organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthedApiError> {
-    let file_name = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("Invalid file path")?
-        .to_string();
+    let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let subpath = screenshot_upload_subpath(content_type);
+    let total_size = image_bytes.len() as u64;
 
-    let s3_config = create_or_get_video(app, true, None, None, None, None).await?;
-
-    let (stream, total_size) = file_reader_stream(file_path).await?;
     singlepart_uploader(
         app.clone(),
         PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
-            subpath: file_name,
+            subpath: subpath.to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
+        },
+        total_size,
+        stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(image_bytes)) }),
+    )
+    .await?;
+
+    Ok(UploadedItem {
+        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
+        id: s3_config.id,
+    })
+}
+
+pub async fn upload_screenshot_file(
+    app: &AppHandle,
+    file_path: PathBuf,
+    video_id: Option<String>,
+    organization_id: Option<String>,
+) -> Result<UploadedItem, AuthedApiError> {
+    let content_type = screenshot_content_type_from_path(&file_path);
+    let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
+    let subpath = screenshot_upload_subpath(content_type);
+    let (stream, total_size) = file_reader_stream(file_path).await?;
+
+    singlepart_uploader(
+        app.clone(),
+        PresignedS3PutRequest {
+            video_id: s3_config.id.clone(),
+            subpath: subpath.to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
@@ -319,7 +368,12 @@ pub async fn create_or_get_video_with_mode(
     recording_mode: &str,
 ) -> Result<S3UploadMeta, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
-        format!("/api/desktop/video/create?recordingMode={recording_mode}&videoId={id}")
+        let mut url =
+            format!("/api/desktop/video/create?recordingMode={recording_mode}&videoId={id}");
+        if is_screenshot {
+            url.push_str("&isScreenshot=true");
+        }
+        url
     } else if is_screenshot {
         format!("/api/desktop/video/create?recordingMode={recording_mode}&isScreenshot=true")
     } else {
@@ -500,7 +554,7 @@ impl InstantMultipartUpload {
                 async_capture_event(
                     &app,
                     match &result {
-                        Ok(meta) => PostHogEvent::MultipartUploadComplete {
+                        Ok(meta) => AnalyticsEvent::MultipartUploadComplete {
                             duration: start.elapsed(),
                             length: meta
                                 .as_ref()
@@ -510,7 +564,7 @@ impl InstantMultipartUpload {
                                 .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
                                 .unwrap_or_default(),
                         },
-                        Err(err) => PostHogEvent::MultipartUploadFailed {
+                        Err(err) => AnalyticsEvent::MultipartUploadFailed {
                             duration: start.elapsed(),
                             error: err.to_string(),
                         },
@@ -790,6 +844,7 @@ impl PresignedUrlCache {
             },
         )
         .await
+        .map(|target| target.url)
     }
 
     async fn extend_prefetch(&self, app: &AppHandle, video_id: &str, from: u32, count: u32) {
@@ -842,12 +897,12 @@ impl SegmentUploader {
                 async_capture_event(
                     &app,
                     match &result {
-                        Ok(total_bytes) => PostHogEvent::MultipartUploadComplete {
+                        Ok(total_bytes) => AnalyticsEvent::MultipartUploadComplete {
                             duration: start.elapsed(),
                             length: start.elapsed(),
                             size: total_bytes / (1024 * 1024),
                         },
-                        Err(err) => PostHogEvent::MultipartUploadFailed {
+                        Err(err) => AnalyticsEvent::MultipartUploadFailed {
                             duration: start.elapsed(),
                             error: err.to_string(),
                         },
@@ -1006,20 +1061,14 @@ impl SegmentUploader {
         app: &AppHandle,
         video_id: &str,
         manifest: &SegmentUploadManifest,
+        url_cache: &PresignedUrlCache,
     ) -> Result<(), AuthedApiError> {
         let json = serde_json::to_string_pretty(manifest)
             .map_err(|e| format!("segment_upload/manifest/serialize: {e}"))?;
 
-        let presigned_url = api::upload_signed(
-            app,
-            api::PresignedS3PutRequest {
-                video_id: video_id.to_string(),
-                subpath: "segments/manifest.json".to_string(),
-                method: api::PresignedS3PutRequestMethod::Put,
-                meta: None,
-            },
-        )
-        .await?;
+        let presigned_url = url_cache
+            .get_or_fetch(app, video_id, "segments/manifest.json")
+            .await?;
 
         let client = app
             .state::<RetryableHttpClient>()
@@ -1103,6 +1152,7 @@ impl SegmentUploader {
             let dirty = manifest_dirty.clone();
             let shutdown = manifest_shutdown.clone();
             let notify = manifest_notify.clone();
+            let url_cache = url_cache.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(1));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1116,7 +1166,9 @@ impl SegmentUploader {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .to_manifest();
-                        if let Err(e) = Self::upload_manifest(&app, &video_id, &manifest).await {
+                        if let Err(e) =
+                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache).await
+                        {
                             warn!("Periodic manifest upload failed: {e}");
                         }
                     }
@@ -1126,7 +1178,9 @@ impl SegmentUploader {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .to_manifest();
-                            Self::upload_manifest(&app, &video_id, &manifest).await.ok();
+                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache)
+                                .await
+                                .ok();
                         }
                         break;
                     }
@@ -1497,7 +1551,37 @@ impl SegmentUploader {
 
             return Err(error.into());
         }
-        Self::upload_manifest(&app, &video_id, &final_manifest).await?;
+        {
+            let mut manifest_err: Option<AuthedApiError> = None;
+            for attempt in 0..3u32 {
+                match Self::upload_manifest(&app, &video_id, &final_manifest, &url_cache).await {
+                    Ok(()) => {
+                        manifest_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            attempt = attempt + 1,
+                            "Failed to upload final manifest: {e}"
+                        );
+                        manifest_err = Some(e);
+                        if attempt < 2 {
+                            tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
+                                .await;
+                        }
+                    }
+                }
+            }
+            if let Some(e) = manifest_err {
+                error!("All attempts to upload final manifest failed for {video_id}");
+
+                // Leave the UploadMeta::SegmentUpload written at upload start in
+                // place so resume_uploads retries this recording on next launch.
+                emit_upload_complete(&app, &video_id);
+
+                return Err(format!("segment_upload/final_manifest: {e}").into());
+            }
+        }
 
         {
             let mut signal_ok = false;
@@ -2273,15 +2357,23 @@ pub async fn singlepart_uploader(
     total_size: u64,
     stream: impl Stream<Item = io::Result<Bytes>> + Send + 'static,
 ) -> Result<(), AuthedApiError> {
-    let presigned_url = api::upload_signed(&app, request).await?;
+    let upload_target = api::upload_signed(&app, request).await?;
+    let presigned_url = upload_target.url;
 
-    let request = app
+    let mut request = app
         .state::<RetryableHttpClient>()
         .as_ref()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
         .body(reqwest::Body::wrap_stream(stream));
+
+    for (key, value) in upload_target.headers {
+        if key.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        request = request.header(key, value);
+    }
 
     let resp = with_drive_content_range(request, &presigned_url, 0, total_size, total_size)
         .send()
@@ -2458,6 +2550,26 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn screenshot_upload_subpath_matches_content_type() {
+        assert_eq!(
+            screenshot_upload_subpath("image/png"),
+            "screenshot/screen-capture.png"
+        );
+        assert_eq!(
+            screenshot_upload_subpath("image/jpeg"),
+            "screenshot/screen-capture.jpg"
+        );
+        assert_eq!(
+            screenshot_content_type_from_path(Path::new("screen-capture.png")),
+            "image/png"
+        );
+        assert_eq!(
+            screenshot_content_type_from_path(Path::new("screen-capture.jpg")),
+            "image/jpeg"
+        );
+    }
 
     #[tokio::test]
     async fn read_segment_data_returns_existing_file() {

@@ -484,6 +484,7 @@ impl DashAudioSegmentEncoder {
             tracing::warn!("Audio write_trailer warning: {e}");
         }
 
+        self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();
 
@@ -508,6 +509,7 @@ impl DashAudioSegmentEncoder {
             tracing::warn!("Audio write_trailer warning: {e}");
         }
 
+        self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();
 
@@ -601,7 +603,7 @@ impl DashAudioSegmentEncoder {
 
                 if file_size < 100 {
                     tracing::debug!(
-                        "Skipping tiny orphaned audio segment {} ({} bytes)",
+                        "Skipping tiny unlisted audio segment {} ({} bytes)",
                         segment_path.display(),
                         file_size
                     );
@@ -621,7 +623,7 @@ impl DashAudioSegmentEncoder {
                 };
 
                 tracing::info!(
-                    "Recovered orphaned audio segment {} with {} bytes, estimated duration {:?}",
+                    "Finalized unlisted audio segment {} with {} bytes, estimated duration {:?}",
                     segment_path.display(),
                     file_size,
                     duration

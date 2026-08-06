@@ -1,0 +1,51 @@
+---
+title: Screenshot Sharing, Desktop Automations, Caption Exports & Linux Fixes
+app: Cap Desktop
+publishedAt: "2026-06-30"
+version: 0.5.3
+image:
+---
+
+This release adds screenshot sharing, desktop automations, richer caption and editing tools, better Linux support, and focused reliability fixes across screenshots, recording, uploads, and previews.
+
+## Features
+
+- **Screenshot sharing** - Upload screenshots directly from the screenshot editor or automations. The editor copies the share link after upload, automation rules can copy or open it, and rendered PNG or JPEG uploads preserve your annotations, crop, padding, background, and style settings.
+- **Desktop automations** - Create rules in Settings that run after screenshots, recordings, uploads, imports, and deleted recordings. Automations can copy, save, export, upload, open files, read screenshot text, show notifications, open or skip the editor, apply presets, run commands, send webhooks, and delete local files.
+- **CLI automation support** - CLI screenshots, finished recordings, and uploads can now run compatible desktop automation rules, and `cap doctor` can report automation rule counts.
+- **Linux CLI and capture support** - Linux support has been expanded across the CLI, desktop capture, native X11 recording, tray icons, package dependencies, and release handling.
+- **Clips and in-editor recording** - Record new clips from inside the editor, view clip thumbnails, see clip counts, and manage clip-based edits more easily.
+- **Audio library and music tracks** - Add bundled music or imported audio to a recording, edit audio segments on the timeline, and mix music tracks into MP4 exports.
+- **Caption styling and exports** - Apply caption presets, animations, and highlight styles, track caption model download progress, and export captions as SRT or VTT.
+- **Manual caption positioning** - Drag captions directly in the preview and place them exactly where you want them.
+- **Better transcript editing** - Edit transcript words and create captions from transcript text more easily.
+- **Improved captions** - Caption segmentation, punctuation, text fitting, source-timed captions, and final rendering are more accurate.
+- **Live crop preview** - The crop flow now includes a live GPU preview with a clearer side-by-side layout.
+- **Better screenshot workflows** - New screenshots start transparent, screenshot OCR works in automations, images can be imported from the system tray, and transparent screenshot exports stay transparent.
+- **Content protection while recording** - Desktop window content protection turns on when recording starts and turns off when recording stops.
+- **Plan-based instant mode resolution** - Instant mode resolution now follows the user's plan.
+
+## Fixes
+
+- **More reliable screenshot uploads** - Screenshot uploads can reuse an existing share link when the rendered content has not changed, and automation uploads now use the dedicated screenshot upload path.
+- **Recording finalization fixes** - Recording startup, stop, dead CLI sessions, incomplete project validation, and editor imports after recording finish are handled more reliably.
+- **Caption reliability fixes** - Caption settings load more safely, source-timed captions survive import and editing, long transcription jobs are less likely to exhaust memory, and caption project folders are detected more reliably.
+- **Screenshot and crop fixes** - Transparent screenshot exports stay transparent, screenshot previews wait for their first paint, and image imports no longer wake the main window unnecessarily.
+- **Rendering artifact fixes** - Per-clip camera size, display aspect ratio, cursor highlights, and source-timed captions render more accurately.
+- **Multi-monitor Windows fixes** - Capture area sizing and target picker overlays behave more reliably on HiDPI and multi-monitor Windows setups.
+- **Target picker overlay fixes** - Target picker overlays restore correctly after Settings, clean up on recording start and stop, and avoid stealing focus.
+- **Offscreen window recovery** - The main window and Settings window recentre themselves if they would otherwise open offscreen.
+- **Linux recording fixes** - Linux capture handles display geometry, missing active displays, WebKit rendering issues, and corrupted PipeWire frames more reliably.
+- **Camera preview fixes** - Camera preview fallbacks are safer, low-RAM machines use a lighter preview profile, and routine disconnects are less noisy.
+- **Offline sharing fixes** - Sharing while offline now shows a clearer error and avoids duplicate dialogs.
+- **Updater fixes** - Update checks use platform-specific endpoints and show clearer fallback download behavior.
+- **Crash marker fix** - Crash reporting is more accurate when the previous desktop session ended unexpectedly.
+
+## Performance
+
+- **Faster screenshot editor startup** - Screenshot rendering starts faster, backgrounds are cached, wallpaper previews warm before selection, and the editor waits for first paint before showing previews.
+- **Faster camera previews** - Camera preview rendering does less unnecessary frame work, handles websocket previews more efficiently, and supports low-spec preview limits.
+- **Smaller background snapshots** - Desktop background snapshots are capped, compressed, and healed when oversized to reduce project size and memory use.
+- **Faster editor timelines** - Off-screen timeline segments are virtualized for smoother editing in larger projects.
+- **Faster crop previews** - Crop previews use downscaled frames so crop editing feels more responsive.
+- **Faster editor startup** - Editor startup, screenshot rendering, and audio repair now run more work in parallel.

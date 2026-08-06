@@ -1,4 +1,5 @@
 import * as Db from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import {
 	Database,
 	provideOptionalAuth,
@@ -16,6 +17,10 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
+import {
+	resolveMobileRequestOrigin,
+	resolveMobileWebResourceUrl,
+} from "@/lib/mobile-request-origin";
 import { apiToHandler } from "@/lib/server";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
@@ -61,28 +66,51 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				const storage = yield* Storage;
 				const videos = yield* Videos;
 
-				return handlers.handle("getVideoSrc", ({ urlParams }) =>
+				return handlers.handle("getVideoSrc", ({ request, urlParams }) =>
 					Effect.gen(function* () {
+						const requestHost =
+							request.headers["x-forwarded-host"] ?? request.headers.host;
+						let requestUrl = request.originalUrl;
+						if (requestHost) {
+							try {
+								const url = new URL(requestUrl);
+								url.host = requestHost.split(",")[0]?.trim() ?? url.host;
+								requestUrl = url.toString();
+							} catch {
+								requestUrl = request.originalUrl;
+							}
+						}
 						const [video] = yield* videos
 							.getByIdForViewing(urlParams.videoId)
 							.pipe(
 								Effect.flatten,
-								Effect.catchTag(
-									"NoSuchElementException",
-									() => new HttpApiError.NotFound(),
+								Effect.catchTag("NoSuchElementException", () =>
+									Effect.fail(new HttpApiError.NotFound()),
 								),
 							);
 
-						return yield* getPlaylistResponse(video, urlParams);
+						return yield* getPlaylistResponse(
+							video,
+							urlParams,
+							resolveMobileRequestOrigin(
+								serverEnv().WEB_URL,
+								requestUrl,
+								requestHost,
+							),
+						);
 					}).pipe(
 						provideOptionalAuth,
 						Effect.tapErrorCause(Effect.logError),
 						Effect.catchTags({
-							VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
-							PolicyDenied: () => new HttpApiError.Unauthorized(),
-							DatabaseError: () => new HttpApiError.InternalServerError(),
-							StorageError: () => new HttpApiError.InternalServerError(),
-							UnknownException: () => new HttpApiError.InternalServerError(),
+							VerifyVideoPasswordError: () =>
+								Effect.fail(new HttpApiError.Forbidden()),
+							PolicyDenied: () => Effect.fail(new HttpApiError.Unauthorized()),
+							DatabaseError: () =>
+								Effect.fail(new HttpApiError.InternalServerError()),
+							StorageError: () =>
+								Effect.fail(new HttpApiError.InternalServerError()),
+							UnknownException: () =>
+								Effect.fail(new HttpApiError.InternalServerError()),
 						}),
 						Effect.provideService(Storage, storage),
 					),
@@ -136,6 +164,7 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
+	publicOrigin: string,
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
@@ -237,13 +266,28 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
 
-			const initUrl = yield* bucket.getSignedObjectUrl(initKey);
+			const signedInitUrl = yield* bucket.getSignedObjectUrl(initKey);
+			const initUrl = resolveMobileWebResourceUrl(
+				signedInitUrl,
+				serverEnv().WEB_URL,
+				publicOrigin,
+			);
 			const segmentUrls = yield* Effect.all(
 				segments.map((seg) => {
 					const key = isVideo
 						? segSource.getVideoSegmentKey(seg.index)
 						: segSource.getAudioSegmentKey(seg.index);
-					return bucket.getSignedObjectUrl(key);
+					return bucket
+						.getSignedObjectUrl(key)
+						.pipe(
+							Effect.map((url) =>
+								resolveMobileWebResourceUrl(
+									url,
+									serverEnv().WEB_URL,
+									publicOrigin,
+								),
+							),
+						);
 				}),
 				{ concurrency: "unbounded" },
 			);
@@ -298,7 +342,7 @@ const getPlaylistResponse = (
 				.pipe(
 					Effect.andThen(
 						Option.match({
-							onNone: () => new HttpApiError.NotFound(),
+							onNone: () => Effect.fail(new HttpApiError.NotFound()),
 							onSome: (c) =>
 								HttpServerResponse.text(c).pipe(
 									HttpServerResponse.setHeaders({
@@ -319,7 +363,9 @@ const getPlaylistResponse = (
 			const enhancedAudioKey = `${video.ownerId}/${video.id}/enhanced-audio.mp3`;
 			return yield* bucket.getSignedObjectUrl(enhancedAudioKey).pipe(
 				Effect.map(HttpServerResponse.redirect),
-				Effect.catchTag("StorageError", () => new HttpApiError.NotFound()),
+				Effect.catchTag("StorageError", () =>
+					Effect.fail(new HttpApiError.NotFound()),
+				),
 				Effect.withSpan("fetchEnhancedAudio"),
 			);
 		}

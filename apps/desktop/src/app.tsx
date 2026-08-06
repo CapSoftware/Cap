@@ -22,8 +22,8 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
-import { generalSettingsStore } from "./store";
-import { initAnonymousUser } from "./utils/analytics";
+import { authStore, generalSettingsStore } from "./store";
+import { identifyUser, initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
@@ -95,6 +95,7 @@ const TargetSelectOverlayPage = lazy(
 const WindowCaptureOccluderPage = lazy(
 	() => import("./routes/window-capture-occluder"),
 );
+const TeleprompterPage = lazy(() => import("./routes/teleprompter"));
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -126,6 +127,12 @@ function Inner() {
 
 	onMount(() => {
 		initAnonymousUser();
+		// OpenPanel keeps profileId in memory only (PostHog persisted it), so
+		// sign-in-time identify alone loses attribution after an app restart.
+		void authStore.get().then((auth) => {
+			if (auth?.user_id) identifyUser(auth.user_id);
+		});
+		prewarmFontCaches();
 	});
 
 	return (
@@ -234,7 +241,11 @@ function Inner() {
 					<Route path="/mode-select" component={ModeSelectPage} />
 					<Route path="/notifications" component={NotificationsPage} />
 					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
-					<Route path="/screenshot-editor" component={ScreenshotEditorPage} />
+					<Route
+						path="/screenshot-editor"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={ScreenshotEditorPage}
+					/>
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
@@ -243,10 +254,38 @@ function Inner() {
 						path="/window-capture-occluder"
 						component={WindowCaptureOccluderPage}
 					/>
+					<Route
+						path="/teleprompter"
+						info={{ AUTO_SHOW_WINDOW: false }}
+						component={TeleprompterPage}
+					/>
 				</Router>
 			</CapErrorBoundary>
 		</>
 	);
+}
+
+// WebKit resolves the emoji fallback chain lazily on first glyph paint, which
+// can jank the first list/text render containing emoji (e.g. recording
+// titles). Drawing once to an offscreen canvas at idle warms the per-process
+// font caches instead.
+function prewarmFontCaches() {
+	const warm = () => {
+		try {
+			const canvas = document.createElement("canvas");
+			canvas.width = 32;
+			canvas.height = 32;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) return;
+			ctx.font = "16px 'Geist Sans'";
+			ctx.fillText("Ag", 0, 24);
+			ctx.font = "16px system-ui";
+			ctx.fillText("😀", 0, 24);
+		} catch {}
+	};
+
+	if ("requestIdleCallback" in window) requestIdleCallback(warm);
+	else setTimeout(warm, 250);
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {

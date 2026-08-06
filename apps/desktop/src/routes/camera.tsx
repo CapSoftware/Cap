@@ -39,7 +39,10 @@ import {
 } from "~/components/CameraPreviewChrome";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { createCameraMutation } from "~/utils/queries";
+import {
+	createCameraMutation,
+	createCurrentRecordingQuery,
+} from "~/utils/queries";
 import {
 	type CanvasControls,
 	createImageDataWS,
@@ -69,6 +72,7 @@ const getNativeCameraPreviewInitialState = () => {
 };
 
 let ignoreMoveUntil = 0;
+let performanceHarnessCameraOpen = false;
 
 const ignoreMoveFor = (durationMs: number) => {
 	ignoreMoveUntil = Date.now() + durationMs;
@@ -357,6 +361,8 @@ function LegacyCameraPreviewPage(props: {
 	issue: Accessor<CameraPreviewIssue | null>;
 }) {
 	const isCameraOnlyMode = () => getCameraOnlyMode();
+	const currentRecording = createCurrentRecordingQuery();
+	const isInstantRecording = () => currentRecording.data?.mode === "instant";
 
 	const [state, setState] = makePersisted(
 		createStore<CameraWindowState>(getDefaultCameraWindowState()),
@@ -452,7 +458,9 @@ function LegacyCameraPreviewPage(props: {
 	const WS_MAX_RETRIES = 10;
 
 	const { cameraWsPort } = window.__CAP__;
-	const [isWindowVisible, setIsWindowVisible] = createSignal(!document.hidden);
+	const [isWindowVisible, setIsWindowVisible] = createSignal(
+		performanceHarnessCameraOpen || !document.hidden,
+	);
 	let ws: Omit<WebSocket, "onmessage"> | undefined;
 	let canvasControls: CanvasControls | undefined;
 	let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -500,22 +508,34 @@ function LegacyCameraPreviewPage(props: {
 	};
 
 	onMount(() => {
+		const unlistenHarnessCameraOpened = listen(
+			"instant-mode-harness-camera-opened",
+			() => {
+				performanceHarnessCameraOpen = true;
+				setIsWindowVisible(true);
+				lastFrameTime = Date.now();
+			},
+		);
+
 		const handleVisibilityChange = () => {
-			setIsWindowVisible(!document.hidden);
-			if (!document.hidden) {
+			const visible = performanceHarnessCameraOpen || !document.hidden;
+			setIsWindowVisible(visible);
+			if (visible) {
 				lastFrameTime = Date.now();
 				commands.refreshCameraFeed().catch(() => {});
 			}
 		};
 		document.addEventListener("visibilitychange", handleVisibilityChange);
-		onCleanup(() =>
-			document.removeEventListener("visibilitychange", handleVisibilityChange),
-		);
+		onCleanup(() => {
+			document.removeEventListener("visibilitychange", handleVisibilityChange);
+			void unlistenHarnessCameraOpened.then((unlisten) => unlisten());
+		});
 	});
 
 	const createSocket = () => {
+		const instantQuery = isInstantRecording() ? "?instant=true" : "";
 		const [socket, _isConnected, _isWorkerReady, controls] = createImageDataWS(
-			`ws://localhost:${cameraWsPort}`,
+			`ws://localhost:${cameraWsPort}${instantQuery}`,
 			updateFrameState,
 			() => commands.refreshCameraFeed().catch(() => {}),
 			{ powerPreference: "low-power" },
@@ -592,6 +612,7 @@ function LegacyCameraPreviewPage(props: {
 
 		stallCheckInterval = setInterval(() => {
 			if (
+				!performanceHarnessCameraOpen &&
 				ws?.readyState === WebSocket.OPEN &&
 				isWindowVisible() &&
 				lastFrameTime > 0 &&
@@ -611,6 +632,18 @@ function LegacyCameraPreviewPage(props: {
 			stopSocket();
 		}
 	});
+
+	createEffect(
+		on(
+			isInstantRecording,
+			() => {
+				if (!isWindowVisible()) return;
+				stopSocket();
+				startSocket();
+			},
+			{ defer: true },
+		),
+	);
 
 	onCleanup(() => {
 		isCleanedUp = true;

@@ -183,18 +183,25 @@ impl AutomationHost for DesktopAutomationHost {
     ) -> Result<(), String> {
         let link = if let Some(image_path) = ctx.image_path.as_ref() {
             info!(path = %image_path.display(), "Automation: uploading screenshot");
-            let uploaded = crate::upload::upload_image(&self.app, image_path.clone())
-                .await
-                .map_err(|e| format!("Upload failed: {e}"))?;
+            let meta = ctx
+                .project_path
+                .as_ref()
+                .or(Some(image_path))
+                .and_then(|path| crate::load_screenshot_project_meta(path).ok());
+            let existing_video_id = meta
+                .as_ref()
+                .and_then(|(_, meta)| meta.sharing.as_ref().map(|sharing| sharing.id.clone()));
+            let uploaded = crate::upload::upload_screenshot_file(
+                &self.app,
+                image_path.clone(),
+                existing_video_id,
+                organization_id.map(str::to_string),
+            )
+            .await
+            .map_err(|e| format!("Upload failed: {e}"))?;
 
-            if let Some(project_path) = ctx.project_path.as_ref()
-                && let Ok(mut meta) = cap_project::RecordingMeta::load_for_project(project_path)
-            {
-                meta.sharing = Some(cap_project::SharingMeta {
-                    link: uploaded.link.clone(),
-                    id: uploaded.id.clone(),
-                });
-                let _ = meta.save_for_project();
+            if let Some((project_path, meta)) = meta {
+                let _ = crate::save_screenshot_sharing(&project_path, meta, &uploaded, None);
             }
 
             uploaded.link

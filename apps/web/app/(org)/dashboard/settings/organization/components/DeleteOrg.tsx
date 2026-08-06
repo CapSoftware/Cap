@@ -1,9 +1,6 @@
 import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { useState } from "react";
-import {
-	canManageOrganizationBilling,
-	getEffectiveOrganizationRole,
-} from "@/lib/permissions/roles";
+import { getEffectiveOrganizationRole } from "@/lib/permissions/roles";
 import { useDashboardContext } from "../../../Contexts";
 import DeleteOrgDialog from "./DeleteOrgDialog";
 
@@ -18,33 +15,39 @@ const DeleteOrg = () => {
 		ownerId: activeOrganization?.organization.ownerId,
 		memberRole: currentMember?.role,
 	});
-	const canDeleteOrganization = canManageOrganizationBilling(currentRole);
+	const canDeleteOrganization = currentRole === "owner";
 
 	return (
 		<>
-			<DeleteOrgDialog
-				open={toggleDeleteDialog}
-				onOpenChange={setToggleDeleteDialog}
-			/>
+			{canDeleteOrganization && (
+				<DeleteOrgDialog
+					open={toggleDeleteDialog}
+					onOpenChange={setToggleDeleteDialog}
+				/>
+			)}
 			<Card className="flex flex-wrap gap-6 justify-between items-center w-full">
 				<CardHeader>
 					<CardTitle>Delete Organization</CardTitle>
 					<CardDescription>
-						Delete your organization and all associated data.{" "}
+						{canDeleteOrganization
+							? "Delete your organization and all associated data."
+							: "Deleting this organization requires the owner's permission."}
 					</CardDescription>
 				</CardHeader>
-				<Button
-					variant="destructive"
-					disabled={organizationData?.length === 1 || !canDeleteOrganization}
-					size="sm"
-					onClick={(e) => {
-						e.stopPropagation();
-						e.preventDefault();
-						setToggleDeleteDialog(true);
-					}}
-				>
-					Delete Organization
-				</Button>
+				{canDeleteOrganization && (
+					<Button
+						variant="destructive"
+						disabled={!activeOrganization || !organizationData}
+						size="sm"
+						onClick={(e) => {
+							e.stopPropagation();
+							e.preventDefault();
+							setToggleDeleteDialog(true);
+						}}
+					>
+						Delete Organization
+					</Button>
+				)}
 			</Card>
 		</>
 	);

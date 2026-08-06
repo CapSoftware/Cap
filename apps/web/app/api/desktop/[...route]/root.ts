@@ -8,8 +8,8 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import { STRIPE_AVAILABLE, stripe, userIsPro } from "@cap/utils";
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
@@ -17,10 +17,11 @@ import { zValidator } from "@hono/zod-validator";
 import { and, eq, isNull } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { type Context, Hono } from "hono";
-import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { runPromise } from "@/lib/server";
+import { trackServerEvent } from "@/lib/server-analytics";
 import { withAuth, withOptionalAuth } from "../../utils";
 import {
 	canEditOrganizationBranding,
@@ -696,14 +697,35 @@ app.patch(
 app.post(
 	"/subscribe",
 	withAuth,
-	zValidator("json", z.object({ priceId: z.string() })),
+	zValidator(
+		"json",
+		z.object({
+			priceId: z.string(),
+			platform: z.literal("mobile").optional(),
+		}),
+	),
 	async (c) => {
-		const { priceId } = c.req.valid("json");
+		const { priceId, platform } = c.req.valid("json");
 		const user = c.get("user");
+		const checkoutPlatform = platform ?? "desktop";
 
 		if (userIsPro(user)) {
 			console.log("[POST] Error: User already on Pro plan");
 			return c.json({ error: true, subscription: true }, { status: 400 });
+		}
+
+		if (!STRIPE_AVAILABLE()) {
+			console.error(
+				JSON.stringify({
+					level: "error",
+					message: "Stripe checkout is not configured",
+					route: "/api/desktop/subscribe",
+				}),
+			);
+			return c.json(
+				{ code: "billing_unavailable", error: true },
+				{ status: 503 },
+			);
 		}
 
 		let customerId = user.stripeCustomerId;
@@ -749,38 +771,28 @@ app.post(
 		}
 
 		console.log("[POST] Creating checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: 1 }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
-			metadata: { platform: "desktop", dubCustomerId: user.id },
+			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
 		});
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");
 
-			try {
-				const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
-					host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
-				});
-
-				ph.capture({
-					distinctId: user.id,
-					event: "checkout_started",
-					properties: {
-						price_id: priceId,
-						quantity: 1,
-						platform: "desktop",
-					},
-				});
-
-				await ph.shutdown();
-			} catch (e) {
-				console.error("Failed to capture checkout_started in PostHog", e);
-			}
+			trackServerEvent(user.id, "checkout_started", {
+				price_id: priceId,
+				quantity: 1,
+				platform: checkoutPlatform,
+			});
 
 			return c.json({ url: checkoutSession.url });
 		}

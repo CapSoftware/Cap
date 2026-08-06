@@ -1,6 +1,16 @@
 import type { XY } from "~/utils/tauri";
+import maskEffectContract from "../../../../../crates/project/mask-effects.json";
 
 export type MaskKind = "sensitive" | "highlight";
+export type MaskEffect = "blur" | "pixelate";
+
+// Older versions interpret encoded blur as strong pixelation, keeping masked content private.
+const {
+	blurEncodingOffset: MASK_BLUR_ENCODING_OFFSET,
+	defaultAmount: DEFAULT_MASK_EFFECT_AMOUNT,
+	minAmount: MIN_MASK_EFFECT_AMOUNT,
+	maxAmount: MAX_MASK_EFFECT_AMOUNT,
+} = maskEffectContract;
 
 export type MaskScalarKeyframe = {
 	time: number;
@@ -38,7 +48,37 @@ export type MaskSegment = {
 export type MaskState = {
 	position: XY<number>;
 	size: XY<number>;
-	intensity: number;
+};
+
+const normalizeMaskEffectAmount = (amount: number) => {
+	if (!Number.isFinite(amount) || amount <= 0) {
+		return DEFAULT_MASK_EFFECT_AMOUNT;
+	}
+	return Math.min(
+		Math.max(amount, MIN_MASK_EFFECT_AMOUNT),
+		MAX_MASK_EFFECT_AMOUNT,
+	);
+};
+
+export const encodeMaskEffect = (effect: MaskEffect, amount: number) => {
+	const normalizedAmount = normalizeMaskEffectAmount(amount);
+	return effect === "blur"
+		? MASK_BLUR_ENCODING_OFFSET + normalizedAmount
+		: normalizedAmount;
+};
+
+export const getMaskEffect = (segment: MaskSegment): MaskEffect =>
+	segment.pixelation >= MASK_BLUR_ENCODING_OFFSET ? "blur" : "pixelate";
+
+export const getMaskEffectAmount = (segment: MaskSegment) => {
+	const storedAmount = Number.isFinite(segment.pixelation)
+		? segment.pixelation
+		: DEFAULT_MASK_EFFECT_AMOUNT;
+	const decodedAmount =
+		getMaskEffect(segment) === "blur"
+			? storedAmount - MASK_BLUR_ENCODING_OFFSET
+			: storedAmount;
+	return normalizeMaskEffectAmount(decodedAmount);
 };
 
 export const defaultMaskSegment = (
@@ -54,7 +94,7 @@ export const defaultMaskSegment = (
 	size: { x: 0.35, y: 0.35 },
 	feather: 0.1,
 	opacity: 1,
-	pixelation: 18,
+	pixelation: encodeMaskEffect("blur", DEFAULT_MASK_EFFECT_AMOUNT),
 	darkness: 0.5,
 	fadeDuration: 0,
 	keyframes: { position: [], size: [], intensity: [] },
@@ -72,9 +112,7 @@ export const evaluateMask = (
 		x: Math.min(Math.max(segment.size.x, 0.01), 2),
 		y: Math.min(Math.max(segment.size.y, 0.01), 2),
 	};
-	const intensity = Math.min(Math.max(segment.opacity, 0), 1);
-
-	return { position, size, intensity };
+	return { position, size };
 };
 
 const sortByTime = <T extends { time: number }>(items: T[]) =>

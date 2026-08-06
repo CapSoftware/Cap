@@ -33,15 +33,17 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 			name: videos.name,
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
+			isScreenshot: videos.isScreenshot,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 			ownerName: users.name,
 			folderName: folders.name,
 			folderColor: folders.color,
 			effectiveDate: videos.effectiveCreatedAt,
-			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-				Boolean,
-			),
+			hasActiveUpload:
+				sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+					Boolean,
+				),
 		};
 
 		const videoData = isAllSpacesEntry
@@ -70,6 +72,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						videos.name,
 						videos.createdAt,
 						videos.metadata,
+						videos.isScreenshot,
 						users.name,
 						folders.name,
 						folders.color,
@@ -102,6 +105,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						videos.name,
 						videos.createdAt,
 						videos.metadata,
+						videos.isScreenshot,
 						users.name,
 						folders.name,
 						folders.color,

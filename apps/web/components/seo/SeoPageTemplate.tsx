@@ -521,7 +521,9 @@ export const SeoPageTemplate = ({
 												className="overflow-hidden"
 											>
 												<div className="px-6 pb-4">
-													<p className="text-gray-3">{faq.answer}</p>
+													<p className="text-gray-3 [&_a]:font-semibold [&_a]:text-white [&_a]:underline [&_a:hover]:text-gray-1">
+														{renderHTML(faq.answer)}
+													</p>
 												</div>
 											</motion.div>
 										)}

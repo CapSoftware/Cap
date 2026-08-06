@@ -110,6 +110,8 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 									id={folder.id}
 									parentId={folder.parentId}
 									videoCount={folder.videoCount}
+									canMove={share.canManage}
+									moveRootLabel="My Caps"
 								/>
 							))}
 						</div>
@@ -119,6 +121,11 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 				{/* Display Videos */}
 				<FolderVideosSection
 					initialVideos={videosData}
+					location={{ type: "personal" }}
+					rootLabel="My Caps"
+					currentFolderId={folderId}
+					canMove={share.canManage}
+					allowBulkDelete
 					analyticsEnabled={Boolean(
 						serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
 					)}

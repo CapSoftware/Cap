@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.5.2"
+version = "0.5.8"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -29,7 +29,7 @@ tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
 tauri-plugin-fs = "2.2.0"
 tauri-plugin-global-shortcut = "2.2.0"
-tauri-plugin-http = "2.2.0"
+tauri-plugin-http = "=2.5.2"
 tauri-plugin-notification = "2.2.0"
 tauri-plugin-os = "2.2.0"
 tauri-plugin-process = "2.2.0"
@@ -75,6 +75,7 @@ clipboard-rs = "0.2.2"
 whisper-rs = "0.11.0"
 lazy_static = "1.4.0"
 log = "0.4.20"
+semver = "1"
 
 cap-audio = { path = "../../../crates/audio" }
 cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }
@@ -119,7 +120,6 @@ tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
 opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
-posthog-rs = "0.3.7"
 sysinfo = "0.35"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 aho-corasick.workspace = true
@@ -150,6 +150,9 @@ cap-camera-ffmpeg = { path = "../../../crates/camera-ffmpeg" }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libappindicator = "0.9.0"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [

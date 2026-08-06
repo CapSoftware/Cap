@@ -129,9 +129,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						.pipe(
 							Policy.withPolicy(policy.canEdit(parentId)),
 							Effect.flatMap(
-								Effect.catchTag(
-									"NoSuchElementException",
-									() => new Folder.NotFoundError(),
+								Effect.catchTag("NoSuchElementException", () =>
+									Effect.fail(new Folder.NotFoundError()),
 								),
 							),
 						);
@@ -172,9 +171,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				const folder = yield* (yield* repo
 					.getById(data.id)
 					.pipe(Policy.withPolicy(policy.canEdit(data.id)))).pipe(
-					Effect.catchTag(
-						"NoSuchElementException",
-						() => new Folder.NotFoundError(),
+					Effect.catchTag("NoSuchElementException", () =>
+						Effect.fail(new Folder.NotFoundError()),
 					),
 				);
 
@@ -212,9 +210,8 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						.pipe(
 							Policy.withPolicy(policy.canEdit(parentId)),
 							Effect.flatMap(
-								Effect.catchTag(
-									"NoSuchElementException",
-									() => new Folder.ParentNotFoundError(),
+								Effect.catchTag("NoSuchElementException", () =>
+									Effect.fail(new Folder.ParentNotFoundError()),
 								),
 							),
 						);

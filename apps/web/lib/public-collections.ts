@@ -426,9 +426,10 @@ const videoSelect = {
 		sql`${videos.id}`,
 		sql`${videos.password}`,
 	).mapWith(Boolean),
-	hasActiveUpload: sql`MAX(${videoUploads.videoId} IS NOT NULL)`.mapWith(
-		Boolean,
-	),
+	hasActiveUpload:
+		sql`MAX(${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false)`.mapWith(
+			Boolean,
+		),
 };
 
 const videoGroupBy = [

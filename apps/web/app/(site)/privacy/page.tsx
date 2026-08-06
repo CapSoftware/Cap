@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
+import { buildMarketingMetadata } from "@/lib/og/url";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildMarketingMetadata({
 	title: "Privacy Policy — Cap",
-};
+	path: "/privacy",
+	ogTitle: "Privacy policy",
+	ogTag: "Legal",
+});
 
 export default function App() {
 	return (

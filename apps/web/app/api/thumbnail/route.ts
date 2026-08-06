@@ -1,6 +1,11 @@
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
-import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import {
+	findScreenshotObjectKey,
+	provideOptionalAuth,
+	Storage,
+	VideosPolicy,
+} from "@cap/web-backend";
 import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
@@ -71,9 +76,7 @@ export async function GET(request: NextRequest) {
 			.pipe(runPromise);
 		const contents = listResponse.Contents || [];
 
-		const thumbnailKey = contents.find((item) =>
-			item.Key?.endsWith("screen-capture.jpg"),
-		)?.Key;
+		const thumbnailKey = findScreenshotObjectKey(contents);
 
 		if (!thumbnailKey)
 			return new Response(

@@ -23,9 +23,13 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
 		title: metadata.title,
 		description: metadata.description,
 		keywords: metadata.keywords,
+		alternates: {
+			canonical: `https://cap.so/${params.slug}`,
+		},
 		openGraph: {
 			title: metadata.title,
 			description: metadata.description,
+			url: `https://cap.so/${params.slug}`,
 			images: [metadata.ogImage],
 		},
 	};

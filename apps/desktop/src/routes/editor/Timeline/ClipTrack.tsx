@@ -1,7 +1,5 @@
-import {
-	createEventListener,
-	createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { Popover } from "@kobalte/core/popover";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
 	batch,
@@ -20,6 +18,16 @@ import {
 import { produce } from "solid-js/store";
 
 import type { TimelineSegment } from "~/utils/tauri";
+import {
+	clampTransitionDuration,
+	clipTimelineDuration,
+	clipTimelineOffsets,
+	clipTransitionMap,
+	DEFAULT_CLIP_TRANSITION_DURATION,
+	getClipTransition,
+	MIN_CLIP_TRANSITION_DURATION,
+	maxTransitionDuration,
+} from "../clip-transitions";
 import { useEditorContext } from "../context";
 import { useSegmentContext, useTimelineContext } from "./context";
 import { getSectionMarker } from "./sectionMarker";
@@ -326,40 +334,63 @@ export function ClipTrack(
 
 	const segments = (): Array<TimelineSegment> =>
 		project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
+	const [transitionDrag, setTransitionDrag] = createSignal<{
+		index: number;
+		duration: number;
+	} | null>(null);
 	const selectedClipIndices = createMemo(() => {
 		const selection = editorState.timeline.selection;
 		if (!selection || selection.type !== "clip") return null;
 		return new Set(selection.indices);
 	});
 	const totalClipTimelineDuration = createMemo(() => {
-		const segs = segments();
-		let total = 0;
-		for (let i = 0; i < segs.length; i++) {
-			total += (segs[i].end - segs[i].start) / segs[i].timescale;
-		}
-		return total;
+		return clipTimelineDuration(
+			segments(),
+			project.timeline?.transitions ?? [],
+		);
 	});
+	const effectiveTransitions = createMemo(() =>
+		clipTransitionMap(segments(), project.timeline?.transitions ?? []),
+	);
 
 	const segmentOffsets = createMemo(() => {
 		const segs = segments();
-		const offsets: number[] = new Array(segs.length);
-		let sum = 0;
-		for (let idx = 0; idx < segs.length; idx++) {
-			offsets[idx] = sum;
-			sum += (segs[idx].end - segs[idx].start) / segs[idx].timescale;
+		const transitions = project.timeline?.transitions ?? [];
+		const offsets = clipTimelineOffsets(segs, transitions);
+		const drag = transitionDrag();
+		if (drag) {
+			const committed =
+				getClipTransition(segs, transitions, drag.index)?.duration ?? 0;
+			const shift = committed - drag.duration;
+			for (let index = drag.index; index < offsets.length; index++) {
+				offsets[index] += shift;
+			}
 		}
 		return offsets;
 	});
 
+	const transitionAt = (index: number) => {
+		const drag = transitionDrag();
+		const transition = effectiveTransitions()[index] ?? null;
+		if (drag?.index !== index) return transition;
+		if (drag.duration === 0) return null;
+		return {
+			segmentIndex: index,
+			type: transition?.type ?? ("cross-fade" as const),
+			duration: drag.duration,
+		};
+	};
+
 	const visibleSegmentIndices = createMemo(() => {
 		const segs = segments();
 		const offsets = segmentOffsets();
+		const draggedIndex = transitionDrag()?.index;
 		const visible: number[] = [];
 		for (let i = 0; i < segs.length; i++) {
 			const seg = segs[i];
 			const segStart = offsets[i];
 			const segEnd = segStart + (seg.end - seg.start) / seg.timescale;
-			if (isSegmentVisible(segStart, segEnd)) {
+			if (i === draggedIndex || isSegmentVisible(segStart, segEnd)) {
 				visible.push(i);
 			}
 		}
@@ -367,6 +398,7 @@ export function ClipTrack(
 	});
 
 	function onHandleReleased() {
+		projectActions.normalizeClipTransitions();
 		const { transform } = editorState.timeline;
 
 		if (transform.position + transform.zoom > totalDuration() + 4) {
@@ -381,6 +413,38 @@ export function ClipTrack(
 		editorInstance.recordings.segments.length > 1;
 
 	const split = () => editorState.timeline.interactMode === "split";
+
+	function selectClip(currentIndex: number, event: MouseEvent) {
+		const selection = editorState.timeline.selection;
+		const isMac = navigator.platform.toUpperCase().includes("MAC");
+		const isMultiSelect = isMac ? event.metaKey : event.ctrlKey;
+
+		if (event.shiftKey && selection?.type === "clip") {
+			const lastIndex = selection.indices.at(-1) ?? currentIndex;
+			const start = Math.min(lastIndex, currentIndex);
+			const end = Math.max(lastIndex, currentIndex);
+			setEditorState("timeline", "selection", {
+				type: "clip",
+				indices: Array.from({ length: end - start + 1 }, (_, i) => start + i),
+			});
+		} else if (isMultiSelect && selection?.type === "clip") {
+			const indices = selection.indices.includes(currentIndex)
+				? selection.indices.filter((index) => index !== currentIndex)
+				: [...selection.indices, currentIndex];
+			setEditorState(
+				"timeline",
+				"selection",
+				indices.length > 0 ? { type: "clip", indices } : null,
+			);
+		} else {
+			setEditorState("timeline", "selection", {
+				type: "clip",
+				indices: [currentIndex],
+			});
+		}
+
+		props.handleUpdatePlayhead(event);
+	}
 
 	return (
 		<TrackRoot
@@ -556,6 +620,13 @@ export function ClipTrack(
 								segment={relativeSegment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
+									if (e.button !== 0) return;
+									if (
+										(e.target as HTMLElement).closest(
+											"[data-clip-handle], [data-transition]",
+										)
+									)
+										return;
 
 									if (editorState.timeline.interactMode === "split") {
 										const rect = e.currentTarget.getBoundingClientRect();
@@ -565,84 +636,94 @@ export function ClipTrack(
 										const splitTime =
 											(fraction * (seg.end - seg.start)) / seg.timescale;
 
-										projectActions.splitClipSegment(prevDuration() + splitTime);
+										projectActions.splitClipSegment(
+											prevDuration() + splitTime,
+											i(),
+										);
 									} else {
-										createRoot((dispose) => {
-											createEventListener(
-												e.currentTarget,
-												"mouseup",
-												(upEvent) => {
-													dispose();
+										const index = i();
+										const initialTransition = getClipTransition(
+											segments(),
+											project.timeline?.transitions ?? [],
+											index,
+										);
+										const initialDuration = initialTransition?.duration ?? 0;
+										const canDrag =
+											index > 0 && !e.shiftKey && !e.ctrlKey && !e.metaKey;
+										const startX = e.clientX;
+										let active = false;
+										let nextDuration = initialDuration;
+										let pendingX = startX;
+										let frame: number | null = null;
 
-													const currentIndex = i();
-													const selection = editorState.timeline.selection;
-													const isMac =
-														navigator.platform.toUpperCase().indexOf("MAC") >=
-														0;
-													const isMultiSelect = isMac
-														? upEvent.metaKey
-														: upEvent.ctrlKey;
-													const isRangeSelect = upEvent.shiftKey;
+										const update = () => {
+											frame = null;
+											const delta = pendingX - startX;
+											if (!active) {
+												if (!canDrag || Math.abs(delta) < 4) return;
+												if (!initialTransition && delta > 0) return;
+												active = true;
+											}
 
-													if (
-														isRangeSelect &&
-														selection &&
-														selection.type === "clip"
-													) {
-														// Range selection: select from last selected to current
-														const existingIndices = selection.indices;
-														const lastIndex =
-															existingIndices[existingIndices.length - 1];
-														const start = Math.min(lastIndex, currentIndex);
-														const end = Math.max(lastIndex, currentIndex);
-														const rangeIndices = Array.from(
-															{ length: end - start + 1 },
-															(_, idx) => start + idx,
+											const requested =
+												initialDuration - delta * secsPerPixel();
+											nextDuration =
+												requested < MIN_CLIP_TRANSITION_DURATION / 2
+													? 0
+													: clampTransitionDuration(
+															requested || DEFAULT_CLIP_TRANSITION_DURATION,
+															segments()[index - 1],
+															segments()[index],
 														);
+											setTransitionDrag({ index, duration: nextDuration });
+										};
 
-														setEditorState("timeline", "selection", {
-															type: "clip" as const,
-															indices: rangeIndices,
-														});
-													} else if (
-														isMultiSelect &&
-														selection &&
-														selection.type === "clip"
-													) {
-														// Multi-select: toggle current index
-														const existingIndices = selection.indices;
-
-														if (existingIndices.includes(currentIndex)) {
-															// Remove from selection
-															const newIndices = existingIndices.filter(
-																(idx) => idx !== currentIndex,
-															);
-															if (newIndices.length > 0) {
-																setEditorState("timeline", "selection", {
-																	type: "clip" as const,
-																	indices: newIndices,
-																});
-															} else {
-																setEditorState("timeline", "selection", null);
-															}
-														} else {
-															// Add to selection
-															setEditorState("timeline", "selection", {
-																type: "clip" as const,
-																indices: [...existingIndices, currentIndex],
-															});
-														}
-													} else {
-														// Normal single selection
-														setEditorState("timeline", "selection", {
-															type: "clip" as const,
-															indices: [currentIndex],
-														});
-													}
-
-													props.handleUpdatePlayhead(upEvent);
+										createRoot((dispose) => {
+											onCleanup(() => {
+												if (frame !== null) cancelAnimationFrame(frame);
+											});
+											createEventListenerMap(window, {
+												mousemove: (event) => {
+													pendingX = event.clientX;
+													if (frame === null)
+														frame = requestAnimationFrame(update);
 												},
-											);
+												mouseup: (event) => {
+													pendingX = event.clientX;
+													if (frame !== null) {
+														cancelAnimationFrame(frame);
+														frame = null;
+													}
+													update();
+													if (active) {
+														projectActions.setClipTransition(
+															index,
+															nextDuration > 0
+																? {
+																		type:
+																			initialTransition?.type ?? "cross-fade",
+																		duration: nextDuration,
+																	}
+																: null,
+														);
+														setEditorState(
+															"timeline",
+															"selection",
+															nextDuration > 0
+																? { type: "transition", index }
+																: null,
+														);
+														setTransitionDrag(null);
+													} else {
+														selectClip(index, event);
+													}
+													dispose();
+												},
+												blur: () => {
+													setTransitionDrag(null);
+													dispose();
+												},
+											});
 										});
 									}
 								}}
@@ -658,8 +739,139 @@ export function ClipTrack(
 
 								<Markings segment={segment()} prevDuration={prevDuration()} />
 
+								<Show when={i() > 0 && !transitionAt(i())}>
+									<button
+										type="button"
+										data-transition
+										class="absolute inset-y-0 left-0 z-[4] grid w-4 -translate-x-1/2 place-items-center bg-blue-9/40 text-xs text-white opacity-0 transition-opacity hover:bg-blue-9/60 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-blue-9"
+										aria-label={`Add transition before clip ${i() + 1}`}
+										onClick={(event) => {
+											event.stopPropagation();
+											projectActions.setClipTransition(i(), {
+												type: "cross-fade",
+												duration: DEFAULT_CLIP_TRANSITION_DURATION,
+											});
+											setEditorState("timeline", "selection", {
+												type: "transition",
+												index: i(),
+											});
+										}}
+									>
+										+
+									</button>
+								</Show>
+
+								<Show when={transitionAt(i())}>
+									{(transition) => (
+										<Popover
+											placement="top"
+											gutter={8}
+											open={
+												editorState.timeline.selection?.type === "transition" &&
+												editorState.timeline.selection.index === i()
+											}
+											onOpenChange={(open) =>
+												setEditorState(
+													"timeline",
+													"selection",
+													open ? { type: "transition", index: i() } : null,
+												)
+											}
+										>
+											<Popover.Trigger
+												data-transition
+												class={cx(
+													"absolute inset-y-0 left-0 z-[5] overflow-hidden border-x border-blue-7/80 bg-blue-9/25 text-white transition-colors hover:bg-blue-9/40",
+													editorState.timeline.selection?.type ===
+														"transition" &&
+														editorState.timeline.selection.index === i() &&
+														"bg-blue-9/50 ring-1 ring-inset ring-blue-10",
+												)}
+												style={{
+													width: `${transition().duration / secsPerPixel()}px`,
+													"background-image":
+														"linear-gradient(135deg, transparent 42%, rgb(96 165 250 / 0.7) 43%, rgb(96 165 250 / 0.7) 57%, transparent 58%)",
+												}}
+												title={`${transition().type === "cross-fade" ? "Crossfade" : "Fade through black"} · ${transition().duration.toFixed(2)}s`}
+												onMouseDown={(event) => event.stopPropagation()}
+											>
+												<span class="sr-only">Edit clip transition</span>
+											</Popover.Trigger>
+											<Popover.Portal>
+												<Popover.Content
+													onMouseDown={(event) => event.stopPropagation()}
+													class="z-50 flex w-64 flex-col gap-3 rounded-xl border border-gray-3 bg-gray-1 p-3 text-gray-12 shadow-xl outline-hidden"
+												>
+													<div class="flex items-center justify-between">
+														<span class="text-sm font-medium">
+															Clip transition
+														</span>
+														<span class="text-xs tabular-nums text-gray-10">
+															{transition().duration.toFixed(2)}s
+														</span>
+													</div>
+													<div class="grid grid-cols-2 gap-1 rounded-lg bg-gray-2 p-1">
+														{(
+															[
+																["cross-fade", "Crossfade"],
+																["fade-through-black", "Fade"],
+															] as const
+														).map(([type, label]) => (
+															<button
+																type="button"
+																aria-pressed={transition().type === type}
+																class={cx(
+																	"rounded-md px-2 py-1.5 text-xs transition-colors",
+																	transition().type === type
+																		? "bg-gray-4 text-gray-12"
+																		: "text-gray-10 hover:text-gray-12",
+																)}
+																onClick={() =>
+																	projectActions.setClipTransition(i(), {
+																		type,
+																		duration: transition().duration,
+																	})
+																}
+															>
+																{label}
+															</button>
+														))}
+													</div>
+													<input
+														type="range"
+														aria-label="Transition duration"
+														min={MIN_CLIP_TRANSITION_DURATION}
+														max={maxTransitionDuration(
+															segments()[i() - 1],
+															segment(),
+														)}
+														step={0.05}
+														value={transition().duration}
+														onChange={(event) =>
+															projectActions.setClipTransition(i(), {
+																type: transition().type,
+																duration: event.currentTarget.valueAsNumber,
+															})
+														}
+													/>
+													<button
+														type="button"
+														class="rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+														onClick={() =>
+															projectActions.deleteClipTransition(i())
+														}
+													>
+														Remove transition
+													</button>
+												</Popover.Content>
+											</Popover.Portal>
+										</Popover>
+									)}
+								</Show>
+
 								<SegmentHandle
 									position="start"
+									data-clip-handle
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										if (split()) return;
@@ -668,6 +880,12 @@ export function ClipTrack(
 											1,
 											secsPerPixel() *
 												MIN_CLIP_SEGMENT_PIXEL_WIDTH *
+												seg.timescale,
+											Math.max(
+												effectiveTransitions()[i()]?.duration ?? 0,
+												effectiveTransitions()[i() + 1]?.duration ?? 0,
+											) *
+												2 *
 												seg.timescale,
 										);
 
@@ -780,6 +998,7 @@ export function ClipTrack(
 								</SegmentContent>
 								<SegmentHandle
 									position="end"
+									data-clip-handle
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										const seg = segment();
@@ -788,6 +1007,12 @@ export function ClipTrack(
 											1,
 											secsPerPixel() *
 												MIN_CLIP_SEGMENT_PIXEL_WIDTH *
+												seg.timescale,
+											Math.max(
+												effectiveTransitions()[i()]?.duration ?? 0,
+												effectiveTransitions()[i() + 1]?.duration ?? 0,
+											) *
+												2 *
 												seg.timescale,
 										);
 

@@ -2,7 +2,7 @@ import type { comments as commentsSchema } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -44,6 +44,15 @@ interface SidebarProps {
 		aiGenerationStatus?: AiGenerationStatus | null;
 	} | null;
 	aiGenerationEnabled?: boolean;
+	isScreenshot?: boolean;
+	/** The owner just stopped this recording and landed here from the desktop
+	 * app — surface the transcript, which is the thing appearing live. */
+	recordingStopped?: boolean;
+	/** Owner is on Pro and the viewer is signed in; the composer's record
+	 * buttons ride on the same gate the timeline's do. */
+	canRecordMedia?: boolean;
+	/** Supplied on desktop, where the rail can be folded away. */
+	onCollapse?: () => void;
 }
 
 const TabContent = motion.div;
@@ -68,7 +77,7 @@ const tabVariants = {
 const tabTransition = {
 	x: { type: "spring", stiffness: 300, damping: 30 },
 	opacity: { duration: 0.2 },
-};
+} as const;
 
 export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
@@ -84,6 +93,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			onSeek,
 			aiData,
 			aiGenerationEnabled = false,
+			isScreenshot = false,
+			recordingStopped = false,
+			canRecordMedia = false,
+			onCollapse,
 		},
 		ref,
 	) => {
@@ -94,18 +107,25 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			isOwner || (user && data.organizationMembers?.includes(user.id)),
 		);
 
-		const defaultTab = !(
-			videoSettings?.disableComments ?? data.orgSettings?.disableComments
-		)
-			? "activity"
-			: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
-				? "summary"
-				: !(
-							videoSettings?.disableTranscript ??
-							data.orgSettings?.disableTranscript
+		const transcriptDisabled =
+			videoSettings?.disableTranscript ?? data.orgSettings?.disableTranscript;
+
+		const defaultTab =
+			// Landing right after stopping a recording: the transcript is what's
+			// appearing within seconds — show it instead of empty comments.
+			recordingStopped && !isScreenshot && !transcriptDisabled
+				? "transcript"
+				: isScreenshot ||
+						!(
+							videoSettings?.disableComments ??
+							data.orgSettings?.disableComments
 						)
-					? "transcript"
-					: "activity";
+					? "activity"
+					: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
+						? "summary"
+						: !transcriptDisabled
+							? "transcript"
+							: "activity";
 
 		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
 		const [[page, direction], setPage] = useState([0, 0]);
@@ -117,19 +137,24 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				disabled:
 					videoSettings?.disableComments ?? data.orgSettings?.disableComments,
 			},
-			{
-				id: "summary",
-				label: "Summary",
-				disabled:
-					videoSettings?.disableSummary ?? data.orgSettings?.disableSummary,
-			},
-			{
-				id: "transcript",
-				label: "Transcript",
-				disabled:
-					videoSettings?.disableTranscript ??
-					data.orgSettings?.disableTranscript,
-			},
+			...(isScreenshot
+				? []
+				: [
+						{
+							id: "summary",
+							label: "Summary",
+							disabled:
+								videoSettings?.disableSummary ??
+								data.orgSettings?.disableSummary,
+						},
+						{
+							id: "transcript",
+							label: "Transcript",
+							disabled:
+								videoSettings?.disableTranscript ??
+								data.orgSettings?.disableTranscript,
+						},
+					]),
 		];
 
 		const paginate = (tabId: TabType) => {
@@ -165,6 +190,8 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								isOwner={isOwner}
 								onSeek={onSeek}
 								videoId={data.id}
+								ownerName={data.owner.name}
+								canRecordMedia={canRecordMedia && !isScreenshot}
 							/>
 						</Suspense>
 					);
@@ -190,8 +217,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 
 		const allTabsDisabled = tabs.every((tab) => tab.disabled);
 
+		// Desktop: a flush pane that fills its rail, so the comment list gets the
+		// viewport's height rather than the video's. Phones keep the card.
 		return (
-			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
+			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[70svh] flex flex-col lg:h-full lg:rounded-none lg:border-0">
 				<div className="flex-none">
 					<div
 						className={clsx(
@@ -234,6 +263,24 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									)}
 								</button>
 							))}
+						{onCollapse && (
+							<button
+								type="button"
+								onClick={onCollapse}
+								aria-label="Hide comments"
+								title="Hide comments"
+								className="hidden shrink-0 items-center justify-center px-3 text-gray-9 transition-colors hover:bg-gray-1 hover:text-gray-12 lg:flex"
+							>
+								<svg
+									viewBox="0 0 16 16"
+									className="size-4 fill-current"
+									aria-hidden
+								>
+									<title>Hide comments</title>
+									<path d="M5.7 3.3a.6.6 0 0 0 0 .85L9.55 8 5.7 11.85a.6.6 0 1 0 .85.85l4.27-4.27a.6.6 0 0 0 0-.86L6.55 3.3a.6.6 0 0 0-.85 0Z" />
+								</svg>
+							</button>
+						)}
 					</div>
 				</div>
 				<div className="flex-1 min-h-0">

@@ -67,6 +67,9 @@ function createServerEnv() {
 			GOOGLE_CLIENT_ID: z.string().optional(),
 			GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+			APPLE_CLIENT_ID: z.string().optional(),
+			APPLE_CLIENT_SECRET: z.string().optional(),
+
 			/// WorkOS SSO
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
@@ -86,7 +89,7 @@ function createServerEnv() {
 				.describe("Comma-separated list of permitted signup domains"),
 
 			/// AI providers
-			DEEPGRAM_API_KEY: z.string().optional().describe("Audio transcription"),
+			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
@@ -103,6 +106,9 @@ function createServerEnv() {
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),
+			SLACK_CLIENT_ID: z.string().optional(),
+			SLACK_CLIENT_SECRET: z.string().optional(),
+			SLACK_SIGNING_SECRET: z.string().optional(),
 
 			/// Tinybird analytics
 			TINYBIRD_HOST: z.string().optional(),
@@ -121,7 +127,7 @@ function createServerEnv() {
 			VERCEL_BRANCH_URL_HOST: z.string().optional(),
 			VERCEL_PROJECT_PRODUCTION_URL_HOST: z.string().optional(),
 			VERCEL_AWS_ROLE_ARN: z.string().optional(),
-			POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+			OPENPANEL_CLIENT_SECRET: z.string().optional(),
 			DUB_API_KEY: z.string().optional(),
 
 			/// Media Server

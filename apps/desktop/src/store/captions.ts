@@ -163,6 +163,15 @@ export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
 ];
 
 const classicPreset = CAPTION_STYLE_PRESETS[0];
+const captionAnimations: readonly CaptionAnimation[] = [
+	"none",
+	"bounce",
+	"pop",
+];
+const captionHighlightStyles: readonly CaptionHighlightStyle[] = [
+	"color",
+	"pill",
+];
 
 export const defaultCaptionSettings: EditorCaptionSettings = {
 	enabled: false,
@@ -175,6 +184,34 @@ export const defaultCaptionSettings: EditorCaptionSettings = {
 	preset: classicPreset.id,
 	...classicPreset.style,
 };
+
+function isCaptionAnimation(value: unknown): value is CaptionAnimation {
+	return captionAnimations.includes(value as CaptionAnimation);
+}
+
+function isCaptionHighlightStyle(
+	value: unknown,
+): value is CaptionHighlightStyle {
+	return captionHighlightStyles.includes(value as CaptionHighlightStyle);
+}
+
+export function normalizeCaptionSettings(
+	settings: Partial<CaptionSettings> | null | undefined,
+): EditorCaptionSettings {
+	const animation = isCaptionAnimation(settings?.animation)
+		? settings.animation
+		: defaultCaptionSettings.animation;
+	const highlightStyle = isCaptionHighlightStyle(settings?.highlightStyle)
+		? settings.highlightStyle
+		: defaultCaptionSettings.highlightStyle;
+
+	return {
+		...defaultCaptionSettings,
+		...settings,
+		animation,
+		highlightStyle,
+	};
+}
 
 function createCaptionsStore() {
 	const [state, setState] = createStore<CaptionsState>({
@@ -237,8 +274,8 @@ function createCaptionsStore() {
 				const captionsData = await commands.loadCaptions(videoPath);
 				if (captionsData) {
 					const loadedSettings = captionsData.settings
-						? { ...defaultCaptionSettings, ...captionsData.settings }
-						: { ...defaultCaptionSettings, enabled: true };
+						? normalizeCaptionSettings(captionsData.settings)
+						: normalizeCaptionSettings({ enabled: true });
 					setState((prev) => ({
 						...prev,
 						segments: captionsData.segments,
@@ -255,10 +292,10 @@ function createCaptionsStore() {
 						setState("segments", localCaptionsData.segments);
 					}
 					if (localCaptionsData.settings) {
-						setState("settings", {
-							...defaultCaptionSettings,
-							...localCaptionsData.settings,
-						});
+						setState(
+							"settings",
+							normalizeCaptionSettings(localCaptionsData.settings),
+						);
 					}
 				} catch (e) {
 					console.error("Error loading saved captions from localStorage:", e);

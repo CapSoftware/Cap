@@ -6,21 +6,25 @@ import {
 	readFileSync,
 	rmSync,
 	statSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withTimeout } from "../../lib/media-common";
 import { probeVideo } from "../../lib/media-probe";
 import {
+	buildStreamingDownloadFfmpegArgs,
 	copyFileToMp4,
 	generatePreviewGif,
 	generateThumbnail,
+	getFfmpegHlsCapabilities,
 	materializeHlsPlaylist,
 	materializeMpdAsHlsPlaylist,
 	materializeMpdManifest,
 	materializeStreamingInput,
 	muxMediaTracksToMp4,
 	normalizeVideoInputExtension,
+	parseFfmpegHlsCapabilities,
 	pickMobileSafeH264Level,
 	processVideo,
 	repairContainer,
@@ -238,7 +242,7 @@ describe("processVideo integration tests", () => {
 
 		globalThis.fetch = (async () =>
 			new Response(
-				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>',
+				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/><Initialization sourceURL="escaped.mp4?part=1&amp;token=x"/></Representation></AdaptationSet></Period></MPD>',
 				{ status: 200, statusText: "OK" },
 			)) as unknown as typeof fetch;
 
@@ -255,6 +259,8 @@ describe("processVideo integration tests", () => {
 			expect(content).toContain(
 				"chunk-$Number$.m4s?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
 			);
+			expect(content).toContain("escaped.mp4?part=1&amp;token=x");
+			expect(content).not.toContain("&amp;amp;");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -339,6 +345,7 @@ describe("processVideo integration tests", () => {
 						<Period>
 							<AdaptationSet mimeType="video/mp4">
 								<Representation id="v1" bandwidth="800000">
+									<BaseURL>media/</BaseURL>
 									<SegmentList>
 										<Initialization sourceURL="init.mp4"/>
 										<SegmentURL media="seg-1.m4s"/>
@@ -360,6 +367,9 @@ describe("processVideo integration tests", () => {
 
 			expect(path.endsWith(".mpd")).toBe(true);
 			expect(requests).toBe(2);
+			expect(content).toContain(
+				"https://cdn.example/video/media/?Policy=a&amp;Signature=b",
+			);
 			expect(content).toContain("seg-1.m4s?Policy=a&amp;Signature=b");
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -385,6 +395,40 @@ describe("processVideo integration tests", () => {
 				),
 			).rejects.toThrow("Failed to fetch DASH manifest: 403 Forbidden");
 			expect(requests).toBe(1);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects local file references in remote DASH manifests", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-local-file-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				`<MPD>
+					<Period>
+						<AdaptationSet mimeType="video/mp4">
+							<Representation id="v1" bandwidth="800000">
+								<BaseURL>file:///etc/</BaseURL>
+								<SegmentList>
+									<Initialization sourceURL="passwd"/>
+								</SegmentList>
+							</Representation>
+						</AdaptationSet>
+					</Period>
+				</MPD>`,
+				{ status: 200, statusText: "OK" },
+			)) as unknown as typeof fetch;
+
+		try {
+			await expect(
+				materializeStreamingInput(
+					"https://cdn.example/video/manifest.mpd",
+					manifestDir,
+				),
+			).rejects.toThrow("Unsupported media resource protocol: file:");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -462,6 +506,28 @@ describe("processVideo integration tests", () => {
 			expect(variant).toContain(
 				"https://cdn.example/video/segment-2.ts?Policy=a&Signature=b",
 			);
+		} finally {
+			globalThis.fetch = originalFetch;
+			rmSync(manifestDir, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects local file references in remote HLS playlists", async () => {
+		const originalFetch = globalThis.fetch;
+		const manifestDir = mkdtempSync(join(tmpdir(), "cap-hls-local-file-"));
+
+		globalThis.fetch = (async () =>
+			new Response(
+				["#EXTM3U", "#EXTINF:1.0,", "file:///etc/passwd"].join("\n"),
+			)) as unknown as typeof fetch;
+
+		try {
+			await expect(
+				materializeStreamingInput(
+					"https://cdn.example/video/manifest.m3u8",
+					manifestDir,
+				),
+			).rejects.toThrow("Unsupported media resource protocol: file:");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -700,6 +766,83 @@ describe("processVideo integration tests", () => {
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {
+	test("uses only legacy HLS options when newer FFmpeg options are unavailable", () => {
+		const capabilities = parseFfmpegHlsCapabilities(`
+			-allowed_extensions <string>
+		`);
+		const args = buildStreamingDownloadFfmpegArgs(
+			"/tmp/input.m3u8",
+			"/tmp/output.mkv",
+			capabilities,
+		);
+
+		expect(capabilities).toEqual({
+			allowedSegmentExtensions: false,
+			extensionPicky: false,
+		});
+		expect(args[args.indexOf("-allowed_extensions") + 1]).toBe("ALL");
+		expect(args).not.toContain("-allowed_segment_extensions");
+		expect(args).not.toContain("-extension_picky");
+	});
+
+	test("adds newer HLS options only when FFmpeg supports them", () => {
+		const capabilities = parseFfmpegHlsCapabilities(`
+			-allowed_extensions <string>
+			-allowed_segment_extensions <string>
+			-extension_picky <boolean>
+		`);
+		const args = buildStreamingDownloadFfmpegArgs(
+			"/tmp/input.m3u8",
+			"/tmp/output.mkv",
+			capabilities,
+		);
+
+		expect(args[args.indexOf("-allowed_segment_extensions") + 1]).toBe("ALL");
+		expect(args[args.indexOf("-extension_picky") + 1]).toBe("0");
+	});
+
+	test("remuxes WebM HLS segments with the installed FFmpeg options", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-webm-hls-"));
+		try {
+			const segmentPath = join(workDir, "segment.webm");
+			const manifestPath = join(workDir, "input.m3u8");
+			const outputPath = join(workDir, "output.mkv");
+
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-t",
+				"1",
+				"-an",
+				"-c:v",
+				"libvpx-vp9",
+				segmentPath,
+			]);
+			writeFileSync(
+				manifestPath,
+				"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1.0,\nsegment.webm\n#EXT-X-ENDLIST\n",
+			);
+
+			const capabilities = await getFfmpegHlsCapabilities();
+			const [command = "ffmpeg", ...args] = buildStreamingDownloadFfmpegArgs(
+				manifestPath,
+				outputPath,
+				capabilities,
+			);
+			execFileSync(command, args, { stdio: "pipe" });
+
+			const metadata = await probeVideo(`file://${outputPath}`);
+			expect(metadata.videoCodec).toBe("vp9");
+			expect(metadata.duration).toBeGreaterThan(0);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 60000);
+
 	test("repairs a real mp4 container into a probeable file", async () => {
 		const repairedFile = await repairContainer(TEST_VIDEO_WITH_AUDIO);
 		tempFiles.push(repairedFile.path);

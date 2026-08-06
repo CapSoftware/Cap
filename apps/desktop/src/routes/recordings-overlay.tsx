@@ -719,6 +719,14 @@ function createRecordingMutations(
 				return;
 			}
 
+			// Check connectivity first — prevent hanging on network calls when offline
+			if (!navigator.onLine) {
+				await commands.globalMessageDialog(
+					"You appear to be offline. Please check your internet connection and try again.",
+				);
+				return;
+			}
+
 			// Check authentication first
 			const existingAuth = await authStore.get();
 			if (!existingAuth) {

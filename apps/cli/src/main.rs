@@ -1,19 +1,34 @@
+mod account;
+mod agent_auth;
+mod agent_client;
+mod agents;
+mod analytics;
+mod atomic;
 mod automation;
+mod caps;
+mod confirmation;
 mod credentials;
+mod developers;
 mod doctor;
 mod export;
 mod guide;
+mod jobs;
+mod library;
+mod mcp;
+mod notifications;
+mod organizations;
 mod project;
 mod record;
 mod recordings;
 mod screenshot;
+mod selftest;
 mod session;
 mod targets;
 mod update;
 mod upload;
 
 use std::{
-    io::{Write, stderr, stdout},
+    io::{IsTerminal, Write, stderr, stdout},
     path::PathBuf,
 };
 
@@ -24,6 +39,79 @@ use serde::Serialize;
 use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_BLUE: &str = "\x1b[38;2;71;133;255m";
+const ANSI_SOFT_BLUE: &str = "\x1b[38;2;173;201;255m";
+const ANSI_WHITE: &str = "\x1b[38;2;255;255;255m";
+const ANSI_MUTED: &str = "\x1b[38;2;118;128;145m";
+
+const WELCOME_LINES: &[&[(&str, &str)]] = &[
+    &[(ANSI_BLUE, "      ██████████")],
+    &[
+        (ANSI_BLUE, "    ███"),
+        (ANSI_SOFT_BLUE, "████████"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "     ____"),
+    ],
+    &[
+        (ANSI_BLUE, "  ███"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "    / ___|__ _ _ __"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "██████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "   | |   / _` | '_ \\"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "█"),
+        (ANSI_WHITE, "████████████"),
+        (ANSI_SOFT_BLUE, "█"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "   | |__| (_| | |_) |"),
+    ],
+    &[
+        (ANSI_BLUE, "  ██"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "██████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "██"),
+        (ANSI_BOLD, "    \\____\\__,_| .__/"),
+    ],
+    &[
+        (ANSI_BLUE, "  ███"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_WHITE, "████████"),
+        (ANSI_SOFT_BLUE, "██"),
+        (ANSI_BLUE, "███"),
+        (ANSI_BOLD, "              |_|"),
+    ],
+    &[
+        (ANSI_BLUE, "    ███"),
+        (ANSI_SOFT_BLUE, "████████"),
+        (ANSI_BLUE, "███"),
+    ],
+    &[(ANSI_BLUE, "      ██████████")],
+    &[],
+    &[(
+        ANSI_BOLD,
+        "  Record, edit, and share screen recordings from the command line.",
+    )],
+    &[],
+    &[(ANSI_BLUE, "  cap record start --screen <id> --detach")],
+    &[(
+        ANSI_MUTED,
+        "  cap targets     cap doctor     cap guide --json     cap --help",
+    )],
+];
 
 /// Long-form help epilogue. Agents read `cap --help` before doing anything, so the conventions they
 /// need to drive the CLI correctly (JSON on stdout, env vars, the canonical workflow) live here.
@@ -38,11 +126,11 @@ OUTPUT
 AUTH
   `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
   key to copy when you are signed in there. Check with `cap auth status --json`. For headless/CI,
-  set CAP_API_KEY to a Cap auth key (Settings) to override.
+  create a CLI API key in the Cap dashboard under Settings -> Account and set it as CAP_API_KEY.
 
 ENVIRONMENT
-  CAP_API_KEY         Overrides auth for `cap upload` (Cap auth key from Settings); optional when
-                      signed into Cap Desktop.
+  CAP_API_KEY         Overrides auth (CLI API key from the Cap dashboard, Settings -> Account);
+                      optional when signed into Cap Desktop.
   CAP_SERVER_URL      Cap server base URL; defaults to Cap Desktop's server, else https://cap.so.
   CAP_NO_MODIFY_PATH  Set to skip editing shell profiles during `cap desktop install-cli`.
   CAP_DESKTOP_FORCE_INSTALL
@@ -75,7 +163,7 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -119,10 +207,32 @@ enum Commands {
     Update(FormatArgs),
     /// Show how `cap upload` will authenticate (env key or Cap Desktop login)
     Auth(AuthArgs),
+    /// Read and manage Caps in your personal library
+    Caps(caps::CapsArgs),
+    /// Read or update the authenticated Cap account
+    Account(account::AccountArgs),
+    /// Inspect Cap organizations, members, billing, and storage connections
+    Organizations(organizations::OrganizationsArgs),
+    /// Manage folders, spaces, and space membership
+    Library(library::LibraryArgs),
+    /// Read and manage account notifications
+    Notifications(notifications::NotificationsArgs),
+    /// Read organization, space, or Cap analytics
+    Analytics(analytics::AnalyticsArgs),
+    /// Inspect developer apps, domains, usage, and credits
+    Developers(developers::DevelopersArgs),
+    /// Inspect or wait for asynchronous Cap operations
+    Jobs(jobs::JobsArgs),
+    /// Run Cap's local Model Context Protocol server
+    Mcp(mcp::McpArgs),
+    /// Install Cap integrations for one explicitly selected agent
+    Agents(agents::AgentsArgs),
     /// List available capture targets and devices
     Targets(TargetsArgs),
     /// Report CLI environment and capture-readiness diagnostics
     Doctor(FormatArgs),
+    /// Run end-to-end diagnostics that verify Cap works on this machine
+    Selftest(selftest::SelftestArgs),
     /// Print CLI version and execution context
     Version(FormatArgs),
     /// Inspect or manage the desktop-installed `cap` shim
@@ -137,7 +247,20 @@ enum Commands {
 
 impl Commands {
     fn exit_after_success(&self) -> bool {
-        matches!(self, Self::Export(_) | Self::ExportPreview(_))
+        // Selftest runs an export, so it shares export's teardown-crash
+        // avoidance on Windows.
+        matches!(
+            self,
+            Self::Export(_) | Self::ExportPreview(_) | Self::Selftest(_)
+        )
+    }
+}
+
+impl Cli {
+    fn exit_after_success(&self) -> bool {
+        self.command
+            .as_ref()
+            .is_some_and(Commands::exit_after_success)
     }
 }
 
@@ -299,6 +422,10 @@ struct AuthArgs {
 enum AuthCommands {
     /// Report whether a credential is available and where it comes from (never prints the secret)
     Status(FormatArgs),
+    /// Authorize Cap CLI in the browser using PKCE
+    Login(agent_auth::LoginArgs),
+    /// Revoke and remove the Cap CLI credential
+    Logout(agent_auth::LogoutArgs),
 }
 
 #[derive(Args)]
@@ -342,7 +469,13 @@ fn main() {
         )
         .init();
 
-    let exit_after_success = cli.command.exit_after_success();
+    let exit_after_success = cli.exit_after_success();
+
+    // The self-test opens a window, which AppKit requires to live on the real
+    // process main thread — so the main thread stays here to serve pattern
+    // requests while the command itself runs on the runtime thread.
+    let pattern_rx = matches!(cli.command, Some(Commands::Selftest(_)))
+        .then(selftest::pattern::install_main_thread_runner);
 
     // Windows export exercises deep WGPU/MediaFoundation/FFmpeg stacks. Running the CLI runtime
     // on an explicitly large stack is what stopped the export worker from overflowing before
@@ -351,6 +484,17 @@ fn main() {
         .name("cap-cli-runtime".to_string())
         .stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
         .spawn(move || -> Result<(), String> {
+            // serve_main_thread blocks the main thread until this shutdown
+            // runs; a drop guard keeps that true on every exit path, including
+            // the runtime failing to build and panics unwinding out of run().
+            struct PatternShutdown;
+            impl Drop for PatternShutdown {
+                fn drop(&mut self) {
+                    selftest::pattern::shutdown_main_thread_runner();
+                }
+            }
+            let _pattern_shutdown = PatternShutdown;
+
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
@@ -370,16 +514,24 @@ fn main() {
             result
         });
 
-    // Surface failures as a clean, unquoted `error: ...` line on stderr (the default
-    // `Result`-returning main prints `Error: "debug-quoted"`, which is noisy for humans and brittle
-    // for agents scraping stderr). clap already exits 2 for usage/parse errors before we get here.
-    let outcome = match runtime_thread {
-        Ok(handle) => handle.join(),
+    // A failed spawn means nothing will ever call shutdown_main_thread_runner, so the
+    // pattern server below would block forever — bail out before serving.
+    let runtime_thread = match runtime_thread {
+        Ok(handle) => handle,
         Err(e) => {
             eprintln!("error: Failed to spawn CLI runtime thread: {e}");
             std::process::exit(1);
         }
     };
+
+    if let Some(rx) = pattern_rx {
+        selftest::pattern::serve_main_thread(rx);
+    }
+
+    // Surface failures as a clean, unquoted `error: ...` line on stderr (the default
+    // `Result`-returning main prints `Error: "debug-quoted"`, which is noisy for humans and brittle
+    // for agents scraping stderr). clap already exits 2 for usage/parse errors before we get here.
+    let outcome = runtime_thread.join();
 
     match outcome {
         Ok(Ok(())) => {}
@@ -396,9 +548,14 @@ fn main() {
 
 async fn run(cli: Cli) -> Result<(), String> {
     let json = cli.json;
-    match cli.command {
+    let Some(command) = cli.command else {
+        return print_welcome(json);
+    };
+
+    match command {
         Commands::Export(e) => e.run(json).await,
         Commands::ExportPreview(e) => e.run().await,
+        Commands::Selftest(args) => args.run(json).await,
         Commands::Project(args) => args.run(json),
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Start(args)) => args.run(json).await,
@@ -436,11 +593,23 @@ async fn run(cli: Cli) -> Result<(), String> {
         Commands::Auth(args) => match args.command {
             AuthCommands::Status(args) => {
                 let format = resolve_format(json, args.format);
-                finish_json(format, credentials::status(format))
+                finish_json(format, credentials::status(format).await)
             }
+            AuthCommands::Login(args) => args.run(json).await,
+            AuthCommands::Logout(args) => args.run(json).await,
         },
+        Commands::Caps(args) => args.run(json).await,
+        Commands::Account(args) => args.run(json).await,
+        Commands::Organizations(args) => args.run(json).await,
+        Commands::Library(args) => args.run(json).await,
+        Commands::Notifications(args) => args.run(json).await,
+        Commands::Analytics(args) => args.run(json).await,
+        Commands::Developers(args) => args.run(json).await,
+        Commands::Jobs(args) => args.run(json).await,
+        Commands::Mcp(args) => args.run().await,
+        Commands::Agents(args) => args.run(json),
         Commands::Targets(args) => args.run(json),
-        Commands::Doctor(args) => doctor::run_doctor(resolve_format(json, args.format)),
+        Commands::Doctor(args) => doctor::run_doctor(resolve_format(json, args.format)).await,
         Commands::Version(args) => {
             let format = resolve_format(json, args.format);
             finish_json(format, doctor::run_version(format))
@@ -461,6 +630,31 @@ async fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn print_welcome(json: bool) -> Result<(), String> {
+    if json {
+        return write_json(&serde_json::json!({
+            "name": "cap",
+            "about": "Cap screen recording from the command line",
+            "commands": ["record", "targets", "doctor", "guide", "upload"],
+        }));
+    }
+
+    let ansi = stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let mut stdout = stdout();
+    for line in WELCOME_LINES {
+        for segment in *line {
+            let (style, text) = *segment;
+            if ansi && !text.is_empty() {
+                write!(stdout, "{style}{text}{ANSI_RESET}").map_err(|e| e.to_string())?;
+            } else {
+                write!(stdout, "{text}").map_err(|e| e.to_string())?;
+            }
+        }
+        writeln!(stdout).map_err(|e| e.to_string())?;
+    }
+    stdout.flush().map_err(|e| e.to_string())
 }
 
 /// `--json` is a global convenience that forces JSON regardless of a command's local `--format`

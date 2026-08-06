@@ -144,12 +144,21 @@ pub fn append_matching_webview_window_ids(
             continue;
         };
         if Window::from_id(&native_id).is_none() {
-            warn!(
-                window_id = %native_id,
-                label = %label,
-                title = %title,
-                "Excluded Tauri webview window id is not visible to CGWindowList"
-            );
+            if window.is_visible().unwrap_or(false) {
+                warn!(
+                    window_id = %native_id,
+                    label = %label,
+                    title = %title,
+                    "Excluded Tauri webview window id is not visible to CGWindowList"
+                );
+            } else {
+                debug!(
+                    window_id = %native_id,
+                    label = %label,
+                    title = %title,
+                    "Skipping hidden excluded Tauri webview window"
+                );
+            }
             continue;
         }
         if ids.contains(&native_id) {

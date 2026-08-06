@@ -29,6 +29,13 @@ function ShareButton() {
 		mutationFn: async () => {
 			setUploadState({ type: "idle" });
 
+			if (!navigator.onLine) {
+				await commands.globalMessageDialog(
+					"You appear to be offline. Please check your internet connection and try again.",
+				);
+				return;
+			}
+
 			console.log("Starting upload process...");
 
 			// Check authentication first

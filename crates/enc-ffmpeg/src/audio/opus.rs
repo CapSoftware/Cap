@@ -67,6 +67,11 @@ impl OpusEncoder {
         let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
+        // libopus rejects surround layouts without an explicit mapping
+        // family; multichannel interfaces (5.1 mics) would fail to start a
+        // recording at all. Voice capture doesn't need surround: downmix to
+        // stereo via the resampler instead.
+        output_config.channels = output_config.channels.min(2);
 
         let resampler = BufferedResampler::new(input_config, output_config)
             .map_err(OpusEncoderError::Resampler)?;

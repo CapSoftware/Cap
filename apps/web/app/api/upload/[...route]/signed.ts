@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
@@ -23,6 +25,7 @@ function contentTypeForSubpath(subpath: string): string {
 	if (subpath.endsWith(".mp4") || subpath.endsWith(".m4s")) return "video/mp4";
 	if (subpath.endsWith(".jpg") || subpath.endsWith(".jpeg"))
 		return "image/jpeg";
+	if (subpath.endsWith(".png")) return "image/png";
 	if (subpath.endsWith(".aac")) return "audio/aac";
 	if (subpath.endsWith(".webm")) return "audio/webm";
 	if (subpath.endsWith(".m3u8")) return "application/x-mpegURL";
@@ -89,7 +92,10 @@ app.post(
 
 			return c.json(batch);
 		} catch (error) {
-			console.error("Batch signed URL generation failed:", error);
+			console.error(
+				"Batch signed URL generation failed:",
+				inspect(error, { depth: null }),
+			);
 			return c.json({ error: "Internal server error" }, 500);
 		}
 	},
@@ -139,13 +145,19 @@ app.post(
 				? "audio/aac"
 				: fileKey.endsWith(".webm")
 					? "audio/webm"
-					: fileKey.endsWith(".mp4")
+					: fileKey.endsWith(".mp4") || fileKey.endsWith(".m4s")
 						? "video/mp4"
 						: fileKey.endsWith(".mp3")
 							? "audio/mpeg"
 							: fileKey.endsWith(".m3u8")
 								? "application/x-mpegURL"
-								: "video/mp2t";
+								: fileKey.endsWith(".json")
+									? "application/json"
+									: fileKey.endsWith(".jpg") || fileKey.endsWith(".jpeg")
+										? "image/jpeg"
+										: fileKey.endsWith(".png")
+											? "image/png"
+											: "video/mp2t";
 
 			const data = await Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
@@ -168,17 +180,23 @@ app.post(
 
 			if (videoIdToUse) {
 				const videoId = Video.VideoId.make(videoIdToUse);
-				await db()
-					.update(Db.videos)
-					.set({
-						duration: updateIfDefined(durationInSecs, Db.videos.duration),
-						width: updateIfDefined(width, Db.videos.width),
-						height: updateIfDefined(height, Db.videos.height),
-						fps: updateIfDefined(fps, Db.videos.fps),
-					})
-					.where(
-						and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
-					);
+				if (
+					durationInSecs !== undefined ||
+					width !== undefined ||
+					height !== undefined ||
+					fps !== undefined
+				)
+					await db()
+						.update(Db.videos)
+						.set({
+							duration: updateIfDefined(durationInSecs, Db.videos.duration),
+							width: updateIfDefined(width, Db.videos.width),
+							height: updateIfDefined(height, Db.videos.height),
+							fps: updateIfDefined(fps, Db.videos.fps),
+						})
+						.where(
+							and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+						);
 
 				const clientSupportsUploadProgress = isFromDesktopSemver(
 					c.req,
@@ -205,12 +223,11 @@ app.post(
 				},
 			});
 		} catch (s3Error) {
-			console.error("S3 operation failed:", s3Error);
-			throw new Error(
-				`S3 operation failed: ${
-					s3Error instanceof Error ? s3Error.message : "Unknown error"
-				}`,
+			console.error(
+				"Signed upload URL generation failed:",
+				inspect(s3Error, { depth: null }),
 			);
+			return c.json({ error: "Internal server error" }, 500);
 		}
 	},
 );

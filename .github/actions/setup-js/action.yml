@@ -16,4 +16,14 @@ runs:
 
     - name: Install frontend dependencies
       shell: bash
-      run: pnpm install
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if pnpm install; then
+            exit 0
+          fi
+          if [[ "$attempt" == "3" ]]; then
+            exit 1
+          fi
+          sleep $((attempt * 30))
+        done

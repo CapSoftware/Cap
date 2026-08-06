@@ -21,6 +21,7 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { resetUser } from "@/app/utils/analytics";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../Contexts";
@@ -85,6 +86,7 @@ export const Settings = () => {
 		onSuccess: () => {
 			toast.success("Signed out of all devices");
 			setSignOutAllDevicesOpen(false);
+			resetUser();
 			signOut({ callbackUrl: "/login" });
 		},
 		onError: () => {
@@ -292,8 +294,8 @@ export const Settings = () => {
 				<div className="space-y-1">
 					<CardTitle>Sign out of all devices</CardTitle>
 					<CardDescription>
-						Invalidate every Cap web session and desktop app authentication
-						token connected to your account.
+						Invalidate every Cap web session, desktop app authentication token,
+						and CLI API key connected to your account.
 					</CardDescription>
 				</div>
 				<Button
@@ -313,7 +315,7 @@ export const Settings = () => {
 				<DialogContent>
 					<DialogHeader
 						icon={<LogOut className="size-4" />}
-						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, and desktop API keys for your account."
+						description="This will immediately invalidate existing Cap web sessions, desktop session tokens, desktop API keys, and CLI API keys for your account."
 					>
 						<DialogTitle>Sign out of all devices?</DialogTitle>
 					</DialogHeader>

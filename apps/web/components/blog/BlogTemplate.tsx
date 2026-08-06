@@ -11,6 +11,7 @@ interface BlogPost {
 	title: string;
 	description: string;
 	publishedAt: string;
+	updatedAt?: string;
 	category: string;
 	image?: string;
 	author: string;
@@ -132,8 +133,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					{content.description}
 				</p>
 				<div className="flex justify-center items-center space-x-2 text-sm text-gray-10 fade-in-down animate-delay-2">
-					<time dateTime={content.publishedAt}>
-						{formatDate(content.publishedAt)}
+					<time dateTime={content.updatedAt ?? content.publishedAt}>
+						{content.updatedAt
+							? `Updated ${formatDate(content.updatedAt)}`
+							: formatDate(content.publishedAt)}
 					</time>
 					<span>•</span>
 					<span>by {content.author}</span>
@@ -246,7 +249,9 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{item.question}
 								</summary>
-								<p className="mt-4 text-gray-700">{item.answer}</p>
+								<p className="mt-4 text-gray-700">
+									{renderRichText(item.answer)}
+								</p>
 							</details>
 						))}
 					</div>
@@ -311,7 +316,9 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{faq.question}
 								</summary>
-								<p className="mt-4 text-gray-700">{faq.answer}</p>
+								<p className="mt-4 text-gray-700">
+									{renderRichText(faq.answer)}
+								</p>
 							</details>
 						))}
 					</div>

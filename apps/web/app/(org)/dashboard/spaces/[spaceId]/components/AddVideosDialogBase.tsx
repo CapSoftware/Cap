@@ -22,23 +22,12 @@ import { toast } from "sonner";
 import * as z from "zod";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
 
-interface AddVideosDialogBaseProp<T> {
-	open: boolean;
-	onClose: () => void;
-	entityId: T;
-	entityName: string;
-	onVideosAdded?: () => void;
-	addVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
-	removeVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
-	getVideos: () => Promise<any>;
-	getEntityVideoIds: () => Promise<any>;
-}
-
 export interface VideoData {
 	id: Video.VideoId;
 	ownerId: string;
 	name: string;
 	createdAt: Date;
+	isScreenshot?: boolean;
 	totalComments: number;
 	totalReactions: number;
 	ownerName: string;
@@ -47,6 +36,42 @@ export interface VideoData {
 	metadata?: {
 		customCreatedAt?: string;
 	};
+}
+
+type UpdateVideosResult = {
+	success: boolean;
+	message?: string;
+	error?: string;
+};
+
+type VideosResult = {
+	success: boolean;
+	data?: VideoData[];
+	error?: string;
+};
+
+type VideoIdsResult = {
+	success: boolean;
+	data?: Video.VideoId[];
+	error?: string;
+};
+
+interface AddVideosDialogBaseProp<T> {
+	open: boolean;
+	onClose: () => void;
+	entityId: T;
+	entityName: string;
+	onVideosAdded?: () => void;
+	addVideos: (
+		entityId: T,
+		videoIds: Video.VideoId[],
+	) => Promise<UpdateVideosResult>;
+	removeVideos: (
+		entityId: T,
+		videoIds: Video.VideoId[],
+	) => Promise<UpdateVideosResult>;
+	getVideos: () => Promise<VideosResult>;
+	getEntityVideoIds: () => Promise<VideoIdsResult>;
 }
 
 const formSchema = z.object({
@@ -81,8 +106,8 @@ function AddVideosDialogBase<T>({
 		queryKey: ["user-videos"],
 		queryFn: async () => {
 			const result = await getVideos();
-			if (!result.success) {
-				throw new Error(result.error);
+			if (!result.success || !result.data) {
+				throw new Error(result.error ?? "Failed to fetch videos");
 			}
 			return result.data;
 		},
@@ -95,8 +120,8 @@ function AddVideosDialogBase<T>({
 		queryKey: ["entity-video-ids", entityId, entityName],
 		queryFn: async () => {
 			const result = await getEntityVideoIds();
-			if (!result.success) {
-				throw new Error(result.error);
+			if (!result.success || !result.data) {
+				throw new Error(result.error ?? "Failed to fetch video ids");
 			}
 			return result.data;
 		},
@@ -115,8 +140,8 @@ function AddVideosDialogBase<T>({
 			toAdd: Video.VideoId[];
 			toRemove: Video.VideoId[];
 		}) => {
-			let addResult = { success: true, message: "", error: "" };
-			let removeResult = { success: true, message: "", error: "" };
+			let addResult: UpdateVideosResult = { success: true };
+			let removeResult: UpdateVideosResult = { success: true };
 			if (toAdd.length > 0) {
 				addResult = await addVideos(entityId, toAdd);
 			}

@@ -97,7 +97,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			subNav: [],
 		},
 		{
-			name: "Import Video",
+			name: "Import Media",
 			href: `/dashboard/import`,
 			matchChildren: true,
 			icon: <ImportIcon />,

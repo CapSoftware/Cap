@@ -1,12 +1,13 @@
 "use client";
 
-import type { Video } from "@cap/web-domain";
+import type { Folder, Video } from "@cap/web-domain";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import type { MoveLocation } from "@/lib/move-items";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
@@ -17,11 +18,21 @@ import { useUploadingStatus } from "../../../caps/UploadingContext";
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
 	analyticsEnabled: boolean;
+	location: MoveLocation;
+	rootLabel: string;
+	currentFolderId: Folder.FolderId;
+	canMove: boolean;
+	allowBulkDelete?: boolean;
 }
 
 export default function FolderVideosSection({
 	initialVideos,
 	analyticsEnabled,
+	location,
+	rootLabel,
+	currentFolderId,
+	canMove,
+	allowBulkDelete = false,
 }: FolderVideosSectionProps) {
 	const router = useRouter();
 	const { user } = useDashboardContext();
@@ -126,13 +137,15 @@ export default function FolderVideosSection({
 	return (
 		<>
 			<div className="flex justify-between items-center mb-6 w-full">
-				<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
+				<h1 className="text-2xl font-medium text-gray-12">
+					Videos and screenshots
+				</h1>
 			</div>
 			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 				{visibleVideos.length === 0 && !isUploading ? (
 					<p className="col-span-full text-gray-9">
-						No videos in this folder yet. Drag and drop into the folder or
-						upload.
+						No videos or screenshots in this folder yet. Drag and drop into the
+						folder or upload.
 					</p>
 				) : (
 					<>
@@ -149,7 +162,15 @@ export default function FolderVideosSection({
 								isSelected={selectedCaps.includes(video.id)}
 								anyCapSelected={selectedCaps.length > 0}
 								isDeleting={isDeletingCaps || isDeletingCap}
-								onSelectToggle={() => handleCapSelection(video.id)}
+								onSelectToggle={
+									canMove || allowBulkDelete
+										? () => handleCapSelection(video.id)
+										: undefined
+								}
+								canMove={canMove}
+								moveLocation={location}
+								moveRootLabel={rootLabel}
+								currentFolderId={currentFolderId}
 								onDelete={() => {
 									if (selectedCaps.length > 0) {
 										deleteCaps(selectedCaps);
@@ -165,8 +186,13 @@ export default function FolderVideosSection({
 			<SelectedCapsBar
 				selectedCaps={selectedCaps}
 				setSelectedCaps={setSelectedCaps}
-				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
+				deleteSelectedCaps={
+					allowBulkDelete ? () => deleteCaps(selectedCaps) : undefined
+				}
 				isDeleting={isDeletingCaps || isDeletingCap}
+				moveLocation={canMove ? location : undefined}
+				moveRootLabel={canMove ? rootLabel : undefined}
+				currentFolderId={currentFolderId}
 			/>
 		</>
 	);

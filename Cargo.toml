@@ -10,8 +10,10 @@ members = [
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
-# stopped and released on drop on macOS
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
+# stopped and released on drop on macOS, plus zeroing of WASAPI capture
+# packets flagged AUDCLNT_BUFFERFLAGS_SILENT (loopback of an idle endpoint
+# otherwise surfaces unspecified buffer contents as audio).
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
     "macros",
@@ -116,9 +118,6 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 tao = { path = "vendor/tao" }
-
-# https://github.com/CapSoftware/posthog-rs/commit/c7e9712be2f9a9122b1df685d5a067afa5415288
-posthog-rs = { git = "https://github.com/CapSoftware/posthog-rs", rev = "c7e9712be2f9a9122b1df685d5a067afa5415288" }
 
 # https://github.com/CapSoftware/reqwest/commit/9b5ecbd5210a9510fde766015cabb724c1e70d2e
 reqwest = { git = "https://github.com/CapSoftware/reqwest", rev = "9b5ecbd5210a9510fde766015cabb724c1e70d2e" }

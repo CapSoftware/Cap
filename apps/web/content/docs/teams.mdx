@@ -1,0 +1,65 @@
+---
+title: "Working With Your Team"
+summary: "Organize people, recordings, permissions, and feedback in Cap"
+tags: "Teams, Organizations, Collaboration"
+---
+
+Cap organizations give a team one place to manage members, recordings, storage, and reporting. Within an organization, spaces and folders keep work organized while roles control who can change settings.
+
+## Start with an organization
+
+An organization has three member roles:
+
+| Role | What it is for |
+|------|-----------------|
+| Owner | Full control of the organization, including billing and organization settings |
+| Admin | Day-to-day administration, member management, and organization-wide workflows |
+| Member | Creating, viewing, and collaborating on content they can access |
+
+Owners and admins can invite people from the organization settings. Invitations can be prepared in batches, and Cap also creates missing organization users during a mapped Loom migration without sending an unexpected invitation email.
+
+## Organize work with spaces and folders
+
+Use spaces for durable team areas such as Product, Support, Sales, or Onboarding. Add the organization members who should work in each space; space members can be admins or members. A Pro space can also publish a collection link where anyone with the link can browse the public Caps in that space, and a space can require a password for its Caps.
+
+Folders provide another level of organization inside a space or in a personal library. A Cap can be moved between supported organization, space, and folder locations without changing the recording itself.
+
+A practical structure is:
+
+- One organization for the company or business unit
+- Spaces for teams or long-running programs
+- Folders for projects, releases, customers, or time periods
+
+## Share and collaborate
+
+Public Caps can be watched by anyone with the link. Private Caps require an authorized signed-in viewer, and password-protected Caps prompt for the password before playback.
+
+Signed-in viewers can add timestamped comments, replies, and emoji reactions when the organization and Cap settings allow them. Comment authors can delete their own comments. New-comment notifications can appear in Cap and by email, depending on notification preferences.
+
+Organization settings can disable comments, reactions, transcripts, captions, summaries, or chapters for the whole organization. They can also set branding, a custom domain, an allowed email domain, a default playback speed, and an AI language.
+
+## Understand engagement
+
+Organization analytics can be viewed over 24 hours, 7 days, 30 days, or the lifetime of the organization. The dashboard includes Cap, view, comment, and reaction totals plus time-series and breakdown views for geography, browser, operating system, device, and top Caps. Results can be narrowed to a space or an individual Cap.
+
+Analytics are aggregate. They are useful for understanding reach and engagement, but they should not be described as a definitive attendance record for named viewers.
+
+## Use your own storage
+
+An organization can manage storage centrally. Cap currently supports Cap-managed storage, Google Drive, and S3-compatible storage. When storage is managed by the organization, individual members cannot override that choice in Cap Desktop.
+
+Read [Google Drive](/docs/teams/google-drive) for the Drive workflow, or the [S3 guides](/docs/s3-config/aws-s3) for S3-compatible storage.
+
+## Work with an agent
+
+Cap's CLI and MCP surface can inspect organizations, members, spaces, folders, Caps, comments, and analytics. Start by asking the agent to run `cap guide --json` so it uses the command contract installed on your machine.
+
+For example:
+
+> Inspect our Cap organization, members, spaces, and folders. Propose a structure for Product, Support, and Sales, including the exact moves you would make. Do not create, invite, or move anything until I approve the full plan.
+
+The agent should discover IDs rather than infer them from names, remain read-only while planning, and request confirmation before every invitation, role change, content move, storage change, or other mutation. See [Agent Workflows](/docs/agents/workflows) for tested patterns.
+
+## Bringing an existing team over
+
+For a small Loom library, use Cap's importer directly. For a larger organization, map owners and spaces before starting and verify every import reaches a terminal result. The full process is in [Migrating to Cap](/docs/migrating-to-cap).

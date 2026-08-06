@@ -17,11 +17,13 @@ import {
 	createSignal,
 	ErrorBoundary,
 	For,
+	lazy,
 	Match,
 	on,
 	onCleanup,
 	onMount,
 	Show,
+	Suspense,
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -39,7 +41,6 @@ import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
-import { ClipsSidebar } from "./ClipsSidebar";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -51,13 +52,27 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
-import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
-import { TranscriptPanel } from "./TranscriptPage";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+
+// Deferred surfaces: these are not visible at first paint (export mode,
+// transcript panel, clips sidebar), so their code is split out of the editor
+// chunk to keep webview parse time — the dominant editor-open cost on
+// WebView2 — off the critical path. Each render site wraps them in a local
+// <Suspense> so the chunk load never bubbles up to the top-level editor
+// Suspense (which would flash the whole UI back to the skeleton).
+const ClipsSidebar = lazy(() =>
+	import("./ClipsSidebar").then((m) => ({ default: m.ClipsSidebar })),
+);
+const ExportPage = lazy(() =>
+	import("./ExportPage").then((m) => ({ default: m.ExportPage })),
+);
+const TranscriptPanel = lazy(() =>
+	import("./TranscriptPage").then((m) => ({ default: m.TranscriptPanel })),
+);
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
@@ -639,8 +654,15 @@ function Inner() {
 	};
 
 	return (
-		<Show when={!fullscreenMode()} fallback={<ExportPage />}>
-			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
+		<Show
+			when={!fullscreenMode()}
+			fallback={
+				<Suspense>
+					<ExportPage />
+				</Suspense>
+			}
+		>
+			<div class="flex flex-col flex-1 min-h-0">
 				<Header />
 				<div
 					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
@@ -707,10 +729,12 @@ function Inner() {
 										<ConfigSidebar />
 									</div>
 									<Show when={clipsSidebarMounted()}>
-										<ClipsSidebar
-											open={isClipsMode()}
-											class={isClipsMode() ? undefined : "hidden"}
-										/>
+										<Suspense>
+											<ClipsSidebar
+												open={isClipsMode()}
+												class={isClipsMode() ? undefined : "hidden"}
+											/>
+										</Suspense>
 									</Show>
 								</div>
 							</Show>
@@ -719,7 +743,7 @@ function Inner() {
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
-									aria-label="Resize transcript panel"
+									aria-label="Resize captions panel"
 									role="separator"
 									aria-orientation="vertical"
 								>
@@ -739,7 +763,9 @@ function Inner() {
 										"min-width": "0",
 									}}
 								>
-									<TranscriptPanel />
+									<Suspense>
+										<TranscriptPanel />
+									</Suspense>
 								</div>
 							</Show>
 						</div>
@@ -931,6 +957,8 @@ function Dialogs() {
 								let cropperRef: CropperRef | undefined;
 								let previewCanvas: HTMLCanvasElement | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
+								const [cropInteracting, setCropInteracting] =
+									createSignal(false);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
 								const [frameUrl, setFrameUrl] = createSignal<string | null>(
@@ -1266,6 +1294,7 @@ function Dialogs() {
 															<Cropper
 																ref={cropperRef}
 																onCropChange={setCrop}
+																onInteraction={setCropInteracting}
 																aspectRatio={aspect() ?? undefined}
 																targetSize={{
 																	x: display.width,
@@ -1297,6 +1326,29 @@ function Dialogs() {
 																	}
 																/>
 															</Cropper>
+															<Show
+																when={
+																	cropInteracting() &&
+																	crop().width > 0 &&
+																	crop().height > 0
+																}
+															>
+																<div
+																	aria-hidden="true"
+																	class="absolute z-40 border pointer-events-none border-black/90 shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+																	style={{
+																		left: `${(crop().x / display.width) * 100}%`,
+																		top: `${(crop().y / display.height) * 100}%`,
+																		width: `${(crop().width / display.width) * 100}%`,
+																		height: `${(crop().height / display.height) * 100}%`,
+																	}}
+																>
+																	<div class="absolute left-0 top-[calc(100%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute left-0 top-[calc(200%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute top-0 left-[calc(100%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
+																	<div class="absolute top-0 left-[calc(200%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
+																</div>
+															</Show>
 														</div>
 														<Show when={!frameLoaded()}>
 															<div class="flex absolute inset-0 z-40 flex-col gap-3 justify-center items-center bg-gray-3">

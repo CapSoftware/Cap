@@ -3,12 +3,9 @@ import {
 	type ChunkUploadState,
 	DEFAULT_API_REQUEST_TIMEOUT_MS,
 	DISPLAY_MEDIA_IDEAL,
-	DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
-	DISPLAY_MODE_PREFERENCES,
 	deleteRecoveredRecordingSpool,
 	describeRecordingCodecs,
 	detectRecordingModeFromTrack,
-	type ExtendedDisplayMediaStreamOptions,
 	InstantRecordingUploader,
 	initialLocalRecordingState,
 	initiateMultipartUpload,
@@ -20,7 +17,6 @@ import {
 	RecordingSpool,
 	recoverRecordingSpoolSession,
 	selectRecordingPipeline,
-	shouldRetryDisplayMediaWithoutPreferences,
 	type VideoId,
 } from "@cap/recorder-core";
 
@@ -69,6 +65,7 @@ import {
 	toSessionDescriptionInit,
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
+import { captureDisplayStream } from "./display-capture";
 
 const RECORDING_TIMESLICE_MS = 1000;
 const RECORDING_TIMESLICE_GUARD_MS = RECORDING_TIMESLICE_MS * 3;
@@ -408,61 +405,6 @@ const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
 		},
 	}) as unknown as MediaStreamConstraints;
 
-const requestDisplayMedia = (
-	options: Partial<ExtendedDisplayMediaStreamOptions>,
-) =>
-	navigator.mediaDevices.getDisplayMedia(options as DisplayMediaStreamOptions);
-
-const getDisplayStream = async (
-	mode: Exclude<RecordingMode, "tab" | "camera">,
-	includeAudio: boolean,
-) => {
-	const preferences = DISPLAY_MODE_PREFERENCES[mode];
-	const video = DISPLAY_MEDIA_VIDEO_CONSTRAINTS;
-
-	try {
-		return await requestDisplayMedia({
-			...preferences,
-			video,
-			audio: includeAudio,
-		});
-	} catch (error) {
-		if (isUserCancellationError(error)) throw error;
-
-		// Some browsers/OSes reject the advanced surface preferences
-		// (monitorTypeSurfaces, surfaceSwitching, preferCurrentTab, …) or a
-		// system-audio request the picker cannot satisfy. Fall back the way the
-		// dashboard recorder does instead of failing the whole capture.
-		if (shouldRetryDisplayMediaWithoutPreferences(error)) {
-			try {
-				return await requestDisplayMedia({ video, audio: includeAudio });
-			} catch (retryError) {
-				if (
-					includeAudio &&
-					shouldRetryDisplayMediaWithoutPreferences(retryError)
-				) {
-					return requestDisplayMedia({ video, audio: false });
-				}
-				throw retryError;
-			}
-		}
-
-		if (includeAudio) {
-			try {
-				return await requestDisplayMedia({
-					...preferences,
-					video,
-					audio: false,
-				});
-			} catch {
-				throw error;
-			}
-		}
-
-		throw error;
-	}
-};
-
 const getMainStream = async (request: StartRecordingRequest) => {
 	if (request.mode === "tab") {
 		if (!request.tabStreamId) throw new Error("Tab stream id is missing");
@@ -481,7 +423,14 @@ const getMainStream = async (request: StartRecordingRequest) => {
 		);
 	}
 
-	return getDisplayStream(request.mode, request.settings.systemAudio.enabled);
+	return captureDisplayStream(
+		request.mode,
+		request.settings.systemAudio.enabled,
+		(options) =>
+			navigator.mediaDevices.getDisplayMedia(
+				options as DisplayMediaStreamOptions,
+			),
+	);
 };
 
 const getAudioConstraint = (
@@ -833,6 +782,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let ownedVideoId: string | null = null;
 	let ownedSpool: RecordingSpool | null = null;
 	let ownedRecording: ActiveRecording | null = null;
+	let countdownPromise: Promise<void> | null = null;
 
 	try {
 		status = { phase: "creating" };
@@ -844,6 +794,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		if (captureSource) {
 			broadcastCaptureSource(captureSource);
 		}
+		countdownPromise = runStartCountdown(request);
 		const microphoneStream = await getMicrophoneStream(
 			request.settings.microphone,
 			request.mode,
@@ -964,11 +915,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			mimeType: pipeline.mimeType,
 		});
 
-		// Pre-roll countdown is the last step before capture: the picker and every
-		// server round-trip are already done, so recording begins the moment the
-		// count ends. `startedAt` is read afterwards so the countdown is excluded
-		// from the recording duration.
-		await runStartCountdown(request);
+		await countdownPromise;
 		throwIfStartCanceled();
 
 		const startedAt = Date.now();
@@ -1121,6 +1068,17 @@ const startRecording = async (request: StartRecordingRequest) => {
 		broadcastStatus();
 		return status;
 	} catch (error) {
+		chrome.runtime.sendMessage(
+			{
+				target: "service-worker",
+				type: "hide-recording-start-overlays",
+			} satisfies ServiceWorkerRequest,
+			() => {
+				void chrome.runtime.lastError;
+			},
+		);
+		countdownResolve?.();
+		await countdownPromise?.catch(() => undefined);
 		// Release only what this attempt acquired. No chunk can have been
 		// captured yet — chunks only flow once recorder.start() succeeds, after
 		// which nothing here throws — so the spool holds no recoverable data.

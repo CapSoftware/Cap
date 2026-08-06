@@ -72,6 +72,7 @@ objc2 = "0.6"
 objc2-app-kit = "0.3.1"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
+coreaudio-rs = { version = "0.11.3", features = ["audio_unit"] }
 foreign-types-shared = "0.3"
 libc = "0.2"
 

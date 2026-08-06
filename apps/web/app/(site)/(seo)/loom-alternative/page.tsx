@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { LoomAlternativePage } from "@/components/pages/seo/LoomAlternativePage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "The open source Loom alternative",
+	tag: "Compare",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -15,7 +21,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: The Best Loom Alternative",
@@ -29,7 +35,7 @@ export const metadata: Metadata = {
 		title: "The Ultimate Loom Alternative: Cap Screen Recorder",
 		description:
 			"Looking for the best Loom alternative? Discover Cap, the open-source, privacy-focused screen recorder for Mac & Windows.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/loom-alternative",

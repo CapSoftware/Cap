@@ -983,6 +983,19 @@ footer a {
 	margin-bottom: 0;
 }
 
+/*
+ * While the share-page stage is morphing between the player and timeline
+ * views, its layout animation scales the whole card. Overlay chrome that is
+ * positioned against the video (controls, comment stamps) skews visibly during
+ * that scale, so it is faded out for the duration of the morph.
+ */
+[data-morphing] [data-media-player-controls],
+[data-morphing] [data-comment-stamp] {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 120ms linear;
+}
+
 @supports (view-transition-name: none) {
 	::view-transition-old(root),
 	::view-transition-new(root) {

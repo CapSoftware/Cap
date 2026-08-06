@@ -2,20 +2,19 @@ export interface ReleaseDownloads {
 	"macos-arm64"?: string;
 	"macos-x64"?: string;
 	windows?: string;
-	"linux-appimage"?: string;
 	"linux-deb"?: string;
-	"linux-rpm"?: string;
 }
 
+export const releasesRevalidateSeconds = 60;
+
 export type ReleaseDownloadKey = keyof ReleaseDownloads;
+type ReleaseDownloadJsonKey = ReleaseDownloadKey | "linux";
 
 export const releaseDownloadKeys = [
 	"macos-arm64",
 	"macos-x64",
 	"windows",
-	"linux-appimage",
 	"linux-deb",
-	"linux-rpm",
 ] satisfies ReleaseDownloadKey[];
 
 export interface Release {
@@ -47,12 +46,21 @@ export function parseDownloadsFromBody(body: string): ReleaseDownloads {
 			const parsed: unknown = JSON.parse(jsonMatch[1]);
 			if (!parsed || typeof parsed !== "object") return downloads;
 
-			const values = parsed as Partial<Record<ReleaseDownloadKey, unknown>>;
+			const values = parsed as Partial<Record<ReleaseDownloadJsonKey, unknown>>;
 			for (const key of releaseDownloadKeys) {
 				const value = values[key];
 				if (typeof value === "string" && value.length > 0) {
 					downloads[key] = value;
 				}
+			}
+
+			const linuxValue = values.linux;
+			if (
+				!downloads["linux-deb"] &&
+				typeof linuxValue === "string" &&
+				linuxValue.length > 0
+			) {
+				downloads["linux-deb"] = linuxValue;
 			}
 		} catch {}
 	}
@@ -73,7 +81,7 @@ export async function getGitHubReleases(): Promise<Release[]> {
 				"User-Agent": "Cap-Web",
 			},
 			next: {
-				revalidate: 3600,
+				revalidate: releasesRevalidateSeconds,
 			},
 		},
 	);

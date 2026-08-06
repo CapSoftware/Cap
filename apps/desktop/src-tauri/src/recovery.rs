@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tracing::info;
 
 use crate::create_screenshot;
@@ -44,18 +44,12 @@ pub struct IncompleteRecordingInfo {
 pub async fn find_incomplete_recordings(
     app: AppHandle,
 ) -> Result<Vec<IncompleteRecordingInfo>, String> {
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
-
-    if !recordings_dir.exists() {
-        return Ok(Vec::new());
-    }
+    let recordings_dirs = crate::recordings_locations::known_recordings_dirs(&app);
 
     let result = tokio::task::spawn_blocking(move || {
-        let incomplete_list = RecoveryManager::find_incomplete(&recordings_dir);
+        let incomplete_list = recordings_dirs
+            .iter()
+            .flat_map(|dir| RecoveryManager::find_incomplete(dir));
 
         incomplete_list
             .into_iter()
@@ -94,9 +88,9 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
         Ok(r) => r,
         Err(e) => {
             let reason = format!("{e}");
-            crate::posthog::async_capture_event(
+            crate::telemetry::async_capture_event(
                 &app,
-                crate::posthog::PostHogEvent::RecordingRecoveryFailed {
+                crate::telemetry::AnalyticsEvent::RecordingRecoveryFailed {
                     trigger: "app_startup",
                     reason: reason.clone(),
                 },
@@ -116,9 +110,9 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
         segment_count, project_path
     );
 
-    crate::posthog::async_capture_event(
+    crate::telemetry::async_capture_event(
         &app,
-        crate::posthog::PostHogEvent::RecordingRecovered {
+        crate::telemetry::AnalyticsEvent::RecordingRecovered {
             trigger: "app_startup",
             recovered_duration_secs: estimated_duration_secs,
             segments_recovered: segment_count as u32,

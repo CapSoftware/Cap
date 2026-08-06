@@ -138,9 +138,9 @@ const DEFAULT_CURSOR: CursorConfiguration = {
 	size: 100,
 	type: "auto",
 	animationStyle: "mellow",
-	tension: 120,
-	mass: 1.1,
-	friction: 18,
+	tension: 470,
+	mass: 3,
+	friction: 70,
 	raw: false,
 	motionBlur: 0,
 	useSvg: true,
@@ -365,7 +365,10 @@ function createScreenshotEditorContext() {
 			setIsRenderReady(true);
 
 			try {
-				const imageData = new ImageData(processedData, width, height);
+				const imageBuffer = new ArrayBuffer(processedData.byteLength);
+				const imagePixels = new Uint8ClampedArray(imageBuffer);
+				imagePixels.set(processedData);
+				const imageData = new ImageData(imagePixels, width, height);
 				const bitmap = await createImageBitmap(imageData);
 				const existing = latestFrame();
 				if (existing?.bitmap && existing.bitmap !== bitmap) {

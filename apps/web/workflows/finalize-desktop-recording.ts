@@ -1,26 +1,44 @@
 import { db } from "@cap/database";
 import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { FatalError } from "workflow";
-import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
-import { runPromise } from "@/lib/server";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
-import { isAiGenerationEnabled } from "@/utils/flags";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface FinalizeDesktopRecordingWorkflowPayload {
 	videoId: string;
 	userId: User.UserId;
 }
 
+type DesktopSegmentsOutputUpload =
+	| {
+			type: "put";
+			url: string;
+	  }
+	| {
+			type: "multipart";
+			videoId: string;
+			key: string;
+			uploadId: string;
+			partSize: number;
+			signPartUrl: string;
+			completeUrl: string;
+			abortUrl: string;
+			webhookSecret?: string;
+	  };
+
 interface DesktopSegmentsMuxBody {
 	videoId: string;
 	userId: string;
 	outputPresignedUrl: string;
+	outputUpload: DesktopSegmentsOutputUpload;
 	thumbnailPresignedUrl: string;
 	previewGifPresignedUrl: string;
 	videoInitUrl: string;
@@ -37,6 +55,7 @@ const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5_000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
 
 function getRetryDelay(attempt: number) {
 	return Math.min(
@@ -57,6 +76,39 @@ async function waitBeforeMuxRetry(delayMs: number): Promise<void> {
 
 function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function getMediaServerWebhookUrl(baseUrl: string, path: string) {
+	const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+	return new URL(path.replace(/^\//, ""), normalizedBaseUrl).toString();
+}
+
+async function abortDesktopSegmentsOutputUpload(
+	outputUpload: DesktopSegmentsOutputUpload,
+): Promise<void> {
+	if (outputUpload.type === "put") return;
+
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (outputUpload.webhookSecret) {
+		headers["x-media-server-secret"] = outputUpload.webhookSecret;
+	}
+
+	const response = await fetch(outputUpload.abortUrl, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({
+			videoId: outputUpload.videoId,
+			key: outputUpload.key,
+			uploadId: outputUpload.uploadId,
+		}),
+		signal: AbortSignal.timeout(30_000),
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to abort output upload: ${response.status}`);
+	}
 }
 
 function isRetryableMuxError(error: unknown) {
@@ -269,7 +321,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	const segSource = new Video.SegmentsSource({
 		videoId,
@@ -278,7 +330,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	const manifestContent = await bucket
 		.getObject(segSource.getManifestKey())
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	const manifestJson = Option.getOrNull(manifestContent);
 
 	if (!manifestJson) {
@@ -294,7 +346,7 @@ async function buildDesktopSegmentsMuxBody(
 
 	let manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
 		.pipe(Effect.mapError(() => new Error("Invalid segment manifest format")))
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	if (!manifest.video_init_uploaded || manifest.video_segments.length === 0) {
 		throw new Error("No video segments found in manifest");
@@ -311,14 +363,14 @@ async function buildDesktopSegmentsMuxBody(
 				contentType: "application/json",
 				contentLength: Buffer.byteLength(body),
 			})
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 	}
 
 	const videoInitUrl = await bucket
 		.getSignedObjectUrl(segSource.getVideoInitKey(), {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const videoSegmentUrls = await Effect.all(
 		manifest.video_segments.map((seg) => {
@@ -331,7 +383,7 @@ async function buildDesktopSegmentsMuxBody(
 			);
 		}),
 		{ concurrency: "unbounded" },
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 
 	let audioInitUrl: string | undefined;
 	let audioSegmentUrls: string[] | undefined;
@@ -341,7 +393,7 @@ async function buildDesktopSegmentsMuxBody(
 			.getSignedObjectUrl(segSource.getAudioInitKey(), {
 				expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 			})
-			.pipe(runPromise);
+			.pipe(runWorkflowPromise);
 		audioSegmentUrls = await Effect.all(
 			manifest.audio_segments.map((seg) => {
 				const entry = Video.normalizeSegmentEntry(seg);
@@ -353,12 +405,15 @@ async function buildDesktopSegmentsMuxBody(
 				);
 			}),
 			{ concurrency: "unbounded" },
-		).pipe(runPromise);
+		).pipe(runWorkflowPromise);
 	}
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
+	const env = serverEnv();
+	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
+	const webhookSecret = env.MEDIA_SERVER_WEBHOOK_SECRET;
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -368,7 +423,11 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
+	let outputUpload: DesktopSegmentsOutputUpload = {
+		type: "put",
+		url: outputPresignedUrl,
+	};
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
 			thumbnailKey,
@@ -377,7 +436,7 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
 			previewGifKey,
@@ -387,16 +446,52 @@ async function buildDesktopSegmentsMuxBody(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
-	const webhookBaseUrl =
-		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
-	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+	if (bucket.provider === "s3" && webhookSecret) {
+		try {
+			const signPartUrl = getMediaServerWebhookUrl(
+				webhookBaseUrl,
+				"/api/webhooks/media-server/multipart/sign-part",
+			);
+			const completeUrl = getMediaServerWebhookUrl(
+				webhookBaseUrl,
+				"/api/webhooks/media-server/multipart/complete",
+			);
+			const abortUrl = getMediaServerWebhookUrl(
+				webhookBaseUrl,
+				"/api/webhooks/media-server/multipart/abort",
+			);
+			const multipartUpload = await bucket.multipart
+				.create(outputKey, { ContentType: "video/mp4" })
+				.pipe(runWorkflowPromise);
+			if (!multipartUpload.UploadId) {
+				throw new Error("Storage did not return a multipart upload id");
+			}
+			outputUpload = {
+				type: "multipart",
+				videoId,
+				key: outputKey,
+				uploadId: multipartUpload.UploadId,
+				partSize: MEDIA_SERVER_MULTIPART_OUTPUT_PART_SIZE_BYTES,
+				signPartUrl,
+				completeUrl,
+				abortUrl,
+				webhookSecret: webhookSecret || undefined,
+			};
+		} catch (error) {
+			console.warn(
+				`[finalizeDesktopRecordingWorkflow] Failed to create multipart output upload for ${videoId}:`,
+				error,
+			);
+		}
+	}
 
 	return {
 		videoId,
 		userId,
 		outputPresignedUrl,
+		outputUpload,
 		thumbnailPresignedUrl,
 		previewGifPresignedUrl,
 		videoInitUrl,
@@ -427,14 +522,35 @@ async function startDesktopSegmentsMuxJob(
 		headers["x-media-server-secret"] = body.webhookSecret;
 	}
 
-	const response = await fetch(`${mediaServerUrl}/video/mux-segments`, {
-		method: "POST",
-		headers,
-		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(30_000),
-	});
+	let response: Response;
+	try {
+		response = await fetch(`${mediaServerUrl}/video/mux-segments`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(30_000),
+		});
+	} catch (error) {
+		await abortDesktopSegmentsOutputUpload(body.outputUpload).catch(
+			(abortError) => {
+				console.warn(
+					`[finalizeDesktopRecordingWorkflow] Failed to abort output upload for ${videoId}:`,
+					abortError,
+				);
+			},
+		);
+		throw error;
+	}
 
 	if (!response.ok) {
+		await abortDesktopSegmentsOutputUpload(body.outputUpload).catch(
+			(abortError) => {
+				console.warn(
+					`[finalizeDesktopRecordingWorkflow] Failed to abort output upload for ${videoId}:`,
+					abortError,
+				);
+			},
+		);
 		const errorText = await response.text().catch(() => "");
 		throw new Error(
 			`Failed to start segment muxing: ${response.status} ${errorText}`,
@@ -482,6 +598,15 @@ async function waitForDesktopSegmentsMuxCompletion(
 		}
 
 		if (!upload) {
+			const [currentVideo] = await db()
+				.select({ source: videos.source })
+				.from(videos)
+				.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+			if (currentVideo?.source?.type === "desktopMP4") {
+				return;
+			}
+
 			throw new Error("Segment muxing state disappeared before completion");
 		}
 
@@ -526,9 +651,7 @@ async function queueFinalizedRecordingTranscription(
 		.from(users)
 		.where(eq(users.id, userId));
 
-	const aiGenerationEnabled = owner
-		? await isAiGenerationEnabled(owner)
-		: false;
+	const aiGenerationEnabled = isAiGenerationEnabledForUser(owner);
 
 	const result = await transcribeVideo(
 		Video.VideoId.make(videoId),

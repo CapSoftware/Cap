@@ -32,6 +32,7 @@ import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
 import Folder, { type FolderDataType } from "../../caps/components/Folder";
 import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
+import { SelectedCapsBar } from "../../caps/components/SelectedCapsBar";
 import { AddVideosDialog } from "./components/AddVideosDialog";
 import { AddVideosToOrganizationDialog } from "./components/AddVideosToOrganizationDialog";
 import { EmptySharedCapState } from "./components/EmptySharedCapState";
@@ -53,6 +54,7 @@ type SharedVideoData = {
 	totalReactions: number;
 	ownerName: string | null;
 	metadata?: VideoMetadata;
+	isScreenshot: boolean;
 	hasPassword?: boolean;
 	hasInheritedPassword?: boolean;
 	inheritedPasswordSources?: SpaceRuleSource[];
@@ -121,10 +123,8 @@ export const SharedCaps = ({
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / limit);
-	const [isDraggingCap, setIsDraggingCap] = useState({
-		isOwner: false,
-		isDragging: false,
-	});
+	const [isDraggingCap, setIsDraggingCap] = useState(false);
+	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isAddVideosDialogOpen, setIsAddVideosDialogOpen] = useState(false);
 	const [isSpaceSettingsOpen, setIsSpaceSettingsOpen] = useState(false);
 	const [
@@ -159,6 +159,21 @@ export const SharedCaps = ({
 	const canManageCurrentSharedCollection = spaceData
 		? canManageCurrentSpace
 		: canManageCurrentOrganization;
+	const moveLocation = spaceData
+		? ({ type: "space", spaceId } as const)
+		: ({ type: "organization" } as const);
+	const moveRootLabel =
+		spaceData?.name ??
+		organizationData?.name ??
+		activeOrganization?.organization.name ??
+		"All organization";
+	const handleCapSelection = (capId: Video.VideoId) => {
+		setSelectedCaps((current) =>
+			current.includes(capId)
+				? current.filter((id) => id !== capId)
+				: [...current, capId],
+		);
+	};
 
 	const spaceMemberCount = spaceMembers?.length || 0;
 
@@ -311,7 +326,7 @@ export const SharedCaps = ({
 	return (
 		<div className="flex relative flex-col w-full h-full">
 			{spaceSettingsDialog}
-			{isDraggingCap.isDragging && (
+			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">
 					<div className="flex justify-center items-center w-full h-full">
 						<div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
@@ -319,11 +334,7 @@ export const SharedCaps = ({
 								className="size-3.5 text-white opacity-50"
 								icon={faInfoCircle}
 							/>
-							<p className="text-white">
-								{isDraggingCap.isOwner
-									? " Drag to a space to share or folder to move"
-									: "Only the video owner can drag and move the video"}
-							</p>
+							<p className="text-white">Drag to a folder to move</p>
 						</div>
 					</div>
 				</div>
@@ -412,7 +423,12 @@ export const SharedCaps = ({
 					<h1 className="mb-6 text-2xl font-medium text-gray-12">Folders</h1>
 					<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
 						{folders.map((folder) => (
-							<Folder key={folder.id} {...folder} />
+							<Folder
+								key={folder.id}
+								{...folder}
+								canMove={canManageCurrentSharedCollection}
+								moveRootLabel={moveRootLabel}
+							/>
 						))}
 					</div>
 				</>
@@ -420,10 +436,11 @@ export const SharedCaps = ({
 
 			{data.length > 0 && (
 				<>
-					<h1 className="mb-4 text-2xl font-medium text-gray-12">Videos</h1>
+					<h1 className="mb-4 text-2xl font-medium text-gray-12">
+						Videos and screenshots
+					</h1>
 					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
 						{data.map((cap) => {
-							const isOwner = cap.ownerId === currentUserId;
 							return (
 								<SharedCapCard
 									key={cap.id}
@@ -434,12 +451,23 @@ export const SharedCaps = ({
 									organizationName={activeOrganization?.organization.name || ""}
 									spaceName={spaceData?.name || ""}
 									userId={currentUserId}
-									onDragStart={() =>
-										setIsDraggingCap({ isOwner, isDragging: true })
+									canMove={canManageCurrentSharedCollection}
+									moveLocation={moveLocation}
+									moveRootLabel={moveRootLabel}
+									isSelected={
+										canManageCurrentSharedCollection &&
+										selectedCaps.includes(cap.id)
 									}
-									onDragEnd={() =>
-										setIsDraggingCap({ isOwner, isDragging: false })
+									anyCapSelected={
+										canManageCurrentSharedCollection && selectedCaps.length > 0
 									}
+									onSelectToggle={
+										canManageCurrentSharedCollection
+											? () => handleCapSelection(cap.id)
+											: undefined
+									}
+									onDragStart={() => setIsDraggingCap(true)}
+									onDragEnd={() => setIsDraggingCap(false)}
 								/>
 							);
 						})}
@@ -456,6 +484,14 @@ export const SharedCaps = ({
 						</div>
 					)}
 				</>
+			)}
+			{canManageCurrentSharedCollection && (
+				<SelectedCapsBar
+					selectedCaps={selectedCaps}
+					setSelectedCaps={setSelectedCaps}
+					moveLocation={moveLocation}
+					moveRootLabel={moveRootLabel}
+				/>
 			)}
 		</div>
 	);

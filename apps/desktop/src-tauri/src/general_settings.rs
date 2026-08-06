@@ -1,3 +1,4 @@
+use crate::updates::UpdateChannel;
 use crate::window_exclusion::WindowExclusion;
 use scap_targets::DisplayId;
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,7 @@ use specta::Type;
 use std::collections::BTreeMap;
 #[cfg(target_os = "macos")]
 use tauri::Listener;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 use tracing::{error, instrument};
 use uuid::Uuid;
@@ -85,22 +86,31 @@ pub fn default_studio_recording_quality() -> StudioRecordingQuality {
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
-            Self::Close => window.hide(),
+            Self::Close => {
+                // On Windows, hide() leaves the DirectComposition surface composited on screen as
+                // a white ghost box. minimize() releases the surface without leaving an artifact.
+                #[cfg(windows)]
+                return window.minimize();
+                #[cfg(not(windows))]
+                window.hide()
+            }
             Self::Minimise => window.minimize(),
         }
     }
 }
 
+// NOTE: Do not add "Cap Target Select" here — on Windows, WDA_EXCLUDEFROMCAPTURE applied to that
+// hidden window causes it to reappear as a ghost overlay after recording ends.
 const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap",
     "Cap Settings",
     "Cap Recording Controls",
     "Cap Camera",
-    "Cap Target Select",
     "Cap Window Capture Occluder",
     "Cap Capture Area",
     "Cap Mode Selection",
     "Cap Recordings Overlay",
+    "Cap Teleprompter",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {
@@ -184,6 +194,11 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
+    /// `None` until [`init`] seeds it from whether this machine has a notched
+    /// display. From then on it is the user's preference and nothing re-reads
+    /// the hardware, so moving between machines can't silently flip it.
+    #[serde(default)]
+    pub macbook_notch_overlay: Option<bool>,
     #[serde(default = "default_capture_keyboard_events")]
     pub capture_keyboard_events: bool,
     #[serde(default)]
@@ -218,10 +233,24 @@ pub struct GeneralSettingsStore {
     pub enable_telemetry: bool,
     #[serde(default)]
     pub out_of_process_muxer: bool,
+    #[serde(default)]
+    pub recordings_path: Option<String>,
+    /// Custom recordings folders that were used before; recordings left in
+    /// them stay visible in the library. Most recent last.
+    #[serde(default)]
+    pub previous_recordings_paths: Vec<String>,
+    /// App version at which camera background blur was disabled after a crash
+    /// was attributed to the blur pipeline; `None` means blur is allowed.
+    /// Cleared automatically when the app version changes (one retry per
+    /// update, since a new ort/wgpu/driver stack may have fixed the crash).
+    #[serde(default)]
+    pub camera_blur_disabled_by_crash: Option<String>,
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
 }
 
 fn default_enable_native_camera_preview() -> bool {
-    cfg!(target_os = "macos")
+    false
 }
 
 fn no(_: &bool) -> bool {
@@ -296,7 +325,10 @@ impl Default for GeneralSettingsStore {
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
-            auto_zoom_on_clicks: false,
+            // Keep aligned with the field's serde `default_true`: auto zooms
+            // are on by default, matching configs that never stored the key.
+            auto_zoom_on_clicks: true,
+            macbook_notch_overlay: None,
             capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
@@ -314,6 +346,10 @@ impl Default for GeneralSettingsStore {
             has_completed_onboarding: false,
             enable_telemetry: true,
             out_of_process_muxer: cap_recording::DEFAULT_OUT_OF_PROCESS_MUXER,
+            recordings_path: None,
+            previous_recordings_paths: Vec::new(),
+            camera_blur_disabled_by_crash: None,
+            update_channel: UpdateChannel::Stable,
         }
     }
 }
@@ -328,6 +364,40 @@ pub enum AppTheme {
 }
 
 impl GeneralSettingsStore {
+    pub fn recordings_dir(app: &AppHandle<Wry>) -> std::path::PathBuf {
+        let custom = Self::get(app)
+            .map_err(|e| tracing::warn!("Failed to read general settings for recordings_dir: {e}"))
+            .ok()
+            .flatten()
+            .and_then(|s| s.recordings_path)
+            .and_then(|p| {
+                let path = std::path::PathBuf::from(&p);
+                if path.is_absolute() { Some(path) } else { None }
+            });
+
+        // A custom folder can become unavailable (unplugged drive, deleted
+        // path). Recording must keep working, so fall back to the default
+        // location instead of failing; the library lists recordings from
+        // every known folder, so nothing goes missing when this happens.
+        if let Some(path) = custom {
+            match std::fs::create_dir_all(&path) {
+                Ok(()) => return path,
+                Err(e) => {
+                    tracing::warn!(
+                        ?path, %e,
+                        "Custom recordings directory unavailable; falling back to default"
+                    );
+                }
+            }
+        }
+
+        let path = app.path().app_data_dir().unwrap().join("recordings");
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            tracing::warn!(?path, %e, "Failed to create recordings directory");
+        }
+        path
+    }
+
     // The effective value: the native preview is macOS-only; it is not
     // reliable on Windows, so the stored setting is ignored there and the
     // websocket preview is always used.
@@ -366,7 +436,7 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())?;
 
-        crate::posthog::set_telemetry_enabled(settings.enable_telemetry);
+        crate::telemetry::set_telemetry_enabled(settings.enable_telemetry);
 
         #[cfg(target_os = "macos")]
         crate::permissions::sync_macos_dock_visibility(app);
@@ -404,6 +474,13 @@ fn sync_dock_visibility_on_general_settings_change(app: &AppHandle) {
     });
 }
 
+/// Always false off macOS, so the overlay starts off and waits to be asked for.
+fn machine_has_notched_display() -> bool {
+    scap_targets::Display::list()
+        .iter()
+        .any(|display| display.notch().is_some())
+}
+
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
@@ -417,21 +494,31 @@ pub fn init(app: &AppHandle) {
     };
 
     append_missing_default_excluded_windows(&mut store.excluded_windows);
-    crate::posthog::set_telemetry_enabled(store.enable_telemetry);
+
+    if store.macbook_notch_overlay.is_none() {
+        store.macbook_notch_overlay = Some(machine_has_notched_display());
+    }
+
+    const REMOVE_TARGET_SELECT_MIGRATION_KEY: &str = "remove_cap_target_select_exclusion_v1";
+    if let Ok(raw_store) = app.store("store")
+        && raw_store.get(REMOVE_TARGET_SELECT_MIGRATION_KEY).is_none()
+    {
+        store
+            .excluded_windows
+            .retain(|w| w.window_title.as_deref() != Some("Cap Target Select"));
+        raw_store.set(REMOVE_TARGET_SELECT_MIGRATION_KEY, json!(true));
+    }
+
+    crate::telemetry::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
 
-    // One-time rollout of the native (GPU-surface) camera preview as the macOS
-    // default. The setting is always serialized, so existing users carry an
-    // explicit `false` from the old opt-in default; a raw marker key (outside
-    // the typed struct, so re-serialization never drops it) makes sure a user
-    // who explicitly turns it back off afterwards stays off.
     #[cfg(target_os = "macos")]
     {
-        const NATIVE_PREVIEW_MIGRATION_KEY: &str = "native_camera_preview_default_v1";
+        const NATIVE_PREVIEW_MIGRATION_KEY: &str = "native_camera_preview_default_rollback_v1";
         if let Ok(raw_store) = app.store("store")
             && raw_store.get(NATIVE_PREVIEW_MIGRATION_KEY).is_none()
         {
-            store.enable_native_camera_preview = true;
+            store.enable_native_camera_preview = false;
             raw_store.set(NATIVE_PREVIEW_MIGRATION_KEY, json!(true));
         }
     }

@@ -79,6 +79,9 @@ const PANEL_SRC = `${PANEL_URL}#${encodeURIComponent(PANEL_TOKEN)}`;
 const PANEL_WIDTH = 300;
 const PANEL_DEFAULT_HEIGHT = 460;
 const PANEL_MARGIN = 16;
+const CAMERA_MIN_SIZE = 120;
+const CAMERA_MAX_SIZE = 420;
+const CAMERA_RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
 // Persisting every 700ms preview frame to session storage broadcasts a
 // 10-30KB onChanged event to every open tab; the cached frame is only a
 // placeholder, so a coarse cadence is plenty.
@@ -117,6 +120,27 @@ const ensureOverlayTokensRegistered = () => {
 type VideoDimensions = {
 	width: number;
 	height: number;
+};
+
+type CameraResizeCorner = (typeof CAMERA_RESIZE_CORNERS)[number];
+
+type CameraPreviewMetrics = {
+	width: number;
+	height: number;
+	aspectRatio: number;
+};
+
+type CameraResizeSnapshot = {
+	size: number;
+	position: { x: number; y: number };
+	metrics: CameraPreviewMetrics;
+};
+
+type CameraResizeStart = CameraResizeSnapshot & {
+	corner: CameraResizeCorner;
+	pointerId: number;
+	clientX: number;
+	clientY: number;
 };
 
 // Preview events (frames, drag, errors) arrive from the camera-preview
@@ -171,7 +195,7 @@ const getPreviewMetrics = (
 	base: number,
 	shape: WebcamShape,
 	dimensions: VideoDimensions | null,
-) => {
+): CameraPreviewMetrics => {
 	if (!dimensions || dimensions.height === 0) {
 		return {
 			width: base,
@@ -209,6 +233,9 @@ const getBorderRadius = (size: number, shape: WebcamShape) => {
 	if (shape === "round") return "9999px";
 	return size <= 230 ? "3rem" : "4rem";
 };
+
+const clampCameraSize = (size: number) =>
+	Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
 
 const toOverlayPosition = (position: {
 	x: number;
@@ -341,8 +368,10 @@ const isPanelFrameMessage = (value: unknown): value is PanelFrameMessage => {
 };
 
 function RecorderPanelOverlay({
+	onDismiss,
 	onOpenChange,
 }: {
+	onDismiss: () => void;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const [open, setOpen] = useState(false);
@@ -411,12 +440,13 @@ function RecorderPanelOverlay({
 
 	const closePanel = useCallback(() => {
 		setOpen(false);
+		onDismiss();
 		void updateSharedUiState((current) => ({
 			...current,
 			panelOpen: false,
 			updatedAt: Date.now(),
 		})).catch(() => undefined);
-	}, []);
+	}, [onDismiss]);
 
 	useEffect(() => {
 		const handleMessage = (
@@ -522,6 +552,8 @@ function OverlayApp() {
 	const [persistedWebcamPosition, setPersistedWebcamPosition] =
 		useState<OverlayPosition | null>(null);
 	const [isDragging, setIsDragging] = useState(false);
+	const [activeResizeCorner, setActiveResizeCorner] =
+		useState<CameraResizeCorner | null>(null);
 	const [videoDimensions, setVideoDimensions] =
 		useState<VideoDimensions | null>(null);
 	const [lastPreviewFrame, setLastPreviewFrame] =
@@ -534,11 +566,14 @@ function OverlayApp() {
 	const [parentPipActive, setParentPipActive] = useState(false);
 	const [framePipActive, setFramePipActive] = useState(false);
 	const [previewOpen, setPreviewOpen] = useState(false);
+	const [previewPointerInside, setPreviewPointerInside] = useState(false);
 	const [recordingPreviewActive, setRecordingPreviewActive] = useState(false);
 	const [recorderPanelOpen, setRecorderPanelOpen] = useState(false);
 	const [previewTokenReady, setPreviewTokenReady] = useState(false);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const windowRef = useRef<HTMLDivElement>(null);
+	const cameraShellRef = useRef<HTMLDivElement>(null);
+	const cameraFrameRef = useRef<HTMLDivElement>(null);
 	const pipVideoRef = useRef<HTMLVideoElement>(null);
 	const pipPeerRef = useRef<RTCPeerConnection | null>(null);
 	const pipStreamRef = useRef<MediaStream | null>(null);
@@ -551,6 +586,9 @@ function OverlayApp() {
 	const dragStartRef = useRef({ x: 0, y: 0 });
 	const dragFrameRef = useRef<number | null>(null);
 	const isDraggingRef = useRef(false);
+	const cameraResizeStartRef = useRef<CameraResizeStart | null>(null);
+	const cameraResizePreviewRef = useRef<CameraResizeSnapshot | null>(null);
+	const cameraResizeFrameRef = useRef<number | null>(null);
 	const framePipActiveRef = useRef(false);
 	const recordingPreviewActiveRef = useRef(false);
 	const previewOpenRef = useRef(false);
@@ -623,7 +661,9 @@ function OverlayApp() {
 	}, []);
 
 	const stopLocalPreview = useCallback(() => {
+		previewOpenRef.current = false;
 		setPreviewOpen(false);
+		setPreviewPointerInside(false);
 		setLivePreviewReady(false);
 		// Surface the freshest captured frame as the placeholder for the next
 		// time the preview opens (state updates are skipped while live).
@@ -644,6 +684,13 @@ function OverlayApp() {
 		persistPreviewFrame,
 		postPreviewMessage,
 	]);
+
+	const handleRecorderPanelDismiss = useCallback(() => {
+		void sendServiceWorkerMessage({
+			target: "service-worker",
+			type: "close-extension-ui",
+		}).catch(() => undefined);
+	}, []);
 
 	const applyWebcamSettings = useCallback(
 		(getNext: (current: WebcamSettings) => WebcamSettings) => {
@@ -885,6 +932,7 @@ function OverlayApp() {
 			sendResponse({ ok: true });
 
 			if (message.type === "overlay-hide") {
+				recordingPreviewActiveRef.current = false;
 				setRecordingPreviewActive(false);
 				stopLocalPreview();
 				return false;
@@ -942,10 +990,8 @@ function OverlayApp() {
 			if (!sameLivePreview) {
 				setLivePreviewReady(false);
 			} else {
-				// "webcam-preview-ready" is normally only sent when the preview
-				// first goes live. A restarted service worker loses that flag, so
-				// re-announce readiness whenever it pushes settings while the
-				// preview is already streaming; recording start waits on it.
+				// A restarted service worker loses which tab owns the live preview,
+				// so re-announce readiness whenever it pushes the same settings.
 				void sendServiceWorkerMessage({
 					target: "service-worker",
 					type: "webcam-preview-ready",
@@ -954,6 +1000,7 @@ function OverlayApp() {
 			setPreviewError(null);
 			setShowPreviewError(false);
 			setPreviewOpen(true);
+			recordingPreviewActiveRef.current = message.recording;
 			setRecordingPreviewActive(message.recording);
 			if (settingsRef.current) {
 				setExtensionSettings({
@@ -1052,6 +1099,155 @@ function OverlayApp() {
 			.catch(() => undefined);
 	}, [applyDragTransform]);
 
+	const applyCameraResizePreview = useCallback(() => {
+		cameraResizeFrameRef.current = null;
+		const preview = cameraResizePreviewRef.current;
+		const cameraWindow = windowRef.current;
+		const cameraShell = cameraShellRef.current;
+		const cameraFrame = cameraFrameRef.current;
+		const shape = webcamRef.current?.shape;
+		if (!preview || !cameraWindow || !cameraShell || !cameraFrame || !shape) {
+			return;
+		}
+
+		const borderRadius = getBorderRadius(preview.size, shape);
+		cameraWindow.style.transform = `translate3d(${preview.position.x}px, ${preview.position.y}px, 0)`;
+		cameraWindow.style.width = `${preview.metrics.width}px`;
+		cameraWindow.style.height = `${preview.metrics.height + BAR_HEIGHT}px`;
+		cameraWindow.style.borderRadius = borderRadius;
+		cameraShell.style.borderRadius = borderRadius;
+		cameraFrame.style.width = `${preview.metrics.width}px`;
+		cameraFrame.style.height = `${preview.metrics.height}px`;
+		cameraFrame.style.borderRadius = borderRadius;
+	}, []);
+
+	const handleCameraResizeStart =
+		(corner: CameraResizeCorner) =>
+		(event: ReactPointerEvent<HTMLButtonElement>) => {
+			const webcamSettings = webcamRef.current;
+			const currentPosition = positionRef.current;
+			if (
+				event.button !== 0 ||
+				!event.isPrimary ||
+				!webcamSettings ||
+				!currentPosition
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			event.currentTarget.setPointerCapture(event.pointerId);
+			const metrics = getPreviewMetrics(
+				webcamSettings.size,
+				webcamSettings.shape,
+				videoDimensionsRef.current,
+			);
+			const snapshot = {
+				size: webcamSettings.size,
+				position: currentPosition,
+				metrics,
+			};
+			cameraResizeStartRef.current = {
+				...snapshot,
+				corner,
+				pointerId: event.pointerId,
+				clientX: event.clientX,
+				clientY: event.clientY,
+			};
+			cameraResizePreviewRef.current = snapshot;
+			setActiveResizeCorner(corner);
+		};
+
+	const handleCameraResizeMove = useCallback(
+		(event: ReactPointerEvent<HTMLButtonElement>) => {
+			const start = cameraResizeStartRef.current;
+			const webcamSettings = webcamRef.current;
+			if (!start || !webcamSettings || event.pointerId !== start.pointerId) {
+				return;
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+			const deltaX = event.clientX - start.clientX;
+			const deltaY = event.clientY - start.clientY;
+			const horizontalDelta = start.corner.includes("e") ? deltaX : -deltaX;
+			const verticalDelta = start.corner.includes("s") ? deltaY : -deltaY;
+			const nextSize = clampCameraSize(
+				Math.round(start.size + Math.max(horizontalDelta, verticalDelta)),
+			);
+			const nextMetrics = getPreviewMetrics(
+				nextSize,
+				webcamSettings.shape,
+				videoDimensionsRef.current,
+			);
+			const nextX =
+				start.position.x +
+				(start.corner.includes("w")
+					? start.metrics.width - nextMetrics.width
+					: 0);
+			const nextY =
+				start.position.y +
+				(start.corner.includes("n")
+					? start.metrics.height - nextMetrics.height
+					: 0);
+			const position = {
+				x: Math.max(0, Math.min(nextX, window.innerWidth - nextMetrics.width)),
+				y: Math.max(
+					0,
+					Math.min(nextY, window.innerHeight - nextMetrics.height - BAR_HEIGHT),
+				),
+			};
+
+			positionRef.current = position;
+			cameraResizePreviewRef.current = {
+				size: nextSize,
+				position,
+				metrics: nextMetrics,
+			};
+			cameraResizeFrameRef.current ??= window.requestAnimationFrame(
+				applyCameraResizePreview,
+			);
+		},
+		[applyCameraResizePreview],
+	);
+
+	const endCameraResize = useCallback(
+		(event: ReactPointerEvent<HTMLButtonElement>) => {
+			const start = cameraResizeStartRef.current;
+			if (!start || event.pointerId !== start.pointerId) return;
+
+			event.preventDefault();
+			event.stopPropagation();
+			cameraResizeStartRef.current = null;
+			if (cameraResizeFrameRef.current !== null) {
+				window.cancelAnimationFrame(cameraResizeFrameRef.current);
+				cameraResizeFrameRef.current = null;
+			}
+			applyCameraResizePreview();
+			const preview = cameraResizePreviewRef.current;
+			cameraResizePreviewRef.current = null;
+			setActiveResizeCorner(null);
+			if (!preview) return;
+
+			positionRef.current = preview.position;
+			setPosition(preview.position);
+			const persistedPosition = toOverlayPosition(preview.position);
+			setPersistedWebcamPosition(persistedPosition);
+			applyWebcamSettings((current) => ({
+				...current,
+				size: preview.size,
+			}));
+			void updateOverlayUiState((current) => ({
+				...current,
+				webcamPosition: persistedPosition,
+			}))
+				.then((state) => setPersistedWebcamPosition(state.webcamPosition))
+				.catch(() => undefined);
+		},
+		[applyCameraResizePreview, applyWebcamSettings],
+	);
+
 	const toPagePoint = useCallback((clientX: number, clientY: number) => {
 		const rect = iframeRef.current?.getBoundingClientRect();
 		if (rect) {
@@ -1126,6 +1322,11 @@ function OverlayApp() {
 				return false;
 			}
 
+			if (event.type === "pointer-presence") {
+				setPreviewPointerInside(event.inside && previewOpenRef.current);
+				return false;
+			}
+
 			if (event.type === "drag-move") {
 				const point = toPagePoint(event.clientX, event.clientY);
 				moveDrag(point.x, point.y);
@@ -1169,6 +1370,14 @@ function OverlayApp() {
 
 	useEffect(() => {
 		if (!previewEnabled) {
+			if (cameraResizeFrameRef.current !== null) {
+				window.cancelAnimationFrame(cameraResizeFrameRef.current);
+				cameraResizeFrameRef.current = null;
+			}
+			cameraResizeStartRef.current = null;
+			cameraResizePreviewRef.current = null;
+			setActiveResizeCorner(null);
+			setPreviewPointerInside(false);
 			setIframeReady(false);
 			setVideoDimensions(null);
 			setLivePreviewReady(false);
@@ -1337,14 +1546,14 @@ function OverlayApp() {
 	}, [clampPosition, webcam?.position]);
 
 	useEffect(() => {
-		if (!persistedWebcamPosition || isDragging) return;
+		if (!persistedWebcamPosition || isDragging || activeResizeCorner) return;
 		setPosition(
 			clampPosition({
 				x: persistedWebcamPosition.x,
 				y: persistedWebcamPosition.y,
 			}),
 		);
-	}, [clampPosition, isDragging, persistedWebcamPosition]);
+	}, [activeResizeCorner, clampPosition, isDragging, persistedWebcamPosition]);
 
 	useEffect(() => {
 		const handleResize = () => {
@@ -1469,15 +1678,23 @@ function OverlayApp() {
 
 	const metricsDimensions =
 		videoDimensions ?? lastPreviewFrame?.dimensions ?? null;
+	const isResizing = activeResizeCorner !== null;
+	const renderSize = isResizing
+		? (cameraResizePreviewRef.current?.size ?? webcam?.size)
+		: webcam?.size;
 	const metrics = webcam
-		? getPreviewMetrics(webcam.size, webcam.shape, metricsDimensions)
+		? getPreviewMetrics(
+				renderSize ?? webcam.size,
+				webcam.shape,
+				metricsDimensions,
+			)
 		: null;
 	const totalHeight = metrics ? metrics.height + BAR_HEIGHT : 0;
 	const borderRadius = webcam
-		? getBorderRadius(webcam.size, webcam.shape)
+		? getBorderRadius(renderSize ?? webcam.size, webcam.shape)
 		: "0";
 	const renderPosition =
-		(isDragging ? positionRef.current : position) ?? position;
+		(isDragging || isResizing ? positionRef.current : position) ?? position;
 
 	const cameraWindow = previewEnabled &&
 		previewTokenReady &&
@@ -1489,6 +1706,8 @@ function OverlayApp() {
 				className={classNames(
 					"cap-extension-camera-window",
 					isDragging && "is-dragging",
+					isResizing && "is-resizing",
+					previewPointerInside && "is-preview-hovered",
 				)}
 				data-camera-preview
 				role="dialog"
@@ -1500,7 +1719,11 @@ function OverlayApp() {
 				}}
 				onPointerDown={handlePointerDown}
 			>
-				<div className="cap-extension-camera-shell" style={{ borderRadius }}>
+				<div
+					ref={cameraShellRef}
+					className="cap-extension-camera-shell"
+					style={{ borderRadius }}
+				>
 					<div className="cap-extension-camera-bar">
 						<div
 							data-controls
@@ -1590,6 +1813,7 @@ function OverlayApp() {
 					</div>
 
 					<div
+						ref={cameraFrameRef}
 						className={classNames(
 							"cap-extension-camera-frame",
 							webcam.shape === "round" ? "is-round" : "is-rounded",
@@ -1645,6 +1869,29 @@ function OverlayApp() {
 							</div>
 						) : null}
 					</div>
+					<div className="cap-extension-camera-resize-layer" data-controls>
+						{CAMERA_RESIZE_CORNERS.map((corner) => (
+							<button
+								key={corner}
+								type="button"
+								tabIndex={-1}
+								className={classNames(
+									"cap-extension-camera-resize-handle",
+									`is-${corner}`,
+									activeResizeCorner === corner && "is-active",
+								)}
+								aria-label={`Resize camera from ${corner}`}
+								title="Drag to resize camera"
+								data-camera-resize-handle
+								data-camera-resize-ne={corner === "ne" ? "" : undefined}
+								onPointerDown={handleCameraResizeStart(corner)}
+								onPointerMove={handleCameraResizeMove}
+								onPointerUp={endCameraResize}
+								onPointerCancel={endCameraResize}
+								onLostPointerCapture={endCameraResize}
+							/>
+						))}
+					</div>
 				</div>
 			</div>
 		);
@@ -1661,7 +1908,10 @@ function OverlayApp() {
 				disablePictureInPicture={false}
 				controlsList="nodownload nofullscreen noremoteplayback"
 			/>
-			<RecorderPanelOverlay onOpenChange={setRecorderPanelOpen} />
+			<RecorderPanelOverlay
+				onDismiss={handleRecorderPanelDismiss}
+				onOpenChange={setRecorderPanelOpen}
+			/>
 			<RecordingBarOverlay recorderPanelOpen={recorderPanelOpen} />
 			<CountdownOverlay />
 			<ConfirmOverlay />

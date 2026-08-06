@@ -46,6 +46,7 @@ export type Organization = {
 	totalInvites: number;
 	/** Whether the organization OWNER is on Pro — gates org-wide Pro features. */
 	ownerIsPro: boolean;
+	hasActiveProSeatProvider: boolean;
 };
 
 export type OrganizationSettings = NonNullable<
@@ -460,9 +461,10 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						invites: organizationInvitesData.filter(
 							(invite) => invite.organizationId === organization.id,
 						),
-						inviteQuota: proSeatProvider?.inviteQuota || 1,
+						inviteQuota: proSeatProvider?.inviteQuota ?? 0,
 						totalInvites,
 						ownerIsPro: userIsPro(owner ?? null),
+						hasActiveProSeatProvider: proSeatProvider !== null,
 					};
 				}),
 			),

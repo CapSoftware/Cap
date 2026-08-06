@@ -118,12 +118,12 @@ export function SeatManagementCard() {
 					<span>
 						<span className="font-medium text-gray-12">{proSeatsUsed}</span> of{" "}
 						<span className="font-medium text-gray-12">{proSeatsTotal}</span>{" "}
-						Pro seats assigned to members
+						Pro seats in use
 					</span>
 					{activeOrganization?.ownerIsPro && (
 						<span className="text-xs text-gray-10">
-							The organization owner is always on Cap Pro and doesn't use a
-							seat.
+							The organization owner is always on Cap Pro and uses one of your
+							seats.
 						</span>
 					)}
 				</div>
@@ -169,7 +169,7 @@ export function SeatManagementCard() {
 								<span className="text-sm text-gray-11">
 									{preview.proratedAmount === 0
 										? "No prorated adjustment"
-										: `${preview.proratedAmount > 0 ? "Prorated charge" : "Prorated credit"}: $${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
+										: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: $${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
 								</span>
 							) : null}
 							<Button

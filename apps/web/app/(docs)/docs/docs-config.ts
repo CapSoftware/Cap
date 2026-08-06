@@ -19,6 +19,23 @@ export const docsConfig = {
 			],
 		},
 		{
+			title: "Cap for Agents",
+			items: [
+				{ title: "Overview", slug: "agents" },
+				{ title: "Set Up Your Agent", slug: "agents/setup" },
+				{ title: "Agent Workflows", slug: "agents/workflows" },
+				{ title: "Safety & Troubleshooting", slug: "agents/safety" },
+			],
+		},
+		{
+			title: "Teams & Migration",
+			items: [
+				{ title: "Working With Your Team", slug: "teams" },
+				{ title: "Google Drive", slug: "teams/google-drive" },
+				{ title: "Migrating to Cap", slug: "migrating-to-cap" },
+			],
+		},
+		{
 			title: "Recording",
 			items: [
 				{ title: "Instant Mode", slug: "recording/instant-mode" },
@@ -40,9 +57,10 @@ export const docsConfig = {
 			],
 		},
 		{
-			title: "Self-hosting",
+			title: "Storage & Self-hosting",
 			items: [
-				{ title: "Overview", slug: "self-hosting" },
+				{ title: "Self-hosting", slug: "self-hosting" },
+				{ title: "S3-compatible Storage", slug: "s3-config" },
 				{ title: "S3: AWS", slug: "s3-config/aws-s3" },
 				{ title: "S3: Cloudflare R2", slug: "s3-config/cloudflare-r2" },
 			],

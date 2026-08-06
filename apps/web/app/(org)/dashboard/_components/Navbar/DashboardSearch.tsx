@@ -166,10 +166,10 @@ export function DashboardSearch({
 			},
 			{
 				id: "import-video",
-				title: "Import Video",
-				subtitle: "Bring an existing video into Cap",
+				title: "Import Media",
+				subtitle: "Bring an existing video or image into Cap",
 				href: "/dashboard/import",
-				value: "import upload loom video file",
+				value: "import upload loom video image media file",
 				icon: Upload,
 			},
 			{
@@ -387,7 +387,7 @@ export function DashboardSearch({
 						<CommandList className="overflow-y-auto px-2 pt-1 pb-2 h-[min(60vh,440px)] max-h-[min(60vh,440px)]">
 							{canSearchVideos && (
 								<>
-									<SectionHeader>Videos</SectionHeader>
+									<SectionHeader>Videos and screenshots</SectionHeader>
 									{videoLoading ? (
 										<div className="flex gap-3 items-center px-2.5 py-2 text-[13px] text-gray-10">
 											<Loader2 className="flex-shrink-0 animate-spin size-4" />
@@ -406,7 +406,7 @@ export function DashboardSearch({
 										))
 									) : (
 										<p className="px-3 py-6 text-[13px] text-center text-gray-10">
-											No videos match{" "}
+											No videos or screenshots match{" "}
 											<span className="font-medium text-gray-12">
 												“{query.trim()}”
 											</span>

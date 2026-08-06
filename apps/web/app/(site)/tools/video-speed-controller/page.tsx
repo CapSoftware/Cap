@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { SpeedController } from "@/components/tools/SpeedController";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Speed up or slow down videos — free, in your browser",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -27,10 +33,10 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap Video Speed Controller — Free Online Video Speed Changer",
+				alt: "Speed up or slow down videos — free, in your browser",
 			},
 		],
 		locale: "en_US",
@@ -42,7 +48,7 @@ export const metadata: Metadata = {
 			"Video Speed Controller Online – Speed Up or Slow Down Videos Free | Cap",
 		description:
 			"Adjust video playback speed from 0.25× to 3× directly in your browser. Free, private, no uploads required.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/video-speed-controller",

@@ -1,124 +1,61 @@
 ---
 title: "Share a Cap"
-summary: "Share your recordings with a link"
+summary: "Share recordings with Cap links and access controls"
 tags: "Sharing"
 ---
 
-Every Cap recording gets a unique shareable link. This guide covers how sharing works, how to customize your share settings, and what viewers see when they open your link.
+A shared Cap uses a URL in this form:
 
-## How Sharing Works
-
-When you finish a recording in Instant Mode, Cap automatically generates a shareable link and copies it to your clipboard. In Studio Mode, the link is generated after you finish editing and upload the recording.
-
-The link follows this format:
-
-```
-https://cap.so/s/[video-id]
+```text
+https://cap.so/s/<video-id>
 ```
 
-If you are self-hosting Cap, the link uses your custom domain instead.
+Self-hosted installations use their configured web URL instead of `cap.so`.
 
-Anyone with the link can watch your recording in their browser. No account or download is required to view a shared Cap.
+## Create and copy a link
 
-## Copying the Link
+Instant Mode creates a shareable Cap as part of its recording flow. Studio Mode creates one when you choose **Shareable Link** from the export screen.
 
-After recording, the link is automatically copied to your clipboard. You can also find and copy the link from:
+After Cap finishes the required upload and processing, copy the returned link from Cap Desktop or the recording's dashboard and share it anywhere a URL is accepted.
 
-- **Cap Desktop** - Click the share icon on any recording in your library.
-- **Cap Dashboard** - Navigate to [Cap.so/dashboard](https://cap.so/dashboard), find your recording, and click the share button.
+## Choose who can watch
 
-## Customizing Share Settings
+Cap supports different access states:
 
-You can customize how your shared recordings appear and control who can access them.
+- **Public:** anyone with the link can watch in a browser without an account.
+- **Private:** the viewer must sign in and have access through the owner, organization, space, or folder rules.
+- **Password protected:** the viewer must enter the recording or effective space password before playback.
 
-### Title and Description
+Sharing a link does not bypass private, organization, space, or password rules. If a Cap belongs to several containers, Cap resolves the effective viewer settings for those locations.
 
-Give your recording a descriptive title so viewers know what they are about to watch:
+## What appears on the share page
 
-1. Open your [Cap dashboard](https://cap.so/dashboard).
-2. Click on the recording you want to update.
-3. Edit the title field at the top of the page.
+The share page provides video playback, scrubbing, fullscreen, volume, and Cap's configured playback speeds. Depending on the recording's processing state and effective settings, it can also show:
 
-A good title helps viewers find your recording later and sets expectations before they press play.
+- Captions and a transcript
+- A summary and chapters
+- Timestamped comments, replies, and emoji reactions
+- Download controls
+- Owner and organization branding
 
-### Password Protection
+Captions and AI output are not guaranteed to exist for every recording. They depend on the audio, processing result, plan, and organization settings. Posting comments, replies, or reactions requires a signed-in account.
 
-Restrict access to your recording by setting a password:
+## Organize a shared Cap
 
-1. Open the recording's settings on your dashboard.
-2. Enable **Password Protection**.
-3. Enter a password.
-4. Save your changes.
+A Cap can be placed in an organization, space, or folder. Moving it changes its library location and can change the access or viewer settings inherited from that location, but it does not create a new recording URL.
 
-When viewers open the link, they will be prompted to enter the password before they can watch. This is useful for sensitive content, internal demos, or client recordings.
+See [Working With Your Team](/docs/teams) for roles, spaces, folders, and organization-wide controls.
 
-## The Viewer Experience
+## Embed a Cap
 
-When someone opens your shared link, they see a clean video player page with:
+Use the dedicated embed route when the recording should play inside a site or documentation page:
 
-### Video Player
+```text
+https://cap.so/embed/<video-id>
+```
 
-- High-quality video playback
-- Play, pause, and scrub controls
-- Fullscreen mode
-- Adjustable playback speed (0.5x, 0.75x, 1x, 1.25x, 1.5x, 1.75x, 2x)
-- Volume control
+The embed enforces the same effective access and viewer rules. Screenshots do not render in the video embed. See [Embeds](/docs/sharing/embeds).
 
-### AI Captions
+## Revoke access or delete
 
-Cap automatically generates captions for recordings that include audio. Viewers can:
-
-- Toggle captions on and off
-- Read along as the video plays
-- Captions are synced to the audio timeline
-
-### Comments
-
-Viewers can leave timestamped comments on your recording. See [Comments](/docs/sharing/comments) for more details.
-
-### Download
-
-Viewers can download the video file directly from the share page.
-
-## Sharing to Different Platforms
-
-### Slack and Teams
-
-Paste your Cap link directly into a Slack or Microsoft Teams message. Most platforms will show a rich preview with the recording title and thumbnail.
-
-### Email
-
-Include the Cap link in any email. Recipients click the link to watch in their browser.
-
-### GitHub and GitLab
-
-Paste the link in issues, pull requests, or comments. This is great for bug reports, feature demonstrations, and code review walkthroughs.
-
-### Documentation
-
-Embed your recordings directly in documentation sites using an iframe. See [Embeds](/docs/sharing/embeds) for embed instructions.
-
-### Social Media
-
-Share the link on Twitter/X, LinkedIn, or any social platform. The link will display a preview card with your recording's thumbnail and title.
-
-## Managing Shared Recordings
-
-### Viewing All Recordings
-
-Your [Cap dashboard](https://cap.so/dashboard) shows all of your recordings with their share links, view counts, and creation dates. Use the dashboard to manage, organize, and review your content.
-
-### Deleting a Recording
-
-To remove a shared recording:
-
-1. Open your [Cap dashboard](https://cap.so/dashboard).
-2. Find the recording you want to delete.
-3. Click the menu icon and select **Delete**.
-4. Confirm the deletion.
-
-Once deleted, the share link will no longer work and viewers will see a "not found" page.
-
-### Revoking Access
-
-If you need to quickly restrict access to a recording without deleting it, enable password protection. Existing viewers without the password will no longer be able to watch it.
+Change the Cap's access settings when you need to restrict future viewing while keeping the recording. Deleting the Cap removes it from the supported library surfaces and makes its share route unavailable after deletion is processed.

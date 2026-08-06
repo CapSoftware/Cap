@@ -1,5 +1,7 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
 	batch,
@@ -11,15 +13,27 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import toast from "solid-toast";
 import { defaultCaptionSettings } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import {
 	getCaptionTextFromWords,
+	type MappedTimeRange,
 	mapEditedTimeToSource,
 	mapSourceRangeToEdited,
 	mapSourceTimeToEdited,
 	syncCaptionWordsWithText,
 } from "./captions";
+import {
+	type CaptionExportFormat,
+	captionExportDefaultPath,
+	createCaptionExportCues,
+	formatCaptionCues,
+} from "./captions-export";
+import {
+	clipCutPreservesTransitionGeometry,
+	rangeIntersectsClipTransition,
+} from "./clip-transitions";
 import { FPS, useEditorContext } from "./context";
 import { rippleDeleteAllTracks } from "./timeline-utils";
 
@@ -57,6 +71,7 @@ export function TranscriptPanel() {
 		project,
 		setProject,
 		editorInstance,
+		meta,
 		totalDuration,
 		previewResolutionBase,
 	} = useEditorContext();
@@ -66,6 +81,17 @@ export function TranscriptPanel() {
 	const [textSizeIndex, setTextSizeIndex] = makePersisted(createSignal(1), {
 		name: "editorTranscriptTextSize",
 	});
+	const [exportingFormat, setExportingFormat] =
+		createSignal<CaptionExportFormat | null>(null);
+
+	const exportableCues = createMemo(() =>
+		createCaptionExportCues(
+			project.captions?.segments ?? [],
+			project.timeline?.segments ?? [],
+			recordingSegments(),
+			project.timeline?.transitions ?? [],
+		),
+	);
 
 	const allWords = createMemo((): FlatWord[] => {
 		const segments = project.captions?.segments ?? [];
@@ -160,6 +186,9 @@ export function TranscriptPanel() {
 				outputStart,
 				project.timeline?.segments ?? [],
 				recordingSegments(),
+				project.timeline?.transitions ?? [],
+				undefined,
+				"incoming",
 			) ?? outputStart;
 		const end = start + defaultDuration;
 		const text = "New caption";
@@ -185,6 +214,7 @@ export function TranscriptPanel() {
 					textSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					transitions: [],
 				};
 
 				p.captions.segments.push({
@@ -201,6 +231,36 @@ export function TranscriptPanel() {
 		setEditorState("captions", "isStale", false);
 	};
 
+	const handleExportCaptions = async (format: CaptionExportFormat) => {
+		const cues = exportableCues();
+		if (cues.length === 0) {
+			toast.error("No captions to download");
+			return;
+		}
+
+		setExportingFormat(format);
+		try {
+			const path = await save({
+				defaultPath: captionExportDefaultPath(meta().prettyName, format),
+				filters: [
+					{
+						name: format === "srt" ? "SubRip Subtitle" : "WebVTT",
+						extensions: [format],
+					},
+				],
+			});
+			if (!path) return;
+
+			await writeTextFile(path, formatCaptionCues(cues, format));
+			toast.success(`Captions saved as ${format.toUpperCase()}`);
+		} catch (error) {
+			console.error("Failed to save captions:", error);
+			toast.error("Failed to save captions");
+		} finally {
+			setExportingFormat(null);
+		}
+	};
+
 	const activeWordIndex = createMemo(() => {
 		const words = allWords();
 		if (words.length === 0) return -1;
@@ -209,6 +269,9 @@ export function TranscriptPanel() {
 			editorState.playbackTime,
 			project.timeline?.segments ?? [],
 			recordingSegments(),
+			project.timeline?.transitions ?? [],
+			undefined,
+			"incoming",
 		);
 		if (sourceTime === null) return -1;
 
@@ -233,6 +296,7 @@ export function TranscriptPanel() {
 				word.start,
 				project.timeline?.segments ?? [],
 				recordingSegments(),
+				project.timeline?.transitions ?? [],
 			);
 			if (outputTime === null) return;
 			if (editorState.playing) {
@@ -281,10 +345,6 @@ export function TranscriptPanel() {
 			}
 		}
 
-		// Deleting transcript words also removes the matching span of video. The
-		// caption master is source-timed, so translate the deleted source ranges
-		// into the output-time ranges they currently occupy and ripple those out
-		// of every output-time track (clips + zoom/mask/text/keyboard).
 		const outputRanges = mergedSourceRanges
 			.flatMap((range) =>
 				mapSourceRangeToEdited(
@@ -292,18 +352,49 @@ export function TranscriptPanel() {
 					range.end,
 					project.timeline?.segments ?? [],
 					recordingSegments(),
+					project.timeline?.transitions ?? [],
 				),
 			)
-			.sort((a, b) => a.start - b.start);
+			.sort((a, b) => a.start - b.start || a.segmentIndex - b.segmentIndex);
 
-		const mergedOutputRanges: { start: number; end: number }[] = [];
+		const mergedOutputRanges: MappedTimeRange[] = [];
 		for (const range of outputRanges) {
 			const last = mergedOutputRanges[mergedOutputRanges.length - 1];
-			if (last && range.start <= last.end + 0.0001) {
+			if (
+				last &&
+				last.segmentIndex === range.segmentIndex &&
+				range.start <= last.end + 0.0001
+			) {
 				last.end = Math.max(last.end, range.end);
 			} else {
 				mergedOutputRanges.push({ ...range });
 			}
+		}
+
+		const timeline = project.timeline;
+		if (
+			timeline &&
+			mergedOutputRanges.some(
+				(range) =>
+					rangeIntersectsClipTransition(
+						timeline.segments,
+						timeline.transitions ?? [],
+						range.start,
+						range.end,
+					) ||
+					!clipCutPreservesTransitionGeometry(
+						timeline.segments,
+						timeline.transitions ?? [],
+						range.segmentIndex,
+						range.start,
+						range.end,
+					),
+			)
+		) {
+			toast.error(
+				"Remove the nearby transition before deleting this transcript range.",
+			);
+			return;
 		}
 
 		setProject(
@@ -332,19 +423,22 @@ export function TranscriptPanel() {
 				if (p.timeline) {
 					for (const range of [...mergedOutputRanges].reverse()) {
 						if (range.end - range.start <= 0.001) continue;
-						rippleDeleteAllTracks(p.timeline, range.start, range.end);
+						rippleDeleteAllTracks(
+							p.timeline,
+							range.start,
+							range.end,
+							range.segmentIndex,
+						);
 					}
 				}
 			}),
 		);
+		setEditorState("timeline", "selection", null);
 
 		setEditorState("captions", "isStale", false);
 
-		const newDuration = project.timeline?.segments.reduce(
-			(acc, s) => acc + (s.end - s.start) / s.timescale,
-			0,
-		);
-		if (newDuration !== undefined && editorState.playbackTime > newDuration) {
+		const newDuration = totalDuration();
+		if (editorState.playbackTime > newDuration) {
 			setEditorState("playbackTime", Math.max(newDuration - 0.01, 0));
 		}
 	};
@@ -413,7 +507,7 @@ export function TranscriptPanel() {
 	return (
 		<div class="flex flex-col min-h-0 h-full">
 			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-gray-12">Transcript</span>
+				<span class="text-xs font-medium text-gray-12">Captions</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
@@ -422,6 +516,28 @@ export function TranscriptPanel() {
 					>
 						<IconLucidePlus class="size-3" />
 						Add
+					</button>
+					<button
+						type="button"
+						class="flex items-center gap-1 rounded-sm px-2 h-6 hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors text-xs disabled:opacity-30 disabled:pointer-events-none"
+						disabled={
+							exportableCues().length === 0 || exportingFormat() !== null
+						}
+						onClick={() => void handleExportCaptions("srt")}
+					>
+						<IconCapDownload class="size-3" />
+						SRT
+					</button>
+					<button
+						type="button"
+						class="flex items-center gap-1 rounded-sm px-2 h-6 hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors text-xs disabled:opacity-30 disabled:pointer-events-none"
+						disabled={
+							exportableCues().length === 0 || exportingFormat() !== null
+						}
+						onClick={() => void handleExportCaptions("vtt")}
+					>
+						<IconCapDownload class="size-3" />
+						VTT
 					</button>
 					<button
 						type="button"
@@ -517,7 +633,7 @@ function TranscriptWord(props: {
 				<span
 					ref={props.ref}
 					class={cx(
-						"cursor-pointer transition-colors duration-100 rounded-xs relative",
+						"transition-colors duration-100 rounded-xs relative",
 						props.isSelected && "bg-blue-4/50",
 						props.isActive
 							? "text-blue-11"
@@ -780,7 +896,7 @@ function TranscriptEditor(props: {
 				fallback={
 					<div class="flex flex-col items-center justify-center h-full text-gray-9">
 						<IconCapCaptions class="size-10 mb-3 text-gray-7" />
-						<span class="text-sm">No transcript available</span>
+						<span class="text-sm">No captions available</span>
 						<span class="text-xs mt-1">
 							Generate captions in the editor first
 						</span>

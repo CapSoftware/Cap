@@ -29,15 +29,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				return handlers.handle("deleteVideo", ({ urlParams }) =>
 					videos.delete(urlParams.videoId).pipe(
 						Effect.catchTags({
-							VideoNotFoundError: () => new HttpApiError.NotFound(),
-							PolicyDenied: () => new HttpApiError.Unauthorized(),
+							VideoNotFoundError: () =>
+								Effect.fail(new HttpApiError.NotFound()),
+							PolicyDenied: () => Effect.fail(new HttpApiError.Unauthorized()),
 							DatabaseError: (e) =>
 								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
+									Effect.andThen(() =>
+										Effect.fail(new HttpApiError.InternalServerError()),
+									),
 								),
 							StorageError: (e) =>
 								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
+									Effect.andThen(() =>
+										Effect.fail(new HttpApiError.InternalServerError()),
+									),
 								),
 						}),
 					),

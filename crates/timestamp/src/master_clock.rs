@@ -248,6 +248,7 @@ impl SourceClockState {
         }
 
         let mut ts_ns = raw_ns;
+        let duration_ns = frame_duration_ns.min(i64::MAX as u64) as i64;
 
         if !self.timing_set {
             self.timing_adjust = now_ns.saturating_sub(raw_ns);
@@ -262,7 +263,21 @@ impl SourceClockState {
                 self.resync_count = self.resync_count.saturating_add(1);
                 outcome = SourceClockOutcome::HardReset;
             } else if diff < TS_SMOOTHING_THRESHOLD_NS {
-                ts_ns = expected;
+                // Snap jitter onto the expected cadence, but cap how far the
+                // ladder may lead the source clock. Each snap re-anchors
+                // next_expected, so a source delivering faster than the
+                // nominal rate (e.g. a camera free-running at 60fps — or
+                // 1000fps — while the pipeline expects 30fps) would otherwise
+                // be re-timed to the nominal rate: a non-monotonic sawtooth
+                // that stretches the recording. The cap must also keep the
+                // ladder inside the smoothing threshold for the NEXT frame
+                // (lead + frame duration < threshold), otherwise a fast
+                // source escapes smoothing and the output jumps backwards to
+                // the source clock; hence the second bound.
+                let max_lead_ns = duration_ns
+                    .min((TS_SMOOTHING_THRESHOLD_NS as i64).saturating_sub(duration_ns))
+                    .max(0);
+                ts_ns = expected.min(raw_ns.saturating_add(max_lead_ns));
                 self.snap_count = self.snap_count.saturating_add(1);
                 if !matches!(outcome, SourceClockOutcome::HardReset) {
                     outcome = SourceClockOutcome::Smoothed;
@@ -271,8 +286,6 @@ impl SourceClockState {
         } else if matches!(outcome, SourceClockOutcome::Untouched) {
             outcome = SourceClockOutcome::FirstFrame;
         }
-
-        let duration_ns = frame_duration_ns.min(i64::MAX as u64) as i64;
         self.next_expected_ns = Some(ts_ns.saturating_add(duration_ns));
 
         let output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
@@ -512,6 +525,115 @@ mod tests {
             );
             assert_eq!(state.hard_reset_count(), 1);
             assert_eq!(state.resync_count(), 1);
+        }
+    }
+
+    /// Deterministic pseudo-random stream for jitter/fps sampling in tests.
+    struct TestRng(u64);
+
+    impl TestRng {
+        fn next_f64(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+
+    /// Feeds a source delivering at `actual_fps` (with optional bounded
+    /// timestamp jitter) into remap configured for `nominal_fps`, and asserts
+    /// the output stays monotonic and tracks the source clock — never re-timed
+    /// to the nominal cadence, whatever the mismatch.
+    fn assert_remap_tracks_source(actual_fps: f64, nominal_fps: f64, jitter_frac: f64, seed: u64) {
+        let clock = clock();
+        let mut state = SourceClockState::new("matrix-source");
+        let mut rng = TestRng(seed);
+
+        let nominal_frame_ns = (1_000_000_000.0 / nominal_fps) as u64;
+        let real_delta_ns = 1_000_000_000.0 / actual_fps;
+        let jitter_max_ns = real_delta_ns * jitter_frac;
+
+        // ~1.5s of source time (more for slow sources so there are enough
+        // frames to expose ladder drift).
+        let frames = ((1.5 * actual_fps) as u32).max(24);
+
+        let start = clock.start_instant();
+        let mut outputs = Vec::with_capacity(frames as usize);
+        let mut last_raw_ns = 0u64;
+        for i in 0..frames {
+            let jitter_ns = (rng.next_f64() * 2.0 - 1.0) * jitter_max_ns;
+            let raw_ns = (i as f64 * real_delta_ns + jitter_ns).max(0.0) as u64;
+            last_raw_ns = raw_ns;
+            let ts = Timestamp::Instant(start + Duration::from_nanos(raw_ns));
+            let result = state.remap(&clock, ts, nominal_frame_ns);
+            outputs.push(result.master_ns);
+        }
+
+        let combo = format!(
+            "actual={actual_fps}fps nominal={nominal_fps}fps jitter={jitter_frac} seed={seed}"
+        );
+
+        for (i, pair) in outputs.windows(2).enumerate() {
+            assert!(
+                pair[1] >= pair[0],
+                "[{combo}] remap output went backwards at frame {}: {} -> {}",
+                i + 1,
+                pair[0],
+                pair[1]
+            );
+        }
+
+        let last = *outputs.last().unwrap();
+        let ahead_bound = nominal_frame_ns + jitter_max_ns as u64;
+        assert!(
+            last <= last_raw_ns + ahead_bound,
+            "[{combo}] remap output ran ahead of the source clock: {last} vs raw {last_raw_ns} \
+             (re-timing toward the nominal rate stretches the recording)"
+        );
+        let behind_bound = TS_SMOOTHING_THRESHOLD_NS + nominal_frame_ns + jitter_max_ns as u64;
+        assert!(
+            last + behind_bound >= last_raw_ns,
+            "[{combo}] remap output fell behind the source clock: {last} vs raw {last_raw_ns}"
+        );
+    }
+
+    #[test]
+    fn remap_stays_monotonic_when_source_faster_than_nominal() {
+        // The original report: a camera delivering 60fps while the pipeline
+        // believes 30fps (AVFoundation running a format's default rate). The
+        // snap ladder previously advanced by the nominal frame duration on
+        // every snap, doubling timestamps for four frames then dropping back
+        // to the source clock — a non-monotonic sawtooth that downstream
+        // encoders inflated into a 2x-duration recording.
+        assert_remap_tracks_source(60.0, 30.0, 0.0, 1);
+    }
+
+    #[test]
+    fn remap_tracks_source_across_fps_matrix() {
+        // Whatever rate a camera or display actually delivers — including
+        // rates far above anything Cap configures, like a 1000fps camera —
+        // the remapped timeline must track the source clock so audio and
+        // video stay in sync.
+        for nominal_fps in [24.0, 30.0, 60.0] {
+            for actual_fps in [
+                10.0, 15.0, 24.0, 25.0, 29.97, 30.0, 48.0, 60.0, 90.0, 120.0, 240.0, 500.0, 1000.0,
+            ] {
+                assert_remap_tracks_source(actual_fps, nominal_fps, 0.0, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn remap_tracks_source_with_random_fps_and_jitter() {
+        // Randomized (but seeded/deterministic) rates with delivery jitter:
+        // real capture timestamps are never perfectly uniform.
+        let mut rng = TestRng(0xCA9_5EED);
+        for round in 0..25 {
+            let actual_fps = 5.0 + rng.next_f64() * 995.0;
+            let nominal_fps = [24.0, 30.0, 60.0][(rng.next_f64() * 3.0) as usize % 3];
+            let seed = 1000 + round;
+            assert_remap_tracks_source(actual_fps, nominal_fps, 0.3, seed);
         }
     }
 

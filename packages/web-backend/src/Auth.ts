@@ -87,17 +87,18 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 				return yield* user.pipe(
 					Option.map(makeCurrentUser),
-					Effect.catchTag(
-						"NoSuchElementException",
-						() => new HttpApiError.Unauthorized(),
+					Effect.catchTag("NoSuchElementException", () =>
+						Effect.fail(new HttpApiError.Unauthorized()),
 					),
 				);
 			}).pipe(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
-					UnknownException: () => new HttpApiError.InternalServerError(),
-					DatabaseError: () => new HttpApiError.InternalServerError(),
-					ParseError: () => new HttpApiError.BadRequest(),
+					UnknownException: () =>
+						Effect.fail(new HttpApiError.InternalServerError()),
+					DatabaseError: () =>
+						Effect.fail(new HttpApiError.InternalServerError()),
+					ParseError: () => Effect.fail(new HttpApiError.BadRequest()),
 				}),
 			),
 		);

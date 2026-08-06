@@ -178,7 +178,7 @@ impl Mp4ExportSettings {
             VideoInfo::from_raw(RawVideoFormat::Nv12, output_size.0, output_size.1, fps);
         video_info.time_base = ffmpeg::Rational::new(1, fps as i32);
 
-        let audio_segments = get_audio_segments(&base.segments);
+        let audio_segments = get_audio_segments(&base.segments).await;
         let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
 
         let has_recording_audio = audio_segments

@@ -1,6 +1,8 @@
 use crate::{
     SharedPauseState, TaskPool,
-    output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
+    output_pipeline::{
+        AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer, frame_timing_log_threshold_ms,
+    },
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::{
@@ -580,6 +582,7 @@ impl SegmentedVideoMuxer {
             output_size: self.output_size,
         };
 
+        let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
         let encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
         let encoder = Arc::new(Mutex::new(encoder));
@@ -595,7 +598,6 @@ impl SegmentedVideoMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut encode_error_count = 0u32;
                 let mut total_frames = 0u64;
-                const SLOW_THRESHOLD_MS: u128 = 5;
 
                 while let Ok(Some((frame, timestamp))) = video_rx.recv() {
                     let encode_start = std::time::Instant::now();
@@ -613,14 +615,14 @@ impl SegmentedVideoMuxer {
 
                     let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
-                    if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                    if encode_elapsed_ms > slow_threshold_ms {
                         slow_encode_count += 1;
                         if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = encode_elapsed_ms,
                                 count = slow_encode_count,
                                 "encoder.queue_frame exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
+                                slow_threshold_ms
                             );
                         }
                     }

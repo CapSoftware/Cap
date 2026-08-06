@@ -31,7 +31,7 @@
 		"effect": "^3.18.4",
 		"mysql2": "^3.15.2",
 		"nanoid": "^5.0.4",
-		"next": "15.5.9",
+		"next": "16.3.0",
 		"next-auth": "^4.24.5",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
@@ -58,6 +58,7 @@
 	"exports": {
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
+		"./auth/domain-utils": "./auth/domain-utils.ts",
 		"./auth/session": "./auth/session.ts",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
@@ -71,6 +72,7 @@
 		"exports": {
 			".": "./dist/index.js",
 			"./auth/auth-options": "./dist/auth/auth-options.js",
+			"./auth/domain-utils": "./dist/auth/domain-utils.js",
 			"./auth/session": "./dist/auth/session.js",
 			"./schema": "./dist/schema.js",
 			"./crypto": "./dist/crypto.js",

@@ -2,7 +2,13 @@ import type { Metadata } from "next";
 import { MediaFormatConverter } from "@/components/tools/MediaFormatConverter";
 import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
+import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Convert MP4 to MP3 — free, in your browser",
+	tag: "Tools",
+});
 
 export const metadata: Metadata = {
 	title: "MP4 to MP3 Converter | Extract Audio from Video | Cap",
@@ -14,10 +20,10 @@ export const metadata: Metadata = {
 			"Extract audio from MP4 videos and save as MP3 files. Process videos locally in your browser with no uploads for maximum privacy.",
 		images: [
 			{
-				url: "/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap MP4 to MP3 Converter Tool",
+				alt: "Convert MP4 to MP3 — free, in your browser",
 			},
 		],
 	},
@@ -26,7 +32,7 @@ export const metadata: Metadata = {
 		title: "MP4 to MP3 Converter | Extract Audio from Video",
 		description:
 			"Extract audio from MP4 videos and save as high-quality MP3 files. No uploads required, completely private and secure.",
-		images: ["/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/tools/convert/mp4-to-mp3",

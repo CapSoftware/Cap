@@ -191,6 +191,10 @@ export async function GET(request: NextRequest) {
 			? `${sanitizedName}.mp4`
 			: `loom-video-${videoId}.mp4`;
 
+		if (getInputExtension(cdnUrl) === ".mp4") {
+			return NextResponse.redirect(cdnUrl);
+		}
+
 		const directResponse = await fetch(cdnUrl);
 		if (directResponse.ok && directResponse.body) {
 			const body = directResponse.body;
@@ -265,6 +269,8 @@ export async function GET(request: NextRequest) {
 				});
 			}
 
+			const status = convertedResponse.status === 503 ? 503 : 502;
+			const retryAfter = convertedResponse.headers.get("Retry-After");
 			let errorMessage = "Failed to convert streaming video";
 			try {
 				const errorData = (await convertedResponse.json()) as {
@@ -276,6 +282,11 @@ export async function GET(request: NextRequest) {
 					errorData.error ||
 					"Failed to convert streaming video";
 			} catch {}
+
+			if (status === 503) {
+				const headers = retryAfter ? { "Retry-After": retryAfter } : undefined;
+				return NextResponse.json({ error: errorMessage }, { status, headers });
+			}
 
 			throw new Error(errorMessage);
 		} catch (error) {
@@ -295,8 +306,9 @@ export async function GET(request: NextRequest) {
 
 	try {
 		const mp4Buffer = await convertRemoteVideoToMp4Buffer(cdnUrl);
+		const body = new Uint8Array(mp4Buffer).buffer;
 
-		return new NextResponse(mp4Buffer, {
+		return new NextResponse(body, {
 			headers: {
 				"Content-Type": "video/mp4",
 				"Content-Disposition": `attachment; filename="${mp4Filename}"`,

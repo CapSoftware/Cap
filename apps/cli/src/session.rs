@@ -118,6 +118,27 @@ pub fn cleanup(id: &str) {
     }
 }
 
+pub fn archive_log(id: &str, project_path: &Path) -> Result<Option<PathBuf>, String> {
+    let source = log_file(id)?;
+    if !source.exists() {
+        return Ok(None);
+    }
+    if project_path.as_os_str().is_empty() || !project_path.is_dir() {
+        return Ok(None);
+    }
+
+    let destination = project_path.join("detached-session.log");
+    std::fs::copy(&source, &destination).map_err(|e| {
+        format!(
+            "Could not archive session log {} to {}: {e}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+
+    Ok(Some(destination))
+}
+
 /// Whether `pid` is still running. On unix `kill(pid, 0)` probes existence without signalling; on
 /// Windows a zero-timeout wait on the process handle does the equivalent.
 #[cfg(unix)]

@@ -1,34 +1,63 @@
-import posthog from "posthog-js";
-import * as uuid from "uuid";
-import { trackMetaEvent } from "../Layout/MetaPixel";
+/**
+ * Thin wrapper over the OpenPanel browser SDK.
+ *
+ * The SDK is injected by `<OpenPanelComponent />` in the root layout, which
+ * installs a `window.op` queue stub before the script finishes loading. When
+ * `NEXT_PUBLIC_OPENPANEL_CLIENT_ID` is unset the component renders nothing, so
+ * `window.op` never exists and every helper below becomes a no-op — self-hosted
+ * Cap ships analytics-inert.
+ */
 
-export function initAnonymousUser() {
+import type { IdentifyPayload, TrackProperties } from "@openpanel/sdk";
+
+/** The subset of the `window.op` queue API we use. */
+type OpenPanelQueue = {
+	(method: "track", name: string, properties?: TrackProperties): void;
+	(method: "identify", payload: IdentifyPayload): void;
+	(method: "clear"): void;
+};
+
+export type AnalyticsUser = {
+	id: string;
+	email?: string | null;
+	name?: string | null;
+	lastName?: string | null;
+};
+
+function getOpenPanel(): OpenPanelQueue | undefined {
+	if (typeof window === "undefined") return undefined;
+	const op: unknown = (window as unknown as { op?: unknown }).op;
+	return typeof op === "function" ? (op as OpenPanelQueue) : undefined;
+}
+
+export function identifyUser(
+	user: AnalyticsUser,
+	properties?: Record<string, unknown>,
+) {
 	try {
-		const anonymousId = localStorage.getItem("anonymous_id") ?? uuid.v4();
-		localStorage.setItem("anonymous_id", anonymousId);
-		posthog.identify(anonymousId);
+		const op = getOpenPanel();
+		if (!op) return;
+
+		// OpenPanel merges the anonymous device profile into the identified
+		// profile automatically, so no aliasing dance is needed here.
+		op("identify", {
+			profileId: user.id,
+			...(user.email ? { email: user.email } : {}),
+			...(user.name ? { firstName: user.name } : {}),
+			...(user.lastName ? { lastName: user.lastName } : {}),
+			...(properties ? { properties } : {}),
+		});
 	} catch (error) {
-		console.error("Error initializing anonymous user:", error);
+		console.error("Error identifying user:", error);
 	}
 }
 
-export function identifyUser(userId: string, properties?: Record<string, any>) {
+/** Drops the identified profile + session. Call this on sign out. */
+export function resetUser() {
 	try {
-		const currentId = posthog.get_distinct_id();
-		const anonymousId = localStorage.getItem("anonymous_id");
-
-		if (currentId !== userId) {
-			if (anonymousId && currentId === anonymousId) {
-				posthog.alias(userId, anonymousId);
-			}
-			posthog.identify(userId);
-			if (properties) {
-				posthog.people.set(properties);
-			}
-			localStorage.removeItem("anonymous_id");
-		}
+		getOpenPanel()?.("clear");
 	} catch (error) {
-		console.error("Error identifying user:", error);
+		console.error("Error resetting analytics user:", error);
 	}
 }
 
@@ -37,32 +66,10 @@ export function trackEvent(
 	properties?: Record<string, any>,
 ) {
 	try {
-		if (!posthog || typeof posthog.capture !== "function") {
-			console.warn(`PostHog not available for event: ${eventName}`);
-			return;
-		}
+		const op = getOpenPanel();
+		if (!op) return;
 
-		posthog.capture(eventName, { ...properties, platform: "web" });
-
-		const metaEventMap: Record<string, string> = {
-			purchase_completed: "Purchase",
-			subscription_purchased: "Purchase",
-			user_signed_up: "CompleteRegistration",
-		};
-
-		const metaEventName = metaEventMap[eventName];
-		if (metaEventName) {
-			const isSignup = eventName === "user_signed_up";
-			const metaParameters = isSignup ? undefined : properties;
-			const eventId = isSignup
-				? `signup_${posthog.get_distinct_id?.() ?? "unknown"}`
-				: undefined;
-			trackMetaEvent(
-				metaEventName,
-				metaParameters,
-				eventId ? { eventId } : undefined,
-			);
-		}
+		op("track", eventName, { platform: "web", ...properties });
 	} catch (error) {
 		console.error(`Error tracking event ${eventName}:`, error);
 	}

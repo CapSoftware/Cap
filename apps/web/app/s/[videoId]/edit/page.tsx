@@ -38,6 +38,7 @@ export default async function EditVideoPage(props: {
 			height: videos.height,
 			source: videos.source,
 			isScreenshot: videos.isScreenshot,
+			transcriptionStatus: videos.transcriptionStatus,
 			uploadPhase: videoUploads.phase,
 		})
 		.from(videos)
@@ -90,6 +91,7 @@ export default async function EditVideoPage(props: {
 				duration: video.duration,
 				width: video.width,
 				height: video.height,
+				transcriptionStatus: video.transcriptionStatus,
 			}}
 		/>
 	);

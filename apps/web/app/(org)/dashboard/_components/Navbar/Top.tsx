@@ -32,6 +32,7 @@ import {
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
+import { resetUser } from "@/app/utils/analytics";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
@@ -64,6 +65,7 @@ const Top = () => {
 		"/dashboard/caps/record": "Record a Cap",
 		"/dashboard/settings/organization": "Organization Settings",
 		"/dashboard/settings/organization/preferences": "Organization Settings",
+		"/dashboard/settings/organization/content": "Organization Settings",
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
@@ -255,6 +257,7 @@ const User = () => {
 				icon: <LogoutIcon />,
 				onClick: () => {
 					setMenuOpen(false);
+					resetUser();
 					signOut();
 				},
 				iconClassName: "text-gray-11 group-hover:text-gray-12",

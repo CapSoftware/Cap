@@ -1,11 +1,13 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 use crate::{OutputFormat, write_json};
 
 /// Version of the machine-readable JSON contracts the CLI emits. Bump on breaking changes so an
 /// agent can detect drift via `cap version`/`cap doctor`.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[cfg(windows)]
 const BINARY_SUFFIX: &str = ".exe";
@@ -196,7 +198,7 @@ fn plist_string_value(plist: &str, key: &str) -> Option<String> {
     Some(after_key[start..start + end].trim().to_string())
 }
 
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CheckStatus {
     Ok,
@@ -207,11 +209,13 @@ pub enum CheckStatus {
 
 /// Closed vocabulary of diagnostic check ids. Pinned by a test so agents can branch on a stable set;
 /// adding/renaming a variant is a schema change (bump `SCHEMA_VERSION`).
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CheckId {
     Ffmpeg,
     ScreenRecordingPermission,
+    #[cfg(target_os = "macos")]
+    ScreenCaptureKit,
     CliInstall,
 }
 
@@ -220,6 +224,8 @@ impl CheckId {
         match self {
             Self::Ffmpeg => "ffmpeg",
             Self::ScreenRecordingPermission => "screenRecordingPermission",
+            #[cfg(target_os = "macos")]
+            Self::ScreenCaptureKit => "screenCaptureKit",
             Self::CliInstall => "cliInstall",
         }
     }
@@ -345,6 +351,79 @@ fn permission_check(permissions: &Permissions) -> Check {
     }
 }
 
+#[cfg(target_os = "macos")]
+async fn screen_capture_kit_check(permissions: &Permissions) -> Check {
+    if !matches!(permissions.screen_recording, PermissionStatus::Granted) {
+        return Check {
+            id: CheckId::ScreenCaptureKit,
+            status: CheckStatus::Warn,
+            message: "ScreenCaptureKit stream availability was not checked because screen recording permission is not granted".to_string(),
+        };
+    }
+
+    let content = match tokio::time::timeout(
+        Duration::from_secs(3),
+        cidre::sc::ShareableContent::current(),
+    )
+    .await
+    {
+        Ok(Ok(content)) => content,
+        Ok(Err(error)) => {
+            return Check {
+                id: CheckId::ScreenCaptureKit,
+                status: CheckStatus::Fail,
+                message: format!("ScreenCaptureKit failed to return shareable content: {error}"),
+            };
+        }
+        Err(_) => {
+            return Check {
+                id: CheckId::ScreenCaptureKit,
+                status: CheckStatus::Fail,
+                message: "ScreenCaptureKit timed out while reading shareable content".to_string(),
+            };
+        }
+    };
+
+    let process_content = match tokio::time::timeout(
+        Duration::from_secs(3),
+        cidre::sc::ShareableContent::current_process(),
+    )
+    .await
+    {
+        Ok(Ok(content)) => Some(content),
+        Ok(Err(_)) | Err(_) => None,
+    };
+
+    let display_count = content.displays().len();
+    let window_count = content.windows().len();
+    let process_display_count = process_content
+        .as_ref()
+        .map(|content| content.displays().len())
+        .unwrap_or(0);
+    let process_window_count = process_content
+        .as_ref()
+        .map(|content| content.windows().len())
+        .unwrap_or(0);
+
+    if display_count == 0 && process_display_count == 0 {
+        return Check {
+            id: CheckId::ScreenCaptureKit,
+            status: CheckStatus::Fail,
+            message: format!(
+                "ScreenCaptureKit returned no displays; live screen recording will fail in this process. Windows visible: {window_count}, current-process windows visible: {process_window_count}"
+            ),
+        };
+    }
+
+    Check {
+        id: CheckId::ScreenCaptureKit,
+        status: CheckStatus::Ok,
+        message: format!(
+            "ScreenCaptureKit returned {display_count} display(s), {window_count} window(s), {process_display_count} current-process display(s), and {process_window_count} current-process window(s)"
+        ),
+    }
+}
+
 fn install_check(install: &Result<cap_cli_install::CliInstallStatus, String>) -> Check {
     match install {
         Ok(status) if status.installed && status.on_path => Check {
@@ -376,14 +455,29 @@ fn install_check(install: &Result<cap_cli_install::CliInstallStatus, String>) ->
     }
 }
 
-fn capture_ready(permissions: &Permissions) -> bool {
-    match permissions.screen_recording {
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+fn capture_ready(permissions: &Permissions, checks: &[Check]) -> bool {
+    let permission_ready = match permissions.screen_recording {
         #[cfg(target_os = "macos")]
         PermissionStatus::Granted => true,
         PermissionStatus::Unknown => true,
         #[cfg(target_os = "macos")]
         PermissionStatus::Denied | PermissionStatus::NotDetermined => false,
+    };
+
+    if !permission_ready {
+        return false;
     }
+
+    #[cfg(target_os = "macos")]
+    if checks
+        .iter()
+        .any(|check| check.id == CheckId::ScreenCaptureKit && check.status != CheckStatus::Ok)
+    {
+        return false;
+    }
+
+    true
 }
 
 #[derive(Serialize)]
@@ -444,21 +538,22 @@ fn distribution_label(distribution: Distribution) -> &'static str {
     }
 }
 
-pub fn run_doctor(format: OutputFormat) -> Result<(), String> {
+pub async fn run_doctor(format: OutputFormat) -> Result<(), String> {
     let version = VersionInfo::collect();
     let permissions = permissions();
     let install = cap_cli_install::status();
 
-    let checks = vec![
-        ffmpeg_check(),
-        permission_check(&permissions),
-        install_check(&install),
-    ];
+    let mut checks = vec![ffmpeg_check(), permission_check(&permissions)];
+
+    #[cfg(target_os = "macos")]
+    checks.push(screen_capture_kit_check(&permissions).await);
+
+    checks.push(install_check(&install));
 
     let ok = !checks
         .iter()
         .any(|check| matches!(check.status, CheckStatus::Fail));
-    let capture_ready = capture_ready(&permissions);
+    let capture_ready = capture_ready(&permissions, &checks);
 
     let (rule_count, enabled_count) = crate::automation::rule_counts();
 

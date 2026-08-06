@@ -1,8 +1,6 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
 #[cfg(target_os = "linux")]
-use crate::sources::screen_capture::{
-    X11InputConfig, frame_from_x11_packet, open_x11_input, x11_capture_rect,
-};
+use crate::sources::screen_capture::{X11Grabber, X11InputConfig, x11_capture_rect};
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 #[cfg(target_os = "linux")]
@@ -1236,22 +1234,9 @@ fn capture_screenshot_x11_blocking(target: &ScreenCaptureTarget) -> anyhow::Resu
         fps: 1,
         show_cursor: false,
     };
-    let mut input = open_x11_input(&config)?;
-    let stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or_else(|| anyhow!("x11grab did not expose a video stream"))?;
-    let stream_index = stream.index();
-
-    for (stream, packet) in input.packets() {
-        if stream.index() != stream_index {
-            continue;
-        }
-        let frame = frame_from_x11_packet(&packet, config.width, config.height)?;
-        return convert_ffmpeg_frame_to_image(&frame);
-    }
-
-    Err(anyhow!("x11grab ended before producing a screenshot frame"))
+    let mut grabber = X11Grabber::new(&config)?;
+    let frame = grabber.grab()?;
+    convert_ffmpeg_frame_to_image(&frame)
 }
 
 #[cfg(target_os = "linux")]

@@ -29,7 +29,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Half the Price of Loom",
 			description:
-				"Cap stars from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
+				"Cap starts from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
 		},
 		{
 			title: "High-Quality Recordings",
@@ -49,7 +49,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Built-In Loom Video Importer",
 			description:
-				"Already using Loom? Cap's built-in video importer lets you seamlessly transfer your existing Loom recordings into Cap. No need to start from scratch — bring all your content with you when you switch.",
+				"Already using Loom? Cap's built-in video importer lets you seamlessly transfer your existing Loom recordings into Cap. No need to start from scratch — bring all your content with you when you switch. Just need the raw files? Our <a href='/tools/loom-downloader'>free Loom video downloader</a> saves any public Loom as an MP4 in one click.",
 		},
 	],
 
@@ -141,7 +141,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			question: "Can I import my existing Loom videos into Cap?",
 			answer:
-				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content.",
+				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content. If you'd rather keep local copies, our <a href='/tools/loom-downloader'>Loom video downloader</a> exports any public Loom to MP4, and our <a href='/migrate-from-loom'>migrate from Loom</a> guide covers the full switch.",
 		},
 	],
 

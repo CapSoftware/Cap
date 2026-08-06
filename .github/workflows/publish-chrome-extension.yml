@@ -30,10 +30,23 @@ jobs:
     name: Publish Chrome Extension
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Require default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "branch" ] || [ "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]; then
+            echo "::error::Run this workflow from ${DEFAULT_BRANCH}, not ${GITHUB_REF}."
+            exit 1
+          fi
 
       - uses: ./.github/actions/setup-js
 
@@ -128,6 +141,111 @@ jobs:
           	process.exit(1);
           }
           NODE
+
+      - name: Prepare next extension version
+        if: ${{ inputs.publish_target != 'draft' }}
+        id: next_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const extensionDirectory = process.env.EXTENSION_DIR;
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!extensionDirectory || !outputPath) {
+            throw new Error("EXTENSION_DIR and GITHUB_OUTPUT are required");
+          }
+
+          const paths = [
+            `${extensionDirectory}/package.json`,
+            `${extensionDirectory}/public/manifest.json`,
+          ];
+          const files = paths.map((path) => {
+            const source = fs.readFileSync(path, "utf8");
+            return { path, source, version: JSON.parse(source).version };
+          });
+          const versions = new Set(files.map(({ version }) => version));
+          if (versions.size !== 1) {
+            throw new Error("Package and manifest versions must match");
+          }
+
+          const currentVersion = files[0].version;
+          const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(currentVersion);
+          if (!match) {
+            throw new Error(`Version ${currentVersion} must use the x.y.z format`);
+          }
+
+          let [major, minor, patch] = match.slice(1).map(Number);
+          if ([major, minor, patch].some((part) => part > 65535)) {
+            throw new Error(`Version ${currentVersion} exceeds Chrome's component limit`);
+          }
+          if (patch < 65535) {
+            patch += 1;
+          } else if (minor < 65535) {
+            minor += 1;
+            patch = 0;
+          } else if (major < 65535) {
+            major += 1;
+            minor = 0;
+            patch = 0;
+          } else {
+            throw new Error("Chrome extension version space is exhausted");
+          }
+
+          const nextVersion = `${major}.${minor}.${patch}`;
+          for (const { path, source } of files) {
+            const versionFields = source.match(/"version"\s*:\s*"[^"]+"/g) ?? [];
+            if (versionFields.length !== 1) {
+              throw new Error(`${path} must contain exactly one version field`);
+            }
+            const updated = source.replace(
+              /("version"\s*:\s*")[^"]+(")/,
+              (_field, prefix, suffix) => `${prefix}${nextVersion}${suffix}`,
+            );
+            if (JSON.parse(updated).version !== nextVersion) {
+              throw new Error(`Failed to update ${path}`);
+            }
+            fs.writeFileSync(path, updated);
+          }
+          fs.appendFileSync(outputPath, `current=${currentVersion}\nnext=${nextVersion}\n`);
+          NODE
+
+      - name: Commit next extension version
+        if: ${{ inputs.publish_target != 'draft' }}
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.next_version.outputs.next }}
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- . \
+            ":(exclude)${EXTENSION_DIR}/package.json" \
+            ":(exclude)${EXTENSION_DIR}/public/manifest.json"; then
+            echo "::error::Unexpected tracked changes exist outside the extension version files."
+            git diff --name-only
+            exit 1
+          fi
+
+          git diff --check -- \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json"
+          git add -- \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json"
+
+          actual_paths="$(git diff --cached --name-only | sort)"
+          expected_paths="$(printf '%s\n' \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json" | sort)"
+          if [ "${actual_paths}" != "${expected_paths}" ]; then
+            echo "::error::The version commit does not contain exactly the expected files."
+            git diff --cached --name-only
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(chrome-extension): bump version to ${NEXT_VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Publish Chrome Web Store item
         if: ${{ inputs.publish_target != 'draft' }}

@@ -225,6 +225,55 @@
 			"when": 1781271269353,
 			"tag": "0031_add_auth_api_keys_user_created_index",
 			"breakpoints": true
+		},
+		{
+			"idx": 32,
+			"version": "5",
+			"when": 1782850635482,
+			"tag": "0032_past_lester",
+			"breakpoints": true
+		},
+		{
+			"idx": 33,
+			"version": "5",
+			"when": 1782853232527,
+			"tag": "0033_fluffy_gamora",
+			"breakpoints": true
+		},
+		{
+			"idx": 34,
+			"version": "5",
+			"when": 1782854064505,
+			"tag": "0034_fluffy_falcon",
+			"breakpoints": true
+		},
+		{
+			"idx": 35,
+			"version": "5",
+			"when": 1784393810560,
+			"tag": "0035_agent_api",
+			"breakpoints": true
+		},
+		{
+			"idx": 36,
+			"version": "5",
+			"when": 1784402487715,
+			"tag": "0036_premium_master_chief",
+			"breakpoints": true
+		},
+		{
+			"idx": 37,
+			"version": "5",
+			"when": 1785452585612,
+			"tag": "0037_integration_installations",
+			"breakpoints": true
+		},
+		{
+			"idx": 38,
+			"version": "5",
+			"when": 1785892430217,
+			"tag": "0038_mean_ozymandias",
+			"breakpoints": true
 		}
 	]
 }

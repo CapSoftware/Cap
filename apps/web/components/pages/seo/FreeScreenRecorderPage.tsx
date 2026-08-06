@@ -1,5 +1,3 @@
-"use client";
-
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 
 export const freeScreenRecorderContent = {

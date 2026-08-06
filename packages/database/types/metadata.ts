@@ -34,7 +34,21 @@ export interface VideoMetadata {
 		| "COMPLETE"
 		| "ERROR"
 		| "SKIPPED";
+	/**
+	 * Progress of the provisional live transcription that runs while an
+	 * instant-mode recording is still uploading. The transcript content lives
+	 * in `transcription.live.json` next to the video; this only gates UI/queue
+	 * behavior. Cleared when the canonical transcription completes.
+	 */
+	liveTranscript?: {
+		status: "active" | "complete" | "stopped";
+		updatedAt?: string;
+	};
 	enhancedAudioStatus?: "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+	agentUpload?: {
+		state: "pending" | "accepted" | "rejected";
+		rawFileKey?: string;
+	};
 }
 
 export type VideoEditRange = {

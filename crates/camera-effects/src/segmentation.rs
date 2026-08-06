@@ -1,13 +1,15 @@
 use anyhow::Context;
 use ort::session::Session;
 use ort::value::Value;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.dylib";
 #[cfg(target_os = "linux")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.so";
+#[cfg(target_os = "windows")]
+const ORT_LIBRARY_NAME: &str = "onnxruntime.dll";
 
 const MODEL_BYTES: &[u8] = include_bytes!("../assets/selfie_segmentation.onnx");
 const MODEL_INPUT_SIZE: usize = 256;
@@ -90,16 +92,9 @@ fn create_session() -> anyhow::Result<Session> {
     Ok(session)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn init_runtime() -> anyhow::Result<()> {
-    let path = std::env::var_os("ORT_DYLIB_PATH")
-        .map(PathBuf::from)
-        .or_else(|| {
-            onnx_runtime_candidates()
-                .into_iter()
-                .find(|path| path.exists())
-        })
-        .context("Failed to find ONNX Runtime library")?;
+    let path = onnx_runtime_library_path().context("Failed to find ONNX Runtime library")?;
 
     let _ = ort::init_from(&path)
         .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?
@@ -108,12 +103,23 @@ fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub(crate) fn onnx_runtime_library_path() -> Option<PathBuf> {
+    std::env::var_os("ORT_DYLIB_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            onnx_runtime_candidates()
+                .into_iter()
+                .find(|path| path.exists())
+        })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn onnx_runtime_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -142,12 +148,19 @@ fn onnx_runtime_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+// `error_on_failure` is load-bearing in both registrars: without it ort swallows
+// registration failures and returns Ok (it only logs through its own internal
+// logger), so a CPU-only runtime DLL would make the "registered" log a false
+// positive while inference silently runs on CPU.
+
 #[cfg(target_os = "macos")]
 fn try_register_coreml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {
     match builder.with_execution_providers([
-        ort::execution_providers::CoreMLExecutionProvider::default().build(),
+        ort::execution_providers::CoreMLExecutionProvider::default()
+            .build()
+            .error_on_failure(),
     ]) {
         Ok(b) => {
             tracing::info!("Camera background blur: CoreML execution provider registered");
@@ -165,7 +178,9 @@ fn try_register_directml(
     builder: ort::session::builder::SessionBuilder,
 ) -> ort::session::builder::SessionBuilder {
     match builder.with_execution_providers([
-        ort::execution_providers::DirectMLExecutionProvider::default().build(),
+        ort::execution_providers::DirectMLExecutionProvider::default()
+            .build()
+            .error_on_failure(),
     ]) {
         Ok(b) => {
             tracing::info!("Camera background blur: DirectML execution provider registered");

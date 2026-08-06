@@ -1,4 +1,4 @@
-FROM oven/bun:1
+FROM oven/bun:1.3.14
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ffmpeg \
@@ -15,6 +15,6 @@ ENV PORT=3456
 EXPOSE 3456
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-	CMD ["bun", "-e", "const response = await fetch(`http://localhost:${process.env.PORT || 3456}/health`); process.exit(response.ok ? 0 : 1)"]
+	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3456}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
 CMD ["bun", "run", "src/index.ts"]

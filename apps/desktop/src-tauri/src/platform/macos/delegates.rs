@@ -32,18 +32,35 @@ pub fn position_window_controls(
     inset: &LogicalPosition<f64>,
 ) {
     use cocoa::{
-        appkit::{NSView, NSWindow, NSWindowButton},
+        appkit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask},
         base::id,
         foundation::NSRect,
     };
 
     let ns_window = ns_window_handle.0 as id;
     unsafe {
+        // In native fullscreen the standard window buttons are hosted in a
+        // system-managed titlebar overlay; resizing their superviews there
+        // makes AppKit throw an NSException, which aborts the process once it
+        // unwinds into Rust. The system positions them itself in fullscreen.
+        if ns_window
+            .styleMask()
+            .contains(NSWindowStyleMask::NSFullScreenWindowMask)
+        {
+            return;
+        }
+
         let close = ns_window.standardWindowButton_(NSWindowButton::NSWindowCloseButton);
         let minimize = ns_window.standardWindowButton_(NSWindowButton::NSWindowMiniaturizeButton);
         let zoom = ns_window.standardWindowButton_(NSWindowButton::NSWindowZoomButton);
+        if close.is_null() || minimize.is_null() || zoom.is_null() {
+            return;
+        }
 
         let title_bar_container_view = close.superview().superview();
+        if title_bar_container_view.is_null() {
+            return;
+        }
 
         let close_rect: NSRect = msg_send![close, frame];
         let button_height = close_rect.size.height;

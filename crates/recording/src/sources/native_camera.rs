@@ -9,7 +9,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Duration;
 use tokio::sync::oneshot;
+
+const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 pub struct NativeCamera {
     feed_lock: Arc<CameraFeedLock>,
@@ -31,10 +34,13 @@ impl VideoSource for NativeCamera {
     {
         let (tx, rx) = flume::bounded(8);
 
-        feed_lock
-            .ask(camera::AddNativeSender(tx))
-            .await
-            .map_err(|e| anyhow!("Failed to add native camera sender: {e}"))?;
+        tokio::time::timeout(
+            CAMERA_SENDER_ATTACH_TIMEOUT,
+            feed_lock.ask(camera::AddNativeSender(tx)),
+        )
+        .await
+        .map_err(|_| anyhow!("Timed out adding native camera sender"))?
+        .map_err(|e| anyhow!("Failed to add native camera sender: {e}"))?;
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));

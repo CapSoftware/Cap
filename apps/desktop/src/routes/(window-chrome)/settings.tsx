@@ -2,10 +2,10 @@ import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
 import { createQuery, useQueryClient } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import * as shell from "@tauri-apps/plugin-shell";
-import { check } from "@tauri-apps/plugin-updater";
 import {
 	createEffect,
 	createMemo,
@@ -17,12 +17,14 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
+import toast from "solid-toast";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
 import { authStore, userProfileStore } from "~/store";
-import { trackEvent } from "~/utils/analytics";
+import { resetUser, trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
+import { commands } from "~/utils/tauri";
 import {
 	apiClient,
 	getConfiguredServerUrl,
@@ -147,6 +149,7 @@ export default function Settings(props: RouteSectionProps) {
 	>(null);
 	const clearLocalAuth = async () => {
 		setAuth(undefined);
+		resetUser();
 		queryClient.removeQueries({ queryKey: ["settings-user-profile"] });
 		await Promise.all([
 			authStore.set(undefined),
@@ -405,12 +408,21 @@ export default function Settings(props: RouteSectionProps) {
 			await clearLocalAuth();
 		}
 	};
+	const copyVersion = async (appVersion: string) => {
+		try {
+			await writeText(appVersion);
+			toast.success("Version copied to clipboard");
+		} catch (error) {
+			console.error("Failed to copy app version:", error);
+			toast.error("Failed to copy version");
+		}
+	};
 
 	const checkForUpdates = async () => {
 		setIsCheckingForUpdates(true);
 
 		try {
-			const update = await check();
+			const update = await commands.updatesCheck();
 
 			if (!update) {
 				await dialog.message(
@@ -507,7 +519,15 @@ export default function Settings(props: RouteSectionProps) {
 					<Show when={version()}>
 						{(v) => (
 							<div class="mb-2 text-xs text-gray-11 flex flex-col items-start gap-1.5">
-								<span>v{v()}</span>
+								<button
+									type="button"
+									class="-ml-1 cursor-copy rounded px-1 py-0.5 transition-colors hover:bg-gray-3 hover:text-gray-12"
+									title="Copy version to clipboard"
+									aria-label={`Copy version ${v()} to clipboard`}
+									onClick={() => copyVersion(v())}
+								>
+									v{v()}
+								</button>
 								<div class="flex flex-col items-start gap-1.5">
 									<button
 										type="button"
@@ -548,7 +568,7 @@ export default function Settings(props: RouteSectionProps) {
 					</Show>
 				</div>
 			</div>
-			<div class="cap-settings-content overflow-y-hidden flex-1 animate-in min-w-0">
+			<div class="cap-settings-content overflow-y-hidden flex-1 min-w-0">
 				<CapErrorBoundary>
 					<Suspense fallback={<SettingsContentSkeleton />}>
 						{props.children}

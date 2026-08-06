@@ -1,28 +1,32 @@
 import { Button, type ButtonProps } from "@cap/ui";
 import Image from "next/image";
-import type React from "react";
 import { CAP_CHROME_EXTENSION_URL } from "@/lib/chrome-extension";
 
 type ChromeExtensionButtonProps = {
 	className?: string;
+	href?: string | null;
 	label?: string;
-	onClick?: React.MouseEventHandler<HTMLButtonElement>;
+	onClick?: ButtonProps["onClick"];
 	size?: ButtonProps["size"];
+	target?: ButtonProps["target"];
 	variant?: ButtonProps["variant"];
 };
 
 export function ChromeExtensionButton({
 	className,
+	href = CAP_CHROME_EXTENSION_URL,
 	label = "Add to Chrome",
 	onClick,
 	size = "lg",
+	target,
 	variant = "dark",
 }: ChromeExtensionButtonProps) {
 	return (
 		<Button
-			href={CAP_CHROME_EXTENSION_URL}
+			href={href ?? undefined}
 			onClick={onClick}
 			size={size}
+			target={target}
 			variant={variant}
 			className={`group ${className ?? ""}`}
 			icon={

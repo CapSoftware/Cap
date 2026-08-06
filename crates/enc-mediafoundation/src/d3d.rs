@@ -83,7 +83,7 @@ pub fn create_d3d_device() -> Result<ID3D11Device> {
                 adapter = %description,
                 "enc-mediafoundation: D3D11 device created on pinned hardware adapter"
             );
-            return Ok(device.unwrap());
+            return device.ok_or_else(windows::core::Error::from_win32);
         }
         Err(e) => {
             tracing::warn!(
@@ -100,7 +100,7 @@ pub fn create_d3d_device() -> Result<ID3D11Device> {
         result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device);
     }
     result?;
-    Ok(device.unwrap())
+    device.ok_or_else(windows::core::Error::from_win32)
 }
 
 pub fn create_direct3d_device(d3d_device: &ID3D11Device) -> Result<IDirect3DDevice> {

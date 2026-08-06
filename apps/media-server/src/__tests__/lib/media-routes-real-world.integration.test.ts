@@ -33,6 +33,9 @@ let baseUrl = "";
 let tempDir = "";
 
 const uploadedArtifacts = new Map<string, Uint8Array>();
+let transientFixtureFailures = 0;
+let permanentFixtureFailures = 0;
+let slowFixtureCancellations = 0;
 
 function fileUrl(path: string) {
 	return pathToFileURL(path).toString();
@@ -138,12 +141,38 @@ beforeAll(async () => {
 			const url = new URL(request.url);
 
 			if (request.method === "GET" || request.method === "HEAD") {
+				if (url.pathname === "/fixtures/permanent-unavailable.m4s") {
+					permanentFixtureFailures++;
+					return new Response("Unavailable", { status: 503 });
+				}
+				if (url.pathname === "/fixtures/slow-segment.m4s") {
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(new Uint8Array(1024));
+							},
+							cancel() {
+								slowFixtureCancellations++;
+							},
+						}),
+					);
+				}
+				if (
+					request.method === "GET" &&
+					url.pathname === "/fixtures/transient-no-audio.mp4" &&
+					transientFixtureFailures < 2
+				) {
+					transientFixtureFailures++;
+					return new Response("Unavailable", { status: 503 });
+				}
 				const fixturePath =
 					url.pathname === "/fixtures/test-no-audio.mp4"
 						? TEST_VIDEO_NO_AUDIO
-						: url.pathname === "/fixtures/test-with-audio.mp4"
-							? TEST_VIDEO_WITH_AUDIO
-							: null;
+						: url.pathname === "/fixtures/transient-no-audio.mp4"
+							? TEST_VIDEO_NO_AUDIO
+							: url.pathname === "/fixtures/test-with-audio.mp4"
+								? TEST_VIDEO_WITH_AUDIO
+								: null;
 
 				if (fixturePath) {
 					const fixture = Bun.file(fixturePath);
@@ -169,7 +198,7 @@ beforeAll(async () => {
 				};
 				return request.method === "HEAD"
 					? new Response(null, { headers })
-					: new Response(bytes, { headers });
+					: new Response(Uint8Array.from(bytes).buffer, { headers });
 			}
 
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
@@ -196,6 +225,9 @@ beforeAll(async () => {
 beforeEach(() => {
 	mock.restore();
 	uploadedArtifacts.clear();
+	transientFixtureFailures = 0;
+	permanentFixtureFailures = 0;
+	slowFixtureCancellations = 0;
 });
 
 afterAll(() => {
@@ -315,6 +347,65 @@ describe("media routes real-world integration tests", () => {
 			expect(metadata.audioCodec).toBe("aac");
 			expect(metadata.width).toBeLessThanOrEqual(160);
 			expect(metadata.height).toBeLessThanOrEqual(120);
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("retries transient segment downloads and completes a real mux job", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", {
+				videoId: "real-mux-video",
+				userId: "real-mux-user",
+				outputPresignedUrl: uploadUrl("mux-output.mp4"),
+				videoInitUrl: `${baseUrl}/fixtures/transient-no-audio.mp4`,
+				videoSegmentUrls: [],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("complete");
+			expect(job.error).toBeUndefined();
+			expect(transientFixtureFailures).toBe(2);
+
+			const bytes = uploadedBytes("/uploads/mux-output.mp4");
+			expectMp4(bytes);
+			const metadata = await probeBytesAsMp4(bytes, "mux-output.mp4");
+			expect(metadata.videoCodec).toBe("h264");
+			expect(metadata.audioCodec).toBeNull();
+		} finally {
+			deleteJob(data.jobId);
+		}
+	}, 90000);
+
+	test("fails a mux job when a segment stays unavailable after retries", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/mux-segments", {
+				videoId: "failed-segment-mux-video",
+				userId: "failed-segment-mux-user",
+				outputPresignedUrl: uploadUrl("failed-segment-output.mp4"),
+				videoInitUrl: fixtureUrl("test-no-audio.mp4"),
+				videoSegmentUrls: [
+					`${baseUrl}/fixtures/permanent-unavailable.m4s`,
+					`${baseUrl}/fixtures/slow-segment.m4s`,
+				],
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const data = (await response.json()) as { jobId: string };
+		const job = await waitForTerminalJob(data.jobId);
+		try {
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("503");
+			expect(permanentFixtureFailures).toBe(3);
+			expect(slowFixtureCancellations).toBe(1);
+			expect(uploadedArtifacts.has("/uploads/failed-segment-output.mp4")).toBe(
+				false,
+			);
 		} finally {
 			deleteJob(data.jobId);
 		}

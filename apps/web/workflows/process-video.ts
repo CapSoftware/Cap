@@ -1,12 +1,14 @@
 import { db } from "@cap/database";
-import { videos, videoUploads } from "@cap/database/schema";
+import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -53,6 +55,8 @@ export async function processVideoWorkflow(
 		if (rawFileKey !== outputKey) {
 			await cleanupRawUpload(videoId, rawFileKey);
 		}
+
+		await queueProcessedVideoTranscription(videoId);
 
 		return {
 			success: true,
@@ -248,13 +252,13 @@ async function processVideoOnMediaServer(
 	const videoDomain = decodeStorageVideo(video);
 
 	const [bucket] =
-		await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
+		await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
 
 	const rawVideoUrl = await bucket
 		.getInternalSignedObjectUrl(rawFileKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
@@ -268,7 +272,7 @@ async function processVideoOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const thumbnailPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -278,7 +282,7 @@ async function processVideoOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const previewGifPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -289,7 +293,7 @@ async function processVideoOnMediaServer(
 			},
 			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 		)
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 
 	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
@@ -456,11 +460,49 @@ async function cleanupRawUpload(
 		const videoDomain = decodeStorageVideo(video);
 
 		const [bucket] =
-			await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
+			await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
 
-		await bucket.deleteObject(rawFileKey).pipe(runPromise);
+		await bucket.deleteObject(rawFileKey).pipe(runWorkflowPromise);
 	} catch (error) {
 		console.error("[process-video] Failed to delete raw upload", error);
+	}
+}
+
+async function queueProcessedVideoTranscription(
+	videoId: string,
+): Promise<void> {
+	"use step";
+
+	try {
+		const [owner] = await db()
+			.select({
+				id: videos.ownerId,
+				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			})
+			.from(videos)
+			.innerJoin(users, eq(videos.ownerId, users.id))
+			.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+		if (!owner) return;
+
+		const result = await transcribeVideo(
+			Video.VideoId.make(videoId),
+			owner.id,
+			isAiGenerationEnabledForUser(owner),
+		);
+
+		if (!result.success) {
+			console.warn("[process-video] Failed to queue transcription", {
+				videoId,
+				message: result.message,
+			});
+		}
+	} catch (error) {
+		console.warn("[process-video] Failed to queue transcription", {
+			videoId,
+			error,
+		});
 	}
 }
 

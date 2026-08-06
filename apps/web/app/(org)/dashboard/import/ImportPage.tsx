@@ -10,7 +10,7 @@ export const ImportPage = () => {
 			<div className="mb-8">
 				<h1 className="text-2xl font-medium text-gray-12">Import</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Import videos from external sources or upload from your device.
+					Import media from external sources or upload from your device.
 				</p>
 			</div>
 
@@ -29,7 +29,7 @@ export const ImportPage = () => {
 							Upload File
 						</p>
 						<p className="text-xs text-left text-gray-10">
-							Upload a video file from your device
+							Upload a video or image file from your device
 						</p>
 					</div>
 				</Link>

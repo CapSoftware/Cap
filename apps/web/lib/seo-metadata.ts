@@ -1,3 +1,5 @@
+import { ogImageUrl } from "@/lib/og/url";
+
 export const seoMetadata = {
 	"best-screen-recorder": {
 		title:
@@ -12,7 +14,10 @@ export const seoMetadata = {
 			"screen recorder no watermark",
 			"best screen recording software",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "The best screen recorder for Mac & Windows",
+			tag: "Screen Recorder",
+		}),
 	},
 	"screen-recorder": {
 		title: "Screen Recorder | Cap - Beautiful Screen Recording Software",
@@ -24,7 +29,10 @@ export const seoMetadata = {
 			"video capture",
 			"free screen recorder",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Screen recorder for Mac & Windows",
+			tag: "Screen Recorder",
+		}),
 	},
 	"screen-recorder-mac": {
 		title: "Screen Record on Mac | Cap - Best Screen Recorder for macOS",
@@ -36,7 +44,10 @@ export const seoMetadata = {
 			"macos screen capture",
 			"screen recorder for mac",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "The best screen recorder for Mac",
+			tag: "Screen Recorder",
+		}),
 	},
 	"screen-recorder-windows": {
 		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
@@ -52,7 +63,10 @@ export const seoMetadata = {
 			"screen recorder for windows 10",
 			"screen recorder for windows 11",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Free screen recorder for Windows 10 & 11",
+			tag: "Screen Recorder",
+		}),
 	},
 	"free-screen-recorder": {
 		title: "Free Screen Recorder | Cap - High-Quality Recording at No Cost",
@@ -64,7 +78,10 @@ export const seoMetadata = {
 			"free video capture",
 			"no cost screen recorder",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Free screen recorder, no watermarks",
+			tag: "Screen Recorder",
+		}),
 	},
 	"screen-recording": {
 		title: "Screen Recording — Free HD Capture, Instant Sharing | Cap",
@@ -77,7 +94,10 @@ export const seoMetadata = {
 			"screen capture",
 			"screen recording software",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Screen recording with instant sharing",
+			tag: "Screen Recorder",
+		}),
 	},
 	"screen-recording-software": {
 		title: "Screen Recording Software | Cap - Professional Video Capture Tool",
@@ -89,7 +109,10 @@ export const seoMetadata = {
 			"professional screen recorder",
 			"screen capture tool",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Screen recording software for Mac & Windows",
+			tag: "Screen Recorder",
+		}),
 	},
 	"how-to-screen-record": {
 		title:
@@ -103,7 +126,10 @@ export const seoMetadata = {
 			"how to screen record with audio",
 			"screen recording guide",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "How to screen record on Mac, Windows & Chrome",
+			tag: "Guide",
+		}),
 	},
 	"loom-alternative": {
 		title:
@@ -117,7 +143,10 @@ export const seoMetadata = {
 			"loom video importer",
 			"privacy screen recorder",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "The open source Loom alternative",
+			tag: "Compare",
+		}),
 	},
 	"solutions/remote-team-collaboration": {
 		title:
@@ -131,7 +160,10 @@ export const seoMetadata = {
 			"remote work tools",
 			"asynchronous video",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Remote team collaboration with async video",
+			tag: "Solutions",
+		}),
 	},
 	"solutions/agencies": {
 		title: "Cap for Agencies — Faster Client Updates with Instant Video Links",
@@ -143,7 +175,10 @@ export const seoMetadata = {
 			"agency screen recording",
 			"client communication tool",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Cap for agencies",
+			tag: "Solutions",
+		}),
 	},
 	"solutions/daily-standup-software": {
 		title: "Daily Standup Software: Streamline Your Agile Meetings with Cap",
@@ -155,7 +190,10 @@ export const seoMetadata = {
 			"agile standup tool",
 			"remote standup meetings",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Async daily standups with video",
+			tag: "Solutions",
+		}),
 	},
 	"solutions/employee-onboarding-platform": {
 		title:
@@ -168,7 +206,10 @@ export const seoMetadata = {
 			"new hire training",
 			"onboarding video platform",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Employee onboarding with video",
+			tag: "Solutions",
+		}),
 	},
 	"solutions/online-classroom-tools": {
 		title: "Online Classroom Tools: Empower Remote Teaching with Cap",
@@ -180,7 +221,10 @@ export const seoMetadata = {
 			"educational screen recorder",
 			"async teaching platform",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Online classroom tools for educators",
+			tag: "Solutions",
+		}),
 	},
 	"open-source-screen-recorder": {
 		title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
@@ -194,7 +238,10 @@ export const seoMetadata = {
 			"privacy screen recorder",
 			"github screen recorder",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "The open source screen recorder",
+			tag: "Screen Recorder",
+		}),
 	},
 	"video-recording-software": {
 		title: "Video Recording Software — Free HD Capture, Instant Sharing | Cap",
@@ -208,7 +255,10 @@ export const seoMetadata = {
 			"video recorder for pc",
 			"video recorder for mac",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Video recording software for Mac & Windows",
+			tag: "Screen Recorder",
+		}),
 	},
 	"mac-screen-recording-with-audio": {
 		title: "Mac Screen Recording with Audio — Capture System Sound & Mic | Cap",
@@ -222,7 +272,10 @@ export const seoMetadata = {
 			"how to record screen on mac with audio",
 			"mac screen capture with sound",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Mac screen recording with system audio",
+			tag: "Screen Recorder",
+		}),
 	},
 	"obs-alternative": {
 		title:
@@ -237,7 +290,10 @@ export const seoMetadata = {
 			"simpler obs replacement",
 			"obs for screen sharing",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "The simple OBS alternative",
+			tag: "Compare",
+		}),
 	},
 	"hipaa-compliant-screen-recording": {
 		title:
@@ -252,7 +308,10 @@ export const seoMetadata = {
 			"hipaa video recording",
 			"secure screen recording healthcare",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "HIPAA-compliant screen recording",
+			tag: "Screen Recorder",
+		}),
 	},
 	"self-hosted-screen-recording": {
 		title:
@@ -267,7 +326,10 @@ export const seoMetadata = {
 			"private screen recording",
 			"on premise screen recorder",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Self-hosted screen recording",
+			tag: "Screen Recorder",
+		}),
 	},
 	"async-video-code-reviews": {
 		title: "Async Video Code Reviews — Ship Faster Without the Meetings | Cap",
@@ -281,7 +343,10 @@ export const seoMetadata = {
 			"screen recording for code review",
 			"async developer feedback",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Async video code reviews",
+			tag: "Solutions",
+		}),
 	},
 	"developer-documentation-videos": {
 		title:
@@ -296,7 +361,10 @@ export const seoMetadata = {
 			"screen recorder for developers",
 			"developer docs video",
 		],
-		ogImage: "/og.png",
+		ogImage: ogImageUrl({
+			title: "Developer documentation videos",
+			tag: "Solutions",
+		}),
 	},
 };
 

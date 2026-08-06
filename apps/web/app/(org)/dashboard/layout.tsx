@@ -8,6 +8,7 @@ import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
 import DashboardInner from "./_components/DashboardInner";
+import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
@@ -105,6 +106,7 @@ export default async function DashboardLayout({
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
 				>
+					<DashboardPasteImport />
 					<div className="bg-gray-2 dashboard-grid">
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">

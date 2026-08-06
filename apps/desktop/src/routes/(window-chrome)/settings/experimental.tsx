@@ -70,7 +70,7 @@ function Inner(props: {
 						<SectionRows>
 							<ToggleSettingItem
 								label="Native camera preview"
-								description="Render the camera preview using a native GPU surface instead of through the webview. On by default on macOS; turn off if you run into camera preview issues."
+								description="Render the camera preview using a native GPU surface instead of through the webview. Experimental and off by default."
 								value={!!settings.enableNativeCameraPreview}
 								onChange={(value) =>
 									handleChange("enableNativeCameraPreview", value)

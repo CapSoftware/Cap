@@ -7,6 +7,7 @@ export const DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX =
 export type DesktopSegmentsRecoveryMarker = {
 	observedAtMs: number;
 	signature: string;
+	attempts: number;
 };
 
 export function getDesktopSegmentsManifestSignature(
@@ -34,8 +35,9 @@ export function getDesktopSegmentsManifestSignature(
 export function buildDesktopSegmentsRecoveryMarker(
 	signature: string,
 	observedAtMs = Date.now(),
+	attempts = 0,
 ) {
-	return `${DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX}${observedAtMs}:${signature}`;
+	return `${DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX}${observedAtMs}:${signature}:${attempts}`;
 }
 
 export function parseDesktopSegmentsRecoveryMarker(
@@ -46,12 +48,18 @@ export function parseDesktopSegmentsRecoveryMarker(
 	}
 
 	const payload = message.slice(DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX.length);
-	const [observedAtRaw, signature] = payload.split(":");
+	const [observedAtRaw, signature, attemptsRaw] = payload.split(":");
 	const observedAtMs = Number(observedAtRaw);
 
 	if (!Number.isSafeInteger(observedAtMs) || !signature) {
 		return null;
 	}
 
-	return { observedAtMs, signature };
+	const attemptsParsed = Number(attemptsRaw);
+	const attempts =
+		Number.isSafeInteger(attemptsParsed) && attemptsParsed >= 0
+			? attemptsParsed
+			: 0;
+
+	return { observedAtMs, signature, attempts };
 }

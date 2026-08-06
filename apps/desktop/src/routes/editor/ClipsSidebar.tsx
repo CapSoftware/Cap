@@ -7,6 +7,7 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type Component,
@@ -53,10 +54,17 @@ import {
 	useRecordingOptions,
 } from "../(window-chrome)/OptionsContext";
 import {
+	clipTimelineOffsets,
+	getClipTransition,
+	rippleTimelineTrack,
+	transitionsAfterClipMove,
+} from "./clip-transitions";
+import {
 	type EditorTimelineSegment,
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
+import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
 import { Input } from "./ui";
 
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
@@ -259,6 +267,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const {
 		project,
 		setProject,
+		projectActions,
 		editorInstance,
 		editorState,
 		setEditorState,
@@ -304,7 +313,16 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const resetRecordingTarget = () => {
 		const targetMode = untrack(() => rawOptions.targetMode);
 		if (targetMode != null) {
-			setOptions("targetMode", null);
+			const source = untrack(() => rawOptions.targetModeSource) ?? "main";
+			// "superseded" only for a picker the editor owns: the editor is taking
+			// it over, so the main window must not treat the dismissal as a cancel
+			// and resurface itself. A main-owned picker dismissed from here keeps
+			// cancel semantics — the main window hid itself for that picker and
+			// must stay reachable.
+			setOptions({
+				targetMode: null,
+				targetModeDismissal: source === "main" ? "cancelled" : "superseded",
+			});
 			void commands.closeTargetSelectOverlays().catch(() => {});
 		}
 		void commands.setEditorRecordingTarget(null).catch(() => {});
@@ -514,11 +532,9 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 
 	const pickCapRecording = async () => {
 		const recordingsPath = await join(await appDataDir(), "recordings");
-		const path = await open({
-			defaultPath: recordingsPath,
-			filters: [{ name: "Cap Recording", extensions: ["cap"] }],
-			multiple: false,
-		});
+		const path = await open(
+			getExistingRecordingPickerOptions(ostype(), recordingsPath),
+		);
 		if (typeof path === "string") await importRecordingPath(path);
 	};
 
@@ -625,14 +641,52 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		if (from < insertionIndex) to -= 1;
 		if (from === to) return;
 		setProject(
-			"timeline",
-			"segments",
-			produce((segs) => {
-				if (!segs) return;
-				const [moved] = segs.splice(from, 1);
-				segs.splice(to, 0, moved);
+			produce((project) => {
+				const timeline = project.timeline;
+				if (!timeline) return;
+				const proposedSegments = [...timeline.segments];
+				const [proposedMoved] = proposedSegments.splice(from, 1);
+				proposedSegments.splice(to, 0, proposedMoved);
+				const { kept, dropped } = transitionsAfterClipMove(
+					timeline.segments.length,
+					timeline.transitions ?? [],
+					from,
+					to,
+				);
+				dropped.sort((a, b) => b.segmentIndex - a.segmentIndex);
+
+				for (const transition of dropped) {
+					const effective = getClipTransition(
+						timeline.segments,
+						timeline.transitions,
+						transition.segmentIndex,
+					);
+					if (!effective) continue;
+					const boundary =
+						clipTimelineOffsets(timeline.segments, timeline.transitions)[
+							transition.segmentIndex
+						] + effective.duration;
+					timeline.transitions = timeline.transitions.filter(
+						(candidate) => candidate.segmentIndex !== transition.segmentIndex,
+					);
+					for (const track of [
+						timeline.zoomSegments,
+						timeline.sceneSegments ?? [],
+						timeline.maskSegments,
+						timeline.textSegments,
+						timeline.captionSegments ?? [],
+						timeline.keyboardSegments ?? [],
+						timeline.audioSegments ?? [],
+					]) {
+						rippleTimelineTrack(track, boundary, effective.duration);
+					}
+				}
+
+				timeline.segments = proposedSegments;
+				timeline.transitions = kept;
 			}),
 		);
+		setEditorState("timeline", "selection", null);
 	};
 
 	const computeDropIndex = (clientY: number) => {
@@ -704,14 +758,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 
 	const deleteClip = (index: number) => {
 		if (segments().length < 2) return;
-		setProject(
-			"timeline",
-			"segments",
-			produce((segs) => {
-				if (!segs) return;
-				segs.splice(index, 1);
-			}),
-		);
+		projectActions.deleteClipSegment(index);
 	};
 
 	createEventListener(window, "keydown", (event) => {

@@ -43,6 +43,15 @@ const faqContent: FaqItem[] = [
 			"Yes! Cap can be self-hosted on your own infrastructure, giving you full control over your data.",
 	},
 	{
+		title: "Is Cap SOC 2 compliant?",
+		answer:
+			"Yes. Cap is SOC 2 Type II and ISO 27001 compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
+		link: {
+			text: "Visit the Trust Portal",
+			href: "https://trust.cap.so",
+		},
+	},
+	{
 		title: "Is there a commercial license available?",
 		answer:
 			"Yes, we offer commercial licenses for businesses that want to use the Cap desktop app. The commercial license includes the Cap Recorder + Editor with local-only features. Our Pro plan also includes a commercial license for the desktop app.",

@@ -108,16 +108,12 @@ impl Coord<CroppedDisplaySpace> {
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
         let crop = ProjectUniforms::get_crop(options, project);
-        let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
         let padding_offset = ProjectUniforms::display_offset(options, project, resolution_base);
-
-        let output_size = XY::new(output_size.0, output_size.1).map(|v| v as f64);
+        let display_size = ProjectUniforms::display_size(options, project, resolution_base);
 
         let position_ratio = self.coord / crop.size.map(|v| v as f64);
 
-        Coord::new(
-            padding_offset.coord + (output_size - padding_offset.coord * 2.0) * position_ratio,
-        )
+        Coord::new(padding_offset.coord + display_size.coord * position_ratio)
     }
 }
 

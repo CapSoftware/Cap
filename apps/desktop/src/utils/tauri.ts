@@ -47,6 +47,9 @@ async resumeRecording() : Promise<null> {
 async togglePauseRecording() : Promise<null> {
     return await TAURI_INVOKE("toggle_pause_recording");
 },
+async setMicRecordingMuted(muted: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_mic_recording_muted", { muted });
+},
 async restartRecording() : Promise<RecordingAction> {
     return await TAURI_INVOKE("restart_recording");
 },
@@ -212,6 +215,12 @@ async generateKeyboardSegments(groupingThresholdMs: number, lingerDurationMs: nu
 async renderScreenshotForExport() : Promise<number[]> {
     return await TAURI_INVOKE("render_screenshot_for_export");
 },
+async renderScreenshotProjectForExport(path: string) : Promise<ScreenshotProjectExport> {
+    return await TAURI_INVOKE("render_screenshot_project_for_export", { path });
+},
+async getScreenshotProjectShareState(path: string) : Promise<ScreenshotProjectShareState> {
+    return await TAURI_INVOKE("get_screenshot_project_share_state", { path });
+},
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
 },
@@ -227,8 +236,14 @@ async getDevicesSnapshot() : Promise<DevicesUpdated> {
 async uploadExportedVideo(path: string, mode: UploadMode, channel: TAURI_CHANNEL<UploadProgress>, organizationId: string | null) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_exported_video", { path, mode, channel, organizationId });
 },
+async copyCurrentScreenshotShareLink(projectPath: string, contentHash: string) : Promise<UploadResult | null> {
+    return await TAURI_INVOKE("copy_current_screenshot_share_link", { projectPath, contentHash });
+},
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
+},
+async uploadRenderedScreenshot(imageBytes: number[], contentType: string, projectPath: string, contentHash: string | null) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_rendered_screenshot", { imageBytes, contentType, projectPath, contentHash });
 },
 async createScreenshotEditorInstance() : Promise<SerializedScreenshotEditorInstance> {
     return await TAURI_INVOKE("create_screenshot_editor_instance");
@@ -251,7 +266,7 @@ async saveFileDialog(fileName: string, fileType: string) : Promise<string | null
 async listRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
-async listScreenshots() : Promise<([string, RecordingMeta])[]> {
+async listScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_screenshots");
 },
 async checkUpgradedAndUpdate() : Promise<boolean> {
@@ -289,6 +304,12 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
+},
+async setTeleprompterWindowLevel(alwaysOnTop: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_teleprompter_window_level", { alwaysOnTop });
+},
+async setTeleprompterWindowOpacity(opacity: number) : Promise<void> {
+    await TAURI_INVOKE("set_teleprompter_window_opacity", { opacity });
 },
 async applyMacosLiquidGlassBackground(enabled: boolean, radius: number) : Promise<boolean> {
     return await TAURI_INVOKE("apply_macos_liquid_glass_background", { enabled, radius });
@@ -343,6 +364,18 @@ async setPrettyName(prettyName: string) : Promise<null> {
 async setServerUrl(serverUrl: string) : Promise<null> {
     return await TAURI_INVOKE("set_server_url", { serverUrl });
 },
+async pickRecordingsFolder() : Promise<string | null> {
+    return await TAURI_INVOKE("pick_recordings_folder");
+},
+async resetRecordingsFolder() : Promise<null> {
+    return await TAURI_INVOKE("reset_recordings_folder");
+},
+async countRecordingsToMigrate() : Promise<number> {
+    return await TAURI_INVOKE("count_recordings_to_migrate");
+},
+async migrateRecordingsToCurrentDir() : Promise<RecordingsMigrationSummary> {
+    return await TAURI_INVOKE("migrate_recordings_to_current_dir");
+},
 async setCameraPreviewState(state: CameraPreviewState) : Promise<null> {
     return await TAURI_INVOKE("set_camera_preview_state", { state });
 },
@@ -375,6 +408,9 @@ async saveCaptions(videoId: string, captions: CaptionData) : Promise<null> {
 },
 async loadCaptions(videoId: string) : Promise<CaptionData | null> {
     return await TAURI_INVOKE("load_captions", { videoId });
+},
+async getModelDownloadStatus(targetPath: string) : Promise<ModelDownloadStatus | null> {
+    return await TAURI_INVOKE("get_model_download_status", { targetPath });
 },
 async downloadWhisperModel(modelName: string, outputPath: string) : Promise<null> {
     return await TAURI_INVOKE("download_whisper_model", { modelName, outputPath });
@@ -444,6 +480,15 @@ async automationShouldOpenScreenshotEditor(target: ScreenCaptureTarget) : Promis
 },
 async listAutomationCapabilities() : Promise<string[]> {
     return await TAURI_INVOKE("list_automation_capabilities");
+},
+async updatesCheck() : Promise<UpdateCheckResult | null> {
+    return await TAURI_INVOKE("updates_check");
+},
+async updatesDownloadAndInstall() : Promise<null> {
+    return await TAURI_INVOKE("updates_download_and_install");
+},
+async updatesChannelChanged() : Promise<null> {
+    return await TAURI_INVOKE("updates_channel_changed");
 }
 }
 
@@ -457,6 +502,7 @@ devicesUpdated: DevicesUpdated,
 downloadProgress: DownloadProgress,
 editorRecordingAdded: EditorRecordingAdded,
 editorStateChanged: EditorStateChanged,
+frameLayoutEvent: FrameLayoutEvent,
 newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
 newStudioRecordingAdded: NewStudioRecordingAdded,
@@ -466,6 +512,7 @@ recordingEvent: RecordingEvent,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
+recordingsMigrationProgress: RecordingsMigrationProgress,
 renderFrameEvent: RenderFrameEvent,
 requestOpenRecordingPicker: RequestOpenRecordingPicker,
 requestOpenSettings: RequestOpenSettings,
@@ -475,6 +522,8 @@ requestSetTargetMode: RequestSetTargetMode,
 requestStartRecording: RequestStartRecording,
 setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
+updateDownloadProgress: UpdateDownloadProgress,
+updateReady: UpdateReady,
 uploadProgressEvent: UploadProgressEvent,
 videoImportProgress: VideoImportProgress
 }>({
@@ -484,6 +533,7 @@ devicesUpdated: "devices-updated",
 downloadProgress: "download-progress",
 editorRecordingAdded: "editor-recording-added",
 editorStateChanged: "editor-state-changed",
+frameLayoutEvent: "frame-layout-event",
 newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
 newStudioRecordingAdded: "new-studio-recording-added",
@@ -493,6 +543,7 @@ recordingEvent: "recording-event",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
+recordingsMigrationProgress: "recordings-migration-progress",
 renderFrameEvent: "render-frame-event",
 requestOpenRecordingPicker: "request-open-recording-picker",
 requestOpenSettings: "request-open-settings",
@@ -502,6 +553,8 @@ requestSetTargetMode: "request-set-target-mode",
 requestStartRecording: "request-start-recording",
 setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
+updateDownloadProgress: "update-download-progress",
+updateReady: "update-ready",
 uploadProgressEvent: "upload-progress-event",
 videoImportProgress: "video-import-progress"
 })
@@ -573,10 +626,32 @@ export type AutomationTestReport = { ruleId: string; ruleName: string; actionChe
 export type AutomationsStore = { version?: number; rules?: AutomationRule[] }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
 export type BackgroundBlurMode = "off" | "light" | "heavy"
-export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null }
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; 
+/**
+ * Normalized (0-1) center of the display rect in output-frame space.
+ * `None` keeps the display centered. When a frame is active this is the
+ * center of the framed card (chrome included), not the bare video.
+ */
+displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null; 
+/**
+ * Decorative frame around the recording. `None` (or `FrameStyle::None`)
+ * renders the bare video exactly as before the feature existed.
+ */
+frame: FrameConfiguration | null; 
+/**
+ * Redraws the recording device's physical notch over the capture. Distinct
+ * from `frame`: the decorative MacBook style is a mockup, this restores
+ * something the capture really did hide, and the two are independent.
+ */
+notch: NotchConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
-export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; 
+/**
+ * Normalized (0-1) center of the camera rect in output-frame space.
+ * Overrides `position` when set.
+ */
+manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
 export type CameraDeviceSettings = { width: number | null; height: number | null; frameRate: number | null }
 export type CameraFormatInfo = { width: number; height: number; frameRate: number }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
@@ -614,8 +689,17 @@ export type CliInstallStatus = { installDir: string; shimPath: string; targetPat
  */
 pathConfigured: boolean }
 export type ClickSpringConfig = { tension: number; mass: number; friction: number }
-export type ClipConfiguration = { index: number; offsets: ClipOffsets }
+export type ClipConfiguration = { index: number; offsets: ClipOffsets; 
+/**
+ * Whether `offsets` were computed automatically (recording start-time
+ * alignment + device sync calibration) rather than entered by the user.
+ * Cleared by the editor UI once the user edits an offset.
+ */
+offsetsAutoCalculated?: boolean }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }
+export type ClipSpeedAudioMode = "mute" | "maintainPitch" | "matchSpeed"
+export type ClipTransition = { segmentIndex: number; type: ClipTransitionType; duration: number }
+export type ClipTransitionType = "cross-fade" | "fade-through-black"
 export type ClipboardSource = "raw" | "rendered"
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Condition = { type: "captureTargetIs"; target: CaptureTargetKind } | { type: "recordingModeIs"; mode: AutomationRecordingMode } | { type: "durationAtLeast"; secs: number } | { type: "durationAtMost"; secs: number } | { type: "windowTitleContains"; pattern: string } | { type: "organizationIs"; id: string }
@@ -633,6 +717,19 @@ export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DevicesUpdated = { cameras: CameraInfo[]; microphones: string[]; permissions: OSPermissionsCheck }
 export type DisplayId = string
 export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; logical_bounds: LogicalBounds | null; refresh_rate: string }
+/**
+ * Where the recording device's physical notch sits within the captured video.
+ * 
+ * macOS captures the pixels behind the notch, so without this the recording
+ * shows an unbroken menu bar where the recorder saw a cutout. Fractions of the
+ * captured frame rather than of the display, so area recordings, which are
+ * cropped at capture time, need no extra context to interpret.
+ */
+export type DisplayNotch = { 
+/**
+ * Distance from the left edge of the video to the notch.
+ */
+x: number; width: number; height: number }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorPreviewQuality = "quarter" | "half" | "full"
 export type EditorRecordingAdded = { editor_path: string; recording_path: string }
@@ -647,8 +744,68 @@ export type ExportProfile = { format: ExportFormat; fps?: number; resolutionBase
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings) | ({ format: "Mov" } & MovExportSettings)
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
+export type FrameConfiguration = { style: FrameStyle; theme: FrameTheme; 
+/**
+ * Text shown in the browser style's URL pill.
+ */
+url: string; 
+/**
+ * Text shown in the macOS window style's title bar.
+ */
+title: string }
+/**
+ * Rendered display/camera placement of the latest preview frame, in
+ * output-frame pixels — consumed by the editor's on-canvas layout overlay.
+ */
+export type FrameLayoutEvent = { display: [number, number, number, number]; camera: [number, number, number, number] | null; output_width: number; output_height: number }
+/**
+ * Decorative frame drawn around the screen recording (browser window,
+ * macOS window, MacBook bezel, ...). The video is inset inside the frame's
+ * chrome; the framed card as a whole follows padding / position / zoom
+ * exactly like the bare video does today.
+ */
+export type FrameStyle = 
+/**
+ * No frame: the video renders bare, exactly as before this feature.
+ */
+"none" | 
+/**
+ * A macOS window title bar with traffic-light buttons.
+ */
+"macOS" | 
+/**
+ * A Windows 11 window title bar with minimize/maximize/close controls.
+ */
+"windows" | 
+/**
+ * A browser toolbar: traffic lights plus a centered URL pill.
+ */
+"browser" | 
+/**
+ * A MacBook mockup: black bezel, aluminum body and deck.
+ */
+"macbook"
+export type FrameTheme = "dark" | "light"
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; 
+/**
+ * `None` until [`init`] seeds it from whether this machine has a notched
+ * display. From then on it is the user's preference and nothing re-reads
+ * the hardware, so moving between machines can't silently flip it.
+ */
+macbookNotchOverlay?: boolean | null; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null; 
+/**
+ * Custom recordings folders that were used before; recordings left in
+ * them stay visible in the library. Most recent last.
+ */
+previousRecordingsPaths?: string[]; 
+/**
+ * App version at which camera background blur was disabled after a crash
+ * was attributed to the blur pipeline; `None` means blur is allowed.
+ * Cleared automatically when the app version changes (one retry per
+ * update, since a new ort/wgpu/driver stack may have fixed the crash).
+ */
+cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
@@ -694,14 +851,26 @@ export type MatchMode = "all" | "any"
 export type MicrophoneDeviceSettings = { sampleRate: number | null; channels: number | null }
 export type MicrophoneFormatInfo = { sampleRate: number; channels: number }
 export type MicrophoneInfo = { name: string; sampleRate: number; channels: number; formats: MicrophoneFormatInfo[] }
+export type ModelDownloadState = "downloading" | "completed" | "failed"
+export type ModelDownloadStatus = { state: ModelDownloadState; progress: number; message: string }
 export type ModelIDType = string
 export type MovExportSettings = { fps: number; resolution_base: XY<number>; cursor_only?: boolean }
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression; custom_bpp: number | null; force_ffmpeg_decoder?: boolean; optimize_filesize?: boolean }
-export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null }
+export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null; display_notch?: DisplayNotch | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors; status?: StudioRecordingStatus | null }
 export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewScreenshotAdded = { path: string }
 export type NewStudioRecordingAdded = { path: string }
+/**
+ * Draws a MacBook notch over the recording. Nothing here is inferred from the
+ * video: a finished recording carries no evidence of the panel it came from.
+ */
+export type NotchConfiguration = { enabled: boolean; 
+/**
+ * Manual placement, as fractions of the video. Each `None` falls back to
+ * the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+ */
+x: number | null; width: number | null; height: number | null }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
@@ -715,14 +884,23 @@ export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring }
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring; 
+/**
+ * How text segment font sizes are interpreted. 0 (legacy): the renderer
+ * multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
+ * box. 1: `font_size` alone determines glyph size (1080p-relative);
+ * legacy configs are migrated on load by baking the box factor into
+ * `font_size`. The field-level default keeps old files at 0 while
+ * `Default::default()` produces the current version.
+ */
+textSizeVersion?: number }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }
-export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Paused" } | { variant: "Resumed" } | { variant: "Failed"; error: string } | { variant: "InputLost"; input: RecordingInputKind } | { variant: "InputRestored"; input: RecordingInputKind } | { variant: "Degraded"; reason: string } | { variant: "Recovered" }
+export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Paused" } | { variant: "Resumed" } | { variant: "Failed"; error: string } | { variant: "StartFailed"; error: string } | { variant: "InputLost"; input: RecordingInputKind } | { variant: "InputRestored"; input: RecordingInputKind } | { variant: "Degraded"; reason: string } | { variant: "Recovered" }
 export type RecordingInputKind = "microphone" | "camera"
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }
-export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus; clip_count: number }
+export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus; clip_count: number; sort_time_millis: number }
 export type RecordingMode = "studio" | "instant" | "screenshot"
 export type RecordingOptionsChanged = null
 export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean; organizationId: string | null; cameraDeviceSettings: { [key in string]: CameraDeviceSettings }; microphoneDeviceSettings: { [key in string]: MicrophoneDeviceSettings } }
@@ -730,6 +908,9 @@ export type RecordingStarted = null
 export type RecordingStatus = "pending" | "recording"
 export type RecordingStopped = null
 export type RecordingTargetMode = "display" | "window" | "area" | "camera"
+export type RecordingsMigrationFailure = { name: string; error: string }
+export type RecordingsMigrationProgress = { total: number; done: number; current: string | null }
+export type RecordingsMigrationSummary = { moved: number; skippedInUse: number; failed: RecordingsMigrationFailure[] }
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
 export type RequestOpenRecordingPicker = { target_mode: RecordingTargetMode | null }
 export type RequestOpenSettings = { page: string }
@@ -738,19 +919,35 @@ export type RequestScrollToSettingsSection = { section: string }
 export type RequestSetTargetMode = { target_mode: RecordingTargetMode | null; display_id: string | null }
 export type RequestStartRecording = { mode: RecordingMode }
 export type S3UploadMeta = { id: string }
-export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen"
+export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen" | 
+/**
+ * Like [`SceneMode::SplitScreen`], but the screen and camera render as
+ * padded, rounded, shadowed cards floating over the background instead
+ * of full-bleed halves. Shares [`SplitLayout`] for per-pane pan/zoom.
+ */
+"floating"
 export type SceneSegment = { start: number; end: number; mode?: SceneMode; splitLayout?: SplitLayout | null; transitionIn?: number; transitionOut?: number }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds } | { variant: "cameraOnly" }
 export type ScreenMovementSpring = { stiffness: number; damping: number; mass: number }
+export type ScreenshotMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { sort_time_millis: number }
 export type ScreenshotOcrLine = { text: string; confidence: number | null; bounds: ScreenshotOcrRegion }
 export type ScreenshotOcrRegion = { x: number; y: number; width: number; height: number }
 export type ScreenshotOcrResult = { text: string; lines: ScreenshotOcrLine[]; engine: string }
+export type ScreenshotProjectExport = { imageBytes: number[]; config: ProjectConfiguration; imageWidth: number; imageHeight: number }
+export type ScreenshotProjectShareState = { config: ProjectConfiguration; sharing: ScreenshotSharingState | null }
+export type ScreenshotSharingState = { link: string; contentHash: string | null }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string; 
+/**
+ * Notch geometry the overlay uses when the project sets no manual
+ * placement: this recording's own measurements where the recorder took
+ * them, else a stock MacBook notch for the editor to start from.
+ */
+notchBase: DisplayNotch }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
-export type SharingMeta = { id: string; link: string }
+export type SharingMeta = { id: string; link: string; content_hash?: string | null }
 export type ShowCapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { CaptureArea: { screen_id: DisplayId } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type SplitLayout = { screenZoom: number; screenPosition: XY<number>; cameraZoom: number; cameraPosition: XY<number> }
@@ -762,10 +959,14 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsR
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
-export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
+export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
+export type UpdateChannel = "stable" | "nightly"
+export type UpdateCheckResult = { version: string; notes: string | null; channel: UpdateChannel }
+export type UpdateDownloadProgress = { downloaded: number; total: number | null }
+export type UpdateReady = { version: string; installed: boolean }
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "SegmentUpload"; video_id: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }

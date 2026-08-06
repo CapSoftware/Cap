@@ -24,7 +24,7 @@
 :root {
 	--track-clip: #3f8ae0; /* blue */
 	--track-zoom: #4a4f5c; /* slate */
-	--track-caption: #c44fa6; /* magenta */
+	--track-caption: #6f747d;
 	--track-keyboard: #d4742c; /* orange */
 	--track-text: #2898ac; /* teal */
 	--track-mask: #d2444b; /* red */
@@ -358,6 +358,15 @@
 
 [data-macos-native-material="panel"] .cap-window-shell {
 	border-radius: 16px;
+}
+
+[data-macos-native-material="teleprompter"] .cap-window-shell {
+	border-radius: 16px;
+}
+
+[data-macos-visual-system="liquid-glass"][data-macos-native-material="teleprompter"]
+	.cap-window-shell {
+	border-radius: 22px;
 }
 
 /* Tone down the see-through on the main panel under Liquid Glass: layer a

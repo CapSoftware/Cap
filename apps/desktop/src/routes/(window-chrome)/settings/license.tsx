@@ -77,7 +77,9 @@ export default function Page() {
 											generalSettingsStore.set({
 												commercialLicense: undefined,
 											});
-											queryClient.refetchQueries({ queryKey: ["bruh"] });
+											queryClient.refetchQueries({
+												queryKey: ["licenseQuery"],
+											});
 										}}
 									>
 										Deactivate License
@@ -132,7 +134,7 @@ function LicenseKeyActivate(props: {
 						},
 						onSuccess: (value, { licenseKey }) => {
 							props.onActivated({ ...value, licenseKey });
-							queryClient.refetchQueries({ queryKey: ["bruh"] });
+							queryClient.refetchQueries({ queryKey: ["licenseQuery"] });
 						},
 					}));
 
@@ -250,7 +252,7 @@ function CommercialLicensePurchase() {
 						</div>
 						<div
 							onClick={() => setIsCommercialAnnual((v) => !v)}
-							class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer w-fit bg-gray-5 hover:border-gray-400"
+							class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 w-fit bg-gray-5 hover:border-gray-400"
 						>
 							<p class="text-xs text-gray-12">
 								Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
@@ -305,7 +307,7 @@ function CommercialLicensePurchase() {
 							licenseKey: value.licenseKey,
 						},
 					});
-					await queryClient.refetchQueries({ queryKey: ["bruh"] });
+					await queryClient.refetchQueries({ queryKey: ["licenseQuery"] });
 				}}
 			/>
 		</>

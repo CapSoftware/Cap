@@ -1,5 +1,3 @@
-"use client";
-
 import { Code, MessageSquare } from "lucide-react";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";

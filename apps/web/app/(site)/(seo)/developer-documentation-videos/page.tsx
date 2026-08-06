@@ -3,7 +3,13 @@ import {
 	DeveloperDocumentationVideosPage,
 	developerDocumentationVideosContent,
 } from "@/components/pages/seo/DeveloperDocumentationVideosPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Developer documentation videos",
+	tag: "Solutions",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -22,7 +28,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Developer Documentation Videos",
@@ -37,7 +43,7 @@ export const metadata: Metadata = {
 			"Developer Documentation Videos — Record API Demos and SDK Walkthroughs | Cap",
 		description:
 			"Record API demos, SDK walkthroughs, and changelog videos instantly. Share a link, embed in your docs, get AI transcripts. Free and open-source.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 
