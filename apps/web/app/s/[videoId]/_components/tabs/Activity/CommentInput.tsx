@@ -67,11 +67,14 @@ const CommentInput: React.FC<CommentInputProps> = ({
 				<div className="flex items-start gap-2 p-2 rounded-lg border bg-gray-1 border-gray-5 focus-within:border-gray-6">
 					{avatar && <div className="shrink-0">{avatar}</div>}
 					<div className="flex-1 min-w-0">
+						{/* Two rows even at idle: a one-line sliver reads as a search box,
+						    and this field is the sidebar's whole point. Focus grows it to
+						    a proper drafting area. */}
 						<textarea
 							ref={inputRef}
 							value={content}
 							disabled={disabled}
-							rows={expanded ? 2 : 1}
+							rows={expanded ? 3 : 2}
 							onChange={(e) => setContent(e.target.value)}
 							onKeyDown={handleKeyDown}
 							onFocus={() => setFocused(true)}
