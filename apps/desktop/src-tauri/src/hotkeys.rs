@@ -66,6 +66,7 @@ pub enum HotkeyAction {
     ScreenshotDisplay,
     ScreenshotWindow,
     ScreenshotArea,
+    OcrArea,
     #[serde(other)]
     Other,
 }
@@ -73,6 +74,8 @@ pub enum HotkeyAction {
 #[derive(Serialize, Deserialize, Type, Default)]
 pub struct HotkeysStore {
     hotkeys: HashMap<HotkeyAction, Hotkey>,
+    #[serde(default)]
+    seeded: Vec<HotkeyAction>,
 }
 
 impl HotkeysStore {
@@ -208,7 +211,7 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let store = match HotkeysStore::get(app) {
+    let mut store = match HotkeysStore::get(app) {
         Ok(Some(s)) => s,
         Ok(None) => HotkeysStore::default(),
         Err(e) => {
@@ -217,12 +220,54 @@ pub fn init(app: &AppHandle) {
         }
     };
 
+    seed_default_hotkeys(app, &mut store);
+
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {
         global_shortcut.register(Shortcut::from(*hotkey)).ok();
     }
 
     app.manage(Mutex::new(store));
+}
+
+fn default_hotkey(action: HotkeyAction) -> Option<Hotkey> {
+    match action {
+        HotkeyAction::OcrArea => Some(Hotkey {
+            code: Code::KeyT,
+            meta: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            alt: false,
+            shift: true,
+        }),
+        _ => None,
+    }
+}
+
+fn seed_default_hotkeys(app: &AppHandle, store: &mut HotkeysStore) {
+    let mut changed = false;
+
+    for action in [HotkeyAction::OcrArea] {
+        if store.seeded.contains(&action) || store.hotkeys.contains_key(&action) {
+            continue;
+        }
+
+        let Some(hotkey) = default_hotkey(action) else {
+            continue;
+        };
+
+        if !store.hotkeys.values().any(|h| h == &hotkey) {
+            store.hotkeys.insert(action, hotkey);
+        }
+        store.seeded.push(action);
+        changed = true;
+    }
+
+    if changed && let Ok(s) = app.store("store") {
+        s.set("hotkeys", serde_json::json!(&*store));
+        if let Err(e) = s.save() {
+            eprintln!("Failed to save hotkeys store: {e}");
+        }
+    }
 }
 
 async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
@@ -328,6 +373,13 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
 
             let _ = RequestOpenRecordingPicker {
                 target_mode: Some(RecordingTargetMode::Area),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OcrArea => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Ocr),
             }
             .emit(&app);
             Ok(())

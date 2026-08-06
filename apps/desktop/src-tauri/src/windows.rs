@@ -1707,6 +1707,7 @@ impl ShowCapWindow {
                     Some(RecordingTargetMode::Window) => "&targetMode=window",
                     Some(RecordingTargetMode::Area) => "&targetMode=area",
                     Some(RecordingTargetMode::Camera) => "&targetMode=camera",
+                    Some(RecordingTargetMode::Ocr) => "&targetMode=ocr",
                     None => "",
                 };
 

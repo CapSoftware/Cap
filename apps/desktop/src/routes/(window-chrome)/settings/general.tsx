@@ -573,6 +573,35 @@ function Inner(props: {
 				/>
 
 				<Section
+					title="Text capture (OCR)"
+					description="Copy text from anywhere on your screen with the OCR hotkey."
+				>
+					<SectionRows>
+						<ToggleSettingItem
+							label="Keep a screenshot of the captured area"
+							description="Save the selected region to your screenshots when copying text. When off, nothing is stored."
+							value={!!settings.ocrKeepScreenshot}
+							onChange={(value) => handleChange("ocrKeepScreenshot", value)}
+						/>
+						<ToggleSettingItem
+							label="Show a notification when text is copied"
+							description="Display a system notification with a preview of the copied text."
+							value={!!settings.ocrShowNotification}
+							onChange={async (value) => {
+								if (value) {
+									const permissionGranted = await isPermissionGranted();
+									if (!permissionGranted) {
+										const permission = await requestPermission();
+										if (permission !== "granted") return;
+									}
+								}
+								handleChange("ocrShowNotification", value);
+							}}
+						/>
+					</SectionRows>
+				</Section>
+
+				<Section
 					title="Recording"
 					description="Behaviour while you record and after you stop."
 				>

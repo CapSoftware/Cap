@@ -247,6 +247,10 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    #[serde(default)]
+    pub ocr_keep_screenshot: bool,
+    #[serde(default)]
+    pub ocr_show_notification: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -350,6 +354,8 @@ impl Default for GeneralSettingsStore {
             previous_recordings_paths: Vec::new(),
             camera_blur_disabled_by_crash: None,
             update_channel: UpdateChannel::Stable,
+            ocr_keep_screenshot: false,
+            ocr_show_notification: false,
         }
     }
 }
