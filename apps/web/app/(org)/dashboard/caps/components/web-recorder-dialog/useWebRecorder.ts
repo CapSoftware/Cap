@@ -1,6 +1,13 @@
 "use client";
 
 import {
+	acquireCameraStream,
+	acquireDisplayStream,
+	acquireMicStream,
+	createAudioMixer,
+	getCaptureErrorMessage,
+} from "@cap/recorder-core/capture-streams";
+import {
 	InstantRecordingUploader,
 	initiateMultipartUpload,
 	MultipartCompletionUncertainError,
@@ -15,12 +22,10 @@ import type {
 } from "@cap/recorder-core/recorder-types";
 import {
 	detectCapabilities,
-	isUserCancellationError,
 	openShareUrlInNewTab,
 	type RecorderCapabilities,
 	type RecordingPipeline,
 	selectRecordingPipeline,
-	shouldRetryDisplayMediaWithoutPreferences,
 } from "@cap/recorder-core/recorder-utils";
 import {
 	canUseRecordingSpool,
@@ -59,12 +64,7 @@ import { useStreamManagement } from "./useStreamManagement";
 import { useSurfaceDetection } from "./useSurfaceDetection";
 import {
 	type DetectedDisplayRecordingMode,
-	DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
-	DISPLAY_MODE_PREFERENCES,
-	type DisplaySurfacePreference,
-	type ExtendedDisplayMediaStreamOptions,
 	FREE_PLAN_MAX_RECORDING_MS,
-	RECORDING_MODE_TO_DISPLAY_SURFACE,
 } from "./web-recorder-constants";
 
 interface UseWebRecorderOptions {
@@ -129,65 +129,6 @@ const triggerBrowserDownload = (url: string, fileName: string) => {
 };
 
 const recoveredToastId = (id: string) => `recovered-${id}`;
-
-const getStartRecordingErrorMessage = (
-	error: unknown,
-	recordingMode: RecordingMode,
-) => {
-	if (typeof DOMException !== "undefined" && error instanceof DOMException) {
-		if (error.name === "NotAllowedError" || error.name === "AbortError") {
-			return recordingMode === "camera"
-				? "Camera access was cancelled or blocked. Allow camera access in your browser and try again."
-				: "Screen sharing was cancelled or blocked. Allow screen sharing in your browser and try again.";
-		}
-
-		if (error.name === "NotReadableError") {
-			return recordingMode === "camera"
-				? "Your browser couldn't start the selected camera. Close other apps or tabs using it, then try again."
-				: "Your browser couldn't start screen capture. Try a different screen or window, close other screen-sharing apps, or restart the browser.";
-		}
-
-		if (error.name === "InvalidStateError") {
-			return "Your browser blocked the capture request because this tab wasn't active. Bring Cap to the foreground and click Start recording again.";
-		}
-
-		if (error.name === "NotFoundError") {
-			return "No recording source was available. Try another recording mode or reconnect the device.";
-		}
-
-		if (
-			error.name === "OverconstrainedError" ||
-			error.name === "NotSupportedError" ||
-			error.name === "InvalidAccessError"
-		) {
-			return "Your browser rejected the capture settings. Try another recording mode, or turn off system audio and try again.";
-		}
-
-		if (error.name === "SecurityError") {
-			return "Your browser blocked media capture for this site. Check site permissions or managed browser policies.";
-		}
-	}
-
-	if (error instanceof TypeError) {
-		if (/fetch|network|load failed|failed to fetch/i.test(error.message)) {
-			return "Cap couldn't create the upload session. Check Chrome extensions, privacy settings, or network access, then try again.";
-		}
-
-		return "Your browser rejected the capture settings. Try another recording mode, or turn off system audio and try again.";
-	}
-
-	if (error instanceof Error) {
-		if (error.message === "No supported recording pipeline available") {
-			return "This browser can capture media but can't encode a recording. Try updating Chrome or use the desktop app.";
-		}
-
-		if (/multipart|upload|request to/i.test(error.message)) {
-			return "Cap couldn't create the upload session. Check Chrome extensions, privacy settings, or network access, then try again.";
-		}
-	}
-
-	return "Could not start recording. Try again, or use another browser or the desktop app if this is urgent.";
-};
 
 export const useWebRecorder = ({
 	organisationId,
@@ -806,149 +747,19 @@ export const useWebRecorder = ({
 				if (!selectedCameraId) {
 					throw new Error("Camera ID is required for camera-only mode");
 				}
-				videoStream = await navigator.mediaDevices.getUserMedia({
-					video: {
-						deviceId: { exact: selectedCameraId },
-						frameRate: { ideal: 30 },
-						width: { ideal: 1920 },
-						height: { ideal: 1080 },
-					},
-				});
+				videoStream = await acquireCameraStream(selectedCameraId);
 				cameraStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			} else {
-				const desiredSurface =
-					RECORDING_MODE_TO_DISPLAY_SURFACE[
-						recordingMode as DetectedDisplayRecordingMode
-					];
-				const videoConstraints: MediaTrackConstraints & {
-					displaySurface?: DisplaySurfacePreference;
-				} = {
-					...DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
-					displaySurface: desiredSurface,
-				};
-
-				const displayAudioConfig: boolean | MediaTrackConstraints =
-					systemAudioEnabled
-						? {
-								echoCancellation: false,
-								autoGainControl: false,
-								noiseSuppression: false,
-							}
-						: false;
-
-				const baseDisplayRequest: ExtendedDisplayMediaStreamOptions = {
-					video: videoConstraints,
-					audio: displayAudioConfig,
-					preferCurrentTab: recordingMode === "tab",
-					...(systemAudioEnabled ? { systemAudio: "include" } : {}),
-				};
-
-				const noAudioDisplayRequest: ExtendedDisplayMediaStreamOptions = {
-					video: videoConstraints,
-					audio: false,
-					preferCurrentTab: recordingMode === "tab",
-				};
-
-				const preferredOptions = DISPLAY_MODE_PREFERENCES[recordingMode];
-
-				if (preferredOptions) {
-					const preferredDisplayRequest: ExtendedDisplayMediaStreamOptions = {
-						...baseDisplayRequest,
-						...preferredOptions,
-						video: videoConstraints,
-						audio: displayAudioConfig,
-						...(systemAudioEnabled ? { systemAudio: "include" } : {}),
-					};
-
-					try {
-						videoStream = await navigator.mediaDevices.getDisplayMedia(
-							preferredDisplayRequest as DisplayMediaStreamOptions,
+				videoStream = await acquireDisplayStream({
+					mode: recordingMode as DetectedDisplayRecordingMode,
+					systemAudioEnabled,
+					onSystemAudioFallback: () => {
+						toast.warning(
+							"System audio isn't supported in this browser. Recording without it.",
 						);
-					} catch (displayError) {
-						if (isUserCancellationError(displayError)) {
-							throw displayError;
-						}
-						if (shouldRetryDisplayMediaWithoutPreferences(displayError)) {
-							console.warn(
-								"Display media preferences not supported, retrying without them",
-								displayError,
-							);
-							try {
-								videoStream = await navigator.mediaDevices.getDisplayMedia(
-									baseDisplayRequest as DisplayMediaStreamOptions,
-								);
-							} catch (audioRetryError) {
-								if (
-									systemAudioEnabled &&
-									shouldRetryDisplayMediaWithoutPreferences(audioRetryError)
-								) {
-									console.warn(
-										"System audio not supported, retrying without audio",
-										audioRetryError,
-									);
-									toast.warning(
-										"System audio isn't supported in this browser. Recording without it.",
-									);
-									videoStream = await navigator.mediaDevices.getDisplayMedia(
-										noAudioDisplayRequest as DisplayMediaStreamOptions,
-									);
-								} else {
-									throw audioRetryError;
-								}
-							}
-						} else if (systemAudioEnabled) {
-							console.warn(
-								"Display media with audio failed, retrying without system audio",
-								displayError,
-							);
-							toast.warning(
-								"System audio isn't supported in this browser. Recording without it.",
-							);
-							const noAudioPreferred: ExtendedDisplayMediaStreamOptions = {
-								...noAudioDisplayRequest,
-								...preferredOptions,
-								video: videoConstraints,
-								audio: false,
-							};
-							try {
-								videoStream = await navigator.mediaDevices.getDisplayMedia(
-									noAudioPreferred as DisplayMediaStreamOptions,
-								);
-							} catch {
-								throw displayError;
-							}
-						} else {
-							throw displayError;
-						}
-					}
-				}
-
-				if (!videoStream) {
-					try {
-						videoStream = await navigator.mediaDevices.getDisplayMedia(
-							baseDisplayRequest as DisplayMediaStreamOptions,
-						);
-					} catch (fallbackError) {
-						if (
-							systemAudioEnabled &&
-							shouldRetryDisplayMediaWithoutPreferences(fallbackError)
-						) {
-							console.warn(
-								"System audio not supported, retrying without audio",
-								fallbackError,
-							);
-							toast.warning(
-								"System audio isn't supported in this browser. Recording without it.",
-							);
-							videoStream = await navigator.mediaDevices.getDisplayMedia(
-								noAudioDisplayRequest as DisplayMediaStreamOptions,
-							);
-						} else {
-							throw fallbackError;
-						}
-					}
-				}
+					},
+				});
 				displayStreamRef.current = videoStream;
 				firstTrack = videoStream.getVideoTracks()[0] ?? null;
 			}
@@ -988,14 +799,7 @@ export const useWebRecorder = ({
 			let micStream: MediaStream | null = null;
 			if (micEnabled && selectedMicId) {
 				try {
-					micStream = await navigator.mediaDevices.getUserMedia({
-						audio: {
-							deviceId: { exact: selectedMicId },
-							echoCancellation: true,
-							autoGainControl: true,
-							noiseSuppression: true,
-						},
-					});
+					micStream = await acquireMicStream(selectedMicId);
 				} catch (micError) {
 					console.warn("Microphone permission denied", micError);
 					toast.warning("Microphone unavailable. Recording without audio.");
@@ -1012,33 +816,9 @@ export const useWebRecorder = ({
 			const hasMicAudio = micStream !== null;
 
 			if (hasSystemAudio && hasMicAudio) {
-				const audioCtx = new AudioContext();
-				audioContextRef.current = audioCtx;
-
-				if (audioCtx.state !== "running") {
-					await audioCtx.resume();
-				}
-
-				const systemSource = audioCtx.createMediaStreamSource(
-					new MediaStream(systemAudioTracks),
-				);
-				const micSource = micStream
-					? audioCtx.createMediaStreamSource(micStream)
-					: null;
-				const destination = audioCtx.createMediaStreamDestination();
-
-				const limiter = audioCtx.createDynamicsCompressor();
-				limiter.threshold.value = -3;
-				limiter.knee.value = 2;
-				limiter.ratio.value = 20;
-				limiter.attack.value = 0.002;
-				limiter.release.value = 0.05;
-
-				systemSource.connect(limiter);
-				micSource?.connect(limiter);
-				limiter.connect(destination);
-
-				audioTracks = destination.stream.getAudioTracks();
+				const mixer = await createAudioMixer({ systemAudioTracks, micStream });
+				audioContextRef.current = mixer.context;
+				audioTracks = mixer.stream.getAudioTracks();
 			} else if (hasSystemAudio) {
 				audioTracks = systemAudioTracks;
 			} else if (hasMicAudio) {
@@ -1185,7 +965,12 @@ export const useWebRecorder = ({
 			}
 
 			console.error("Failed to start recording", err);
-			toast.error(getStartRecordingErrorMessage(err, recordingMode));
+			toast.error(
+				getCaptureErrorMessage(
+					err,
+					recordingMode === "camera" ? "camera" : "display",
+				),
+			);
 			await resetState();
 		} finally {
 			setIsSettingUp(false);

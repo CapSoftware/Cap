@@ -21,6 +21,7 @@ type FooterLink = {
 const footerLinks = {
 	product: [
 		{ label: "Blog", href: "/blog" },
+		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
@@ -137,7 +138,7 @@ const complianceBadges: {
 }[] = [
 	{
 		label: "SOC 2",
-		status: "in progress",
+		status: "compliant",
 		content: (
 			<text
 				x="22"
@@ -233,7 +234,7 @@ const ComplianceBadges = () => (
 			))}
 		</div>
 		<p className="mt-2 text-[11px] text-gray-9">
-			ISO 27001 compliant · SOC 2 & HIPAA in progress
+			SOC 2 Type II & ISO 27001 compliant · HIPAA in progress
 		</p>
 	</div>
 );

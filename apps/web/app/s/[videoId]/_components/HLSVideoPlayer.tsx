@@ -7,14 +7,16 @@ import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -49,6 +51,10 @@ const { circumference } = getProgressCircleConfig();
 const PROBE_MAX_RETRIES = 60;
 const PROBE_INITIAL_DELAY_MS = 1000;
 const PROBE_MAX_DELAY_MS = 8000;
+
+// Stable default: `= []` in the destructuring would mint a new array identity
+// every render and re-run everything that depends on the prop.
+const NO_CAPTIONS: CaptionOption[] = [];
 
 function getProgressStatusText(
 	status: "uploading" | "processing" | "generating_thumbnail",
@@ -103,6 +109,14 @@ interface Props {
 	duration?: number | null;
 	defaultPlaybackSpeed?: number;
 	previewMode?: "background";
+	/** The share page's timeline deck owns scrubbing while visible. */
+	externalTimeline?: boolean;
+	/**
+	 * With `externalTimeline`, the deck row the control bar renders into via a
+	 * portal. Context crosses portals, so the bar keeps its player store; the
+	 * timeline strip replaces the seek slider, everything else comes along.
+	 */
+	controlsPortalEl?: HTMLElement | null;
 }
 
 export function HLSVideoPlayer({
@@ -121,13 +135,15 @@ export function HLSVideoPlayer({
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
-	availableCaptions = [],
+	availableCaptions = NO_CAPTIONS,
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
 	defaultPlaybackSpeed,
 	previewMode,
+	externalTimeline = false,
+	controlsPortalEl = null,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -407,7 +423,7 @@ export function HLSVideoPlayer({
 									console.log(
 										`HLSVideoPlayer: Fatal network error, retrying in ${delay}ms (attempt ${networkRetryCount}/${maxNetworkRetries})`,
 									);
-									setTimeout(() => hls.startLoad(), delay);
+									retryTimer = setTimeout(() => hls.startLoad(), delay);
 								} else {
 									console.log("HLSVideoPlayer: Network retries exhausted");
 									setHlsInitFailed(true);
@@ -523,6 +539,21 @@ export function HLSVideoPlayer({
 
 	const prevUploadProgress =
 		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
+	const pendingReadyRefreshRef = useRef(false);
+	// The belt-and-braces second reload below must survive effect re-runs (its
+	// whole point is firing after progress events settle), so it is only ever
+	// cancelled on unmount.
+	const delayedReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	useEffect(
+		() => () => {
+			if (delayedReloadTimerRef.current) {
+				clearTimeout(delayedReloadTimerRef.current);
+			}
+		},
+		[],
+	);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
@@ -531,17 +562,32 @@ export function HLSVideoPlayer({
 				{ includeFetching: isLiveSegments },
 			)
 		) {
-			if (isLiveSegments) {
-				router.refresh();
+			if (isLiveSegments && !pendingReadyRefreshRef.current) {
+				pendingReadyRefreshRef.current = true;
+				scheduleReadyRefresh({
+					video: videoRef.current,
+					videoId,
+					refresh: () => router.refresh(),
+				});
 			}
 
 			if (!isLiveSegments || !videoLoadedRef.current) {
 				reloadPlayback();
-				setTimeout(reloadPlayback, 1000);
+				if (delayedReloadTimerRef.current) {
+					clearTimeout(delayedReloadTimerRef.current);
+				}
+				delayedReloadTimerRef.current = setTimeout(reloadPlayback, 1000);
 			}
 		}
 		prevUploadProgress.current = uploadProgressRaw;
-	}, [isLiveSegments, router, uploadProgressRaw, reloadPlayback]);
+	}, [
+		isLiveSegments,
+		router,
+		uploadProgressRaw,
+		reloadPlayback,
+		videoRef,
+		videoId,
+	]);
 
 	return (
 		<MediaPlayer
@@ -729,57 +775,86 @@ export function HLSVideoPlayer({
 			<MediaPlayerLoading />
 			<MediaPlayerError />
 			<MediaPlayerVolumeIndicator />
-			<MediaPlayerControls
-				className={clsx(
-					"flex-col items-start gap-2.5",
-					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
-				)}
-				isUploadingOrFailed={
-					isBackgroundPreview || hasActiveProgress || hasFailedOrError
-				}
-			>
-				<MediaPlayerControlsOverlay />
-				<MediaPlayerSeek fallbackDuration={playerDuration} />
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
-						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
-							/>
+			{(() => {
+				// Docked: the bar renders into the timeline deck's slot through a
+				// portal. Same tree, same store; only where it paints changes. The
+				// overrides pin it visible and static (twMerge drops the base
+				// absolute/opacity-0/auto-hide classes).
+				const docked = externalTimeline && controlsPortalEl !== null;
+				const controls = (
+					<MediaPlayerControls
+						// Docked, the bar sits on the timeline card's white row instead
+						// of on the video, so it drops its `dark` scope and the controls
+						// resolve to dark-on-light off the same gray scale.
+						tone={docked ? "light" : "dark"}
+						className={clsx(
+							docked
+								? "relative h-full flex-row items-center gap-2 opacity-100 pointer-events-auto"
+								: "flex-col items-start gap-2.5",
+							!docked && showPlayButton && !hasPlayedOnce && "max-sm:hidden",
 						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
-							// enhancedAudioStatus={enhancedAudioStatus}
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-							captionLanguage={captionLanguage}
-							onCaptionLanguageChange={onCaptionLanguageChange}
-							availableCaptions={availableCaptions}
-							isCaptionLoading={isCaptionLoading}
-							hasCaptions={hasCaptions}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
-					</div>
-				</div>
-			</MediaPlayerControls>
+						isUploadingOrFailed={
+							isBackgroundPreview || hasActiveProgress || hasFailedOrError
+						}
+					>
+						{!docked && <MediaPlayerControlsOverlay />}
+						{!externalTimeline && (
+							<MediaPlayerSeek fallbackDuration={playerDuration} />
+						)}
+						<div className="flex gap-2 items-center w-full">
+							<div className="flex flex-1 gap-2 items-center">
+								<MediaPlayerPlay />
+								<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+								<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+								<MediaPlayerVolume
+									expandable
+									// Docked, the bar shares a phone-width row with the deck's
+									// zoom cluster; volume and PiP are the two controls a phone
+									// can live without (hardware rocker, and PiP is barely
+									// supported in mobile browsers).
+									className={docked ? "max-sm:hidden" : undefined}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// enhancedAudioMuted={enhancedAudioMuted}
+									// setEnhancedAudioMuted={setEnhancedAudioMuted}
+								/>
+								{(!externalTimeline || docked) && (
+									<MediaPlayerTime fallbackDuration={playerDuration} />
+								)}
+							</div>
+							<div className="flex gap-2 items-center">
+								{!disableCaptions && (
+									<MediaPlayerCaptions
+										setToggleCaptions={setToggleCaptions}
+										toggleCaptions={toggleCaptions}
+									/>
+								)}
+								{/* <MediaPlayerEnhancedAudio
+									enhancedAudioStatus={enhancedAudioStatus}
+									enhancedAudioEnabled={enhancedAudioEnabled}
+									setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+								/> */}
+								<MediaPlayerSettings
+									// enhancedAudioStatus={enhancedAudioStatus}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+									captionLanguage={captionLanguage}
+									onCaptionLanguageChange={onCaptionLanguageChange}
+									availableCaptions={availableCaptions}
+									isCaptionLoading={isCaptionLoading}
+									hasCaptions={hasCaptions}
+								/>
+								<MediaPlayerPiP
+									className={docked ? "max-sm:hidden" : undefined}
+								/>
+								<MediaPlayerFullscreen />
+							</div>
+						</div>
+					</MediaPlayerControls>
+				);
+				return docked && controlsPortalEl
+					? createPortal(controls, controlsPortalEl)
+					: controls;
+			})()}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio

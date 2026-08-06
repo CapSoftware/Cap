@@ -10,7 +10,7 @@ use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use std::{
     future::Future,
     str::FromStr,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     time::Duration,
 };
 #[cfg(target_os = "macos")]
@@ -23,6 +23,28 @@ static MACOS_DOCK_VISIBILITY_SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
 static MACOS_PENDING_PANEL_WINDOWS: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_os = "macos")]
 static MACOS_SCK_PERMISSION_MISMATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_DISPLAYS_VALIDATED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_DISPLAYS_VALIDATION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_LAST_STRICT_OUTCOME: AtomicU8 = AtomicU8::new(MACOS_SCK_OUTCOME_UNKNOWN);
+#[cfg(target_os = "macos")]
+static MACOS_SCK_LAST_VALIDATION_ATTEMPT: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+#[cfg(target_os = "macos")]
+const MACOS_SCK_VALIDATION_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+// Strictly less than the retry interval: the backoff stamp is refreshed when
+// an attempt completes, and a timeout that consumed the whole interval would
+// otherwise leave zero backoff between attempts against a wedged replayd.
+#[cfg(target_os = "macos")]
+const MACOS_SCK_VALIDATION_TIMEOUT: Duration = Duration::from_secs(4);
+#[cfg(target_os = "macos")]
+const MACOS_SCK_OUTCOME_UNKNOWN: u8 = 0;
+#[cfg(target_os = "macos")]
+const MACOS_SCK_OUTCOME_OK: u8 = 1;
+#[cfg(target_os = "macos")]
+const MACOS_SCK_OUTCOME_FAILED: u8 = 2;
 
 #[cfg(target_os = "macos")]
 pub(crate) struct MacosPanelWindowActivationGuard {
@@ -270,42 +292,182 @@ fn macos_permission_status(permission: &OSPermission, initial_check: bool) -> OS
     }
 }
 
+// The SCShareableContent snapshot behind this validation materialises every
+// window/app/display on the system (~1MB+ of ObjC objects per call). Polling
+// callers (devices snapshot emitter every 5s, permission UIs down to 250ms)
+// used to re-run it for the whole process lifetime, leaking the graph on
+// pool-less tokio threads at ~15MB/min until macOS exhausted swap (issue
+// #2023, the 82GB incident). A successful validation is cached for the rest
+// of the process: runtime revocation is caught by the cheap CGPreflight gate,
+// and macOS relaunches the app on screen-recording permission changes anyway.
+// Failed validations retry at most once per MACOS_SCK_VALIDATION_RETRY_INTERVAL.
 #[cfg(target_os = "macos")]
 fn macos_screen_recording_available() -> bool {
-    if !scap_screencapturekit::has_permission() {
+    macos_screen_recording_available_with(
+        scap_screencapturekit::has_permission(),
+        MACOS_SCK_DISPLAYS_VALIDATED.load(Ordering::Acquire),
+        MACOS_SCK_LAST_STRICT_OUTCOME.load(Ordering::Acquire),
+        objc2::MainThreadMarker::new().is_some(),
+        macos_spawn_sck_displays_validation,
+        || {
+            // block_in_place covers the mutex acquisition too: waiters serialised
+            // behind an in-flight validation would otherwise park a tokio worker
+            // without telling the runtime.
+            if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::task::block_in_place(macos_validate_sck_displays)
+            } else {
+                macos_validate_sck_displays()
+            }
+        },
+    )
+}
+
+// SCShareableContent's completion needs the main run loop, so blocking the
+// main thread on the strict validation deadlocks the whole app. Both
+// 2026-08-03 macOS hang reports show it: onboarding tray rebuilds
+// (run_on_main_thread → build_tray_menu → do_permissions_check) parked the
+// main thread in block_on for 76+s until force-quit. Main-thread callers are
+// the tray menu builds (tray.rs), create_tray, the setup-time log line
+// (lib.rs), and RunEvent::Reopen → should_show_onboarding (lib.rs); they get
+// the last strictly-observed answer without blocking — optimistic until the
+// first strict validation completes, since CGPreflight already passed. Reopen
+// consuming an optimistic answer is self-correcting: ShowCapWindow::Main
+// re-checks off-main (windows.rs) and redirects back to Onboarding. The
+// onboarding/permission UIs poll via async commands and keep the strict path.
+#[cfg(target_os = "macos")]
+fn macos_screen_recording_available_with(
+    preflight_granted: bool,
+    displays_validated: bool,
+    last_strict_outcome: u8,
+    on_main_thread: bool,
+    spawn_background_validation: impl FnOnce(),
+    validate: impl FnOnce() -> bool,
+) -> bool {
+    if !preflight_granted {
         return false;
     }
 
-    let future = async {
-        match sc::ShareableContent::current().await {
-            Ok(content) => {
-                let display_count = content.displays().len();
-                if display_count == 0
-                    && !MACOS_SCK_PERMISSION_MISMATCH_LOGGED.swap(true, Ordering::AcqRel)
-                {
-                    tracing::debug!(
-                        window_count = content.windows().len(),
-                        application_count = content.apps().len(),
-                        "ScreenCaptureKit returned no displays despite CoreGraphics screen-recording permission"
-                    );
-                }
-                display_count > 0
-            }
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    "ScreenCaptureKit shareable content unavailable during permission check"
-                );
-                false
-            }
-        }
-    };
-
-    if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| tauri::async_runtime::block_on(future))
-    } else {
-        tauri::async_runtime::block_on(future)
+    if displays_validated {
+        return true;
     }
+
+    if on_main_thread {
+        spawn_background_validation();
+        return last_strict_outcome != MACOS_SCK_OUTCOME_FAILED;
+    }
+
+    validate()
+}
+
+#[cfg(target_os = "macos")]
+struct MacosSckValidationInFlightReset;
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosSckValidationInFlightReset {
+    fn drop(&mut self) {
+        MACOS_SCK_DISPLAYS_VALIDATION_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+// Blocking pool rather than a raw std::thread: pool threads carry the runtime
+// handle without tokio's "entered" flag, so the validator's nested
+// Handle::block_on is legal there (it panics on entered threads, which rules
+// out tokio::spawn), they inherit the 16MiB stack configured in main.rs
+// (SCK graph walks are why it was raised), and an idle pool thread is reused
+// instead of spawning one per check. The Drop guard clears the in-flight
+// latch even if the validation panics.
+#[cfg(target_os = "macos")]
+fn macos_spawn_sck_displays_validation() {
+    if MACOS_SCK_DISPLAYS_VALIDATION_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let _reset = MacosSckValidationInFlightReset;
+        macos_validate_sck_displays();
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn macos_validate_sck_displays() -> bool {
+    // Serialise validators: concurrent callers during the first startup check
+    // must wait for the in-flight validation rather than tripping the backoff
+    // and transiently reporting a granted permission as denied.
+    let mut last_attempt = MACOS_SCK_LAST_VALIDATION_ATTEMPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if MACOS_SCK_DISPLAYS_VALIDATED.load(Ordering::Acquire) {
+        return true;
+    }
+    if let Some(attempted_at) = *last_attempt
+        && attempted_at.elapsed() < MACOS_SCK_VALIDATION_RETRY_INTERVAL
+    {
+        return false;
+    }
+    *last_attempt = Some(std::time::Instant::now());
+
+    let validated = objc2::rc::autoreleasepool(|_| {
+        tauri::async_runtime::block_on(async {
+            // Bounded: a wedged replayd (post-sleep, or right after a TCC
+            // grant before relaunch) can leave this future unresolved forever,
+            // which would park whichever thread is validating.
+            let content = match tokio::time::timeout(
+                MACOS_SCK_VALIDATION_TIMEOUT,
+                sc::ShareableContent::current(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_ms = MACOS_SCK_VALIDATION_TIMEOUT.as_millis() as u64,
+                        "ScreenCaptureKit shareable content query timed out during permission check"
+                    );
+                    return false;
+                }
+            };
+            match content {
+                Ok(content) => {
+                    let display_count = content.displays().len();
+                    if display_count == 0
+                        && !MACOS_SCK_PERMISSION_MISMATCH_LOGGED.swap(true, Ordering::AcqRel)
+                    {
+                        tracing::debug!(
+                            window_count = content.windows().len(),
+                            application_count = content.apps().len(),
+                            "ScreenCaptureKit returned no displays despite CoreGraphics screen-recording permission"
+                        );
+                    }
+                    display_count > 0
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "ScreenCaptureKit shareable content unavailable during permission check"
+                    );
+                    false
+                }
+            }
+        })
+    });
+
+    if validated {
+        MACOS_SCK_DISPLAYS_VALIDATED.store(true, Ordering::Release);
+    }
+    MACOS_SCK_LAST_STRICT_OUTCOME.store(
+        if validated {
+            MACOS_SCK_OUTCOME_OK
+        } else {
+            MACOS_SCK_OUTCOME_FAILED
+        },
+        Ordering::Release,
+    );
+    // Re-stamp on completion: an attempt can consume up to the SCK timeout,
+    // so a start-only stamp would leave a timed-out attempt with an already
+    // expired backoff window (back-to-back attempts against a wedged
+    // replayd). The start stamp above stays as insurance in case this thread
+    // dies mid-attempt.
+    *last_attempt = Some(std::time::Instant::now());
+    validated
 }
 
 #[cfg(target_os = "macos")]
@@ -361,6 +523,20 @@ where
 
 #[cfg(target_os = "macos")]
 async fn macos_wait_for_permission_update(permission: &OSPermission) -> bool {
+    // The user just interacted with the permission prompt; drop the SCK
+    // validation backoff so this poll loop sees fresh answers instead of a
+    // stale negative from up to 5s ago. block_in_place because an in-flight
+    // validation holds this mutex for up to the SCK timeout, and waiting it
+    // out is deliberate — its result predates the grant, so the reset must
+    // land after it finishes.
+    if matches!(permission, OSPermission::ScreenRecording) {
+        tokio::task::block_in_place(|| {
+            *MACOS_SCK_LAST_VALIDATION_ATTEMPT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        });
+    }
+
     macos_wait_for_permission_update_with(
         || macos_permission_status(permission, false).permitted(),
         || tokio::time::sleep(Duration::from_millis(200)),
@@ -484,9 +660,12 @@ impl OSPermissionsCheck {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
+    // Pool-wrapped because this runs on tokio/tauri worker threads (which have
+    // no ambient NSAutoreleasePool) from polling callers; without it every
+    // autoreleased AVFoundation/AppKit temporary leaks for the process lifetime.
     #[cfg(target_os = "macos")]
     {
-        OSPermissionsCheck {
+        objc2::rc::autoreleasepool(|_| OSPermissionsCheck {
             screen_recording: macos_permission_status(
                 &OSPermission::ScreenRecording,
                 _initial_check,
@@ -494,7 +673,7 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
             microphone: macos_permission_status(&OSPermission::Microphone, _initial_check),
             camera: macos_permission_status(&OSPermission::Camera, _initial_check),
             accessibility: macos_permission_status(&OSPermission::Accessibility, _initial_check),
-        }
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -563,6 +742,123 @@ mod tests {
                 .await;
 
         assert!(!granted);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn main_thread_never_validates_inline() {
+        use std::cell::Cell;
+
+        let spawned = Cell::new(false);
+        let validated_inline = Cell::new(false);
+
+        let result = macos_screen_recording_available_with(
+            true,
+            false,
+            MACOS_SCK_OUTCOME_UNKNOWN,
+            true,
+            || spawned.set(true),
+            || {
+                validated_inline.set(true);
+                true
+            },
+        );
+
+        assert!(result, "optimistic before the first strict validation");
+        assert!(spawned.get(), "must kick a background validation");
+        assert!(
+            !validated_inline.get(),
+            "the main thread must never run the blocking SCK validation"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn main_thread_reports_last_failed_strict_outcome() {
+        use std::cell::Cell;
+
+        let spawned = Cell::new(false);
+
+        let result = macos_screen_recording_available_with(
+            true,
+            false,
+            MACOS_SCK_OUTCOME_FAILED,
+            true,
+            || spawned.set(true),
+            || unreachable!("main thread must not validate inline"),
+        );
+
+        assert!(!result, "a strictly-observed failure must not be masked");
+        assert!(spawned.get(), "still revalidates in the background");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn off_main_thread_keeps_the_strict_path() {
+        use std::cell::Cell;
+
+        let spawned = Cell::new(false);
+        let validated_inline = Cell::new(false);
+
+        let result = macos_screen_recording_available_with(
+            true,
+            false,
+            MACOS_SCK_OUTCOME_UNKNOWN,
+            false,
+            || spawned.set(true),
+            || {
+                validated_inline.set(true);
+                false
+            },
+        );
+
+        assert!(!result);
+        assert!(validated_inline.get(), "off-main callers validate inline");
+        assert!(!spawned.get());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preflight_denial_and_cached_validation_short_circuit() {
+        let denied = macos_screen_recording_available_with(
+            false,
+            false,
+            MACOS_SCK_OUTCOME_UNKNOWN,
+            true,
+            || unreachable!("no work when preflight is denied"),
+            || unreachable!("no work when preflight is denied"),
+        );
+        assert!(!denied);
+
+        let cached = macos_screen_recording_available_with(
+            true,
+            true,
+            MACOS_SCK_OUTCOME_UNKNOWN,
+            true,
+            || unreachable!("no work once displays are validated"),
+            || unreachable!("no work once displays are validated"),
+        );
+        assert!(cached);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sck_timeout_fits_inside_the_retry_backoff() {
+        assert!(MACOS_SCK_VALIDATION_TIMEOUT < MACOS_SCK_VALIDATION_RETRY_INTERVAL);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn in_flight_latch_clears_even_when_validation_panics() {
+        MACOS_SCK_DISPLAYS_VALIDATION_IN_FLIGHT.store(true, Ordering::Release);
+
+        let panicked = std::panic::catch_unwind(|| {
+            let _reset = MacosSckValidationInFlightReset;
+            panic!("validation blew up");
+        });
+
+        assert!(panicked.is_err());
+        assert!(!MACOS_SCK_DISPLAYS_VALIDATION_IN_FLIGHT.load(Ordering::Acquire));
     }
 
     #[cfg(target_os = "macos")]

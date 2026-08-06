@@ -18,7 +18,7 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    FrameLayer, KeyboardLayer, MaskLayer, TextLayer,
+    FrameLayer, KeyboardLayer, MaskLayer, NotchLayer, NotchUniforms, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -42,6 +42,7 @@ mod frame_pipeline;
 pub mod iosurface_texture;
 mod layers;
 mod mask;
+pub mod notch_shape;
 mod project_recordings;
 mod scene;
 pub mod spring_mass_damper;
@@ -2244,6 +2245,9 @@ pub struct ProjectUniforms {
     /// Decorative frame chrome around the display; `None` when no frame style
     /// is active.
     pub frame_chrome: Option<frame_chrome::FrameChromeUniforms>,
+    /// The recording device's physical notch, redrawn over the capture;
+    /// `None` when the overlay is off or the recording has no notch.
+    pub notch: Option<layers::NotchUniforms>,
     /// Final placement of the outer display card (chrome included) in output
     /// px. Equals `display.target_bounds` when no frame is active.
     display_outer_bounds: [f32; 4],
@@ -2541,6 +2545,82 @@ const FLOATING_CAMERA_FRAC_STACKED: f32 = 0.40;
 const FLOATING_ROUNDING_FRAC: f32 = 0.028;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NotchPlacement {
+    bounds: [f32; 4],
+    size: [f32; 2],
+    full_size: [f32; 2],
+    source_crop: [f32; 4],
+}
+
+/// Places the visible part of a notch on the output frame while retaining the
+/// source crop and full raster size, or returns `None` when nothing remains.
+///
+/// The notch is part of the screen rather than decoration around it, so it goes
+/// through the same RawDisplaySpace -> zoomed frame space chain the cursor
+/// uses. Crop, padding, aspect fit and zoom all follow from that for free.
+fn notch_bounds(
+    notch: cap_project::DisplayNotch,
+    options: &RenderOptions,
+    project: &ProjectConfiguration,
+    resolution_base: XY<u32>,
+    zoom: &InterpolatedZoom,
+) -> Option<NotchPlacement> {
+    let screen = options.screen_size.map(|v| v as f64);
+    let crop = ProjectUniforms::get_crop(options, project);
+    let crop_start = crop.position.map(|v| v as f64);
+    let crop_end = crop_start + crop.size.map(|v| v as f64);
+
+    let notch_start = XY::new(notch.x * screen.x, 0.0);
+    let notch_end = XY::new((notch.x + notch.width) * screen.x, notch.height * screen.y);
+    let notch_size = notch_end - notch_start;
+    if notch_size.x <= 0.0 || notch_size.y <= 0.0 {
+        return None;
+    }
+
+    let left = notch_start.x.max(crop_start.x);
+    let right = notch_end.x.min(crop_end.x);
+    let top = notch_start.y.max(crop_start.y);
+    let bottom = notch_end.y.min(crop_end.y);
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    let to_output = |p: XY<f64>| {
+        Coord::<RawDisplaySpace>::new(p)
+            .to_cropped_display_space(options, project)
+            .to_frame_space(options, project, resolution_base)
+            .to_zoomed_frame_space(options, project, resolution_base, zoom)
+            .coord
+    };
+
+    let start = to_output(XY::new(left, top));
+    let end = to_output(XY::new(right, bottom));
+    let full_start = to_output(notch_start);
+    let full_end = to_output(notch_end);
+    let size = [(end.x - start.x) as f32, (end.y - start.y) as f32];
+    let full_size = [
+        (full_end.x - full_start.x) as f32,
+        (full_end.y - full_start.y) as f32,
+    ];
+    if size[0] <= 0.0 || size[1] <= 0.0 || full_size[0] <= 0.0 || full_size[1] <= 0.0 {
+        return None;
+    }
+
+    Some(NotchPlacement {
+        bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
+        size,
+        full_size,
+        source_crop: [
+            ((left - notch_start.x) / notch_size.x).clamp(0.0, 1.0) as f32,
+            ((top - notch_start.y) / notch_size.y).clamp(0.0, 1.0) as f32,
+            ((right - notch_start.x) / notch_size.x).clamp(0.0, 1.0) as f32,
+            ((bottom - notch_start.y) / notch_size.y).clamp(0.0, 1.0) as f32,
+        ],
+    })
+}
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
 /// Velocity is measured strictly against the previous frame (Screen Studio
@@ -3387,7 +3467,7 @@ impl ProjectUniforms {
             None
         };
 
-        let (display, display_motion_parent, frame_chrome, display_outer_bounds) = {
+        let (display, display_motion_parent, frame_chrome, display_outer_bounds, notch) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
 
@@ -3593,6 +3673,59 @@ impl ProjectUniforms {
                 .map(|f| f.composite.target_bounds)
                 .unwrap_or(final_target_bounds);
 
+            let notch = project
+                .background
+                .notch
+                .and_then(|config| config.resolve(constants.meta.display_notch()))
+                .and_then(|notch| {
+                    let placement = notch_bounds(notch, options, project, resolution_base, &zoom)?;
+                    // Rasterize at the unzoomed size and let zoom scale the
+                    // texture, so an animating zoom reuses one rasterization.
+                    let unzoomed = notch_bounds(
+                        notch,
+                        options,
+                        project,
+                        resolution_base,
+                        &InterpolatedZoom {
+                            t: 0.0,
+                            bounds: SegmentBounds::default(),
+                        },
+                    )?;
+
+                    Some(NotchUniforms {
+                        composite: CompositeVideoFrameUniforms {
+                            output_size: [output_size.x as f32, output_size.y as f32],
+                            target_bounds: placement.bounds,
+                            target_size: placement.size,
+                            // The outline is baked into the texture's alpha, so
+                            // the SDF has to leave the edges alone.
+                            preserve_source_alpha: 1.0,
+                            rounding_px: 0.0,
+                            corner_radii: [0.0; 4],
+                            rounding_type: rounding_type_value(CornerStyle::Rounded),
+                            mirror_x: 0.0,
+                            motion_blur_vector: [0.0; 2],
+                            motion_blur_zoom_center: [0.0; 2],
+                            motion_blur_params: [0.0; 4],
+                            shadow: 0.0,
+                            shadow_size: 0.0,
+                            shadow_opacity: 0.0,
+                            shadow_blur: 0.0,
+                            // Fades out as a split-screen scene morphs in, where
+                            // the geometry above stops describing the pane.
+                            opacity: scene.screen_opacity as f32 * split_fade,
+                            border_enabled: 0.0,
+                            border_width: 0.0,
+                            _padding1: [0.0; 3],
+                            border_color: [0.0; 4],
+                            frame_size: [1.0, 1.0],
+                            crop_bounds: [0.0, 0.0, 1.0, 1.0],
+                        },
+                        raster_size: [unzoomed.full_size[0] as f64, unzoomed.full_size[1] as f64],
+                        source_crop: placement.source_crop,
+                    })
+                });
+
             (
                 CompositeVideoFrameUniforms {
                     output_size: [output_size.x as f32, output_size.y as f32],
@@ -3643,6 +3776,7 @@ impl ProjectUniforms {
                 display_parent_motion_px,
                 frame_chrome,
                 display_outer_bounds,
+                notch,
             )
         };
 
@@ -3973,6 +4107,7 @@ impl ProjectUniforms {
             camera,
             camera_only,
             frame_chrome,
+            notch,
             display_outer_bounds,
             project: project.clone(),
             zoom,
@@ -5048,6 +5183,7 @@ pub struct RendererLayers {
     background_blur: BlurLayer,
     frame: FrameLayer,
     display: DisplayLayer,
+    notch: NotchLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
     camera_only: CameraLayer,
@@ -5077,6 +5213,7 @@ impl RendererLayers {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
             frame: FrameLayer::new(device, shared_composite_pipeline.clone()),
+            notch: NotchLayer::new(device, shared_composite_pipeline.clone()),
             display: DisplayLayer::new_with_all_shared_pipelines(
                 device,
                 shared_yuv_pipelines.clone(),
@@ -5240,6 +5377,8 @@ impl RendererLayers {
 
         if render_display {
             self.frame.prepare(constants, uniforms);
+            self.notch
+                .prepare(&constants.device, &constants.queue, uniforms.notch);
             self.display.prepare(
                 &constants.device,
                 &constants.queue,
@@ -5382,6 +5521,8 @@ impl RendererLayers {
         let start = Instant::now();
         if render_display {
             self.frame.prepare(constants, uniforms);
+            self.notch
+                .prepare(&constants.device, &constants.queue, uniforms.notch);
             let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
@@ -5571,6 +5712,13 @@ impl RendererLayers {
         if should_render_cursor {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
+        }
+
+        // After the cursor, which really does disappear behind the notch on a
+        // Mac, but before masks and text, which are editor annotations.
+        if should_render_screen && self.notch.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.notch.render(&mut pass);
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
@@ -5827,6 +5975,183 @@ pub fn create_shader_render_pipeline(
         multiview: None,
         cache: None,
     })
+}
+
+#[cfg(test)]
+mod notch_bounds_tests {
+    use super::*;
+    use cap_project::{Crop, DisplayNotch, XY as ProjectXY};
+
+    /// 14" MacBook Pro panel and the notch measured on it.
+    const SCREEN: XY<u32> = XY { x: 3024, y: 1964 };
+    const NOTCH: DisplayNotch = DisplayNotch {
+        x: 0.438_492_063_492_063_5,
+        width: 0.122_354_497_354_497_35,
+        height: 0.032_586_558_044_806_514,
+    };
+
+    fn options() -> RenderOptions {
+        RenderOptions {
+            screen_size: SCREEN,
+            camera_size: None,
+            preserve_screen_alpha: false,
+        }
+    }
+
+    fn place(project: &ProjectConfiguration, zoom: &InterpolatedZoom) -> Option<NotchPlacement> {
+        notch_bounds(NOTCH, &options(), project, SCREEN, zoom)
+    }
+
+    fn no_zoom() -> InterpolatedZoom {
+        InterpolatedZoom {
+            t: 0.0,
+            bounds: SegmentBounds::default(),
+        }
+    }
+
+    #[test]
+    fn sits_flush_against_the_top_of_the_screen() {
+        let project = ProjectConfiguration::default();
+        let placement = place(&project, &no_zoom()).unwrap();
+
+        let display_offset = ProjectUniforms::display_offset(&options(), &project, SCREEN);
+        assert!(
+            (placement.bounds[1] as f64 - display_offset.coord.y).abs() < 1e-3,
+            "notch top {} should meet the display top {}",
+            placement.bounds[1],
+            display_offset.coord.y
+        );
+        assert!(placement.size[0] > 0.0 && placement.size[1] > 0.0);
+        assert_eq!(placement.source_crop, [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn is_horizontally_centred_on_the_display() {
+        let project = ProjectConfiguration::default();
+        let placement = place(&project, &no_zoom()).unwrap();
+
+        let display_offset = ProjectUniforms::display_offset(&options(), &project, SCREEN);
+        let display_size = ProjectUniforms::display_size(&options(), &project, SCREEN);
+
+        let notch_centre = (placement.bounds[0] + placement.bounds[2]) as f64 / 2.0;
+        let display_centre = display_offset.coord.x + display_size.coord.x / 2.0;
+
+        // The measured notch is half a point off-centre on a 1512pt panel.
+        assert!(
+            (notch_centre - display_centre).abs() < 2.0,
+            "notch centre {notch_centre} vs display centre {display_centre}"
+        );
+    }
+
+    #[test]
+    fn keeps_its_proportions_relative_to_the_display() {
+        let project = ProjectConfiguration::default();
+        let placement = place(&project, &no_zoom()).unwrap();
+        let display_size = ProjectUniforms::display_size(&options(), &project, SCREEN);
+
+        let width_frac = placement.size[0] as f64 / display_size.coord.x;
+        let height_frac = placement.size[1] as f64 / display_size.coord.y;
+
+        assert!((width_frac - NOTCH.width).abs() < 1e-3, "{width_frac}");
+        assert!((height_frac - NOTCH.height).abs() < 1e-3, "{height_frac}");
+    }
+
+    #[test]
+    fn scales_and_translates_with_zoom() {
+        let project = ProjectConfiguration::default();
+        let unzoomed = place(&project, &no_zoom()).unwrap();
+
+        let zoom = InterpolatedZoom {
+            t: 1.0,
+            bounds: SegmentBounds::from_amount_center(2.0, ProjectXY::new(0.5, 0.5)),
+        };
+        let zoomed = place(&project, &zoom).unwrap();
+
+        assert!(
+            zoomed.size[0] > unzoomed.size[0] * 1.9,
+            "2x zoom should roughly double the notch width: {} -> {}",
+            unzoomed.size[0],
+            zoomed.size[0]
+        );
+        assert!(
+            zoomed.bounds[1] < unzoomed.bounds[1],
+            "zooming into the centre should push the top edge off-frame"
+        );
+    }
+
+    #[test]
+    fn travels_off_frame_when_zoomed_into_the_bottom_right() {
+        let project = ProjectConfiguration::default();
+        let zoom = InterpolatedZoom {
+            t: 1.0,
+            bounds: SegmentBounds::from_amount_center(3.0, ProjectXY::new(1.0, 1.0)),
+        };
+
+        let placement = place(&project, &zoom).unwrap();
+        let output = ProjectUniforms::get_output_size(&options(), &project, SCREEN);
+
+        assert!(
+            placement.bounds[3] < 0.0 || placement.bounds[0] > output.0 as f32,
+            "notch should leave the frame entirely, got {:?}",
+            placement.bounds
+        );
+    }
+
+    #[test]
+    fn disappears_when_the_crop_excludes_the_top_of_the_screen() {
+        let mut project = ProjectConfiguration::default();
+        project.background.crop = Some(Crop {
+            position: ProjectXY::new(0, SCREEN.y / 2),
+            size: ProjectXY::new(SCREEN.x, SCREEN.y / 2),
+        });
+
+        assert_eq!(place(&project, &no_zoom()), None);
+    }
+
+    #[test]
+    fn survives_a_crop_that_keeps_the_top_of_the_screen() {
+        let mut project = ProjectConfiguration::default();
+        project.background.crop = Some(Crop {
+            position: ProjectXY::new(0, 0),
+            size: ProjectXY::new(SCREEN.x, SCREEN.y / 2),
+        });
+
+        let placement = place(&project, &no_zoom()).expect("notch is still visible");
+        assert!(placement.size[0] > 0.0 && placement.size[1] > 0.0);
+    }
+
+    #[test]
+    fn partial_crop_preserves_source_coordinates() {
+        let notch_mid_x = ((NOTCH.x + NOTCH.width / 2.0) * SCREEN.x as f64).round() as u32;
+        let notch_mid_y = (NOTCH.height * SCREEN.y as f64 / 2.0).round() as u32;
+        let mut project = ProjectConfiguration::default();
+        project.background.crop = Some(Crop {
+            position: ProjectXY::new(notch_mid_x, notch_mid_y),
+            size: ProjectXY::new(SCREEN.x - notch_mid_x, SCREEN.y - notch_mid_y),
+        });
+
+        let placement = place(&project, &no_zoom()).unwrap();
+
+        assert!((placement.source_crop[0] - 0.5).abs() < 0.01);
+        assert!((placement.source_crop[1] - 0.5).abs() < 0.01);
+        assert_eq!(placement.source_crop[2..], [1.0, 1.0]);
+        assert!((placement.size[0] / placement.full_size[0] - 0.5).abs() < 0.01);
+        assert!((placement.size[1] / placement.full_size[1] - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn padding_shrinks_the_notch_with_the_display() {
+        let mut project = ProjectConfiguration::default();
+        let unpadded = place(&project, &no_zoom()).unwrap();
+
+        project.background.padding = 40.0;
+        let padded = place(&project, &no_zoom()).unwrap();
+
+        assert!(
+            padded.size[0] < unpadded.size[0],
+            "padded notch {padded:?} should be narrower than {unpadded:?}"
+        );
+    }
 }
 
 #[cfg(test)]

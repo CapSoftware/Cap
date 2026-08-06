@@ -126,11 +126,11 @@ OUTPUT
 AUTH
   `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
   key to copy when you are signed in there. Check with `cap auth status --json`. For headless/CI,
-  set CAP_API_KEY to a Cap auth key (Settings) to override.
+  create a CLI API key in the Cap dashboard under Settings -> Account and set it as CAP_API_KEY.
 
 ENVIRONMENT
-  CAP_API_KEY         Overrides auth for `cap upload` (Cap auth key from Settings); optional when
-                      signed into Cap Desktop.
+  CAP_API_KEY         Overrides auth (CLI API key from the Cap dashboard, Settings -> Account);
+                      optional when signed into Cap Desktop.
   CAP_SERVER_URL      Cap server base URL; defaults to Cap Desktop's server, else https://cap.so.
   CAP_NO_MODIFY_PATH  Set to skip editing shell profiles during `cap desktop install-cli`.
   CAP_DESKTOP_FORCE_INSTALL

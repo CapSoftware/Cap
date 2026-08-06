@@ -145,23 +145,18 @@ const RecordingModePicker = () => {
 									className="flex flex-col items-center"
 									style={{ width: `${CIRCLE_SIZE.base}px` }}
 								>
-									<motion.button
+									{/* Colors transition via CSS: Motion can't interpolate the
+									    display-p3 values these gray vars resolve to on P3 screens. */}
+									<button
 										type="button"
 										onClick={() => handleSelect(mode.id)}
-										className="relative flex items-center justify-center rounded-full cursor-pointer"
+										className={`relative flex items-center justify-center rounded-full cursor-pointer transition-colors duration-200 hover:bg-gray-7 ${
+											isSelected ? "bg-gray-7" : "bg-gray-3"
+										}`}
 										style={{
 											width: `${CIRCLE_SIZE.base}px`,
 											height: `${CIRCLE_SIZE.base}px`,
 										}}
-										animate={{
-											backgroundColor: isSelected
-												? "var(--gray-7)"
-												: "var(--gray-3)",
-										}}
-										whileHover={{
-											backgroundColor: "var(--gray-7)",
-										}}
-										transition={{ duration: 0.2 }}
 									>
 										{isSelected && (
 											<motion.div
@@ -183,19 +178,18 @@ const RecordingModePicker = () => {
 												isSelected ? "text-gray-12" : "text-gray-10"
 											}`}
 										/>
-									</motion.button>
+									</button>
 
-									<motion.span
-										className="mt-3 text-sm font-medium whitespace-nowrap cursor-pointer"
+									<span
+										className={`mt-3 text-sm font-medium whitespace-nowrap cursor-pointer transition-[color,opacity] duration-200 ${
+											isSelected
+												? "text-gray-12 opacity-100"
+												: "text-gray-9 opacity-60"
+										}`}
 										onClick={() => handleSelect(mode.id)}
-										animate={{
-											color: isSelected ? "var(--gray-12)" : "var(--gray-9)",
-											opacity: isSelected ? 1 : 0.6,
-										}}
-										transition={{ duration: 0.2 }}
 									>
 										{mode.title}
-									</motion.span>
+									</span>
 								</div>
 							);
 						})}
@@ -217,23 +211,16 @@ const RecordingModePicker = () => {
 									className="flex flex-col items-center"
 									style={{ width: `${CIRCLE_SIZE.md}px` }}
 								>
-									<motion.button
+									<button
 										type="button"
 										onClick={() => handleSelect(mode.id)}
-										className="relative flex items-center justify-center rounded-full cursor-pointer"
+										className={`relative flex items-center justify-center rounded-full cursor-pointer transition-colors duration-200 hover:bg-gray-7 ${
+											isSelected ? "bg-gray-7" : "bg-gray-3"
+										}`}
 										style={{
 											width: `${CIRCLE_SIZE.md}px`,
 											height: `${CIRCLE_SIZE.md}px`,
 										}}
-										animate={{
-											backgroundColor: isSelected
-												? "var(--gray-7)"
-												: "var(--gray-3)",
-										}}
-										whileHover={{
-											backgroundColor: "var(--gray-7)",
-										}}
-										transition={{ duration: 0.2 }}
 									>
 										{isSelected && (
 											<motion.div
@@ -255,19 +242,18 @@ const RecordingModePicker = () => {
 												isSelected ? "text-gray-12" : "text-gray-10"
 											}`}
 										/>
-									</motion.button>
+									</button>
 
-									<motion.span
-										className="mt-4 text-[15px] font-medium whitespace-nowrap cursor-pointer"
+									<span
+										className={`mt-4 text-[15px] font-medium whitespace-nowrap cursor-pointer transition-[color,opacity] duration-200 ${
+											isSelected
+												? "text-gray-12 opacity-100"
+												: "text-gray-9 opacity-60"
+										}`}
 										onClick={() => handleSelect(mode.id)}
-										animate={{
-											color: isSelected ? "var(--gray-12)" : "var(--gray-9)",
-											opacity: isSelected ? 1 : 0.6,
-										}}
-										transition={{ duration: 0.2 }}
 									>
 										{mode.title}
-									</motion.span>
+									</span>
 								</div>
 							);
 						})}

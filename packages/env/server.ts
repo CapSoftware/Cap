@@ -127,7 +127,7 @@ function createServerEnv() {
 			VERCEL_BRANCH_URL_HOST: z.string().optional(),
 			VERCEL_PROJECT_PRODUCTION_URL_HOST: z.string().optional(),
 			VERCEL_AWS_ROLE_ARN: z.string().optional(),
-			POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+			OPENPANEL_CLIENT_SECRET: z.string().optional(),
 			DUB_API_KEY: z.string().optional(),
 
 			/// Media Server

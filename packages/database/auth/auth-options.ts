@@ -19,6 +19,8 @@ import { DrizzleAdapter } from "./drizzle-adapter.ts";
 
 export const maxDuration = 120;
 
+const OTP_CODE_MAX_AGE_SECONDS = 10 * 60;
+
 export async function decodeSessionToken(
 	params: JWTDecodeParams,
 ): Promise<JWT | null> {
@@ -108,6 +110,11 @@ export const authOptions = (): NextAuthOptions => {
 					},
 				}),
 				EmailProvider({
+					// next-auth defaults to 24h, but the code is 6 digits and the
+					// verify path has no attempt limiting, so a day-long window is a
+					// practical brute-force target. The OTP email and the dev console
+					// have always told users 10 minutes; this makes that true.
+					maxAge: OTP_CODE_MAX_AGE_SECONDS,
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
@@ -123,7 +130,9 @@ export const authOptions = (): NextAuthOptions => {
 							);
 							console.log(`📧 Email: ${identifier}`);
 							console.log(`🔢 Code: ${token}`);
-							console.log(`⏱  Expires in: 10 minutes`);
+							console.log(
+								`⏱  Expires in: ${OTP_CODE_MAX_AGE_SECONDS / 60} minutes`,
+							);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);

@@ -39,4 +39,17 @@ describe("authOptions", () => {
 
 		expect(providers).not.toContain("apple");
 	});
+
+	// Without an explicit maxAge next-auth falls back to 24 hours, which is far
+	// too long for a 6-digit code and contradicts what the OTP email tells users.
+	it("expires email verification codes after the advertised 10 minutes", () => {
+		const email = authOptions().providers.find(
+			(provider) => provider.id === "email",
+		);
+
+		expect(email).toBeDefined();
+		expect((email as { options?: { maxAge?: number } }).options?.maxAge).toBe(
+			10 * 60,
+		);
+	});
 });

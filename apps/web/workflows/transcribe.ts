@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { db } from "@cap/database";
 import {
 	organizations,
@@ -12,11 +15,13 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
-	type Video,
+	Video,
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { Either, Option, Schema } from "effect";
 import { FatalError } from "workflow";
+import { start } from "workflow/api";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
 import {
 	ENHANCED_AUDIO_CONTENT_TYPE,
@@ -33,12 +38,15 @@ import {
 } from "@/lib/edit-transcript";
 import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
 import {
 	checkHasAudioTrackViaMediaServer,
 	extractAudioViaMediaServer,
 	isMediaServerConfigured,
 	probeVideoViaMediaServer,
 } from "@/lib/media-client";
+import { planSegmentsAudioExtraction } from "@/lib/segments-audio";
+import { downloadConcatenatedSegments } from "@/lib/segments-audio-download";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -46,6 +54,12 @@ interface TranscribeWorkflowPayload {
 	videoId: string;
 	userId: string;
 	aiGenerationEnabled: boolean;
+	/**
+	 * The recording's segments are fully uploaded but the mux into result.mp4
+	 * has not finished; transcribe directly from the segment audio and defer
+	 * back to the normal post-mux queue if that isn't possible.
+	 */
+	earlyFromSegments?: boolean;
 }
 
 interface VideoData {
@@ -88,7 +102,48 @@ export async function transcribeVideoWorkflow(
 	}
 
 	try {
-		const audioUrl = await extractAudio(videoId, userId, videoData.video);
+		let audioUrl: string | null;
+		let videoDurationMs = Math.max(0, (videoData.video.duration ?? 0) * 1000);
+
+		if (payload.earlyFromSegments) {
+			const segments = await extractAudioFromSegmentsStep(
+				videoId,
+				userId,
+				videoData.video,
+			);
+
+			if (segments.status === "no-audio") {
+				await markNoAudio(videoId);
+				return {
+					success: true,
+					message: "Video has no audio track - skipped transcription",
+				};
+			}
+
+			if (segments.status !== "ok" || !segments.audioUrl) {
+				// The early path must never end worse than today's timing: clean up
+				// while we still hold the claim, release it, then explicitly re-offer
+				// the video to the normal path — the post-mux queue may have already
+				// run and been rejected by our claim, so we cannot rely on it firing
+				// again.
+				await cleanupTempAudio(videoId, userId, videoData.video);
+				await deferEarlyTranscription(videoId);
+				await requeueAfterEarlyDefer(videoId, userId, aiGenerationEnabled);
+				return {
+					success: true,
+					message: `Early transcription deferred: ${
+						segments.status === "unavailable" ? segments.reason : "no audio URL"
+					}`,
+				};
+			}
+
+			audioUrl = segments.audioUrl;
+			if (videoDurationMs <= 0 && (segments.durationMs ?? 0) > 0) {
+				videoDurationMs = segments.durationMs ?? 0;
+			}
+		} else {
+			audioUrl = await extractAudio(videoId, userId, videoData.video);
+		}
 
 		if (!audioUrl) {
 			await markNoAudio(videoId);
@@ -101,7 +156,7 @@ export async function transcribeVideoWorkflow(
 		const transcription = await transcribeWithAssemblyAI(
 			audioUrl,
 			videoData.aiGenerationLanguage,
-			Math.max(0, (videoData.video.duration ?? 0) * 1000),
+			videoDurationMs,
 		);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
@@ -288,6 +343,33 @@ async function validateEditTranscriptBackfill(
 	return video;
 }
 
+/**
+ * Every terminal transcription outcome must clear the live-transcription
+ * metadata flag, or share pages keep polling for a live transcript that can
+ * never resolve. Guarded so videos without the flag see a 0-row update.
+ */
+async function clearLiveTranscriptFlag(videoId: string): Promise<void> {
+	try {
+		await db()
+			.update(videos)
+			.set({
+				metadata: sql`JSON_REMOVE(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript')`,
+				updatedAt: sql`${videos.updatedAt}`,
+			})
+			.where(
+				and(
+					eq(videos.id, videoId as Video.VideoId),
+					sql`JSON_EXTRACT(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.liveTranscript') IS NOT NULL`,
+				),
+			);
+	} catch (error) {
+		console.warn(
+			`[transcribe] Failed to clear live transcript flag for ${videoId}`,
+			error,
+		);
+	}
+}
+
 async function markSkipped(videoId: string): Promise<void> {
 	"use step";
 
@@ -295,6 +377,7 @@ async function markSkipped(videoId: string): Promise<void> {
 		.update(videos)
 		.set({ transcriptionStatus: "SKIPPED" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+	await clearLiveTranscriptFlag(videoId);
 }
 
 async function markNoAudio(videoId: string): Promise<void> {
@@ -304,6 +387,7 @@ async function markNoAudio(videoId: string): Promise<void> {
 		.update(videos)
 		.set({ transcriptionStatus: "NO_AUDIO" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+	await clearLiveTranscriptFlag(videoId);
 }
 
 async function markError(videoId: string): Promise<void> {
@@ -318,6 +402,76 @@ async function markError(videoId: string): Promise<void> {
 				eq(videos.transcriptionStatus, "PROCESSING"),
 			),
 		);
+	await clearLiveTranscriptFlag(videoId);
+}
+
+async function deferEarlyTranscription(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videos)
+		.set({ transcriptionStatus: null })
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				eq(videos.transcriptionStatus, "PROCESSING"),
+			),
+		);
+}
+
+/**
+ * After an early-path deferral, put the video back on the normal
+ * transcription path. Mirrors lib/transcribe.ts semantics without importing
+ * it (that would be a module cycle): no-op while the mux still owns the
+ * upload row — its completion queues transcription — otherwise claim and
+ * start a normal (non-early) workflow right away.
+ */
+async function requeueAfterEarlyDefer(
+	videoId: string,
+	userId: string,
+	aiGenerationEnabled: boolean,
+): Promise<void> {
+	"use step";
+
+	const upload = await db()
+		.select({ phase: videoUploads.phase })
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId))
+		.limit(1);
+
+	if (
+		upload[0]?.phase === "uploading" ||
+		upload[0]?.phase === "processing" ||
+		upload[0]?.phase === "generating_thumbnail"
+	) {
+		return;
+	}
+
+	const claim = await db()
+		.update(videos)
+		.set({ transcriptionStatus: "PROCESSING" })
+		.where(
+			and(
+				eq(videos.id, videoId as Video.VideoId),
+				isNull(videos.transcriptionStatus),
+			),
+		);
+	const affectedRows = Array.isArray(claim)
+		? ((claim[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0)
+		: ((claim as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+	if (affectedRows === 0) return;
+
+	try {
+		await start(transcribeVideoWorkflow, [
+			{ videoId, userId, aiGenerationEnabled },
+		]);
+	} catch (error) {
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: null })
+			.where(eq(videos.id, videoId as Video.VideoId));
+		throw error;
+	}
 }
 
 async function extractAudio(
@@ -333,12 +487,37 @@ async function extractAudio(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
 
-	const videoUrl = await resolveVideoSourceUrl(
-		videoId,
-		userId,
-		video,
-		sourceKeyOverride,
-	);
+	let videoUrl: string;
+	try {
+		videoUrl = await resolveVideoSourceUrl(
+			videoId,
+			userId,
+			video,
+			sourceKeyOverride,
+		);
+	} catch (error) {
+		// Instant-mode recordings can be transcribed straight from their uploaded
+		// audio segments when no muxed source exists (self-hosted deployments
+		// without a media server never produce a result.mp4 at all).
+		if (
+			!sourceKeyOverride &&
+			(video.source.type === "desktopSegments" ||
+				video.source.type === "desktopMP4")
+		) {
+			const segments = await extractAudioFromSegmentsImpl(
+				videoId,
+				userId,
+				video,
+				tempAudioFilename,
+			);
+			if (segments.status === "ok") return segments.audioUrl;
+			if (segments.status === "no-audio") return null;
+			console.warn(
+				`[transcribe] Segments audio fallback unavailable for ${videoId}: ${segments.reason}`,
+			);
+		}
+		throw error;
+	}
 
 	const useMediaServer = isMediaServerConfigured();
 	console.log(
@@ -452,6 +631,125 @@ async function resolveVideoSourceUrl(
 	}
 
 	throw new Error("Video file not accessible");
+}
+
+type SegmentsAudioExtraction =
+	| { status: "ok"; audioUrl: string; durationMs: number }
+	| { status: "no-audio" }
+	| { status: "unavailable"; reason: string };
+
+async function extractAudioFromSegmentsStep(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+): Promise<SegmentsAudioExtraction> {
+	"use step";
+
+	return extractAudioFromSegmentsImpl(videoId, userId, video);
+}
+
+/**
+ * Build the transcription audio input straight from the recording's uploaded
+ * fMP4 audio segments (init.mp4 + segment_*.m4s byte-concatenate into a valid
+ * fragmented MP4). Never throws: any failure reports "unavailable" so callers
+ * can fall back to the muxed result.mp4 path instead of erroring the video.
+ */
+async function extractAudioFromSegmentsImpl(
+	videoId: string,
+	userId: string,
+	video: typeof videos.$inferSelect,
+	tempAudioFilename = "audio-temp.mp3",
+): Promise<SegmentsAudioExtraction> {
+	try {
+		const [bucket] = await Storage.getAccessForVideo(
+			decodeStorageVideo(video),
+		).pipe(runWorkflowPromise);
+
+		const segSource = new Video.SegmentsSource({
+			videoId,
+			ownerId: video.ownerId,
+		});
+
+		const manifestContent = await bucket
+			.getObject(segSource.getManifestKey())
+			.pipe(runWorkflowPromise);
+		const manifestJson = Option.getOrNull(manifestContent);
+		if (!manifestJson) {
+			return { status: "unavailable", reason: "segment manifest not found" };
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(manifestJson);
+		} catch {
+			return { status: "unavailable", reason: "invalid segment manifest JSON" };
+		}
+
+		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(parsed);
+		if (Either.isLeft(decoded)) {
+			return {
+				status: "unavailable",
+				reason: "invalid segment manifest format",
+			};
+		}
+		const manifest = decoded.right;
+
+		const plan = planSegmentsAudioExtraction(manifest);
+		if (plan.status !== "ok") return plan;
+
+		const segmentUrls = await Promise.all([
+			bucket
+				.getInternalSignedObjectUrl(segSource.getAudioInitKey())
+				.pipe(runWorkflowPromise),
+			...plan.entries.map((entry) =>
+				bucket
+					.getInternalSignedObjectUrl(segSource.getAudioSegmentKey(entry.index))
+					.pipe(runWorkflowPromise),
+			),
+		]);
+
+		const concatPath = join(tmpdir(), `segments-audio-${randomUUID()}.mp4`);
+		try {
+			const totalBytes = await downloadConcatenatedSegments(
+				segmentUrls,
+				concatPath,
+			);
+			console.log(
+				`[transcribe] Assembled ${plan.entries.length} audio segments (${totalBytes} bytes) for ${videoId}`,
+			);
+
+			// The concatenated init + fragments form a valid fragmented MP4 that
+			// AssemblyAI ingests directly — no transcode, and no ffmpeg binary
+			// (which is not available in the serverless runtime). The temp object
+			// keeps the same key regardless of container so cleanupTempAudio's
+			// contract is untouched.
+			const audioBuffer = await fs.readFile(concatPath);
+
+			const audioKey = `${userId}/${videoId}/${tempAudioFilename}`;
+			await bucket
+				.putObject(audioKey, audioBuffer, {
+					contentType: "audio/mp4",
+				})
+				.pipe(runWorkflowPromise);
+
+			const audioSignedUrl = await bucket
+				.getInternalSignedObjectUrl(audioKey)
+				.pipe(runWorkflowPromise);
+
+			return {
+				status: "ok",
+				audioUrl: audioSignedUrl,
+				durationMs: plan.totalDurationMs,
+			};
+		} finally {
+			await fs.unlink(concatPath).catch(() => {});
+		}
+	} catch (error) {
+		return {
+			status: "unavailable",
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 async function transcribeWithAssemblyAI(
@@ -591,6 +889,26 @@ async function saveTranscription(
 		.update(videos)
 		.set({ transcriptionStatus: "COMPLETE" })
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	// The canonical transcript supersedes the provisional live transcript, so
+	// drop the artifact and its metadata flag. Never fatal: a leftover live
+	// artifact is unused once transcriptionStatus is COMPLETE.
+	if (
+		video.source.type === "desktopSegments" ||
+		video.source.type === "desktopMP4"
+	) {
+		try {
+			await bucket
+				.deleteObject(getLiveTranscriptObjectKey(userId, videoId))
+				.pipe(runWorkflowPromise);
+		} catch (error) {
+			console.warn(
+				`[transcribe] Failed to clean up live transcript for ${videoId}`,
+				error,
+			);
+		}
+		await clearLiveTranscriptFlag(videoId);
+	}
 }
 
 async function saveEditTranscriptBackfill(

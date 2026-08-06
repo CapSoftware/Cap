@@ -668,6 +668,12 @@ function Inner(props: {
 							value={!!settings.captureKeyboardEvents}
 							onChange={(value) => handleChange("captureKeyboardEvents", value)}
 						/>
+						<ToggleSettingItem
+							label="Draw the MacBook notch on screen recordings"
+							description="Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
+							value={!!settings.macbookNotchOverlay}
+							onChange={(value) => handleChange("macbookNotchOverlay", value)}
+						/>
 						<SelectSettingItem
 							label="Max capture framerate"
 							description={

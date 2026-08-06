@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
 
+use crate::DisplayNotch;
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AspectRatio {
@@ -290,6 +292,53 @@ impl FrameConfiguration {
     }
 }
 
+/// Draws a MacBook notch over the recording. Nothing here is inferred from the
+/// video: a finished recording carries no evidence of the panel it came from.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotchConfiguration {
+    pub enabled: bool,
+    /// Manual placement, as fractions of the video. Each `None` falls back to
+    /// the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+    pub x: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+/// Notch of a 14" MacBook Pro, measured via `NSScreen` on a 1512x982pt display.
+///
+/// Only a starting point for placing one by hand on recordings that carry no
+/// measurements of their own. The cutout is physically the same size across
+/// MacBook models but the panels are not, so this reads a little wide on
+/// 15"/16" machines until adjusted.
+pub const DEFAULT_MACBOOK_NOTCH: DisplayNotch = DisplayNotch {
+    x: 0.438_492_063_492_063_5,
+    width: 0.122_354_497_354_497_35,
+    height: 0.032_586_558_044_806_514,
+};
+
+impl NotchConfiguration {
+    /// Notch rect to draw, in fractions of the recorded video, or `None` when
+    /// the overlay is switched off.
+    pub fn resolve(&self, recorded: Option<DisplayNotch>) -> Option<DisplayNotch> {
+        if !self.enabled {
+            return None;
+        }
+
+        let base = recorded.unwrap_or(DEFAULT_MACBOOK_NOTCH);
+
+        let width = self.width.unwrap_or(base.width).clamp(0.0, 1.0);
+        let height = self.height.unwrap_or(base.height).clamp(0.0, 1.0);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+
+        let x = self.x.unwrap_or(base.x).clamp(0.0, 1.0 - width);
+
+        Some(DisplayNotch { x, width, height })
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BackgroundConfiguration {
@@ -310,6 +359,10 @@ pub struct BackgroundConfiguration {
     /// Decorative frame around the recording. `None` (or `FrameStyle::None`)
     /// renders the bare video exactly as before the feature existed.
     pub frame: Option<FrameConfiguration>,
+    /// Redraws the recording device's physical notch over the capture. Distinct
+    /// from `frame`: the decorative MacBook style is a mockup, this restores
+    /// something the capture really did hide, and the two are independent.
+    pub notch: Option<NotchConfiguration>,
 }
 
 impl Default for BorderConfiguration {
@@ -338,6 +391,7 @@ impl Default for BackgroundConfiguration {
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
             frame: None,  // No decorative frame by default
+            notch: None,
         }
     }
 }
@@ -1814,6 +1868,100 @@ pub const FAST_SMOOTHING_SAMPLES: usize = 10;
 pub const SLOW_VELOCITY_THRESHOLD: f64 = 0.003;
 pub const REGULAR_VELOCITY_THRESHOLD: f64 = 0.008;
 pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;
+
+#[cfg(test)]
+mod notch_tests {
+    use super::*;
+
+    const RECORDED: DisplayNotch = DisplayNotch {
+        x: 0.4,
+        width: 0.2,
+        height: 0.04,
+    };
+
+    fn enabled() -> NotchConfiguration {
+        NotchConfiguration {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn disabled_by_default() {
+        assert_eq!(NotchConfiguration::default().resolve(Some(RECORDED)), None);
+    }
+
+    #[test]
+    fn prefers_geometry_measured_at_capture_time() {
+        assert_eq!(enabled().resolve(Some(RECORDED)), Some(RECORDED));
+    }
+
+    /// Recordings the recorder could not measure still get a notch on request;
+    /// it just starts from the stock MacBook rect for the user to adjust.
+    #[test]
+    fn unmeasured_recordings_start_from_the_default_rect() {
+        assert_eq!(enabled().resolve(None), Some(DEFAULT_MACBOOK_NOTCH));
+    }
+
+    /// Each field falls back independently, so resizing without repositioning
+    /// leaves the notch where it was measured. Keeping the notch centred as it
+    /// resizes is the editor's job, which lets its sliders show the real value.
+    #[test]
+    fn each_field_falls_back_on_its_own() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.1),
+            height: Some(0.02),
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.width, 0.1);
+        assert_eq!(resolved.height, 0.02);
+        assert_eq!(resolved.x, RECORDED.x);
+    }
+
+    #[test]
+    fn explicit_x_overrides_the_centring() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.1),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert_eq!(resolved.x, 0.1);
+    }
+
+    #[test]
+    fn placement_stays_inside_the_video() {
+        let resolved = NotchConfiguration {
+            enabled: true,
+            x: Some(0.95),
+            width: Some(0.2),
+            height: None,
+        }
+        .resolve(Some(RECORDED))
+        .unwrap();
+
+        assert!(resolved.x + resolved.width <= 1.0, "{resolved:?}");
+    }
+
+    #[test]
+    fn zero_sized_override_draws_nothing() {
+        let config = NotchConfiguration {
+            enabled: true,
+            x: None,
+            width: Some(0.0),
+            height: None,
+        };
+
+        assert_eq!(config.resolve(Some(RECORDED)), None);
+    }
+}
 
 #[cfg(test)]
 mod tests {

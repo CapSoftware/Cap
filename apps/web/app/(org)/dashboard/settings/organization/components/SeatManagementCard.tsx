@@ -118,12 +118,12 @@ export function SeatManagementCard() {
 					<span>
 						<span className="font-medium text-gray-12">{proSeatsUsed}</span> of{" "}
 						<span className="font-medium text-gray-12">{proSeatsTotal}</span>{" "}
-						Pro seats assigned to members
+						Pro seats in use
 					</span>
 					{activeOrganization?.ownerIsPro && (
 						<span className="text-xs text-gray-10">
-							The organization owner is always on Cap Pro and doesn't use a
-							seat.
+							The organization owner is always on Cap Pro and uses one of your
+							seats.
 						</span>
 					)}
 				</div>

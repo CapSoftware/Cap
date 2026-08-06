@@ -98,6 +98,9 @@ pub struct Actor {
     segment_factory: SegmentPipelineFactory,
     segments: Vec<RecordingSegment>,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
+    // Resolved once at recording start: the display can be disconnected, or its
+    // mode changed, by the time the recording stops.
+    display_notch: Option<cap_project::DisplayNotch>,
 }
 
 impl Actor {
@@ -193,6 +196,7 @@ impl Message<Stop> for Actor {
             std::mem::take(&mut self.segments),
             cursors,
             self.segment_factory.fragmented,
+            self.display_notch,
         )
         .await?;
 
@@ -887,6 +891,7 @@ async fn spawn_studio_recording_actor(
         segment_factory: segment_pipeline_factory,
         segments: Vec::new(),
         completion_tx: completion_tx.clone(),
+        display_notch: crate::capture_pipeline::resolve_display_notch(&base_inputs.capture_target),
     });
 
     Ok(ActorHandle {
@@ -920,6 +925,7 @@ async fn stop_recording(
     segments: Vec<RecordingSegment>,
     cursors: Cursors,
     fragmented: bool,
+    display_notch: Option<cap_project::DisplayNotch>,
 ) -> Result<CompletedRecording, RecordingError> {
     use cap_project::*;
     use cap_timestamp::{AUDIO_OUTPUT_FRAMES, DEFAULT_SAMPLE_RATE};
@@ -1096,6 +1102,7 @@ async fn stop_recording(
                             .filter(|path| path.exists())
                             .map(make_relative)
                     }),
+                    display_notch,
                 },
                 diagnostics,
                 duration: display_media_duration,
@@ -2014,6 +2021,7 @@ mod tests {
             vec![segment],
             Default::default(),
             false,
+            None,
         )
         .await
         .expect("recording should stop");
@@ -2211,6 +2219,7 @@ mod tests {
             vec![segment],
             Default::default(),
             false,
+            None,
         )
         .await
         .expect("diagnostics sidecar failure should not abort stop_recording");

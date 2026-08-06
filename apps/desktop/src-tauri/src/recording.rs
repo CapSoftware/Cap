@@ -2186,8 +2186,8 @@ pub async fn start_recording(
                     if let Some((health, mode)) = accumulator_mode.as_ref()
                         && let Some((reason_text, critical)) = health.record_event(&event)
                     {
-                        use crate::posthog::{PostHogEvent, async_capture_event};
                         use crate::recording_telemetry::{CriticalEvent, mode_label};
+                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         match critical {
                             CriticalEvent::MuxerCrashed {
                                 seconds_into_recording,
@@ -2195,7 +2195,7 @@ pub async fn start_recording(
                             } => {
                                 async_capture_event(
                                     &app,
-                                    PostHogEvent::RecordingMuxerCrashed {
+                                    AnalyticsEvent::RecordingMuxerCrashed {
                                         mode: mode_label(*mode),
                                         reason: reason_text,
                                         seconds_into_recording,
@@ -2208,7 +2208,7 @@ pub async fn start_recording(
                             } => {
                                 async_capture_event(
                                     &app,
-                                    PostHogEvent::RecordingAudioDegraded {
+                                    AnalyticsEvent::RecordingAudioDegraded {
                                         mode: mode_label(*mode),
                                         reason: reason_text,
                                         seconds_into_recording,
@@ -2219,8 +2219,8 @@ pub async fn start_recording(
                     }
 
                     if let Some((_, mode)) = accumulator_mode.as_ref() {
-                        use crate::posthog::{PostHogEvent, async_capture_event};
                         use crate::recording_telemetry::mode_label;
+                        use crate::telemetry::{AnalyticsEvent, async_capture_event};
                         let mode_str = mode_label(*mode);
                         match &event {
                             cap_recording::PipelineHealthEvent::DiskSpaceLow {
@@ -2228,7 +2228,7 @@ pub async fn start_recording(
                                 ..
                             } => async_capture_event(
                                 &app,
-                                PostHogEvent::RecordingDiskSpaceLow {
+                                AnalyticsEvent::RecordingDiskSpaceLow {
                                     mode: mode_str,
                                     bytes_remaining: *bytes_remaining,
                                 },
@@ -2237,7 +2237,7 @@ pub async fn start_recording(
                                 bytes_remaining,
                             } => async_capture_event(
                                 &app,
-                                PostHogEvent::RecordingDiskSpaceExhausted {
+                                AnalyticsEvent::RecordingDiskSpaceExhausted {
                                     mode: mode_str,
                                     bytes_remaining: *bytes_remaining,
                                 },
@@ -2245,7 +2245,7 @@ pub async fn start_recording(
                             cap_recording::PipelineHealthEvent::DeviceLost { subsystem } => {
                                 async_capture_event(
                                     &app,
-                                    PostHogEvent::RecordingDeviceLost {
+                                    AnalyticsEvent::RecordingDeviceLost {
                                         mode: mode_str,
                                         subsystem: subsystem.clone(),
                                     },
@@ -2256,7 +2256,7 @@ pub async fn start_recording(
                                 attempt,
                             } => async_capture_event(
                                 &app,
-                                PostHogEvent::RecordingEncoderRebuilt {
+                                AnalyticsEvent::RecordingEncoderRebuilt {
                                     mode: mode_str,
                                     backend: backend.clone(),
                                     attempt: *attempt,
@@ -2267,7 +2267,7 @@ pub async fn start_recording(
                                 starvation_ms,
                             } => async_capture_event(
                                 &app,
-                                PostHogEvent::RecordingSourceAudioReset {
+                                AnalyticsEvent::RecordingSourceAudioReset {
                                     mode: mode_str,
                                     source: source.clone(),
                                     starvation_ms: *starvation_ms,
@@ -2276,7 +2276,7 @@ pub async fn start_recording(
                             cap_recording::PipelineHealthEvent::CaptureTargetLost { target } => {
                                 async_capture_event(
                                     &app,
-                                    PostHogEvent::RecordingCaptureTargetLost {
+                                    AnalyticsEvent::RecordingCaptureTargetLost {
                                         mode: mode_str,
                                         target: target.clone(),
                                     },
@@ -3038,9 +3038,9 @@ async fn handle_recording_end(
             Some(feed) => feed.dropped_message_count().await,
             None => 0,
         };
-        crate::posthog::async_capture_event(
+        crate::telemetry::async_capture_event(
             &handle,
-            crate::posthog::PostHogEvent::RecordingCompleted {
+            crate::telemetry::AnalyticsEvent::RecordingCompleted {
                 mode: crate::recording_telemetry::mode_label(mode),
                 status,
                 duration_secs,
@@ -3852,6 +3852,17 @@ fn project_config_from_recording(
         Vec::new()
     };
 
+    if should_enable_notch_overlay(
+        capture_target,
+        settings.macbook_notch_overlay.unwrap_or(false),
+        completed_recording.meta.display_notch().is_some(),
+    ) {
+        config.background.notch = Some(cap_project::NotchConfiguration {
+            enabled: true,
+            ..Default::default()
+        });
+    }
+
     config.timeline = Some(TimelineConfiguration {
         segments: timeline_segments,
         transitions: Vec::new(),
@@ -3865,6 +3876,19 @@ fn project_config_from_recording(
     });
 
     config
+}
+
+fn should_enable_notch_overlay(
+    capture_target: Option<&ScreenCaptureTarget>,
+    setting_enabled: bool,
+    has_recorded_notch: bool,
+) -> bool {
+    setting_enabled
+        && has_recorded_notch
+        && matches!(
+            capture_target,
+            Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. })
+        )
 }
 
 fn apply_recording_presentation_defaults(
@@ -4031,9 +4055,9 @@ pub fn remux_fragmented_recording_with_trigger(
                         })
                         .unwrap_or(0);
 
-                    crate::posthog::async_capture_event(
+                    crate::telemetry::async_capture_event(
                         app_handle,
-                        crate::posthog::PostHogEvent::RecordingRecovered {
+                        crate::telemetry::AnalyticsEvent::RecordingRecovered {
                             trigger,
                             recovered_duration_secs,
                             segments_recovered,
@@ -4046,9 +4070,9 @@ pub fn remux_fragmented_recording_with_trigger(
             Err(e) => {
                 let reason = format!("{e}");
                 if let Some(app_handle) = app {
-                    crate::posthog::async_capture_event(
+                    crate::telemetry::async_capture_event(
                         app_handle,
-                        crate::posthog::PostHogEvent::RecordingRecoveryFailed {
+                        crate::telemetry::AnalyticsEvent::RecordingRecoveryFailed {
                             trigger,
                             reason: reason.clone(),
                         },
@@ -4088,8 +4112,8 @@ fn classify_error_message(error: &str) -> String {
 }
 
 async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableState<'_, App>) {
-    use crate::posthog::{PostHogEvent, async_capture_event};
     use crate::recording_telemetry::{mode_label, target_kind_label};
+    use crate::telemetry::{AnalyticsEvent, async_capture_event};
 
     let (mode, recording_mode, target_kind, has_camera, has_mic, has_system_audio) = {
         let state = state_mtx.read().await;
@@ -4127,7 +4151,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 
     async_capture_event(
         app,
-        PostHogEvent::RecordingStarted {
+        AnalyticsEvent::RecordingStarted {
             mode,
             target_kind,
             has_camera,
@@ -4320,6 +4344,31 @@ mod tests {
         assert!(!desktop_background_source_requires_user_prompt_for_home(
             Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
             home
+        ));
+    }
+
+    #[test]
+    fn notch_overlay_requires_recorded_geometry_on_screen_target() {
+        let display = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        let area = ScreenCaptureTarget::Area {
+            screen: "1".parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(0.0, 0.0),
+                scap_targets::bounds::LogicalSize::new(100.0, 100.0),
+            ),
+        };
+
+        assert!(should_enable_notch_overlay(Some(&display), true, true));
+        assert!(should_enable_notch_overlay(Some(&area), true, true));
+        assert!(!should_enable_notch_overlay(Some(&display), true, false));
+        assert!(!should_enable_notch_overlay(Some(&area), true, false));
+        assert!(!should_enable_notch_overlay(Some(&display), false, true));
+        assert!(!should_enable_notch_overlay(
+            Some(&ScreenCaptureTarget::CameraOnly),
+            true,
+            true
         ));
     }
 

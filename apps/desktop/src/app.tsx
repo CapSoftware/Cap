@@ -11,8 +11,8 @@ import "./styles/theme.css";
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
 import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
-import { generalSettingsStore } from "./store";
-import { initAnonymousUser } from "./utils/analytics";
+import { authStore, generalSettingsStore } from "./store";
+import { identifyUser, initAnonymousUser } from "./utils/analytics";
 import { appearanceIsDark } from "./utils/appearance";
 import { AutoRevealWindowOnReady } from "./utils/RevealWindow";
 import titlebar from "./utils/titlebar-state";
@@ -124,6 +124,11 @@ function Inner() {
 
 	onMount(() => {
 		initAnonymousUser();
+		// OpenPanel keeps profileId in memory only (PostHog persisted it), so
+		// sign-in-time identify alone loses attribution after an app restart.
+		void authStore.get().then((auth) => {
+			if (auth?.user_id) identifyUser(auth.user_id);
+		});
 		prewarmFontCaches();
 	});
 
@@ -253,7 +258,7 @@ function prewarmFontCaches() {
 			ctx.fillText("Ag", 0, 24);
 			ctx.font = "16px system-ui";
 			ctx.fillText("😀", 0, 24);
-		} catch {}
+		} catch { }
 	};
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);
