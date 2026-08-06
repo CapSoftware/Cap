@@ -9,11 +9,17 @@ use cap_enc_ffmpeg::{
     },
 };
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_recording::{RecordingHealth, output_validation::validate_instant_recording};
+use cap_recording::{
+    RecordingHealth, SharedPauseState, output_validation::validate_instant_recording,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 use tempfile::TempDir;
@@ -2333,6 +2339,267 @@ fn output_file_has_correct_codec() {
         codec_id,
         ffmpeg::codec::Id::H264,
         "Output video codec should be H.264"
+    );
+}
+
+#[test]
+fn pause_resume_full_pipeline_excises_pause_and_stays_uploadable() {
+    common::init();
+
+    let temp = TempDir::new().unwrap();
+    let content_dir = temp.path().join("content");
+    std::fs::create_dir_all(&content_dir).unwrap();
+
+    let video_dir = content_dir.join("display");
+    let audio_dir = content_dir.join("audio");
+
+    let mut video_encoder = SegmentedVideoEncoder::init(
+        video_dir.clone(),
+        default_video_info(),
+        SegmentedVideoEncoderConfig {
+            segment_duration: Duration::from_millis(500),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut audio_encoder = DashAudioSegmentEncoder::init(
+        audio_dir.clone(),
+        default_audio_info(),
+        DashAudioSegmentEncoderConfig {
+            segment_duration: Duration::from_millis(500),
+        },
+    )
+    .unwrap();
+
+    // The real instant-mode pause path: both muxers swallow frames while the
+    // shared flag is set and excise the pause span via SharedPauseState,
+    // exactly like MacOSFragmentedM4SMuxer and DashSegmentedAudioMuxer.
+    // 3s of capture with the recording paused over [1s, 2s).
+    let pause_flag = Arc::new(AtomicBool::new(false));
+    let video_pause = SharedPauseState::new(pause_flag.clone());
+    let audio_pause = SharedPauseState::new(pause_flag.clone());
+    let pause_window = Duration::from_secs(1)..Duration::from_secs(2);
+
+    let mut video_sent = 0u64;
+    for i in 0..90u64 {
+        let ts = Duration::from_nanos(i * 33_333_333 + 400);
+        pause_flag.store(pause_window.contains(&ts), Ordering::Release);
+        if let Some(adjusted) = video_pause.adjust(ts).unwrap() {
+            video_encoder
+                .queue_frame(make_video_frame(320, 240), adjusted)
+                .unwrap();
+            video_sent += 1;
+        }
+    }
+    assert!(
+        (55..=65).contains(&video_sent),
+        "one third of the video frames should be swallowed by the pause, sent {video_sent}"
+    );
+
+    let mut sample_offset = 0u64;
+    for i in 0..140u64 {
+        let ts = Duration::from_nanos(i * 1024 * 1_000_000_000 / 48_000);
+        pause_flag.store(pause_window.contains(&ts), Ordering::Release);
+        if let Some(adjusted) = audio_pause.adjust(ts).unwrap() {
+            audio_encoder
+                .queue_frame(default_audio_frame(1024, sample_offset), adjusted)
+                .unwrap();
+            sample_offset += 1024;
+        }
+    }
+
+    video_encoder.finish().unwrap();
+    audio_encoder.finish().unwrap();
+
+    let video_manifest = read_manifest(&video_dir.join("manifest.json"));
+    let audio_manifest = read_manifest(&audio_dir.join("manifest.json"));
+    assert!(video_manifest["is_complete"].as_bool().unwrap());
+    assert!(audio_manifest["is_complete"].as_bool().unwrap());
+
+    let video_segs: Vec<PathBuf> = video_manifest["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["is_complete"].as_bool().unwrap_or(false))
+        .filter_map(|s| {
+            let p = video_dir.join(s["path"].as_str()?);
+            p.exists().then_some(p)
+        })
+        .collect();
+    let audio_segs: Vec<PathBuf> = audio_manifest["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["is_complete"].as_bool().unwrap_or(false))
+        .filter_map(|s| {
+            let p = audio_dir.join(s["path"].as_str()?);
+            p.exists().then_some(p)
+        })
+        .collect();
+
+    let video_mp4 = temp.path().join("video.mp4");
+    concatenate_m4s_segments_with_init(&video_dir.join("init.mp4"), &video_segs, &video_mp4)
+        .unwrap();
+    let audio_m4a = temp.path().join("audio.m4a");
+    concatenate_m4s_segments_with_init(&audio_dir.join("init.mp4"), &audio_segs, &audio_m4a)
+        .unwrap();
+
+    let video_dur = get_media_duration(&video_mp4).unwrap().as_secs_f64();
+    let audio_dur = get_media_duration(&audio_m4a).unwrap().as_secs_f64();
+
+    assert!(
+        (1.6..=2.4).contains(&video_dur),
+        "3s capture with a 1s pause must produce ~2s of video, got {video_dur:.2}s \
+         (a value near 3s means the pause leaked into the timeline)"
+    );
+    assert!(
+        (1.6..=2.4).contains(&audio_dur),
+        "3s capture with a 1s pause must produce ~2s of audio, got {audio_dur:.2}s"
+    );
+    assert!(
+        (video_dur - audio_dur).abs() < 0.5,
+        "video ({video_dur:.2}s) and audio ({audio_dur:.2}s) must excise the pause identically"
+    );
+
+    let merged = content_dir.join("output.mp4");
+    merge_video_audio(&video_mp4, &audio_m4a, &merged).unwrap();
+
+    assert_valid_playable_mp4(&merged);
+    assert_has_video_stream(&merged);
+    assert_has_audio_stream(&merged);
+
+    let validation = validate_instant_recording(&merged, Duration::from_secs(2));
+    assert!(
+        validation.health.is_uploadable(),
+        "paused-and-resumed instant recording must stay uploadable, got {:?}",
+        validation.health
+    );
+}
+
+#[test]
+fn stall_recovery_burst_full_pipeline_stays_uploadable() {
+    common::init();
+
+    let temp = TempDir::new().unwrap();
+    let content_dir = temp.path().join("content");
+    std::fs::create_dir_all(&content_dir).unwrap();
+
+    let video_dir = content_dir.join("display");
+    let audio_dir = content_dir.join("audio");
+
+    let mut video_encoder = SegmentedVideoEncoder::init(
+        video_dir.clone(),
+        default_video_info(),
+        SegmentedVideoEncoderConfig {
+            segment_duration: Duration::from_millis(500),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut audio_encoder = DashAudioSegmentEncoder::init(
+        audio_dir.clone(),
+        default_audio_info(),
+        DashAudioSegmentEncoderConfig {
+            segment_duration: Duration::from_millis(500),
+        },
+    )
+    .unwrap();
+
+    // The 0.5.8 field-failure shape at the pipeline level: video delivers
+    // normally, stalls for 1.5s, then flushes a burst of backlogged frames
+    // landing nanoseconds apart (same microsecond), while audio keeps
+    // flowing through the stall.
+    let frame_ns = 33_333_333u64;
+    let mut video_timestamps: Vec<Duration> = Vec::new();
+    for i in 0..30u64 {
+        video_timestamps.push(Duration::from_nanos(i * frame_ns + 400));
+    }
+    let stall_end = 30 * frame_ns + 1_500_000_000;
+    for i in 0..10u64 {
+        video_timestamps.push(Duration::from_nanos(stall_end + i * 300));
+    }
+    for i in 1..=45u64 {
+        video_timestamps.push(Duration::from_nanos(stall_end + i * frame_ns));
+    }
+
+    for (i, &ts) in video_timestamps.iter().enumerate() {
+        video_encoder
+            .queue_frame(make_video_frame(320, 240), ts)
+            .unwrap_or_else(|e| panic!("video frame {i} at {ts:?} rejected: {e}"));
+    }
+
+    let total_capture = Duration::from_nanos(stall_end + 45 * frame_ns);
+    let mut sample_offset = 0u64;
+    let mut audio_ts = Duration::ZERO;
+    while audio_ts < total_capture {
+        audio_encoder
+            .queue_frame(default_audio_frame(1024, sample_offset), audio_ts)
+            .unwrap();
+        sample_offset += 1024;
+        audio_ts = Duration::from_nanos(sample_offset * 1_000_000_000 / 48_000);
+    }
+
+    video_encoder.finish().unwrap();
+    audio_encoder.finish().unwrap();
+
+    let video_manifest = read_manifest(&video_dir.join("manifest.json"));
+    let audio_manifest = read_manifest(&audio_dir.join("manifest.json"));
+    assert!(video_manifest["is_complete"].as_bool().unwrap());
+    assert!(audio_manifest["is_complete"].as_bool().unwrap());
+
+    let video_segs: Vec<PathBuf> = video_manifest["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["is_complete"].as_bool().unwrap_or(false))
+        .filter_map(|s| {
+            let p = video_dir.join(s["path"].as_str()?);
+            p.exists().then_some(p)
+        })
+        .collect();
+    let audio_segs: Vec<PathBuf> = audio_manifest["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["is_complete"].as_bool().unwrap_or(false))
+        .filter_map(|s| {
+            let p = audio_dir.join(s["path"].as_str()?);
+            p.exists().then_some(p)
+        })
+        .collect();
+
+    let video_mp4 = temp.path().join("video.mp4");
+    concatenate_m4s_segments_with_init(&video_dir.join("init.mp4"), &video_segs, &video_mp4)
+        .unwrap();
+    let audio_m4a = temp.path().join("audio.m4a");
+    concatenate_m4s_segments_with_init(&audio_dir.join("init.mp4"), &audio_segs, &audio_m4a)
+        .unwrap();
+
+    let expected_secs = total_capture.as_secs_f64();
+    let video_dur = get_media_duration(&video_mp4).unwrap().as_secs_f64();
+    let audio_dur = get_media_duration(&audio_m4a).unwrap().as_secs_f64();
+    assert!(
+        (video_dur - expected_secs).abs() < 0.5,
+        "the stall must stay in the video timeline (expected ~{expected_secs:.2}s, got \
+         {video_dur:.2}s); collapsing it desyncs video from audio"
+    );
+    assert!(
+        (video_dur - audio_dur).abs() < 1.0,
+        "video ({video_dur:.2}s) and audio ({audio_dur:.2}s) must stay aligned across the stall"
+    );
+
+    let merged = content_dir.join("output.mp4");
+    merge_video_audio(&video_mp4, &audio_m4a, &merged).unwrap();
+
+    assert_valid_playable_mp4(&merged);
+    assert_has_video_stream(&merged);
+    assert_has_audio_stream(&merged);
+
+    let validation = validate_instant_recording(&merged, total_capture);
+    assert!(
+        validation.health.is_uploadable(),
+        "stall-recovery burst recording must stay uploadable, got {:?}",
+        validation.health
     );
 }
 
