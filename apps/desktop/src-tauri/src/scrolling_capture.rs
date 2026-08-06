@@ -34,6 +34,10 @@ pub async fn capture_scrolling_window(
     app: AppHandle,
     window_id: WindowId,
 ) -> Result<std::path::PathBuf, String> {
+    if !cfg!(any(windows, target_os = "macos")) {
+        return Err("Scrolling capture is not supported on this platform yet".to_string());
+    }
+
     let target = ScreenCaptureTarget::Window {
         id: window_id.clone(),
     };
@@ -71,7 +75,13 @@ pub async fn capture_scrolling_window(
             break;
         }
 
-        let new_rows = offset.min(frame_height);
+        let remaining_rows = MAX_STITCHED_HEIGHT.saturating_sub(stitched_height);
+        let new_rows = offset.min(frame_height).min(remaining_rows);
+        if new_rows == 0 {
+            debug!("Stitched image reached the height cap; stopping");
+            break;
+        }
+
         let strip = frame.crop_imm(0, frame_height - new_rows, frame_width, new_rows);
         stitched.push(strip);
         stitched_height += new_rows;
