@@ -123,3 +123,43 @@ app.get("/:id/status", async (c) => {
 		},
 	});
 });
+
+app.get("/:id/transcript", async (c) => {
+	const appId = c.get("developerAppId");
+	const videoId = c.req.param("id");
+
+	const [video] = await db()
+		.select()
+		.from(developerVideos)
+		.where(
+			and(
+				eq(developerVideos.id, videoId),
+				eq(developerVideos.appId, appId),
+				isNull(developerVideos.deletedAt),
+			),
+		)
+		.limit(1);
+
+	if (!video) {
+		return c.json({ error: "Video not found" }, 404);
+	}
+
+	if (video.transcriptionStatus === "PROCESSING") {
+		return c.json({ error: "Transcript still processing" }, 202);
+	}
+
+	if (video.transcriptionStatus !== "COMPLETE") {
+		return c.json(
+			{ error: "No transcript available", status: video.transcriptionStatus },
+			400,
+		);
+	}
+
+	return c.json({
+		data: {
+			id: video.id,
+			transcriptionStatus: video.transcriptionStatus,
+			s3Key: video.s3Key,
+		},
+	});
+});
