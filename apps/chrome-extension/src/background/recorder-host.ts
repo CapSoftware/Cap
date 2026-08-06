@@ -17,7 +17,7 @@ const getRecorderContexts = async () => {
 	return new Promise<Array<{ documentUrl?: string }>>((resolve) => {
 		chrome.runtime.getContexts(
 			{
-				contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+				contextTypes: ["OFFSCREEN_DOCUMENT" as chrome.runtime.ContextType],
 				documentUrls: [recorderUrl],
 			},
 			(contexts) => resolve(contexts),
