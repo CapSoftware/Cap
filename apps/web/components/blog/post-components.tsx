@@ -1,6 +1,4 @@
 import type { ComponentType } from "react";
-import { BranchesDemo } from "./timeline/BranchesDemo";
-import { ReplyDemo } from "./timeline/ReplyDemo";
 import { ToggleDemo } from "./timeline/ToggleDemo";
 
 /**
@@ -14,8 +12,6 @@ type PostComponents = Record<string, ComponentType>;
 
 const POST_COMPONENTS: Record<string, PostComponents> = {
 	"timeline-view": {
-		BranchesDemo,
-		ReplyDemo,
 		ToggleDemo,
 	},
 };
