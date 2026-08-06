@@ -164,6 +164,35 @@ const trackVideoView = (payload: {
 	});
 };
 
+const PROGRESS_MILESTONES = [25, 50, 75, 95] as const;
+
+const trackVideoProgress = (videoId: string, percentWatched: number) => {
+	if (typeof window === "undefined") return;
+	const sessionId = ensureAnalyticsSessionId();
+	const body = JSON.stringify({
+		videoId,
+		sessionId,
+		action: "video_progress",
+		percentWatched,
+	});
+	if (
+		typeof navigator !== "undefined" &&
+		typeof navigator.sendBeacon === "function"
+	) {
+		navigator.sendBeacon(
+			"/api/analytics/track",
+			new Blob([body], { type: "application/json" }),
+		);
+	} else {
+		void fetch("/api/analytics/track", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body,
+			keepalive: true,
+		});
+	}
+};
+
 type AiGenerationStatus =
 	| "QUEUED"
 	| "PROCESSING"
@@ -388,6 +417,42 @@ export const Share = ({
 			ownerId: data.owner.id,
 		});
 	}, [data.id, data.orgId, data.owner.id, viewerId]);
+
+	useEffect(() => {
+		if (viewerId && viewerId === data.owner.id) return;
+
+		const fired = new Set<number>();
+
+		const onTimeUpdate = (e: Event) => {
+			const video = e.currentTarget as HTMLVideoElement;
+			if (!video.duration || video.duration === 0) return;
+			const pct = (video.currentTime / video.duration) * 100;
+			for (const milestone of PROGRESS_MILESTONES) {
+				if (!fired.has(milestone) && pct >= milestone) {
+					fired.add(milestone);
+					trackVideoProgress(data.id, milestone);
+				}
+			}
+		};
+
+		let cleanup: (() => void) | null = null;
+
+		const attach = () => {
+			const video = playerRef.current;
+			if (!video) return false;
+			video.addEventListener("timeupdate", onTimeUpdate);
+			cleanup = () => video.removeEventListener("timeupdate", onTimeUpdate);
+			return true;
+		};
+
+		let raf = 0;
+		if (!attach()) raf = requestAnimationFrame(() => attach());
+
+		return () => {
+			cancelAnimationFrame(raf);
+			cleanup?.();
+		};
+	}, [data.id, data.owner.id, viewerId]);
 
 	const isDisabled = (setting: ViewerSettingKey) =>
 		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
