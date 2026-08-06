@@ -98,7 +98,8 @@ const isRecordingStatus = (
 const resolveAvailableMode = (mode: RecordingMode): RecordingMode =>
 	mode === "tab" && !capabilities.supportsTabCapture ? "fullscreen" : mode;
 
-const HOST_PERMISSION_ORIGINS = ["http://*/*", "https://*/*"];
+// Keep in sync with welcome/main.ts and the Firefox manifest host_permissions.
+const HOST_PERMISSION_ORIGINS = ["http://*/*", "https://*/*", "file:///*"];
 
 function App() {
 	// This page is web accessible, so any site can put it in an iframe and
