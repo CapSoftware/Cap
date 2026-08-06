@@ -82,6 +82,18 @@ export async function uploadCommentMedia(input: CommentMediaUploadInput) {
 
 	if (isVideo) {
 		if (!init.uploadId) throw new CommentMediaUploadError("failed");
+		// Monotonic merge of two progress sources: sendProgressUpdate ticks only
+		// when a whole part lands (a typical comment is ONE part — that alone
+		// would jump 0→100), while chunk states carry the XHR's byte-level
+		// progress inside each part. Take whichever is further along.
+		let bestFraction = 0;
+		const totalBytes = input.blob.size;
+		const report = (fraction: number) => {
+			const clamped = Math.min(1, fraction);
+			if (clamped <= bestFraction) return;
+			bestFraction = clamped;
+			input.onProgress?.(clamped);
+		};
 		const uploader = new InstantRecordingUploader({
 			// Only used for labels and passthrough body fields the comment routes
 			// ignore; authorization travels in the token.
@@ -92,7 +104,15 @@ export async function uploadCommentMedia(input: CommentMediaUploadInput) {
 			subpath: init.key,
 			setUploadStatus: () => {},
 			sendProgressUpdate: async (uploaded, total) => {
-				if (total > 0) input.onProgress?.(Math.min(1, uploaded / total));
+				if (total > 0) report(uploaded / total);
+			},
+			onChunkStateChange: (chunks) => {
+				if (totalBytes <= 0) return;
+				const uploaded = chunks.reduce(
+					(sum, chunk) => sum + chunk.uploadedBytes,
+					0,
+				);
+				report(uploaded / totalBytes);
 			},
 			api: {
 				multipartBasePath: COMMENT_MEDIA_BASE,
