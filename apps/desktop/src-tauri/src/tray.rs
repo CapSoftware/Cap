@@ -451,27 +451,29 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
         None::<&str>,
     )?)?;
 
+    use crate::hotkeys::{HotkeyAction, get_hotkey_accelerator};
+
     if is_screenshot_mode {
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordDisplay,
             "Screenshot Display",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::ScreenshotDisplay),
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordWindow,
             "Screenshot Window",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::ScreenshotWindow),
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordArea,
             "Screenshot Area",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::ScreenshotArea),
         )?)?;
     } else {
         menu.append(&MenuItem::with_id(
@@ -479,28 +481,28 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
             TrayItem::RecordDisplay,
             "Record Display",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::OpenRecordingPickerDisplay),
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordWindow,
             "Record Window",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::OpenRecordingPickerWindow),
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::RecordArea,
             "Record Area",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::OpenRecordingPickerArea),
         )?)?;
         menu.append(&MenuItem::with_id(
             app,
             TrayItem::TakeScreenshot,
             "Take a Screenshot",
             true,
-            None::<&str>,
+            get_hotkey_accelerator(app, HotkeyAction::ScreenshotDisplay),
         )?)?;
     }
 

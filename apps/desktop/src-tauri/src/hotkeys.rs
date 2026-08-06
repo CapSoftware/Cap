@@ -21,11 +21,38 @@ use tracing::instrument;
 #[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy, Debug)]
 pub struct Hotkey {
     #[specta(type = String)]
-    code: Code,
-    meta: bool,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
+    pub code: Code,
+    pub meta: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl Hotkey {
+    pub fn to_accelerator_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.meta {
+            parts.push("CmdOrCtrl");
+        }
+        if self.ctrl {
+            parts.push("Ctrl");
+        }
+        if self.alt {
+            parts.push("Alt");
+        }
+        if self.shift {
+            parts.push("Shift");
+        }
+        let code_str = format!("{:?}", self.code);
+        parts.push(&code_str);
+        parts.join("+")
+    }
+}
+
+pub fn get_hotkey_accelerator(app: &AppHandle, action: HotkeyAction) -> Option<String> {
+    let state = app.try_state::<HotkeysState>()?;
+    let store = state.lock().ok()?;
+    store.hotkeys.get(&action).map(|h| h.to_accelerator_string())
 }
 
 impl From<Hotkey> for Shortcut {
@@ -361,6 +388,8 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
     if let Some(hotkey) = hotkey {
         global_shortcut.register(Shortcut::from(hotkey)).ok();
     }
+
+    tray::refresh_tray_menu_for_app(&app);
 
     Ok(())
 }
