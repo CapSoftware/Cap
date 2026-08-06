@@ -2,10 +2,18 @@
 	"manifest_version": 3,
 	"name": "Cap - Screen Recorder & Screen Capture",
 	"short_name": "Cap",
-	"description": "Free, open source screen recorder. Capture your screen, tab, camera & mic in Chrome and share a video link the moment you stop.",
+	"description": "Free, open source screen recorder. Capture your screen, camera & mic in Firefox and share a video link the moment you stop.",
 	"version": "1.0.3",
 	"homepage_url": "https://cap.so",
-	"minimum_chrome_version": "116",
+	"browser_specific_settings": {
+		"gecko": {
+			"id": "extension@cap.so",
+			"strict_min_version": "128.0",
+			"data_collection_permissions": {
+				"required": ["authenticationInfo", "websiteContent"]
+			}
+		}
+	},
 	"icons": {
 		"16": "icons/icon-16.png",
 		"32": "icons/icon-32.png",
@@ -22,18 +30,13 @@
 		}
 	},
 	"background": {
-		"service_worker": "assets/service-worker.js",
-		"type": "module"
+		"scripts": ["assets/service-worker.js"]
 	},
-	"options_page": "options.html",
-	"permissions": [
-		"activeTab",
-		"identity",
-		"offscreen",
-		"scripting",
-		"storage",
-		"tabCapture"
-	],
+	"options_ui": {
+		"page": "options.html",
+		"open_in_tab": true
+	},
+	"permissions": ["activeTab", "identity", "scripting", "storage"],
 	"host_permissions": ["http://*/*", "https://*/*", "file:///*"],
 	"content_scripts": [
 		{
@@ -49,8 +52,7 @@
 		},
 		{
 			"resources": ["camera-preview.html", "popup.html"],
-			"matches": ["http://*/*", "https://*/*", "file:///*"],
-			"use_dynamic_url": true
+			"matches": ["http://*/*", "https://*/*", "file:///*"]
 		}
 	]
 }
