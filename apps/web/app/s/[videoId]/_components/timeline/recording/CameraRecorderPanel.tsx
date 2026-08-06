@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useCameraDevices } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useCameraDevices";
+import { useEffect, useRef } from "react";
 import { formatClock } from "../timeline-format";
+import { DevicePill } from "./DevicePill";
+import { MicMuteButton } from "./MicMuteButton";
+import { PauseResumeButton } from "./PauseResumeButton";
+import { useCommentMediaDevices } from "./useCommentMediaDevices";
 import {
 	type CommentRecording,
 	useCommentRecorder,
 } from "./useCommentRecorder";
 
 /**
- * Inline camera reply: mirrored live preview, device picker only when there's
- * a choice, Start → timer → Stop. Mic is on by default (mutable).
+ * Inline camera reply: mirrored live preview, camera/mic pickers backed by the
+ * shared web recorder engine, Start → timer → Stop. Mic is on by default
+ * (mutable), and stays switchable even mid-recording; the camera locks while
+ * recording because its track feeds the encoder directly.
  */
 export function CameraRecorderPanel({
 	timestamp,
@@ -22,28 +27,43 @@ export function CameraRecorderPanel({
 	onCancel: () => void;
 }) {
 	const previewRef = useRef<HTMLVideoElement | null>(null);
-	const [opened, setOpened] = useState(false);
-	const { devices: cameras } = useCameraDevices(true);
+	const devices = useCommentMediaDevices();
 
 	const {
 		phase,
 		durationMs,
 		micMuted,
 		previewStream,
+		switchingCamera,
+		liveMicSwitchable,
 		error,
 		openCamera,
+		switchCamera,
+		switchMic,
 		startCameraRecording,
 		toggleMic,
+		pause,
+		resume,
 		stop,
 		cancel,
-	} = useCommentRecorder({ onFinish, onPickerCancelled: onCancel });
+	} = useCommentRecorder({
+		onFinish,
+		onPickerCancelled: onCancel,
+		selectedCameraId: devices.selectedCameraId,
+		selectedMicId: devices.selectedMicId,
+		onCameraInUse: devices.adoptCamera,
+		onMicInUse: devices.adoptMic,
+		onDevicesChanged: devices.refreshDevices,
+	});
 
+	// Cancellable-timeout auto-start: survives StrictMode's mount → cancel →
+	// remount cycle with exactly one getUserMedia.
+	const openRef = useRef(openCamera);
+	openRef.current = openCamera;
 	useEffect(() => {
-		if (!opened) {
-			setOpened(true);
-			void openCamera();
-		}
-	}, [openCamera, opened]);
+		const id = window.setTimeout(() => void openRef.current(), 0);
+		return () => window.clearTimeout(id);
+	}, []);
 
 	useEffect(() => {
 		if (previewRef.current && previewStream)
@@ -55,10 +75,18 @@ export function CameraRecorderPanel({
 		onCancel();
 	};
 
-	const switchCamera = (deviceId: string) => {
-		cancel();
-		void openCamera({ camera: deviceId });
+	const handleCameraSelect = (deviceId: string) => {
+		devices.selectCamera(deviceId);
+		void switchCamera(deviceId);
 	};
+
+	const handleMicSelect = (deviceId: string) => {
+		devices.selectMic(deviceId);
+		void switchMic(deviceId);
+	};
+
+	const live = phase === "recording" || phase === "paused";
+	const micSwitchable = phase === "ready" || (live && liveMicSwitchable);
 
 	return (
 		<div className="new-card-style flex w-80 flex-col gap-2 p-2.5">
@@ -76,60 +104,69 @@ export function CameraRecorderPanel({
 						className="size-full -scale-x-100 object-cover"
 					/>
 				)}
-				{phase === "recording" && (
+				{switchingCamera && (
+					<div className="absolute inset-0 grid place-items-center bg-gray-3/60">
+						<span className="size-5 animate-spin rounded-full border-2 border-gray-8 border-t-transparent" />
+					</div>
+				)}
+				{live && (
 					<span className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full bg-black/55 px-2 py-0.5 text-[11px] tabular-nums text-white backdrop-blur-md">
-						<span className="inline-flex size-2 rounded-full bg-red-500" />
+						<span
+							className={`inline-flex size-2 rounded-full ${
+								phase === "paused" ? "bg-gray-8" : "bg-red-500"
+							}`}
+						/>
 						{formatClock(durationMs / 1000)}
+						{phase === "paused" && (
+							<span className="text-white/70">Paused</span>
+						)}
 					</span>
 				)}
 			</div>
 
-			<div className="flex items-center gap-1.5">
-				<span className="rounded-md bg-gray-2 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-gray-11 ring-1 ring-gray-4">
-					{formatClock(timestamp)}
-				</span>
+			{(devices.cameras.length > 1 || devices.mics.length > 1) && (
+				<div className="flex items-center gap-1.5">
+					{devices.cameras.length > 1 && (
+						<DevicePill
+							kind="camera"
+							devices={devices.cameras}
+							selectedId={devices.selectedCameraId}
+							onSelect={handleCameraSelect}
+							disabled={phase !== "ready" || switchingCamera}
+							title={live ? "Stop recording to switch cameras" : undefined}
+							className="min-w-0 flex-1"
+						/>
+					)}
+					{devices.mics.length > 1 && (
+						<DevicePill
+							kind="mic"
+							devices={devices.mics}
+							selectedId={devices.selectedMicId}
+							onSelect={handleMicSelect}
+							disabled={!micSwitchable}
+							className="min-w-0 flex-1"
+						/>
+					)}
+				</div>
+			)}
 
-				{cameras.length > 1 && phase === "ready" && (
-					<select
-						aria-label="Camera"
-						onChange={(event) => switchCamera(event.target.value)}
-						className="h-7 max-w-28 truncate rounded-lg bg-gray-2 px-1.5 text-[11px] text-gray-11 ring-1 ring-gray-4 outline-none"
-					>
-						{cameras.map((camera) => (
-							<option key={camera.deviceId} value={camera.deviceId}>
-								{camera.label || "Camera"}
-							</option>
-						))}
-					</select>
+			<div className="flex items-center gap-1.5">
+				{/* 0 = the viewer wasn't at a moment in the video; no stamp to show. */}
+				{timestamp > 0 && (
+					<span className="rounded-md bg-gray-2 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-gray-11 ring-1 ring-gray-4">
+						{formatClock(timestamp)}
+					</span>
 				)}
 
-				<button
-					type="button"
-					onClick={toggleMic}
-					aria-label={micMuted ? "Unmute microphone" : "Mute microphone"}
-					aria-pressed={micMuted}
-					className={`flex size-7 items-center justify-center rounded-lg ring-1 ring-gray-4 transition-colors ${
-						micMuted ? "bg-gray-3 text-gray-9" : "bg-gray-2 text-gray-12"
-					}`}
-				>
-					<svg
-						viewBox="0 0 16 16"
-						className="size-3.5"
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<path d="M8 1.5A2.25 2.25 0 0 0 5.75 3.75v3.5a2.25 2.25 0 0 0 4.5 0v-3.5A2.25 2.25 0 0 0 8 1.5Z" />
-						<path d="M3.75 6.75a.65.65 0 0 1 1.3 0v.5a2.95 2.95 0 0 0 5.9 0v-.5a.65.65 0 0 1 1.3 0v.5a4.25 4.25 0 0 1-3.6 4.2v1.55h1.6a.65.65 0 0 1 0 1.3h-4.5a.65.65 0 0 1 0-1.3h1.6v-1.55a4.25 4.25 0 0 1-3.6-4.2v-.5Z" />
-						{micMuted && (
-							<path
-								d="M2 2l12 12"
-								stroke="currentColor"
-								strokeWidth="1.4"
-								strokeLinecap="round"
-							/>
-						)}
-					</svg>
-				</button>
+				<MicMuteButton muted={micMuted} onToggle={toggleMic} shape="square" />
+
+				{live && (
+					<PauseResumeButton
+						paused={phase === "paused"}
+						onToggle={phase === "paused" ? resume : pause}
+						shape="square"
+					/>
+				)}
 
 				<div className="flex-1" />
 
@@ -140,10 +177,10 @@ export function CameraRecorderPanel({
 				>
 					Cancel
 				</button>
-				{phase === "recording" ? (
+				{live ? (
 					<button
 						type="button"
-						onClick={stop}
+						onClick={() => void stop()}
 						className="flex h-7 items-center gap-1.5 rounded-lg bg-gray-12 px-3 text-xs font-medium text-white transition-opacity hover:opacity-90"
 					>
 						<span className="inline-flex size-2 rounded-sm bg-red-400" />
@@ -152,8 +189,8 @@ export function CameraRecorderPanel({
 				) : (
 					<button
 						type="button"
-						onClick={startCameraRecording}
-						disabled={phase !== "ready"}
+						onClick={() => void startCameraRecording()}
+						disabled={phase !== "ready" || switchingCamera}
 						className="h-7 rounded-lg bg-blue-9 px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
 					>
 						Start
