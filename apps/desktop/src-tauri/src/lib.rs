@@ -6,6 +6,7 @@ mod audio_library;
 mod audio_meter;
 mod auth;
 mod automation;
+mod barcode;
 mod camera;
 mod camera_legacy;
 #[cfg(target_os = "macos")]

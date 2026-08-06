@@ -2826,8 +2826,24 @@ pub async fn capture_ocr_text(
 
     let image = capture_screen_image(&app, target.clone()).await?;
 
-    let text = crate::screenshot_editor::recognize_text_from_dynamic_image(&image).await?;
-    let text = text.trim().to_string();
+    // A QR code or barcode in the selection takes priority over OCR: its
+    // decoded payload is what the user is after, and OCR would only pick up
+    // surrounding text.
+    let barcode = {
+        let image = image.clone();
+        tokio::task::spawn_blocking(move || crate::barcode::decode_barcode(&image))
+            .await
+            .ok()
+            .flatten()
+    };
+
+    let text = match barcode {
+        Some(payload) => payload,
+        None => {
+            let text = crate::screenshot_editor::recognize_text_from_dynamic_image(&image).await?;
+            text.trim().to_string()
+        }
+    };
 
     if text.is_empty() {
         return Err("No text was found in the selected area".to_string());
