@@ -47,7 +47,7 @@ const validateExtensionRedirectUri = (redirectUri: string) =>
 		}
 
 		const extensionId = url.hostname.slice(0, -identityHost.suffix.length);
-		const configuredExtensionId = identityHost.getConfiguredExtensionId();
+		const configuredExtensionId = identityHost.getConfiguredExtensionId()?.toLowerCase();
 
 		if (configuredExtensionId) {
 			if (extensionId !== configuredExtensionId) {
