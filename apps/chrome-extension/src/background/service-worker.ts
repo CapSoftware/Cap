@@ -1922,11 +1922,13 @@ chrome.runtime.onInstalled.addListener((details) => {
 	}
 });
 
-chrome.action.onClicked.addListener((tab) => {
-	// sidePanel.open must ride the click gesture, which Chrome can void
-	// across async hops — so decide synchronously. The tab is right in the
-	// event, injectability is a pure URL check, and the in-memory status
-	// mirror covers the "clicking stops a live recording" case.
+chrome.action.onClicked.addListener(async (tab) => {
+	// Wait for the startup panel-flag refresh so that a click arriving
+	// immediately after an MV3 worker restart reads the correct value.
+	// standaloneFlagReady resolves as a microtask when already settled
+	// (the common case), preserving Chrome's click-gesture window for
+	// sidePanel.open.
+	await standaloneFlagReady;
 	if (
 		chrome.sidePanel &&
 		!canInjectIntoTab(tab) &&
