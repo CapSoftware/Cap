@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 
-const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
-const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
-const PREFERRED_MICROPHONE_KEY = "cap-web-recorder-preferred-microphone";
+export const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
+export const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
+export const PREFERRED_MICROPHONE_KEY = "cap-web-recorder-preferred-microphone";
 const SYSTEM_AUDIO_ENABLED_KEY = "cap-web-recorder-system-audio";
 
 interface DevicePreferencesOptions {
