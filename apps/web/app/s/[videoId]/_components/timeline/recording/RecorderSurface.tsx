@@ -3,6 +3,7 @@
 import { Comment, type Video } from "@cap/web-domain";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { startTransition, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { captureThumbnail } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/recording-conversion";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -12,19 +13,23 @@ import {
 	remapLocalMediaUrl,
 	setLocalMediaUrl,
 } from "../../media-comment/local-media-urls";
+import {
+	clearUploadProgress,
+	setUploadProgress,
+} from "../../media-comment/upload-progress";
 import type { RecordIntentKind } from "../TimelineComposer";
 import { formatClock } from "../timeline-format";
 import { CameraRecorderPanel } from "./CameraRecorderPanel";
 import { normalizeCommentMedia } from "./convert-comment-media";
 import { MediaPreviewPanel } from "./MediaPreviewPanel";
-import { ScreenRecorderFloatingBar } from "./ScreenRecorderFloatingBar";
+import { ScreenRecorderPanel } from "./ScreenRecorderPanel";
 import {
 	CommentMediaUploadError,
 	uploadCommentMedia,
 } from "./upload-comment-media";
 import type { CommentRecording } from "./useCommentRecorder";
 import type { VoiceRecording } from "./useVoiceRecorder";
-import { VoiceRecorderBar } from "./VoiceRecorderBar";
+import { VoiceRecorderPanel } from "./VoiceRecorderPanel";
 
 export interface RecorderSurfaceProps {
 	kind: RecordIntentKind;
@@ -33,6 +38,13 @@ export interface RecorderSurfaceProps {
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
 	onClose: () => void;
+	/**
+	 * "anchored": absolutely positioned above the mount point — the timeline
+	 * composer, whose shelf is a positioned ancestor built for escaping cards.
+	 * "floating": portaled to a fixed bottom-center bar, for composers living
+	 * inside clipping containers (the sidebar's tab pane, the reaction bar).
+	 */
+	placement?: "anchored" | "floating";
 }
 
 interface PendingVideo {
@@ -49,7 +61,7 @@ const uploadErrorMessage = (error: unknown) => {
 		if (error.reason === "upgrade_required")
 			return "Media comments aren't available on this video.";
 		if (error.reason === "rate_limited")
-			return "You're sending media comments too fast — try again in a bit.";
+			return "You're sending media comments too fast. Try again in a bit.";
 	}
 	return "Couldn't send your recording. Please try again.";
 };
@@ -66,6 +78,7 @@ export default function RecorderSurface({
 	onOptimisticComment,
 	onCommentSuccess,
 	onClose,
+	placement = "anchored",
 }: RecorderSurfaceProps) {
 	const user = useCurrentUser();
 	const reduceMotion = useReducedMotion() ?? false;
@@ -86,6 +99,9 @@ export default function RecorderSurface({
 
 			const tempId = Comment.CommentId.make(`temp-${Date.now()}`);
 			setLocalMediaUrl(tempId, URL.createObjectURL(input.blob));
+			// An entry from the very start: the card reads 0% as "preparing" while
+			// conversion and the thumbnail run, before any bytes move.
+			setUploadProgress(tempId, 0);
 
 			const now = new Date();
 			const optimistic: CommentType = {
@@ -141,12 +157,18 @@ export default function RecorderSurface({
 					waveform: input.waveform,
 					thumbnailBlob,
 					authorImage: user.imageUrl,
+					onProgress: (fraction) => setUploadProgress(tempId, fraction),
 				});
 				remapLocalMediaUrl(tempId, saved.id);
-				onCommentSuccess?.(saved as CommentType);
+				clearUploadProgress(tempId);
+				// clientKey keeps the real comment on the optimistic card's React
+				// key, so the settle swaps data inside the same mounted card instead
+				// of remounting it (which restarts playback and flashes the poster).
+				onCommentSuccess?.({ ...(saved as CommentType), clientKey: tempId });
 				return saved;
 			})().catch((error) => {
 				dropLocalMediaUrl(tempId);
+				clearUploadProgress(tempId);
 				throw error;
 			});
 
@@ -155,7 +177,11 @@ export default function RecorderSurface({
 					input.mediaKind === "video"
 						? "Sending video comment…"
 						: "Sending voice note…",
-				success: `Comment added at ${formatClock(timestamp)}`,
+				// 0 means "wasn't watching yet", not a chosen moment — no stamp.
+				success:
+					timestamp > 0
+						? `Comment added at ${formatClock(timestamp)}`
+						: "Comment added",
 				error: uploadErrorMessage,
 			});
 
@@ -207,66 +233,81 @@ export default function RecorderSurface({
 		onClose();
 	}, [onClose]);
 
+	// Retake goes back to the recorder for another take (camera re-opens its
+	// preview, screen returns to its setup card) — closing the whole surface
+	// here would turn "Retake" into a lie.
+	const handleRetake = useCallback(() => {
+		setPendingVideo(null);
+	}, []);
+
 	if (!user) return null;
 
-	const anchored = kind !== "screen" || pendingVideo !== null;
-
-	return (
-		<>
-			{anchored && (
-				<AnimatePresence>
-					<motion.div
-						key="recorder-surface"
-						className="absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2"
-						initial={
-							reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.96 }
-						}
-						animate={
-							reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }
-						}
-						exit={
-							reduceMotion
-								? { opacity: 0, transition: { duration: 0 } }
-								: { opacity: 0, scale: 0.95, transition: { duration: 0.12 } }
-						}
-						transition={
-							reduceMotion
-								? { duration: 0 }
-								: { type: "spring", stiffness: 420, damping: 34 }
-						}
-					>
-						{pendingVideo ? (
-							<MediaPreviewPanel
-								blob={pendingVideo.blob}
-								durationSeconds={pendingVideo.durationSeconds}
-								timestamp={timestamp}
-								onSend={handlePreviewSend}
-								onDiscard={handleCancel}
-							/>
-						) : kind === "voice" ? (
-							<VoiceRecorderBar
-								timestamp={timestamp}
-								onFinish={handleVoiceFinish}
-								onCancel={handleCancel}
-							/>
-						) : kind === "camera" ? (
-							<CameraRecorderPanel
-								timestamp={timestamp}
-								onFinish={handleVideoFinish}
-								onCancel={handleCancel}
-							/>
-						) : null}
-					</motion.div>
-				</AnimatePresence>
-			)}
-
-			{kind === "screen" && !pendingVideo && (
-				<ScreenRecorderFloatingBar
-					timestamp={timestamp}
-					onFinish={handleVideoFinish}
-					onCancel={handleCancel}
-				/>
-			)}
-		</>
+	// AnimatePresence outlives the conditional child so the exit animation can
+	// actually play when the panel swaps away.
+	const panel = (
+		<AnimatePresence>
+			<motion.div
+				key="recorder-surface"
+				className={
+					placement === "floating"
+						? "fixed bottom-6 left-1/2 z-[60] max-w-[calc(100vw-1.5rem)]"
+						: "absolute bottom-full left-1/2 z-50 mb-2"
+				}
+				// Centering rides in style, not className: motion owns the inline
+				// transform while animating y/scale and silently drops a class-based
+				// -translate-x-1/2 (the panel then hangs off the anchor's right).
+				style={{ translateX: "-50%" }}
+				initial={
+					reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.96 }
+				}
+				animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+				exit={
+					reduceMotion
+						? { opacity: 0, transition: { duration: 0 } }
+						: { opacity: 0, scale: 0.95, transition: { duration: 0.12 } }
+				}
+				transition={
+					reduceMotion
+						? { duration: 0 }
+						: { type: "spring", stiffness: 420, damping: 34 }
+				}
+			>
+				{pendingVideo ? (
+					<MediaPreviewPanel
+						blob={pendingVideo.blob}
+						durationSeconds={pendingVideo.durationSeconds}
+						timestamp={timestamp}
+						onSend={handlePreviewSend}
+						onDiscard={handleRetake}
+					/>
+				) : kind === "voice" ? (
+					<VoiceRecorderPanel
+						timestamp={timestamp}
+						onFinish={handleVoiceFinish}
+						onCancel={handleCancel}
+					/>
+				) : kind === "camera" ? (
+					<CameraRecorderPanel
+						timestamp={timestamp}
+						onFinish={handleVideoFinish}
+						onCancel={handleCancel}
+					/>
+				) : kind === "screen" ? (
+					<ScreenRecorderPanel
+						timestamp={timestamp}
+						onFinish={handleVideoFinish}
+						onCancel={handleCancel}
+					/>
+				) : null}
+			</motion.div>
+		</AnimatePresence>
 	);
+
+	// A composer inside a clipping container (sidebar tab pane, reaction bar)
+	// can't host an absolutely-anchored card — the panel escapes to a fixed
+	// bottom-center portal instead. This chunk is ssr:false, but guard document
+	// anyway so the component stays render-safe wherever it's imported.
+	return placement === "floating" && typeof document !== "undefined"
+		? createPortal(panel, document.body)
+		: panel;
 }
