@@ -50,7 +50,10 @@ void checkAuth();
 // script (overlay, countdown, recording bar) stays inert until the user
 // grants access here. The click on the button supplies the required user
 // gesture for permissions.request.
-const HOST_PERMISSION_ORIGINS = ["http://*/*", "https://*/*"];
+// file:///* is declared in the Firefox manifest and must be included here;
+// without it the user can grant http/https but the content script still won't
+// inject on local file:// pages even though the manifest advertises support.
+const HOST_PERMISSION_ORIGINS = ["http://*/*", "https://*/*", "file:///*"];
 
 if (!capabilities.hostPermissionsGrantedAtInstall) {
 	const hostPermissionRow = byId<HTMLElement>("host-permission-row");

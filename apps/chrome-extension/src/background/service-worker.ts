@@ -1849,6 +1849,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // user-closable, so this never fires anything meaningful there.
 chrome.windows.onRemoved.addListener(() => {
 	if (capabilities.supportsOffscreen) return;
+	// If the popup is closed while the arm button is waiting (phase "creating"),
+	// the in-flight start promise prevents syncRecordingStatus from resetting
+	// the status. Force-clear it so the UI doesn't stay stuck on "creating".
+	if (recordingStatus.phase === "creating") {
+		setRecordingStatusAndBroadcast({ phase: "idle" });
+	}
 	void syncRecordingStatus().catch(() => undefined);
 });
 
