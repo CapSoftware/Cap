@@ -15,6 +15,7 @@ mod cli;
 mod clip_thumbnails;
 mod crash_sentinel;
 mod deeplink_actions;
+mod display_utils;
 mod editor_window;
 mod exit_shutdown;
 mod export;
@@ -27,6 +28,7 @@ mod http_client;
 mod import;
 mod logging;
 mod notifications;
+#[cfg(target_os = "macos")]
 mod panel_manager;
 mod permissions;
 mod platform;
@@ -120,8 +122,8 @@ use web_api::ManagerExt as WebManagerExt;
 #[cfg(target_os = "macos")]
 use windows::hide_overlay;
 use windows::{
-    CapWindowId, EditorRecordingTarget, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow,
-    set_window_transparent, show_overlay,
+    CapWindow, CapWindowId, EditorRecordingTarget, EditorWindowIds, ScreenshotEditorWindowIds,
+    show_overlay,
 };
 
 use crate::{recording::start_recording, upload::build_video_meta};
@@ -135,10 +137,6 @@ use exit_shutdown::{
 };
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
-#[cfg(target_os = "macos")]
-use tauri::menu::{
-    AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
-};
 
 type FinalizingRecordingsMap =
     std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
@@ -360,10 +358,6 @@ const APP_EXIT_STEP_TIMEOUT: Duration = Duration::from_millis(750);
 const APP_EXIT_CAMERA_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(1200);
 const APP_EXIT_TOTAL_TIMEOUT: Duration = Duration::from_secs(3);
 const APP_EXIT_FORCE_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(target_os = "macos")]
-const APP_MENU_QUIT_ID: &str = "app_quit";
-#[cfg(target_os = "macos")]
-static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
 where
@@ -474,152 +468,6 @@ fn should_show_onboarding(app: &AppHandle) -> bool {
     !startup_completed
         || !onboarding_completed
         || !permissions::do_permissions_check(false).necessary_granted()
-}
-
-#[cfg(target_os = "macos")]
-fn build_macos_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let pkg_info = app_handle.package_info();
-    let config = app_handle.config();
-    let about_metadata = AboutMetadata {
-        name: Some(pkg_info.name.clone()),
-        version: Some(pkg_info.version.to_string()),
-        copyright: config.bundle.copyright.clone(),
-        authors: config
-            .bundle
-            .publisher
-            .clone()
-            .map(|publisher| vec![publisher]),
-        ..Default::default()
-    };
-    let quit_label = config
-        .product_name
-        .as_ref()
-        .map(|name| format!("Quit {name}"))
-        .unwrap_or_else(|| "Quit Cap".to_string());
-
-    let window_menu = Submenu::with_id_and_items(
-        app_handle,
-        WINDOW_SUBMENU_ID,
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app_handle, None)?,
-            &PredefinedMenuItem::maximize(app_handle, None)?,
-            &PredefinedMenuItem::separator(app_handle)?,
-            &PredefinedMenuItem::close_window(app_handle, None)?,
-        ],
-    )?;
-
-    let help_menu = Submenu::with_id_and_items(app_handle, HELP_SUBMENU_ID, "Help", true, &[])?;
-
-    Menu::with_items(
-        app_handle,
-        &[
-            &Submenu::with_items(
-                app_handle,
-                pkg_info.name.clone(),
-                true,
-                &[
-                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::services(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::hide(app_handle, None)?,
-                    &PredefinedMenuItem::hide_others(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &MenuItem::with_id(
-                        app_handle,
-                        APP_MENU_QUIT_ID,
-                        quit_label,
-                        true,
-                        Some("Cmd+Q"),
-                    )?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "File",
-                true,
-                &[&PredefinedMenuItem::close_window(app_handle, None)?],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(app_handle, None)?,
-                    &PredefinedMenuItem::redo(app_handle, None)?,
-                    &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::cut(app_handle, None)?,
-                    &PredefinedMenuItem::copy(app_handle, None)?,
-                    &PredefinedMenuItem::paste(app_handle, None)?,
-                    &PredefinedMenuItem::select_all(app_handle, None)?,
-                ],
-            )?,
-            &Submenu::with_items(
-                app_handle,
-                "View",
-                true,
-                &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
-            )?,
-            &window_menu,
-            &help_menu,
-        ],
-    )
-}
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" fn macos_application_should_terminate(
-    _: &objc::runtime::Object,
-    _: objc::runtime::Sel,
-    _: cocoa::base::id,
-) -> isize {
-    if let Some(app) = MACOS_NATIVE_TERMINATE_APP.get() {
-        let app = app.clone();
-        tokio::spawn(async move {
-            request_app_exit(app).await;
-        });
-    } else {
-        warn!("macOS native termination requested before app exit handler was installed");
-    }
-
-    0
-}
-
-#[cfg(target_os = "macos")]
-fn install_macos_native_terminate_handler(app: &AppHandle) {
-    use cocoa::base::{id, nil};
-    use objc::{class, msg_send, sel, sel_impl};
-
-    let _ = MACOS_NATIVE_TERMINATE_APP.set(app.clone());
-
-    unsafe {
-        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
-        let delegate: id = msg_send![ns_app, delegate];
-
-        if delegate == nil {
-            warn!("Unable to install macOS native termination handler without app delegate");
-            return;
-        }
-
-        let delegate_class = (*delegate).class() as *const _ as *mut objc::runtime::Class;
-        let imp = std::mem::transmute::<
-            unsafe extern "C" fn(&objc::runtime::Object, objc::runtime::Sel, id) -> isize,
-            objc::runtime::Imp,
-        >(macos_application_should_terminate);
-        let added = objc::runtime::class_addMethod(
-            delegate_class,
-            sel!(applicationShouldTerminate:),
-            imp,
-            c"q@:@".as_ptr(),
-        );
-
-        if added == objc::runtime::YES {
-            info!("Installed macOS native termination handler");
-        } else {
-            warn!("macOS native termination handler was already installed");
-        }
-    }
 }
 
 fn now_millis() -> u64 {
@@ -1263,7 +1111,7 @@ async fn set_camera_input(
         let show_result = if camera_window_is_visible {
             Ok(())
         } else {
-            ShowCapWindow::Camera { centered: false }
+            CapWindow::Camera { centered: false }
                 .show(&app_handle)
                 .await
                 .map(|_| ())
@@ -1354,7 +1202,7 @@ async fn set_camera_input(
 
                 if !showed_camera_window {
                     showed_camera_window = true;
-                    let show_result = ShowCapWindow::Camera { centered: false }
+                    let show_result = CapWindow::Camera { centered: false }
                         .show(&app_handle)
                         .await;
                     show_result
@@ -2355,9 +2203,6 @@ pub struct RecordingDeleted {
     path: PathBuf,
 }
 
-#[derive(specta::Type, tauri_specta::Event, Serialize)]
-pub struct SetCaptureAreaPending(bool);
-
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
     path: PathBuf,
@@ -3224,8 +3069,10 @@ fn close_recordings_overlay_window(app: AppHandle) {
             if let Ok(panel) =
                 app_for_close.get_webview_panel(&CapWindowId::RecordingsOverlay.label())
             {
-                panel.released_when_closed(false);
-                panel.close();
+                panel.set_released_when_closed(false);
+                if let Some(window) = panel.to_window() {
+                    let _ = window.close();
+                }
             }
         })
         .ok();
@@ -3596,7 +3443,7 @@ fn screenshot_share_link_for_hash(
 }
 
 async fn upgrade_required_result(app: &AppHandle) -> UploadResult {
-    let _ = ShowCapWindow::Upgrade.show(app).await;
+    let _ = CapWindow::Upgrade.show(app).await;
     UploadResult::UpgradeRequired
 }
 
@@ -4379,8 +4226,8 @@ async fn editor_delete_project(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
-    if matches!(window, ShowCapWindow::Camera { .. }) {
+async fn show_window(app: AppHandle, window: CapWindow) -> Result<(), String> {
+    if matches!(window, CapWindow::Camera { .. }) {
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
         window.show(&app).await.map_err(|e| e.to_string())?;
@@ -4933,10 +4780,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             seek_to,
             get_display_frame_for_cropping,
             clip_thumbnails::get_clip_thumbnail,
-            windows::position_traffic_lights,
-            windows::set_theme,
-            windows::set_teleprompter_window_level,
-            windows::set_teleprompter_window_opacity,
+            windows::set_window_always_on_top,
+            windows::set_window_opacity,
             windows::apply_macos_liquid_glass_background,
             global_message_dialog,
             show_window,
@@ -4946,7 +4791,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             list_fails,
             set_fail,
             update_auth_plan,
-            set_window_transparent,
             get_editor_meta,
             get_recording_meta_by_path,
             set_editor_recording_target,
@@ -4987,6 +4831,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recovery::find_incomplete_recordings,
             recovery::recover_recording,
             recovery::discard_incomplete_recording,
+            set_appearance,
             automation::get_automations,
             automation::set_automations,
             automation::test_automation,
@@ -5023,7 +4868,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
             import::VideoImportProgress,
-            SetCaptureAreaPending,
             DevicesUpdated,
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
@@ -5122,7 +4966,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             else {
                 let app = app.clone();
                 tokio::spawn(async move {
-                    ShowCapWindow::Main {
+                    CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&app)
@@ -5138,15 +4982,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     #[cfg(target_os = "macos")]
     {
         builder = builder
-            .menu(build_macos_app_menu)
-            .on_menu_event(|app, event| {
-                if event.id() == APP_MENU_QUIT_ID {
-                    let app = app.clone();
-                    tokio::spawn(async move {
-                        request_app_exit(app).await;
-                    });
-                }
-            })
+            .menu(platform::menu::build_app_menu)
+            .on_menu_event(platform::menu::on_event)
             .plugin(tauri_nspanel::init());
     }
 
@@ -5165,27 +5002,23 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_prevent_default::debug())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
                     use tauri_plugin_window_state::StateFlags;
-                    let mut flags = StateFlags::all();
-                    flags.remove(StateFlags::VISIBLE);
-                    flags
+                    StateFlags::all() - StateFlags::VISIBLE - StateFlags::DECORATIONS
                 })
                 .with_denylist(&[
                     CapWindowId::Onboarding.label().as_str(),
-                    CapWindowId::Main.label().as_str(),
-                    CapWindowId::Settings.label().as_str(),
                     "window-capture-occluder",
                     "target-select-overlay",
-                    CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
-                    "editor",
-                    "screenshot-editor",
+                    #[cfg(target_os = "macos")]
+                    CapWindowId::Main.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("camera-") => "camera",
@@ -5202,6 +5035,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+
+            #[cfg(target_os = "macos")]
+            platform::menu::init(&app)?;
 
             if let Err(err) = update_project_names::migrate_if_needed(&app) {
                 tracing::error!("Failed to migrate project file names: {}", err);
@@ -5346,8 +5182,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 app.manage(AppExitState::default());
                 app.manage(MainWindowReadyState::default());
                 app.manage(deeplink_actions::DeepLinkActionExecutor::new(&app));
-                #[cfg(target_os = "macos")]
-                install_macos_native_terminate_handler(&app);
                 spawn_process_memory_sampler(app.clone());
 
                 app.manage(Arc::new(RwLock::new(
@@ -5407,10 +5241,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 async move {
                     if should_show_onboarding(&app) {
                         println!("Showing onboarding");
-                        let _ = ShowCapWindow::Onboarding.show(&app).await;
+                        let _ = CapWindow::Onboarding.show(&app).await;
                     } else {
                         println!("Showing main window");
-                        let _ = ShowCapWindow::Main {
+                        let _ = CapWindow::Main {
                             init_target_mode: None,
                         }
                         .show(&app)
@@ -5453,7 +5287,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 if let Some(target_mode) = event.target_mode {
                     open_target_picker(&app, target_mode).await;
                 } else {
-                    let _ = ShowCapWindow::Main {
+                    let _ = CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&app)
@@ -5462,7 +5296,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             RequestOpenSettings::listen_any_spawn(&app, async |payload, app| {
-                let _ = ShowCapWindow::Settings {
+                let _ = CapWindow::Settings {
                     page: Some(payload.page),
                 }
                 .show(&app)
@@ -5847,14 +5681,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     constrained_position.to_logical::<f64>(scale_factor);
                                 let display_id = display_for_position(logical_pos.x, logical_pos.y)
                                     .map(|display| display.id());
-                                window_position_persistence::queue_main_position(
-                                    app,
-                                    general_settings::WindowPosition {
-                                        x: logical_pos.x,
-                                        y: logical_pos.y,
-                                        display_id,
-                                    },
-                                );
                                 return;
                             }
                             Err(error) => warn!(
@@ -5877,34 +5703,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         #[cfg(not(windows))]
                         let moved_display = display_for_position(logical_pos.x, logical_pos.y);
 
-                        match window_id {
-                            CapWindowId::Main => {
-                                let display_id =
-                                    moved_display.as_ref().map(|display| display.id());
-                                window_position_persistence::queue_main_position(
-                                    app,
-                                    general_settings::WindowPosition {
-                                        x: logical_pos.x,
-                                        y: logical_pos.y,
-                                        display_id,
-                                    },
-                                );
+                        if let CapWindowId::Camera = window_id {
+                            if app
+                                .try_state::<CameraWindowPositionGuard>()
+                                .is_some_and(|guard| guard.should_ignore())
+                            {
+                                return;
                             }
-                            CapWindowId::Camera => {
-                                if app
-                                    .try_state::<CameraWindowPositionGuard>()
-                                    .is_some_and(|guard| guard.should_ignore())
-                                {
-                                    return;
-                                }
-                                window_position_persistence::queue_camera_position(
-                                    app,
-                                    logical_pos.x,
-                                    logical_pos.y,
-                                    moved_display.map(|display| display.id()),
-                                );
-                            }
-                            _ => {}
+                            window_position_persistence::queue_camera_position(
+                                app,
+                                logical_pos.x,
+                                logical_pos.y,
+                                moved_display.map(|display| display.id()),
+                            );
                         }
                     }
                 }
@@ -6038,7 +5849,7 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
             } else {
                 let handle = _handle.clone();
                 spawn_on_runtime(async move {
-                    let _ = ShowCapWindow::Main {
+                    let _ = CapWindow::Main {
                         init_target_mode: None,
                     }
                     .show(&handle)
@@ -6127,7 +5938,7 @@ where
 fn show_camera_window_unlocked(app: &AppHandle) {
     let app = app.clone();
     spawn_on_runtime(async move {
-        let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+        let _ = CapWindow::Camera { centered: false }.show(&app).await;
     });
 }
 
@@ -6212,7 +6023,7 @@ fn restore_camera_window(app: &AppHandle) {
                 return;
             };
             let _operation_guard = operation_lock.lock().await;
-            let _ = ShowCapWindow::Camera { centered: false }.show(&app).await;
+            let _ = CapWindow::Camera { centered: false }.show(&app).await;
         });
     }
 }
@@ -6230,7 +6041,7 @@ fn reopen_main_window(app: &AppHandle) {
     } else {
         let handle = app.clone();
         tokio::spawn(async move {
-            let _ = ShowCapWindow::Main {
+            let _ = CapWindow::Main {
                 init_target_mode: None,
             }
             .show(&handle)
@@ -6683,6 +6494,15 @@ fn format_project_name(
     )
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+#[instrument(skip(app))]
+fn set_appearance(app: AppHandle, appearance: general_settings::Appearance) -> Result<(), String> {
+    GeneralSettingsStore::update(&app, move |s| s.appearance = appearance)?;
+    app.set_theme(appearance.into());
+    Ok(())
+}
+
 trait EventExt: tauri_specta::Event {
     fn listen_any_spawn<Fut>(
         app: &AppHandle,
@@ -6725,7 +6545,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
         tokio::spawn(async move {
             match import::start_video_import(app.clone(), source_path).await {
                 Ok(project_path) => {
-                    if let Err(err) = (ShowCapWindow::Editor { project_path }).show(&app).await {
+                    if let Err(err) = (CapWindow::Editor { project_path }).show(&app).await {
                         error!("Failed to show imported video editor: {err}");
                         show_import_error_dialog(
                             &app,
@@ -6750,7 +6570,7 @@ fn open_importable_from_path(path: &Path, app: AppHandle) -> Result<(), String> 
         tokio::spawn(async move {
             match import::start_image_import(app.clone(), source_path).await {
                 Ok(path) => {
-                    if let Err(err) = (ShowCapWindow::ScreenshotEditor { path }).show(&app).await {
+                    if let Err(err) = (CapWindow::ScreenshotEditor { path }).show(&app).await {
                         error!("Failed to show imported image editor: {err}");
                         show_import_error_dialog(
                             &app,
@@ -6786,7 +6606,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
             }
 
             let project_path = path.to_path_buf();
-            tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
+            tokio::spawn(async move { CapWindow::Editor { project_path }.show(&app).await });
         }
         RecordingMetaInner::Instant(_) => {
             let mp4_path = path.join("content/output.mp4");

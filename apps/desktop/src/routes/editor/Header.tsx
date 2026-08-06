@@ -14,7 +14,6 @@ import {
 	Show,
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { trackEvent } from "~/utils/analytics";
 import { commands } from "~/utils/tauri";
@@ -88,15 +87,12 @@ export function Header() {
 
 	return (
 		<div
-			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14"
+			data-tauri-drag-region="deep"
+			class="flex relative flex-row items-center w-full h-[52px]"
 		>
-			<div
-				data-tauri-drag-region
-				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
-			>
+			<div class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}>
 				{ostype() === "macos" && <div class="h-full w-16" />}
-				{ostype() === "linux" && <CaptionControlsMacOS class="mr-1" />}
+				{ostype() === "linux" && <CaptionControlsWindows11 class="mr-1" />}
 				<EditorButton
 					onClick={async () => {
 						clearTimelineSelection();
@@ -124,19 +120,15 @@ export function Header() {
 					<NameEditor name={meta().prettyName} />
 					<span class="text-sm text-gray-11">.cap</span>
 				</div>
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 			</div>
 
-			<div
-				data-tauri-drag-region
-				class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10"
-			>
+			<div class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10">
 				<PresetsDropdown />
 				<OrganizationDropdown />
 			</div>
 
 			<div
-				data-tauri-drag-region
 				class={cx(
 					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
 					ostype() !== "windows" && "pr-2",
@@ -166,7 +158,7 @@ export function Header() {
 					tooltipText="Redo"
 					leftIcon={<IconCapRedo class="w-5" />}
 				/>
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				<Show when={customDomain.data}>
 					<ShareButton />
 				</Show>

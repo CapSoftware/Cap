@@ -370,6 +370,7 @@ function Dialogs() {
 													variant="white"
 													size="xs"
 													class="flex items-center justify-center text-center rounded-full h-8 w-8 border focus:border-blue-9"
+													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
 													<div class="relative pointer-events-none size-4">

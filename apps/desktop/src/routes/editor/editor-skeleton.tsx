@@ -28,32 +28,25 @@ function SkeletonButton(props: { class?: string; width?: string }) {
 function HeaderSkeleton() {
 	return (
 		<div
-			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14"
+			data-tauri-drag-region="deep"
+			class="flex relative flex-row items-center w-full h-[52px]"
 		>
-			<div
-				data-tauri-drag-region
-				class="flex flex-row flex-1 gap-2 items-center px-4 h-full"
-			>
+			<div class="flex flex-row flex-1 gap-2 items-center px-4 h-full">
 				{ostype() === "macos" && <div class="h-full w-16" />}
 				<SkeletonButton />
 				<SkeletonButton />
 				<SkeletonPulse class="h-5 w-32" />
 				<SkeletonPulse class="h-5 w-8" />
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				<SkeletonButton />
 				<SkeletonButton />
 			</div>
 
-			<div
-				data-tauri-drag-region
-				class="flex flex-col justify-center px-4 border-x border-black-transparent-10"
-			>
+			<div class="flex flex-col justify-center px-4 border-x border-black-transparent-10">
 				<SkeletonPulse class="h-9 w-28 rounded-lg" />
 			</div>
 
 			<div
-				data-tauri-drag-region
 				class={cx(
 					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
 					ostype() !== "windows" && "pr-2",
@@ -61,7 +54,7 @@ function HeaderSkeleton() {
 			>
 				<SkeletonButton />
 				<SkeletonButton />
-				<div data-tauri-drag-region class="flex-1 h-full" />
+				<div class="flex-1 h-full" />
 				<SkeletonPulse class="h-[40px] w-[100px] rounded-lg" />
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
@@ -224,7 +217,7 @@ export function EditorSkeleton() {
 		<div class="flex flex-col flex-1 min-h-0">
 			<HeaderSkeleton />
 			<div
-				data-tauri-drag-region
+				data-tauri-drag-region="deep"
 				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
 			>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">

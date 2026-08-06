@@ -13,7 +13,6 @@ import {
 } from "solid-js";
 
 import { Toggle } from "~/components/Toggle";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import {
 	type TeleprompterStore,
@@ -40,6 +39,8 @@ import {
 	clamp,
 	countWords,
 } from "./teleprompter-utils";
+
+const TELEPROMPTER_NSWINDOW_LEVEL = 101;
 
 function ToolButton(props: {
 	label: string;
@@ -129,7 +130,7 @@ export default function Teleprompter() {
 			}),
 		])
 			.then(async () => {
-				await commands.setTeleprompterWindowLevel(true);
+				await commands.setWindowAlwaysOnTop(true, TELEPROMPTER_NSWINDOW_LEVEL);
 				await currentWindow.show();
 				if (isWindows) await commands.refreshWindowContentProtection();
 				await currentWindow.setFocus();
@@ -196,7 +197,7 @@ export default function Teleprompter() {
 	createEffect(() => {
 		if (!isLoaded() || !isMacOS) return;
 		const opacity = clamp(state().windowOpacityPercent, 45, 100) / 100;
-		void commands.setTeleprompterWindowOpacity(opacity).catch((error) => {
+		void commands.setWindowOpacity(opacity).catch((error) => {
 			console.error("Failed to update teleprompter window opacity:", error);
 		});
 	});
@@ -323,10 +324,10 @@ export default function Teleprompter() {
 				class="cap-window-header flex h-9 shrink-0 items-center"
 			>
 				<Show when={isLinux}>
-					<CaptionControlsMacOS
+					<CaptionControlsWindows11
 						class="ml-3"
-						showMinimize={false}
-						showZoom={false}
+						maximizable={false}
+						minimizable={false}
 					/>
 				</Show>
 				<div
@@ -465,7 +466,6 @@ export default function Teleprompter() {
 							type="range"
 							min="45"
 							max="100"
-							step="5"
 							value={state().windowOpacityPercent}
 							onInput={(event) =>
 								setState((current) => ({

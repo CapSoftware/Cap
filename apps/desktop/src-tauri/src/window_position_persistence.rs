@@ -4,11 +4,10 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
-use crate::general_settings::{GeneralSettingsStore, WindowPosition};
+use crate::general_settings::GeneralSettingsStore;
 
 #[derive(Default)]
 struct PendingState {
-    main: Option<WindowPosition>,
     camera_position: Option<(f64, f64, Option<DisplayId>)>,
 }
 
@@ -23,14 +22,6 @@ impl WindowPositionPersistence {
             pending: Mutex::new(PendingState::default()),
             notify: Arc::new(Notify::new()),
         })
-    }
-
-    pub fn queue_main(&self, position: WindowPosition) {
-        {
-            let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            guard.main = Some(position);
-        }
-        self.notify.notify_one();
     }
 
     pub fn queue_camera(&self, x: f64, y: f64, display_id: Option<DisplayId>) {
@@ -85,16 +76,13 @@ pub fn install(app: &AppHandle) {
             };
             let pending = persistence.take_pending();
 
-            if pending.main.is_none() && pending.camera_position.is_none() {
+            if pending.camera_position.is_none() {
                 continue;
             }
 
             let write_app = app_handle.clone();
             let write_result = tokio::task::spawn_blocking(move || {
                 GeneralSettingsStore::update(&write_app, |settings| {
-                    if let Some(main) = pending.main {
-                        settings.main_window_position = Some(main);
-                    }
                     if let Some((x, y, display_id)) = pending.camera_position {
                         crate::update_camera_window_position_settings(settings, x, y, display_id);
                     }
@@ -111,12 +99,6 @@ pub fn install(app: &AppHandle) {
             last_flush = std::time::Instant::now();
         }
     });
-}
-
-pub fn queue_main_position(app: &AppHandle, position: WindowPosition) {
-    if let Some(persistence) = app.try_state::<Arc<WindowPositionPersistence>>() {
-        persistence.queue_main(position);
-    }
 }
 
 pub fn queue_camera_position(app: &AppHandle, x: f64, y: f64, display_id: Option<DisplayId>) {

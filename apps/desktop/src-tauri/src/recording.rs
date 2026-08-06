@@ -74,7 +74,7 @@ use crate::{
     upload::{InstantMultipartUpload, SegmentUploader, compress_image},
     web_api::ManagerExt,
     windows::{
-        CapWindowId, EditorRecordingTarget, ShowCapWindow, editor_window_for_path, hide_overlay,
+        CapWindow, CapWindowId, EditorRecordingTarget, editor_window_for_path, hide_overlay,
     },
 };
 
@@ -1532,7 +1532,7 @@ pub async fn start_recording(
     if is_camera_only {
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
-        if let Err(err) = (ShowCapWindow::Camera { centered: true }).show(&app).await {
+        if let Err(err) = (CapWindow::Camera { centered: true }).show(&app).await {
             let error = format!("Failed to show centered camera window: {err}");
             state_mtx.write().await.clear_pending_recording();
             notify_recording_start_failed(&app, &error);
@@ -1739,13 +1739,13 @@ pub async fn start_recording(
             if let Some(show) = inputs
                 .capture_target
                 .display()
-                .map(|d| ShowCapWindow::WindowCaptureOccluder { screen_id: d.id() })
+                .map(|d| CapWindow::WindowCaptureOccluder { screen_id: d.id() })
             {
                 let _ = show.show(&app).await;
             }
         }
         ScreenCaptureTarget::Area { screen, .. } => {
-            let _ = ShowCapWindow::WindowCaptureOccluder {
+            let _ = CapWindow::WindowCaptureOccluder {
                 screen_id: screen.clone(),
             }
             .show(&app)
@@ -1756,7 +1756,7 @@ pub async fn start_recording(
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
     crate::target_select_overlay::close_target_select_overlay_windows(&app);
-    let _ = ShowCapWindow::InProgressRecording {
+    let _ = CapWindow::InProgressRecording {
         countdown,
         capture_target: Some(inputs.capture_target.clone()),
     }
@@ -2782,7 +2782,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
-                let _ = ShowCapWindow::Main {
+                let _ = CapWindow::Main {
                     init_target_mode: None,
                 }
                 .show(&app)
@@ -2830,7 +2830,6 @@ pub async fn take_screenshot(
                 id,
                 CapWindowId::TargetSelectOverlay { .. }
                     | CapWindowId::WindowCaptureOccluder { .. }
-                    | CapWindowId::CaptureArea
                     | CapWindowId::ModeSelect
                     | CapWindowId::RecordingsOverlay
             )
@@ -3244,7 +3243,7 @@ async fn apply_post_studio_editor_behaviour(
         default,
     ) {
         Some(PostStudioRecordingBehaviour::OpenEditor) => {
-            let _ = ShowCapWindow::Editor {
+            let _ = CapWindow::Editor {
                 project_path: recording_dir,
             }
             .show(app)
@@ -3253,7 +3252,7 @@ async fn apply_post_studio_editor_behaviour(
             true
         }
         Some(PostStudioRecordingBehaviour::ShowOverlay) => {
-            let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+            let _ = CapWindow::RecordingsOverlay.show(app).await;
 
             let app = AppHandle::clone(app);
             tokio::spawn(async move {

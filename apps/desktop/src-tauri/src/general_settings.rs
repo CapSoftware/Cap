@@ -166,14 +166,12 @@ pub struct GeneralSettingsStore {
     pub disable_auto_open_links: bool,
     #[serde(default = "default_true")]
     pub has_completed_startup: bool,
-    #[serde(default)]
-    pub theme: AppTheme,
+    #[serde(default, alias = "theme")]
+    pub appearance: Appearance,
     #[serde(default)]
     pub commercial_license: Option<CommercialLicense>,
     #[serde(default)]
     pub last_version: Option<String>,
-    #[serde(default)]
-    pub window_transparency: bool,
     #[serde(default)]
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
@@ -222,8 +220,6 @@ pub struct GeneralSettingsStore {
     #[serde(default)]
     pub studio_recording_quality: StudioRecordingQuality,
     #[serde(default)]
-    pub main_window_position: Option<WindowPosition>,
-    #[serde(default)]
     pub camera_window_position: Option<WindowPosition>,
     #[serde(default)]
     pub camera_window_positions_by_monitor_name: BTreeMap<String, WindowPosition>,
@@ -247,6 +243,8 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    #[serde(default = "default_true")]
+    pub main_window_always_on_top: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -315,10 +313,9 @@ impl Default for GeneralSettingsStore {
             enable_notifications: true,
             disable_auto_open_links: false,
             has_completed_startup: false,
-            theme: AppTheme::System,
+            appearance: Appearance::System,
             commercial_license: None,
             last_version: None,
-            window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: cap_recording::DEFAULT_CUSTOM_CURSOR_CAPTURE,
@@ -340,7 +337,6 @@ impl Default for GeneralSettingsStore {
             transcription_hints: default_transcription_hints(),
             editor_preview_quality: EditorPreviewQuality::Half,
             studio_recording_quality: default_studio_recording_quality(),
-            main_window_position: None,
             camera_window_position: None,
             camera_window_positions_by_monitor_name: BTreeMap::new(),
             has_completed_onboarding: false,
@@ -350,17 +346,28 @@ impl Default for GeneralSettingsStore {
             previous_recordings_paths: Vec::new(),
             camera_blur_disabled_by_crash: None,
             update_channel: UpdateChannel::Stable,
+            main_window_always_on_top: true,
         }
     }
 }
 
 #[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub enum AppTheme {
+pub enum Appearance {
     #[default]
     System,
     Light,
     Dark,
+}
+
+impl From<Appearance> for Option<tauri::Theme> {
+    fn from(appearance: Appearance) -> Self {
+        match appearance {
+            Appearance::Light => Some(tauri::Theme::Light),
+            Appearance::Dark => Some(tauri::Theme::Dark),
+            Appearance::System => None,
+        }
+    }
 }
 
 impl GeneralSettingsStore {

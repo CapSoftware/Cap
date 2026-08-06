@@ -1190,11 +1190,7 @@ fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result
 
     if src_stride < dst_stride {
         return Err(anyhow!(
-            "Source stride ({}) is less than destination stride ({}); width={}, height={}",
-            src_stride,
-            dst_stride,
-            width,
-            height
+            "Source stride ({src_stride}) is less than destination stride ({dst_stride}); width={width}, height={height}"
         ));
     }
 

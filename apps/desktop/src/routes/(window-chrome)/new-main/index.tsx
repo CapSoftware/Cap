@@ -1,17 +1,14 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import {
-	createMutation,
 	queryOptions,
+	useMutation,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import {
 	currentMonitor,
 	getCurrentWindow,
@@ -40,6 +37,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { showCapDebugWindow } from "~/routes/debug";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
@@ -85,7 +83,6 @@ import {
 	type UpdateCheckResult,
 	type UploadProgress,
 } from "~/utils/tauri";
-import { openTeleprompter } from "~/utils/teleprompter";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -2455,7 +2452,7 @@ function Page() {
 		closeAllMenuPanels();
 	});
 
-	const setMicInput = createMutation(() => ({
+	const setMicInput = useMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			const previous = rawOptions.micName ?? null;
 			if (previous !== name) setOptions("micName", name);
@@ -2762,7 +2759,7 @@ function Page() {
 	const license = createLicenseQuery();
 
 	const signIn = createSignInMutation();
-	const stopRecording = createMutation(() => ({
+	const stopRecording = useMutation(() => ({
 		mutationFn: async () => {
 			try {
 				await commands.stopRecording();
@@ -3109,11 +3106,11 @@ function Page() {
 			>
 				<div
 					class="flex flex-1 gap-1 items-center mx-2 min-w-0"
-					data-tauri-drag-region
+					data-tauri-drag-region="deep"
 				>
 					<MainWindowHelpButton />
-					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
-					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
+					<div class="flex-1 min-h-9 min-w-0" />
+					<div class="flex gap-1 items-center shrink-0">
 						<Tooltip
 							content={<span>{isExpanded() ? "Collapse" : "Expand"}</span>}
 						>
@@ -3188,7 +3185,11 @@ function Page() {
 						<Tooltip content={<span>Teleprompter</span>}>
 							<button
 								type="button"
-								onClick={() => void openTeleprompter()}
+								onClick={() => {
+									commands.showWindow("Teleprompter").then(() => {
+										commands.refreshWindowContentProtection();
+									});
+								}}
 								class="flex justify-center items-center size-5 focus:outline-hidden"
 								aria-label="Open teleprompter"
 							>
@@ -3196,12 +3197,42 @@ function Page() {
 							</button>
 						</Tooltip>
 						<ChangelogButton />
+						<Tooltip content={<span>Always on Top</span>}>
+							<button
+								type="button"
+								onClick={async () => {
+									const current = !!generalSettings.data?.mainWindowAlwaysOnTop;
+									try {
+										await commands.setWindowAlwaysOnTop(
+											!current,
+											26 /* NSStatusWindowLevel + 1 */,
+										);
+										await generalSettingsStore.set({
+											mainWindowAlwaysOnTop: !current,
+										});
+									} catch (e) {
+										console.warn("Failed to toggle Always on Top", e);
+										toast.error("Failed to toggle Always on Top");
+									}
+								}}
+								class="flex justify-center items-center size-5 focus:outline-hidden"
+								aria-label="Always on Top"
+								aria-pressed={!!generalSettings.data?.mainWindowAlwaysOnTop}
+							>
+								<Show
+									when={!!generalSettings.data?.mainWindowAlwaysOnTop}
+									fallback={
+										<IconLucidePinOff class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+									}
+								>
+									<IconLucidePin class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+								</Show>
+							</button>
+						</Tooltip>
 						{import.meta.env.DEV && (
 							<button
 								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
+								onClick={showCapDebugWindow}
 								class="flex justify-center items-center focus:outline-hidden"
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />

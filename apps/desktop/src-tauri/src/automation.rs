@@ -452,7 +452,7 @@ impl AutomationHost for DesktopAutomationHost {
 
     async fn open_editor(&self, ctx: &TriggerContext) -> Result<(), String> {
         if let Some(image_path) = ctx.image_path.as_ref() {
-            let _ = crate::windows::ShowCapWindow::ScreenshotEditor {
+            let _ = crate::windows::CapWindow::ScreenshotEditor {
                 path: image_path.clone(),
             }
             .show(&self.app)
@@ -465,7 +465,7 @@ impl AutomationHost for DesktopAutomationHost {
             .as_ref()
             .ok_or("No project path for editor")?;
 
-        let _ = crate::windows::ShowCapWindow::Editor {
+        let _ = crate::windows::CapWindow::Editor {
             project_path: path.clone(),
         }
         .show(&self.app)

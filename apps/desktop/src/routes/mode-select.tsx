@@ -38,7 +38,7 @@ const ModeSelectWindow = () => {
 
 	return (
 		<div
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 			class="flex flex-col relative justify-center items-center min-h-screen bg-gray-1"
 		>
 			{isWindows && (
@@ -57,7 +57,7 @@ const ModeSelectWindow = () => {
 					</p>
 				</div>
 
-				<div data-tauri-drag-region="false" class="w-full max-w-lg">
+				<div class="w-full max-w-lg">
 					<ModeSelect />
 				</div>
 			</div>

@@ -20,10 +20,11 @@ import {
 	Show,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { Transition } from "solid-transition-group";
 import { createKeyDownSignal } from "~/utils/events";
+import { MotionSafeTransition } from "~/utils/motion-safe";
 
 import { commands } from "~/utils/tauri";
+import { usePrefersReducedMotion } from "~/utils/use-media-query";
 export interface CropBounds {
 	x: number;
 	y: number;
@@ -125,8 +126,8 @@ function moveBounds(
 ): CropBounds {
 	return {
 		...bounds,
-		x: x !== null ? Math.round(x) : bounds.x,
-		y: y !== null ? Math.round(y) : bounds.y,
+		x: x !== null ? x : bounds.x,
+		y: y !== null ? y : bounds.y,
 	};
 }
 
@@ -139,10 +140,10 @@ function resizeBounds(
 	const fromX = bounds.x + bounds.width * origin.x;
 	const fromY = bounds.y + bounds.height * origin.y;
 	return {
-		x: Math.round(fromX - newWidth * origin.x),
-		y: Math.round(fromY - newHeight * origin.y),
-		width: Math.round(newWidth),
-		height: Math.round(newHeight),
+		x: fromX - newWidth * origin.x,
+		y: fromY - newHeight * origin.y,
+		width: newWidth,
+		height: newHeight,
 	};
 }
 
@@ -237,7 +238,6 @@ export function Cropper(
 		onInteraction?: (interacting: boolean) => void;
 		onContextMenu?: (event: PointerEvent) => void;
 		ref?: CropperRef | ((ref: CropperRef) => void);
-		class?: string;
 		minSize?: Vec2;
 		maxSize?: Vec2;
 		targetSize?: Vec2;
@@ -247,6 +247,9 @@ export function Cropper(
 		snapToRatioEnabled?: boolean;
 		useBackdropFilter?: boolean;
 		allowLightMode?: boolean;
+		enableAnimation?: boolean;
+		onAnimationFrame?: (bounds: CropBounds) => void;
+		hideSelection?: boolean;
 	}>,
 ) {
 	let containerRef: HTMLDivElement | undefined;
@@ -255,6 +258,7 @@ export function Cropper(
 	let occBottomRef: HTMLDivElement | undefined;
 	let occLeftRef: HTMLDivElement | undefined;
 	let occRightRef: HTMLDivElement | undefined;
+	let plusRef: HTMLDivElement | undefined;
 
 	const resolvedChildren = children(() => props.children);
 
@@ -278,22 +282,23 @@ export function Cropper(
 		() => displayRawBounds().width <= 30 || displayRawBounds().height <= 30,
 	);
 
-	const [mouseState, setMouseState] = createStore<
-		(
-			| { drag: null | "region" | "overlay" }
-			| { drag: "handle"; cursor: string }
-		) & { hoveringHandle: HandleSide | null }
-	>({ drag: null, hoveringHandle: null });
+	const [pointerState, setPointerState] = createStore<
+		({ drag: null | "region" | "overlay" } | { drag: "handle" }) & {
+			hoveringHandle: HandleSide | null;
+			cursor: string | null;
+		}
+	>({ drag: null, hoveringHandle: null, cursor: null });
 
 	const resizing = () =>
-		mouseState.drag === "handle" || mouseState.drag === "overlay";
+		pointerState.drag === "handle" || pointerState.drag === "overlay";
+
 	const cursorStyle = () => {
-		if (mouseState.drag === "region" || mouseState.drag === "overlay")
-			return "grabbing";
-		if (mouseState.drag === "handle") return mouseState.cursor;
+		const drag = pointerState.drag;
+		if (drag === "region") return "grabbing";
+		if (drag === "handle" || drag === "overlay") return pointerState.cursor;
 	};
 
-	createEffect(() => props.onInteraction?.(mouseState.drag !== null));
+	createEffect(() => props.onInteraction?.(pointerState.drag !== null));
 
 	const [aspectState, setAspectState] = createStore({
 		snapped: null as Ratio | null,
@@ -414,8 +419,8 @@ export function Cropper(
 	}
 
 	const labelTransform = createMemo(() =>
-		resizing() && mouseState.hoveringHandle
-			? calculateLabelTransform(mouseState.hoveringHandle)
+		resizing() && pointerState.hoveringHandle
+			? calculateLabelTransform(pointerState.hoveringHandle)
 			: null,
 	);
 
@@ -429,7 +434,18 @@ export function Cropper(
 		};
 	}
 
+	const reducedMotion = usePrefersReducedMotion();
+
 	function animateToRawBounds(target: CropBounds, durationMs = 240) {
+		if (props.enableAnimation === false || reducedMotion()) {
+			if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+			animationFrameId = null;
+			setIsAnimating(false);
+			setRawBounds(target);
+			setDisplayRawBounds(target);
+			return;
+		}
+
 		const start = displayRawBounds();
 		if (
 			target.x === start.x &&
@@ -490,8 +506,8 @@ export function Cropper(
 		const startBoundsReal = initialCrop ?? {
 			x: 0,
 			y: 0,
-			width: Math.round(target.x / 2),
-			height: Math.round(target.y / 2),
+			width: target.x / 2,
+			height: target.y / 2,
 		};
 
 		let bounds = boundsToRaw(startBoundsReal);
@@ -584,11 +600,18 @@ export function Cropper(
 
 			setContainerSize({ x: width, y: height });
 
-			setRawBoundsConstraining(boundsToRaw(preservedReal));
+			// Only reconcile against previously-preserved bounds once we've
+			// actually initialized — otherwise this clobbers rawBounds with a
+			// constrained CROP_ZERO before init() has a chance to compute the
+			// real starting crop, which is what caused the top-left flash.
+			if (initialized) {
+				setRawBoundsConstraining(boundsToRaw(preservedReal));
+			}
 
 			if (!initialized && width > 1 && height > 1) {
 				initialized = true;
 				init();
+				setIsReady(true);
 			}
 		};
 
@@ -597,13 +620,10 @@ export function Cropper(
 		);
 		updateContainerSize(containerRef.clientWidth, containerRef.clientHeight);
 
-		setDisplayRawBounds(rawBounds());
-
 		function init() {
 			const bounds = computeInitialBounds();
 			setRawBoundsConstraining(bounds);
 			setDisplayRawBounds(bounds);
-			setIsReady(true);
 		}
 
 		if (props.ref) {
@@ -647,7 +667,7 @@ export function Cropper(
 		disposeActivePointerSession();
 		stopAnimation();
 		e.stopPropagation();
-		setMouseState({ drag: "region" });
+		setPointerState({ drag: "region" });
 		let currentBounds = rawBounds();
 		const containerRect = containerRef.getBoundingClientRect();
 		const startOffset = {
@@ -671,7 +691,7 @@ export function Cropper(
 				if (!isAnimating()) setDisplayRawBounds(currentBounds);
 			},
 			() => {
-				setMouseState({ drag: null });
+				setPointerState({ drag: null });
 			},
 		);
 	}
@@ -737,6 +757,38 @@ export function Cropper(
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
 	});
 
+	function liveHandleFromPointer(
+		anchor: Vec2,
+		pointX: number,
+		pointY: number,
+		original: HandleSide,
+	): HandleSide {
+		const left = pointX < anchor.x;
+		const top = pointY < anchor.y;
+
+		if (original.isCorner) {
+			return (
+				HANDLES.find(
+					(h) => h.isCorner && (h.x === "l") === left && (h.y === "t") === top,
+				) ?? original
+			);
+		}
+		// Side handles only flip along their own axis, and must stay a side
+		// (y === "c" for horizontal, x === "c" for vertical) — otherwise this
+		// matches a corner that happens to share the same x/y label.
+		if (original.x !== "c") {
+			return (
+				HANDLES.find((h) => h.y === "c" && (h.x === "l") === left) ?? original
+			);
+		}
+		if (original.y !== "c") {
+			return (
+				HANDLES.find((h) => h.x === "c" && (h.y === "t") === top) ?? original
+			);
+		}
+		return original;
+	}
+
 	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
 		const target = e.currentTarget as HTMLElement;
@@ -744,7 +796,7 @@ export function Cropper(
 		e.stopPropagation();
 
 		stopAnimation();
-		setMouseState({ drag: "handle", cursor: handle.cursor });
+		setPointerState({ drag: "handle", cursor: handle.cursor });
 
 		const context: ResizeSessionState = {
 			containerRect: containerRef.getBoundingClientRect(),
@@ -759,7 +811,7 @@ export function Cropper(
 			e.pointerId,
 			(e) => handleResizePointerMove(e, context),
 			() => {
-				setMouseState({ drag: null });
+				setPointerState({ drag: null });
 			},
 		);
 	}
@@ -815,6 +867,36 @@ export function Cropper(
 					pointY,
 				);
 			}
+		}
+
+		const anchor = context.isAltMode
+			? {
+					x: context.startBounds.x + context.startBounds.width / 2,
+					y: context.startBounds.y + context.startBounds.height / 2,
+				}
+			: {
+					x:
+						context.startBounds.x +
+						(context.originalHandle.movable.left
+							? context.startBounds.width
+							: 0),
+					y:
+						context.startBounds.y +
+						(context.originalHandle.movable.top
+							? context.startBounds.height
+							: 0),
+				};
+
+		const live = liveHandleFromPointer(
+			anchor,
+			pointX,
+			pointY,
+			context.originalHandle,
+		);
+		if (pointerState.hoveringHandle !== live) {
+			// Always clone to avoid possibly mutating the state directly.
+			// Without cloning, the handles can become mutated and break the functionality.
+			setPointerState("hoveringHandle", { ...live });
 		}
 
 		const { min, max } = rawSizeConstraint();
@@ -904,7 +986,7 @@ export function Cropper(
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
 		const handle = HANDLES[SE_HANDLE_INDEX];
 
-		setMouseState({ drag: "overlay" });
+		setPointerState({ drag: "overlay", cursor: "crosshair" });
 
 		const containerRect = containerRef.getBoundingClientRect();
 		const startPoint = {
@@ -932,7 +1014,7 @@ export function Cropper(
 			e.pointerId,
 			(e) => handleResizePointerMove(e, context),
 			() => {
-				setMouseState({ drag: null });
+				setPointerState({ drag: null, cursor: null });
 				const bounds = rawBounds();
 				if (bounds.width < 5 || bounds.height < 5) {
 					setRawBounds(initialBounds);
@@ -1004,7 +1086,7 @@ export function Cropper(
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
-		if (!KEY_MAPPINGS.has(e.key) || mouseState.drag !== null) return;
+		if (!KEY_MAPPINGS.has(e.key) || pointerState.drag !== null) return;
 
 		e.preventDefault();
 		e.stopPropagation();
@@ -1056,27 +1138,41 @@ export function Cropper(
 		on<CropBounds, number>(displayRawBounds, (b, _prevIn, prevFrameId) => {
 			if (prevFrameId) cancelAnimationFrame(prevFrameId);
 			return requestAnimationFrame(() => {
+				if (!isReady()) return;
+				const x = Math.round(b.x);
+				const y = Math.round(b.y);
+				const right = Math.round(b.x + b.width);
+				const bottom = Math.round(b.y + b.height);
+				const width = right - x;
+				const height = bottom - y;
+
 				if (regionRef) {
-					regionRef.style.width = `${Math.round(b.width)}px`;
-					regionRef.style.height = `${Math.round(b.height)}px`;
-					regionRef.style.transform = `translate(${Math.round(b.x)}px,${Math.round(b.y)}px)`;
+					regionRef.style.width = `${width}px`;
+					regionRef.style.height = `${height}px`;
+					regionRef.style.transform = `translate(${x}px,${y}px)`;
 				}
 				if (occLeftRef) {
-					occLeftRef.style.width = `${Math.max(0, Math.round(b.x))}px`;
+					occLeftRef.style.width = `${Math.max(0, x)}px`;
 				}
 				if (occRightRef) {
-					occRightRef.style.left = `${Math.round(b.x + b.width)}px`;
+					occRightRef.style.left = `${right}px`;
 				}
 				if (occTopRef) {
-					occTopRef.style.left = `${Math.round(b.x)}px`;
-					occTopRef.style.width = `${Math.round(b.width)}px`;
-					occTopRef.style.height = `${Math.max(0, Math.round(b.y))}px`;
+					occTopRef.style.left = `${x}px`;
+					occTopRef.style.width = `${width}px`;
+					occTopRef.style.height = `${Math.max(0, y)}px`;
 				}
 				if (occBottomRef) {
-					occBottomRef.style.top = `${Math.round(b.y + b.height)}px`;
-					occBottomRef.style.left = `${Math.round(b.x)}px`;
-					occBottomRef.style.width = `${Math.round(b.width)}px`;
+					occBottomRef.style.top = `${bottom}px`;
+					occBottomRef.style.left = `${x}px`;
+					occBottomRef.style.width = `${width}px`;
 				}
+				if (plusRef) {
+					const w = Math.round(b.x + b.width) - Math.round(b.x);
+					const h = Math.round(b.y + b.height) - Math.round(b.y);
+					plusRef.style.transform = `translate(${Math.round(w / 2) - 2}px,${Math.round(h / 2) - 2}px) translate(-50%,-50%)`;
+				}
+				props.onAnimationFrame?.({ x, y, width, height });
 			});
 		}),
 	);
@@ -1096,7 +1192,7 @@ export function Cropper(
 			onContextMenu={props.onContextMenu}
 			onDblClick={() => fill()}
 		>
-			<Transition
+			<MotionSafeTransition
 				appear
 				enterActiveClass="transition-opacity duration-300 ease-in-out"
 				enterClass="opacity-0 blur-xs"
@@ -1108,7 +1204,7 @@ export function Cropper(
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
 						<div
-							class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono scale-50"
+							class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono"
 							style={{
 								transform: `translate(${transform().x}px, ${transform().y}px)`,
 							}}
@@ -1117,7 +1213,7 @@ export function Cropper(
 						</div>
 					)}
 				</Show>
-			</Transition>
+			</MotionSafeTransition>
 
 			{resolvedChildren()}
 
@@ -1136,9 +1232,11 @@ export function Cropper(
 			<div class="size-full">
 				<div
 					ref={regionRef}
-					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
+					class="absolute top-0 left-0 z-30 border-2 border-white/50 contrast-more:border-white contrast-more:shadow-[0_0_0_1px_rgba(0,0,0,0.8)]"
 					style={{
 						cursor: cursorStyle() ?? "grab",
+						visibility:
+							isReady() && !props.hideSelection ? "visible" : "hidden",
 					}}
 					onDblClick={(e) => e.stopPropagation()}
 				>
@@ -1150,13 +1248,22 @@ export function Cropper(
 						onPointerDown={onRegionPointerDown}
 					/>
 
-					<Show when={altDown()}>
-						<div class="absolute opacity-70 pointer-events-none flex items-center justify-center size-full">
+					<Show when={altDown() && !boundsTooSmall()}>
+						<div
+							ref={(el) => {
+								plusRef = el;
+								const b = displayRawBounds();
+								const w = Math.round(b.x + b.width) - Math.round(b.x);
+								const h = Math.round(b.y + b.height) - Math.round(b.y);
+								el.style.transform = `translate(${Math.round(w / 2) - 1}px,${Math.round(h / 2) - 1}px) translate(-50%,-50%)`;
+							}}
+							class="absolute top-0 left-0 opacity-70 pointer-events-none"
+						>
 							<IconLucidePlus class="pointer-events-none size-6" />
 						</div>
 					</Show>
 
-					<Transition
+					<MotionSafeTransition
 						appear
 						enterActiveClass="transition-opacity duration-300"
 						enterClass="opacity-0"
@@ -1165,13 +1272,13 @@ export function Cropper(
 						exitClass="opacity-100"
 						exitToClass="opacity-0"
 					>
-						<Show when={mouseState.drag !== null}>
+						<Show when={pointerState.drag !== null}>
 							<div class="pointer-events-none *:absolute *:border-white/40">
 								<div class="left-0 w-full border-t border-b pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
 								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
 							</div>
 						</Show>
-					</Transition>
+					</MotionSafeTransition>
 
 					<For each={HANDLES}>
 						{(handle) =>
@@ -1180,12 +1287,12 @@ export function Cropper(
 									type="button"
 									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
-									classList={{ "opacity-0": mouseState.drag === "overlay" }}
+									classList={{ "opacity-0": pointerState.drag === "overlay" }}
 									style={{
 										cursor:
-											mouseState.drag === "handle" &&
-											mouseState.hoveringHandle?.isCorner
-												? mouseState.hoveringHandle.cursor
+											pointerState.drag === "handle" &&
+											pointerState.hoveringHandle?.isCorner
+												? pointerState.hoveringHandle.cursor
 												: (cursorStyle() ?? handle.cursor),
 										...(handle.x === "l"
 											? { left: "-12px" }
@@ -1195,7 +1302,7 @@ export function Cropper(
 											: { bottom: "-12px" }),
 									}}
 									onMouseEnter={() =>
-										setMouseState("hoveringHandle", { ...handle })
+										setPointerState("hoveringHandle", { ...handle })
 									}
 									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
@@ -1244,7 +1351,7 @@ export function Cropper(
 									tabIndex={-1}
 									style={{
 										visibility:
-											resizing() && mouseState.hoveringHandle?.isCorner
+											resizing() && pointerState.hoveringHandle?.isCorner
 												? "hidden"
 												: "visible",
 										cursor: cursorStyle() ?? handle.cursor,
@@ -1281,7 +1388,7 @@ export function Cropper(
 														}),
 									}}
 									onMouseEnter={() =>
-										setMouseState("hoveringHandle", { ...handle })
+										setPointerState("hoveringHandle", { ...handle })
 									}
 									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
@@ -1307,11 +1414,12 @@ export function Cropper(
 								aria-live="polite"
 							>
 								<div
-									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline-solid outline-black/80"
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 contrast-more:bg-gray-1! drop-shadow-md outline-1 outline-solid outline-black/80"
 									classList={{
 										"backdrop-blur-xs bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
 											props.useBackdropFilter,
-										"bg-gray-3 opacity-80": !props.useBackdropFilter,
+										"bg-gray-3 not-contrast-more:opacity-80":
+											!props.useBackdropFilter,
 									}}
 								>
 									{bounds[0]}:{bounds[1]}
@@ -1420,10 +1528,10 @@ function computeAspectRatioResize(
 	finalBounds = slideBoundsIntoContainer(finalBounds, container.x, container.y);
 
 	return {
-		x: Math.round(finalBounds.x),
-		y: Math.round(finalBounds.y),
-		width: Math.round(Math.max(1, finalBounds.width)),
-		height: Math.round(Math.max(1, finalBounds.height)),
+		x: finalBounds.x,
+		y: finalBounds.y,
+		width: Math.max(1, finalBounds.width),
+		height: Math.max(1, finalBounds.height),
 	};
 }
 
@@ -1454,8 +1562,11 @@ function computeFreeResize(
 		const expTop = Math.min(distH, center.y);
 		const expBottom = Math.min(distH, container.y - center.y);
 
-		let newW = expLeft + expRight;
-		let newH = expTop + expBottom;
+		const changesX = handle.movable.left || handle.movable.right;
+		const changesY = handle.movable.top || handle.movable.bottom;
+
+		let newW = changesX ? expLeft + expRight : startBounds.width;
+		let newH = changesY ? expTop + expBottom : startBounds.height;
 
 		if (min) {
 			newW = Math.max(newW, min.x);
@@ -1477,10 +1588,10 @@ function computeFreeResize(
 		}
 
 		bounds = {
-			x: Math.round(center.x - newW / 2),
-			y: Math.round(center.y - newH / 2),
-			width: Math.round(newW),
-			height: Math.round(newH),
+			x: center.x - newW / 2,
+			y: center.y - newH / 2,
+			width: newW,
+			height: newH,
 		};
 	} else {
 		const anchor = {
@@ -1549,10 +1660,10 @@ function computeFreeResize(
 		}
 
 		bounds = {
-			x: Math.round(newX),
-			y: Math.round(newY),
-			width: Math.round(newW),
-			height: Math.round(newH),
+			x: newX,
+			y: newY,
+			width: newW,
+			height: newH,
 		};
 	}
 	return { bounds, snappedRatio };

@@ -1,18 +1,7 @@
-import { Route, Router, useCurrentMatches } from "@solidjs/router";
+import { Route, Router } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import {
-	getCurrentWebviewWindow,
-	type WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import {
-	createEffect,
-	createSignal,
-	lazy,
-	onCleanup,
-	onMount,
-	Suspense,
-} from "solid-js";
+import { createEffect, lazy, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -24,8 +13,10 @@ import WindowChromeLayout from "./routes/(window-chrome)";
 import SettingsLayout from "./routes/(window-chrome)/settings";
 import { authStore, generalSettingsStore } from "./store";
 import { identifyUser, initAnonymousUser } from "./utils/analytics";
-import { type AppTheme, commands } from "./utils/tauri";
+import { appearanceIsDark } from "./utils/appearance";
+import { AutoRevealWindowOnReady } from "./utils/RevealWindow";
 import titlebar from "./utils/titlebar-state";
+import { usePrefersDarkMode } from "./utils/use-media-query";
 
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SettingsGeneralPage = lazy(
@@ -79,7 +70,6 @@ const OnboardingPage = lazy(
 const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
 const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
 const CameraPage = lazy(() => import("./routes/camera"));
-const CaptureAreaPage = lazy(() => import("./routes/capture-area"));
 const DebugPage = lazy(() => import("./routes/debug"));
 const EditorPage = lazy(() => import("./routes/editor"));
 const InProgressRecordingPage = lazy(
@@ -122,8 +112,15 @@ export default function App() {
 }
 
 function Inner() {
-	const currentWindow = getCurrentWebviewWindow();
-	createThemeListener(currentWindow);
+	const generalSettings = generalSettingsStore.createQuery();
+	const prefersDark = usePrefersDarkMode();
+
+	createEffect(() =>
+		document.documentElement.classList.toggle(
+			"dark",
+			appearanceIsDark(generalSettings.data?.appearance, prefersDark()),
+		),
+	);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -157,40 +154,20 @@ function Inner() {
 			/>
 			<CapErrorBoundary>
 				<Router
-					root={(props) => {
-						const matches = useCurrentMatches();
-
-						onMount(() => {
-							let autoShow = true;
-							for (const match of matches()) {
-								if (match.route.info?.AUTO_SHOW_WINDOW === false)
-									autoShow = false;
-							}
-
-							if (
-								location.pathname === "/" ||
-								location.pathname === "/camera"
-							) {
-								return;
-							}
-
-							if (autoShow) {
-								void currentWindow.show();
-								void currentWindow.setFocus();
-							} else {
-								// The route reveals itself after its first themed paint to
-								// avoid a load flash. Safety net so the window is never left
-								// hidden if that self-reveal never runs (e.g. chunk load error).
-								setTimeout(() => void currentWindow.show(), 2000);
-							}
-						});
-
-						return <Suspense fallback={null}>{props.children}</Suspense>;
-					}}
+					root={(props) => (
+						<Suspense fallback={null}>
+							{props.children}
+							<AutoRevealWindowOnReady />
+						</Suspense>
+					)}
 				>
 					<Route path="/" component={WindowChromeLayout}>
 						<Route path="/" component={NewMainPage} />
-						<Route path="/settings" component={SettingsLayout}>
+						<Route
+							path="/settings"
+							component={SettingsLayout}
+							info={{ autoShow: false }}
+						>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
@@ -226,14 +203,13 @@ function Inner() {
 						<Route path="/upgrade" component={UpgradePage} />
 						<Route path="/update" component={UpdatePage} />
 					</Route>
-					<Route path="/camera" component={CameraPage} />
-					<Route path="/capture-area" component={CaptureAreaPage} />
-					<Route path="/debug" component={DebugPage} />
 					<Route
-						path="/editor"
-						info={{ AUTO_SHOW_WINDOW: false }}
-						component={EditorPage}
+						path="/camera"
+						component={CameraPage}
+						info={{ autoShow: false }}
 					/>
+					<Route path="/debug" component={DebugPage} />
+					<Route path="/editor" component={EditorPage} />
 					<Route
 						path="/in-progress-recording"
 						component={InProgressRecordingPage}
@@ -243,12 +219,13 @@ function Inner() {
 					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
 					<Route
 						path="/screenshot-editor"
-						info={{ AUTO_SHOW_WINDOW: false }}
+						info={{ autoShow: false }}
 						component={ScreenshotEditorPage}
 					/>
 					<Route
 						path="/target-select-overlay"
 						component={TargetSelectOverlayPage}
+						info={{ autoShow: false }}
 					/>
 					<Route
 						path="/window-capture-occluder"
@@ -256,7 +233,7 @@ function Inner() {
 					/>
 					<Route
 						path="/teleprompter"
-						info={{ AUTO_SHOW_WINDOW: false }}
+						info={{ autoShow: false }}
 						component={TeleprompterPage}
 					/>
 				</Router>
@@ -281,88 +258,9 @@ function prewarmFontCaches() {
 			ctx.fillText("Ag", 0, 24);
 			ctx.font = "16px system-ui";
 			ctx.fillText("😀", 0, 24);
-		} catch {}
+		} catch { }
 	};
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);
 	else setTimeout(warm, 250);
-}
-
-function createThemeListener(currentWindow: WebviewWindow) {
-	const [appTheme, setAppTheme] = createSignal<AppTheme | null | undefined>();
-	let disposed = false;
-	let stopSettingsListening: (() => void) | undefined;
-	let stopThemeListening: (() => void) | undefined;
-
-	createEffect(() => {
-		update(appTheme());
-	});
-
-	onMount(() => {
-		void generalSettingsStore
-			.get()
-			.then((settings) => {
-				if (!disposed) setAppTheme(settings?.theme ?? null);
-			})
-			.catch((error) =>
-				console.error("Failed to load general settings:", error),
-			);
-
-		void generalSettingsStore
-			.listen((settings) => {
-				setAppTheme(settings?.theme ?? null);
-			})
-			.then((unlisten) => {
-				if (disposed) {
-					unlisten();
-					return;
-				}
-				stopSettingsListening = unlisten;
-			})
-			.catch((error) =>
-				console.error("Failed to listen to general settings:", error),
-			);
-
-		void currentWindow
-			.onThemeChanged(() => update(appTheme()))
-			.then((unlisten) => {
-				if (disposed) {
-					unlisten();
-					return;
-				}
-				stopThemeListening = unlisten;
-			})
-			.catch((error) =>
-				console.error("Failed to listen to window theme changes:", error),
-			);
-	});
-
-	onCleanup(() => {
-		disposed = true;
-		stopSettingsListening?.();
-		stopThemeListening?.();
-	});
-
-	function update(appTheme: AppTheme | null | undefined) {
-		if (location.pathname === "/camera") return;
-
-		if (appTheme === undefined || appTheme === null) return;
-
-		const isDark =
-			appTheme === "dark" ||
-			(appTheme === "system" &&
-				window.matchMedia("(prefers-color-scheme: dark)").matches);
-
-		try {
-			if (appTheme === "system") {
-				localStorage.removeItem("cap-theme");
-			} else {
-				localStorage.setItem("cap-theme", appTheme);
-			}
-		} catch {}
-
-		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle("dark", isDark);
-		});
-	}
 }

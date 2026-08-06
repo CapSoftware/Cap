@@ -51,12 +51,6 @@ pub struct CaptureDisplay {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CaptureArea {
-    pub screen: CaptureDisplay,
-    pub bounds: LogicalBounds,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window {

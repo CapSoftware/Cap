@@ -392,7 +392,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                                 };
                                 if changed {
                                     let _ = window.set_position(
-                                        crate::windows::logical_point_position(px, py),
+                                        crate::display_utils::logical_point_position(px, py),
                                     );
                                     last_target_pos = Some((px, py));
                                 }
@@ -413,8 +413,9 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                         && let Some(display) = get_display_by_id(&cursor_display_id)
                         && let Some((pos_x, pos_y)) = calculate_bottom_center_position(&display)
                     {
-                        let _ = window
-                            .set_position(crate::windows::logical_point_position(pos_x, pos_y));
+                        let _ = window.set_position(crate::display_utils::logical_point_position(
+                            pos_x, pos_y,
+                        ));
                         current_display_id = Some(cursor_display_id);
                     }
                 }

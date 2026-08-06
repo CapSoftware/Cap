@@ -15,15 +15,14 @@ import {
 	onCleanup,
 	onMount,
 	Show,
-	Suspense,
 } from "solid-js";
 import toast from "solid-toast";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
-
 import { authStore, userProfileStore } from "~/store";
 import { resetUser, trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
+import { RevealWindowWithSuspense } from "~/utils/RevealWindow";
 import { commands } from "~/utils/tauri";
 import {
 	apiClient,
@@ -570,9 +569,9 @@ export default function Settings(props: RouteSectionProps) {
 			</div>
 			<div class="cap-settings-content overflow-y-hidden flex-1 min-w-0">
 				<CapErrorBoundary>
-					<Suspense fallback={<SettingsContentSkeleton />}>
+					<RevealWindowWithSuspense fallback={<SettingsContentSkeleton />}>
 						{props.children}
-					</Suspense>
+					</RevealWindowWithSuspense>
 				</CapErrorBoundary>
 			</div>
 		</div>

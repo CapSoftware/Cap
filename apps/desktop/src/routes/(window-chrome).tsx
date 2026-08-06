@@ -1,3 +1,4 @@
+import { createEventListener } from "@solid-primitives/event-listener";
 import { type RouteSectionProps, useLocation } from "@solidjs/router";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -10,9 +11,7 @@ import {
 	type ParentProps,
 	Suspense,
 } from "solid-js";
-
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
 import { initializeTitlebar } from "~/utils/titlebar-state";
@@ -23,7 +22,7 @@ import {
 
 export default function (props: RouteSectionProps) {
 	let unlistenResize: UnlistenFn | undefined;
-	const location = useLocation();
+	onCleanup(() => unlistenResize?.());
 
 	onMount(async () => {
 		console.log("window chrome mounted");
@@ -32,28 +31,16 @@ export default function (props: RouteSectionProps) {
 		});
 	});
 
-	const handleKeyDown = (e: KeyboardEvent) => {
-		const isMac = ostype() === "macos";
-		const closeShortcut = isMac
-			? e.metaKey && e.key === "w"
-			: e.ctrlKey && e.key === "w";
+	if (ostype() !== "macos") {
+		createEventListener(window, "keydown", (e) => {
+			if (e.ctrlKey && e.key === "w") {
+				e.preventDefault();
+				getCurrentWindow().close();
+			}
+		});
+	}
 
-		if (closeShortcut) {
-			e.preventDefault();
-			getCurrentWindow().close();
-		}
-	};
-
-	onMount(() => {
-		window.addEventListener("keydown", handleKeyDown);
-	});
-
-	onCleanup(() => {
-		unlistenResize?.();
-		window.removeEventListener("keydown", handleKeyDown);
-	});
-
-	const isMacOS = ostype() === "macos";
+	const location = useLocation();
 
 	createEffect(() => {
 		void applyMacOSWindowMaterial(
@@ -68,7 +55,7 @@ export default function (props: RouteSectionProps) {
 			<div
 				class={cx(
 					"cap-window-shell flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1",
-					isMacOS && "rounded-[16px]",
+					ostype() === "macos" && "rounded-[16px]",
 				)}
 			>
 				<Header />
@@ -113,10 +100,12 @@ function Header() {
 				"cap-window-header flex items-center min-w-0 w-full h-9 select-none shrink-0 bg-gray-2",
 				isWindows ? "flex-row" : "flex-row-reverse",
 			)}
-			data-tauri-drag-region
+			data-tauri-drag-region="deep"
 		>
 			{ctx.state()?.items}
-			{isWindows && (
+			{/* This is temporary until the re-strcture of window-chrome.
+			    Then we'll use native captions on Windows and GTK-4 window controls on Linux */}
+			{(isWindows || isLinux) && (
 				<CaptionControlsWindows11
 					class="ml-auto!"
 					maximizable={ctx.state()?.onMaximize ? true : undefined}
@@ -124,25 +113,12 @@ function Header() {
 					onMaximize={ctx.state()?.onMaximize}
 				/>
 			)}
-			{((isMacOS && !isSettings()) || isLinux) && (
-				<CaptionControlsMacOS
-					class="mr-auto! ml-3"
-					showMinimize={false}
-					showZoom={ctx.state()?.onMaximize !== undefined}
-					onZoom={ctx.state()?.onMaximize}
-				/>
-			)}
+			{isMacOS && !isSettings() && <div class="h-full w-[70px]" />}
 		</header>
 	);
 }
 
 function Inner(props: ParentProps) {
-	const location = useLocation();
-
-	onMount(() => {
-		if (location.pathname !== "/") void getCurrentWindow().show();
-	});
-
 	return (
 		<div
 			data-tauri-drag-region="false"

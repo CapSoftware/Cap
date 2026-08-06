@@ -664,10 +664,7 @@ function Inner() {
 		>
 			<div class="flex flex-col flex-1 min-h-0">
 				<Header />
-				<div
-					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
-					data-tauri-drag-region
-				>
+				<div class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5">
 					<div
 						ref={setLayoutRef}
 						class="flex overflow-hidden flex-col flex-1 min-h-0"
@@ -1222,6 +1219,7 @@ function Dialogs() {
 													variant="white"
 													size="xs"
 													class="flex items-center justify-center text-center rounded-full h-8 w-8 border focus:border-blue-9"
+													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
 													<div class="relative pointer-events-none size-4">
@@ -1281,7 +1279,7 @@ function Dialogs() {
 														Crop area
 													</span>
 													<div
-														class="overflow-hidden relative rounded-xl border shadow-sm border-gray-3 bg-gray-3"
+														class="relative border shadow-sm border-gray-3 bg-gray-3"
 														style={{
 															width: `${boxSize().w}px`,
 															height: `${boxSize().h}px`,
@@ -1384,7 +1382,7 @@ function Dialogs() {
 														Preview
 													</span>
 													<div
-														class="flex overflow-hidden relative justify-center items-center rounded-xl border shadow-sm border-gray-3 bg-gray-3"
+														class="flex overflow-hidden relative justify-center items-center border shadow-sm border-gray-3 bg-gray-3"
 														style={{
 															width: `${boxSize().w}px`,
 															height: `${boxSize().h}px`,

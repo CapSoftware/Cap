@@ -6,7 +6,6 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, onCleanup, Suspense } from "solid-js";
-import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
@@ -108,12 +107,12 @@ export function Header() {
 
 	return (
 		<div
-			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14 px-4 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 shrink-0 z-20 gap-4 justify-between"
+			data-tauri-drag-region="deep"
+			class="flex relative flex-row items-center w-full h-[52px] px-4 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 shrink-0 z-20 gap-4 justify-between"
 		>
 			<div class="flex items-center gap-4">
 				{ostype() === "macos" && <div class="w-14" />}
-				{ostype() === "linux" && <CaptionControlsMacOS />}
+				{ostype() === "linux" && <CaptionControlsWindows11 />}
 			</div>
 
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">

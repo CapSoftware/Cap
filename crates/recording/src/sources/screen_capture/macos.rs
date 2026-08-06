@@ -759,8 +759,7 @@ impl output_pipeline::VideoSource for VideoSource {
                                         "Failed to restart macOS screen capture"
                                     );
                                     return Err(anyhow!(
-                                        "Screen capture restart failed after {} attempts: {e}",
-                                        restart_count
+                                        "Screen capture restart failed after {restart_count} attempts: {e}"
                                     ));
                                 }
                             }

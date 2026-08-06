@@ -117,8 +117,16 @@
 				"ext": ["cap"],
 				"name": "Cap Project",
 				"mimeType": "application/x-cap-project",
-				"role": "Editor"
+				"role": "Editor",
+				"rank": "Owner",
+				"description": "Cap Project",
+				"exportedType": {
+					"identifier": "so.cap.desktop.project",
+					"conformsTo": ["com.apple.package"]
+				}
 			}
-		]
+		],
+		"copyright": "Copyright (c) 2023-present Cap Software, Inc.",
+		"homepage": "https://cap.so/home"
 	}
 }

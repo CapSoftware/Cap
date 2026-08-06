@@ -2,7 +2,7 @@ use crate::{
     App, ArcLock, RequestOpenRecordingPicker, RequestStartRecording, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     tray,
-    windows::ShowCapWindow,
+    windows::CapWindow,
 };
 use cap_recording::feeds::microphone::MicrophoneFeed;
 use cap_recording::screen_capture::ScreenCaptureTarget;
@@ -191,7 +191,7 @@ pub fn init(app: &AppHandle) {
                 if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
+                        let _ = CapWindow::Settings { page: None }.show(&app).await;
                     });
                 }
 
@@ -294,7 +294,7 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             match recording::take_screenshot(app.clone(), target.clone()).await {
                 Ok(path) => {
                     if crate::automation::should_open_screenshot_editor(&app, &target) {
-                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                        let _ = CapWindow::ScreenshotEditor { path }.show(&app).await;
                     }
                     Ok(())
                 }
@@ -313,7 +313,7 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             match recording::take_screenshot(app.clone(), target.clone()).await {
                 Ok(path) => {
                     if crate::automation::should_open_screenshot_editor(&app, &target) {
-                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                        let _ = CapWindow::ScreenshotEditor { path }.show(&app).await;
                     }
                     Ok(())
                 }
