@@ -8,15 +8,21 @@ use tracing::debug;
 const MAX_FRAMES: usize = 60;
 /// Maximum height of the stitched image, in pixels.
 const MAX_STITCHED_HEIGHT: u32 = 16_000;
-/// Wheel lines injected per scroll step.
-const SCROLL_LINES: i32 = 5;
-/// Delay after injecting a scroll before capturing the next frame.
-const SETTLE_MS: u64 = 350;
+/// Wheel notches injected per scroll step. Kept small so consecutive frames
+/// overlap enough for reliable offset matching (one notch scrolls ~3 lines,
+/// roughly 100px in most applications).
+const SCROLL_NOTCHES: i32 = 2;
+/// Delay after injecting a scroll before capturing the next frame, long
+/// enough for smooth-scrolling animations to finish.
+const SETTLE_MS: u64 = 600;
 /// Fraction of the frame height ignored at the top when matching frames, so
 /// sticky headers and toolbars don't pin the detected offset to zero.
 const HEADER_SKIP_FRACTION: f32 = 0.2;
 /// Maximum mean absolute pixel difference for an overlap to count as a match.
-const MATCH_THRESHOLD: f64 = 8.0;
+const MATCH_THRESHOLD: f64 = 12.0;
+/// Minimum fraction of the matchable rows that must overlap for a candidate
+/// offset to be considered; small overlaps produce noisy scores.
+const MIN_OVERLAP_FRACTION: f32 = 0.25;
 
 /// Captures a window while scrolling it, stitching the frames into one tall
 /// image. The window must be under the cursor so the injected wheel events
@@ -45,7 +51,7 @@ pub async fn capture_scrolling_window(
     let mut prev = first.to_luma8();
 
     for frame_index in 0..MAX_FRAMES {
-        inject_scroll(-SCROLL_LINES);
+        inject_scroll(-SCROLL_NOTCHES);
         tokio::time::sleep(std::time::Duration::from_millis(SETTLE_MS)).await;
 
         let frame = crate::recording::capture_screen_image(&app, target.clone()).await?;
@@ -107,8 +113,10 @@ fn find_scroll_offset(prev: &image::GrayImage, cur: &image::GrayImage) -> Option
     let mut best_offset = 0usize;
     let mut best_score = f64::MAX;
 
-    let max_offset = height - skip_top - row_step;
-    for offset in (0..max_offset).step_by(2) {
+    let matchable_rows = height - skip_top;
+    let min_overlap = ((matchable_rows as f32 * MIN_OVERLAP_FRACTION) as usize).max(row_step);
+    let max_offset = matchable_rows - min_overlap;
+    for offset in 0..=max_offset {
         let overlap_rows = height - skip_top - offset;
         let mut sum = 0u64;
         let mut count = 0u64;
@@ -146,9 +154,9 @@ fn find_scroll_offset(prev: &image::GrayImage, cur: &image::GrayImage) -> Option
 }
 
 /// Injects vertical mouse-wheel scrolling at the current cursor position.
-/// Negative `lines` scrolls the content up (revealing content below).
+/// Negative `notches` scrolls the content up (revealing content below).
 #[allow(unused_variables)]
-fn inject_scroll(lines: i32) {
+fn inject_scroll(notches: i32) {
     #[cfg(windows)]
     {
         use ::windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -163,7 +171,7 @@ fn inject_scroll(lines: i32) {
                 mi: MOUSEINPUT {
                     dx: 0,
                     dy: 0,
-                    mouseData: (lines * WHEEL_DELTA) as u32,
+                    mouseData: (notches * WHEEL_DELTA) as u32,
                     dwFlags: MOUSEEVENTF_WHEEL,
                     time: 0,
                     dwExtraInfo: 0,
@@ -184,6 +192,8 @@ fn inject_scroll(lines: i32) {
         const UNITS_LINE: u32 = 1;
         // kCGHIDEventTap
         const HID_EVENT_TAP: u32 = 0;
+        // Lines scrolled per wheel notch.
+        const LINES_PER_NOTCH: i32 = 3;
 
         #[link(name = "CoreGraphics", kind = "framework")]
         unsafe extern "C" {
@@ -200,8 +210,14 @@ fn inject_scroll(lines: i32) {
         }
 
         unsafe {
-            let event =
-                CGEventCreateScrollWheelEvent2(std::ptr::null(), UNITS_LINE, 1, lines, 0, 0);
+            let event = CGEventCreateScrollWheelEvent2(
+                std::ptr::null(),
+                UNITS_LINE,
+                1,
+                notches * LINES_PER_NOTCH,
+                0,
+                0,
+            );
             if !event.is_null() {
                 CGEventPost(HID_EVENT_TAP, event);
                 CFRelease(event);
