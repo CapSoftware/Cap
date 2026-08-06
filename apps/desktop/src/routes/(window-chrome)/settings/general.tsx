@@ -522,6 +522,20 @@ function Inner(props: {
 					}}
 				/>
 
+				<Section
+					title="Interface & Performance"
+					description="Adjust interface visuals and animations for peak performance."
+				>
+					<SectionRows>
+						<ToggleSettingItem
+							label="Disable visual animations"
+							description="Turn off interface entry animations and capture overlays for a faster, low-latency workflow."
+							value={!!settings.disableAnimations}
+							onChange={(v) => handleChange("disableAnimations", v)}
+						/>
+					</SectionRows>
+				</Section>
+
 				{ostype === "macos" && (
 					<Section
 						title="App"

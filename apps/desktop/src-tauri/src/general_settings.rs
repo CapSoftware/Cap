@@ -164,6 +164,8 @@ pub struct GeneralSettingsStore {
     pub enable_notifications: bool,
     #[serde(default)]
     pub disable_auto_open_links: bool,
+    #[serde(default)]
+    pub disable_animations: bool,
     #[serde(default = "default_true")]
     pub has_completed_startup: bool,
     #[serde(default)]

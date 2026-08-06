@@ -8,6 +8,7 @@ export type GeneralSettingsStore = TauriGeneralSettingsStore & {
 	transcriptionHints?: string[];
 	enableTelemetry?: boolean;
 	outOfProcessMuxer?: boolean;
+	disableAnimations?: boolean;
 };
 
 export const DEFAULT_TRANSCRIPTION_HINTS = [
@@ -53,6 +54,7 @@ export function createDefaultGeneralSettings(): GeneralSettingsStore {
 		maxFps: 60,
 		transcriptionHints: [...DEFAULT_TRANSCRIPTION_HINTS],
 		enableTelemetry: true,
+		disableAnimations: false,
 	};
 }
 
