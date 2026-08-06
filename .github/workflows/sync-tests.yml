@@ -125,6 +125,16 @@ jobs:
         run: |
           cargo test --locked -p cap-recording --test instant_mode_scenarios
 
+      # The hardware harnesses (real screen/mic recordings) only run on
+      # developer machines, but they must keep compiling: nothing else
+      # builds the full test target set, and hardware_instant_recording
+      # once rotted into breaking every non-macOS test build via ungated
+      # macOS-only imports.
+      - name: Compile recording test harnesses
+        shell: bash
+        run: |
+          cargo check --locked -p cap-recording --tests
+
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
       # sources that deliver at a different rate than configured.
