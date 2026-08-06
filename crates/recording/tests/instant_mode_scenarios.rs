@@ -145,11 +145,23 @@ fn encode_video_segments(
     .unwrap();
     encoder.set_segment_callback(tx);
 
+    // The DASH muxer can only cut segments at keyframes and the encoder's
+    // GOP is fixed at DEFAULT_KEYFRAME_INTERVAL_SECS (2s), so sub-GOP
+    // segment durations are only reachable when the source marks I-frames
+    // at the segment cadence. libx264 honors keyint_min strictly while
+    // hardware encoders emit extra IDRs, so without this the segment counts
+    // differ per platform.
+    let seg_ms = segment_duration.as_millis() as u64;
     let total_frames = recording_duration_ms / frame_interval_ms;
     for i in 0..total_frames {
-        let frame = make_video_frame_patterned(info.width, info.height, i as u32);
-        let ts = Duration::from_millis(i * frame_interval_ms);
-        encoder.queue_frame(frame, ts).unwrap();
+        let ts_ms = i * frame_interval_ms;
+        let mut frame = make_video_frame_patterned(info.width, info.height, i as u32);
+        if seg_ms > 0 && ts_ms % seg_ms < frame_interval_ms {
+            frame.set_kind(ffmpeg::picture::Type::I);
+        }
+        encoder
+            .queue_frame(frame, Duration::from_millis(ts_ms))
+            .unwrap();
     }
 
     encoder.finish().unwrap();
@@ -1317,11 +1329,18 @@ fn video_audio_duration_alignment() {
         None,
     );
 
-    let video_manifest = read_manifest(&video.manifest_path);
-    let audio_manifest = read_manifest(&audio.manifest_path);
+    // Compare assembled media durations, not manifest bookkeeping: the DASH
+    // muxer only opens a new segment file at a keyframe, so a tail that ends
+    // between keyframes is appended into the previous segment file and the
+    // manifest's estimated total under-reports it. The assembled output is
+    // what users get and must carry the full content on both tracks.
+    let video_mp4 = temp.path().join("video.mp4");
+    concatenate_m4s_segments_with_init(&video.init_path, &video.segment_paths, &video_mp4).unwrap();
+    let audio_m4a = temp.path().join("audio.m4a");
+    concatenate_m4s_segments_with_init(&audio.init_path, &audio.segment_paths, &audio_m4a).unwrap();
 
-    let video_duration = video_manifest["total_duration"].as_f64().unwrap();
-    let audio_duration = audio_manifest["total_duration"].as_f64().unwrap();
+    let video_duration = get_media_duration(&video_mp4).unwrap().as_secs_f64();
+    let audio_duration = get_media_duration(&audio_m4a).unwrap().as_secs_f64();
 
     let diff = (video_duration - audio_duration).abs();
     assert!(
@@ -2121,10 +2140,21 @@ fn segment_callback_receives_events_during_encoding() {
     .unwrap();
     encoder.set_segment_callback(tx);
 
-    for i in 0..15 {
+    // Segment cuts require keyframes; mark them at the segment cadence so
+    // sub-GOP segment durations behave the same on every encoder.
+    let queue_with_cadence = |encoder: &mut SegmentedVideoEncoder, i: u64| {
+        let ts_ms = i * 33;
+        let mut frame = make_video_frame(320, 240);
+        if ts_ms % 200 < 33 {
+            frame.set_kind(ffmpeg::picture::Type::I);
+        }
         encoder
-            .queue_frame(make_video_frame(320, 240), Duration::from_millis(i * 33))
+            .queue_frame(frame, Duration::from_millis(ts_ms))
             .unwrap();
+    };
+
+    for i in 0..15 {
+        queue_with_cadence(&mut encoder, i);
     }
 
     let mid_events: Vec<SegmentCompletedEvent> = rx.try_iter().collect();
@@ -2135,9 +2165,7 @@ fn segment_callback_receives_events_during_encoding() {
     );
 
     for i in 15..45 {
-        encoder
-            .queue_frame(make_video_frame(320, 240), Duration::from_millis(i * 33))
-            .unwrap();
+        queue_with_cadence(&mut encoder, i);
     }
 
     encoder.finish().unwrap();
