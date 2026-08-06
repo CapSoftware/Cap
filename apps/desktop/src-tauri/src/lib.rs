@@ -38,6 +38,7 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
+mod scrolling_capture;
 mod target_select_overlay;
 mod telemetry;
 mod thumbnails;
@@ -4854,6 +4855,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::delete_recording,
             recording::take_screenshot,
             recording::capture_ocr_text,
+            scrolling_capture::capture_scrolling_window,
             recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,

@@ -37,6 +37,7 @@ const ACTION_TEXT = {
 	screenshotWindow: "Screenshot current window",
 	screenshotArea: "Screenshot area picker",
 	ocrArea: "Copy text from area (OCR)",
+	scrollingCaptureWindow: "Scrolling capture of window under cursor",
 } satisfies { [K in HotkeyAction]?: string };
 
 export default function () {
@@ -89,6 +90,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			"screenshotWindow",
 			"screenshotArea",
 			"ocrArea",
+			"scrollingCaptureWindow",
 			"openRecordingPicker",
 			"stopRecording",
 			"restartRecording",

@@ -62,6 +62,9 @@ async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
 async captureOcrText(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("capture_ocr_text", { target });
 },
+async captureScrollingWindow(windowId: WindowId) : Promise<string> {
+    return await TAURI_INVOKE("capture_scrolling_window", { windowId });
+},
 async importCurrentDesktopBackground(projectPath: string) : Promise<string> {
     return await TAURI_INVOKE("import_current_desktop_background", { projectPath });
 },
@@ -832,7 +835,7 @@ export type GpuInfoDiag = { vendor: string; description: string; dedicatedVideoM
 export type HapticPattern = "alignment" | "levelChange" | "generic"
 export type HapticPerformanceTime = "default" | "now" | "drawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
-export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "ocrArea" | "other"
+export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "ocrArea" | "scrollingCaptureWindow" | "other"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey }; seeded?: HotkeyAction[] }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
