@@ -3225,7 +3225,7 @@ function Page() {
 										<IconLucidePinOff class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 									}
 								>
-									<IconLucidePin class="transition-colors text-blue-11 size-4 hover:text-blue-12" />
+									<IconLucidePin class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 								</Show>
 							</button>
 						</Tooltip>
