@@ -1,6 +1,6 @@
 ---
 title: Introducing Timeline view
-description: Timeline view is a new way to collaborate on the videos you share. Comments sit on the timeline at the moment they're about, and your team or clients can reply with their screen, camera, or voice.
+description: Timeline view is a better way to collaborate on the Caps you share with your team, clients, and customers. Comments sit on the timeline at the moment they're about, and anyone can reply with their screen, camera, or voice.
 publishedAt: "2026-08-05"
 category: Product
 image: /blog/timeline-view.jpg
@@ -8,51 +8,33 @@ author: Richie McIlroy
 tags: Product, Timeline, Collaboration
 ---
 
-Hey everyone,
+Today we're shipping Timeline view: a better way to collaborate on the links you share with your team, your clients, and your customers. Comments sit on the video's timeline at the moment they're about, and anyone you share with can reply with their screen, their camera, or their voice.
 
-Today we're shipping Timeline view: a new way to collaborate on the videos you share.
+Until now, comments only sat in a sidebar next to the player: "Sam, 1:12: the logo flickers." Connecting the number to the moment was your job. Now Sam's comment sits at 1:12, comes up when playback gets there, and clicking it takes you to the frame.
 
-Most Caps aren't just watched. They're reviewed. You send a walkthrough to your team, a cut to a client, a bug report to an engineer, and what comes back is comments like this:
+There's nothing to set up. Timeline view is the same player you already share, and it's live on every shared Cap with comments enabled, for everyone watching, signed in or not.
 
-> **Sam** 1:12 The logo flickers the moment the dialog opens.
->
-> **Priya** 1:15 Same, but only on Safari for me.
+## What Timeline view does for you
 
-Those two comments are about the same three seconds of video, but they sit in a sidebar next to the player, and connecting the numbers to the moments is your job. Nothing on the page knows they belong together.
+Say you record a walkthrough of the new dashboard and share the link with your team before you log off. Overnight, Sam comments at the moment a logo flickers. Priya replies with a screen recording of the same bug in Safari. Jo talks through a fix in a voice note, Ana records a quick camera reply with a suggestion, and Alex signs off with "ship it" near the end.
 
-Timeline view fixes that. Comments now sit on the video's timeline, at the moment they're about, and the people you shared with can reply with their screen, their camera, or their voice. The whole review happens on the video, instead of next to it.
+The next morning you press play and the review comes to you. Each comment surfaces as the video reaches it, already attached to the seconds it's about.
 
-Here's how it works.
-
-## Comments, where they happened
-
-This is a small working version of the real thing. Press play:
-
-<BranchesDemo />
-
-Every comment hangs off the second it was left at, and comes up as you reach it. Threads collapse into their parent, emoji reactions get their own markers, and when a few comments land on the same moment they group together until you zoom in (pinch, or hold ⌘ and scroll; double-click zooms back out).
-
-The bar itself is built from your recording: real frames from the video so you can find things by sight, and a speech envelope drawn from the transcript so you can see where the talking is and skip the dead air.
-
-## Reply with a recording
-
-This is the part I'm most excited about. Most feedback on a video is about something visual, and typing it out is the clumsiest way to give it. A teammate describing a bug, a client explaining which part of the design they mean: now they can just show you.
-
-<ReplyDemo />
-
-Signed-in viewers can reply at any timestamp with their screen, their camera, or a voice note. Replies upload while you record, the same way instant recordings do, so they're ready about as soon as you stop talking.
-
-Recording a reply requires the video's owner to be on Cap Pro. Watching them is open to everyone.
-
-## Still one player
-
-Timeline view isn't a separate page or a mode you have to commit to. It's the same player with a different set of controls:
+Here's that review in a working player. Flip between the classic view and Timeline view:
 
 <ToggleDemo />
 
-Hit **Timeline** under any shared recording, or press <kbd>T</kbd>. Switch mid-playback and nothing resets. It's live now on every shared Cap with comments enabled, for everyone watching, signed in or not.
+## What you can do with Timeline view
 
-Try it with your team on something you've already shared, and tell me what you think. If the timeline doesn't show you something the comment list didn't, I want to know.
+**Reply with a recording.** Most feedback on a video is about something visual, and typing it out is the clumsiest way to give it. Signed-in viewers can reply at any timestamp with their screen, their camera, or a voice note, and replies upload while they record, so they're ready about as soon as they stop talking. Recording requires the video's owner to be on Cap Pro; watching is open to everyone.
+
+**Find moments by sight.** The bar is drawn from your recording: real frames so you can spot the part you're after, and a speech envelope from the transcript so you can skip the dead air.
+
+**Zoom into a pile-up.** When several comments land on the same few seconds they group together. Pinch, or hold <kbd>⌘</kbd> and scroll, to spread them out; double-click to zoom back out.
+
+**Switch whenever.** Hit **Timeline** under any shared recording, or press <kbd>T</kbd>. It's the same player, so nothing resets, even mid-playback.
+
+Try it with your team on something you've already shared, and tell me what you think.
 
 Richie McIlroy
 
