@@ -1412,6 +1412,29 @@ export function ExportPage() {
 										</>
 									)}
 								</Button>
+								<Show when={renderEstimate()}>
+									{(est) => {
+										const estimate = est();
+										const rawSec =
+											(estimate.frameRenderTimeMs * estimate.totalFrames) /
+											1000;
+										const sec = Number.isFinite(rawSec)
+											? Math.max(1, Math.ceil(rawSec))
+											: 1;
+										const timeStr =
+											sec < 60
+												? `~${sec}s`
+												: `~${Math.floor(sec / 60)}m ${sec % 60}s`;
+										const sizeStr = Number.isFinite(estimate.estimatedSizeMb)
+											? estimate.estimatedSizeMb.toFixed(1)
+											: "?";
+										return (
+											<p class="text-xs text-gray-10 text-center mt-0.5">
+												Est. size: {sizeStr} MB • Est. time: {timeStr}
+											</p>
+										);
+									}}
+								</Show>
 							</div>
 						)}
 					</div>
