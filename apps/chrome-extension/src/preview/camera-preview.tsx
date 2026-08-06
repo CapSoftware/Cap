@@ -518,6 +518,7 @@ function App() {
 			peer.addEventListener("connectionstatechange", () => {
 				if (peer.connectionState === "connected") {
 					clearDisconnectTimer();
+					clearMuteTimer();
 					return;
 				}
 				if (
