@@ -2,10 +2,11 @@
 
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
-import { Tinybird } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { provideOptionalAuth, Tinybird, VideosPolicy } from "@cap/web-backend";
+import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -41,11 +42,32 @@ export async function getVideoAnalytics(
 ) {
 	if (!videoId) throw new Error("Video ID is required");
 
-	const [{ orgId } = { orgId: null }] = await db()
-		.select({ orgId: videos.orgId })
-		.from(videos)
-		.where(eq(videos.id, Video.VideoId.make(videoId)))
-		.limit(1);
+	const id = Video.VideoId.make(videoId);
+
+	// This is a server action, so it is directly callable by any client
+	// independently of `/api/analytics` — the gate on that route does not
+	// protect this entry point. Without this check the view count of a private
+	// or password-protected video is readable by anyone who knows its ID.
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db()
+				.select({ orgId: videos.orgId })
+				.from(videos)
+				.where(eq(videos.id, id))
+				.limit(1),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(id)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	// If the video doesn't exist or isn't viewable, don't query Tinybird.
+	// Otherwise we'd fall through with a null orgId, dropping the tenant
+	// filter, and return analytics for an arbitrary `/s/${videoId}` pathname.
+	if (Exit.isFailure(exit) || exit.value.length === 0) {
+		throw new Error("Video not found");
+	}
+
+	const orgId = exit.value[0]?.orgId ?? null;
 
 	return runPromise(
 		Effect.gen(function* () {
