@@ -1799,6 +1799,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
+	void clearSharedSessionState().catch(() => undefined);
 	void updateActionForStatus(recordingStatus);
 	void injectOverlayIntoOpenTabs();
 	if (details.reason === "install") {
@@ -1854,6 +1855,7 @@ chrome.windows.onRemoved.addListener(() => {
 	// the status. Force-clear it so the UI doesn't stay stuck on "creating".
 	if (recordingStatus.phase === "creating") {
 		setRecordingStatusAndBroadcast({ phase: "idle" });
+		recordingStartInFlight = null;
 	}
 	void syncRecordingStatus().catch(() => undefined);
 });
