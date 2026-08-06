@@ -83,7 +83,7 @@ export function ToggleDemo() {
 		<DemoPanel
 			title="One player, two views"
 			hint="Flip between them. With your pointer over this demo you can also just press T, the way you would on a Cap link."
-			caption="The video element never reloads, so the position, the volume and a running playback survive the switch. Going fullscreen puts the controls back over the video, because there is no card to dock them to."
+			caption="The blue markers are recorded replies: a screen recording, a voice note and a camera clip. The video element never reloads, so the position, the volume and a running playback survive the switch."
 		>
 			<div
 				ref={containerRef}
