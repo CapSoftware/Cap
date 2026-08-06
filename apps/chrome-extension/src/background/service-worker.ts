@@ -1,3 +1,4 @@
+import { capabilities } from "../platform/capabilities";
 import { EXTENSION_PROTOCOL } from "../platform/extension-protocol";
 import {
 	ApiRequestError,
@@ -250,6 +251,10 @@ const sendOffscreen = async (
 
 const getTabStreamId = (tabId: number) =>
 	new Promise<string>((resolve, reject) => {
+		if (!capabilities.supportsTabCapture) {
+			reject(new Error("Tab capture is not supported on this browser"));
+			return;
+		}
 		chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (streamId) => {
 			if (chrome.runtime.lastError) {
 				reject(

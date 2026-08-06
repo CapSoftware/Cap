@@ -4,6 +4,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
 	plugins: [react()],
+	define: {
+		__TARGET__: JSON.stringify("chrome"),
+	},
 	build: {
 		emptyOutDir: false,
 		outDir: "dist",
