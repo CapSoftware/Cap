@@ -117,6 +117,14 @@ jobs:
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-rendering
 
+      # Real encoders + DASH muxer + remux/validation over full instant-mode
+      # scenarios: pause/resume excision, stall-recovery bursts with
+      # same-microsecond timestamps, segment assembly and A/V alignment.
+      - name: Instant mode scenario harness
+        shell: bash
+        run: |
+          cargo test --locked -p cap-recording --test instant_mode_scenarios
+
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
       # sources that deliver at a different rate than configured.
