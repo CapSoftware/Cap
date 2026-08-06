@@ -60,6 +60,12 @@ export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
 	authorImage?: ImageUpload.ImageUrl | null;
 	sending?: boolean;
+	/**
+	 * The optimistic entry's temp id, carried onto the saved comment so lists
+	 * can key the pair identically — the settle then updates the mounted card
+	 * in place instead of remounting it (which would restart media playback).
+	 */
+	clientKey?: string;
 };
 
 const SESSION_STORAGE_KEY = "cap_tb_session_id";
@@ -554,6 +560,20 @@ export const Share = ({
 		}, 100);
 	}, []);
 
+	// If the settle ever commits the saved comment while its optimistic twin is
+	// still applied, both would render under the same clientKey; keep only the
+	// settled one. Almost always a no-op passthrough.
+	const visibleComments = useMemo(() => {
+		const settledKeys = new Set<string>();
+		for (const comment of optimisticComments)
+			if (!comment.sending && comment.clientKey)
+				settledKeys.add(comment.clientKey);
+		if (settledKeys.size === 0) return optimisticComments;
+		return optimisticComments.filter(
+			(comment) => !(comment.sending && settledKeys.has(comment.id)),
+		);
+	}, [optimisticComments]);
+
 	const reduceMotion = useReducedMotion() ?? false;
 	const [selectedView, setSelectedView] = useState<ShareView>(initialView);
 	// Screenshots have no timeline to show, and a comments-disabled video has
@@ -994,7 +1014,7 @@ export const Share = ({
 											>
 												<Suspense fallback={<TimelineSkeleton />}>
 													<TimelineView
-														comments={optimisticComments}
+														comments={visibleComments}
 														videoId={data.id}
 														chapters={aiData?.chapters ?? undefined}
 														transcriptionStatus={transcriptionStatus}
@@ -1108,7 +1128,7 @@ export const Share = ({
 									videoSettings={videoSettings}
 									commentsData={commentsData}
 									setCommentsData={setCommentsData}
-									optimisticComments={optimisticComments}
+									optimisticComments={visibleComments}
 									setOptimisticComments={setOptimisticComments}
 									handleCommentSuccess={handleCommentSuccess}
 									views={views}

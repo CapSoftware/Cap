@@ -13,9 +13,18 @@ const CULL_MARGIN = 0.02;
 /** The only fields the layout cares about. */
 export interface LayoutComment {
 	id: string;
+	/** Stable key carried from a comment's optimistic entry onto its saved row. */
+	clientKey?: string;
 	timestamp: number | null;
 	createdAt: Date | string | number;
 }
+
+/**
+ * Node identity: the clientKey when present, so a just-uploaded comment keeps
+ * the node (and any open hover card) its optimistic twin was mounted under.
+ */
+const keyOf = (comment: LayoutComment): string =>
+	comment.clientKey ?? comment.id;
 
 export type BranchLane = 0 | 1;
 
@@ -84,7 +93,7 @@ export function layoutBranches<C extends LayoutComment>(
 	const push = (comment: C & { timestamp: number }, lane: BranchLane) => {
 		nodes.push({
 			kind: "single",
-			id: comment.id,
+			id: keyOf(comment),
 			t: comment.timestamp,
 			lane,
 			comment,
@@ -131,7 +140,7 @@ export function layoutBranches<C extends LayoutComment>(
 		// Full: start a new stack in the same lane and measure future gaps from it.
 		nodes.push({
 			kind: "cluster",
-			id: comment.id,
+			id: keyOf(comment),
 			t,
 			lane: last.lane,
 			comments: [comment],

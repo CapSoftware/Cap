@@ -69,11 +69,18 @@ const CommentComponent: React.FC<{
 	return (
 		<div
 			id={`comment-${comment.id}`}
-			key={`comment-${comment.id}`}
+			// No key here: the list already keys this component by clientKey, and
+			// an id-derived key would force a remount at the optimistic→saved swap
+			// (the id changes) — restarting any playing media in the card.
 			className={clsx(
 				`space-y-3`,
 				level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "",
-				comment.sending ? "opacity-20" : "opacity-100",
+				// A media comment uploads for a while and carries its own progress
+				// ring — ghosting it out for the duration would read as broken. Text
+				// keeps the classic dim for its sub-second round trip.
+				comment.sending && !isMediaComment(comment)
+					? "opacity-20"
+					: "opacity-100",
 			)}
 		>
 			<div className="flex items-start space-x-2.5">
@@ -190,7 +197,7 @@ const CommentComponent: React.FC<{
 				<div className="mt-3 space-y-3">
 					{nestedReplies.map((reply) => (
 						<CommentComponent
-							key={reply.id}
+							key={reply.clientKey ?? reply.id}
 							comment={reply}
 							replies={replies}
 							onReply={onReply}

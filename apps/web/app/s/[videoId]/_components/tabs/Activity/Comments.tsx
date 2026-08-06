@@ -231,7 +231,9 @@ export const Comments = Object.assign(
 					<div className="p-4 space-y-6">
 						{rootComments.map((comment) => (
 							<CommentComponent
-								key={comment.id}
+								// clientKey pins a just-uploaded comment to its optimistic
+								// card's mount, so the settle can't restart its playback.
+								key={comment.clientKey ?? comment.id}
 								comment={comment}
 								replies={optimisticComments}
 								onReply={(id) => {
