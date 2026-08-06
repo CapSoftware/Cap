@@ -43,7 +43,7 @@ fn capture_target_kind(target: &ScreenCaptureTarget) -> Option<cap_automation::C
         ScreenCaptureTarget::Window { .. } => Some(cap_automation::CaptureTargetKind::Window),
         ScreenCaptureTarget::Display { .. } => Some(cap_automation::CaptureTargetKind::Display),
         ScreenCaptureTarget::Area { .. } => Some(cap_automation::CaptureTargetKind::Area),
-        ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
     }
 }
 

@@ -360,7 +360,7 @@ pub struct ScreenPipelineOutput {
 struct Pipeline {
     pub start_time: Timestamps,
     // sources
-    pub screen: OutputPipeline,
+    pub screen: Option<OutputPipeline>,
     pub microphone: Option<OutputPipeline>,
     pub camera: Option<OutputPipeline>,
     pub system_audio: Option<OutputPipeline>,
@@ -372,7 +372,7 @@ struct Pipeline {
 struct FinishedPipeline {
     pub start_time: Timestamps,
     // sources
-    pub screen: FinishedOutputPipeline,
+    pub screen: Option<FinishedOutputPipeline>,
     pub microphone: Option<FinishedOutputPipeline>,
     pub camera: Option<FinishedOutputPipeline>,
     pub system_audio: Option<FinishedOutputPipeline>,
@@ -529,7 +529,7 @@ impl Pipeline {
             OptionFuture::from(self.system_audio.map(|s| s.stop()))
         );
 
-        let screen = self.screen.stop().await;
+        let screen = OptionFuture::from(self.screen.map(|s| s.stop())).await;
 
         if let Some(cursor) = self.cursor.as_mut() {
             cursor.actor.stop();
@@ -543,7 +543,7 @@ impl Pipeline {
 
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen.context("display")?,
+            screen: screen.transpose().context("display")?,
             microphone: finalize_optional_track(
                 RecordingTrackKind::Microphone,
                 microphone.transpose(),
@@ -577,10 +577,12 @@ impl Pipeline {
                 >,
             >,
         >::new();
-        futures.push(Box::pin({
-            let done_fut = self.screen.done_fut();
-            async move { (RecordingTrackKind::Display, true, done_fut.await) }
-        }));
+        if let Some(ref screen) = self.screen {
+            futures.push(Box::pin({
+                let done_fut = screen.done_fut();
+                async move { (RecordingTrackKind::Display, true, done_fut.await) }
+            }));
+        }
 
         if let Some(ref microphone) = self.microphone {
             futures.push(Box::pin({
@@ -609,10 +611,12 @@ impl Pipeline {
             let cam_cancel = self.camera.as_ref().map(|p| p.cancel_token());
             let sys_cancel = self.system_audio.as_ref().map(|p| p.cancel_token());
 
-            let screen_done = self.screen.done_fut();
+            let screen_done = self.screen.as_ref().map(|s| s.done_fut());
             tokio::spawn(async move {
-                // When screen (video) finishes, cancel the other pipelines
-                let _ = screen_done.await;
+                let Some(done) = screen_done else {
+                    return;
+                };
+                let _ = done.await;
                 if let Some(token) = mic_cancel.as_ref() {
                     token.cancel();
                 }
@@ -982,11 +986,19 @@ async fn stop_recording(
                 snap_nearby_start_time(raw_camera_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
             });
 
-            let raw_display_start = to_start_time(s.pipeline.screen.first_timestamp);
-            let display_start_time = if camera_start_time.is_some() {
-                snap_nearby_start_time(raw_display_start, camera_start_time, CROSS_TRACK_SNAP_SECS)
+            let raw_display_start = s
+                .pipeline
+                .screen
+                .as_ref()
+                .map(|sc| to_start_time(sc.first_timestamp));
+            let display_start_time = if let Some(raw_display) = raw_display_start {
+                if let Some(cam_start) = camera_start_time {
+                    snap_nearby_start_time(raw_display, Some(cam_start), CROSS_TRACK_SNAP_SECS)
+                } else {
+                    snap_nearby_start_time(raw_display, mic_start_time, CROSS_TRACK_SNAP_SECS)
+                }
             } else {
-                snap_nearby_start_time(raw_display_start, mic_start_time, CROSS_TRACK_SNAP_SECS)
+                mic_start_time.or(camera_start_time).unwrap_or(s.start)
             };
 
             let diagnostics =
@@ -997,16 +1009,17 @@ async fn stop_recording(
                     track_failures: s.pipeline.track_failures.clone(),
                 });
 
-            let display_fps = s
-                .pipeline
-                .screen
-                .video_info
-                .map(|v| v.fps())
+            let screen = s.pipeline.screen.as_ref();
+
+            let display_fps = screen
+                .and_then(|sc| sc.video_info.map(|v| v.fps()))
                 .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "Screen video_info missing, using default fps: {}",
-                        DEFAULT_FPS
-                    );
+                    if screen.is_some() {
+                        tracing::warn!(
+                            "Screen video_info missing, using default fps: {}",
+                            DEFAULT_FPS
+                        );
+                    }
                     DEFAULT_FPS
                 });
             // Use the encoded display-media span (first to last muxed timestamp plus one
@@ -1015,41 +1028,42 @@ async fn stop_recording(
             // content by the length of every capture gap (static screens, dropped frames).
             // This is the timeline the recorder persists to project-config.json, so it is
             // what un-edited recordings use.
-            let display_media_duration = match s.pipeline.screen.video_timestamp_span {
+            let display_media_duration = match screen.and_then(|sc| sc.video_timestamp_span) {
                 Some((first, last)) if display_fps > 0 => {
                     (last - first).as_secs_f64() + 1.0 / f64::from(display_fps)
                 }
-                _ if display_fps > 0 => {
-                    s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-                }
+                _ if display_fps > 0 => screen
+                    .map(|sc| sc.video_frame_count as f64 / f64::from(display_fps))
+                    .unwrap_or(0.0),
                 _ => 0.0,
             };
 
             // Non-fragmented recordings have their final display file already;
             // verify the muxed container matches the timestamps we sent it.
             // Fragmented recordings get the same check after remux in recovery.
-            if s.pipeline
-                .screen
-                .path
-                .extension()
-                .is_some_and(|e| e == "mp4")
-                && s.pipeline.screen.path.is_file()
-                && display_media_duration > 0.0
-            {
-                crate::output_validation::check_display_sync_span(
-                    &s.pipeline.screen.path,
-                    Duration::from_secs_f64(display_media_duration),
-                );
+            if let Some(screen_pipeline) = s.pipeline.screen.as_ref() {
+                if screen_pipeline
+                    .path
+                    .extension()
+                    .is_some_and(|e| e == "mp4")
+                    && screen_pipeline.path.is_file()
+                    && display_media_duration > 0.0
+                {
+                    crate::output_validation::check_display_sync_span(
+                        &screen_pipeline.path,
+                        Duration::from_secs_f64(display_media_duration),
+                    );
+                }
             }
 
             SegmentOutput {
                 meta: MultipleSegment {
-                    display: VideoMeta {
-                        path: make_relative(&s.pipeline.screen.path),
+                    display: screen.map(|sc| VideoMeta {
+                        path: make_relative(&sc.path),
                         fps: display_fps,
                         start_time: Some(display_start_time),
                         device_id: None,
-                    },
+                    }),
                     camera: s.pipeline.camera.map(|camera| VideoMeta {
                         path: make_relative(&camera.path),
                         fps: camera.video_info.map(|v| v.fps()).unwrap_or_else(|| {
@@ -1148,7 +1162,11 @@ async fn stop_recording(
 
     let needs_remux = if fragmented {
         segment_metas.iter().any(|seg| {
-            let display_path = seg.display.path.to_path(&recording_dir);
+            let display_path = seg
+                .display
+                .as_ref()
+                .map(|d| d.path.to_path(&recording_dir))
+                .unwrap_or_default();
             display_path.is_dir()
         })
     } else {
@@ -1411,6 +1429,11 @@ async fn create_segment_pipeline(
         screen_capture::ScreenCaptureTarget::CameraOnly
     );
 
+    let audio_only = matches!(
+        base_inputs.capture_target,
+        screen_capture::ScreenCaptureTarget::AudioOnly
+    );
+
     let (screen, system_audio, cursor_display) = if camera_only {
         #[cfg(target_os = "linux")]
         {
@@ -1485,8 +1508,17 @@ async fn create_segment_pipeline(
                 .await
                 .context("camera-only screen pipeline setup")?;
 
-            (screen, None, None)
+            (Some(screen), None, None)
         }
+    } else if audio_only {
+        base_inputs.mic_feed.clone().ok_or_else(|| {
+            anyhow!(
+                "Audio-only recording requires a microphone, but no microphone is currently \
+                available. Please select a microphone in the recording settings before starting."
+            )
+        })?;
+
+        (None, None, None)
     } else {
         let capture_target = base_inputs.capture_target.clone();
 
@@ -1551,11 +1583,11 @@ async fn create_segment_pipeline(
         .await
         .context("screen pipeline setup")?;
 
-        (screen, system_audio, Some(display))
+        (Some(screen), system_audio, Some(display))
     };
 
     #[cfg(target_os = "macos")]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -1586,7 +1618,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -1617,7 +1649,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(target_os = "linux")]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -1701,7 +1733,7 @@ async fn create_segment_pipeline(
         None
     };
 
-    let cursor = if camera_only {
+    let cursor = if camera_only || audio_only {
         None
     } else {
         (custom_cursor_capture || keyboard_capture)
@@ -1778,6 +1810,10 @@ fn persist_final_recording_meta(recording_dir: &Path, studio_meta: &StudioRecord
     use chrono::Local;
 
     let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+    let audio_only = RecordingMeta::load_for_project(recording_dir)
+        .ok()
+        .map(|m| m.audio_only)
+        .unwrap_or(false);
     let recording_meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.to_path_buf(),
@@ -1785,6 +1821,7 @@ fn persist_final_recording_meta(recording_dir: &Path, studio_meta: &StudioRecord
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
         upload: None,
+        audio_only,
     };
 
     if let Err(err) = recording_meta.save_for_project() {
@@ -1800,6 +1837,10 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
     use chrono::Local;
 
     let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+    let audio_only = RecordingMeta::load_for_project(recording_dir)
+        .ok()
+        .map(|m| m.audio_only)
+        .unwrap_or(false);
 
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
@@ -1814,6 +1855,7 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
             },
         })),
         upload: None,
+        audio_only,
     };
 
     meta.save_for_project()
@@ -2194,12 +2236,12 @@ mod tests {
             end: 1.0,
             pipeline: FinishedPipeline {
                 start_time,
-                screen: test_finished_output_pipeline_at(
+                screen: Some(test_finished_output_pipeline_at(
                     recording_dir.join("content/display.mp4"),
                     Timestamp::Instant(start_time.instant() + Duration::from_millis(33)),
                     Some(test_video_info()),
                     1,
-                ),
+                )),
                 microphone: None,
                 camera: None,
                 system_audio: None,
@@ -2271,7 +2313,7 @@ mod tests {
 
         let mut pipeline = Pipeline {
             start_time: timestamps,
-            screen,
+            screen: Some(screen),
             microphone: Some(microphone),
             camera: None,
             system_audio: None,
@@ -2313,7 +2355,12 @@ mod tests {
             .expect("display success should still allow the recording to stop cleanly");
 
         assert_eq!(
-            finished.screen.video_frame_count, 1,
+            finished
+                .screen
+                .as_ref()
+                .map(|s| s.video_frame_count)
+                .unwrap_or(0),
+            1,
             "display output should be preserved"
         );
         assert!(

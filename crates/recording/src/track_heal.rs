@@ -113,9 +113,12 @@ pub fn heal_stretched_camera(project_path: &Path) -> anyhow::Result<bool> {
         let Some(camera) = segment.camera.as_mut() else {
             continue;
         };
+        let Some(display) = segment.display.as_ref() else {
+            continue;
+        };
 
         let camera_path = camera.path.to_path(&project_path);
-        let display_path = segment.display.path.to_path(&project_path);
+        let display_path = display.path.to_path(&project_path);
 
         let backup_path = backup_path_for(&camera_path);
         if backup_path.exists() {
@@ -134,7 +137,7 @@ pub fn heal_stretched_camera(project_path: &Path) -> anyhow::Result<bool> {
         let mut references: Vec<(&'static str, f64)> = Vec::new();
 
         if let Some(display_duration) = get_media_duration(&display_path) {
-            let display_start = segment.display.start_time.unwrap_or(0.0);
+            let display_start = display.start_time.unwrap_or(0.0);
             references.push((
                 "display",
                 display_duration.as_secs_f64() + (display_start - camera_start),
@@ -281,7 +284,10 @@ pub fn heal_stretched_display(project_path: &Path) -> anyhow::Result<bool> {
     let mut healed_scales: HashMap<u32, f64> = HashMap::new();
 
     for (segment_index, segment) in inner.segments.iter().enumerate() {
-        let display_path = segment.display.path.to_path(&project_path);
+        let Some(display) = segment.display.as_ref() else {
+            continue;
+        };
+        let display_path = display.path.to_path(&project_path);
 
         let backup_path = display_path.with_file_name(DISPLAY_BACKUP_FILE_NAME);
         if backup_path.exists() {
@@ -293,7 +299,7 @@ pub fn heal_stretched_display(project_path: &Path) -> anyhow::Result<bool> {
             continue;
         };
         let display_secs = display_duration.as_secs_f64();
-        let display_start = segment.display.start_time.unwrap_or(0.0);
+        let display_start = display.start_time.unwrap_or(0.0);
 
         let mut audio_refs: Vec<(&'static str, f64)> = Vec::new();
         let mut audio_track_count = 0usize;
@@ -328,7 +334,7 @@ pub fn heal_stretched_display(project_path: &Path) -> anyhow::Result<bool> {
             continue;
         };
 
-        let ladder_confirmed = probe_video_pts_ladder(&display_path, segment.display.fps)
+        let ladder_confirmed = probe_video_pts_ladder(&display_path, display.fps)
             .is_some_and(|probe| probe.is_ladder());
         if !ladder_confirmed {
             info!(

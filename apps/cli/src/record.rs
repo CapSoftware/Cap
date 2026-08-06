@@ -1024,6 +1024,7 @@ fn persist_instant_recording_meta(
         sharing: None,
         inner: RecordingMetaInner::Instant(meta),
         upload: None,
+        audio_only: false,
     }
     .save_for_project()
     .map_err(|e| format!("Failed to save instant recording meta: {e}"))?;

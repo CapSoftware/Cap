@@ -253,7 +253,7 @@ impl RecoveryManager {
                 display_init_segment = None;
             }
 
-            if display_fragments.is_empty() {
+            if display_fragments.is_empty() && !meta.audio_only {
                 debug!(
                     "No display fragments found for segment {} at {:?}",
                     index, segment_path
@@ -1350,18 +1350,26 @@ impl RecoveryManager {
                     }
                 };
 
-                let display_start_time = original_segment.and_then(|s| s.display.start_time);
+                let display_start_time = original_segment
+                    .and_then(|s| s.display.as_ref())
+                    .and_then(|d| d.start_time);
 
                 let get_start_time_or_fallback = |original_time: Option<f64>| -> Option<f64> {
                     start_time_or_display_fallback(original_time, display_start_time)
                 };
 
                 MultipleSegment {
-                    display: VideoMeta {
-                        path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
-                        fps,
-                        start_time: display_start_time,
-                        device_id: original_segment.and_then(|s| s.display.device_id.clone()),
+                    display: if seg.display_fragments.is_empty() {
+                        None
+                    } else {
+                        Some(VideoMeta {
+                            path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
+                            fps,
+                            start_time: display_start_time,
+                            device_id: original_segment
+                                .and_then(|s| s.display.as_ref())
+                                .and_then(|d| d.device_id.clone()),
+                        })
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
@@ -1473,19 +1481,25 @@ impl RecoveryManager {
             .iter()
             .enumerate()
             .filter_map(|(i, segment)| {
-                let display_path = recording.project_path.join(segment.display.path.as_str());
-
-                let duration = get_media_duration(&display_path)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or_else(|| {
-                        let fps = segment.display.fps as f64;
-                        if fps > 0.0 {
+                let duration = if let Some(display) = segment.display.as_ref() {
+                    let display_path = recording.project_path.join(display.path.as_str());
+                    get_media_duration(&display_path)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or_else(|| {
                             recording.estimated_duration.as_secs_f64()
                                 / recording.recoverable_segments.len() as f64
-                        } else {
-                            5.0
-                        }
-                    });
+                        })
+                } else if let Some(mic) = segment.mic.as_ref() {
+                    let mic_path = recording.project_path.join(mic.path.as_str());
+                    get_media_duration(&mic_path)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or_else(|| {
+                            recording.estimated_duration.as_secs_f64()
+                                / recording.recoverable_segments.len() as f64
+                        })
+                } else {
+                    5.0
+                };
 
                 if duration <= 0.0 {
                     return None;

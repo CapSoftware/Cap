@@ -90,11 +90,16 @@ async fn main() -> Result<()> {
 
     let render_segments: Vec<RenderSegment> = match &studio_meta {
         StudioRecordingMeta::SingleSegment { segment } => {
+            let display = segment
+                .display
+                .as_ref()
+                .map(|d| recording_meta.path(&d.path))
+                .context("Missing display video")?;
             let decoders = RecordingSegmentDecoders::new(
                 &recording_meta,
                 &studio_meta,
                 SegmentVideoPaths {
-                    display: recording_meta.path(&segment.display.path),
+                    display,
                     camera: segment
                         .camera
                         .as_ref()
@@ -116,11 +121,16 @@ async fn main() -> Result<()> {
         StudioRecordingMeta::MultipleSegments { inner, .. } => {
             let mut segments = Vec::new();
             for (i, s) in inner.segments.iter().enumerate() {
+                let display = s
+                    .display
+                    .as_ref()
+                    .map(|d| recording_meta.path(&d.path))
+                    .context("Missing display video")?;
                 let decoders = RecordingSegmentDecoders::new(
                     &recording_meta,
                     &studio_meta,
                     SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
+                        display,
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,

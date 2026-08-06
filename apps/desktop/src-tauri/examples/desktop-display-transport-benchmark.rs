@@ -121,11 +121,12 @@ async fn load_recording(
     if project.timeline.is_none() {
         let timeline_segments = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { segment } => {
-                let display_path = recording_meta.path(&segment.display.path);
-                let duration = match Video::new(&display_path, 0.0) {
-                    Ok(video) => video.duration,
-                    Err(_) => 5.0,
-                };
+                let duration = segment
+                    .display
+                    .as_ref()
+                    .and_then(|d| Video::new(&recording_meta.path(&d.path), 0.0).ok())
+                    .map(|video| video.duration)
+                    .unwrap_or(5.0);
                 vec![TimelineSegment {
                     recording_clip: 0,
                     start: 0.0,
@@ -140,11 +141,12 @@ async fn load_recording(
                 .iter()
                 .enumerate()
                 .filter_map(|(i, segment)| {
-                    let display_path = recording_meta.path(&segment.display.path);
-                    let duration = match Video::new(&display_path, 0.0) {
-                        Ok(video) => video.duration,
-                        Err(_) => 5.0,
-                    };
+                    let duration = segment
+                        .display
+                        .as_ref()
+                        .and_then(|d| Video::new(&recording_meta.path(&d.path), 0.0).ok())
+                        .map(|video| video.duration)
+                        .unwrap_or(5.0);
                     (duration > 0.0).then_some(TimelineSegment {
                         recording_clip: i as u32,
                         start: 0.0,

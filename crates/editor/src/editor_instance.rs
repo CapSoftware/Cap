@@ -146,6 +146,10 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
 
+        if recording_meta.audio_only {
+            return Err("Audio-only recordings aren't supported in the editor yet".to_string());
+        }
+
         let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
@@ -163,23 +167,27 @@ impl EditorInstance {
             warn!("Project config has no timeline, creating one from recording segments");
             let timeline_segments = match meta.as_ref() {
                 StudioRecordingMeta::SingleSegment { segment } => {
-                    let display_path = recording_meta.path(&segment.display.path);
-                    match display_video_duration(&display_path) {
-                        Some(duration) if duration > 0.0 => vec![TimelineSegment {
-                            recording_clip: 0,
-                            start: 0.0,
-                            end: duration,
-                            timescale: 1.0,
-                            name: None,
-                            speed_audio_mode: None,
-                        }],
-                        _ => {
-                            warn!(
-                                "Failed to determine display duration for {}, leaving timeline unset",
-                                display_path.display()
-                            );
-                            Vec::new()
+                    if let Some(display) = segment.display.as_ref() {
+                        let display_path = recording_meta.path(&display.path);
+                        match display_video_duration(&display_path) {
+                            Some(duration) if duration > 0.0 => vec![TimelineSegment {
+                                recording_clip: 0,
+                                start: 0.0,
+                                end: duration,
+                                timescale: 1.0,
+                                name: None,
+                                speed_audio_mode: None,
+                            }],
+                            _ => {
+                                warn!(
+                                    "Failed to determine display duration for {}, leaving timeline unset",
+                                    display_path.display()
+                                );
+                                Vec::new()
+                            }
                         }
+                    } else {
+                        Vec::new()
                     }
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -187,7 +195,8 @@ impl EditorInstance {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, segment)| {
-                        let display_path = recording_meta.path(&segment.display.path);
+                        let display = segment.display.as_ref()?;
+                        let display_path = recording_meta.path(&display.path);
                         tracing::debug!(
                             "Attempting to get duration for segment {}: {:?}",
                             i,
@@ -1132,7 +1141,18 @@ pub async fn create_segments(
                 recording_meta,
                 meta,
                 SegmentVideoPaths {
-                    display: recording_meta.path(&s.display.path),
+                    display: s
+                        .display
+                        .as_ref()
+                        .map(|d| recording_meta.path(&d.path))
+                        .ok_or_else(|| {
+                            if recording_meta.audio_only {
+                                "Audio-only recordings aren't supported in the editor yet"
+                                    .to_string()
+                            } else {
+                                "SingleSegment / missing display metadata".to_string()
+                            }
+                        })?,
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
@@ -1190,7 +1210,18 @@ pub async fn create_segments(
                     recording_meta,
                     meta,
                     SegmentVideoPaths {
-                        display: recording_meta.path(&s.display.path),
+                        display: s
+                            .display
+                            .as_ref()
+                            .map(|d| recording_meta.path(&d.path))
+                            .ok_or_else(|| {
+                                if recording_meta.audio_only {
+                                    "Audio-only recordings aren't supported in the editor yet"
+                                        .to_string()
+                                } else {
+                                    format!("MultipleSegments {i} / missing display metadata")
+                                }
+                            })?,
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
