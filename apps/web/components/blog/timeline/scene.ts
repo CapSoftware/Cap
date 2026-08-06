@@ -1,18 +1,15 @@
 /**
- * The worked example every demo in the timeline post shares: one 2:48 product
- * walkthrough, six pieces of feedback on it, and a synthetic soundtrack.
- *
- * Keeping a single scene across every demo is the point — the reader meets the
- * same six comments as a flat list, then watches them land on the video, then
- * untangles the three that collide. Nothing here talks to the network or to a
- * real recording; the frames are drawn (see `MockFrame`) and the waveform is a
- * deterministic function of time, so every demo agrees with every other one.
+ * The worked example the timeline post's demo runs on: one 2:48 product
+ * walkthrough, seven pieces of feedback on it, and a synthetic soundtrack.
+ * Nothing here talks to the network or to a real recording; the frames are
+ * drawn (see `MockFrame`) and the waveform is a deterministic function of
+ * time, so the demo is fully self-contained.
  */
 
 /** Length of the fictional recording, in seconds. */
 export const DEMO_DURATION = 168;
 
-export type DemoCommentKind = "text" | "emoji" | "video" | "voice";
+export type DemoCommentKind = "text" | "emoji" | "screen" | "camera" | "voice";
 
 export interface DemoComment {
 	id: string;
@@ -24,15 +21,18 @@ export interface DemoComment {
 	/** Seconds into the recording. */
 	t: number;
 	kind: DemoCommentKind;
-	/** Comment body, or the emoji itself for reactions. */
+	/** Comment body, the emoji for reactions, or what a recorded reply shows. */
 	text: string;
 	/** Media length for video/voice replies, in seconds. */
 	mediaDuration?: number;
 }
 
 /**
- * Three of these sit inside six seconds of each other on purpose: that pile-up
- * is what the lanes, the cluster and the zoom demo all exist to explain.
+ * One of everything the timeline can hold: text, an emoji reaction, a screen
+ * reply, a voice note and a camera reply. Sam and Priya sit three seconds
+ * apart on purpose, so the second lane earns its keep, while the recorded
+ * replies are spread out far enough that every glyph stays visible instead of
+ * folding into a cluster.
  */
 export const DEMO_COMMENTS: readonly DemoComment[] = [
 	{
@@ -68,21 +68,32 @@ export const DEMO_COMMENTS: readonly DemoComment[] = [
 		initials: "P",
 		tone: "bg-amber-500",
 		t: 75,
-		kind: "text",
-		text: "Same, but only on Safari for me.",
+		kind: "screen",
+		text: "Screen recording of the flicker in Safari",
+		mediaDuration: 19,
 	},
 	{
 		id: "c5",
 		author: "Jo",
 		initials: "J",
 		tone: "bg-rose-500",
-		t: 78,
+		t: 96,
 		kind: "voice",
-		text: "Voice note",
+		text: "Voice note talking through a fix",
 		mediaDuration: 14,
 	},
 	{
 		id: "c6",
+		author: "Ana",
+		initials: "A",
+		tone: "bg-teal-500",
+		t: 124,
+		kind: "camera",
+		text: "Camera reply with a suggestion",
+		mediaDuration: 26,
+	},
+	{
+		id: "c7",
 		author: "Alex",
 		initials: "A",
 		tone: "bg-sky-600",
