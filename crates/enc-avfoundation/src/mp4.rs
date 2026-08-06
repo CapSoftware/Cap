@@ -898,8 +898,17 @@ impl MP4Encoder {
             return;
         };
 
-        self.flush_pending_video();
-
+        // Deliberately keep the pending frame instead of flushing it here.
+        // Flushing wrote it with the full nominal duration, and the first
+        // post-resume frame ties against its pts and gets bumped +1us —
+        // landing inside the flushed sample's extent. Overlapping extents are
+        // the sporadic AVAssetWriter failure shape reproduced in the
+        // overlapping-extents tests. Held until resume, the pending frame is
+        // written with the real (clamped) forward gap and extents stay
+        // disjoint; the writer derives inter-sample durations from
+        // consecutive pts anyway, so the resumed timeline is unchanged.
+        // finish_start still flushes it with nominal duration when the
+        // recording stops while paused.
         self.pause_timestamp = Some(timestamp);
         self.is_paused = true;
     }
@@ -3784,6 +3793,99 @@ mod tests {
 
         let finish = encoder.finish(Some(Duration::from_secs(13)));
         assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_pause_resume_keeps_sample_extents_disjoint() {
+        let output = test_output_path("pause_resume_extents");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let mut errors = Vec::new();
+        let mut queue = |encoder: &mut MP4Encoder, ts: Duration, label: &str| {
+            let frame = create_test_video_frame(&pool, ts.as_micros() as i64, 33_333);
+            match encoder.queue_video_frame(frame, ts) {
+                Ok(()) | Err(QueueFrameError::NotReadyForMore) => {}
+                Err(e) => errors.push(format!("{e:?} at {label}")),
+            }
+            std::thread::sleep(Duration::from_micros(500));
+        };
+
+        for i in 0..60u64 {
+            queue(
+                &mut encoder,
+                Duration::from_micros(i * 33_333) + Duration::from_nanos(400),
+                "pre-pause",
+            );
+        }
+
+        let pre_pause_last = Duration::from_micros(59 * 33_333) + Duration::from_nanos(400);
+        encoder.pause();
+        assert!(
+            encoder.pending_video_frame.is_some(),
+            "pause must hold the pending frame instead of flushing it with nominal duration"
+        );
+        encoder.resume();
+
+        // Upstream excises the pause from the timeline, so the first resumed
+        // frame can tie the last pre-pause frame within the same microsecond.
+        queue(
+            &mut encoder,
+            pre_pause_last + Duration::from_nanos(200),
+            "resume-tie",
+        );
+
+        for i in 61..120u64 {
+            queue(
+                &mut encoder,
+                Duration::from_micros(i * 33_333) + Duration::from_nanos(400),
+                "post-resume",
+            );
+        }
+
+        assert!(
+            errors.is_empty(),
+            "pause/resume with a same-microsecond resume tie must not fail the writer: {errors:?}"
+        );
+
+        let finish = encoder.finish(Some(Duration::from_secs(5)));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_stop_while_paused_flushes_pending_frame() {
+        let output = test_output_path("stop_while_paused");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        for i in 0..30u64 {
+            let ts = Duration::from_micros(i * 33_333);
+            let frame = create_test_video_frame(&pool, (i * 33_333) as i64, 33_333);
+            encoder.queue_video_frame(frame, ts).unwrap();
+            std::thread::sleep(Duration::from_micros(500));
+        }
+
+        encoder.pause();
+        assert!(encoder.pending_video_frame.is_some());
+
+        let finish = encoder.finish(Some(Duration::from_secs(1)));
+        assert!(
+            finish.is_ok(),
+            "stopping while paused must flush the held frame and finalize: {finish:?}"
+        );
+        assert!(encoder.pending_video_frame.is_none());
+        assert_eq!(
+            encoder.video_frames_appended, 30,
+            "every queued frame including the held one must reach the writer"
+        );
 
         let _ = std::fs::remove_file(&output);
     }
