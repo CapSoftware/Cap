@@ -10,6 +10,7 @@ import {
 	releasePlayback,
 	suspendMainVideo,
 } from "./media-playback-registry";
+import { UploadProgressIndicator } from "./UploadProgressIndicator";
 import {
 	resolveWaveform,
 	WAVEFORM_BAR_COUNT,
@@ -203,6 +204,7 @@ export const VoiceNotePill = ({
 				</AnimatePresence>
 			</button>
 			<WaveformBars peaks={peaks} progressRef={progressRef} onSeek={seek} />
+			<UploadProgressIndicator commentId={comment.id} variant="inline" />
 			<span
 				ref={labelRef}
 				className="text-[11px] shrink-0 tabular-nums text-gray-10"

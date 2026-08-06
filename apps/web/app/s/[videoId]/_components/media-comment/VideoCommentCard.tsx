@@ -11,6 +11,7 @@ import {
 	releasePlayback,
 	suspendMainVideo,
 } from "./media-playback-registry";
+import { UploadProgressIndicator } from "./UploadProgressIndicator";
 
 const FilmGlyph = () => (
 	<svg
@@ -267,6 +268,8 @@ export const VideoCommentCard = ({
 				</motion.button>
 			)}
 
+			{/* Rides above poster and playback alike while the upload runs. */}
+			<UploadProgressIndicator commentId={comment.id} variant="overlay" />
 
 			{expanded && src && (
 				<CommentMiniPlayer
