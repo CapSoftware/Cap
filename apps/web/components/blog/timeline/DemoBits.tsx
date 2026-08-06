@@ -32,10 +32,22 @@ export function Avatar({
 	);
 }
 
-export const PlayGlyph = () => (
+export const ScreenGlyph = () => (
 	<svg viewBox="0 0 12 12" className="size-4 fill-current" aria-hidden>
-		<title>Video reply</title>
-		<path d="M4 2.6c0-.5.5-.8.9-.5l4 3.4c.3.3.3.7 0 1l-4 3.4c-.4.3-.9 0-.9-.5V2.6Z" />
+		<title>Screen reply</title>
+		<path
+			fillRule="evenodd"
+			d="M2 1.9h8a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2.9a1 1 0 0 1 1-1Zm2.9 2.15c0-.44.48-.71.85-.48l1.66 1.04c.35.22.35.73 0 .95L5.75 6.6c-.37.23-.85-.04-.85-.48V4.05Z"
+		/>
+		<rect x="3.9" y="9.2" width="4.2" height="1.1" rx="0.55" />
+	</svg>
+);
+
+export const CameraGlyph = () => (
+	<svg viewBox="0 0 12 12" className="size-4 fill-current" aria-hidden>
+		<title>Camera reply</title>
+		<rect x="1" y="3.1" width="6.9" height="5.8" rx="1.3" />
+		<path d="M8.6 5.35 10.5 4.1a.55.55 0 0 1 .85.46v2.88a.55.55 0 0 1-.85.46L8.6 6.65V5.35Z" />
 	</svg>
 );
 
@@ -47,6 +59,13 @@ export const MicGlyph = () => (
 	</svg>
 );
 
+/** The recorded-reply kinds, and how a label should name them. */
+const MEDIA_LABEL: Partial<Record<DemoComment["kind"], string>> = {
+	screen: "screen reply",
+	camera: "camera reply",
+	voice: "voice note",
+};
+
 /** What sits inside a node: avatar, emoji, or a media glyph. */
 export function NodeFace({ comment }: { comment: DemoComment }) {
 	if (comment.kind === "emoji") {
@@ -57,14 +76,15 @@ export function NodeFace({ comment }: { comment: DemoComment }) {
 		);
 	}
 	if (comment.kind === "voice") return <MicGlyph />;
-	if (comment.kind === "video") return <PlayGlyph />;
+	if (comment.kind === "camera") return <CameraGlyph />;
+	if (comment.kind === "screen") return <ScreenGlyph />;
 	return <Avatar comment={comment} className="size-[26px] text-[11px]" />;
 }
 
 export function nodeClassName(comment: DemoComment, count: number) {
 	if (count > 1) return "bg-white text-gray-12 ring-1 ring-gray-5";
 	if (comment.kind === "emoji") return "text-[19px] leading-none";
-	if (comment.kind === "voice") return "bg-blue-9 text-white";
+	if (MEDIA_LABEL[comment.kind]) return "bg-blue-9 text-white";
 	return "bg-white text-gray-12 ring-1 ring-gray-5";
 }
 
@@ -89,10 +109,13 @@ export function BranchNode({
 	const reduceMotion = useReducedMotion() ?? false;
 	const stem = LANE_STEM[node.lane];
 	const { comment, count } = node;
+	const media = MEDIA_LABEL[comment.kind];
 	const label =
 		count > 1
 			? `${count} comments around ${formatClock(comment.t)}`
-			: `${comment.author} at ${formatClock(comment.t)}`;
+			: media
+				? `${comment.author}'s ${formatClock(comment.mediaDuration ?? 0)} ${media} at ${formatClock(comment.t)}`
+				: `${comment.author} at ${formatClock(comment.t)}`;
 
 	return (
 		<motion.div
