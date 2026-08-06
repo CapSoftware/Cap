@@ -2879,15 +2879,18 @@ async fn capture_screen_image(
                     | CapWindowId::ModeSelect
                     | CapWindowId::RecordingsOverlay
             )
-            && window.is_visible().unwrap_or(false)
         {
+            let was_visible = window.is_visible().unwrap_or(false);
             hide_overlay(&window);
             hid_any = true;
             // The target-select overlay's lifecycle is owned by the frontend,
             // which hides it before invoking a capture and closes or restores
-            // it afterwards; re-showing it here would fight that.
-            if !matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
-                hidden_windows.push(window);
+            // it afterwards; re-showing it here would fight that. The occluder
+            // must keep ignoring cursor events, so it is re-shown without the
+            // show_overlay cursor-event reset.
+            if was_visible && !matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+                let ignores_cursor = matches!(id, CapWindowId::WindowCaptureOccluder { .. });
+                hidden_windows.push((window, ignores_cursor));
             }
         }
     }
@@ -2900,8 +2903,12 @@ async fn capture_screen_image(
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"));
 
-    for window in hidden_windows {
-        show_overlay(&window);
+    for (window, ignores_cursor) in hidden_windows {
+        if ignores_cursor {
+            let _ = window.show();
+        } else {
+            show_overlay(&window);
+        }
     }
 
     result
