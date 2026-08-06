@@ -1344,4 +1344,112 @@ mod tests {
 
         assert!(crate::remux::probe_video_can_decode(&output_path).unwrap_or(false));
     }
+
+    #[test]
+    fn stall_recovery_burst_with_same_microsecond_timestamps_survives() {
+        // Replays the 0.5.8 field-failure timeline shape end to end: normal
+        // cadence with nanosecond-fraction timestamps, a multi-second system
+        // stall, then a recovery burst of backlogged frames landing hundreds
+        // of nanoseconds apart (same microsecond, same 90kHz tick), plus an
+        // exact duplicate and a backwards blip. The instant-mode encoder must
+        // accept every frame, keep encoded PTS strictly monotonic, and the
+        // production remux + decode of the segments must succeed.
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_millis(500),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let frame_ns = 33_333_333u64;
+        let mut timestamps: Vec<Duration> = Vec::new();
+        for i in 0..60u64 {
+            timestamps.push(Duration::from_nanos(i * frame_ns + 400));
+        }
+        let stall_end = 60 * frame_ns + 2_000_000_000;
+        for i in 0..12u64 {
+            timestamps.push(Duration::from_nanos(stall_end + i * 300));
+        }
+        timestamps.push(Duration::from_nanos(stall_end + 11 * 300));
+        timestamps.push(Duration::from_nanos(stall_end.saturating_sub(5_000_000)));
+        for i in 1..=60u64 {
+            timestamps.push(Duration::from_nanos(stall_end + i * frame_ns));
+        }
+
+        for (i, &ts) in timestamps.iter().enumerate() {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .queue_frame(frame, ts)
+                .unwrap_or_else(|e| panic!("frame {i} at {ts:?} rejected: {e}"));
+        }
+
+        encoder.finish().unwrap();
+
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(&base_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        assert!(
+            segment_paths.len() >= 3,
+            "expected multiple media segments, got {segment_paths:?}"
+        );
+
+        let concat_path = base_path.join("concat_test.mp4");
+        let mut concatenated = std::fs::read(base_path.join(INIT_SEGMENT_NAME)).unwrap();
+        for segment in &segment_paths {
+            concatenated.extend(std::fs::read(segment).unwrap());
+        }
+        std::fs::write(&concat_path, concatenated).unwrap();
+
+        let mut input = format::input(&concat_path).unwrap();
+        let stream_index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+
+        let mut pts_ticks: Vec<i64> = input
+            .packets()
+            .filter_map(|(stream, packet)| {
+                (stream.index() == stream_index)
+                    .then_some(packet.pts())
+                    .flatten()
+            })
+            .collect();
+        pts_ticks.sort_unstable();
+
+        assert_eq!(
+            pts_ticks.len(),
+            timestamps.len(),
+            "every queued frame must be encoded (ties bumped, never dropped)"
+        );
+        for pair in pts_ticks.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "encoded pts must be strictly monotonic, found {} then {} (duplicate PTS is the \
+                 -16364 failure class)",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        let remuxed_path = temp.path().join("stall-burst-output.mp4");
+        crate::remux::concatenate_m4s_segments_with_init(
+            &base_path.join(INIT_SEGMENT_NAME),
+            &segment_paths,
+            &remuxed_path,
+        )
+        .unwrap();
+        assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
 }
