@@ -62,6 +62,11 @@ async takeScreenshot(target: ScreenCaptureTarget) : Promise<string> {
 async captureOcrText(target: ScreenCaptureTarget) : Promise<string> {
     return await TAURI_INVOKE("capture_ocr_text", { target });
 },
+/**
+ * Captures a window while scrolling it, stitching the frames into one tall
+ * image. The window must be under the cursor so the injected wheel events
+ * reach it.
+ */
 async captureScrollingWindow(windowId: WindowId) : Promise<string> {
     return await TAURI_INVOKE("capture_scrolling_window", { windowId });
 },
