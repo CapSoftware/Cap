@@ -4,7 +4,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "pnpm build:chrome && pnpm build:firefox",
+		"build": "pnpm build:chrome",
+		"build:all": "pnpm build:chrome && pnpm build:firefox",
 		"build:chrome": "rm -rf dist/chrome && TARGET=chrome vite build && TARGET=chrome vite build --config vite.content.config.ts && TARGET=chrome vite build --config vite.content-overlay.config.ts",
 		"build:firefox": "rm -rf dist/firefox && TARGET=firefox vite build && TARGET=firefox vite build --config vite.content.config.ts && TARGET=firefox vite build --config vite.content-overlay.config.ts",
 		"dev": "rm -rf dist/chrome && (trap 'kill 0' INT TERM; TARGET=chrome vite build --watch --config vite.content.config.ts --mode development & TARGET=chrome vite build --watch --config vite.content-overlay.config.ts --mode development & TARGET=chrome vite build --watch --mode development & wait)",
