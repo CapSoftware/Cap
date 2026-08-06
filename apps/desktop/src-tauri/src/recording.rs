@@ -2864,8 +2864,10 @@ async fn capture_screen_image(
     app: &AppHandle,
     target: ScreenCaptureTarget,
 ) -> Result<image::DynamicImage, String> {
+    use crate::windows::show_overlay;
     use cap_recording::screenshot::capture_screenshot;
 
+    let mut hidden_windows = Vec::new();
     let mut hid_any = false;
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -2877,9 +2879,16 @@ async fn capture_screen_image(
                     | CapWindowId::ModeSelect
                     | CapWindowId::RecordingsOverlay
             )
+            && window.is_visible().unwrap_or(false)
         {
             hide_overlay(&window);
             hid_any = true;
+            // The target-select overlay's lifecycle is owned by the frontend,
+            // which hides it before invoking a capture and closes or restores
+            // it afterwards; re-showing it here would fight that.
+            if !matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+                hidden_windows.push(window);
+            }
         }
     }
 
@@ -2887,9 +2896,15 @@ async fn capture_screen_image(
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
-    capture_screenshot(target)
+    let result = capture_screenshot(target)
         .await
-        .map_err(|e| format!("Failed to capture screenshot: {e}"))
+        .map_err(|e| format!("Failed to capture screenshot: {e}"));
+
+    for window in hidden_windows {
+        show_overlay(&window);
+    }
+
+    result
 }
 
 fn save_screenshot_project(
