@@ -396,7 +396,12 @@ impl Muxer for AVFoundationMp4Muxer {
                         break;
                     }
 
-                    if is_instant && last_disk_check.elapsed() >= DISK_SPACE_CHECK_INTERVAL {
+                    // All modes, not just instant: if the disk fills, the
+                    // AVAssetWriter dies asynchronously mid-write and the
+                    // non-fragmented output loses its moov (unrecoverable).
+                    // Stopping while the writer is alive lets finish() write
+                    // the moov and preserves the recording up to this point.
+                    if last_disk_check.elapsed() >= DISK_SPACE_CHECK_INTERVAL {
                         last_disk_check = std::time::Instant::now();
                         if let Some(available_mb) = get_available_disk_space_mb(&disk_check_path)
                             && available_mb < DISK_SPACE_CRITICAL_MB
@@ -447,7 +452,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                         let total = video_count_thread
                                             .load(std::sync::atomic::Ordering::Relaxed);
                                         let message = format!(
-                                            "Failed to encode video frame: WriterFailed/{err} \
+                                            "Failed to encode video frame: WriterFailed/{err:?} \
                                              (frame #{total}, ts={timestamp:?})"
                                         );
                                         set_fatal_error(&video_fatal_error, message.clone());
@@ -576,7 +581,7 @@ impl Muxer for AVFoundationMp4Muxer {
                                             let total = audio_count_thread
                                                 .load(std::sync::atomic::Ordering::Relaxed);
                                             let message = format!(
-                                                "Failed to encode audio frame: WriterFailed/{err} \
+                                                "Failed to encode audio frame: WriterFailed/{err:?} \
                                                  (frame #{total}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
@@ -982,6 +987,7 @@ impl Muxer for AVFoundationCameraMuxer {
         let encoder_clone = encoder.clone();
         let fatal_error = Arc::new(Mutex::new(None));
         let video_fatal_error = fatal_error.clone();
+        let disk_check_path = output_path.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name("mp4-camera-encoder".to_string())
@@ -994,10 +1000,27 @@ impl Muxer for AVFoundationCameraMuxer {
 
                 let mut total_frames = 0u64;
                 let mut encoder_busy_count = 0u64;
+                let mut last_disk_check = std::time::Instant::now();
 
                 while let Ok(Some(msg)) = video_rx.recv() {
                     if fatal_error_message(&video_fatal_error).is_some() {
                         break;
+                    }
+
+                    // Same rationale as the screen writer above: stop while
+                    // the AVAssetWriter is still alive so the camera file
+                    // keeps its moov instead of dying on a failed async write.
+                    if last_disk_check.elapsed() >= DISK_SPACE_CHECK_INTERVAL {
+                        last_disk_check = std::time::Instant::now();
+                        if let Some(available_mb) = get_available_disk_space_mb(&disk_check_path)
+                            && available_mb < DISK_SPACE_CRITICAL_MB
+                        {
+                            let message = format!(
+                                "Disk space critically low ({available_mb}MB), stopping camera recording to preserve output"
+                            );
+                            set_fatal_error(&video_fatal_error, message.clone());
+                            return Err(anyhow!(message));
+                        }
                     }
 
                     match msg {
@@ -1037,7 +1060,7 @@ impl Muxer for AVFoundationCameraMuxer {
                                     }
                                     Err(QueueFrameError::WriterFailed(err)) => {
                                         let message = format!(
-                                            "Failed to encode camera frame: WriterFailed/{err}"
+                                            "Failed to encode camera frame: WriterFailed/{err:?}"
                                         );
                                         set_fatal_error(&video_fatal_error, message.clone());
                                         return Err(anyhow!(message));
@@ -1161,7 +1184,7 @@ impl Muxer for AVFoundationCameraMuxer {
                                         }
                                         Err(QueueFrameError::WriterFailed(err)) => {
                                             let message = format!(
-                                                "Failed to encode camera audio frame: WriterFailed/{err} \
+                                                "Failed to encode camera audio frame: WriterFailed/{err:?} \
                                                  (frame #{total_frames}, ts={timestamp:?})"
                                             );
                                             set_fatal_error(&audio_fatal_error, message.clone());
