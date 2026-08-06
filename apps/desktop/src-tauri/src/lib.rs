@@ -450,10 +450,12 @@ pub(crate) fn note_exit_requested_code(code: Option<i32>) {
         // Logged here, not in force_exit: the non-blocking appender drops
         // records emitted microseconds before _exit().
         info!("Relaunch requested; will respawn after exit");
-        // A deliberate relaunch is a clean shutdown. tauri exempts restart
-        // requests from prevent_exit, so the runtime exits before the async
-        // cleanup (which normally disarms the crash sentinel) can finish —
-        // without this, every relaunch reports a phantom crash on next boot.
+        // A deliberate relaunch is a clean shutdown. In tauri 2.8.5,
+        // prevent_exit() is a no-op when code == RESTART_EXIT_CODE (app.rs),
+        // so this exit can no longer be prevented and the state armed here is
+        // always consumed by the force_exit it precedes — and the runtime
+        // exits before the async cleanup that normally disarms the crash
+        // sentinel, so without this every relaunch reports a phantom crash.
         crash_sentinel::mark_clean_exit();
         RESTART_REQUESTED_ON_EXIT.store(true, std::sync::atomic::Ordering::Release);
     }
@@ -473,29 +475,17 @@ fn spawn_relauncher_if_requested() {
             eprintln!("cap relaunch: current_exe() failed; not respawning");
             return;
         };
-        match exit_shutdown::relaunch_target(&exe) {
-            Some(bundle) => {
-                let path = bundle.display().to_string();
-                if path.contains('\'') {
-                    eprintln!("cap relaunch: bundle path contains a quote; not respawning: {path}");
-                    return;
-                }
-                // A detached shell survives this process (reparented to
-                // launchd). The delay lets the old instance die completely
-                // first, so the single-instance plugin in the fresh one never
-                // meets a live listener; `open` goes through LaunchServices so
-                // the new instance keeps normal app context (TCC, dock).
-                let _ = std::process::Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(format!("sleep 0.7; /usr/bin/open '{path}'"))
-                    .spawn();
-            }
-            None => {
-                // Dev / non-bundle run: open(1) would route a bare Mach-O to
-                // Terminal and re-attribute TCC to it — spawn the executable
-                // directly instead, like tauri's own process::restart does.
-                let _ = std::process::Command::new(&exe).spawn();
-            }
+        // A detached shell survives this process (reparented to launchd); the
+        // delay lets the old instance die first so the fresh single-instance
+        // plugin never meets a live listener.
+        if let Err(err) = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(exit_shutdown::RELAUNCH_SH)
+            .arg("cap-relaunch")
+            .args(exit_shutdown::relaunch_argv(&exe))
+            .spawn()
+        {
+            eprintln!("cap relaunch: failed to spawn relauncher: {err}");
         }
     }
 }
