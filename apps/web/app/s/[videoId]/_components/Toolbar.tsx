@@ -1,12 +1,21 @@
 import { Button } from "@cap/ui";
 import { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
 import type { VideoData } from "../types";
 import { AuthOverlay } from "./AuthOverlay";
+import { RecordActionButtons } from "./media-comment/record-actions";
+import type { RecordIntentKind } from "./timeline/TimelineComposer";
+
+// Capture and upload code stays out of the page bundle until someone records.
+const RecorderSurface = dynamic(
+	() => import("./timeline/recording/RecorderSurface"),
+	{ ssr: false },
+);
 
 const MotionButton = motion.create(Button);
 
@@ -17,6 +26,8 @@ interface ToolbarProps {
 	onCommentSuccess?: (comment: CommentType) => void;
 	disableComments?: boolean;
 	disableReactions?: boolean;
+	/** Owner is on Pro and the viewer is signed in; uploads re-check server-side. */
+	canRecordMedia?: boolean;
 }
 
 interface EmojiButtonProps {
@@ -46,13 +57,29 @@ export const Toolbar = ({
 	onCommentSuccess,
 	disableComments,
 	disableReactions,
+	canRecordMedia = false,
 }: ToolbarProps) => {
 	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+	const [recordIntent, setRecordIntent] = useState<{
+		kind: RecordIntentKind;
+		t: number;
+	} | null>(null);
 	const canComment = !disableComments;
 	const canReact = !disableReactions;
+
+	const startRecording = (kind: RecordIntentKind) => {
+		// Anchor to the playhead like a text comment, pause, and fold the box
+		// away — the floating recorder takes over from here.
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
+		const t = data.isScreenshot ? 0 : videoElement?.currentTime || 0;
+		videoElement?.pause();
+		setCommentBoxOpen(false);
+		setComment("");
+		setRecordIntent({ kind, t });
+	};
 
 	const handleEmojiClick = async (emoji: string) => {
 		if (!canReact || !user) return;
@@ -241,6 +268,17 @@ export const Toolbar = ({
 								layout="position"
 								className="flex items-center space-x-2"
 							>
+								{canRecordMedia && (
+									// preventDefault on the way down: the input is focused, and
+									// letting its blur run first would shuffle layout under the
+									// click. Screen/camera/voice replies from right here.
+									<div
+										className="flex items-center gap-0.5 pr-1"
+										onPointerDown={(event) => event.preventDefault()}
+									>
+										<RecordActionButtons onSelect={startRecording} />
+									</div>
+								)}
 								<MotionButton
 									disabled={comment.length === 0}
 									variant="primary"
@@ -314,6 +352,20 @@ export const Toolbar = ({
 					)}
 				</AnimatePresence>
 			</motion.div>
+
+			{recordIntent && (
+				<RecorderSurface
+					kind={recordIntent.kind}
+					timestamp={recordIntent.t}
+					videoId={data.id}
+					onOptimisticComment={onOptimisticComment}
+					onCommentSuccess={onCommentSuccess}
+					onClose={() => setRecordIntent(null)}
+					// The toolbar pill clips overflow and sits mid-page; the panel
+					// belongs on the fixed bottom-center spot with the screen bar.
+					placement="floating"
+				/>
+			)}
 
 			<AuthOverlay
 				isOpen={showAuthOverlay}

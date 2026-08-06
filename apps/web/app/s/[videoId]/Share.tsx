@@ -1006,6 +1006,7 @@ export const Share = ({
 														onCommentSuccess={handleCommentSuccess}
 														disableComments={areCommentStampsDisabled}
 														disableReactions={areReactionStampsDisabled}
+														canRecordMedia={canRecordMedia && !isScreenshot}
 														data={data}
 													/>
 												</div>
