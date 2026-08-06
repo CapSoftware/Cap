@@ -7,6 +7,7 @@ import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
 import AppleProvider from "next-auth/providers/apple";
+import CredentialsProvider from "next-auth/providers/credentials";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
@@ -73,6 +74,14 @@ export const authOptions = (): NextAuthOptions => {
 			if (_providers) return _providers;
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
+			if (
+				serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
+				serverEnv().TRUSTED_PROXY_AUTH_EMAIL
+			) {
+				console.warn(
+					"[auth] trusted-proxy sign-in is ENABLED. Only run this behind a reverse proxy that strips client-sent copies of the trust header, or a login bypass is possible.",
+				);
+			}
 			_providers = [
 				...(appleClientId && appleClientSecret
 					? [
@@ -109,6 +118,62 @@ export const authOptions = (): NextAuthOptions => {
 						};
 					},
 				}),
+				...(serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
+				serverEnv().TRUSTED_PROXY_AUTH_EMAIL
+					? [
+							CredentialsProvider({
+								id: "trusted-proxy",
+								name: "Reverse Proxy",
+								credentials: {},
+								// SECURITY: this header is trusted ONLY because the operator
+								// opted in via env, asserting Cap runs behind a reverse proxy
+								// that strips any client-sent copy of the header and sets it
+								// only on authenticated requests. Never enable without such a
+								// proxy — it would be a login bypass. Fails closed below.
+								async authorize(_credentials, req) {
+									const env = serverEnv();
+									const header = env.TRUSTED_PROXY_AUTH_HEADER!.toLowerCase();
+									// The router is the sole authority for this header (it strips
+									// any client-sent copy), so its presence means the request was
+									// owner-authenticated. Fail closed on anything else.
+									if (req?.headers?.[header] !== "true") return null;
+
+									// Defense-in-depth: when a shared secret is configured, the proxy
+									// must also send it, so a request that reaches Cap outside the
+									// proxy can't spoof the header. Constant-time and length-blind.
+									const secret = env.TRUSTED_PROXY_AUTH_SECRET;
+									if (secret) {
+										const provided =
+											req?.headers?.["x-trusted-proxy-secret"] ?? "";
+										const digest = (s: string) =>
+											crypto.createHash("sha256").update(s).digest();
+										if (!crypto.timingSafeEqual(digest(provided), digest(secret)))
+											return null;
+									}
+
+									const email = env.TRUSTED_PROXY_AUTH_EMAIL!.toLowerCase();
+									const [user] = await db()
+										.select({
+											id: users.id,
+											email: users.email,
+											name: users.name,
+											image: users.image,
+										})
+										.from(users)
+										.where(eq(users.email, email))
+										.limit(1);
+									if (!user) return null;
+
+									return {
+										id: user.id,
+										email: user.email,
+										name: user.name,
+										image: user.image,
+									};
+								},
+							}),
+						]
+					: []),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
