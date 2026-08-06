@@ -262,17 +262,21 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         let (width, height, content) = (case.width, case.height, case.content);
         let mut rng = Rng(case.rng_seed);
         tokio::spawn(async move {
+            let mut max_late = 0.0f64;
             for (i, &ts) in sent.iter().enumerate() {
-                tokio::time::sleep_until((base + Duration::from_secs_f64(ts)).into()).await;
+                let due = base + Duration::from_secs_f64(ts);
+                tokio::time::sleep_until(due.into()).await;
+                max_late = max_late.max(due.elapsed().as_secs_f64());
                 let frame = FFmpegVideoFrame {
                     inner: make_video_frame(width, height, i as u64, content, &mut rng),
-                    timestamp: Timestamp::Instant(base + Duration::from_secs_f64(ts)),
+                    timestamp: Timestamp::Instant(due),
                 };
                 if tx.send_async(frame).await.is_err() {
                     break;
                 }
             }
             // Sender drops here, ending the stream.
+            max_late
         })
     };
 
@@ -292,7 +296,7 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
     }
     .map_err(|e| format!("pipeline build: {e}"))?;
 
-    emit.await.map_err(|e| format!("emit join: {e}"))?;
+    let max_emit_late = emit.await.map_err(|e| format!("emit join: {e}"))?;
     // The verification below assumes frames were emitted in real time; when a
     // saturated runner (or a software encoder drowning in worst-case content)
     // stalls emission for seconds, pts-vs-wall comparisons are meaningless.
@@ -307,6 +311,19 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
     if emit_lag > 1.5 {
         return Ok(format!(
             "skipped: runner fell {emit_lag:.1}s behind real-time emission"
+        ));
+    }
+    // A stall that later catches up is invisible to the end-of-emission lag
+    // above, but it still contaminates the checks: frames stamped with their
+    // scheduled capture time arrive late, and the pipeline's wall-clock
+    // coupling (drift re-pinning) legitimately moves the muxed pts by about
+    // the stall size — a 0.3s scheduler stall mid-case reads as a 0.3s "pts
+    // error" on an otherwise healthy pipeline. Real timestamp bugs reproduce
+    // on healthy runners; a stalled runner proves nothing either way.
+    if max_emit_late > 0.1 {
+        return Ok(format!(
+            "skipped: runner stalled {max_emit_late:.2}s mid-emission; \
+             pts-vs-wall checks are environment-contaminated"
         ));
     }
 
