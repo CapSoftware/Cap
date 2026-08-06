@@ -181,7 +181,9 @@ export async function POST(request: NextRequest) {
 				),
 			);
 
-			if (videoRecord && userId === videoRecord.ownerId) {
+			if (!videoRecord) return;
+
+			if (userId === videoRecord.ownerId) {
 				return;
 			}
 
@@ -203,7 +205,7 @@ export async function POST(request: NextRequest) {
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),
-					session_id: sessionId ?? "anon",
+					session_id: sessionId ?? randomUUID(),
 					action: "page_hit",
 					version: "1.0",
 					tenant_id: tenantId,
