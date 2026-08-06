@@ -24,7 +24,7 @@ function getAllTsFiles(dir: string): string[] {
 				results = results.concat(getAllTsFiles(filePath));
 			}
 		} else if (file.endsWith(".ts") || file.endsWith(".tsx")) {
-			if (!filePath.endsWith("lib/rate-limit.ts")) {
+			if (!filePath.endsWith("lib/rate-limit.ts") && !filePath.endsWith("rate-limit-ids.test.ts")) {
 				results.push(filePath);
 			}
 		}
