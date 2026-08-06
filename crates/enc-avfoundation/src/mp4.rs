@@ -513,6 +513,16 @@ impl MP4Encoder {
         {
             self.timestamp_offset += gap;
             self.pause_timestamp = None;
+            // A frame held across the pause may carry a deferred offset
+            // snapshotted before the gap existed; applying it verbatim on
+            // append would overwrite the gap-adjusted offset and re-insert
+            // the pause into every later video and audio timestamp. Shift it
+            // by the gap so apply-on-append stays correct.
+            if let Some(pending) = self.pending_video_frame.as_mut()
+                && let Some(deferred) = pending.deferred_offset
+            {
+                pending.deferred_offset = Some(deferred + gap);
+            }
         }
 
         if !self.instant_mode
@@ -622,6 +632,13 @@ impl MP4Encoder {
         {
             self.timestamp_offset += gap;
             self.pause_timestamp = None;
+            // Same as the video path: keep a held frame's deferred offset in
+            // step with the consumed pause gap.
+            if let Some(pending) = self.pending_video_frame.as_mut()
+                && let Some(deferred) = pending.deferred_offset
+            {
+                pending.deferred_offset = Some(deferred + gap);
+            }
         }
 
         if !self.session_started {
@@ -1350,6 +1367,27 @@ mod tests {
 
     fn create_pixel_buffer_pool(width: usize, height: usize) -> arc::R<cidre::cv::PixelBufPool> {
         create_pixel_buffer_pool_with_format(width, height, cidre::cv::PixelFormat::_420V)
+    }
+
+    // Mirrors the production encoder-thread retry loop: paravirtualized CI
+    // runners have no hardware VideoToolbox, so the writer input reports
+    // NotReadyForMore often enough that single-shot queue calls drop frames
+    // and count-based assertions flake.
+    fn queue_video_frame_with_retry(
+        encoder: &mut MP4Encoder,
+        frame: arc::R<cidre::cm::SampleBuf>,
+        timestamp: Duration,
+    ) -> Result<bool, QueueFrameError> {
+        for _ in 0..1000 {
+            match encoder.queue_video_frame(frame.clone(), timestamp) {
+                Ok(()) => return Ok(true),
+                Err(QueueFrameError::NotReadyForMore) => {
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(false)
     }
 
     fn create_test_video_frame(
@@ -3724,8 +3762,8 @@ mod tests {
 
         let frame_a = create_test_video_frame(&pool, 33_333, 33_333);
         let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
-        encoder.queue_video_frame(frame_a, first).unwrap();
-        encoder.queue_video_frame(frame_b, second).unwrap();
+        assert!(queue_video_frame_with_retry(&mut encoder, frame_a, first).unwrap());
+        assert!(queue_video_frame_with_retry(&mut encoder, frame_b, second).unwrap());
 
         assert_eq!(
             encoder.last_video_pts,
@@ -3759,6 +3797,7 @@ mod tests {
 
         let mut errors = Vec::new();
         let mut appended = 0u64;
+        let mut attempted = 0u64;
 
         'frames: for i in 0..360u64 {
             let base_us = i * 33_333;
@@ -3769,17 +3808,16 @@ mod tests {
 
             for ts in timestamps {
                 let frame = create_test_video_frame(&pool, base_us as i64, 33_333);
-                match encoder.queue_video_frame(frame, ts) {
-                    Ok(()) => appended += 1,
-                    Err(QueueFrameError::NotReadyForMore) => {}
+                attempted += 1;
+                match queue_video_frame_with_retry(&mut encoder, frame, ts) {
+                    Ok(true) => appended += 1,
+                    Ok(false) => {}
                     Err(e) => {
                         errors.push(format!("{e:?} at frame {i}"));
                         break 'frames;
                     }
                 }
             }
-
-            std::thread::sleep(Duration::from_micros(500));
         }
 
         assert!(
@@ -3787,8 +3825,8 @@ mod tests {
             "Same-microsecond PTS bursts must not fail the writer: {errors:?}"
         );
         assert!(
-            appended > 300,
-            "expected most frames to queue, got {appended}"
+            appended >= attempted * 9 / 10,
+            "expected most frames to queue, got {appended}/{attempted}"
         );
 
         let finish = encoder.finish(Some(Duration::from_secs(13)));
@@ -3808,11 +3846,10 @@ mod tests {
         let mut errors = Vec::new();
         let mut queue = |encoder: &mut MP4Encoder, ts: Duration, label: &str| {
             let frame = create_test_video_frame(&pool, ts.as_micros() as i64, 33_333);
-            match encoder.queue_video_frame(frame, ts) {
-                Ok(()) | Err(QueueFrameError::NotReadyForMore) => {}
+            match queue_video_frame_with_retry(encoder, frame, ts) {
+                Ok(_) => {}
                 Err(e) => errors.push(format!("{e:?} at {label}")),
             }
-            std::thread::sleep(Duration::from_micros(500));
         };
 
         for i in 0..60u64 {
@@ -3852,8 +3889,15 @@ mod tests {
             "pause/resume with a same-microsecond resume tie must not fail the writer: {errors:?}"
         );
 
-        let finish = encoder.finish(Some(Duration::from_secs(5)));
+        let finish = encoder.finish(Some(Duration::from_micros(120 * 33_333)));
         assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let duration = container_duration_secs(&output);
+        assert!(
+            (3.8..=4.2).contains(&duration),
+            "held-frame pause must not distort the muxed timeline: 120 frames at 30fps \
+             should span ~4.0s, container reports {duration:.3}s"
+        );
 
         let _ = std::fs::remove_file(&output);
     }
@@ -3869,12 +3913,27 @@ mod tests {
         for i in 0..30u64 {
             let ts = Duration::from_micros(i * 33_333);
             let frame = create_test_video_frame(&pool, (i * 33_333) as i64, 33_333);
-            encoder.queue_video_frame(frame, ts).unwrap();
-            std::thread::sleep(Duration::from_micros(500));
+            let queued = queue_video_frame_with_retry(&mut encoder, frame, ts).unwrap();
+            assert!(queued, "frame {i} exhausted the writer-ready retry budget");
         }
 
         encoder.pause();
         assert!(encoder.pending_video_frame.is_some());
+        let appended_before_finish = encoder.video_frames_appended;
+        assert_eq!(
+            appended_before_finish, 29,
+            "all queued frames but the held one should be appended before finish"
+        );
+
+        // The finish-time flush appends without a readiness check; wait for
+        // the input to drain so the held frame cannot be dropped on a slow
+        // runner.
+        for _ in 0..1000 {
+            if encoder.video_input.is_ready_for_more_media_data() {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
 
         let finish = encoder.finish(Some(Duration::from_secs(1)));
         assert!(
@@ -3883,8 +3942,9 @@ mod tests {
         );
         assert!(encoder.pending_video_frame.is_none());
         assert_eq!(
-            encoder.video_frames_appended, 30,
-            "every queued frame including the held one must reach the writer"
+            encoder.video_frames_appended,
+            appended_before_finish + 1,
+            "the held frame must reach the writer during finish"
         );
 
         let _ = std::fs::remove_file(&output);
