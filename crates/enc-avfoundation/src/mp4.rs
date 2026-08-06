@@ -80,7 +80,11 @@ pub enum QueueFrameError {
     AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
-    #[error("WriterFailed/{0}")]
+    // Debug-format the NSError: Display is only the localized description
+    // ("The operation could not be completed"), which hides the code and the
+    // NSUnderlyingError (e.g. -11800/-16364 InvalidTimestamp) needed to
+    // diagnose field reports.
+    #[error("WriterFailed/{0:?}")]
     WriterFailed(arc::R<ns::Error>),
     #[error("Finished")]
     Finished,
@@ -525,9 +529,21 @@ impl MP4Encoder {
             }
         }
 
-        let mut pts_duration = timestamp
-            .checked_sub(self.timestamp_offset)
-            .unwrap_or(Duration::ZERO);
+        // The writer only sees whole microseconds (write_pending_frame builds
+        // SampleTimingInfo on a 1MHz timescale via as_micros), while remapped
+        // capture timestamps carry nanosecond precision. During stall-recovery
+        // bursts two frames can land inside the same microsecond: they pass a
+        // nanosecond-space monotonicity check but collapse into duplicate
+        // writer PTS, which AVAssetWriter reports asynchronously a few frames
+        // later as -11800/-16364 (InvalidTimestamp), killing the recording.
+        // Truncate first so the tie correction below operates in the same
+        // units the writer sees.
+        let mut pts_duration = Duration::from_micros(
+            timestamp
+                .checked_sub(self.timestamp_offset)
+                .unwrap_or(Duration::ZERO)
+                .as_micros() as u64,
+        );
 
         let mut deferred_offset: Option<Duration> = None;
 
@@ -770,6 +786,7 @@ impl MP4Encoder {
             Ok(()) => {}
             Err(QueueFrameError::WriterFailed(err)) => {
                 error!(
+                    error = ?err,
                     video_frames = self.video_frames_appended,
                     audio_frames = self.audio_frames_appended,
                     audio_pts_value = pts_value,
@@ -831,6 +848,7 @@ impl MP4Encoder {
             }
             Err(QueueFrameError::WriterFailed(err)) => {
                 error!(
+                    error = ?err,
                     video_frames = self.video_frames_appended,
                     audio_frames = self.audio_frames_appended,
                     pts_us = pending.pts.as_micros() as i64,
@@ -3679,6 +3697,93 @@ mod tests {
 
         let result = encoder.finish(Some(Duration::from_micros(166_666)));
         assert!(result.is_ok(), "Finish failed: {result:?}");
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_same_microsecond_pts_pair_is_bumped_apart() {
+        let output = test_output_path("same_us_pts_bump");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let base = Duration::from_micros(33_333);
+        let first = base + Duration::from_nanos(200);
+        let second = base + Duration::from_nanos(800);
+
+        let frame_a = create_test_video_frame(&pool, 33_333, 33_333);
+        let frame_b = create_test_video_frame(&pool, 33_333, 33_333);
+        encoder.queue_video_frame(frame_a, first).unwrap();
+        encoder.queue_video_frame(frame_b, second).unwrap();
+
+        assert_eq!(
+            encoder.last_video_pts,
+            Some(Duration::from_micros(33_333)),
+            "first frame must be written at the truncated microsecond"
+        );
+        assert_eq!(
+            encoder.pending_video_frame.as_ref().map(|p| p.pts),
+            Some(Duration::from_micros(33_334)),
+            "second frame in the same microsecond must be bumped one whole microsecond"
+        );
+
+        let _ = encoder.finish(Some(Duration::from_micros(66_666)));
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_same_microsecond_pts_bursts_survive_writer() {
+        // Field failure from the 0.5.8 reports (studio + camera on macOS):
+        // remapped capture timestamps carry nanosecond precision, and a
+        // stall-recovery burst can put two frames inside the same
+        // microsecond. The writer quantizes PTS to whole microseconds, so
+        // without entry quantization the pair reaches AVAssetWriter as
+        // duplicate timestamps and the writer dies asynchronously with
+        // -11800/-16364 (InvalidTimestamp) a few frames later.
+        let output = test_output_path("same_us_pts_bursts");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let mut errors = Vec::new();
+        let mut appended = 0u64;
+
+        'frames: for i in 0..360u64 {
+            let base_us = i * 33_333;
+            let mut timestamps = vec![Duration::from_micros(base_us) + Duration::from_nanos(200)];
+            if i % 30 == 10 {
+                timestamps.push(Duration::from_micros(base_us) + Duration::from_nanos(800));
+            }
+
+            for ts in timestamps {
+                let frame = create_test_video_frame(&pool, base_us as i64, 33_333);
+                match encoder.queue_video_frame(frame, ts) {
+                    Ok(()) => appended += 1,
+                    Err(QueueFrameError::NotReadyForMore) => {}
+                    Err(e) => {
+                        errors.push(format!("{e:?} at frame {i}"));
+                        break 'frames;
+                    }
+                }
+            }
+
+            std::thread::sleep(Duration::from_micros(500));
+        }
+
+        assert!(
+            errors.is_empty(),
+            "Same-microsecond PTS bursts must not fail the writer: {errors:?}"
+        );
+        assert!(
+            appended > 300,
+            "expected most frames to queue, got {appended}"
+        );
+
+        let finish = encoder.finish(Some(Duration::from_secs(13)));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
 
         let _ = std::fs::remove_file(&output);
     }
