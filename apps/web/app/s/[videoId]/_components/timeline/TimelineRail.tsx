@@ -300,7 +300,7 @@ const FilmstripTiles = memo(function FilmstripTiles({
 									src={src}
 									alt=""
 									draggable={false}
-									className="absolute inset-0 size-full select-none object-cover opacity-0 brightness-105 saturate-[.9] transition-opacity duration-300"
+									className="absolute inset-0 size-full select-none object-cover opacity-0 brightness-110 saturate-[.7] transition-opacity duration-300"
 									onLoad={(event) => {
 										event.currentTarget.style.opacity = "1";
 									}}
@@ -310,7 +310,10 @@ const FilmstripTiles = memo(function FilmstripTiles({
 					);
 				})}
 			</div>
-			<div aria-hidden className="absolute inset-0 bg-white/45" />
+			{/* Heavier than it looks right in isolation: the waveform drawn over
+			    the strip is the layer meant to be read, and busy footage needs
+			    this much wash before the bars separate from it. */}
+			<div aria-hidden className="absolute inset-0 bg-white/60" />
 		</>
 	);
 });
