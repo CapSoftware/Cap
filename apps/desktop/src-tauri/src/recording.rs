@@ -2807,7 +2807,7 @@ pub async fn take_screenshot(
 
     AppSounds::Notification.play();
 
-    save_screenshot_project(&app, image, &target)
+    save_screenshot_project(&app, image, &target, true)
 }
 
 #[tauri::command(async)]
@@ -2840,7 +2840,7 @@ pub async fn capture_ocr_text(
     AppSounds::Notification.play();
 
     if settings.ocr_keep_screenshot
-        && let Err(e) = save_screenshot_project(&app, image, &target)
+        && let Err(e) = save_screenshot_project(&app, image, &target, false)
     {
         error!("Failed to save OCR screenshot: {e}");
     }
@@ -2914,10 +2914,15 @@ async fn capture_screen_image(
     result
 }
 
+/// `run_side_effects` controls whether screenshot automations and the
+/// "screenshot saved" notification fire once the project is written. OCR
+/// captures skip them: an automation like copy-to-clipboard would overwrite
+/// the text that was just copied.
 fn save_screenshot_project(
     app: &AppHandle,
     image: image::DynamicImage,
     target: &ScreenCaptureTarget,
+    run_side_effects: bool,
 ) -> Result<PathBuf, String> {
     use crate::NewScreenshotAdded;
     use crate::notifications;
@@ -3063,16 +3068,18 @@ fn save_screenshot_project(
                 }
                 .emit(&app_handle);
 
-                crate::automation::run_screenshot_automations(
-                    app_handle.clone(),
-                    image_path_for_emit.clone(),
-                    &automation_target,
-                );
+                if run_side_effects {
+                    crate::automation::run_screenshot_automations(
+                        app_handle.clone(),
+                        image_path_for_emit.clone(),
+                        &automation_target,
+                    );
 
-                notifications::send_notification(
-                    &app_handle,
-                    notifications::NotificationType::ScreenshotSaved,
-                );
+                    notifications::send_notification(
+                        &app_handle,
+                        notifications::NotificationType::ScreenshotSaved,
+                    );
+                }
             }
             Ok(Err(e)) => {
                 error!("Failed to encode PNG: {e}");
