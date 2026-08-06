@@ -1,3 +1,4 @@
+import { EXTENSION_PROTOCOL } from "../platform/extension-protocol";
 import {
 	ApiRequestError,
 	createAuthStart,
@@ -56,6 +57,7 @@ import type {
 	ServiceWorkerRequest,
 	ServiceWorkerResponse,
 } from "../shared/types";
+import { ensureRecorderHost, hasRecorderHost } from "./recorder-host";
 
 // popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
 // the extension via the overlay iframe's static URL; that same flag makes its
@@ -63,7 +65,6 @@ import type {
 // a window. The standalone fallback therefore loads a privileged twin that is
 // not in web_accessible_resources.
 const POPUP_URL = "popup-window.html";
-const OFFSCREEN_URL = "offscreen.html";
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 const OFFSCREEN_MESSAGE_ATTEMPTS = 3;
 const OFFSCREEN_MESSAGE_RETRY_DELAY_MS = 75;
@@ -81,7 +82,7 @@ let mediaPermissionsCache: MediaPermissionSnapshot = {
 let uploadProgressTabId: number | null = null;
 let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
-let offscreenDocumentCreation: Promise<void> | null = null;
+let readyPreviewTabId: number | null = null;
 let browserWindowFocused = true;
 let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
@@ -188,58 +189,6 @@ const focusTab = async (tabId: number) => {
 	await activateTab(tabId);
 };
 
-const getOffscreenDocumentContexts = async () => {
-	const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_URL);
-	return new Promise<Array<{ documentUrl?: string }>>((resolve) => {
-		chrome.runtime.getContexts(
-			{
-				contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-				documentUrls: [offscreenUrl],
-			},
-			(contexts) => resolve(contexts),
-		);
-	});
-};
-
-const hasOffscreenDocument = async () =>
-	(await getOffscreenDocumentContexts()).length > 0;
-
-const createOffscreenDocument = () =>
-	new Promise<void>((resolve, reject) => {
-		chrome.offscreen.createDocument(
-			{
-				url: OFFSCREEN_URL,
-				reasons: ["USER_MEDIA", "DISPLAY_MEDIA", "BLOBS", "AUDIO_PLAYBACK"],
-				justification: "Record and upload Cap videos from an extension page.",
-			},
-			() => {
-				const error = chrome.runtime.lastError;
-				if (!error) {
-					resolve();
-					return;
-				}
-
-				const message = error.message ?? "Failed to create offscreen document";
-				if (message.toLowerCase().includes("single offscreen document")) {
-					resolve();
-					return;
-				}
-
-				reject(new Error(message));
-			},
-		);
-	});
-
-const ensureOffscreenDocument = async () => {
-	const contexts = await getOffscreenDocumentContexts();
-	if (contexts.length > 0) return;
-
-	offscreenDocumentCreation ??= createOffscreenDocument().finally(() => {
-		offscreenDocumentCreation = null;
-	});
-	await offscreenDocumentCreation;
-};
-
 const wait = (durationMs: number) =>
 	new Promise<void>((resolve) => {
 		globalThis.setTimeout(resolve, durationMs);
@@ -270,12 +219,12 @@ const sendOffscreen = async (
 	options: { createIfMissing?: boolean } = {},
 ) => {
 	if (options.createIfMissing === false) {
-		const hasDocument = await hasOffscreenDocument();
+		const hasDocument = await hasRecorderHost();
 		if (!hasDocument) {
 			return { ok: true, status: recordingStatus } satisfies OffscreenResponse;
 		}
 	} else {
-		await ensureOffscreenDocument();
+		await ensureRecorderHost();
 	}
 
 	let lastError: unknown;
@@ -292,7 +241,7 @@ const sendOffscreen = async (
 				break;
 			}
 			await wait(OFFSCREEN_MESSAGE_RETRY_DELAY_MS);
-			await ensureOffscreenDocument();
+			await ensureRecorderHost();
 		}
 	}
 
@@ -372,7 +321,7 @@ const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
 const isWebPageSender = (sender: chrome.runtime.MessageSender) => {
 	if (!sender.tab) return false;
 	const senderUrl = sender.url ?? "";
-	return !senderUrl.startsWith("chrome-extension:");
+	return !senderUrl.startsWith(EXTENSION_PROTOCOL);
 };
 
 // camera-preview.html is web accessible, so any site can load it in an
@@ -387,7 +336,7 @@ const isCameraPreviewRequestAllowed = async (
 	if (!(await isOverlayTokenRegistered(token))) return false;
 
 	const senderUrl = sender.url ?? "";
-	if (senderUrl.startsWith("chrome-extension:")) {
+	if (senderUrl.startsWith(EXTENSION_PROTOCOL)) {
 		// The camera preview document is the only extension page that drives
 		// the camera.
 		try {
@@ -412,7 +361,7 @@ const isCameraPreviewEventAllowed = async (
 ) => {
 	if (!token || !(await isOverlayTokenRegistered(token))) return false;
 	const senderUrl = sender.url ?? "";
-	if (!senderUrl.startsWith("chrome-extension:")) return false;
+	if (!senderUrl.startsWith(EXTENSION_PROTOCOL)) return false;
 	try {
 		return new URL(senderUrl).pathname === "/camera-preview.html";
 	} catch {
@@ -1244,7 +1193,7 @@ const forwardToOffscreen = (type: OffscreenRequest["type"]) =>
 	sendOffscreen({ target: "offscreen", type } as OffscreenRequest);
 
 const syncRecordingStatus = async () => {
-	const hasDocument = await hasOffscreenDocument();
+	const hasDocument = await hasRecorderHost();
 	if (!hasDocument) {
 		if (
 			isActiveRecordingStatus(recordingStatus) ||

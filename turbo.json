@@ -19,6 +19,7 @@
 				"**/*.css",
 				"*.html",
 				"public/**",
+				"manifests/**",
 				"vite.config.ts",
 				"vite.content.config.ts",
 				"vite.content-overlay.config.ts",
