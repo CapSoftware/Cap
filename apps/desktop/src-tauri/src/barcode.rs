@@ -1,6 +1,5 @@
 use rxing::{DecodeHintValue, DecodeHints};
 
-/// Decodes a QR code or barcode from an image, returning its text payload.
 pub fn decode_barcode(image: &image::DynamicImage) -> Option<String> {
     let luma = image.to_luma8();
     let width = luma.width();
