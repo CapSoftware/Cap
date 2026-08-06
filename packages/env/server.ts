@@ -92,6 +92,10 @@ function createServerEnv() {
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
+			OPENAI_BASE_URL: z
+				.string()
+				.optional()
+				.describe("Custom base URL for OpenAI-compatible LLM endpoints"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
 			REPLICATE_API_TOKEN: z
 				.string()

@@ -518,7 +518,8 @@ async function callAiApi(
 }
 
 async function callOpenAi(prompt: string): Promise<string> {
-	const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+	const baseUrl = (serverEnv().OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
+	const aiRes = await fetch(`${baseUrl}/chat/completions`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",

@@ -588,8 +588,9 @@ const callOpenAi = async ({
 		history,
 		supportEmailTool,
 		createCompletion: async ({ messages, tools, maxTokens }) => {
+			const baseUrl = (serverEnv().OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
 			const response = await fetch(
-				"https://api.openai.com/v1/chat/completions",
+				`${baseUrl}/chat/completions`,
 				{
 					method: "POST",
 					headers: {
