@@ -93,17 +93,14 @@ export const DEMO_COMMENTS: readonly DemoComment[] = [
 ];
 
 /**
- * When someone is talking. The two holes are the pauses the waveform demo asks
- * the reader to find: 1:01–1:10 (switching apps) and 2:09–2:18.
+ * When someone is talking. The holes at 1:01–1:10 and 2:09–2:18 are the dead
+ * air the speech envelope makes visible.
  */
-export const SPEECH_SEGMENTS: readonly (readonly [number, number])[] = [
+const SPEECH_SEGMENTS: readonly (readonly [number, number])[] = [
 	[2, 61],
 	[70, 129],
 	[138, 166],
 ];
-
-/** The gap the waveform demo scores against. */
-export const QUIET_GAP: readonly [number, number] = [61, 70];
 
 const hash = (n: number) => {
 	const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
