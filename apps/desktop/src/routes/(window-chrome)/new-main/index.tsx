@@ -2038,11 +2038,15 @@ function Page() {
 				dismissal === "ocr" ||
 				dismissal === "recordingInstant";
 			if (shouldRevealMainWindow && dismissalReveals) {
-				const currentWindow = getCurrentWindow();
-				void currentWindow.show();
 				// An OCR capture is a background copy-to-clipboard gesture; bring
 				// the window back without stealing focus from the user's app.
-				if (dismissal !== "ocr") void currentWindow.setFocus();
+				if (dismissal === "ocr") {
+					void commands.showWindowWithoutActivating();
+				} else {
+					const currentWindow = getCurrentWindow();
+					void currentWindow.show();
+					void currentWindow.setFocus();
+				}
 			}
 		}
 	});
