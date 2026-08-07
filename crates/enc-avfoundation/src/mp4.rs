@@ -922,8 +922,12 @@ impl MP4Encoder {
         // the sporadic AVAssetWriter failure shape reproduced in the
         // overlapping-extents tests. Held until resume, the pending frame is
         // written with the real (clamped) forward gap and extents stay
-        // disjoint; the writer derives inter-sample durations from
-        // consecutive pts anyway, so the resumed timeline is unchanged.
+        // disjoint. The trade: when the last pre-pause sample was video, the
+        // first post-resume frame maps to exactly the held frame's pts, ties,
+        // and bumps +1us — the final pre-pause frame keeps a 1us extent and
+        // is effectively never displayed. Total timeline length is preserved
+        // (the 1us comes out of the resume frame's slot), which the
+        // container-duration assertions pin.
         // finish_start still flushes it with nominal duration when the
         // recording stops while paused. Holding it retains one capture-pool
         // pixel buffer for the pause duration; upstream drops paused frames
@@ -1329,7 +1333,9 @@ mod tests {
     }
 
     fn test_output_path(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("cap_test_{name}.mp4"));
+        // Namespaced per process: two concurrent runs of this binary sharing
+        // a fixed path fail AVAssetWriter init with "Cannot Save" mid-suite.
+        let path = std::env::temp_dir().join(format!("cap_test_{name}_{}.mp4", std::process::id()));
         let _ = std::fs::remove_file(&path);
         path
     }
