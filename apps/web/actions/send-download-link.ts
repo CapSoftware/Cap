@@ -45,7 +45,10 @@ export async function sendDownloadLink(email: string) {
 		});
 		rateLimited = result.rateLimited;
 	} catch (error) {
-		// Fail open: a firewall/edge outage must never block download emails.
+		// Fail closed: this action is unauthenticated and the rate limit is its
+		// only outbound-email guard, and a caller can force checkRateLimit to
+		// throw with oversized headers (494).
+		rateLimited = true;
 		console.error(
 			'Rate limit check failed for "rl_send_download_link":',
 			error,

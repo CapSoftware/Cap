@@ -53,7 +53,7 @@ describe("sendDownloadLink", () => {
 		expect(sendEmailMock).not.toHaveBeenCalled();
 	});
 
-	it("fails open when the rate limit check throws", async () => {
+	it("fails closed without sending email when the rate limit check throws", async () => {
 		checkRateLimitMock.mockRejectedValueOnce(
 			new Error("Unexpected response 494"),
 		);
@@ -65,8 +65,11 @@ describe("sendDownloadLink", () => {
 
 		const result = await sendDownloadLink("user@example.com");
 
-		expect(result).toEqual({ success: true });
-		expect(sendEmailMock).toHaveBeenCalledTimes(1);
+		expect(result).toEqual({
+			success: false,
+			error: "You've sent too many requests. Please try again later.",
+		});
+		expect(sendEmailMock).not.toHaveBeenCalled();
 		expect(consoleErrorSpy).toHaveBeenCalledWith(
 			'Rate limit check failed for "rl_send_download_link":',
 			expect.any(Error),
