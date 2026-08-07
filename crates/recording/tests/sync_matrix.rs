@@ -389,8 +389,6 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         let pts_origin = pts[0];
         let mut max_rel: f64 = 0.0;
         let mut j = 0usize;
-        let mut last_matched: Option<usize> = None;
-        let mut reused_matches = 0usize;
         for (i, &p) in pts.iter().enumerate() {
             let rel_p = p - pts_origin;
             while j + 1 < sent.len()
@@ -399,15 +397,6 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
             {
                 j += 1;
             }
-            // Muxed frames should each consume their own sent timestamp.
-            // Occasional double-maps are nearest-neighbor ambiguity under
-            // jittered over-delivery; MANY frames sharing sent instants is
-            // the burst-clustering failure shape that nearest-matching alone
-            // would score as zero error. Budget, don't forbid.
-            if last_matched == Some(j) {
-                reused_matches += 1;
-            }
-            last_matched = Some(j);
             let rel = (rel_p - (sent[j] - sent_origin)).abs();
             max_rel = max_rel.max(rel);
             if rel > rel_tolerance {
@@ -418,11 +407,29 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
                 ));
             }
         }
-        if reused_matches * 10 > pts.len() {
+        // Burst collapse piles muxed frames onto instants the sent timeline
+        // never had; nearest-matching alone scores that as zero error. But
+        // jittered over-delivery legitimately produces tight sent pairs
+        // (sorting ±40%-jittered sub-ms timestamps clusters them), and the
+        // muxed timeline mirrors them — so compare distributions instead of
+        // fixing a constant: the muxed tight-pair rate must not materially
+        // exceed the sent timeline's own tight-pair rate.
+        let tight = 0.25 / f64::from(case.delivered_fps.max(1));
+        let tight_rate = |xs: &[f64]| {
+            if xs.len() < 2 {
+                return 0.0;
+            }
+            let tight_pairs = xs.windows(2).filter(|w| w[1] - w[0] < tight).count();
+            tight_pairs as f64 / (xs.len() - 1) as f64
+        };
+        let muxed_tight = tight_rate(&pts);
+        let sent_tight = tight_rate(&sent);
+        if muxed_tight > sent_tight * 1.5 + 0.05 {
             return Err(format!(
-                "{reused_matches} of {} muxed frames share a nearest sent timestamp — \
-                 pts clustered under overload",
-                pts.len()
+                "muxed pts cluster far beyond the sent timeline (tight-pair rate \
+                 {:.1}% vs sent {:.1}% at <{tight:.6}s) — burst collapse under overload",
+                muxed_tight * 100.0,
+                sent_tight * 100.0
             ));
         }
 
