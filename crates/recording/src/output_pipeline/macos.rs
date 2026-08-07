@@ -1300,14 +1300,34 @@ impl Muxer for AVFoundationCameraMuxer {
 
             let mut can_finish_encoder = true;
 
-            if let Some(handle) = state.encoder_handle.take()
-                && let Err(e) =
-                    wait_for_worker(handle, Duration::from_secs(5), "Camera MP4 encoder thread")
-            {
-                warn!("{e:#}");
-                can_finish_encoder = false;
-                if finish_error.is_none() {
-                    finish_error = Some(e);
+            if let Some(handle) = state.encoder_handle.take() {
+                match wait_for_blocking_thread_finish(
+                    handle,
+                    Duration::from_secs(5),
+                    "Camera MP4 encoder thread",
+                ) {
+                    BlockingThreadFinish::Clean => {}
+                    // The thread exited with an error (writer failure, disk
+                    // exhaustion): the encoder mutex is free and finalizing
+                    // is what preserves the moov, so fall through to
+                    // encoder.finish() below. Skipping it here used to leave
+                    // camera.mp4 headerless and unplayable on every encoder
+                    // thread error.
+                    BlockingThreadFinish::Failed(error) => {
+                        warn!("{error:#}");
+                        if finish_error.is_none() {
+                            finish_error = Some(error);
+                        }
+                    }
+                    // The thread is still alive and may hold the encoder
+                    // mutex; locking it for finish() could block forever.
+                    BlockingThreadFinish::TimedOut(error) => {
+                        warn!("{error:#}");
+                        can_finish_encoder = false;
+                        if finish_error.is_none() {
+                            finish_error = Some(error);
+                        }
+                    }
                 }
             }
 
