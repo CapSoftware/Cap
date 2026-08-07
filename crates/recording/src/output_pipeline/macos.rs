@@ -1307,12 +1307,15 @@ impl Muxer for AVFoundationCameraMuxer {
                     "Camera MP4 encoder thread",
                 ) {
                     BlockingThreadFinish::Clean => {}
-                    // The thread exited with an error (writer failure, disk
-                    // exhaustion): the encoder mutex is free and finalizing
-                    // is what preserves the moov, so fall through to
-                    // encoder.finish() below. Skipping it here used to leave
-                    // camera.mp4 headerless and unplayable on every encoder
-                    // thread error.
+                    // The thread exited with an error: the encoder mutex is
+                    // free, so fall through to encoder.finish() below. When
+                    // the writer is still alive (disk-exhaustion stop, mutex
+                    // poison) finalizing is what preserves the moov —
+                    // skipping it here used to leave camera.mp4 headerless
+                    // on every encoder thread error. When the writer itself
+                    // died (WriterFailed) finish_writing cannot salvage the
+                    // file, but the attempt is harmless and surfaces the
+                    // writer's NSError.
                     BlockingThreadFinish::Failed(error) => {
                         warn!("{error:#}");
                         if finish_error.is_none() {
