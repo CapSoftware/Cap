@@ -25,9 +25,10 @@ import {
 	type ImageUpload,
 	type Organisation,
 	Space,
+	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -163,9 +164,17 @@ type SharedSpaceEntry = Omit<SharedSpaceRow, "videoId" | "iconUrl"> & {
 // Sharing is stored in two places: `space_videos` for named spaces and
 // `shared_videos` for the org-wide "All <Org>" entry. Both have to be read
 // here, otherwise the sharing dialog opens with the org-wide entry unchecked
-// and saving would drop it.
+// and saving would drop it. The `shared_videos` read is limited to the page's
+// organization plus the viewer's own memberships so other organizations'
+// metadata never reaches the client, while an owner's dialog seed still covers
+// every org share `shareCap` is able to preserve (it drops orgs the saver
+// left, regardless of what was submitted).
 async function fetchSharedSpacesForVideos(
 	videoIds: Video.VideoId[],
+	viewer: {
+		userId: User.UserId;
+		organizationId: Organisation.OrganisationId;
+	},
 ): Promise<Record<string, SharedSpaceEntry[]>> {
 	if (videoIds.length === 0) return {};
 
@@ -196,7 +205,21 @@ async function fetchSharedSpacesForVideos(
 				organizations,
 				eq(sharedVideos.organizationId, organizations.id),
 			)
-			.where(inArray(sharedVideos.videoId, videoIds)),
+			.where(
+				and(
+					inArray(sharedVideos.videoId, videoIds),
+					or(
+						eq(sharedVideos.organizationId, viewer.organizationId),
+						inArray(
+							sharedVideos.organizationId,
+							db()
+								.select({ organizationId: organizationMembers.organizationId })
+								.from(organizationMembers)
+								.where(eq(organizationMembers.userId, viewer.userId)),
+						),
+					),
+				),
+			),
 	]);
 
 	const rows: SharedSpaceRow[] = [
@@ -367,6 +390,7 @@ export default async function SharedCapsPage(props: {
 		);
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			spaceVideoData.map((video) => Video.VideoId.make(video.id)),
+			{ userId: user.id, organizationId: space.organizationId },
 		);
 		const [organizationSettingsRow] = await db()
 			.select({ settings: organizations.settings })
@@ -503,6 +527,7 @@ export default async function SharedCapsPage(props: {
 		const { videos: orgVideoData, totalCount } = organizationVideos;
 		const sharedSpacesMap = await fetchSharedSpacesForVideos(
 			orgVideoData.map((video) => Video.VideoId.make(video.id)),
+			{ userId: user.id, organizationId: organization.id },
 		);
 		const [organizationSettingsRow] = await db()
 			.select({ settings: organizations.settings })
