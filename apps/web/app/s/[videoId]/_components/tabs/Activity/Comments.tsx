@@ -1,4 +1,7 @@
-import { Comment, User, type Video } from "@cap/web-domain";
+// type-only on purpose: a value import of @cap/web-domain drags the whole
+// effect runtime (~250 KB gz) into the share page's entry chunk. The branded
+// ids carry no constraints, so plain casts replace `.make()` losslessly.
+import type { Comment, User, Video } from "@cap/web-domain";
 import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useSearchParams } from "next/navigation";
@@ -86,14 +89,14 @@ export const Comments = Object.assign(
 			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
-				id: Comment.CommentId.make(`temp-${Date.now()}`),
-				authorId: User.UserId.make(user.id),
+				id: (`temp-${Date.now()}` as Comment.CommentId),
+				authorId: (user.id as User.UserId),
 				authorName: user?.name,
 				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
-				parentCommentId: Comment.CommentId.make(""),
+				parentCommentId: ("" as Comment.CommentId),
 				type: "text",
 				timestamp: currentTime,
 				updatedAt: new Date(),
@@ -112,7 +115,7 @@ export const Comments = Object.assign(
 					content,
 					videoId: props.videoId,
 					authorImage: user.imageUrl,
-					parentCommentId: Comment.CommentId.make(""),
+					parentCommentId: ("" as Comment.CommentId),
 					type: "text",
 					timestamp: currentTime,
 				});
@@ -134,7 +137,7 @@ export const Comments = Object.assign(
 				: replyingTo;
 
 			const optimisticReply: CommentType = {
-				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
+				id: (`temp-reply-${Date.now()}` as Comment.CommentId),
 				authorId: user.id,
 				authorName: user.name,
 				authorImage: user.imageUrl,

@@ -14,14 +14,12 @@ import type { ViewerSettingKey } from "@cap/web-backend";
 import {
 	faChartSimple,
 	faChevronDown,
-	faCopy,
 	faEllipsis,
 	faGear,
 	faLock,
 	faShare,
 	faTrash,
 	faUnlock,
-	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,7 +37,6 @@ import {
 	Users,
 	X,
 } from "lucide-react";
-import moment from "moment";
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -51,17 +48,11 @@ import {
 } from "@/actions/organization/shareable-link-icon";
 import { editTitle } from "@/actions/videos/edit-title";
 import type { VideoStatusResult } from "@/actions/videos/get-status";
-import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { PasswordDialog } from "@/app/(org)/dashboard/caps/components/PasswordDialog";
-import { SettingsDialog } from "@/app/(org)/dashboard/caps/components/SettingsDialog";
-import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import { useDashboardContext } from "@/app/(org)/dashboard/DashboardContext";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
-import { UpgradeModal } from "@/components/UpgradeModal";
-import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import {
 	copyRichVideoLink,
 	videoPreviewImageUrl,
@@ -71,6 +62,7 @@ import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
+import { fromNow } from "./utils/from-now";
 import { VideoDownloadMenu } from "./VideoDownloadMenu";
 
 /**
@@ -80,6 +72,43 @@ import { VideoDownloadMenu } from "./VideoDownloadMenu";
  */
 const importShareLinkDialog = () => import("./ShareLinkDialog");
 const ShareLinkDialog = dynamic(importShareLinkDialog, { ssr: false });
+
+/**
+ * Same treatment for the rest of the header's interaction-only surfaces. The
+ * owner dialogs and the upgrade modal (which carries the Rive animation
+ * runtime) are mounted behind latches; the two RPC-backed pieces additionally
+ * keep the Effect runtime chunk out of every plain page view.
+ */
+const importUpgradeModal = () =>
+	import("@/components/UpgradeModal").then((m) => m.UpgradeModal);
+const UpgradeModal = dynamic(importUpgradeModal, { ssr: false });
+const SharingDialog = dynamic(
+	() =>
+		import("@/app/(org)/dashboard/caps/components/SharingDialog").then(
+			(m) => m.SharingDialog,
+		),
+	{ ssr: false },
+);
+const SettingsDialog = dynamic(
+	() =>
+		import("@/app/(org)/dashboard/caps/components/SettingsDialog").then(
+			(m) => m.SettingsDialog,
+		),
+	{ ssr: false },
+);
+const PasswordDialog = dynamic(
+	() =>
+		import("@/app/(org)/dashboard/caps/components/PasswordDialog").then(
+			(m) => m.PasswordDialog,
+		),
+	{ ssr: false },
+);
+const DeleteCapDialog = dynamic(() => import("./DeleteCapDialog"), {
+	ssr: false,
+});
+const DuplicateCapMenuItem = dynamic(() => import("./DuplicateCapMenuItem"), {
+	ssr: false,
+});
 
 /**
  * Where a signed-out viewer can go next. Three, not the full site nav: this
@@ -159,15 +188,40 @@ export const ShareHeader = ({
 	const [displayTitle, setDisplayTitle] = useState(data.name);
 	const [editValue, setEditValue] = useState(data.name);
 	const [isTitleRevealing, setIsTitleRevealing] = useState(false);
-	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [upgradeModalOpen, setUpgradeModalOpenRaw] = useState(false);
+	const [isSharingDialogOpen, setIsSharingDialogOpenRaw] = useState(false);
 	const [isShareLinkDialogOpen, setIsShareLinkDialogOpen] = useState(false);
-	// Latched so the lazy chunk is only ever pulled in once, and so the dialog
+	// Latched so each lazy chunk is only ever pulled in once, and so a dialog
 	// keeps its exit animation instead of being torn out of the tree on close.
 	const [shareLinkDialogMounted, setShareLinkDialogMounted] = useState(false);
-	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
-	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
-	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+	const [upgradeModalMounted, setUpgradeModalMounted] = useState(false);
+	const [sharingDialogMounted, setSharingDialogMounted] = useState(false);
+	const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
+	const [passwordDialogMounted, setPasswordDialogMounted] = useState(false);
+	const [deleteDialogMounted, setDeleteDialogMounted] = useState(false);
+	const [isSettingsDialogOpen, setIsSettingsDialogOpenRaw] = useState(false);
+	const [isPasswordDialogOpen, setIsPasswordDialogOpenRaw] = useState(false);
+	const [isDeleteDialogOpen, setIsDeleteDialogOpenRaw] = useState(false);
+	const setUpgradeModalOpen = (open: boolean) => {
+		if (open) setUpgradeModalMounted(true);
+		setUpgradeModalOpenRaw(open);
+	};
+	const setIsSharingDialogOpen = (open: boolean) => {
+		if (open) setSharingDialogMounted(true);
+		setIsSharingDialogOpenRaw(open);
+	};
+	const setIsSettingsDialogOpen = (open: boolean) => {
+		if (open) setSettingsDialogMounted(true);
+		setIsSettingsDialogOpenRaw(open);
+	};
+	const setIsPasswordDialogOpen = (open: boolean) => {
+		if (open) setPasswordDialogMounted(true);
+		setIsPasswordDialogOpenRaw(open);
+	};
+	const setIsDeleteDialogOpen = (open: boolean) => {
+		if (open) setDeleteDialogMounted(true);
+		setIsDeleteDialogOpenRaw(open);
+	};
 	const [passwordProtected, setPasswordProtected] = useState(
 		Boolean(data.hasPassword),
 	);
@@ -214,31 +268,6 @@ export const ShareHeader = ({
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
 	const isOwner = user && user.id === data.owner.id;
-	const rpc = useRpcClient();
-
-	const duplicateMutation = useEffectMutation({
-		mutationFn: () => rpc.VideoDuplicate(data.id),
-		onSuccess: () => {
-			toast.success("Cap duplicated successfully");
-		},
-		onError: () => {
-			toast.error("Failed to duplicate Cap");
-		},
-	});
-
-	const deleteMutation = useEffectMutation({
-		mutationFn: () => rpc.VideoDelete(data.id),
-		onSuccess: () => {
-			toast.success("Cap deleted successfully");
-			push("/dashboard/caps?page=1");
-		},
-		onError: () => {
-			toast.error("Failed to delete Cap");
-		},
-		onSettled: () => {
-			setIsDeleteDialogOpen(false);
-		},
-	});
 
 	const { webUrl } = usePublicEnv();
 	const { download, isDownloading } = useVideoDownload(data.id);
@@ -710,21 +739,23 @@ export const ShareHeader = ({
 					</Button>
 				</div>
 			)}
-			<SharingDialog
-				isOpen={isSharingDialogOpen}
-				onClose={() => setIsSharingDialogOpen(false)}
-				capId={data.id}
-				capName={data.name}
-				sharedSpaces={effectiveSharedSpaces || []}
-				onSharingUpdated={handleSharingUpdated}
-				isPublic={data.public}
-				spacesData={spacesData}
-				hasPassword={passwordProtected}
-				inheritedPasswordSources={data.inheritedPasswordSources}
-				onPasswordUpdated={handlePasswordUpdated}
-				user={user}
-				onUpgradeRequest={setUpgradeModalOpen}
-			/>
+			{sharingDialogMounted && (
+				<SharingDialog
+					isOpen={isSharingDialogOpen}
+					onClose={() => setIsSharingDialogOpen(false)}
+					capId={data.id}
+					capName={data.name}
+					sharedSpaces={effectiveSharedSpaces || []}
+					onSharingUpdated={handleSharingUpdated}
+					isPublic={data.public}
+					spacesData={spacesData}
+					hasPassword={passwordProtected}
+					inheritedPasswordSources={data.inheritedPasswordSources}
+					onPasswordUpdated={handlePasswordUpdated}
+					user={user}
+					onUpgradeRequest={setUpgradeModalOpen}
+				/>
+			)}
 			{shareLinkDialogMounted && (
 				<ShareLinkDialog
 					open={isShareLinkDialogOpen}
@@ -742,34 +773,35 @@ export const ShareHeader = ({
 			)}
 			{isOwner && (
 				<>
-					<SettingsDialog
-						isOpen={isSettingsDialogOpen}
-						onClose={() => setIsSettingsDialogOpen(false)}
-						capId={data.id}
-						settingsData={data.videoSettings ?? undefined}
-						inheritedSpaceSettings={data.inheritedSpaceSettings}
-						user={user}
-						organizationSettings={data.orgSettings}
-						onSaved={refresh}
-					/>
-					<PasswordDialog
-						isOpen={isPasswordDialogOpen}
-						onClose={() => setIsPasswordDialogOpen(false)}
-						videoId={data.id}
-						hasPassword={passwordProtected}
-						onPasswordUpdated={handlePasswordUpdated}
-					/>
-					<ConfirmationDialog
-						open={isDeleteDialogOpen}
-						icon={<FontAwesomeIcon icon={faVideo} />}
-						title="Delete Cap"
-						description={`Are you sure you want to delete the cap "${displayTitle}"? This action cannot be undone.`}
-						confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
-						confirmVariant="destructive"
-						loading={deleteMutation.isPending}
-						onConfirm={() => deleteMutation.mutate()}
-						onCancel={() => setIsDeleteDialogOpen(false)}
-					/>
+					{settingsDialogMounted && (
+						<SettingsDialog
+							isOpen={isSettingsDialogOpen}
+							onClose={() => setIsSettingsDialogOpen(false)}
+							capId={data.id}
+							settingsData={data.videoSettings ?? undefined}
+							inheritedSpaceSettings={data.inheritedSpaceSettings}
+							user={user}
+							organizationSettings={data.orgSettings}
+							onSaved={refresh}
+						/>
+					)}
+					{passwordDialogMounted && (
+						<PasswordDialog
+							isOpen={isPasswordDialogOpen}
+							onClose={() => setIsPasswordDialogOpen(false)}
+							videoId={data.id}
+							hasPassword={passwordProtected}
+							onPasswordUpdated={handlePasswordUpdated}
+						/>
+					)}
+					{deleteDialogMounted && (
+						<DeleteCapDialog
+							open={isDeleteDialogOpen}
+							videoId={data.id}
+							videoTitle={displayTitle}
+							onClose={() => setIsDeleteDialogOpen(false)}
+						/>
+					)}
 				</>
 			)}
 			{/* Sits in the page bar above both panes, so the spacing is the bar's
@@ -950,7 +982,7 @@ export const ShareHeader = ({
 								<div className="flex flex-col text-left">
 									<p className="text-sm text-gray-12">{data.owner.name}</p>
 									<p className="text-xs text-gray-10">
-										{moment(data.createdAt).fromNow()}
+										{fromNow(data.createdAt)}
 										{views !== undefined && (
 											<Suspense fallback={null}>
 												<ViewCount views={views} />
@@ -1084,20 +1116,10 @@ export const ShareHeader = ({
 															: "Add password"}
 													</p>
 												</DropdownMenuItem>
-												<DropdownMenuItem
-													onClick={() => duplicateMutation.mutate()}
-													disabled={
-														duplicateMutation.isPending || data.hasActiveUpload
-													}
-													className="flex items-center gap-2 rounded-lg"
-												>
-													<FontAwesomeIcon className="size-3" icon={faCopy} />
-													<p className="text-sm text-gray-12">
-														{duplicateMutation.isPending
-															? "Duplicating..."
-															: "Duplicate Cap"}
-													</p>
-												</DropdownMenuItem>
+												<DuplicateCapMenuItem
+													videoId={data.id}
+													disabled={data.hasActiveUpload}
+												/>
 												{/* Downloads used to live behind a second dots button next to
 												    the link. There is one "everything else about this Cap"
 												    menu, and this is it. */}
@@ -1198,10 +1220,12 @@ export const ShareHeader = ({
 					</div>
 				</div>
 			</div>
-			<UpgradeModal
-				open={upgradeModalOpen}
-				onOpenChange={setUpgradeModalOpen}
-			/>
+			{upgradeModalMounted && (
+				<UpgradeModal
+					open={upgradeModalOpen}
+					onOpenChange={setUpgradeModalOpen}
+				/>
+			)}
 		</>
 	);
 };

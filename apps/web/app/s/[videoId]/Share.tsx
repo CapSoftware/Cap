@@ -31,7 +31,6 @@ import { PlaybackProvider } from "./_components/playback/PlaybackContext";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
 import { Sidebar } from "./_components/Sidebar";
-import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
 import { formatTimeAgo } from "./_components/tabs/Activity/utils";
 import { TimelineSkeleton } from "./_components/timeline/TimelineSkeleton";
@@ -40,6 +39,11 @@ import type { VideoData } from "./types";
 
 const importTimelineView = () => import("./_components/timeline/TimelineView");
 const TimelineView = dynamic(importTimelineView, { ssr: false });
+
+// Carries react-markdown; split out and only rendered once AI data actually
+// exists, so videos without a summary never download it. SSR still renders
+// the summary into the initial HTML when the data is already there.
+const SummaryChapters = dynamic(() => import("./_components/SummaryChapters"));
 
 /** Whether the viewer last left the comments rail collapsed. */
 const RAIL_COLLAPSED_KEY = "cap_share_rail_collapsed";
@@ -332,9 +336,13 @@ export const Share = ({
 	header,
 }: ShareProps) => {
 	const isScreenshot = data.isScreenshot === true;
-	const effectiveDate: Date = data.metadata?.customCreatedAt
-		? new Date(data.metadata.customCreatedAt)
-		: data.createdAt;
+	// Memoized: a fresh Date each render would defeat the memoized `data`
+	// objects below and re-render Sidebar's whole tree on every poll tick.
+	const customCreatedAt = data.metadata?.customCreatedAt;
+	const effectiveDate: Date = useMemo(
+		() => (customCreatedAt ? new Date(customCreatedAt) : data.createdAt),
+		[customCreatedAt, data.createdAt],
+	);
 
 	const playerRef = useRef<HTMLVideoElement | null>(null);
 	const stageRef = useRef<HTMLDivElement | null>(null);
@@ -573,6 +581,18 @@ export const Share = ({
 			(comment) => !(comment.sending && settledKeys.has(comment.id)),
 		);
 	}, [optimisticComments]);
+
+	// Stable identities for the spreads handed to ShareVideo and Sidebar —
+	// without these, every Share render (each 2s status poll while a video is
+	// processing) re-rendered both subtrees with brand-new `data` objects.
+	const shareVideoData = useMemo(
+		() => ({ ...data, transcriptionStatus }),
+		[data, transcriptionStatus],
+	);
+	const sidebarData = useMemo(
+		() => ({ ...data, createdAt: effectiveDate, transcriptionStatus }),
+		[data, effectiveDate, transcriptionStatus],
+	);
 
 	const reduceMotion = useReducedMotion() ?? false;
 	const [selectedView, setSelectedView] = useState<ShareView>(initialView);
@@ -934,7 +954,7 @@ export const Share = ({
 													/>
 												) : (
 													<ShareVideo
-														data={{ ...data, transcriptionStatus }}
+														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}
 														areCaptionsDisabled={areCaptionsDisabled}
@@ -1081,15 +1101,21 @@ export const Share = ({
 													</div>
 												)}
 
-												{!isScreenshot && (
-													<SummaryChapters
-														isSummaryDisabled={isSummaryDisabled}
-														areChaptersDisabled={areChaptersDisabled}
-														handleSeek={handleSeek}
-														aiData={aiData}
-														aiLoading={aiLoading}
-													/>
-												)}
+												{/* Mirrors the component's own empty-state bail-out so the
+												    chunk is never fetched for a video with nothing to show. */}
+												{!isScreenshot &&
+													!aiLoading &&
+													((!isSummaryDisabled && Boolean(aiData.summary)) ||
+														(!areChaptersDisabled &&
+															(aiData.chapters?.length ?? 0) > 0)) && (
+														<SummaryChapters
+															isSummaryDisabled={isSummaryDisabled}
+															areChaptersDisabled={areChaptersDisabled}
+															handleSeek={handleSeek}
+															aiData={aiData}
+															aiLoading={aiLoading}
+														/>
+													)}
 											</motion.div>
 										)}
 									</AnimatePresence>
@@ -1126,11 +1152,7 @@ export const Share = ({
 								)}
 							>
 								<Sidebar
-									data={{
-										...data,
-										createdAt: effectiveDate,
-										transcriptionStatus,
-									}}
+									data={sidebarData}
 									videoSettings={videoSettings}
 									commentsData={commentsData}
 									setCommentsData={setCommentsData}
