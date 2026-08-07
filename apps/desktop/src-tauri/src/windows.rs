@@ -130,6 +130,27 @@ pub fn show_overlay(window: &WebviewWindow) {
     let _ = window.show();
 }
 
+/// Shows the calling window without activating it, so the foreground app
+/// keeps keyboard focus.
+#[tauri::command]
+#[specta::specta]
+pub fn show_window_without_activating(window: WebviewWindow) {
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        use ::windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+
+        unsafe {
+            let _ = ShowWindow(
+                ::windows::Win32::Foundation::HWND(hwnd.0),
+                SW_SHOWNOACTIVATE,
+            );
+        }
+        return;
+    }
+
+    let _ = window.show();
+}
+
 fn emit_app_event<E>(app: &AppHandle, event: E)
 where
     E: Event + serde::Serialize + Clone,
@@ -1707,6 +1728,7 @@ impl ShowCapWindow {
                     Some(RecordingTargetMode::Window) => "&targetMode=window",
                     Some(RecordingTargetMode::Area) => "&targetMode=area",
                     Some(RecordingTargetMode::Camera) => "&targetMode=camera",
+                    Some(RecordingTargetMode::Ocr) => "&targetMode=ocr",
                     None => "",
                 };
 

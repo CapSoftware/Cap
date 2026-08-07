@@ -66,6 +66,8 @@ pub enum HotkeyAction {
     ScreenshotDisplay,
     ScreenshotWindow,
     ScreenshotArea,
+    OcrArea,
+    ScrollingCaptureWindow,
     #[serde(other)]
     Other,
 }
@@ -73,6 +75,8 @@ pub enum HotkeyAction {
 #[derive(Serialize, Deserialize, Type, Default)]
 pub struct HotkeysStore {
     hotkeys: HashMap<HotkeyAction, Hotkey>,
+    #[serde(default)]
+    seeded: Vec<HotkeyAction>,
 }
 
 impl HotkeysStore {
@@ -208,14 +212,20 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let store = match HotkeysStore::get(app) {
-        Ok(Some(s)) => s,
-        Ok(None) => HotkeysStore::default(),
+    let mut store = match HotkeysStore::get(app) {
+        Ok(Some(s)) => Some(s),
+        Ok(None) => Some(HotkeysStore::default()),
         Err(e) => {
             eprintln!("Failed to load hotkeys store: {e}");
-            HotkeysStore::default()
+            None
         }
     };
+
+    if let Some(store) = &mut store {
+        seed_default_hotkeys(app, store);
+    }
+
+    let store = store.unwrap_or_default();
 
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {
@@ -223,6 +233,46 @@ pub fn init(app: &AppHandle) {
     }
 
     app.manage(Mutex::new(store));
+}
+
+fn default_hotkey(action: HotkeyAction) -> Option<Hotkey> {
+    match action {
+        HotkeyAction::OcrArea => Some(Hotkey {
+            code: Code::KeyT,
+            meta: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            alt: false,
+            shift: true,
+        }),
+        _ => None,
+    }
+}
+
+fn seed_default_hotkeys(app: &AppHandle, store: &mut HotkeysStore) {
+    let mut changed = false;
+
+    for action in [HotkeyAction::OcrArea] {
+        if store.seeded.contains(&action) || store.hotkeys.contains_key(&action) {
+            continue;
+        }
+
+        let Some(hotkey) = default_hotkey(action) else {
+            continue;
+        };
+
+        if !store.hotkeys.values().any(|h| h == &hotkey) {
+            store.hotkeys.insert(action, hotkey);
+        }
+        store.seeded.push(action);
+        changed = true;
+    }
+
+    if changed && let Ok(s) = app.store("store") {
+        s.set("hotkeys", serde_json::json!(&*store));
+        if let Err(e) = s.save() {
+            eprintln!("Failed to save hotkeys store: {e}");
+        }
+    }
 }
 
 async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
@@ -331,6 +381,33 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             }
             .emit(&app);
             Ok(())
+        }
+        HotkeyAction::OcrArea => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Ocr),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::ScrollingCaptureWindow => {
+            use scap_targets::Window;
+
+            let window_id = Window::get_topmost_at_cursor()
+                .ok_or_else(|| "No window found under cursor".to_string())?
+                .id();
+            let target = ScreenCaptureTarget::Window {
+                id: window_id.clone(),
+            };
+
+            match crate::scrolling_capture::capture_scrolling_window(app.clone(), window_id).await {
+                Ok(path) => {
+                    if crate::automation::should_open_screenshot_editor(&app, &target) {
+                        let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to capture scrolling window: {e}")),
+            }
         }
         HotkeyAction::Other => Ok(()),
     }
