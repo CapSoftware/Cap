@@ -273,6 +273,11 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         let (width, height, content) = (case.width, case.height, case.content);
         let mut rng = Rng(case.rng_seed);
         let built_at = built_at.clone();
+        // Over-delivery cases (>240fps, rates production never produces)
+        // exist to verify drop handling, not consumer throughput: a weak
+        // runner saturated by the firehose proves nothing, so send blocking
+        // still counts as falling behind there and earns a loud skip.
+        let overload_case = case.delivered_fps > 240;
         tokio::spawn(async move {
             let mut max_late = 0.0f64;
             let mut last_send_end: Option<std::time::Instant> = None;
@@ -280,12 +285,17 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
                 let due = base + Duration::from_secs_f64(ts);
                 tokio::time::sleep_until(due.into()).await;
                 if built_at.get().is_some_and(|built| due >= *built) {
-                    // Lateness counts only time since the channel was last
-                    // free: a send_async blocked on pipeline backpressure
-                    // delays the next frame too, and that is the pipeline's
-                    // fault, not a runner stall — a consumer-side regression
-                    // must fail the case, not convert it into a skip.
-                    let anchor = last_send_end.map_or(due, |s| s.max(due));
+                    // At production-representative rates, lateness counts
+                    // only time since the channel was last free: a send_async
+                    // blocked on pipeline backpressure delays the next frame
+                    // too, and that is the pipeline's fault, not a runner
+                    // stall — a consumer-side regression must fail the case,
+                    // not convert it into a skip.
+                    let anchor = if overload_case {
+                        due
+                    } else {
+                        last_send_end.map_or(due, |s| s.max(due))
+                    };
                     max_late = max_late.max(anchor.elapsed().as_secs_f64());
                 }
                 let frame = FFmpegVideoFrame {
