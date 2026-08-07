@@ -91,14 +91,14 @@ export const Toolbar = ({
 			? null
 			: videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: (`temp-${Date.now()}` as Comment.CommentId),
+			id: `temp-${Date.now()}` as Comment.CommentId,
 			authorId: user.id,
 			authorName: user.name,
 			authorImage: user.imageUrl,
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: ("" as Comment.CommentId),
+			parentCommentId: "" as Comment.CommentId,
 			type: "emoji",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -115,7 +115,7 @@ export const Toolbar = ({
 				content: emoji,
 				videoId: data.id,
 				authorImage: user.imageUrl,
-				parentCommentId: ("" as Comment.CommentId),
+				parentCommentId: "" as Comment.CommentId,
 				type: "emoji",
 				timestamp: currentTime,
 			});
@@ -139,14 +139,14 @@ export const Toolbar = ({
 			? null
 			: videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: (`temp-${Date.now()}` as Comment.CommentId),
+			id: `temp-${Date.now()}` as Comment.CommentId,
 			authorId: user.id,
 			authorName: user.name,
 			authorImage: user.imageUrl,
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: ("" as Comment.CommentId),
+			parentCommentId: "" as Comment.CommentId,
 			type: "text",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -163,7 +163,7 @@ export const Toolbar = ({
 				content: comment,
 				videoId: data.id,
 				authorImage: user.imageUrl,
-				parentCommentId: ("" as Comment.CommentId),
+				parentCommentId: "" as Comment.CommentId,
 				type: "text",
 				timestamp: currentTime,
 			});

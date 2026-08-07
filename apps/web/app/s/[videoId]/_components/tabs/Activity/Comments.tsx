@@ -89,14 +89,14 @@ export const Comments = Object.assign(
 			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
-				id: (`temp-${Date.now()}` as Comment.CommentId),
-				authorId: (user.id as User.UserId),
+				id: `temp-${Date.now()}` as Comment.CommentId,
+				authorId: user.id as User.UserId,
 				authorName: user?.name,
 				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
-				parentCommentId: ("" as Comment.CommentId),
+				parentCommentId: "" as Comment.CommentId,
 				type: "text",
 				timestamp: currentTime,
 				updatedAt: new Date(),
@@ -115,7 +115,7 @@ export const Comments = Object.assign(
 					content,
 					videoId: props.videoId,
 					authorImage: user.imageUrl,
-					parentCommentId: ("" as Comment.CommentId),
+					parentCommentId: "" as Comment.CommentId,
 					type: "text",
 					timestamp: currentTime,
 				});
@@ -137,7 +137,7 @@ export const Comments = Object.assign(
 				: replyingTo;
 
 			const optimisticReply: CommentType = {
-				id: (`temp-reply-${Date.now()}` as Comment.CommentId),
+				id: `temp-reply-${Date.now()}` as Comment.CommentId,
 				authorId: user.id,
 				authorName: user.name,
 				authorImage: user.imageUrl,
