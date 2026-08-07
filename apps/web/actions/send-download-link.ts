@@ -38,9 +38,19 @@ export async function sendDownloadLink(email: string) {
 		headers: headersList,
 	});
 
-	const { rateLimited } = await checkRateLimit("rl_send_download_link", {
-		request,
-	});
+	let rateLimited = false;
+	try {
+		const result = await checkRateLimit("rl_send_download_link", {
+			request,
+		});
+		rateLimited = result.rateLimited;
+	} catch (error) {
+		// Fail open: a firewall/edge outage must never block download emails.
+		console.error(
+			'Rate limit check failed for "rl_send_download_link":',
+			error,
+		);
+	}
 
 	if (rateLimited) {
 		return {
