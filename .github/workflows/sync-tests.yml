@@ -115,7 +115,27 @@ jobs:
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
           cargo test --locked -p cap-recording --lib
-          cargo test --locked -p cap-rendering
+          # --nocapture so a WARP-adapter notch skip prints instead of
+          # looking identical to a pass in the CI log.
+          cargo test --locked -p cap-rendering -- --nocapture
+
+      # Real encoders + DASH muxer + remux/validation over full instant-mode
+      # scenarios: pause/resume excision, stall-recovery bursts with
+      # same-microsecond timestamps, segment assembly and A/V alignment.
+      - name: Instant mode scenario harness
+        shell: bash
+        run: |
+          cargo test --locked -p cap-recording --test instant_mode_scenarios
+
+      # The hardware harnesses (real screen/mic recordings) only run on
+      # developer machines, but they must keep compiling: nothing else
+      # builds the full test target set, and hardware_instant_recording
+      # once rotted into breaking every non-macOS test build via ungated
+      # macOS-only imports.
+      - name: Compile recording test harnesses
+        shell: bash
+        run: |
+          cargo check --locked -p cap-recording --tests
 
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
@@ -185,7 +205,12 @@ jobs:
           print("| Case | Result | Detail |")
           print("| --- | --- | --- |")
           for case in report.get("cases", []):
-              verdict = "PASS" if case["pass"] else "FAIL"
+              if not case["pass"]:
+                  verdict = "FAIL"
+              elif "skipped:" in case["detail"]:
+                  verdict = "SKIP"
+              else:
+                  verdict = "PASS"
               detail = case["detail"].replace("|", "\\|")
               print(f"| {case['name']} | {verdict} | {detail} |")
           PYEOF
