@@ -33,6 +33,7 @@ pub struct H264StreamMuxer {
     is_finished: bool,
     frame_count: u64,
     last_written_pts: Option<i64>,
+    consecutive_pts_bumps: u64,
 }
 
 impl H264StreamMuxer {
@@ -85,6 +86,7 @@ impl H264StreamMuxer {
             is_finished: false,
             frame_count: 0,
             last_written_pts: None,
+            consecutive_pts_bumps: 0,
         })
     }
 
@@ -114,8 +116,27 @@ impl H264StreamMuxer {
         // encoders are configured without B-frames).
         if let Some(pts) = packet.pts() {
             let pts = match self.last_written_pts {
-                Some(last) if pts <= last => last + 1,
-                _ => pts,
+                Some(last) if pts <= last => {
+                    // Bumps are expected in short runs (re-quantization
+                    // ties); a long run means the source clock is stuck and
+                    // the muxed timeline is compressing, which must be
+                    // visible in logs rather than silent.
+                    self.consecutive_pts_bumps += 1;
+                    if self.consecutive_pts_bumps == 30
+                        || self.consecutive_pts_bumps.is_multiple_of(300)
+                    {
+                        warn!(
+                            consecutive_bumps = self.consecutive_pts_bumps,
+                            "MF sample times are not advancing; muxer is tie-bumping \
+                             every frame (stuck source clock?)"
+                        );
+                    }
+                    last + 1
+                }
+                _ => {
+                    self.consecutive_pts_bumps = 0;
+                    pts
+                }
             };
             self.last_written_pts = Some(pts);
             packet.set_pts(Some(pts));
