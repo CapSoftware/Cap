@@ -395,6 +395,64 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
+	it("fails open when the Loom import rate limit check throws", async () => {
+		checkRateLimitMock.mockRejectedValueOnce(
+			new Error("Unexpected response 494"),
+		);
+		const consoleErrorSpy = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			}
+
+			if (url === "https://www.loom.com/graphql") {
+				return {
+					ok: true,
+					json: async () => ({
+						data: { getVideo: { name: "Imported video" } },
+					}),
+				} as Response;
+			}
+
+			if (url.includes("/v1/oembed")) {
+				return {
+					ok: true,
+					json: async () => ({ duration: 42, width: 1920, height: 1080 }),
+				} as Response;
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
+		const { importFromLoom } = await import("@/actions/loom");
+
+		const result = await importFromLoom({
+			loomUrl: "https://www.loom.com/share/loom-abc1234567",
+			orgId: "org-1" as never,
+		});
+
+		expect(result).toEqual({
+			success: true,
+			videoId: "video-123",
+		});
+		expect(consoleErrorSpy).toHaveBeenCalledWith(
+			'Rate limit check failed for "rl_loom_import_per_user":',
+			expect.any(Error),
+		);
+		expect(startMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("removes a stale Loom row and recreates it with the Cap video id", async () => {
 		whereMock
 			.mockResolvedValueOnce([{ importedVideoId: "stale-row", videoId: null }])
