@@ -145,32 +145,91 @@ const fetchOrganizationMembers = Effect.fn(function* (
 		);
 });
 
-async function fetchSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+type SharedSpaceRow = {
+	videoId: string;
+	id: string;
+	name: string;
+	organizationId: string;
+	isOrg: boolean;
+	iconUrl: ImageUpload.ImageUrlOrKey | null;
+	settings: (typeof spaces.$inferSelect)["settings"] | null;
+	hasPassword: boolean;
+};
+
+type SharedSpaceEntry = Omit<SharedSpaceRow, "videoId" | "iconUrl"> & {
+	iconUrl: ImageUpload.ImageUrl | null;
+};
+
+// Sharing is stored in two places: `space_videos` for named spaces and
+// `shared_videos` for the org-wide "All <Org>" entry. Both have to be read
+// here, otherwise the sharing dialog opens with the org-wide entry unchecked
+// and saving would drop it.
+async function fetchSharedSpacesForVideos(
+	videoIds: Video.VideoId[],
+): Promise<Record<string, SharedSpaceEntry[]>> {
 	if (videoIds.length === 0) return {};
 
-	const rows = await db()
-		.select({
-			videoId: spaceVideos.videoId,
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			iconUrl: spaces.iconUrl,
-			settings: spaces.settings,
-			hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.where(inArray(spaceVideos.videoId, videoIds));
+	const [spaceRows, organizationRows] = await Promise.all([
+		db()
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+				iconUrl: spaces.iconUrl,
+				settings: spaces.settings,
+				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.where(inArray(spaceVideos.videoId, videoIds)),
+		db()
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(inArray(sharedVideos.videoId, videoIds)),
+	]);
+
+	const rows: SharedSpaceRow[] = [
+		...spaceRows.map((row) => ({
+			videoId: row.videoId,
+			id: row.id,
+			name: row.name,
+			organizationId: row.organizationId,
+			isOrg: false,
+			iconUrl: row.iconUrl ?? null,
+			settings: row.settings ?? null,
+			hasPassword: row.hasPassword,
+		})),
+		...organizationRows.map((row) => ({
+			videoId: row.videoId,
+			id: row.id,
+			name: row.name,
+			organizationId: row.organizationId,
+			isOrg: true,
+			iconUrl: row.iconUrl ?? null,
+			settings: null,
+			hasPassword: false,
+		})),
+	];
 
 	const resolvedRows = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
 
 		return yield* Effect.all(
 			rows.map(
-				Effect.fn(function* (row) {
+				Effect.fn(function* (row: SharedSpaceRow) {
 					return {
 						...row,
-						isOrg: false as const,
 						iconUrl: row.iconUrl
 							? yield* imageUploads.resolveImageUrl(row.iconUrl)
 							: null,
@@ -180,13 +239,11 @@ async function fetchSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 		);
 	}).pipe(runPromise);
 
-	return resolvedRows.reduce<
-		Record<string, Omit<(typeof resolvedRows)[number], "videoId">[]>
-	>((acc, row) => {
-		const spaces = acc[row.videoId] ?? [];
-		acc[row.videoId] = spaces;
-		const { videoId: _videoId, ...space } = row;
-		spaces.push(space);
+	return resolvedRows.reduce<Record<string, SharedSpaceEntry[]>>((acc, row) => {
+		const entries = acc[row.videoId] ?? [];
+		acc[row.videoId] = entries;
+		const { videoId: _videoId, ...entry } = row;
+		entries.push(entry);
 		return acc;
 	}, {});
 }
@@ -324,7 +381,9 @@ export default async function SharedCapsPage(props: {
 			const rules = resolveEffectiveVideoRules({
 				videoSettings: video.settings,
 				organizationSettings,
-				spaces: sharedSpaces,
+				// Org-wide entries are not spaces; their rules already come in
+				// through `organizationSettings`.
+				spaces: sharedSpaces.filter((space) => !space.isOrg),
 			});
 			return {
 				...videoWithoutEffectiveDate,
@@ -458,7 +517,9 @@ export default async function SharedCapsPage(props: {
 			const rules = resolveEffectiveVideoRules({
 				videoSettings: video.settings,
 				organizationSettings,
-				spaces: sharedSpaces,
+				// Org-wide entries are not spaces; their rules already come in
+				// through `organizationSettings`.
+				spaces: sharedSpaces.filter((space) => !space.isOrg),
 			});
 			return {
 				...videoWithoutEffectiveDate,
