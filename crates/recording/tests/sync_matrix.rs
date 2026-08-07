@@ -275,11 +275,18 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         let built_at = built_at.clone();
         tokio::spawn(async move {
             let mut max_late = 0.0f64;
+            let mut last_send_end: Option<std::time::Instant> = None;
             for (i, &ts) in sent.iter().enumerate() {
                 let due = base + Duration::from_secs_f64(ts);
                 tokio::time::sleep_until(due.into()).await;
                 if built_at.get().is_some_and(|built| due >= *built) {
-                    max_late = max_late.max(due.elapsed().as_secs_f64());
+                    // Lateness counts only time since the channel was last
+                    // free: a send_async blocked on pipeline backpressure
+                    // delays the next frame too, and that is the pipeline's
+                    // fault, not a runner stall — a consumer-side regression
+                    // must fail the case, not convert it into a skip.
+                    let anchor = last_send_end.map_or(due, |s| s.max(due));
+                    max_late = max_late.max(anchor.elapsed().as_secs_f64());
                 }
                 let frame = FFmpegVideoFrame {
                     inner: make_video_frame(width, height, i as u64, content, &mut rng),
@@ -288,6 +295,7 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
                 if tx.send_async(frame).await.is_err() {
                     break;
                 }
+                last_send_end = Some(std::time::Instant::now());
             }
             // Sender drops here, ending the stream.
             max_late
@@ -408,12 +416,13 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
             }
         }
         // Burst collapse piles muxed frames onto instants the sent timeline
-        // never had; nearest-matching alone scores that as zero error. But
-        // jittered over-delivery legitimately produces tight sent pairs
-        // (sorting ±40%-jittered sub-ms timestamps clusters them), and the
-        // muxed timeline mirrors them — so compare distributions instead of
-        // fixing a constant: the muxed tight-pair rate must not materially
-        // exceed the sent timeline's own tight-pair rate.
+        // never had; nearest-matching alone scores that as zero error. Every
+        // generator dedups its timeline at exactly this threshold
+        // (period * 0.25), so consecutive sent pairs are never tight and
+        // sent_tight is identically zero today — the operative bound is the
+        // 5% absolute slack for boundary effects. The sent term stays as a
+        // scaling guard in case a future generator legitimately emits
+        // tighter cadences than its dedup spacing.
         let tight = 0.25 / f64::from(case.delivered_fps.max(1));
         let tight_rate = |xs: &[f64]| {
             if xs.len() < 2 {
@@ -1421,7 +1430,15 @@ async fn warm_up_video_encoder() {
 async fn run_video_case_with_cold_retry(case: VideoCase) -> Result<String, String> {
     match run_video_case(case.clone()).await {
         Ok(detail) => Ok(detail),
-        Err(first_error) => {
+        // Only the cold-start signatures earn a retry: a contiguous
+        // missing-frame run fails the count check, and a stop timeout is the
+        // same stall surfacing at teardown. Correctness failures (pts error,
+        // tight-pair clustering, duration drift) get no second chance — a
+        // retry there would let a 50%-reproducible regression pass most runs.
+        Err(first_error)
+            if first_error.contains("frame count mismatch")
+                || first_error.contains("Pipeline stop timed out") =>
+        {
             eprintln!("case failed cold ({first_error}); retrying once on a warm pipeline");
             run_video_case(case)
                 .await
@@ -1432,6 +1449,7 @@ async fn run_video_case_with_cold_retry(case: VideoCase) -> Result<String, Strin
                     format!("failed twice: {second_error} (first: {first_error})")
                 })
         }
+        Err(first_error) => Err(first_error),
     }
 }
 
@@ -1656,14 +1674,17 @@ async fn synthetic_device_matrix_preserves_sync() {
     );
 
     // Environment skips are a pressure valve, not a pass: if half the matrix
-    // skipped, the run proves nothing and must be loud about it.
-    let skipped = results
+    // skipped, the run proves nothing and must be loud about it. Retried
+    // passes spent one of their two shots on a cold failure, so they count
+    // toward the same degradation budget — a runner that needs the retry
+    // everywhere proves as little as one that skips everywhere.
+    let degraded = results
         .iter()
-        .filter(|r| r.detail.contains("skipped:"))
+        .filter(|r| r.detail.contains("skipped:") || r.detail.contains("passed on retry"))
         .count();
     assert!(
-        skipped * 2 <= results.len(),
-        "{skipped} of {} matrix cases skipped on environment grounds — runner too \
+        degraded * 2 <= results.len(),
+        "{degraded} of {} matrix cases skipped or passed only on retry — runner too \
          degraded for this run to verify anything",
         results.len()
     );
