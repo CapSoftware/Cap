@@ -203,7 +203,12 @@ jobs:
           print("| Case | Result | Detail |")
           print("| --- | --- | --- |")
           for case in report.get("cases", []):
-              verdict = "PASS" if case["pass"] else "FAIL"
+              if not case["pass"]:
+                  verdict = "FAIL"
+              elif "skipped:" in case["detail"]:
+                  verdict = "SKIP"
+              else:
+                  verdict = "PASS"
               detail = case["detail"].replace("|", "\\|")
               print(f"| {case['name']} | {verdict} | {detail} |")
           PYEOF

@@ -291,23 +291,24 @@ mod tests {
     }
 
     /// Renders on the available adapter, but returns None (skip) when a
-    /// software rasterizer produced output that fails the basic sanity of
-    /// "the clear executed and the layer drew something". Hosted CI GPU
-    /// stacks break underneath us (the windows-2022 WARP adapter stopped
+    /// known-broken software rasterizer produced output that fails the basic
+    /// sanity of "the clear executed and the layer drew something". Hosted CI
+    /// GPU stacks break underneath us (the windows-2022 WARP adapter stopped
     /// compositing correctly with a runner image update, with no repo
-    /// change); on real hardware — and on software adapters that do render,
-    /// like Ubuntu's lavapipe — the shape assertions still run at full
-    /// strength.
+    /// change). The escape hatch is limited by NAME to the WARP family: on
+    /// real hardware and on Ubuntu's lavapipe (DeviceType::Cpu but renders
+    /// correctly) the shape assertions run at full strength, so a real
+    /// regression that draws nothing still fails on at least two CI legs
+    /// instead of skipping everywhere.
     fn render_or_skip_broken_software_adapter() -> Option<Vec<u8>> {
         let (pixels, adapter_info) = render_with_uniforms_and_adapter(uniforms())?;
 
-        let is_software = adapter_info.device_type == wgpu::DeviceType::Cpu
-            || adapter_info.name.contains("Basic Render Driver")
+        let is_known_broken_adapter = adapter_info.name.contains("Basic Render Driver")
             || adapter_info.name.to_lowercase().contains("warp");
         let cleared_to_white = is_white(pixel(&pixels, 2, OUTPUT - 2));
         let drew_anything = (0..OUTPUT).any(|y| black_run(&pixels, y) > 0);
 
-        if is_software && !(cleared_to_white && drew_anything) {
+        if is_known_broken_adapter && !(cleared_to_white && drew_anything) {
             eprintln!(
                 "software adapter '{}' cannot composite this pass (cleared={cleared_to_white}, \
                  drew={drew_anything}), skipping",
