@@ -1452,4 +1452,64 @@ mod tests {
         .unwrap();
         assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
     }
+
+    #[test]
+    fn default_config_cuts_segments_from_encoder_keyframe_cadence() {
+        // Production always runs segment_duration == the encoder GOP
+        // (DEFAULT_KEYFRAME_INTERVAL_SECS), so segment cuts depend on the
+        // encoder emitting keyframes at its configured cadence — no caller
+        // forces I-frames. Pin that contract: if the GOP options regress
+        // (g/keyint_min or the default interval), segments stop cutting and
+        // this fails. Test helpers that force I-frames at shorter cadences
+        // cannot catch that.
+        ffmpeg::init().ok();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+
+        // 6.6s at 30fps with untouched frame kinds.
+        for i in 0..200u64 {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .queue_frame(frame, Duration::from_nanos(i * 33_333_333))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+
+        let mut segment_paths: Vec<PathBuf> = std::fs::read_dir(&base_path)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segment_paths.sort();
+        assert!(
+            (2..=5).contains(&segment_paths.len()),
+            "6.6s at the default 2s segment/GOP cadence must cut ~3 media segments \
+             from the encoder's own keyframes, got {}: {segment_paths:?}",
+            segment_paths.len()
+        );
+
+        let remuxed_path = temp.path().join("default-cadence-output.mp4");
+        crate::remux::concatenate_m4s_segments_with_init(
+            &base_path.join(INIT_SEGMENT_NAME),
+            &segment_paths,
+            &remuxed_path,
+        )
+        .unwrap();
+        let duration = crate::remux::get_media_duration(&remuxed_path)
+            .expect("assembled duration readable")
+            .as_secs_f64();
+        assert!(
+            (6.0..=7.2).contains(&duration),
+            "assembled output must carry the full 6.6s of content, got {duration:.2}s"
+        );
+        assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
 }
