@@ -986,6 +986,12 @@ pub async fn recognize_screenshot_text(
 
 pub async fn recognize_text_from_image_path(path: &std::path::Path) -> Result<String, String> {
     let dynamic = image::open(path).map_err(|e| format!("Failed to open image for OCR: {e}"))?;
+    recognize_text_from_dynamic_image(&dynamic).await
+}
+
+pub async fn recognize_text_from_dynamic_image(
+    dynamic: &image::DynamicImage,
+) -> Result<String, String> {
     let rgba = dynamic.to_rgba8();
     let width = rgba.width();
     let height = rgba.height();
