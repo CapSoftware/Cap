@@ -9,6 +9,7 @@ import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AlertTriangleIcon, InfoIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -22,17 +23,17 @@ import {
 	probeAvcLevelFromUrl,
 } from "./mp4-level-patch";
 import {
-	canRetryFailedProcessing,
-	getUploadFailureMessage,
-	shouldDeferPlaybackSource,
-	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
-import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	type UploadProgress,
+} from "./upload-progress";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -56,6 +57,12 @@ import {
 } from "./video/media-player";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
+
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
 
 const { circumference } = getProgressCircleConfig();
 
@@ -196,10 +203,20 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
 	const uploadProgress = blockPlaybackDuringProcessing
 		? uploadProgressRaw
 		: videoLoaded
@@ -614,6 +631,12 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />

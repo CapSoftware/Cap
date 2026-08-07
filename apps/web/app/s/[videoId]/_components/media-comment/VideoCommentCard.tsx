@@ -1,9 +1,9 @@
 "use client";
 
 import { motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { commentMediaUrl } from "@/lib/comment-media";
-import { CommentMiniPlayer } from "./CommentMiniPlayer";
 import { formatMediaDuration } from "./format-media-duration";
 import type { MediaComment } from "./media-comment-types";
 import {
@@ -12,6 +12,14 @@ import {
 	suspendMainVideo,
 } from "./media-playback-registry";
 import { UploadProgressIndicator } from "./UploadProgressIndicator";
+
+// Only mounts once a viewer expands a video comment, and it carries the
+// shared media-player primitives (media-chrome and friends) — lazy so the
+// comment list itself doesn't put them in the entry chunk.
+const CommentMiniPlayer = dynamic(
+	() => import("./CommentMiniPlayer").then((m) => m.CommentMiniPlayer),
+	{ ssr: false },
+);
 
 const FilmGlyph = () => (
 	<svg

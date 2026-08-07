@@ -20,20 +20,19 @@ import {
 } from "react";
 import { finalizeDesktopSegmentsRecording } from "@/actions/video/finalize-desktop-segments";
 import { Tooltip } from "@/components/Tooltip";
-import { UpgradeModal } from "@/components/UpgradeModal";
 import { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 import type { VideoData } from "../types";
 import { type CaptionLanguage, useCaptionContext } from "./CaptionContext";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import {
-	shouldDeferPlaybackSource,
-	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
-import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import {
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	type UploadProgress,
+} from "./upload-progress";
 import { formatChaptersAsVTT } from "./utils/transcript-utils";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -52,6 +51,16 @@ const CapVideoPlayer = dynamic(() =>
 const HLSVideoPlayer = dynamic(() =>
 	import("./HLSVideoPlayer").then((m) => m.HLSVideoPlayer),
 );
+
+// Both ride outside the first paint: the tracker only mounts mid-upload (its
+// RPC client drags the Effect runtime along), and the upgrade modal — which
+// carries the Rive animation runtime — mounts on the first upgrade prompt.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
+const importUpgradeModal = () =>
+	import("@/components/UpgradeModal").then((m) => m.UpgradeModal);
+const UpgradeModal = dynamic(importUpgradeModal, { ssr: false });
 
 type AiGenerationStatus =
 	| "QUEUED"
@@ -123,6 +132,13 @@ export const ShareVideo = forwardRef<
 		};
 
 		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+		// Latch, not open-state: once the modal has been requested it stays
+		// mounted so closing still plays its exit animation.
+		const [upgradeModalMounted, setUpgradeModalMounted] = useState(false);
+		const openUpgradeModal = () => {
+			setUpgradeModalMounted(true);
+			setUpgradeModalOpen(true);
+		};
 		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
@@ -134,10 +150,23 @@ export const ShareVideo = forwardRef<
 		>(null);
 		const autoFinalizeAttemptedRef = useRef(false);
 		const pendingReadyRefreshRef = useRef(false);
-		const segmentUploadProgress = useUploadProgress(
-			data.id,
-			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false),
-		);
+		// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+		// idle, "fetching" from the first enabled render. The hook itself now lives
+		// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+		const trackUploadProgress =
+			data.source.type === "desktopSegments" && (data.hasActiveUpload ?? false);
+		const [segmentUploadProgress, setSegmentUploadProgress] =
+			useState<UploadProgress | null>(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		useEffect(() => {
+			// Both directions of an enable/disable flip mirror the old inline hook:
+			// tracking starting mid-session reads "fetching" immediately (the lazy
+			// tracker hasn't mounted yet), and stopping reads null.
+			setSegmentUploadProgress(
+				trackUploadProgress ? { status: "fetching" } : null,
+			);
+		}, [trackUploadProgress]);
 
 		const { data: transcriptContent, error: transcriptError } = useTranscript(
 			data.id,
@@ -632,7 +661,10 @@ export const ShareVideo = forwardRef<
 							className="block"
 							onClick={(e) => {
 								e.stopPropagation();
-								setUpgradeModalOpen(true);
+								openUpgradeModal();
+							}}
+							onPointerEnter={() => {
+								void importUpgradeModal();
 							}}
 						>
 							<div className="relative">
@@ -649,10 +681,18 @@ export const ShareVideo = forwardRef<
 						</button>
 					</div>
 				)}
-				<UpgradeModal
-					open={upgradeModalOpen}
-					onOpenChange={setUpgradeModalOpen}
-				/>
+				{trackUploadProgress && (
+					<UploadProgressTracker
+						videoId={data.id}
+						onChange={setSegmentUploadProgress}
+					/>
+				)}
+				{upgradeModalMounted && (
+					<UpgradeModal
+						open={upgradeModalOpen}
+						onOpenChange={setUpgradeModalOpen}
+					/>
+				)}
 			</>
 		);
 	},

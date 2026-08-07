@@ -64,13 +64,22 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 	const tick = () => {
 		frame = 0;
 		sample();
-		if (element && !element.paused && !element.ended) {
+		if (
+			element &&
+			!element.paused &&
+			!element.ended &&
+			timeSubscribers.size > 0
+		) {
 			frame = requestAnimationFrame(tick);
 		}
 	};
 
 	const startFrames = () => {
 		if (frame !== 0) return;
+		// No one is listening at frame rate (classic view has no time
+		// subscribers) — the event-driven `timeupdate` samples are enough, so
+		// skip the 60fps loop until a subscriber shows up.
+		if (timeSubscribers.size === 0) return;
 		if (typeof requestAnimationFrame !== "function") return;
 		frame = requestAnimationFrame(tick);
 	};
@@ -140,6 +149,9 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 		// Hand the subscriber the current position straight away so it can paint
 		// once on mount instead of waiting for the next media event.
 		subscriber(time);
+		// The frame loop only runs while someone is subscribed; if playback is
+		// already going when the first subscriber arrives, start it now.
+		if (element && !element.paused && !element.ended) startFrames();
 		return () => {
 			timeSubscribers.delete(subscriber);
 		};

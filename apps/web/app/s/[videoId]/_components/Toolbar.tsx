@@ -1,5 +1,8 @@
 import { Button } from "@cap/ui";
-import { Comment } from "@cap/web-domain";
+// type-only on purpose: a value import of @cap/web-domain drags the whole
+// effect runtime (~250 KB gz) into the share page's entry chunk. The branded
+// ids carry no constraints, so plain casts replace `.make()` losslessly.
+import type { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import dynamic from "next/dynamic";
 import { startTransition, useEffect, useState } from "react";
@@ -7,7 +10,7 @@ import { newComment } from "@/actions/videos/new-comment";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
 import type { VideoData } from "../types";
-import { AuthOverlay } from "./AuthOverlay";
+import { AuthOverlay } from "./AuthOverlayLazy";
 import { RecordActionButtons } from "./media-comment/record-actions";
 import type { RecordIntentKind } from "./timeline/TimelineComposer";
 
@@ -88,14 +91,14 @@ export const Toolbar = ({
 			? null
 			: videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			id: (`temp-${Date.now()}` as Comment.CommentId),
 			authorId: user.id,
 			authorName: user.name,
 			authorImage: user.imageUrl,
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: Comment.CommentId.make(""),
+			parentCommentId: ("" as Comment.CommentId),
 			type: "emoji",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -112,7 +115,7 @@ export const Toolbar = ({
 				content: emoji,
 				videoId: data.id,
 				authorImage: user.imageUrl,
-				parentCommentId: Comment.CommentId.make(""),
+				parentCommentId: ("" as Comment.CommentId),
 				type: "emoji",
 				timestamp: currentTime,
 			});
@@ -136,14 +139,14 @@ export const Toolbar = ({
 			? null
 			: videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			id: (`temp-${Date.now()}` as Comment.CommentId),
 			authorId: user.id,
 			authorName: user.name,
 			authorImage: user.imageUrl,
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: Comment.CommentId.make(""),
+			parentCommentId: ("" as Comment.CommentId),
 			type: "text",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -160,7 +163,7 @@ export const Toolbar = ({
 				content: comment,
 				videoId: data.id,
 				authorImage: user.imageUrl,
-				parentCommentId: Comment.CommentId.make(""),
+				parentCommentId: ("" as Comment.CommentId),
 				type: "text",
 				timestamp: currentTime,
 			});

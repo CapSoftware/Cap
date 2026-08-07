@@ -6,7 +6,7 @@ import { forwardRef, type JSX, Suspense, useState } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../../Share";
-import { AuthOverlay } from "../../AuthOverlay";
+import { AuthOverlay } from "../../AuthOverlayLazy";
 import Analytics from "./Analytics";
 import { Comments } from "./Comments";
 
