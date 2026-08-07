@@ -925,7 +925,9 @@ impl MP4Encoder {
         // disjoint; the writer derives inter-sample durations from
         // consecutive pts anyway, so the resumed timeline is unchanged.
         // finish_start still flushes it with nominal duration when the
-        // recording stops while paused.
+        // recording stops while paused. Holding it retains one capture-pool
+        // pixel buffer for the pause duration; upstream drops paused frames
+        // before they reach us, so the pool never contends on it.
         self.pause_timestamp = Some(timestamp);
         self.is_paused = true;
     }
@@ -3945,6 +3947,102 @@ mod tests {
             encoder.video_frames_appended,
             appended_before_finish + 1,
             "the held frame must reach the writer during finish"
+        );
+
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn regression_deferred_offset_shifts_with_pause_gap_across_hold() {
+        // Covers the deferred-offset gap shift: a frame that was tie-bumped
+        // (so it carries deferred_offset = Some) held across a SECOND pause
+        // must have that snapshot shifted by the consumed gap. Applied
+        // verbatim on append, the stale snapshot overwrites the gap-adjusted
+        // timestamp_offset and every later timestamp jumps forward by the
+        // pause length.
+        let output = test_output_path("deferred_offset_pause_gap");
+        let video = valid_video_config();
+
+        let mut encoder = MP4Encoder::init(output.clone(), video, None, None).unwrap();
+        let pool = create_pixel_buffer_pool(1920, 1080);
+
+        let step = Duration::from_micros(33_333);
+        let mut errors: Vec<String> = Vec::new();
+        let mut queue = |encoder: &mut MP4Encoder, ts: Duration, label: &str| {
+            let frame = create_test_video_frame(&pool, ts.as_micros() as i64, 33_333);
+            match queue_video_frame_with_retry(encoder, frame, ts) {
+                Ok(_) => {}
+                Err(e) => errors.push(format!("{e:?} at {label}")),
+            }
+        };
+
+        for i in 0..30u64 {
+            queue(
+                &mut encoder,
+                step * i as u32 + Duration::from_nanos(400),
+                "pre",
+            );
+        }
+        let t29 = step * 29 + Duration::from_nanos(400);
+
+        encoder.pause();
+        encoder.resume();
+
+        // Pause excision maps this frame back onto t29's microsecond: it
+        // tie-bumps and becomes the held frame with deferred_offset = Some.
+        let gap1 = Duration::from_secs(2) + Duration::from_nanos(100);
+        let resume1 = t29 + gap1;
+        queue(&mut encoder, resume1, "resume-tie");
+        assert!(
+            encoder
+                .pending_video_frame
+                .as_ref()
+                .is_some_and(|p| p.deferred_offset.is_some()),
+            "the tie-bumped resume frame must carry a deferred offset for this test to bite"
+        );
+
+        // Second pause with the deferred-carrying frame still held.
+        encoder.pause();
+        encoder.resume();
+
+        let gap2 = Duration::from_secs(1) + step;
+        let resume2 = resume1 + gap2;
+        queue(&mut encoder, resume2, "second-resume");
+
+        for k in 1..=10u64 {
+            queue(&mut encoder, resume2 + step * k as u32, "post");
+        }
+
+        assert!(errors.is_empty(), "no queue call may fail: {errors:?}");
+
+        // Both pause gaps must be excised from the mapping. A stale deferred
+        // snapshot (missing gap2) would leave timestamp_offset ~1s short and
+        // push every later pts forward by that much.
+        let expected_offset = gap1 + gap2;
+        let offset_error = encoder.timestamp_offset.abs_diff(expected_offset);
+        assert!(
+            offset_error < Duration::from_micros(5),
+            "timestamp_offset must track both consumed gaps: expected ~{expected_offset:?}, \
+             got {:?}",
+            encoder.timestamp_offset
+        );
+
+        let last_pts = encoder.last_video_pts.expect("frames were written");
+        assert!(
+            last_pts < step * 41,
+            "written pts must continue at frame cadence after the held-frame pauses, \
+             got {last_pts:?} (a value ~1s larger means the stale deferred offset \
+             re-inserted the second pause)"
+        );
+
+        let finish = encoder.finish(Some(resume2 + step * 11));
+        assert!(finish.is_ok(), "Finish failed: {finish:?}");
+
+        let duration = container_duration_secs(&output);
+        assert!(
+            (1.2..=1.7).contains(&duration),
+            "42 frames at 30fps must span ~1.4s regardless of pauses, container reports \
+             {duration:.3}s"
         );
 
         let _ = std::fs::remove_file(&output);
