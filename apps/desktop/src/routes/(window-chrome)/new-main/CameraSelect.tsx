@@ -35,7 +35,6 @@ export default function CameraSelect(props: {
 	value: CameraInfo | null;
 	selectedLabel?: string | null;
 	isSelected?: boolean;
-	/** The selected camera is remembered but not currently connected. */
 	disconnected?: boolean;
 	onChange: (camera: CameraInfo | null) => void;
 	permissions?: OSPermissionsCheck;

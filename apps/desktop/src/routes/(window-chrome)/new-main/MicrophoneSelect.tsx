@@ -27,7 +27,6 @@ export default function MicrophoneSelect(props: {
 	disabled?: boolean;
 	options: string[];
 	value: string | null;
-	/** The selected microphone is remembered but not currently connected. */
 	disconnected?: boolean;
 	onChange: (micName: string | null) => void;
 	permissions?: OSPermissionsCheck;

@@ -5,7 +5,6 @@ import type { InfoPillVariant } from "./InfoPill";
 export default function TargetSelectInfoPill<T>(props: {
 	value: T | null;
 	permissionGranted: boolean;
-	/** The selected device is remembered but not currently connected. */
 	disconnected?: boolean;
 	requestPermission: () => void;
 	onClick: (e: MouseEvent) => void;
