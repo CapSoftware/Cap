@@ -5,6 +5,8 @@ import type { InfoPillVariant } from "./InfoPill";
 export default function TargetSelectInfoPill<T>(props: {
 	value: T | null;
 	permissionGranted: boolean;
+	/** The selected device is remembered but not currently connected. */
+	disconnected?: boolean;
 	requestPermission: () => void;
 	onClick: (e: MouseEvent) => void;
 	PillComponent: Component<
@@ -13,6 +15,7 @@ export default function TargetSelectInfoPill<T>(props: {
 }) {
 	const variant = (): InfoPillVariant => {
 		if (!props.permissionGranted) return "red";
+		if (props.disconnected) return "gray";
 		return props.value !== null ? "blue" : "gray";
 	};
 
@@ -35,7 +38,13 @@ export default function TargetSelectInfoPill<T>(props: {
 				props.onClick(e);
 			}}
 		>
-			{!props.permissionGranted ? "Allow" : props.value !== null ? "On" : "Off"}
+			{!props.permissionGranted
+				? "Allow"
+				: props.disconnected
+					? "Not connected"
+					: props.value !== null
+						? "On"
+						: "Off"}
 		</Dynamic>
 	);
 }

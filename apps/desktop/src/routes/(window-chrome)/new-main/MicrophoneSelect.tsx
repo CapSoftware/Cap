@@ -27,6 +27,8 @@ export default function MicrophoneSelect(props: {
 	disabled?: boolean;
 	options: string[];
 	value: string | null;
+	/** The selected microphone is remembered but not currently connected. */
+	disconnected?: boolean;
 	onChange: (micName: string | null) => void;
 	permissions?: OSPermissionsCheck;
 	onOpen?: () => void;
@@ -42,6 +44,8 @@ export default function MicrophoneSelect(props: {
 		props.permissions === undefined ||
 		props.permissions.microphone === "granted" ||
 		props.permissions.microphone === "notNeeded";
+
+	const notConnected = () => !!props.disconnected && permissionGranted();
 
 	const handleMicrophoneChange = async (name: string | null) => {
 		if (!props.options) return;
@@ -62,10 +66,14 @@ export default function MicrophoneSelect(props: {
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
-	const showLevel = () => props.value !== null && dbs() !== undefined;
+	const showLevel = () =>
+		props.value !== null && dbs() !== undefined && !notConnected();
 
 	const showSettingsShortcut = () =>
-		props.value !== null && permissionGranted() && !!props.onOpenSettings;
+		props.value !== null &&
+		permissionGranted() &&
+		!!props.onOpenSettings &&
+		!notConnected();
 
 	const isDisabled = () => !!currentRecording.data || props.disabled;
 
@@ -95,7 +103,12 @@ export default function MicrophoneSelect(props: {
 					/>
 				</Show>
 				<IconCapMicrophone class={DEVICE_ROW_ICON_CLASS} />
-				<p class={DEVICE_ROW_LABEL_CLASS}>{props.value ?? NO_MICROPHONE}</p>
+				<p
+					class={cx(DEVICE_ROW_LABEL_CLASS, notConnected() && "text-gray-10")}
+					title={notConnected() ? "Not connected" : undefined}
+				>
+					{props.value ?? NO_MICROPHONE}
+				</p>
 				<div class={DEVICE_ROW_TRAILING_CLASS}>
 					<Show when={showSettingsShortcut()}>
 						<button
@@ -116,6 +129,7 @@ export default function MicrophoneSelect(props: {
 					<TargetSelectInfoPill
 						PillComponent={InfoPill}
 						value={props.value}
+						disconnected={notConnected()}
 						permissionGranted={permissionGranted()}
 						requestPermission={() =>
 							requestPermission("microphone", props.permissions?.microphone)
