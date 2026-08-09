@@ -3,67 +3,24 @@
 import { buildEnv } from "@cap/env";
 import Cookies from "js-cookie";
 import { redirect, usePathname } from "next/navigation";
-import {
-	createContext,
-	useCallback,
-	useContext,
-	useEffect,
-	useState,
-} from "react";
+import { useCallback, useEffect, useState } from "react";
 import { InviteDialog } from "@/app/(org)/dashboard/settings/organization/components/InviteDialog";
-import { type CurrentUser, useCurrentUser } from "@/app/Layout/AuthContext";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import type {
-	Organization,
-	OrganizationSettings,
-	Spaces,
-	UserPreferences,
-} from "./dashboard-data";
+import {
+	DashboardContext,
+	type ITheme,
+	type SetThemeOptions,
+	type SharedContext,
+	ThemeContext,
+} from "./DashboardContext";
+import type { Spaces } from "./dashboard-data";
 import type { DeveloperApp } from "./developers/developer-data";
 
-type SharedContext = {
-	organizationData: Organization[] | null;
-	activeOrganization: Organization | null;
-	organizationSettings: OrganizationSettings | null;
-	spacesData: Spaces[] | null;
-	userSpaces: Spaces[] | null;
-	sharedSpaces: Spaces[] | null;
-	activeSpace: Spaces | null;
-	user: CurrentUser;
-	userCapsCount: number | null;
-	toggleSidebarCollapsed: () => void;
-	anyNewNotifications: boolean;
-	userPreferences: UserPreferences;
-	sidebarCollapsed: boolean;
-	upgradeModalOpen: boolean;
-	setUpgradeModalOpen: (open: boolean) => void;
-	inviteDialogOpen: boolean;
-	setInviteDialogOpen: (open: boolean) => void;
-	referClickedState: boolean;
-	setReferClickedStateHandler: (referClicked: boolean) => void;
-	isDeveloperSection: boolean;
-	developerApps: DeveloperApp[] | null;
-	setDeveloperApps: (apps: DeveloperApp[] | null) => void;
-};
-
-type ITheme = "light" | "dark";
-type SetThemeOptions = {
-	persist?: boolean;
-};
-
-const DashboardContext = createContext<SharedContext>({} as SharedContext);
-
-const ThemeContext = createContext<{
-	theme: ITheme;
-	setThemeHandler: (newTheme: ITheme, options?: SetThemeOptions) => void;
-}>({
-	theme: "light",
-	setThemeHandler: () => {},
-});
-
-export const useTheme = () => useContext(ThemeContext);
-
-export const useDashboardContext = () => useContext(DashboardContext);
+// The context objects and hooks live in `DashboardContext.ts` (so the share
+// page can read the context without pulling this file's dialogs); re-exported
+// here to keep the dashboard's existing import sites working unchanged.
+export { useDashboardContext, useTheme } from "./DashboardContext";
 
 export function DashboardContexts({
 	children,

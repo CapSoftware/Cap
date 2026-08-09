@@ -3,14 +3,30 @@ import { classNames } from "@cap/utils";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../types";
 import { Activity } from "./tabs/Activity";
-import { Settings } from "./tabs/Settings";
-import { Summary } from "./tabs/Summary";
-import { Transcript } from "./tabs/Transcript";
+
+// Activity is the default tab, so it stays in the entry chunk; the other tabs
+// (and their deps — react-markdown for Summary, the 1000-line transcript view)
+// load when first shown. With SSR on, a non-default initial tab still renders
+// server-side and preloads its own chunk. Hovering a tab button warms its
+// chunk so the click still feels instant.
+const importSummary = () => import("./tabs/Summary");
+const importTranscript = () => import("./tabs/Transcript");
+const Summary = dynamic(() => importSummary().then((m) => m.Summary));
+const Transcript = dynamic(() => importTranscript().then((m) => m.Transcript));
+const Settings = dynamic(() =>
+	import("./tabs/Settings").then((m) => m.Settings),
+);
+
+const prefetchTab = (tabId: string) => {
+	if (tabId === "summary") void importSummary();
+	else if (tabId === "transcript") void importTranscript();
+};
 
 type TabType = "activity" | "transcript" | "summary" | "settings";
 
@@ -235,6 +251,8 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									type="button"
 									key={tab.id}
 									onClick={() => paginate(tab.id as TabType)}
+									onPointerEnter={() => prefetchTab(tab.id)}
+									onFocus={() => prefetchTab(tab.id)}
 									className={classNames(
 										"flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
 										"hover:bg-gray-1",

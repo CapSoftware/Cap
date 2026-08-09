@@ -10,6 +10,7 @@ import clsx from "clsx";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,8 +23,8 @@ import {
 	getUploadFailureMessage,
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
+	type UploadProgress,
+} from "./upload-progress";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -45,6 +46,12 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
 
 const { circumference } = getProgressCircleConfig();
 
@@ -185,10 +192,20 @@ export function HLSVideoPlayer({
 		videoLoadedRef.current = videoLoaded;
 	}, [videoLoaded]);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
 	const shouldDelayPlaybackSource =
 		!allowSegmentProbeDuringUpload &&
 		shouldDeferPlaybackSource(uploadProgressRaw);
@@ -602,6 +619,12 @@ export function HLSVideoPlayer({
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{hasFailedOrError && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
