@@ -1817,6 +1817,29 @@ pub async fn start_recording(
                 )
             };
 
+            // A remembered camera that isn't connected must not abort the
+            // recording (camera-only mode excepted, where it's required):
+            // degrade to no-camera and tell the user once.
+            let selected_camera_id = match selected_camera_id {
+                Some(id)
+                    if !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
+                        && !crate::is_camera_available(&id) =>
+                {
+                    warn!(
+                        camera = %camera_id_label(&id),
+                        "Selected camera is not connected; recording without camera"
+                    );
+                    let _ = crate::NewNotification {
+                        title: "Recording without camera".to_string(),
+                        body: "The selected camera is not connected, so this recording won't include it.".to_string(),
+                        is_error: true,
+                    }
+                    .emit(&app_handle);
+                    None
+                }
+                other => other,
+            };
+
             let camera_feed = lock_selected_camera(
                 &camera_feed_actor,
                 selected_camera_id,
@@ -1900,7 +1923,34 @@ pub async fn start_recording(
 
             let (done_fut, health_rx) = loop {
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
-                    let selected_mic_label = state.selected_mic_label.clone();
+                    // Resolve the remembered microphone against the connected
+                    // devices (fuzzy-matching Bluetooth profile renames like the
+                    // reconnect watcher does). A missing microphone must not
+                    // abort the recording: degrade and tell the user once.
+                    let selected_mic_label = match state.selected_mic_label.clone() {
+                        Some(label) => {
+                            let matched = crate::find_mic_by_label_or_fuzzy(
+                                &microphone::MicrophoneFeed::list_names(),
+                                &label,
+                            );
+                            if matched.is_none() {
+                                warn!(
+                                    mic = %label,
+                                    "Selected microphone is not connected; recording without microphone"
+                                );
+                                let _ = crate::NewNotification {
+                                    title: "Recording without microphone".to_string(),
+                                    body: format!(
+                                        "Microphone '{label}' is not connected, so this recording won't include it."
+                                    ),
+                                    is_error: true,
+                                }
+                                .emit(&app_handle);
+                            }
+                            matched
+                        }
+                        None => None,
+                    };
                     let selected_mic_settings = selected_mic_label
                         .as_ref()
                         .and_then(|label| state.microphone_settings_for_label(label));
