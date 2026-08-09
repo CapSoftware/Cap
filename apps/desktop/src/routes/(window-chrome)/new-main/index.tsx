@@ -2691,6 +2691,17 @@ function Page() {
 		},
 		micName: () =>
 			devices.microphones.find((m) => m.name === rawOptions.micName),
+		// Selected-but-unplugged devices (e.g. undocked laptop): the selection is
+		// remembered, the row shows "Not connected", and the effects below
+		// re-apply the device when it reappears.
+		cameraDisconnected: () =>
+			rawOptions.cameraID != null &&
+			!devices.isPending &&
+			!findCamera(devices.cameras, rawOptions.cameraID),
+		micDisconnected: () =>
+			rawOptions.micName != null &&
+			!devices.isPending &&
+			!devices.microphones.some((m) => m.name === rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -2717,6 +2728,52 @@ function Page() {
 			}
 		},
 	};
+
+	// Re-apply a remembered device when it reappears (e.g. plugging back into a
+	// dock). The mount-time restore quick-fails while the device is away, so
+	// without this the row would claim a device the backend isn't using.
+	let micPresence: { name: string; present: boolean } | undefined;
+	createEffect(() => {
+		const name = rawOptions.micName;
+		if (name == null || devices.isPending) {
+			micPresence = undefined;
+			return;
+		}
+		const present = devices.microphones.some((m) => m.name === name);
+		// Mid-recording device changes are the backend watcher's job; keep the
+		// last idle observation so the reclaim runs once the recording ends.
+		if (isRecording()) return;
+		const previous = micPresence;
+		micPresence = { name, present };
+		if (present && previous?.present === false && previous.name === name) {
+			commands
+				.setMicInput(name)
+				.catch((error) =>
+					console.error("Failed to restore reconnected microphone:", error),
+				);
+		}
+	});
+
+	let cameraPresence: { key: string; present: boolean } | undefined;
+	createEffect(() => {
+		const id = rawOptions.cameraID;
+		if (id == null || devices.isPending) {
+			cameraPresence = undefined;
+			return;
+		}
+		const key = JSON.stringify(id);
+		const present = !!findCamera(devices.cameras, id);
+		if (isRecording()) return;
+		const previous = cameraPresence;
+		cameraPresence = { key, present };
+		if (present && previous?.present === false && previous.key === key) {
+			commands
+				.setCameraInput(id, false)
+				.catch((error) =>
+					console.error("Failed to restore reconnected camera:", error),
+				);
+		}
+	});
 
 	const toggleTargetMode = async (
 		mode: "display" | "window" | "area" | "camera",
@@ -2875,6 +2932,7 @@ function Page() {
 					value={options.camera() ?? null}
 					selectedLabel={rawOptions.cameraLabel}
 					isSelected={rawOptions.cameraID != null}
+					disconnected={options.cameraDisconnected()}
 					onChange={(c) => {
 						if (!c) {
 							setOptions("cameraLabel", null);
@@ -2903,6 +2961,7 @@ function Page() {
 					disabled={enableDeviceQueries() && devices.isPending}
 					options={devices.microphones.map((m) => m.name)}
 					value={rawOptions.micName ?? null}
+					disconnected={options.micDisconnected()}
 					onChange={(v) => setMicInput.mutate(v)}
 					permissions={currentPermissions()}
 					onOpen={() => openMicrophoneMenu(null)}
