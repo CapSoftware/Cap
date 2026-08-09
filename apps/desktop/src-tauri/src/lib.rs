@@ -1111,6 +1111,27 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         let mut app = state.write().await;
         app.ensure_mic_feed_alive().await?;
 
+        // A selected microphone that isn't connected is an expected state
+        // (e.g. undocked laptop), not an error: remember the selection so the
+        // device can be reclaimed when it reappears, and leave the feed empty.
+        if let Some(label) = desired_label.as_ref()
+            && !matches!(app.recording_state, RecordingState::Active(_))
+            && find_mic_by_label_or_fuzzy(&MicrophoneFeed::list_names(), label).is_none()
+        {
+            info!(
+                "Selected microphone '{label}' is not connected; keeping selection with no input"
+            );
+            app.selected_mic_label = desired_label.clone();
+            let mic_feed = app.mic_feed.clone();
+            drop(app);
+            // Best-effort: the feed may be locked by a recording that is still
+            // spinning up (Pending), in which case it must keep its input.
+            if let Err(err) = mic_feed.ask(microphone::RemoveInput).await {
+                warn!("Failed to release microphone input for absent device: {err}");
+            }
+            return Ok(());
+        }
+
         if desired_label == app.selected_mic_label {
             if desired_label.is_some() && !matches!(app.recording_state, RecordingState::Active(_))
             {
@@ -1281,6 +1302,45 @@ async fn set_camera_input(
             .set_camera_feed(None)
             .await
             .map_err(|e| e.to_string())?;
+    }
+
+    // A selected camera that isn't connected is an expected state (e.g. undocked
+    // laptop), not an error: tear down like a deselect but remember the selection
+    // so the device can be reclaimed when it reappears. Running the init/retry
+    // loop instead would flash the preview window and toast an error on every
+    // launch and picker-open while the device is away.
+    if let Some(id) = &id
+        && !is_camera_available(id)
+    {
+        info!(camera = ?id, "Selected camera is not connected; keeping selection with no input");
+        let shutdown_rx = {
+            let app = &mut *state.write().await;
+            app.camera_in_use = false;
+            app.selected_camera_id = Some(id.clone());
+            app.camera_cleanup_done = true;
+            if skip_camera_window {
+                app.camera_preview.begin_shutdown()
+            } else {
+                app.camera_preview.pause();
+                None
+            }
+        };
+
+        // Best-effort: the feed may be locked by a recording that is still
+        // spinning up (Pending), in which case it must keep its input.
+        if let Err(err) = camera_feed.ask(feeds::camera::RemoveInput).await {
+            warn!("Failed to release camera input for absent device: {err}");
+        }
+
+        if let Some(rx) = shutdown_rx {
+            let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
+        }
+
+        if !skip_camera_window && let Some(window) = CapWindowId::Camera.get(&app_handle) {
+            let _ = window.hide();
+        }
+
+        return Ok(());
     }
 
     match &id {
@@ -2162,7 +2222,10 @@ pub async fn request_app_exit(app: AppHandle) {
     finalize_app_exit(&app, 0);
 }
 
-fn find_mic_by_label_or_fuzzy(devices: &[String], selected_label: &str) -> Option<String> {
+pub(crate) fn find_mic_by_label_or_fuzzy(
+    devices: &[String],
+    selected_label: &str,
+) -> Option<String> {
     if devices.iter().any(|name| name == selected_label) {
         return Some(selected_label.to_string());
     }
@@ -2313,7 +2376,7 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
     });
 }
 
-fn is_camera_available(id: &DeviceOrModelID) -> bool {
+pub(crate) fn is_camera_available(id: &DeviceOrModelID) -> bool {
     let cameras: Vec<_> = cap_camera::list_cameras().collect();
     debug!(
         "is_camera_available: looking for {:?} in {} cameras",
