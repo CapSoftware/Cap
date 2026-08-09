@@ -11,36 +11,41 @@ use std::{
 };
 use tracing::warn;
 
+// Pool-wrapped: device polling calls this every few seconds from tokio threads
+// that have no ambient NSAutoreleasePool, so the discovery session's
+// autoreleased temporaries would otherwise leak for the process lifetime.
 pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
-    let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
+    objc::ar_pool(|| {
+        let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
 
-    if api::macos_available("13.0")
-        && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
-    {
-        device_types.push(typ);
-    }
-
-    if api::macos_available("14.0") {
-        if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+        if api::macos_available("13.0")
+            && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
+        {
             device_types.push(typ);
         }
-        if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
-            device_types.push(typ);
+
+        if api::macos_available("14.0") {
+            if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+                device_types.push(typ);
+            }
+            if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
+                device_types.push(typ);
+            }
+        } else {
+            device_types.push(av::CaptureDeviceType::external_unknown());
         }
-    } else {
-        device_types.push(av::CaptureDeviceType::external_unknown());
-    }
 
-    let device_types = ns::Array::from_slice(&device_types);
+        let device_types = ns::Array::from_slice(&device_types);
 
-    let video_discovery_session =
-        av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
-            &device_types,
-            Some(av::MediaType::video()),
-            av::CaptureDevicePos::Unspecified,
-        );
+        let video_discovery_session =
+            av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
+                &device_types,
+                Some(av::MediaType::video()),
+                av::CaptureDevicePos::Unspecified,
+            );
 
-    video_discovery_session.devices()
+        video_discovery_session.devices()
+    })
 }
 
 #[derive(Clone, Copy)]

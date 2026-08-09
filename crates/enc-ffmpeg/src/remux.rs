@@ -1048,7 +1048,7 @@ mod tests {
         // cadence; deterministic pseudo-jitter stands in for QPC noise.
         let timestamps: Vec<Duration> = (0..120)
             .map(|i| {
-                let jitter_us = ((i * 7919) % 7000) as u64; // 0..7ms
+                let jitter_us = (i * 7919) % 7000; // 0..7ms
                 Duration::from_nanos(i * 1_000_000_000 / 30 + jitter_us * 1_000)
             })
             .collect();

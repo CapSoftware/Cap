@@ -20,8 +20,17 @@ import { AwsCredentials } from "@cap/web-backend/src/Aws";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
+import {
+	type EditTranscript,
+	editTranscriptWordsToCaptionVtt,
+	getEditTranscriptObjectKey,
+	parseEditTranscript,
+	remapEditTranscriptThroughSpec,
+} from "@/lib/edit-transcript";
+import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
+import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	getEditSpecOutputDuration,
@@ -57,6 +66,7 @@ const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_OUTPUT_VERIFICATION_MAX_ATTEMPTS = 4;
 const MEDIA_SERVER_OUTPUT_VERIFICATION_RETRY_MS = 1000;
+const EDIT_TRANSCRIPT_CURRENCY_TOLERANCE_MS = 250;
 
 function isPositiveNumber(value: number | null): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -102,14 +112,28 @@ export async function editVideoWorkflow(
 		const result = await renderVideoEditOnMediaServer(payload);
 		await verifyRenderedEditOutput(videoId, userId, editSpec, result.metadata);
 		await invalidateEditedVideoCache(videoId, editSpec);
-		await saveEditResultAndComplete(
+		const { transcriptRemapped } = await saveEditResultAndComplete(
 			videoId,
 			sourceKey,
 			previousSpec,
 			editSpec,
 			result.metadata,
 		);
-		await queueTranscriptionRegeneration(videoId, userId, aiGenerationEnabled);
+
+		if (transcriptRemapped) {
+			// Captions were derived from the immutable word transcript, so the
+			// transcription stays COMPLETE and no new paid pass is needed.
+			if (aiGenerationEnabled) {
+				await queueAiGeneration(videoId, userId);
+			}
+		} else {
+			await queueTranscriptionRegeneration(
+				videoId,
+				userId,
+				aiGenerationEnabled,
+			);
+		}
+
 		return result;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -495,6 +519,26 @@ function clearAiMetadata(metadata: VideoMetadata | null): VideoMetadata {
 	return nextMetadata;
 }
 
+async function queueAiGeneration(
+	videoId: string,
+	userId: string,
+): Promise<void> {
+	"use step";
+
+	try {
+		const result = await startAiGeneration(videoId as Video.VideoId, userId);
+
+		if (!result.success) {
+			console.warn("[editVideoWorkflow] Failed to queue AI generation", {
+				videoId,
+				message: result.message,
+			});
+		}
+	} catch (error) {
+		console.warn("[editVideoWorkflow] Failed to queue AI generation", error);
+	}
+}
+
 async function queueTranscriptionRegeneration(
 	videoId: string,
 	userId: string,
@@ -518,6 +562,72 @@ async function queueTranscriptionRegeneration(
 	} catch (error) {
 		console.warn("[editVideoWorkflow] Failed to queue transcription", error);
 	}
+}
+
+/**
+ * Loads the immutable word transcript (stored in the ORIGINAL media timeline)
+ * and returns it only when it still describes the original media.
+ */
+async function loadOriginalEditTranscript(
+	video: typeof videos.$inferSelect,
+	editSpec: VideoEditSpec,
+) {
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runWorkflowPromise);
+	const stored = await bucket
+		.getObject(getEditTranscriptObjectKey(video.ownerId, video.id))
+		.pipe(runWorkflowPromise);
+
+	const decrypted = Option.isSome(stored)
+		? decryptEditTranscriptObject(stored.value, video.ownerId, video.id)
+		: null;
+	const transcript = decrypted ? parseEditTranscript(decrypted) : null;
+	if (!transcript) return null;
+
+	const expectedDurationMs = Math.round(editSpec.sourceDuration * 1000);
+	return Math.abs(transcript.durationMs - expectedDurationMs) <=
+		EDIT_TRANSCRIPT_CURRENCY_TOLERANCE_MS
+		? transcript
+		: null;
+}
+
+/**
+ * Replaces every derived transcript object (captions plus stale translations
+ * and status markers) with captions remapped through the new edit spec. The
+ * word transcript itself is never touched — it is the single source of truth.
+ */
+async function rewriteTranscriptObjectsForEdit(
+	video: typeof videos.$inferSelect,
+	transcript: EditTranscript,
+	editSpec: VideoEditSpec,
+) {
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runWorkflowPromise);
+	const transcriptKey = getEditTranscriptObjectKey(video.ownerId, video.id);
+	const prefix = `${video.ownerId}/${video.id}/transcription`;
+	const listed = await bucket.listObjects({ prefix }).pipe(runWorkflowPromise);
+	const objects = (listed.Contents ?? [])
+		.map((object) => ({ Key: object.Key }))
+		.filter(
+			(object): object is { Key: string } =>
+				Boolean(object.Key) && object.Key !== transcriptKey,
+		);
+
+	if (objects.length > 0) {
+		await bucket.deleteObjects(objects).pipe(runWorkflowPromise);
+	}
+
+	await bucket
+		.putObject(
+			`${video.ownerId}/${video.id}/transcription.vtt`,
+			editTranscriptWordsToCaptionVtt(
+				remapEditTranscriptThroughSpec(transcript, editSpec).words,
+			),
+			{ contentType: "text/vtt" },
+		)
+		.pipe(runWorkflowPromise);
 }
 
 async function clearTranscriptObjects(video: typeof videos.$inferSelect) {
@@ -669,7 +779,7 @@ async function saveEditResultAndComplete(
 	previousSpec: VideoEditSpec,
 	editSpec: VideoEditSpec,
 	metadata: { duration: number; width: number; height: number; fps: number },
-): Promise<void> {
+): Promise<{ transcriptRemapped: boolean }> {
 	"use step";
 
 	const duration = getValidDuration(metadata.duration);
@@ -683,6 +793,15 @@ async function saveEditResultAndComplete(
 	}
 
 	const nextMetadata = clearAiMetadata(video.metadata as VideoMetadata | null);
+	let originalTranscript: EditTranscript | null = null;
+	try {
+		originalTranscript = await loadOriginalEditTranscript(video, editSpec);
+	} catch (error) {
+		console.warn(
+			"[editVideoWorkflow] Failed to load stored edit transcript",
+			error,
+		);
+	}
 
 	await db().transaction(async (tx) => {
 		await tx
@@ -692,7 +811,9 @@ async function saveEditResultAndComplete(
 				height: metadata.height,
 				fps: metadata.fps,
 				metadata: nextMetadata,
-				transcriptionStatus: null,
+				// Derivable captions keep the transcription COMPLETE; only legacy
+				// videos without a stored word transcript get re-transcribed.
+				...(originalTranscript ? {} : { transcriptionStatus: null }),
 				...(duration === undefined ? {} : { duration }),
 			})
 			.where(eq(videos.id, videoId as Video.VideoId));
@@ -746,6 +867,26 @@ async function saveEditResultAndComplete(
 			);
 	});
 
+	if (originalTranscript) {
+		try {
+			await rewriteTranscriptObjectsForEdit(
+				video,
+				originalTranscript,
+				editSpec,
+			);
+			return { transcriptRemapped: true };
+		} catch (error) {
+			console.warn(
+				"[editVideoWorkflow] Failed to remap transcript objects",
+				error,
+			);
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: null })
+				.where(eq(videos.id, videoId as Video.VideoId));
+		}
+	}
+
 	try {
 		await clearTranscriptObjects(video);
 	} catch (error) {
@@ -754,6 +895,8 @@ async function saveEditResultAndComplete(
 			error,
 		);
 	}
+
+	return { transcriptRemapped: false };
 }
 
 async function clearEditProcessingState(

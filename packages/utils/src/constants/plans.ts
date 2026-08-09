@@ -33,11 +33,14 @@ export const userIsPro = (
 		return true;
 	}
 
-	// Then check regular subscription status
+	// Then check regular subscription status. past_due keeps Pro during
+	// Stripe's dunning window: the sub moves to canceled/unpaid when retries
+	// exhaust, which is when access actually drops.
 	return (
 		stripeSubscriptionStatus === "active" ||
 		stripeSubscriptionStatus === "trialing" ||
 		stripeSubscriptionStatus === "complete" ||
-		stripeSubscriptionStatus === "paid"
+		stripeSubscriptionStatus === "paid" ||
+		stripeSubscriptionStatus === "past_due"
 	);
 };

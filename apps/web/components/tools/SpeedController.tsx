@@ -118,7 +118,8 @@ export const SpeedController = () => {
 		setProgress(0);
 
 		const action = selectedSpeed < 1 ? "slowing_down" : "speeding_up";
-		trackEvent(`speed_controller_${action}_started`, {
+		trackEvent("speed_controller_action_started", {
+			action,
 			fileSize: file.size,
 			fileName: file.name,
 			speedFactor: selectedSpeed,
@@ -145,7 +146,8 @@ export const SpeedController = () => {
 
 			setError(errorMessage);
 
-			trackEvent(`speed_controller_${action}_failed`, {
+			trackEvent("speed_controller_action_failed", {
+				action,
 				fileSize: file.size,
 				fileName: file.name,
 				error: err.message || "Unknown error",
@@ -278,17 +280,13 @@ export const SpeedController = () => {
 
 						setOutputUrl(url);
 
-						trackEvent(
-							`speed_controller_${
-								selectedSpeed < 1 ? "slowing_down" : "speeding_up"
-							}_completed`,
-							{
-								fileSize: file?.size,
-								fileName: file?.name,
-								outputSize: blob.size,
-								speedFactor: selectedSpeed,
-							},
-						);
+						trackEvent("speed_controller_action_completed", {
+							action: selectedSpeed < 1 ? "slowing_down" : "speeding_up",
+							fileSize: file?.size,
+							fileName: file?.name,
+							outputSize: blob.size,
+							speedFactor: selectedSpeed,
+						});
 
 						videoRef.current = null;
 						mediaRecorderRef.current = null;
@@ -425,7 +423,7 @@ export const SpeedController = () => {
 
 		const downloadFileName = `${baseName}_${selectedSpeed}x.${extension}`;
 
-		trackEvent(`speed_controller_download_clicked`, {
+		trackEvent("speed_controller_download_clicked", {
 			fileName: downloadFileName,
 			speedFactor: selectedSpeed,
 		});
@@ -460,7 +458,7 @@ export const SpeedController = () => {
 		setVideoInfo(null);
 		recordedChunksRef.current = [];
 
-		trackEvent(`speed_controller_reset`);
+		trackEvent("speed_controller_reset");
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";

@@ -7,16 +7,12 @@ import {
 } from "@/lib/mobile-checkout";
 
 const checkoutMocks = vi.hoisted(() => ({
-	capture: vi.fn(),
 	create: vi.fn(),
-	shutdown: vi.fn(() => Promise.resolve()),
+	track: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@cap/env", () => ({
-	buildEnv: {
-		NEXT_PUBLIC_POSTHOG_HOST: "https://posthog.test",
-		NEXT_PUBLIC_POSTHOG_KEY: "test-key",
-	},
+	buildEnv: {},
 	serverEnv: () => ({ WEB_URL: "https://cap.so" }),
 }));
 
@@ -28,11 +24,8 @@ vi.mock("@cap/utils", () => ({
 	}),
 }));
 
-vi.mock("posthog-node", () => ({
-	PostHog: class {
-		capture = checkoutMocks.capture;
-		shutdown = checkoutMocks.shutdown;
-	},
+vi.mock("@/lib/server-analytics", () => ({
+	trackServerEvent: checkoutMocks.track,
 }));
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>

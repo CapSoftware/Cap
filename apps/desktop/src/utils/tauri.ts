@@ -637,7 +637,13 @@ displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfig
  * Decorative frame around the recording. `None` (or `FrameStyle::None`)
  * renders the bare video exactly as before the feature existed.
  */
-frame: FrameConfiguration | null }
+frame: FrameConfiguration | null; 
+/**
+ * Redraws the recording device's physical notch over the capture. Distinct
+ * from `frame`: the decorative MacBook style is a mockup, this restores
+ * something the capture really did hide, and the two are independent.
+ */
+notch: NotchConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; 
@@ -711,6 +717,19 @@ export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DevicesUpdated = { cameras: CameraInfo[]; microphones: string[]; permissions: OSPermissionsCheck }
 export type DisplayId = string
 export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; logical_bounds: LogicalBounds | null; refresh_rate: string }
+/**
+ * Where the recording device's physical notch sits within the captured video.
+ * 
+ * macOS captures the pixels behind the notch, so without this the recording
+ * shows an unbroken menu bar where the recorder saw a cutout. Fractions of the
+ * captured frame rather than of the display, so area recordings, which are
+ * cropped at capture time, need no extra context to interpret.
+ */
+export type DisplayNotch = { 
+/**
+ * Distance from the left edge of the video to the notch.
+ */
+x: number; width: number; height: number }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorPreviewQuality = "quarter" | "half" | "full"
 export type EditorRecordingAdded = { editor_path: string; recording_path: string }
@@ -768,7 +787,13 @@ export type FrameStyle =
 "macbook"
 export type FrameTheme = "dark" | "light"
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; 
+/**
+ * `None` until [`init`] seeds it from whether this machine has a notched
+ * display. From then on it is the user's preference and nothing re-reads
+ * the hardware, so moving between machines can't silently flip it.
+ */
+macbookNotchOverlay?: boolean | null; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null; 
 /**
  * Custom recordings folders that were used before; recordings left in
  * them stay visible in the library. Most recent last.
@@ -831,11 +856,21 @@ export type ModelDownloadStatus = { state: ModelDownloadState; progress: number;
 export type ModelIDType = string
 export type MovExportSettings = { fps: number; resolution_base: XY<number>; cursor_only?: boolean }
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression; custom_bpp: number | null; force_ffmpeg_decoder?: boolean; optimize_filesize?: boolean }
-export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null }
+export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null; display_notch?: DisplayNotch | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors; status?: StudioRecordingStatus | null }
 export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewScreenshotAdded = { path: string }
 export type NewStudioRecordingAdded = { path: string }
+/**
+ * Draws a MacBook notch over the recording. Nothing here is inferred from the
+ * video: a finished recording carries no evidence of the panel it came from.
+ */
+export type NotchConfiguration = { enabled: boolean; 
+/**
+ * Manual placement, as fractions of the video. Each `None` falls back to
+ * the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+ */
+x: number | null; width: number | null; height: number | null }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
@@ -902,7 +937,13 @@ export type ScreenshotProjectExport = { imageBytes: number[]; config: ProjectCon
 export type ScreenshotProjectShareState = { config: ProjectConfiguration; sharing: ScreenshotSharingState | null }
 export type ScreenshotSharingState = { link: string; contentHash: string | null }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string; 
+/**
+ * Notch geometry the overlay uses when the project sets no manual
+ * placement: this recording's own measurements where the recorder took
+ * them, else a stock MacBook notch for the editor to start from.
+ */
+notchBase: DisplayNotch }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }

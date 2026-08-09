@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use cap_enc_ffmpeg::remux::{
     concatenate_m4s_segments_with_init, get_media_duration, merge_video_audio,
     probe_m4s_can_decode_with_init, probe_media_valid, probe_video_can_decode,
@@ -82,8 +84,16 @@ async fn instant_record_with_real_mic_and_screen() {
     let temp = TempDir::new().unwrap();
     let recording_dir = temp.path().join("test_recording.cap");
 
-    let recording_seconds = 15;
-    eprintln!("Starting {recording_seconds}s instant recording...");
+    let record_before_pause = Duration::from_secs(6);
+    let pause_duration = Duration::from_secs(5);
+    let record_after_resume = Duration::from_secs(6);
+    let expected_content_secs = (record_before_pause + record_after_resume).as_secs_f64();
+    eprintln!(
+        "Starting instant recording: {}s, pause {}s, {}s (expecting ~{expected_content_secs}s of content)...",
+        record_before_pause.as_secs(),
+        pause_duration.as_secs(),
+        record_after_resume.as_secs(),
+    );
 
     let mut builder = instant_recording::Actor::builder(
         recording_dir.clone(),
@@ -102,7 +112,25 @@ async fn instant_record_with_real_mic_and_screen() {
 
     let segment_rx = actor_handle.take_segment_rx();
 
-    tokio::time::sleep(Duration::from_secs(recording_seconds)).await;
+    tokio::time::sleep(record_before_pause).await;
+
+    eprintln!("Pausing for {}s...", pause_duration.as_secs());
+    actor_handle
+        .pause()
+        .await
+        .expect("Failed to pause recording");
+    assert!(
+        actor_handle.is_paused().await.expect("is_paused failed"),
+        "actor should report paused"
+    );
+    tokio::time::sleep(pause_duration).await;
+
+    eprintln!("Resuming...");
+    actor_handle
+        .resume()
+        .await
+        .expect("Failed to resume recording");
+    tokio::time::sleep(record_after_resume).await;
 
     eprintln!("Stopping recording...");
     let completed = actor_handle.stop().await.expect("Failed to stop recording");
@@ -307,14 +335,20 @@ async fn instant_record_with_real_mic_and_screen() {
         "Should be able to read assembled video duration"
     );
     let video_dur_secs = video_duration.unwrap().as_secs_f64();
-    eprintln!("  Video duration: {video_dur_secs:.2}s (expected ~{recording_seconds}s)");
-    assert!(
-        video_dur_secs > (recording_seconds as f64) * 0.5,
-        "Video duration ({video_dur_secs:.2}s) should be at least 50% of recording time ({recording_seconds}s)"
+    eprintln!(
+        "  Video duration: {video_dur_secs:.2}s (expected ~{expected_content_secs}s of content, \
+         pause excised)"
     );
     assert!(
-        video_dur_secs < (recording_seconds as f64) * 2.0,
-        "Video duration ({video_dur_secs:.2}s) should be less than 2x recording time ({recording_seconds}s)"
+        video_dur_secs > expected_content_secs * 0.7,
+        "Video duration ({video_dur_secs:.2}s) should be at least 70% of the recorded content \
+         time ({expected_content_secs}s)"
+    );
+    assert!(
+        video_dur_secs < expected_content_secs * 1.3,
+        "Video duration ({video_dur_secs:.2}s) should be under 130% of the recorded content \
+         time ({expected_content_secs}s) — a value near wall time means the pause leaked \
+         into the timeline"
     );
 
     let input_ctx =
@@ -361,10 +395,20 @@ async fn instant_record_with_real_mic_and_screen() {
             "Should be able to read assembled audio duration"
         );
         let audio_dur_secs = audio_duration.unwrap().as_secs_f64();
-        eprintln!("  Audio duration: {audio_dur_secs:.2}s (expected ~{recording_seconds}s)");
+        eprintln!(
+            "  Audio duration: {audio_dur_secs:.2}s (expected ~{expected_content_secs}s of \
+             content, pause excised)"
+        );
         assert!(
-            audio_dur_secs > (recording_seconds as f64) * 0.5,
-            "Audio duration ({audio_dur_secs:.2}s) should be at least 50% of recording time"
+            audio_dur_secs > expected_content_secs * 0.7,
+            "Audio duration ({audio_dur_secs:.2}s) should be at least 70% of the recorded \
+             content time"
+        );
+        assert!(
+            audio_dur_secs < expected_content_secs * 1.3,
+            "Audio duration ({audio_dur_secs:.2}s) should be under 130% of the recorded \
+             content time — a value near wall time means the pause leaked into the audio \
+             timeline"
         );
 
         let av_drift = (video_dur_secs - audio_dur_secs).abs();

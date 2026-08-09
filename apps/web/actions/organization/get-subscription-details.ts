@@ -49,7 +49,13 @@ export async function getSubscriptionDetails(
 		owner.stripeSubscriptionId,
 	);
 
-	if (subscription.status !== "active" && subscription.status !== "trialing") {
+	// past_due renders as a payment-failed state in the billing card rather
+	// than falling through to the "Upgrade to Pro" card.
+	if (
+		subscription.status !== "active" &&
+		subscription.status !== "trialing" &&
+		subscription.status !== "past_due"
+	) {
 		return null;
 	}
 

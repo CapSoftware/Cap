@@ -30,7 +30,6 @@ mod notifications;
 mod panel_manager;
 mod permissions;
 mod platform;
-mod posthog;
 mod power_observer;
 mod presets;
 mod recording;
@@ -40,6 +39,7 @@ mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
 mod target_select_overlay;
+mod telemetry;
 mod thumbnails;
 mod tray;
 mod update_project_names;
@@ -3018,6 +3018,10 @@ struct SerializedEditorInstance {
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordingsMeta>,
     path: PathBuf,
+    /// Notch geometry the overlay uses when the project sets no manual
+    /// placement: this recording's own measurements where the recorder took
+    /// them, else a stock MacBook notch for the editor to start from.
+    notch_base: cap_project::DisplayNotch,
 }
 
 #[tauri::command]
@@ -3051,6 +3055,11 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
         },
         recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
+        notch_base: editor_instance
+            .render_constants
+            .meta
+            .display_notch()
+            .unwrap_or(cap_project::DEFAULT_MACBOOK_NOTCH),
     })
 }
 
@@ -4459,7 +4468,7 @@ async fn check_notification_permissions(app: AppHandle) {
 #[instrument(skip(app))]
 async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
     let mut app = app.write().await;
-    posthog::set_server_url(&server_url);
+    telemetry::set_server_url(&server_url);
     app.server_url = server_url;
 
     Ok(())
@@ -4820,7 +4829,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         camera::init_preview_profile(system.total_memory());
     }
 
-    posthog::init();
+    telemetry::init();
 
     let tauri_context = tauri::generate_context!();
 
@@ -5304,7 +5313,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .ok();
                 }
 
-                posthog::set_server_url(&server_url);
+                telemetry::set_server_url(&server_url);
 
                 let camera_preview = CameraPreviewManager::new(&app);
                 let camera_session_id_handle = camera_preview.session_id_handle();

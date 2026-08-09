@@ -25,6 +25,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import * as EffectRuntime from "@/lib/server";
+import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
@@ -41,54 +42,12 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
-					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
-						videos: [
-							{
-								url: new URL(
-									`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1280,
-								height: 720,
-								type: "video/mp4",
-							},
-						],
-					},
-					twitter: {
-						card: "player",
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
-						images: [
-							new URL(
-								`/api/video/og?videoId=${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-						],
-						players: {
-							playerUrl: new URL(
-								`/embed/${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							streamUrl: new URL(
-								`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							width: 1280,
-							height: 720,
-						},
-					},
+					...buildShareVideoMetadata({
+						videoId,
+						name: video.name,
+						sourceType: video.source.type,
+						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+					}),
 					robots: "index, follow",
 				}),
 			}),
@@ -132,6 +91,17 @@ export default async function EmbedVideoPage(
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
+	const minimal = searchParams.slack === "true";
+	// `?t=` mirrors the share page, so an embed snippet copied "at 1:23" opens
+	// there too. Repeated params arrive as an array; take the first.
+	const startTimeParam = Array.isArray(searchParams.t)
+		? searchParams.t[0]
+		: searchParams.t;
+	const parsedStartTime = Number.parseInt(startTimeParam ?? "", 10);
+	const startTime =
+		Number.isFinite(parsedStartTime) && parsedStartTime > 0
+			? parsedStartTime
+			: null;
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -193,10 +163,22 @@ export default async function EmbedVideoPage(
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div key={videoId} className="min-h-screen bg-black">
+			<div
+				key={videoId}
+				className={
+					minimal
+						? "h-screen overflow-hidden bg-black"
+						: "min-h-screen bg-black"
+				}
+			>
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
-					<EmbedContent video={data.video} autoplay={autoplay} />
+					<EmbedContent
+						video={data.video}
+						autoplay={autoplay}
+						startTime={startTime}
+						minimal={minimal}
+					/>
 				)}
 			</div>
 		)),
@@ -212,6 +194,8 @@ export default async function EmbedVideoPage(
 async function EmbedContent({
 	video,
 	autoplay,
+	startTime,
+	minimal,
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -219,6 +203,8 @@ async function EmbedContent({
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
 	};
 	autoplay: boolean;
+	startTime: number | null;
+	minimal: boolean;
 }) {
 	const user = await getCurrentUser();
 	const sharedSpaces = await db()
@@ -300,6 +286,9 @@ async function EmbedContent({
 			createdAt: comments.createdAt,
 			updatedAt: comments.updatedAt,
 			parentCommentId: comments.parentCommentId,
+			mediaKey: comments.mediaKey,
+			mediaDuration: comments.mediaDuration,
+			mediaMeta: comments.mediaMeta,
 			authorName: users.name,
 		})
 		.from(comments)
@@ -324,6 +313,8 @@ async function EmbedContent({
 			}
 			ownerName={videoOwner[0]?.name || null}
 			autoplay={autoplay}
+			startTime={startTime}
+			minimal={minimal}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 		/>

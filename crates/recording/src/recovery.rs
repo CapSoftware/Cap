@@ -1443,6 +1443,7 @@ impl RecoveryManager {
                     } else {
                         None
                     },
+                    display_notch: original_segment.and_then(|s| s.display_notch),
                 }
             })
             .collect();

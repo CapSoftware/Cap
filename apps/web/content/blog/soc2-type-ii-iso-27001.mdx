@@ -1,0 +1,65 @@
+---
+title: Cap is SOC 2 Type II and ISO 27001 certified
+description: Cap has completed its SOC 2 Type II audit and holds ISO 27001 certification. Here is what that means, why it matters for your team, and how it fits with being open source.
+publishedAt: "2026-08-03"
+category: Security
+image: /blog/soc2-iso-27001-badges.jpg
+author: Richie McIlroy
+tags: Security, Compliance, News
+---
+
+Hey everyone,
+
+Some news we are really proud of: Cap is now SOC 2 Type II and ISO 27001 certified.
+
+If you have been waiting on these before rolling Cap out at work, the wait is over. And if those acronyms mean nothing to you, the short version is that independent auditors have now verified, in depth and over time, that Cap handles your data the way we say we do.
+
+## What we actually achieved
+
+These are two separate things, and each one matters on its own.
+
+**SOC 2 Type II** is an audit of how we protect customer data across security, availability, and confidentiality. The "Type II" part is the important bit. A Type I audit checks that the right controls exist on a single day. A Type II audit tests that those controls actually operated, continuously, over a monitoring period of months. An auditor did not just look at our policies. They watched them run.
+
+**ISO 27001** is the international standard for information security management. Certification means we run a full information security management system: risk assessments, access reviews, incident response, vendor management, and a documented process for continuously improving all of it.
+
+Together, they cover the questions every security team asks before approving a new tool. Who can access production? How is data encrypted? What happens when something goes wrong? How do you vet the services you build on? We now have audited, independently verified answers to all of them.
+
+## Why this matters if you use Cap at work
+
+Screen recordings are sensitive by nature. They capture your product, your dashboards, your customer data, and sometimes things you did not even notice were on screen. Any tool that touches that content should be held to a high bar.
+
+Until now, bringing Cap into a company usually meant someone from IT or security reviewing us by hand. Compliance certifications shortcut that. Your security team can request our SOC 2 report, review it against their own checklist, and approve Cap the same way they would any other vendor. For a lot of companies, this is the difference between "we would love to use it" and actually using it.
+
+If you are that person doing the vendor review: everything you need is in our Trust Portal at [trust.cap.so](https://trust.cap.so). You can request the SOC 2 Type II report, view our ISO 27001 certification, check our subprocessor list, and see our security practices in one place.
+
+## Audited and open source
+
+Here is the part we find genuinely fun.
+
+Most companies ask you to trust their compliance reports because their code is a black box. Cap is open source. Every line of the desktop app, the web platform, and the recording pipeline is [on GitHub](https://github.com/CapSoftware/Cap) for anyone to read.
+
+So you get both halves of the trust equation. The code is public, so you can verify what Cap does. The audits cover everything code cannot show you: how we run production, who has access to what, how we respond to incidents, and how we operate as a company. Transparency for the product, verification for the operation.
+
+And if you want to go further, Cap lets you opt out of trusting us almost entirely. Bring your own S3 bucket or Google Drive so recordings live on your infrastructure, or self-host the whole platform inside your own network.
+
+## What this covered
+
+The audits looked at the Cap cloud platform and the company behind it, including:
+
+- Access control and authentication across production systems
+- Encryption of data in transit and at rest
+- Monitoring, logging, and alerting
+- Incident response and business continuity
+- Change management and code review practices
+- Vendor and subprocessor management
+- Employee security training and offboarding
+
+This was months of work across the whole team. Huge thanks to everyone who helped get it over the line.
+
+## What is next
+
+We are not stopping here. HIPAA readiness is in progress for healthcare teams, and we already offer signed BAAs for enterprise customers alongside our [DPA](/dpa). If your organization has specific compliance requirements, [talk to us](/support).
+
+As always: if you want a screen recorder your security team will approve, that your engineers can audit, and that never locks your data in, Cap is built for you.
+
+Richie

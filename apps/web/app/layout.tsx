@@ -1,4 +1,6 @@
 import "@/app/globals.css";
+import { buildEnv } from "@cap/env";
+import { OpenPanelComponent } from "@openpanel/nextjs";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import Script from "next/script";
@@ -72,7 +74,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: PropsWithChildren) {
 	return (
-		<html className={defaultFont.className} lang="en">
+		// suppressHydrationWarning: the Cap Chrome extension stamps
+		// data-cap-chrome-extension-installed on <html> at document_idle,
+		// which can land before hydration finishes.
+		<html className={defaultFont.className} lang="en" suppressHydrationWarning>
 			<head>
 				<link
 					rel="apple-touch-icon"
@@ -99,6 +104,15 @@ export default function RootLayout({ children }: PropsWithChildren) {
 			</head>
 			<body suppressHydrationWarning>
 				<Script src="/theme-script.js" strategy="beforeInteractive" />
+				{buildEnv.NEXT_PUBLIC_OPENPANEL_CLIENT_ID ? (
+					<OpenPanelComponent
+						apiUrl="/api/op"
+						clientId={buildEnv.NEXT_PUBLIC_OPENPANEL_CLIENT_ID}
+						scriptUrl="/api/op/op1.js"
+						trackOutgoingLinks
+						trackScreenViews
+					/>
+				) : null}
 				<main className="w-full">{children}</main>
 			</body>
 		</html>

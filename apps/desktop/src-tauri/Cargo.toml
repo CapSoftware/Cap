@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.5.7"
+version = "0.5.9"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -120,7 +120,6 @@ tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
 opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
-posthog-rs = "0.3.7"
 sysinfo = "0.35"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 aho-corasick.workspace = true

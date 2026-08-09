@@ -44,6 +44,9 @@ export function getAssemblyAITranscriptionOptions(
 		speech_models: [...ASSEMBLYAI_SPEECH_MODELS],
 		format_text: true,
 		punctuate: true,
+		// Verbatim words: the single transcription pass feeds both the word-level
+		// edit transcript and the caption VTT (which strips fillers itself).
+		disfluencies: true,
 	};
 
 	if (language === AI_GENERATION_LANGUAGE_AUTO) {

@@ -1,7 +1,47 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { getBlogPosts, getDocs } from "@/utils/blog";
+import {
+	CHANGELOG_PAGE_SIZE,
+	CHANGELOG_PLATFORMS,
+	type ChangelogEntry,
+	getChangelogEntries,
+} from "@/utils/changelog";
 import { seoPages } from "../lib/seo-pages";
+
+// Changelog list + platform filter + paginated pages. Pages 2+ live under
+// /page/<n>; lastModified is the newest entry visible on that page so crawlers
+// only refetch pages whose slice actually changed.
+function getChangelogRoutes() {
+	const entries = getChangelogEntries();
+	const routes: { path: string; lastModified?: string }[] = [];
+
+	const lastModifiedOf = (entry?: ChangelogEntry) => {
+		if (!entry) return undefined;
+		const date = new Date(entry.metadata.publishedAt);
+		return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+	};
+
+	const addRoutes = (basePath: string, list: ChangelogEntry[]) => {
+		routes.push({ path: basePath, lastModified: lastModifiedOf(list[0]) });
+		const pageCount = Math.ceil(list.length / CHANGELOG_PAGE_SIZE);
+		for (let page = 2; page <= pageCount; page++) {
+			routes.push({
+				path: `${basePath}/page/${page}`,
+				lastModified: lastModifiedOf(list[(page - 1) * CHANGELOG_PAGE_SIZE]),
+			});
+		}
+	};
+
+	addRoutes("/changelog", entries);
+	for (const platform of CHANGELOG_PLATFORMS) {
+		addRoutes(
+			`/changelog/${platform}`,
+			entries.filter((entry) => entry.platform === platform),
+		);
+	}
+	return routes;
+}
 
 async function getPagePaths(
 	dir: string,
@@ -85,9 +125,16 @@ export default async function sitemap() {
 		.filter((routePath) => !discoveredPaths.has(routePath))
 		.map((routePath) => ({ path: routePath, lastModified: undefined }));
 
-	// Combine, dedupe by path (first occurrence wins, so filesystem mtimes are
-	// preserved), and ensure '/' is first.
-	const combined = [...pagePaths, ...blogRoutes, ...docsRoutes, ...seoRoutes];
+	// Combine, dedupe by path (first occurrence wins). Changelog routes go
+	// first so /changelog reports the newest entry date instead of a file
+	// mtime; then filesystem paths, then the rest. '/' is moved to the front.
+	const combined = [
+		...getChangelogRoutes(),
+		...pagePaths,
+		...blogRoutes,
+		...docsRoutes,
+		...seoRoutes,
+	];
 	const uniqueByPath = new Map<
 		string,
 		{ path: string; lastModified?: string }

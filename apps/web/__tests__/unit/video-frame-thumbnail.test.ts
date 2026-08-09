@@ -31,8 +31,12 @@ function createMockCanvas(options?: {
 	};
 }
 
-function createMockVideo(readyState = 3): HTMLVideoElement {
-	return { readyState } as unknown as HTMLVideoElement;
+function createMockVideo(
+	readyState = 3,
+	videoWidth = 224,
+	videoHeight = 128,
+): HTMLVideoElement {
+	return { readyState, videoWidth, videoHeight } as unknown as HTMLVideoElement;
 }
 
 describe("captureVideoFrameDataUrl", () => {
@@ -83,13 +87,23 @@ describe("captureVideoFrameDataUrl", () => {
 			createCanvas: () => canvas,
 		});
 		expect(result).toBe("data:image/jpeg;base64,abc123");
-		expect(ctx.drawImage).toHaveBeenCalledWith(video, 0, 0, 224, 128);
+		expect(ctx.drawImage).toHaveBeenCalledWith(
+			video,
+			0,
+			0,
+			224,
+			128,
+			0,
+			0,
+			224,
+			128,
+		);
 		expect(canvas.toDataURL).toHaveBeenCalledWith("image/jpeg", 0.8);
 	});
 
 	it("respects custom width and height", () => {
 		const { canvas, ctx } = createMockCanvas();
-		const video = createMockVideo();
+		const video = createMockVideo(3, 320, 180);
 		captureVideoFrameDataUrl({
 			video,
 			createCanvas: () => canvas,
@@ -98,7 +112,61 @@ describe("captureVideoFrameDataUrl", () => {
 		});
 		expect(canvas.width).toBe(320);
 		expect(canvas.height).toBe(180);
-		expect(ctx.drawImage).toHaveBeenCalledWith(video, 0, 0, 320, 180);
+		expect(ctx.drawImage).toHaveBeenCalledWith(
+			video,
+			0,
+			0,
+			320,
+			180,
+			0,
+			0,
+			320,
+			180,
+		);
+	});
+
+	it("center-crops a taller source to the output aspect ratio", () => {
+		const { canvas, ctx } = createMockCanvas();
+		const video = createMockVideo(3, 1280, 960);
+		captureVideoFrameDataUrl({
+			video,
+			createCanvas: () => canvas,
+			width: 160,
+			height: 90,
+		});
+		expect(ctx.drawImage).toHaveBeenCalledWith(
+			video,
+			0,
+			120,
+			1280,
+			720,
+			0,
+			0,
+			160,
+			90,
+		);
+	});
+
+	it("center-crops a wider source to the output aspect ratio", () => {
+		const { canvas, ctx } = createMockCanvas();
+		const video = createMockVideo(3, 2560, 1080);
+		captureVideoFrameDataUrl({
+			video,
+			createCanvas: () => canvas,
+			width: 160,
+			height: 90,
+		});
+		expect(ctx.drawImage).toHaveBeenCalledWith(
+			video,
+			320,
+			0,
+			1920,
+			1080,
+			0,
+			0,
+			160,
+			90,
+		);
 	});
 
 	it("respects custom JPEG quality", () => {

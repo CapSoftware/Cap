@@ -51,7 +51,10 @@ import {
 	createTimelineHistory,
 	createTimelineState,
 	deleteSelectedTimelineSegment,
+	deleteTimelineRanges,
 	findNextPlayableTime,
+	findNextPlayableTimeInRanges,
+	findPlayableRangeIndex,
 	getEditSpecOutputDuration,
 	getTimelineDisplayDuration,
 	getTimelineDisplaySegments,
@@ -76,6 +79,7 @@ import { navigateWithTransition } from "@/utils/view-transition";
 import { CapVideoPlayer } from "../_components/CapVideoPlayer";
 import { VideoDownloadMenu } from "../_components/VideoDownloadMenu";
 import { captureVideoFrameDataUrl } from "../_components/video-frame-thumbnail";
+import { TranscriptSidebar } from "./TranscriptSidebar";
 
 type EditableVideo = {
 	id: Video.VideoId;
@@ -84,12 +88,14 @@ type EditableVideo = {
 	duration: number;
 	width: number | null;
 	height: number | null;
+	transcriptionStatus: string | null;
 };
 
 type DragHandle = "start" | "end";
 
 const MAX_TIMELINE_THUMBNAILS = 48;
 const MAX_VISIBLE_THUMBNAIL_GENERATION = 16;
+const PREVIEW_CUT_MUTE_LEAD_SECONDS = 0.03;
 const TIMELINE_THUMBNAIL_WIDTH = 160;
 const TIMELINE_THUMBNAIL_HEIGHT = 90;
 const MIN_ZOOM = 1;
@@ -930,6 +936,21 @@ export function EditVideoClient({
 		setHistory(redoTimelineHistory);
 	}, []);
 
+	const handleTranscriptDelete = useCallback(
+		(ranges: { start: number; end: number }[]) => {
+			const nextState = deleteTimelineRanges(stateRef.current, ranges);
+			const nextEditSpec = getTimelineEditSpec(nextState);
+			const nextPlayableTime =
+				findNextPlayableTime(playheadRef.current, nextEditSpec) ??
+				nextEditSpec.keepRanges.at(-1)?.end ??
+				0;
+			commitState(nextState);
+			setPlayheadOnFrame(nextPlayableTime, true);
+			setVideoTimeOnFrame(nextPlayableTime, true);
+		},
+		[commitState, setPlayheadOnFrame, setVideoTimeOnFrame],
+	);
+
 	// Loom-style: cut the clip at the current playhead into two independent clips.
 	const handleSplit = useCallback(() => {
 		commitState(splitTimelineAt(stateRef.current, playheadRef.current));
@@ -1239,6 +1260,7 @@ export function EditVideoClient({
 
 	useEffect(() => {
 		let frameId = 0;
+		let playbackFrameId = 0;
 		let detachVideoListeners: (() => void) | null = null;
 
 		const attachVideoListeners = () => {
@@ -1248,19 +1270,46 @@ export function EditVideoClient({
 				return;
 			}
 
-			const syncPlayhead = () => {
+			let restoreAudioAfterCut = false;
+			const muteForCut = () => {
+				if (restoreAudioAfterCut || videoElement.muted) return;
+				restoreAudioAfterCut = true;
+				videoElement.muted = true;
+			};
+			const restoreCutAudio = () => {
+				if (!restoreAudioAfterCut) return;
+				restoreAudioAfterCut = false;
+				videoElement.muted = false;
+			};
+			const syncPlayhead = (updatePlayhead: boolean) => {
 				if (previewWithoutPlayheadRef.current) {
 					// Trimming a clip edge: scrub the preview but keep the cursor put.
 					return;
 				}
 				if (dragDraftRef.current !== null) {
-					setPlayheadOnFrame(videoElement.currentTime, true);
+					if (updatePlayhead) {
+						setPlayheadOnFrame(videoElement.currentTime, true);
+					}
 					return;
 				}
-				const nextTime = findNextPlayableTime(
-					videoElement.currentTime,
-					editSpec,
+				const currentTime = videoElement.currentTime;
+				const playableRangeIndex = findPlayableRangeIndex(
+					currentTime,
+					keepRanges,
 				);
+				const playableRange = keepRanges[playableRangeIndex];
+				if (
+					!videoElement.paused &&
+					playableRange &&
+					playableRangeIndex < keepRanges.length - 1 &&
+					playableRange.end - currentTime <= PREVIEW_CUT_MUTE_LEAD_SECONDS
+				) {
+					muteForCut();
+				}
+				const nextTime =
+					playableRangeIndex >= 0
+						? currentTime
+						: findNextPlayableTimeInRanges(currentTime, keepRanges);
 
 				if (nextTime === null) {
 					videoElement.pause();
@@ -1269,32 +1318,73 @@ export function EditVideoClient({
 					return;
 				}
 
-				if (Math.abs(nextTime - videoElement.currentTime) > 0.04) {
+				if (Math.abs(nextTime - currentTime) > 0.04) {
+					muteForCut();
 					videoElement.currentTime = nextTime;
 					setPlayheadOnFrame(nextTime, true);
 					return;
 				}
 
-				setPlayheadOnFrame(videoElement.currentTime, true);
+				if (updatePlayhead) {
+					setPlayheadOnFrame(currentTime, true);
+				}
+			};
+			const handleMediaTimeChange = () => syncPlayhead(true);
+
+			const stopPlaybackFrames = () => {
+				cancelAnimationFrame(playbackFrameId);
+				playbackFrameId = 0;
+			};
+			const followPlayback = () => {
+				playbackFrameId = 0;
+				syncPlayhead(false);
+				if (!videoElement.paused && !videoElement.ended) {
+					playbackFrameId = requestAnimationFrame(followPlayback);
+				}
+			};
+			const handlePlay = () => {
+				setIsPlaying(true);
+				stopPlaybackFrames();
+				playbackFrameId = requestAnimationFrame(followPlayback);
+			};
+			const handlePause = () => {
+				stopPlaybackFrames();
+				setIsPlaying(false);
+				if (!videoElement.seeking) {
+					restoreCutAudio();
+				}
+				syncPlayhead(true);
+			};
+			const handleSeeked = () => {
+				restoreCutAudio();
+				syncPlayhead(true);
 			};
 
-			const handlePlay = () => setIsPlaying(true);
-			const handlePause = () => setIsPlaying(false);
-
-			videoElement.addEventListener("timeupdate", syncPlayhead);
-			videoElement.addEventListener("seeking", syncPlayhead);
-			videoElement.addEventListener("loadedmetadata", syncPlayhead);
+			videoElement.addEventListener("timeupdate", handleMediaTimeChange);
+			videoElement.addEventListener("seeking", handleMediaTimeChange);
+			videoElement.addEventListener("seeked", handleSeeked);
+			videoElement.addEventListener("loadedmetadata", handleMediaTimeChange);
 			videoElement.addEventListener("play", handlePlay);
 			videoElement.addEventListener("pause", handlePause);
-			setIsPlaying(!videoElement.paused);
-			syncPlayhead();
+			syncPlayhead(true);
+			if (videoElement.paused) {
+				setIsPlaying(false);
+			} else {
+				handlePlay();
+			}
 
 			detachVideoListeners = () => {
-				videoElement.removeEventListener("timeupdate", syncPlayhead);
-				videoElement.removeEventListener("seeking", syncPlayhead);
-				videoElement.removeEventListener("loadedmetadata", syncPlayhead);
+				stopPlaybackFrames();
+				videoElement.removeEventListener("timeupdate", handleMediaTimeChange);
+				videoElement.removeEventListener("seeking", handleMediaTimeChange);
+				videoElement.removeEventListener("seeked", handleSeeked);
+				videoElement.removeEventListener(
+					"loadedmetadata",
+					handleMediaTimeChange,
+				);
 				videoElement.removeEventListener("play", handlePlay);
 				videoElement.removeEventListener("pause", handlePause);
+				restoreCutAudio();
 			};
 		};
 
@@ -1304,7 +1394,7 @@ export function EditVideoClient({
 			cancelAnimationFrame(frameId);
 			detachVideoListeners?.();
 		};
-	}, [editSpec, keepRanges, setPlayheadOnFrame]);
+	}, [keepRanges, setPlayheadOnFrame]);
 
 	useEffect(() => {
 		const videoElement = videoRef.current;
@@ -1467,7 +1557,7 @@ export function EditVideoClient({
 	return (
 		<div className="flex min-h-screen flex-col bg-gray-1 text-gray-12">
 			<header className="sticky top-0 z-30 border-b border-gray-4 bg-white/85 backdrop-blur">
-				<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-3 sm:h-16 sm:px-5">
+				<div className="mx-auto flex h-14 w-full max-w-[1500px] items-center justify-between gap-2 px-3 sm:h-16 sm:px-5">
 					<div className="flex items-center gap-1.5">
 						<button
 							type="button"
@@ -1527,7 +1617,14 @@ export function EditVideoClient({
 				</div>
 			</header>
 
-			<main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-3 pt-3 pb-4 sm:px-5 sm:pt-4 sm:pb-5">
+			<main
+				className={[
+					"mx-auto flex w-full flex-1 flex-col px-3 pt-3 pb-4 sm:px-5 sm:pt-4 sm:pb-5",
+					video.transcriptionStatus === "COMPLETE"
+						? "max-w-[1500px] xl:pr-[400px]"
+						: "max-w-6xl",
+				].join(" ")}
+			>
 				<section className="flex min-h-0 flex-1 items-center justify-center">
 					<div
 						className="relative max-h-full max-w-full overflow-hidden rounded-xl bg-black ring-1 ring-gray-5 [&_[data-slot=media-player-controls]]:!hidden"
@@ -1561,6 +1658,7 @@ export function EditVideoClient({
 							disableCommentStamps
 							disableReactionStamps
 							disablePreviewGif
+							disablePlaybackSpeedDial
 							duration={video.duration}
 							showFloatingVolumeControl
 						/>
@@ -1888,6 +1986,15 @@ export function EditVideoClient({
 					/>
 				</div>
 			</main>
+
+			{video.transcriptionStatus === "COMPLETE" && (
+				<TranscriptSidebar
+					videoId={video.id}
+					videoRef={videoRef}
+					keepRanges={keepRanges}
+					onDeleteRanges={handleTranscriptDelete}
+				/>
+			)}
 
 			<Dialog
 				open={showRestoreConfirm}

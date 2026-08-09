@@ -107,11 +107,20 @@ async function createLoomImportRateLimitCheck(userId: User.UserId) {
 	});
 
 	return async () => {
-		const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
-			request,
-			rateLimitKey: `loom-import:${userId}`,
-		});
-		return rateLimited;
+		try {
+			const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
+				request,
+				rateLimitKey: `loom-import:${userId}`,
+			});
+			return rateLimited;
+		} catch (error) {
+			// Fail open: a firewall/edge outage must never block Loom imports.
+			console.error(
+				`Rate limit check failed for "${LOOM_IMPORT_RATE_LIMIT_ID}":`,
+				error,
+			);
+			return false;
+		}
 	};
 }
 

@@ -48,6 +48,14 @@ export type RecorderApiOptions = {
 	 * count).
 	 */
 	requestTimeoutMs?: number;
+	/**
+	 * Base path for the multipart control-plane routes. Defaults to
+	 * "/api/upload/multipart"; comment-media uploads point this at
+	 * "/api/upload/comment-media", whose routes accept the same bodies.
+	 */
+	multipartBasePath?: string;
+	/** Merged into every control-plane JSON body (e.g. a capability token). */
+	extraBody?: Record<string, unknown>;
 };
 
 interface UploadedPartPayload {
@@ -117,7 +125,7 @@ const postJson = async <TResponse>(
 		method: "POST",
 		headers,
 		credentials: api.credentials ?? (api.authToken ? "omit" : "same-origin"),
-		body: JSON.stringify(body),
+		body: JSON.stringify({ ...body, ...api.extraBody }),
 		signal: AbortSignal.timeout(api.requestTimeoutMs ?? defaultTimeoutMs),
 	});
 
@@ -131,6 +139,9 @@ const postJson = async <TResponse>(
 
 const resolveApiUrl = (url: string, api: RecorderApiOptions) =>
 	api.baseUrl ? new URL(url, api.baseUrl).toString() : url;
+
+const multipartPath = (api: RecorderApiOptions | undefined, route: string) =>
+	`${api?.multipartBasePath ?? "/api/upload/multipart"}/${route}`;
 
 const normalizeMultipartContentType = (mimeType: string) => {
 	const normalized = mimeType.split(";")[0]?.trim();
@@ -152,7 +163,7 @@ export const initiateMultipartUpload = async ({
 		uploadId: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/initiate",
+		multipartPath(api, "initiate"),
 		{
 			videoId,
 			contentType: normalizeMultipartContentType(contentType),
@@ -182,7 +193,7 @@ const presignMultipartPart = async (
 		presignedUrl: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/presign-part",
+		multipartPath(api, "presign-part"),
 		{
 			videoId,
 			uploadId,
@@ -223,7 +234,7 @@ const completeMultipartUpload = async (
 				success: boolean;
 				processingStarted?: boolean;
 			}>(
-				"/api/upload/multipart/complete",
+				multipartPath(api, "complete"),
 				{
 					videoId,
 					uploadId,
@@ -276,7 +287,7 @@ const abortMultipartUpload = async (
 	api: RecorderApiOptions,
 ) => {
 	await postJson<{ success: boolean }>(
-		"/api/upload/multipart/abort",
+		multipartPath(api, "abort"),
 		{
 			videoId,
 			uploadId,

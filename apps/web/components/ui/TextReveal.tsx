@@ -1,12 +1,14 @@
 "use client";
 
 import clsx from "clsx";
+// motion/react, not framer-motion v11: v11's useScroll warns that the
+// default (document) scroll container is position: static; v12 exempts it.
 import {
 	type MotionValue,
 	motion,
 	useScroll,
 	useTransform,
-} from "framer-motion";
+} from "motion/react";
 import {
 	type ComponentPropsWithoutRef,
 	type FC,
@@ -39,7 +41,6 @@ export const TextReveal: FC<TextRevealProps> = ({ children, className }) => {
 				}
 			>
 				<span
-					ref={targetRef}
 					className={
 						"flex flex-wrap gap-y-4 justify-center p-5 text-3xl font-medium text-center md:gap-y-8 md:text-[52px] text-gray-12"
 					}

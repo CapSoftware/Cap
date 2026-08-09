@@ -260,6 +260,20 @@
 			"when": 1784402487715,
 			"tag": "0036_premium_master_chief",
 			"breakpoints": true
+		},
+		{
+			"idx": 37,
+			"version": "5",
+			"when": 1785452585612,
+			"tag": "0037_integration_installations",
+			"breakpoints": true
+		},
+		{
+			"idx": 38,
+			"version": "5",
+			"when": 1785892430217,
+			"tag": "0038_mean_ozymandias",
+			"breakpoints": true
 		}
 	]
 }

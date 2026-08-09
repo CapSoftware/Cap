@@ -546,6 +546,115 @@ pub fn target_to_display_and_crop(
     Ok((display, crop_bounds))
 }
 
+/// Locates the recording display's physical notch within the frames this target
+/// will produce.
+///
+/// Window captures get `None`: they record the window's own surface rather than
+/// a screen region, and the window moves, so there is no stable position.
+/// Area captures also return `None` when they contain only part of the notch,
+/// because `DisplayNotch` cannot encode a cropped source shape.
+pub fn resolve_display_notch(target: &ScreenCaptureTarget) -> Option<cap_project::DisplayNotch> {
+    let display = target.display()?;
+    let notch = display.notch()?;
+
+    match target {
+        ScreenCaptureTarget::Display { .. } => Some(cap_project::DisplayNotch {
+            x: notch.x,
+            width: notch.width,
+            height: notch.height,
+        }),
+        ScreenCaptureTarget::Area { bounds, .. } => {
+            let display_size = display.logical_size()?;
+            resolve_area_display_notch(notch, display_size, *bounds)
+        }
+        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::CameraOnly => None,
+    }
+}
+
+fn resolve_area_display_notch(
+    notch: scap_targets::NotchGeometry,
+    display_size: scap_targets::bounds::LogicalSize,
+    bounds: scap_targets::bounds::LogicalBounds,
+) -> Option<cap_project::DisplayNotch> {
+    let area_left = bounds.position().x();
+    let area_top = bounds.position().y();
+    let area_width = bounds.size().width();
+    let area_height = bounds.size().height();
+    if area_width <= 0.0 || area_height <= 0.0 || area_top != 0.0 {
+        return None;
+    }
+
+    let notch_left = notch.x * display_size.width();
+    let notch_width = notch.width * display_size.width();
+    let notch_right = notch_left + notch_width;
+    let notch_height = notch.height * display_size.height();
+    let area_right = area_left + area_width;
+    let area_bottom = area_height;
+    if area_left > notch_left || area_right < notch_right || area_bottom < notch_height {
+        return None;
+    }
+
+    Some(cap_project::DisplayNotch {
+        x: (notch_left - area_left) / area_width,
+        width: notch_width / area_width,
+        height: notch_height / area_height,
+    })
+}
+
+#[cfg(test)]
+mod display_notch_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+    const NOTCH: scap_targets::NotchGeometry = scap_targets::NotchGeometry {
+        x: 0.4,
+        width: 0.2,
+        height: 0.1,
+    };
+
+    fn display_size() -> LogicalSize {
+        LogicalSize::new(1_000.0, 800.0)
+    }
+
+    #[test]
+    fn area_containing_the_full_notch_rebases_it() {
+        let bounds = LogicalBounds::new(
+            LogicalPosition::new(300.0, 0.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), bounds),
+            Some(cap_project::DisplayNotch {
+                x: 0.25,
+                width: 0.5,
+                height: 0.4,
+            })
+        );
+    }
+
+    #[test]
+    fn partially_intersected_notches_are_omitted() {
+        let horizontal = LogicalBounds::new(
+            LogicalPosition::new(500.0, 0.0),
+            LogicalSize::new(200.0, 200.0),
+        );
+        let vertical = LogicalBounds::new(
+            LogicalPosition::new(300.0, 40.0),
+            LogicalSize::new(400.0, 200.0),
+        );
+
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), horizontal),
+            None
+        );
+        assert_eq!(
+            resolve_area_display_notch(NOTCH, display_size(), vertical),
+            None
+        );
+    }
+}
+
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {

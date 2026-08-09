@@ -7,9 +7,11 @@ import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon, InfoIcon } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
@@ -21,17 +23,17 @@ import {
 	probeAvcLevelFromUrl,
 } from "./mp4-level-patch";
 import {
-	canRetryFailedProcessing,
-	getUploadFailureMessage,
-	shouldDeferPlaybackSource,
-	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
-import {
 	type ResolvedPlaybackSource,
 	resolvePlaybackSource,
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
+import {
+	canRetryFailedProcessing,
+	getUploadFailureMessage,
+	shouldDeferPlaybackSource,
+	shouldReloadPlaybackAfterUploadCompletes,
+	type UploadProgress,
+} from "./upload-progress";
 import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -56,7 +58,18 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "./video/tooltip";
 import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
 
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
+
 const { circumference } = getProgressCircleConfig();
+
+// Stable defaults: a `= []` in the destructuring mints a new array identity
+// every render, which re-runs every hook/memo that lists the prop as a dep.
+const NO_COMMENTS: NonNullable<Props["comments"]> = [];
+const NO_CAPTIONS: CaptionOption[] = [];
 
 function getProgressStatusText(
 	status: "uploading" | "processing" | "generating_thumbnail",
@@ -94,6 +107,15 @@ interface Props {
 	disableCommentStamps?: boolean;
 	disableReactionStamps?: boolean;
 	disablePreviewGif?: boolean;
+	disablePlaybackSpeedDial?: boolean;
+	/** The share page's timeline deck owns scrubbing while visible. */
+	externalTimeline?: boolean;
+	/**
+	 * With `externalTimeline`, the deck row the control bar renders into via a
+	 * portal. Context crosses portals, so the bar keeps its player store; the
+	 * timeline strip replaces the seek slider, everything else comes along.
+	 */
+	controlsPortalEl?: HTMLElement | null;
 	comments?: Array<{
 		id: string;
 		timestamp: number | null;
@@ -130,16 +152,19 @@ export function CapVideoPlayer({
 	enableCrossOrigin = false,
 	hasActiveUpload,
 	blockPlaybackDuringProcessing = false,
-	comments = [],
+	comments = NO_COMMENTS,
 	disableCommentStamps = false,
 	disableReactionStamps = false,
 	disablePreviewGif = false,
+	disablePlaybackSpeedDial = false,
+	externalTimeline = false,
+	controlsPortalEl = null,
 	onSeek,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
-	availableCaptions = [],
+	availableCaptions = NO_CAPTIONS,
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
@@ -178,10 +203,20 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
 	const uploadProgress = blockPlaybackDuringProcessing
 		? uploadProgressRaw
 		: videoLoaded
@@ -450,10 +485,27 @@ export function CapVideoPlayer({
 		videoRef.current,
 	]);
 
+	// The seek tooltip asks for a thumbnail on every render while the pointer is
+	// over the bar (per animation frame). The capture snapshots the *displayed*
+	// frame, so re-encoding is pure waste until the video has actually moved;
+	// caching by currentTime (with a small tolerance while playing) bounds the
+	// canvas + JPEG work to a few captures per second at most.
+	const thumbnailCacheRef = useRef<{ time: number; url: string } | null>(null);
 	const generateVideoFrameThumbnail = useCallback(
-		(_time: number): string | undefined =>
-			captureVideoFrameDataUrl({ video: videoRef.current }),
-		[videoRef.current],
+		(_time: number): string | undefined => {
+			const video = videoRef.current;
+			if (!video) return undefined;
+			const cached = thumbnailCacheRef.current;
+			if (cached && Math.abs(cached.time - video.currentTime) < 0.25) {
+				return cached.url;
+			}
+			const url = captureVideoFrameDataUrl({ video });
+			if (url) {
+				thumbnailCacheRef.current = { time: video.currentTime, url };
+			}
+			return url;
+		},
+		[videoRef],
 	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
@@ -579,6 +631,12 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{showUploadFailureOverlay && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
@@ -767,7 +825,8 @@ export function CapVideoPlayer({
 				videoLoaded &&
 				!hasActiveProgress &&
 				!showUploadFailureOverlay &&
-				!showPlaybackResolutionError && (
+				!showPlaybackResolutionError &&
+				!disablePlaybackSpeedDial && (
 					<MediaPlayerPlaybackSpeedDial
 						defaultSpeed={defaultPlaybackSpeed}
 						fallbackDuration={playerDuration}
@@ -833,63 +892,92 @@ export function CapVideoPlayer({
 					});
 				})()}
 
-			<MediaPlayerControls
-				className={clsx(
-					"flex-col items-start gap-2.5",
-					showPlayButton && !hasPlayedOnce && "max-sm:hidden",
-				)}
-				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={blockPlaybackControls}
-			>
-				<MediaPlayerControlsOverlay className="rounded-b-xl" />
-				<MediaPlayerSeek
-					fallbackDuration={playerDuration}
-					tooltipThumbnailSrc={
-						isMobile || !resolvedSrc.data?.supportsCrossOrigin
-							? undefined
-							: generateVideoFrameThumbnail
-					}
-				/>
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
-						<MediaPlayerSeekForward className="hidden sm:inline-flex" />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
+			{(() => {
+				// Docked: the bar renders into the timeline deck's slot through a
+				// portal. Same tree, same store; only where it paints changes. The
+				// overrides pin it visible and static (twMerge drops the base
+				// absolute/opacity-0/auto-hide classes).
+				const docked = externalTimeline && controlsPortalEl !== null;
+				const controls = (
+					<MediaPlayerControls
+						// Docked, the bar sits on the timeline card's white row instead
+						// of on the video, so it drops its `dark` scope and the controls
+						// resolve to dark-on-light off the same gray scale.
+						tone={docked ? "light" : "dark"}
+						className={clsx(
+							docked
+								? "relative h-full flex-row items-center gap-2 opacity-100 pointer-events-auto"
+								: "flex-col items-start gap-2.5",
+							!docked && showPlayButton && !hasPlayedOnce && "max-sm:hidden",
+						)}
+						mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
+						isUploadingOrFailed={blockPlaybackControls}
+					>
+						{!docked && <MediaPlayerControlsOverlay className="rounded-b-xl" />}
+						{!externalTimeline && (
+							<MediaPlayerSeek
+								fallbackDuration={playerDuration}
+								tooltipThumbnailSrc={
+									isMobile || !resolvedSrc.data?.supportsCrossOrigin
+										? undefined
+										: generateVideoFrameThumbnail
+								}
 							/>
 						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
-							// enhancedAudioStatus={enhancedAudioStatus}
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-							captionLanguage={captionLanguage}
-							onCaptionLanguageChange={onCaptionLanguageChange}
-							availableCaptions={availableCaptions}
-							isCaptionLoading={isCaptionLoading}
-							hasCaptions={hasCaptions}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
-					</div>
-				</div>
-			</MediaPlayerControls>
+						<div className="flex gap-2 items-center w-full">
+							<div className="flex flex-1 gap-2 items-center">
+								<MediaPlayerPlay />
+								<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+								<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+								<MediaPlayerVolume
+									expandable
+									// Docked, the bar shares a phone-width row with the deck's
+									// zoom cluster; volume and PiP are the two controls a phone
+									// can live without (hardware rocker, and PiP is barely
+									// supported in mobile browsers).
+									className={docked ? "max-sm:hidden" : undefined}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// enhancedAudioMuted={enhancedAudioMuted}
+									// setEnhancedAudioMuted={setEnhancedAudioMuted}
+								/>
+								{(!externalTimeline || docked) && (
+									<MediaPlayerTime fallbackDuration={playerDuration} />
+								)}
+							</div>
+							<div className="flex gap-2 items-center">
+								{!disableCaptions && (
+									<MediaPlayerCaptions
+										setToggleCaptions={setToggleCaptions}
+										toggleCaptions={toggleCaptions}
+									/>
+								)}
+								{/* <MediaPlayerEnhancedAudio
+									enhancedAudioStatus={enhancedAudioStatus}
+									enhancedAudioEnabled={enhancedAudioEnabled}
+									setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+								/> */}
+								<MediaPlayerSettings
+									// enhancedAudioStatus={enhancedAudioStatus}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+									captionLanguage={captionLanguage}
+									onCaptionLanguageChange={onCaptionLanguageChange}
+									availableCaptions={availableCaptions}
+									isCaptionLoading={isCaptionLoading}
+									hasCaptions={hasCaptions}
+								/>
+								<MediaPlayerPiP
+									className={docked ? "max-sm:hidden" : undefined}
+								/>
+								<MediaPlayerFullscreen />
+							</div>
+						</div>
+					</MediaPlayerControls>
+				);
+				return docked && controlsPortalEl
+					? createPortal(controls, controlsPortalEl)
+					: controls;
+			})()}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio

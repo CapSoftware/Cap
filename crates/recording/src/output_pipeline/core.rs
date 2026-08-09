@@ -3424,6 +3424,127 @@ pub trait VideoMuxer: Muxer {
 mod tests {
     use super::*;
 
+    mod shared_pause_state {
+        use super::*;
+
+        fn frame_ts(index: u64) -> Duration {
+            Duration::from_nanos(index * 33_333_333 + 400)
+        }
+
+        #[test]
+        fn pause_resume_produces_strictly_forward_timeline() {
+            let flag = Arc::new(AtomicBool::new(false));
+            let pause = SharedPauseState::new(flag.clone());
+
+            let mut sent: Vec<Duration> = Vec::new();
+            for i in 0..10 {
+                sent.push(pause.adjust(frame_ts(i)).unwrap().unwrap());
+            }
+
+            flag.store(true, Ordering::Release);
+            for i in 10..40 {
+                assert_eq!(
+                    pause.adjust(frame_ts(i)).unwrap(),
+                    None,
+                    "paused frames must be swallowed"
+                );
+            }
+            flag.store(false, Ordering::Release);
+
+            for i in 40..60 {
+                sent.push(pause.adjust(frame_ts(i)).unwrap().unwrap());
+            }
+
+            for pair in sent.windows(2) {
+                assert!(
+                    pair[1] > pair[0],
+                    "adjusted timeline must be strictly forward, found {:?} then {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+
+            let resume_step = sent[10].saturating_sub(sent[9]);
+            assert_eq!(
+                resume_step,
+                frame_ts(10).saturating_sub(frame_ts(9)),
+                "the pause span must be excised: the first resumed frame continues one \
+                 normal frame step after the last sent frame"
+            );
+        }
+
+        #[test]
+        fn pause_with_no_frames_is_a_noop() {
+            let flag = Arc::new(AtomicBool::new(false));
+            let pause = SharedPauseState::new(flag.clone());
+
+            assert_eq!(
+                pause.adjust(frame_ts(0)).unwrap(),
+                Some(frame_ts(0)),
+                "no pause yet, passthrough"
+            );
+
+            flag.store(true, Ordering::Release);
+            flag.store(false, Ordering::Release);
+
+            assert_eq!(
+                pause.adjust(frame_ts(1)).unwrap(),
+                Some(frame_ts(1)),
+                "a pause window with no swallowed frames must not shift the timeline"
+            );
+        }
+
+        #[test]
+        fn repeated_pause_cycles_accumulate_offsets() {
+            let flag = Arc::new(AtomicBool::new(false));
+            let pause = SharedPauseState::new(flag.clone());
+
+            let _ = pause.adjust(Duration::from_secs(1)).unwrap();
+
+            flag.store(true, Ordering::Release);
+            assert_eq!(pause.adjust(Duration::from_secs(2)).unwrap(), None);
+            flag.store(false, Ordering::Release);
+            let after_first = pause.adjust(Duration::from_secs(5)).unwrap().unwrap();
+            assert_eq!(after_first, Duration::from_secs(2));
+
+            flag.store(true, Ordering::Release);
+            assert_eq!(pause.adjust(Duration::from_secs(6)).unwrap(), None);
+            flag.store(false, Ordering::Release);
+            let after_second = pause.adjust(Duration::from_secs(10)).unwrap().unwrap();
+            assert_eq!(
+                after_second,
+                Duration::from_secs(3),
+                "both pause spans must stay excised: 10s - (5s-2s) - (10s-6s) = 3s"
+            );
+        }
+
+        #[test]
+        fn resume_with_backwards_timestamp_does_not_panic_or_stall() {
+            let flag = Arc::new(AtomicBool::new(false));
+            let pause = SharedPauseState::new(flag.clone());
+
+            let _ = pause.adjust(Duration::from_secs(2)).unwrap();
+
+            flag.store(true, Ordering::Release);
+            assert_eq!(pause.adjust(Duration::from_secs(3)).unwrap(), None);
+            flag.store(false, Ordering::Release);
+
+            let adjusted = pause.adjust(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                adjusted,
+                Some(Duration::from_secs(1)),
+                "a backwards resume timestamp is treated as zero pause delta"
+            );
+
+            let next = pause.adjust(Duration::from_secs(4)).unwrap();
+            assert_eq!(
+                next,
+                Some(Duration::from_secs(4)),
+                "the timeline keeps flowing after the anomaly"
+            );
+        }
+    }
+
     mod audio_timestamp_generator {
         use super::*;
 

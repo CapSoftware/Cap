@@ -194,6 +194,11 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
+    /// `None` until [`init`] seeds it from whether this machine has a notched
+    /// display. From then on it is the user's preference and nothing re-reads
+    /// the hardware, so moving between machines can't silently flip it.
+    #[serde(default)]
+    pub macbook_notch_overlay: Option<bool>,
     #[serde(default = "default_capture_keyboard_events")]
     pub capture_keyboard_events: bool,
     #[serde(default)]
@@ -323,6 +328,7 @@ impl Default for GeneralSettingsStore {
             // Keep aligned with the field's serde `default_true`: auto zooms
             // are on by default, matching configs that never stored the key.
             auto_zoom_on_clicks: true,
+            macbook_notch_overlay: None,
             capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
@@ -430,7 +436,7 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())?;
 
-        crate::posthog::set_telemetry_enabled(settings.enable_telemetry);
+        crate::telemetry::set_telemetry_enabled(settings.enable_telemetry);
 
         #[cfg(target_os = "macos")]
         crate::permissions::sync_macos_dock_visibility(app);
@@ -468,6 +474,13 @@ fn sync_dock_visibility_on_general_settings_change(app: &AppHandle) {
     });
 }
 
+/// Always false off macOS, so the overlay starts off and waits to be asked for.
+fn machine_has_notched_display() -> bool {
+    scap_targets::Display::list()
+        .iter()
+        .any(|display| display.notch().is_some())
+}
+
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
@@ -482,6 +495,10 @@ pub fn init(app: &AppHandle) {
 
     append_missing_default_excluded_windows(&mut store.excluded_windows);
 
+    if store.macbook_notch_overlay.is_none() {
+        store.macbook_notch_overlay = Some(machine_has_notched_display());
+    }
+
     const REMOVE_TARGET_SELECT_MIGRATION_KEY: &str = "remove_cap_target_select_exclusion_v1";
     if let Ok(raw_store) = app.store("store")
         && raw_store.get(REMOVE_TARGET_SELECT_MIGRATION_KEY).is_none()
@@ -492,7 +509,7 @@ pub fn init(app: &AppHandle) {
         raw_store.set(REMOVE_TARGET_SELECT_MIGRATION_KEY, json!(true));
     }
 
-    crate::posthog::set_telemetry_enabled(store.enable_telemetry);
+    crate::telemetry::set_telemetry_enabled(store.enable_telemetry);
     register_bundled_muxer_binary(app);
 
     #[cfg(target_os = "macos")]

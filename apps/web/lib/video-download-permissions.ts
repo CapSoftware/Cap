@@ -5,19 +5,22 @@ import {
 	spaceMembers,
 	spaceVideos,
 } from "@cap/database/schema";
-import type { Organisation, User, Video } from "@cap/web-domain";
+import type { User, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 
+// Download access must not be broader than view access. VideosPolicy.canView
+// grants org members access only through an explicit sharedVideos row (see
+// OrganisationsRepo.membershipForVideo), and no video-creation path writes one,
+// so trusting the video's own orgId here let colleagues download recordings
+// they cannot open.
 export async function canUserDownloadVideo({
 	userId,
 	ownerId,
 	videoId,
-	orgId: _orgId,
 }: {
 	userId: User.UserId;
 	ownerId: User.UserId;
 	videoId: Video.VideoId;
-	orgId: Organisation.OrganisationId;
 }): Promise<boolean> {
 	if (userId === ownerId) return true;
 
@@ -27,19 +30,19 @@ export async function canUserDownloadVideo({
 		.where(eq(sharedVideos.videoId, videoId));
 
 	if (sharedOrgs.length > 0) {
-		const orgIds = sharedOrgs.map((org) => org.organizationId);
-
 		const [orgMembership] = await db()
 			.select({ id: organizationMembers.id })
 			.from(organizationMembers)
 			.where(
 				and(
 					eq(organizationMembers.userId, userId),
-					inArray(organizationMembers.organizationId, orgIds),
+					inArray(
+						organizationMembers.organizationId,
+						sharedOrgs.map((org) => org.organizationId),
+					),
 				),
 			)
 			.limit(1);
-
 		if (orgMembership) return true;
 	}
 
