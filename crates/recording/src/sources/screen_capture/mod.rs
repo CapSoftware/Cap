@@ -70,6 +70,7 @@ pub enum ScreenCaptureTarget {
         bounds: LogicalBounds,
     },
     CameraOnly,
+    AudioOnly,
 }
 
 #[cfg(target_os = "linux")]
@@ -86,7 +87,9 @@ impl LinuxCaptureSource {
         match target {
             ScreenCaptureTarget::Window { .. } => Self::Window,
             ScreenCaptureTarget::Area { .. } => Self::Area,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+            ScreenCaptureTarget::Display { .. }
+            | ScreenCaptureTarget::CameraOnly
+            | ScreenCaptureTarget::AudioOnly => Self::Display,
         }
     }
 }
@@ -98,6 +101,7 @@ impl ScreenCaptureTarget {
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
             Self::CameraOnly => None,
+            Self::AudioOnly => None,
         }
     }
 
@@ -230,6 +234,7 @@ impl ScreenCaptureTarget {
                 }
             }
             Self::CameraOnly => None,
+            Self::AudioOnly => None,
         }
     }
 
@@ -264,6 +269,7 @@ impl ScreenCaptureTarget {
                 }
             }
             Self::CameraOnly => None,
+            Self::AudioOnly => None,
         }
     }
 
@@ -273,6 +279,7 @@ impl ScreenCaptureTarget {
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
             Self::CameraOnly => Some("Camera".to_string()),
+            Self::AudioOnly => Some("Audio".to_string()),
         }
     }
 
@@ -282,6 +289,7 @@ impl ScreenCaptureTarget {
             ScreenCaptureTarget::Window { .. } => "Window",
             ScreenCaptureTarget::Area { .. } => "Area",
             ScreenCaptureTarget::CameraOnly => "Camera",
+            ScreenCaptureTarget::AudioOnly => "Audio",
         }
     }
 }

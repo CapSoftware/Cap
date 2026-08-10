@@ -113,7 +113,10 @@ fn spawn_current_desktop_background_snapshot(
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
 ) {
-    if matches!(capture_target, ScreenCaptureTarget::CameraOnly) {
+    if matches!(
+        capture_target,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+    ) {
         return;
     }
 
@@ -1639,7 +1642,10 @@ pub async fn start_recording(
             } else {
                 cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
             };
-            let upload_mode = if matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly) {
+            let upload_mode = if matches!(
+                inputs.capture_target,
+                ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+            ) {
                 "desktopMP4"
             } else {
                 "desktopSegments"
@@ -1728,6 +1734,7 @@ pub async fn start_recording(
         },
         sharing: None,
         upload: None,
+        audio_only: matches!(inputs.capture_target, ScreenCaptureTarget::AudioOnly),
     };
 
     pending_try!(meta.save_for_project(), |e| format!(
@@ -1835,7 +1842,7 @@ pub async fn start_recording(
 
             #[cfg(target_os = "macos")]
             let mut shareable_content = match inputs.capture_target {
-                ScreenCaptureTarget::CameraOnly => None,
+                ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
                 _ => {
                     debug!("Acquiring shareable content for recording target");
                     let content =
@@ -2904,7 +2911,7 @@ pub async fn take_screenshot(
     };
 
     let segment = cap_project::SingleSegment {
-        display: video_meta,
+        display: Some(video_meta),
         camera: None,
         audio: None,
         cursor: None,
@@ -2919,6 +2926,7 @@ pub async fn take_screenshot(
             cap_project::StudioRecordingMeta::SingleSegment { segment },
         )),
         upload: None,
+        audio_only: false,
     };
 
     meta.save_for_project()
@@ -3202,9 +3210,7 @@ fn compute_studio_duration_secs(recording_dir: &std::path::Path) -> f64 {
     let Some(studio_meta) = meta.studio_meta() else {
         return 0.0;
     };
-    ProjectRecordingsMeta::new(&recording_dir.to_path_buf(), studio_meta)
-        .map(|r| r.duration())
-        .unwrap_or(0.0)
+    ProjectRecordingsMeta::duration_secs_for_meta(&recording_dir.to_path_buf(), studio_meta)
 }
 
 /// Returns `true` when an editor window took the foreground (in-editor
@@ -3363,22 +3369,32 @@ async fn handle_recording_finish(
             let updated_studio_meta = recording.meta.clone();
 
             let display_output_path = match &updated_studio_meta {
-                StudioRecordingMeta::SingleSegment { segment } => {
-                    segment.display.path.to_path(&recording_dir)
-                }
-                StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                    inner.segments[0].display.path.to_path(&recording_dir)
-                }
+                StudioRecordingMeta::SingleSegment { segment } => segment
+                    .display
+                    .as_ref()
+                    .map(|d| d.path.to_path(&recording_dir)),
+                StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+                    .segments
+                    .first()
+                    .and_then(|s| s.display.as_ref())
+                    .map(|d| d.path.to_path(&recording_dir)),
             };
+            let has_display = display_output_path.is_some();
 
             let display_screenshot = screenshots_dir.join("display.jpg");
-            tokio::spawn(create_screenshot(
-                display_output_path,
-                display_screenshot.clone(),
-                None,
-            ));
+            if let Some(display_path) = display_output_path {
+                tokio::spawn(create_screenshot(
+                    display_path,
+                    display_screenshot.clone(),
+                    None,
+                ));
+            }
 
-            let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)?;
+            let recordings = if has_display {
+                ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)?
+            } else {
+                ProjectRecordingsMeta { segments: vec![] }
+            };
 
             let config = project_config_from_recording(
                 app,
@@ -3611,23 +3627,32 @@ async fn finalize_studio_recording(
         .clone();
 
     let display_output_path = match &updated_studio_meta {
-        StudioRecordingMeta::SingleSegment { segment } => {
-            segment.display.path.to_path(&recording_dir)
-        }
-        StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            inner.segments[0].display.path.to_path(&recording_dir)
-        }
+        StudioRecordingMeta::SingleSegment { segment } => segment
+            .display
+            .as_ref()
+            .map(|d| d.path.to_path(&recording_dir)),
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+            .segments
+            .first()
+            .and_then(|s| s.display.as_ref())
+            .map(|d| d.path.to_path(&recording_dir)),
     };
+    let has_display = display_output_path.is_some();
 
-    let display_screenshot = screenshots_dir.join("display.jpg");
-    tokio::spawn(create_screenshot(
-        display_output_path,
-        display_screenshot,
-        None,
-    ));
+    if let Some(display_path) = display_output_path {
+        tokio::spawn(create_screenshot(
+            display_path,
+            screenshots_dir.join("display.jpg"),
+            None,
+        ));
+    }
 
-    let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)
-        .map_err(|e| format!("Failed to create project recordings meta: {e}"))?;
+    let recordings = if has_display {
+        ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)
+            .map_err(|e| format!("Failed to create project recordings meta: {e}"))?
+    } else {
+        ProjectRecordingsMeta { segments: vec![] }
+    };
 
     let config = project_config_from_recording(
         app,
@@ -3743,6 +3768,7 @@ pub fn generate_zoom_segments_from_clicks(
         sharing: None,
         inner: RecordingMetaInner::Studio(Box::new(recording.meta.clone())),
         upload: None,
+        audio_only: false,
     };
 
     generate_zoom_segments_for_project(&recording_meta, recordings)
@@ -3847,34 +3873,36 @@ fn project_config_from_recording(
         })
         .collect::<Vec<_>>();
 
-    let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
-    } else {
-        Vec::new()
-    };
+    if !timeline_segments.is_empty() {
+        let zoom_segments = if settings.auto_zoom_on_clicks {
+            generate_zoom_segments_from_clicks(completed_recording, recordings)
+        } else {
+            Vec::new()
+        };
 
-    if should_enable_notch_overlay(
-        capture_target,
-        settings.macbook_notch_overlay.unwrap_or(false),
-        completed_recording.meta.display_notch().is_some(),
-    ) {
-        config.background.notch = Some(cap_project::NotchConfiguration {
-            enabled: true,
-            ..Default::default()
+        if should_enable_notch_overlay(
+            capture_target,
+            settings.macbook_notch_overlay.unwrap_or(false),
+            completed_recording.meta.display_notch().is_some(),
+        ) {
+            config.background.notch = Some(cap_project::NotchConfiguration {
+                enabled: true,
+                ..Default::default()
+            });
+        }
+
+        config.timeline = Some(TimelineConfiguration {
+            segments: timeline_segments,
+            transitions: Vec::new(),
+            zoom_segments,
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
         });
     }
-
-    config.timeline = Some(TimelineConfiguration {
-        segments: timeline_segments,
-        transitions: Vec::new(),
-        zoom_segments,
-        scene_segments: Vec::new(),
-        mask_segments: Vec::new(),
-        text_segments: Vec::new(),
-        caption_segments: Vec::new(),
-        keyboard_segments: Vec::new(),
-        audio_segments: Vec::new(),
-    });
 
     config
 }
@@ -3928,7 +3956,10 @@ fn apply_screen_recording_presentation_defaults(
 ) {
     use cap_project::{BackgroundSource, ScreenMovementSpring};
 
-    if matches!(capture_target, Some(ScreenCaptureTarget::CameraOnly)) {
+    if matches!(
+        capture_target,
+        Some(ScreenCaptureTarget::CameraOnly) | Some(ScreenCaptureTarget::AudioOnly)
+    ) {
         return;
     }
 
@@ -3969,7 +4000,13 @@ pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) ->
     };
 
     for segment in &inner.segments {
-        let display_path = segment.display.path.to_path(recording_dir);
+        let Some(display_path) = segment
+            .display
+            .as_ref()
+            .map(|d| d.path.to_path(recording_dir))
+        else {
+            continue;
+        };
         if display_path.is_dir() {
             return true;
         }
@@ -4033,7 +4070,9 @@ pub fn remux_fragmented_recording_with_trigger(
                                     inner
                                         .segments
                                         .iter()
-                                        .filter_map(|seg| seg.display.start_time)
+                                        .filter_map(|seg| {
+                                            seg.display.as_ref().and_then(|d| d.start_time)
+                                        })
                                         .fold(0.0_f64, |acc, v| acc.max(v)),
                                 ),
                                 StudioRecordingMeta::SingleSegment { .. } => None,
@@ -4380,6 +4419,27 @@ mod tests {
         apply_screen_recording_presentation_defaults(
             &mut config,
             Some(&ScreenCaptureTarget::CameraOnly),
+            true,
+            Some("wallpaper.jpg".to_string()),
+        );
+
+        assert_eq!(config.background.padding, 0.0);
+        assert!(matches!(
+            config.background.source,
+            cap_project::BackgroundSource::Color {
+                value: [255, 255, 255],
+                alpha: 255,
+            }
+        ));
+    }
+
+    #[test]
+    fn skips_screen_presentation_defaults_for_audio_only_recordings() {
+        let mut config = ProjectConfiguration::default();
+
+        apply_screen_recording_presentation_defaults(
+            &mut config,
+            Some(&ScreenCaptureTarget::AudioOnly),
             true,
             Some("wallpaper.jpg".to_string()),
         );
