@@ -29,5 +29,7 @@
 	<string>Cap captures your screen as part of recording your Caps</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>
 	<true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <false/>
 </dict>
 </plist>
