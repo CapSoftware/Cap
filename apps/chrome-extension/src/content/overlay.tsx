@@ -26,6 +26,7 @@ import {
 	loadWebcamPreviewDismissed,
 	OVERLAY_UI_STATE_KEY,
 	SETTINGS_KEY,
+	SHARED_STATE_AREA,
 	SHARED_UI_STATE_KEY,
 	saveLastWebcamPreviewFrame,
 	saveSettings,
@@ -417,7 +418,7 @@ function RecorderPanelOverlay({
 			changes: Record<string, chrome.storage.StorageChange>,
 			areaName: string,
 		) => {
-			if (areaName === "session" && changes[SHARED_UI_STATE_KEY]) {
+			if (areaName === SHARED_STATE_AREA && changes[SHARED_UI_STATE_KEY]) {
 				syncPanelState();
 			}
 		};
@@ -828,7 +829,10 @@ function OverlayApp() {
 			if (areaName === "local" && changes[SETTINGS_KEY]) {
 				syncSettingsState();
 			}
-			if (areaName === "session" && changes[WEBCAM_PREVIEW_DISMISSED_KEY]) {
+			if (
+				areaName === SHARED_STATE_AREA &&
+				changes[WEBCAM_PREVIEW_DISMISSED_KEY]
+			) {
 				syncPreviewDismissedState();
 			}
 		};

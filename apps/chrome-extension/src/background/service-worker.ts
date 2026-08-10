@@ -1,3 +1,5 @@
+import { capabilities } from "../platform/capabilities";
+import { EXTENSION_PROTOCOL } from "../platform/extension-protocol";
 import {
 	ApiRequestError,
 	createAuthStart,
@@ -10,11 +12,13 @@ import {
 	isServiceWorkerRequest,
 } from "../shared/messages";
 import { rememberRecordingMode } from "../shared/preferences";
+import { wait } from "../shared/runtime";
 import {
 	clearAuth,
 	clearAuthError,
 	clearCachedBootstrap,
 	clearPendingAuth,
+	clearSharedSessionState,
 	isOverlayTokenRegistered,
 	loadAuth,
 	loadAuthError,
@@ -56,6 +60,7 @@ import type {
 	ServiceWorkerRequest,
 	ServiceWorkerResponse,
 } from "../shared/types";
+import { ensureRecorderHost, hasRecorderHost } from "./recorder-host";
 
 // popup.html is web-accessible with use_dynamic_url so sites cannot fingerprint
 // the extension via the overlay iframe's static URL; that same flag makes its
@@ -63,7 +68,6 @@ import type {
 // a window. The standalone fallback therefore loads a privileged twin that is
 // not in web_accessible_resources.
 const POPUP_URL = "popup-window.html";
-const OFFSCREEN_URL = "offscreen.html";
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 const OFFSCREEN_MESSAGE_ATTEMPTS = 3;
 const OFFSCREEN_MESSAGE_RETRY_DELAY_MS = 75;
@@ -81,7 +85,7 @@ let mediaPermissionsCache: MediaPermissionSnapshot = {
 let uploadProgressTabId: number | null = null;
 let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
-let offscreenDocumentCreation: Promise<void> | null = null;
+let readyPreviewTabId: number | null = null;
 let browserWindowFocused = true;
 let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
@@ -89,9 +93,18 @@ let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
 // contexts unless the access level is widened. Without this every session
-// storage call from a content script fails.
-chrome.storage.session.setAccessLevel({
+// storage call from a content script fails. Firefox does not implement
+// setAccessLevel at all — calling it unconditionally throws and kills the
+// whole background script — so content scripts there rely on the runtime
+// message fallbacks instead of the session-storage mirror.
+chrome.storage.session.setAccessLevel?.({
 	accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
+});
+
+// On Firefox the shared "session" keys live in storage.local; drop them at
+// browser startup so stale recording/UI state does not outlive the session.
+chrome.runtime.onStartup.addListener(() => {
+	void clearSharedSessionState().catch(() => undefined);
 });
 
 const getActiveTab = () =>
@@ -188,63 +201,6 @@ const focusTab = async (tabId: number) => {
 	await activateTab(tabId);
 };
 
-const getOffscreenDocumentContexts = async () => {
-	const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_URL);
-	return new Promise<Array<{ documentUrl?: string }>>((resolve) => {
-		chrome.runtime.getContexts(
-			{
-				contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
-				documentUrls: [offscreenUrl],
-			},
-			(contexts) => resolve(contexts),
-		);
-	});
-};
-
-const hasOffscreenDocument = async () =>
-	(await getOffscreenDocumentContexts()).length > 0;
-
-const createOffscreenDocument = () =>
-	new Promise<void>((resolve, reject) => {
-		chrome.offscreen.createDocument(
-			{
-				url: OFFSCREEN_URL,
-				reasons: ["USER_MEDIA", "DISPLAY_MEDIA", "BLOBS", "AUDIO_PLAYBACK"],
-				justification: "Record and upload Cap videos from an extension page.",
-			},
-			() => {
-				const error = chrome.runtime.lastError;
-				if (!error) {
-					resolve();
-					return;
-				}
-
-				const message = error.message ?? "Failed to create offscreen document";
-				if (message.toLowerCase().includes("single offscreen document")) {
-					resolve();
-					return;
-				}
-
-				reject(new Error(message));
-			},
-		);
-	});
-
-const ensureOffscreenDocument = async () => {
-	const contexts = await getOffscreenDocumentContexts();
-	if (contexts.length > 0) return;
-
-	offscreenDocumentCreation ??= createOffscreenDocument().finally(() => {
-		offscreenDocumentCreation = null;
-	});
-	await offscreenDocumentCreation;
-};
-
-const wait = (durationMs: number) =>
-	new Promise<void>((resolve) => {
-		globalThis.setTimeout(resolve, durationMs);
-	});
-
 const isTransientOffscreenMessageError = (error: unknown) => {
 	if (!(error instanceof Error)) return false;
 	const message = error.message.toLowerCase();
@@ -267,15 +223,19 @@ const sendOffscreenRuntimeMessage = (message: OffscreenRequest) =>
 
 const sendOffscreen = async (
 	message: OffscreenRequest,
-	options: { createIfMissing?: boolean } = {},
+	options: { createIfMissing?: boolean; interactive?: boolean } = {},
 ) => {
+	// `interactive` must survive into the retry path: recreating the Firefox
+	// recorder window minimized for a start-recording message would leave its
+	// arm button waiting for a click no one can make.
+	const hostOptions = { interactive: options.interactive === true };
 	if (options.createIfMissing === false) {
-		const hasDocument = await hasOffscreenDocument();
+		const hasDocument = await hasRecorderHost();
 		if (!hasDocument) {
 			return { ok: true, status: recordingStatus } satisfies OffscreenResponse;
 		}
 	} else {
-		await ensureOffscreenDocument();
+		await ensureRecorderHost(hostOptions);
 	}
 
 	let lastError: unknown;
@@ -292,7 +252,7 @@ const sendOffscreen = async (
 				break;
 			}
 			await wait(OFFSCREEN_MESSAGE_RETRY_DELAY_MS);
-			await ensureOffscreenDocument();
+			await ensureRecorderHost(hostOptions);
 		}
 	}
 
@@ -372,7 +332,7 @@ const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
 const isWebPageSender = (sender: chrome.runtime.MessageSender) => {
 	if (!sender.tab) return false;
 	const senderUrl = sender.url ?? "";
-	return !senderUrl.startsWith("chrome-extension:");
+	return !senderUrl.startsWith(EXTENSION_PROTOCOL);
 };
 
 // camera-preview.html is web accessible, so any site can load it in an
@@ -387,7 +347,7 @@ const isCameraPreviewRequestAllowed = async (
 	if (!(await isOverlayTokenRegistered(token))) return false;
 
 	const senderUrl = sender.url ?? "";
-	if (senderUrl.startsWith("chrome-extension:")) {
+	if (senderUrl.startsWith(EXTENSION_PROTOCOL)) {
 		// The camera preview document is the only extension page that drives
 		// the camera.
 		try {
@@ -412,7 +372,7 @@ const isCameraPreviewEventAllowed = async (
 ) => {
 	if (!token || !(await isOverlayTokenRegistered(token))) return false;
 	const senderUrl = sender.url ?? "";
-	if (!senderUrl.startsWith("chrome-extension:")) return false;
+	if (!senderUrl.startsWith(EXTENSION_PROTOCOL)) return false;
 	try {
 		return new URL(senderUrl).pathname === "/camera-preview.html";
 	} catch {
@@ -1158,6 +1118,11 @@ const resolveMicWarning = async (
 };
 
 const performRecordingStart = async (mode: RecordingMode) => {
+	// Defense against stale overlay/content-script messages: the mode selector
+	// already hides tab capture where it is unsupported.
+	if (mode === "tab" && !capabilities.supportsTabCapture) {
+		throw new Error("Tab recording is not available in this browser.");
+	}
 	const { settings, auth, bootstrap } = await requireSignedInState();
 	externalCaptureAutoPipPending = false;
 	const recordingSettings =
@@ -1205,16 +1170,23 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
-		return await sendOffscreen({
-			target: "offscreen",
-			type: "start-recording",
-			mode,
-			settings: recordingSettings,
-			auth,
-			bootstrap,
-			tabId,
-			tabStreamId,
-		});
+		// On Firefox the recorder document must collect a click (transient
+		// activation for getDisplayMedia), so its window is created — or
+		// surfaced — in front of the user. A no-op beyond document creation on
+		// Chrome.
+		return await sendOffscreen(
+			{
+				target: "offscreen",
+				type: "start-recording",
+				mode,
+				settings: recordingSettings,
+				auth,
+				bootstrap,
+				tabId,
+				tabStreamId,
+			},
+			{ interactive: true },
+		);
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast
@@ -1244,7 +1216,7 @@ const forwardToOffscreen = (type: OffscreenRequest["type"]) =>
 	sendOffscreen({ target: "offscreen", type } as OffscreenRequest);
 
 const syncRecordingStatus = async () => {
-	const hasDocument = await hasOffscreenDocument();
+	const hasDocument = await hasRecorderHost();
 	if (!hasDocument) {
 		if (
 			isActiveRecordingStatus(recordingStatus) ||
@@ -1608,6 +1580,29 @@ const handleRequest = async (
 		return { ok: true };
 	}
 
+	// Firefox content scripts cannot dynamic-import extension modules
+	// (bugzilla 1536094), so the bootstrap asks for the overlay bundle to be
+	// injected into its isolated world instead.
+	if (message.type === "inject-overlay-module") {
+		const tabId = sender.tab?.id;
+		if (tabId === undefined) {
+			return { ok: false, error: "Overlay injection needs a tab sender" };
+		}
+		return new Promise<ServiceWorkerResponse>((resolve) => {
+			chrome.scripting.executeScript(
+				{ target: { tabId }, files: ["content/overlay.js"] },
+				() => {
+					const error = chrome.runtime.lastError;
+					resolve(
+						error
+							? { ok: false, error: error.message ?? "Injection failed" }
+							: { ok: true },
+					);
+				},
+			);
+		});
+	}
+
 	if (
 		message.type === "pause-recording" ||
 		message.type === "resume-recording"
@@ -1804,6 +1799,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
+	void clearSharedSessionState().catch(() => undefined);
 	void updateActionForStatus(recordingStatus);
 	void injectOverlayIntoOpenTabs();
 	if (details.reason === "install") {
@@ -1845,6 +1841,30 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 	if (changeInfo.status === "complete" && tab.active) {
 		void syncActivePreview(tabId).catch(() => undefined);
+	}
+});
+
+// The Firefox recorder host is a window the user can close mid-recording;
+// syncRecordingStatus already degrades to idle when the host is gone, it
+// just needs to be triggered promptly. Chrome's offscreen document is not
+// user-closable, so this never fires anything meaningful there.
+chrome.windows.onRemoved.addListener(() => {
+	if (capabilities.supportsOffscreen) return;
+	// If the popup is closed while the arm button is waiting (phase "creating"),
+	// the in-flight start promise prevents syncRecordingStatus from resetting
+	// the status. Force-clear it so the UI doesn't stay stuck on "creating".
+	if (recordingStatus.phase === "creating") {
+		setRecordingStatusAndBroadcast({ phase: "idle" });
+		recordingStartInFlight = null;
+	}
+	void syncRecordingStatus().catch(() => undefined);
+});
+
+// Firefox grants host permissions after install (welcome page); inject the
+// bootstrap into tabs that were already open once that happens.
+chrome.permissions.onAdded.addListener((permissions) => {
+	if (permissions.origins?.length) {
+		void injectOverlayIntoOpenTabs();
 	}
 });
 

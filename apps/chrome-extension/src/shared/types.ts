@@ -375,6 +375,10 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
+			type: "inject-overlay-module";
+	  }
+	| {
+			target: "service-worker";
 			type: "open-options";
 	  }
 	| {

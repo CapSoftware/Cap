@@ -21,6 +21,7 @@ import {
 	loadSharedUiState,
 	OVERLAY_UI_STATE_KEY,
 	RECORDING_STATE_KEY,
+	SHARED_STATE_AREA,
 	SHARED_UI_STATE_KEY,
 	updateOverlayUiState,
 	updateSharedUiState,
@@ -205,10 +206,10 @@ export function RecordingBarOverlay({
 			if (areaName === "local" && changes[AUTH_KEY]) {
 				syncAuthState();
 			}
-			if (areaName === "session" && changes[RECORDING_STATE_KEY]) {
+			if (areaName === SHARED_STATE_AREA && changes[RECORDING_STATE_KEY]) {
 				syncSharedRecordingState();
 			}
-			if (areaName === "session" && changes[SHARED_UI_STATE_KEY]) {
+			if (areaName === SHARED_STATE_AREA && changes[SHARED_UI_STATE_KEY]) {
 				syncSharedUiState();
 			}
 		};

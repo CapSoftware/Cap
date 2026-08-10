@@ -1,5 +1,10 @@
 import type { ServiceWorkerRequest, ServiceWorkerResponse } from "./types";
 
+export const wait = (durationMs: number) =>
+	new Promise<void>((resolve) => {
+		globalThis.setTimeout(resolve, durationMs);
+	});
+
 export const sendServiceWorkerMessage = (message: ServiceWorkerRequest) =>
 	new Promise<ServiceWorkerResponse>((resolve, reject) => {
 		chrome.runtime.sendMessage(message, (response) => {

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Cap Recorder</title>
+		<style>
+			:root {
+				color-scheme: dark;
+			}
+			body {
+				margin: 0;
+				min-height: 100vh;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+				background: #101012;
+				color: #f4f4f5;
+			}
+			.card {
+				box-sizing: border-box;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 14px;
+				max-width: 340px;
+				padding: 32px 28px;
+				text-align: center;
+			}
+			.card img {
+				width: 48px;
+				height: 48px;
+			}
+			.card h1 {
+				margin: 0;
+				font-size: 18px;
+				font-weight: 600;
+			}
+			.card p {
+				margin: 0;
+				font-size: 13px;
+				line-height: 1.55;
+				color: #a1a1aa;
+			}
+			#arm-capture-button {
+				margin-top: 6px;
+				height: 44px;
+				padding: 0 28px;
+				border: none;
+				border-radius: 12px;
+				background: #4785ff;
+				color: #fff;
+				font-size: 15px;
+				font-weight: 500;
+				cursor: pointer;
+			}
+			#arm-capture-button:hover {
+				background: #3b74e6;
+			}
+			.hint {
+				font-size: 12px !important;
+				color: #71717a !important;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- Default state: this window quietly hosts capture, upload and device
+		     access. Visible only if the user surfaces it. -->
+		<main class="card" id="idle-state">
+			<img src="/icons/icon-48.png" alt="Cap" />
+			<h1>Cap recording engine</h1>
+			<p>
+				This window powers your recording and uploads. It stays minimized
+				while you record and closes by itself when it is no longer needed.
+			</p>
+		</main>
+		<!-- Shown only on Firefox when a recording starts: the click provides
+		     the user activation getDisplayMedia requires in this window. -->
+		<main class="card" id="arm-capture" hidden>
+			<img src="/icons/icon-48.png" alt="Cap" />
+			<h1>Ready to record?</h1>
+			<p>
+				Firefox asks for one click here, then you'll choose what to share.
+			</p>
+			<button id="arm-capture-button" type="button">
+				Choose what to record
+			</button>
+			<p class="hint">
+				Recording starts after the countdown. This window gets out of the
+				way by itself.
+			</p>
+		</main>
+		<script type="module" src="/src/recorder/recorder.ts"></script>
+	</body>
+</html>

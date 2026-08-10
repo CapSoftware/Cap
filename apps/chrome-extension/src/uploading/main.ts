@@ -6,6 +6,7 @@ import {
 	loadFailedRecordings,
 	loadSharedRecordingState,
 	RECORDING_STATE_KEY,
+	SHARED_STATE_AREA,
 } from "../shared/storage";
 import type { RecordingStatus } from "../shared/types";
 import "./styles.css";
@@ -452,7 +453,7 @@ chrome.runtime.onMessage.addListener((message) => {
 // The service worker mirrors every status change into session storage, so
 // the change events keep this page live without polling round trips.
 chrome.storage.onChanged.addListener((changes, areaName) => {
-	if (areaName !== "session" || !changes[RECORDING_STATE_KEY]) return;
+	if (areaName !== SHARED_STATE_AREA || !changes[RECORDING_STATE_KEY]) return;
 	if (redirecting) return;
 	void loadSharedRecordingState()
 		.then((state) => {
