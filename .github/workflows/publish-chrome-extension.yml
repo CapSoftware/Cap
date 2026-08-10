@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           version="$(node -e "const fs = require('node:fs'); const manifest = JSON.parse(fs.readFileSync('${EXTENSION_DIR}/public/manifest.json', 'utf8')); console.log(manifest.version);")"
           zip_path="${RUNNER_TEMP}/cap-chrome-extension-${version}.zip"
-          (cd "${EXTENSION_DIR}/dist" && zip -r "${zip_path}" . -x "*.DS_Store")
+          (cd "${EXTENSION_DIR}/dist/chrome" && zip -r "${zip_path}" . -x "*.DS_Store")
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "zip_path=${zip_path}" >> "$GITHUB_OUTPUT"
 
