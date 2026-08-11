@@ -1,0 +1,12 @@
+{
+	"name": "cap-demo",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Generate a cinematic 3D product-demo video from any URL with Cap.",
+	"bin": {
+		"cap-demo": "./cap-demo.mjs"
+	},
+	"dependencies": {
+		"playwright-core": "^1.62.1"
+	}
+}

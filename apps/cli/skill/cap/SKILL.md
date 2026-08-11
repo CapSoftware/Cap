@@ -115,3 +115,10 @@ cap upload out.mp4 --json
 ```
 
 A stopped recording is complete only when `recordingMetaExists` is `true`.
+
+## Cinematic demo videos
+
+To generate a short, cinematic 3D product-demo video from a URL, use the installed
+`cap-demo` skill (installed alongside this one). It scouts the page, records it with
+virtual input, and treats it with Cap's 3D camera, a brand-matched background, and
+music. Currently macOS-only.

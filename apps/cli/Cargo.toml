@@ -28,6 +28,7 @@ kameo = "0.17.2"
 flume = { workspace = true }
 futures = { workspace = true }
 dirs = "6.0.0"
+include_dir = "0.7"
 image = "0.25.2"
 chrono = "0.4.31"
 base64 = "0.22.1"

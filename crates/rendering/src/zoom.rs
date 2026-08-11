@@ -106,6 +106,16 @@ impl InterpolatedZoom {
     }
 }
 
+impl Default for InterpolatedZoom {
+    /// The resting transform: no zoom engaged.
+    fn default() -> Self {
+        Self {
+            t: 0.0,
+            bounds: SegmentBounds::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

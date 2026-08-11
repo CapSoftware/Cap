@@ -17,8 +17,9 @@ use frame_pipeline::{
 };
 use futures::future::OptionFuture;
 use layers::{
-    Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    FrameLayer, KeyboardLayer, MaskLayer, NotchLayer, NotchUniforms, TextLayer,
+    Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
+    CaptionsLayer, CursorLayer, DisplayLayer, FrameLayer, KeyboardLayer, MaskLayer, NotchLayer,
+    NotchUniforms, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -29,6 +30,7 @@ use std::sync::{
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
+pub mod camera3d;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -68,6 +70,7 @@ pub fn prewarm_fonts() {
     drop(layers::new_font_system());
 }
 
+use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::PrecomputedCursorTimeline;
 use mask::interpolate_masks;
 use scene::*;
@@ -2262,6 +2265,12 @@ pub struct ProjectUniforms {
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
+    /// Effective 3D camera state for this frame; `None` when the frame is
+    /// outside every 3d segment (the warp and blur passes are skipped).
+    pub camera3d: Option<Camera3DFrame>,
+    /// The 2D zoom re-expressed as an on-screen card magnification while a 3D
+    /// pose is active (the display itself renders unzoomed into the card).
+    pub camera3d_zoom: Option<camera3d::Camera3DScreenZoom>,
 }
 
 #[derive(Debug, Clone)]
@@ -3348,6 +3357,35 @@ impl ProjectUniforms {
             scene_segments,
         ));
 
+        let camera3d = project.timeline.as_ref().and_then(|timeline| {
+            interpolate_camera3d(
+                frame_time as f64,
+                &timeline.camera3d_segments,
+                output_size.0 as f64 / output_size.1.max(1) as f64,
+            )
+        });
+        // The card's flat drop shadow is baked into the warped texture, so in
+        // 3D it would rotate with the plane and clip at the texture edge.
+        // A floating card has no baked shadow, so fade ours out.
+        let camera3d_shadow_fade = 1.0 - camera3d.map_or(0.0, |c| c.activity) as f32;
+
+        // While a 3D pose is active the 2D zoom must not crop the display
+        // inside the card texture (the crop edge reads as the card arbitrarily
+        // cutting content off). The content renders unzoomed and the sampled
+        // zoom becomes a screen-space magnification of the whole card about
+        // the zoom target instead (see `camera3d_zoom` below).
+        let camera3d_pose_active = camera3d.as_ref().is_some_and(|c| c.pose.is_some());
+        let raw_zoom = zoom;
+        let (zoom, prev_zoom, motion_prev_zoom) = if camera3d_pose_active {
+            (
+                InterpolatedZoom::default(),
+                InterpolatedZoom::default(),
+                InterpolatedZoom::default(),
+            )
+        } else {
+            (zoom, prev_zoom, motion_prev_zoom)
+        };
+
         // Resolve the side-by-side layout once and share it with the display,
         // camera and cursor layers. Only engages when a camera actually exists;
         // otherwise the layers render normally (graceful full-screen fallback).
@@ -3467,6 +3505,7 @@ impl ProjectUniforms {
             None
         };
 
+        let mut camera3d_zoom: Option<camera3d::Camera3DScreenZoom> = None;
         let (display, display_motion_parent, frame_chrome, display_outer_bounds, notch) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
@@ -3484,6 +3523,27 @@ impl ProjectUniforms {
             let display_offset = Coord::<FrameSpace>::new(layout.content_offset);
             let display_size = Coord::<FrameSpace>::new(layout.content_size);
             let frame_config = project.background.frame.clone().filter(|f| f.is_active());
+
+            if camera3d_pose_active {
+                // Re-express the (neutralized) 2D zoom as a magnification of
+                // the whole card about the zoom target's on-card position.
+                let bounds = raw_zoom.bounds;
+                let span = bounds.bottom_right - bounds.top_left;
+                let amount = ((span.x + span.y) / 2.0).max(1.0);
+                if amount > 1.001 {
+                    let center_u = (0.5 - bounds.top_left.x) / span.x.max(1e-6);
+                    let center_v = (0.5 - bounds.top_left.y) / span.y.max(1e-6);
+                    let frame_x = display_offset.coord.x + center_u * display_size.coord.x;
+                    let frame_y = display_offset.coord.y + center_v * display_size.coord.y;
+                    camera3d_zoom = Some(camera3d::Camera3DScreenZoom {
+                        content_uv: XY::new(
+                            frame_x / output_size.x.max(1.0),
+                            frame_y / output_size.y.max(1.0),
+                        ),
+                        amount,
+                    });
+                }
+            }
 
             let (start, end) = Self::display_bounds(&zoom, display_offset, display_size);
             let (prev_start, prev_end) =
@@ -3631,7 +3691,7 @@ impl ProjectUniforms {
                             0.0,
                         ],
                         shadow: if decorated {
-                            project.background.shadow * split_fade
+                            project.background.shadow * split_fade * camera3d_shadow_fade
                         } else {
                             0.0
                         },
@@ -3645,7 +3705,8 @@ impl ProjectUniforms {
                             .advanced_shadow
                             .as_ref()
                             .map_or(18.0, |s| s.opacity)
-                            * split_fade,
+                            * split_fade
+                            * camera3d_shadow_fade,
                         shadow_blur: project
                             .background
                             .advanced_shadow
@@ -3744,7 +3805,9 @@ impl ProjectUniforms {
                         descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.background.shadow * display_decoration_fade,
+                    shadow: project.background.shadow
+                        * display_decoration_fade
+                        * camera3d_shadow_fade,
                     shadow_size: project
                         .background
                         .advanced_shadow
@@ -3755,7 +3818,8 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(18.0, |s| s.opacity)
-                        * display_decoration_fade,
+                        * display_decoration_fade
+                        * camera3d_shadow_fade,
                     shadow_blur: project
                         .background
                         .advanced_shadow
@@ -3949,7 +4013,7 @@ impl ProjectUniforms {
                         camera_descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.camera.shadow * chrome_fade,
+                    shadow: project.camera.shadow * chrome_fade * camera3d_shadow_fade,
                     shadow_size: project
                         .camera
                         .advanced_shadow
@@ -3960,7 +4024,8 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(18.0, |s| s.opacity)
-                        * chrome_fade,
+                        * chrome_fade
+                        * camera3d_shadow_fade,
                     shadow_blur: project
                         .camera
                         .advanced_shadow
@@ -4122,6 +4187,8 @@ impl ProjectUniforms {
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
+            camera3d,
+            camera3d_zoom,
         }
     }
 }
@@ -5191,6 +5258,7 @@ pub struct RendererLayers {
     text: TextLayer,
     captions: CaptionsLayer,
     keyboard: KeyboardLayer,
+    camera3d: Camera3DLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
 }
@@ -5235,6 +5303,7 @@ impl RendererLayers {
             text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
             keyboard: KeyboardLayer::new(device, queue),
+            camera3d: Camera3DLayer::new(device),
             camera_blur_processor: None,
             camera_blur_init_failed: false,
         }
@@ -5637,6 +5706,8 @@ impl RendererLayers {
         );
         timings.keyboard_prepare_duration = start.elapsed();
 
+        self.camera3d.prepare(&constants.queue, uniforms);
+
         Ok(timings)
     }
 
@@ -5699,31 +5770,53 @@ impl RendererLayers {
             true
         };
 
+        // When a 3D camera pose is active, the content group (frame chrome,
+        // display, cursor, notch, camera) renders into the spare ping-pong
+        // texture, and the camera3d pass then warps it over the untouched
+        // background. Overlay annotations (masks, text, keyboard, captions)
+        // stay flat on top. When inactive this is exactly the flat path.
+        let camera3d_active = self.camera3d.is_active();
+        if camera3d_active {
+            let _pass = render_pass!(
+                session.other_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            );
+        }
+        macro_rules! content_view {
+            () => {
+                if camera3d_active {
+                    session.other_texture_view()
+                } else {
+                    session.current_texture_view()
+                }
+            };
+        }
+
         if should_render_screen && self.frame.has_content() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.frame.render(&mut pass);
         }
 
         if should_render_screen {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
         if should_render_cursor {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
 
         // After the cursor, which really does disappear behind the notch on a
         // Mac, but before masks and text, which are editor annotations.
         if should_render_screen && self.notch.has_content() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.notch.render(&mut pass);
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
         if uniforms.scene.is_transitioning_camera_only() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
         }
 
@@ -5731,8 +5824,38 @@ impl RendererLayers {
         if uniforms.scene.should_render_camera()
             && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
+        }
+
+        if camera3d_active {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.camera3d
+                .render(&mut pass, device, session.other_texture_view());
+        }
+
+        // Focus blur over the composed frame (background and warped content
+        // together), before the flat annotations.
+        match self.camera3d.blur_kind() {
+            Some(Camera3DBlurKind::Gaussian) => {
+                {
+                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+                    self.camera3d
+                        .render_blur_h(&mut pass, device, session.current_texture_view());
+                }
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                self.camera3d
+                    .render_blur_v(&mut pass, device, session.other_texture_view());
+            }
+            Some(Camera3DBlurKind::Bokeh) => {
+                {
+                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+                    self.camera3d
+                        .render_blur_v(&mut pass, device, session.current_texture_view());
+                }
+                session.swap_textures();
+            }
+            None => {}
         }
 
         if !uniforms.masks.is_empty() {

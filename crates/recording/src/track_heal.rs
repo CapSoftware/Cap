@@ -607,6 +607,17 @@ fn rescale_project_config(project_path: &Path, scales: &HashMap<u32, f64>) {
             s.start *= scale;
             s.end *= scale;
         }
+        for s in &mut timeline.camera3d_segments {
+            s.start *= scale;
+            s.end *= scale;
+            s.transition_in *= scale;
+            s.transition_out *= scale;
+            for track in s.tracks.all_tracks_mut() {
+                for k in track.iter_mut() {
+                    k.time *= scale;
+                }
+            }
+        }
         changed = true;
     }
 
@@ -1059,6 +1070,7 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
+            camera3d_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),
@@ -1076,6 +1088,80 @@ mod tests {
         assert!((timeline.segments[0].end - 202.220711 * scale).abs() < 1e-6);
         assert!((timeline.zoom_segments[0].start - 100.0 * scale).abs() < 1e-6);
         assert!((timeline.zoom_segments[0].end - 150.0 * scale).abs() < 1e-6);
+    }
+
+    #[test]
+    fn config_rescale_scales_camera3d_segments_exactly() {
+        use cap_project::{
+            Camera3DKeyframe, Camera3DSegment, Camera3DTracks, ProjectConfiguration,
+            TimelineConfiguration, TimelineSegment,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let timeline = TimelineConfiguration {
+            segments: vec![TimelineSegment {
+                recording_clip: 0,
+                timescale: 1.0,
+                start: 0.0,
+                end: 202.220711,
+                name: None,
+                speed_audio_mode: None,
+            }],
+            transitions: Vec::new(),
+            zoom_segments: vec![],
+            scene_segments: vec![],
+            mask_segments: vec![],
+            text_segments: vec![],
+            caption_segments: vec![],
+            keyboard_segments: vec![],
+            audio_segments: vec![],
+            camera3d_segments: vec![Camera3DSegment {
+                start: 100.0,
+                end: 150.0,
+                enabled: true,
+                properties: Default::default(),
+                blur: Default::default(),
+                tracks: Camera3DTracks {
+                    tilt_x: vec![
+                        Camera3DKeyframe {
+                            time: 0.0,
+                            value: 0.0,
+                            out_easing: None,
+                            in_easing: None,
+                        },
+                        Camera3DKeyframe {
+                            time: 10.0,
+                            value: 15.0,
+                            out_easing: None,
+                            in_easing: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                transition_in: 0.5,
+                transition_out: 0.8,
+            }],
+        };
+        let config = ProjectConfiguration {
+            timeline: Some(timeline),
+            ..Default::default()
+        };
+        config.write(dir.path()).unwrap();
+
+        let scale = 0.4468;
+        let mut scales = HashMap::new();
+        scales.insert(0u32, scale);
+        rescale_project_config(dir.path(), &scales);
+
+        let reloaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let timeline = reloaded.timeline.unwrap();
+        let segment = &timeline.camera3d_segments[0];
+        assert!((segment.start - 100.0 * scale).abs() < 1e-6);
+        assert!((segment.end - 150.0 * scale).abs() < 1e-6);
+        assert!((segment.transition_in - 0.5 * scale).abs() < 1e-6);
+        assert!((segment.transition_out - 0.8 * scale).abs() < 1e-6);
+        assert!((segment.tracks.tilt_x[0].time - 0.0 * scale).abs() < 1e-6);
+        assert!((segment.tracks.tilt_x[1].time - 10.0 * scale).abs() < 1e-6);
     }
 
     #[test]
@@ -1121,6 +1207,7 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
+            camera3d_segments: Vec::new(),
         };
         let config = ProjectConfiguration {
             timeline: Some(timeline),

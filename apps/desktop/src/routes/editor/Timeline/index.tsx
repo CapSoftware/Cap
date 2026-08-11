@@ -51,6 +51,7 @@ import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
+import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
@@ -71,6 +72,7 @@ const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	zoom: () => <IconLucideSearch class="size-4" />,
 	scene: () => <IconLucideVideo class="size-4" />,
 	audio: () => <IconLucideMusic class="size-4" />,
+	"3d": () => <IconLucideRotate3d class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -129,6 +131,12 @@ const trackDefinitions: TrackDefinition[] = [
 		icon: trackIcons.scene,
 		locked: false,
 	},
+	{
+		type: "3d",
+		label: "3D",
+		icon: trackIcons["3d"],
+		locked: false,
+	},
 ];
 
 function deleteTrackLane<T extends { track?: number }>(
@@ -179,6 +187,7 @@ export function Timeline(props: {
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {
 			setEditorState("timeline", "selection", null);
+			setEditorState("timeline", "camera3dSetup", null);
 			setEditorState("timeline", "audioPicker", laneIndex);
 		});
 	};
@@ -187,6 +196,7 @@ export function Timeline(props: {
 	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
 	const captionTrackVisible = () => trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
+	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
 		trackDefinitions.map((definition) => ({
 			...definition,
@@ -197,13 +207,15 @@ export function Timeline(props: {
 						? trackState().keyboard
 						: definition.type === "scene"
 							? trackState().scene
-							: definition.type === "mask"
-								? trackState().mask > 0
-								: definition.type === "text"
-									? trackState().text > 0
-									: definition.type === "audio"
-										? trackState().audio > 0
-										: true,
+							: definition.type === "3d"
+								? trackState()["3d"]
+								: definition.type === "mask"
+									? trackState().mask > 0
+									: definition.type === "text"
+										? trackState().text > 0
+										: definition.type === "audio"
+											? trackState().audio > 0
+											: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
 				definition.type === "mask" ||
@@ -246,6 +258,7 @@ export function Timeline(props: {
 			textTrackRows().length +
 			maskTrackRows().length +
 			audioTrackRows().length +
+			(threeDTrackVisible() ? 1 : 0) +
 			(sceneTrackVisible() ? 1 : 0),
 	);
 	const trackHeight = createMemo(() =>
@@ -313,6 +326,19 @@ export function Timeline(props: {
 
 		if (type === "scene") {
 			setEditorState("timeline", "tracks", "scene", next);
+			return;
+		}
+
+		if (type === "3d") {
+			batch(() => {
+				setEditorState("timeline", "tracks", "3d", next);
+				if (!next && editorState.timeline.selection?.type === "3d") {
+					setEditorState("timeline", "selection", null);
+				}
+				// The setup flow lives on the track it is previewing, so hiding the
+				// track takes its sidebar panel with it.
+				if (!next) setEditorState("timeline", "camera3dSetup", null);
+			});
 			return;
 		}
 
@@ -551,6 +577,7 @@ export function Timeline(props: {
 							textSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							camera3dSegments: [],
 							transitions: [],
 						};
 						project.timeline.captionSegments = [];
@@ -575,6 +602,7 @@ export function Timeline(props: {
 							textSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
+							camera3dSegments: [],
 							transitions: [],
 						};
 						project.timeline.keyboardSegments = [];
@@ -587,9 +615,9 @@ export function Timeline(props: {
 		resumeHistory();
 	}
 
-	// Zoom and Scene are permanent tracks — deleting from them clears every
-	// segment on the track instead of hiding the track row itself.
-	function handleClearTrackSegments(type: "zoom" | "scene") {
+	// Zoom, Scene and 3D keep their row once shown, so deleting from them
+	// clears every segment on the track instead of hiding the row itself.
+	function handleClearTrackSegments(type: "zoom" | "scene" | "3d") {
 		const resumeHistory = projectHistory.pause();
 
 		batch(() => {
@@ -602,6 +630,7 @@ export function Timeline(props: {
 					const timeline = project.timeline;
 					if (!timeline) return;
 					if (type === "zoom") timeline.zoomSegments = [];
+					else if (type === "3d") timeline.camera3dSegments = [];
 					else timeline.sceneSegments = [];
 				}),
 			);
@@ -647,6 +676,7 @@ export function Timeline(props: {
 				textSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
+				camera3dSegments: [],
 				transitions: [],
 			});
 			resume();
@@ -673,7 +703,8 @@ export function Timeline(props: {
 		!project.timeline?.zoomSegments ||
 		project.timeline.zoomSegments.length < 1 ||
 		!project.timeline?.maskSegments ||
-		!project.timeline?.textSegments
+		!project.timeline?.textSegments ||
+		!project.timeline?.camera3dSegments
 	) {
 		setProject(
 			produce((project) => {
@@ -691,6 +722,7 @@ export function Timeline(props: {
 					textSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					camera3dSegments: [],
 					transitions: [],
 				};
 				project.timeline.sceneSegments ??= [];
@@ -699,6 +731,7 @@ export function Timeline(props: {
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.camera3dSegments ??= [];
 			}),
 		);
 	}
@@ -710,6 +743,7 @@ export function Timeline(props: {
 	let audioSegmentDragState = { type: "idle" } as AudioSegmentDragState;
 	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
+	let threeDSegmentDragState = { type: "idle" } as ThreeDSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -787,7 +821,8 @@ export function Timeline(props: {
 			textSegmentDragState.type !== "moving" &&
 			audioSegmentDragState.type !== "moving" &&
 			captionSegmentDragState.type !== "moving" &&
-			keyboardSegmentDragState.type !== "moving"
+			keyboardSegmentDragState.type !== "moving" &&
+			threeDSegmentDragState.type !== "moving"
 		) {
 			if (!metrics) return;
 			const rawTime =
@@ -850,6 +885,8 @@ export function Timeline(props: {
 				projectActions.deleteTextSegments(selection.indices);
 			} else if (selection.type === "audio") {
 				projectActions.deleteAudioSegments(selection.indices);
+			} else if (selection.type === "3d") {
+				projectActions.deleteCamera3DSegments(selection.indices);
 			} else if (selection.type === "transition") {
 				projectActions.deleteClipTransition(selection.index);
 			} else if (selection.type === "clip") {
@@ -877,6 +914,7 @@ export function Timeline(props: {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
 			setEditorState("timeline", "audioPicker", null);
+			setEditorState("timeline", "camera3dSetup", null);
 		}
 	});
 
@@ -990,6 +1028,7 @@ export function Timeline(props: {
 							if (zoomSegmentDragState.type === "idle") {
 								setEditorState("timeline", "selection", null);
 								setEditorState("timeline", "audioPicker", null);
+								setEditorState("timeline", "camera3dSetup", null);
 							}
 						});
 						createEventListener(window, "mouseup", () => {
@@ -1240,6 +1279,27 @@ export function Timeline(props: {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={threeDTrackVisible()}>
+								<TrackRow
+									icon={trackIcons["3d"]}
+									label="3D"
+									type="3d"
+									onDelete={
+										(project.timeline?.camera3dSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("3d")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all 3D segments"
+								>
+									<ThreeDTrack
+										onDragStateChanged={(v) => {
+											threeDSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={sceneTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.scene}

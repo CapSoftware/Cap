@@ -652,6 +652,114 @@ export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
  * Overrides `position` when set.
  */
 manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+/**
+ * Screen-space focus blur applied over the composed frame while a 3d segment
+ * is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
+ * blur radius in pixels at 1080p output height; the renderer scales it with
+ * output size so preview and export match.
+ */
+export type Camera3DBlur = { mode?: Camera3DBlurMode; strength?: number; 
+/**
+ * Widens and flattens the sharp-to-blurred transition (0..1).
+ */
+falloff?: number; 
+/**
+ * Focus center in screen UV (radial mode).
+ */
+focusX?: number; focusY?: number; 
+/**
+ * Sharp region size: radius (radial) or band width (tilt-shift).
+ */
+focusSize?: number; 
+/**
+ * Degrees; blur direction (directional) or band angle (tilt-shift).
+ */
+angle?: number; 
+/**
+ * Where the directional blur begins along its axis (0..1).
+ */
+dirPosition?: number; 
+/**
+ * Swaps the gaussian kernel for a ring-disc bokeh kernel with highlight
+ * gain. Strength is capped at 20 while enabled.
+ */
+bokeh?: boolean }
+export type Camera3DBlurMode = "none" | "radial" | "directional" | "tiltShift"
+/**
+ * One scalar keyframe on a per-property track. Interpolation between two
+ * keyframes is a linear value lerp with time remapped by a cubic bezier whose
+ * P1 comes from the left keyframe's `out_easing` and P2 from the right one's
+ * `in_easing` (a split-handle model). Absent handles default to
+ * cubic ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
+ */
+export type Camera3DKeyframe = { 
+/**
+ * Seconds relative to the segment start.
+ */
+time: number; value: number; 
+/**
+ * Bezier P1 for the track segment leaving this keyframe.
+ */
+outEasing?: [number, number] | null; 
+/**
+ * Bezier P2 for the track segment entering this keyframe.
+ */
+inEasing?: [number, number] | null }
+/**
+ * A 3D camera pose for the composed content plane. Angles are degrees.
+ * 
+ * Geometry: the content plane's longest side spans 2 world units, centered at
+ * the origin facing +Z. `tilt_x`/`tilt_y`/`roll` orbit the CAMERA (Euler YXZ,
+ * roll innermost); `rotate_x`/`rotate_y` rotate the CONTENT plane itself.
+ * `zoom` is the camera DISTANCE in world units (larger = further = smaller on
+ * screen); `fov` is the vertical field of view with no size compensation, so
+ * apparent size ∝ 1 / (zoom · tan(fov/2)). `pan_x`/`pan_y` truck the camera in
+ * its own plane (world units; +x moves the subject right, +y up).
+ */
+export type Camera3DProperties = { 
+/**
+ * Camera orbit pitch.
+ */
+tiltX?: number; 
+/**
+ * Camera orbit yaw.
+ */
+tiltY?: number; 
+/**
+ * Camera roll (innermost camera rotation).
+ */
+roll?: number; 
+/**
+ * Content plane pitch.
+ */
+rotateX?: number;
+/**
+ * Content plane yaw.
+ */
+rotateY?: number; fov?: number; 
+/**
+ * Camera distance in world units.
+ */
+zoom?: number; panX?: number; panY?: number }
+export type Camera3DSegment = { start: number; end: number; enabled?: boolean; 
+/**
+ * Base pose; per-property tracks override individual values.
+ */
+properties?: Camera3DProperties; blur?: Camera3DBlur; tracks?: Camera3DTracks; 
+/**
+ * Seconds to ease from the flat frame into the pose at the segment start.
+ */
+transitionIn?: number; 
+/**
+ * Seconds to ease back to the flat frame before the segment end.
+ */
+transitionOut?: number }
+/**
+ * Per-property keyframe tracks. A property with an empty track holds the
+ * segment's base value; each track holds independently before its first and
+ * after its last keyframe.
+ */
+export type Camera3DTracks = { tiltX: Camera3DKeyframe[]; tiltY: Camera3DKeyframe[]; roll: Camera3DKeyframe[]; rotateX: Camera3DKeyframe[]; rotateY: Camera3DKeyframe[]; fov: Camera3DKeyframe[]; zoom: Camera3DKeyframe[]; panX: Camera3DKeyframe[]; panY: Camera3DKeyframe[]; blurStrength: Camera3DKeyframe[]; blurFalloff: Camera3DKeyframe[]; blurFocusSize: Camera3DKeyframe[]; blurFocusX: Camera3DKeyframe[]; blurFocusY: Camera3DKeyframe[]; blurAngle: Camera3DKeyframe[]; blurDirPosition: Camera3DKeyframe[] }
 export type CameraDeviceSettings = { width: number | null; height: number | null; frameRate: number | null }
 export type CameraFormatInfo = { width: number; height: number; frameRate: number }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
@@ -959,7 +1067,7 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsR
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"

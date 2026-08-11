@@ -1033,6 +1033,264 @@ pub struct SceneSegment {
     pub transition_out: f64,
 }
 
+// Shots cut straight into the pose; easing in and out is opt-in.
+fn default_camera3d_transition() -> f64 {
+    0.0
+}
+
+/// A 3D camera pose for the composed content plane. Angles are degrees.
+///
+/// Geometry: the content plane's longest side spans 2 world units, centered at
+/// the origin facing +Z. `tilt_x`/`tilt_y`/`roll` orbit the CAMERA (Euler YXZ,
+/// roll innermost); `rotate_x`/`rotate_y` rotate the CONTENT plane itself.
+/// `zoom` is the camera DISTANCE in world units (larger = further = smaller on
+/// screen); `fov` is the vertical field of view with no size compensation, so
+/// apparent size ∝ 1 / (zoom · tan(fov/2)). `pan_x`/`pan_y` truck the camera in
+/// its own plane (world units; +x moves the subject right, +y up).
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DProperties {
+    /// Camera orbit pitch.
+    #[serde(default)]
+    pub tilt_x: f64,
+    /// Camera orbit yaw.
+    #[serde(default)]
+    pub tilt_y: f64,
+    /// Camera roll (innermost camera rotation).
+    #[serde(default)]
+    pub roll: f64,
+    /// Content plane pitch.
+    #[serde(default)]
+    pub rotate_x: f64,
+    /// Content plane yaw.
+    #[serde(default)]
+    pub rotate_y: f64,
+    #[serde(default = "Camera3DProperties::default_fov")]
+    pub fov: f64,
+    /// Camera distance in world units.
+    #[serde(default = "Camera3DProperties::default_zoom")]
+    pub zoom: f64,
+    #[serde(default)]
+    pub pan_x: f64,
+    #[serde(default)]
+    pub pan_y: f64,
+}
+
+impl Camera3DProperties {
+    fn default_fov() -> f64 {
+        45.0
+    }
+
+    fn default_zoom() -> f64 {
+        2.0
+    }
+}
+
+impl Default for Camera3DProperties {
+    fn default() -> Self {
+        Self {
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            roll: 0.0,
+            rotate_x: 0.0,
+            rotate_y: 0.0,
+            fov: Self::default_fov(),
+            zoom: Self::default_zoom(),
+            pan_x: 0.0,
+            pan_y: 0.0,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Camera3DBlurMode {
+    #[default]
+    None,
+    Radial,
+    Directional,
+    TiltShift,
+}
+
+/// Screen-space focus blur applied over the composed frame while a 3d segment
+/// is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
+/// blur radius in pixels at 1080p output height; the renderer scales it with
+/// output size so preview and export match.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DBlur {
+    #[serde(default)]
+    pub mode: Camera3DBlurMode,
+    #[serde(default)]
+    pub strength: f64,
+    /// Widens and flattens the sharp-to-blurred transition (0..1).
+    #[serde(default)]
+    pub falloff: f64,
+    /// Focus center in screen UV (radial mode).
+    #[serde(default = "Camera3DBlur::default_focus_x")]
+    pub focus_x: f64,
+    #[serde(default = "Camera3DBlur::default_focus_y")]
+    pub focus_y: f64,
+    /// Sharp region size: radius (radial) or band width (tilt-shift).
+    #[serde(default = "Camera3DBlur::default_focus_size")]
+    pub focus_size: f64,
+    /// Degrees; blur direction (directional) or band angle (tilt-shift).
+    #[serde(default)]
+    pub angle: f64,
+    /// Where the directional blur begins along its axis (0..1).
+    #[serde(default = "Camera3DBlur::default_dir_position")]
+    pub dir_position: f64,
+    /// Swaps the gaussian kernel for a ring-disc bokeh kernel with highlight
+    /// gain. Strength is capped at 20 while enabled.
+    #[serde(default)]
+    pub bokeh: bool,
+}
+
+impl Camera3DBlur {
+    fn default_focus_x() -> f64 {
+        0.37
+    }
+
+    fn default_focus_y() -> f64 {
+        0.5
+    }
+
+    fn default_focus_size() -> f64 {
+        0.5
+    }
+
+    fn default_dir_position() -> f64 {
+        0.5
+    }
+}
+
+impl Default for Camera3DBlur {
+    fn default() -> Self {
+        Self {
+            mode: Camera3DBlurMode::None,
+            strength: 0.0,
+            falloff: 0.0,
+            focus_x: Self::default_focus_x(),
+            focus_y: Self::default_focus_y(),
+            focus_size: Self::default_focus_size(),
+            angle: 0.0,
+            dir_position: Self::default_dir_position(),
+            bokeh: false,
+        }
+    }
+}
+
+/// One scalar keyframe on a per-property track. Interpolation between two
+/// keyframes is a linear value lerp with time remapped by a cubic bezier whose
+/// P1 comes from the left keyframe's `out_easing` and P2 from the right one's
+/// `in_easing` (a split-handle model). Absent handles default to cubic
+/// ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DKeyframe {
+    /// Seconds relative to the segment start.
+    pub time: f64,
+    pub value: f64,
+    /// Bezier P1 for the track segment leaving this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_easing: Option<[f64; 2]>,
+    /// Bezier P2 for the track segment entering this keyframe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_easing: Option<[f64; 2]>,
+}
+
+/// Per-property keyframe tracks. A property with an empty track holds the
+/// segment's base value; each track holds independently before its first and
+/// after its last keyframe.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DTracks {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tilt_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tilt_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roll: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotate_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rotate_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fov: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zoom: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pan_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pan_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_strength: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_falloff: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_size: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_x: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_focus_y: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_angle: Vec<Camera3DKeyframe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blur_dir_position: Vec<Camera3DKeyframe>,
+}
+
+impl Camera3DTracks {
+    /// Every track, for whole-timeline operations like time remapping.
+    pub fn all_tracks_mut(&mut self) -> [&mut Vec<Camera3DKeyframe>; 16] {
+        [
+            &mut self.tilt_x,
+            &mut self.tilt_y,
+            &mut self.roll,
+            &mut self.rotate_x,
+            &mut self.rotate_y,
+            &mut self.fov,
+            &mut self.zoom,
+            &mut self.pan_x,
+            &mut self.pan_y,
+            &mut self.blur_strength,
+            &mut self.blur_falloff,
+            &mut self.blur_focus_size,
+            &mut self.blur_focus_x,
+            &mut self.blur_focus_y,
+            &mut self.blur_angle,
+            &mut self.blur_dir_position,
+        ]
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Camera3DSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "Camera3DSegment::default_enabled")]
+    pub enabled: bool,
+    /// Base pose; per-property tracks override individual values.
+    #[serde(default)]
+    pub properties: Camera3DProperties,
+    #[serde(default)]
+    pub blur: Camera3DBlur,
+    #[serde(default)]
+    pub tracks: Camera3DTracks,
+    /// Seconds to ease from the flat frame into the pose at the segment start.
+    #[serde(default = "default_camera3d_transition")]
+    pub transition_in: f64,
+    /// Seconds to ease back to the flat frame before the segment end.
+    #[serde(default = "default_camera3d_transition")]
+    pub transition_out: f64,
+}
+
+impl Camera3DSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
 /// A timeline-positioned audio clip (background music or imported audio).
 ///
 /// Unlike the recording's mic/system audio (which is keyed to recording clips),
@@ -1126,6 +1384,10 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub audio_segments: Vec<AudioTrackSegment>,
+    // Explicit rename: the digit boundary makes rename_all's camelCase output
+    // easy to second-guess, and the editor TypeScript hardcodes this name.
+    #[serde(default, rename = "camera3dSegments")]
+    pub camera3d_segments: Vec<Camera3DSegment>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1995,6 +2257,7 @@ mod tests {
             caption_segments: Vec::new(),
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
         }
     }
 
@@ -2102,6 +2365,100 @@ mod tests {
 
         assert!(timeline.transitions.is_empty());
         assert_eq!(timeline.duration(), 4.0);
+    }
+
+    /// The editor TypeScript hardcodes these field names; the serialized
+    /// form is a compatibility contract, not an implementation detail.
+    #[test]
+    fn camera3d_segments_serialize_with_stable_field_names() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.camera3d_segments = vec![Camera3DSegment {
+            start: 1.0,
+            end: 3.0,
+            enabled: true,
+            properties: Camera3DProperties {
+                tilt_x: -28.0,
+                tilt_y: 26.0,
+                roll: 5.0,
+                zoom: 1.59,
+                pan_x: 0.37,
+                pan_y: -0.15,
+                ..Default::default()
+            },
+            blur: Camera3DBlur {
+                mode: Camera3DBlurMode::Radial,
+                strength: 19.0,
+                falloff: 0.62,
+                bokeh: true,
+                ..Default::default()
+            },
+            tracks: Camera3DTracks {
+                zoom: vec![
+                    Camera3DKeyframe {
+                        time: 0.0,
+                        value: 0.715,
+                        out_easing: Some([0.0, 0.0]),
+                        in_easing: None,
+                    },
+                    Camera3DKeyframe {
+                        time: 2.0,
+                        value: 2.1,
+                        out_easing: None,
+                        in_easing: Some([1.0, 1.0]),
+                    },
+                ],
+                ..Default::default()
+            },
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }];
+
+        let json = serde_json::to_value(&timeline).unwrap();
+        let segment = &json["camera3dSegments"][0];
+        assert_eq!(segment["start"], 1.0);
+        assert_eq!(segment["properties"]["tiltX"], -28.0);
+        assert_eq!(segment["properties"]["tiltY"], 26.0);
+        assert_eq!(segment["properties"]["panX"], 0.37);
+        assert_eq!(segment["properties"]["fov"], 45.0);
+        assert_eq!(segment["properties"]["rotateX"], 0.0);
+        assert_eq!(segment["blur"]["mode"], "radial");
+        assert_eq!(segment["blur"]["strength"], 19.0);
+        assert_eq!(segment["blur"]["focusX"], 0.37);
+        assert_eq!(segment["blur"]["dirPosition"], 0.5);
+        assert_eq!(segment["blur"]["bokeh"], true);
+        assert_eq!(segment["tracks"]["zoom"][0]["time"], 0.0);
+        assert_eq!(segment["tracks"]["zoom"][0]["value"], 0.715);
+        assert_eq!(segment["tracks"]["zoom"][0]["outEasing"][1], 0.0);
+        assert!(segment["tracks"]["zoom"][0].get("inEasing").is_none());
+        assert!(segment["tracks"].get("tiltX").is_none());
+        assert_eq!(segment["transitionIn"], 0.3);
+        assert_eq!(
+            serde_json::to_value(Camera3DBlurMode::TiltShift).unwrap(),
+            serde_json::json!("tiltShift")
+        );
+
+        // Old configs without the field still load, and the loaded form
+        // round-trips.
+        let legacy: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": [
+                { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 }
+            ],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        assert!(legacy.camera3d_segments.is_empty());
+
+        let reloaded: TimelineConfiguration = serde_json::from_value(json).unwrap();
+        assert_eq!(reloaded.camera3d_segments.len(), 1);
+        assert_eq!(reloaded.camera3d_segments[0].tracks.zoom.len(), 2);
+        assert_eq!(
+            reloaded.camera3d_segments[0].tracks.zoom[0].out_easing,
+            Some([0.0, 0.0])
+        );
+        assert_eq!(
+            reloaded.camera3d_segments[0].blur.mode,
+            Camera3DBlurMode::Radial
+        );
     }
 
     #[test]
@@ -2297,6 +2654,7 @@ mod tests {
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             }),
             ..Default::default()
         };
