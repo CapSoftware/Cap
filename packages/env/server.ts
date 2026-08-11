@@ -93,6 +93,42 @@ function createServerEnv() {
 			ANTHROPIC_API_KEY: z.string().optional().describe("AI chat"),
 			OPENAI_API_KEY: z.string().optional().describe("AI summaries"),
 			GROQ_API_KEY: z.string().optional().describe("AI summaries"),
+			AI_PROVIDER: z
+				.union([
+					z.literal("assemblyai"),
+					z.literal("openai"),
+					z.literal("anthropic"),
+					z.literal("groq"),
+					z.literal("openai-compatible"),
+				])
+				.optional()
+				.describe(
+					"Preferred LLM provider. When unset, providers are auto-detected from the API keys above ('assemblyai' is never auto-detected and must be opted into explicitly).",
+				),
+			AI_MODEL: z
+				.string()
+				.optional()
+				.describe(
+					"Model for AI generation (titles, summaries, chapters, transcript translation). Required for 'openai-compatible'; overrides the provider default otherwise.",
+				),
+			AI_CHAT_MODEL: z
+				.string()
+				.optional()
+				.describe("Model for AI chat (the support messenger)"),
+			AI_STREAM_MODEL: z
+				.string()
+				.optional()
+				.describe("Model for streaming AI chat (docs Ask AI)"),
+			AI_BASE_URL: z
+				.string()
+				.optional()
+				.describe(
+					"Base URL for the 'openai-compatible' provider (eg. Ollama, OpenRouter, LM Studio), or an alternative AssemblyAI LLM gateway (eg. the EU gateway)",
+				),
+			AI_API_KEY: z
+				.string()
+				.optional()
+				.describe("API key for the 'openai-compatible' provider"),
 			REPLICATE_API_TOKEN: z
 				.string()
 				.optional()
