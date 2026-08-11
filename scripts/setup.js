@@ -201,7 +201,7 @@ async function main() {
 
 		const { stdout: vcInstallDir } = await exec(
 			// biome-ignore lint/suspicious/noTemplateCurlyInString: PowerShell syntax, not JS template literal
-			'$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
+			'$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products "*" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)',
 			{ shell: "powershell.exe" },
 		);
 
