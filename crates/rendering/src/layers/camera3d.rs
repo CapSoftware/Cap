@@ -87,7 +87,8 @@ impl Camera3DLayer {
         let aspect = out_w as f64 / out_h as f64;
 
         if let Some(pose) = frame.pose
-            && let Some(homography) = camera3d_inverse_homography(&pose, aspect, uniforms.camera3d_zoom.as_ref())
+            && let Some(homography) =
+                camera3d_inverse_homography(&pose, aspect, uniforms.camera3d_zoom.as_ref())
         {
             let rows = homography.inverse_rows;
             let (hx, hy) = homography.half_extents;

@@ -5840,11 +5840,8 @@ impl RendererLayers {
             Some(Camera3DBlurKind::Gaussian) => {
                 {
                     let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                    self.camera3d.render_blur_h(
-                        &mut pass,
-                        device,
-                        session.current_texture_view(),
-                    );
+                    self.camera3d
+                        .render_blur_h(&mut pass, device, session.current_texture_view());
                 }
                 let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                 self.camera3d
@@ -5853,11 +5850,8 @@ impl RendererLayers {
             Some(Camera3DBlurKind::Bokeh) => {
                 {
                     let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                    self.camera3d.render_blur_v(
-                        &mut pass,
-                        device,
-                        session.current_texture_view(),
-                    );
+                    self.camera3d
+                        .render_blur_v(&mut pass, device, session.current_texture_view());
                 }
                 session.swap_textures();
             }

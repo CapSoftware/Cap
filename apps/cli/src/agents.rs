@@ -20,10 +20,7 @@ static CAP_DEMO_SKILL: include_dir::Dir<'static> =
 // Flatten every embedded file (recursively) so each becomes its own install
 // change. include_dir gives direct files via `files()` and nested dirs via
 // `dirs()`; file paths are already relative to the embedded root.
-fn collect_demo_files<'a>(
-    dir: &'a include_dir::Dir<'a>,
-    out: &mut Vec<&'a include_dir::File<'a>>,
-) {
+fn collect_demo_files<'a>(dir: &'a include_dir::Dir<'a>, out: &mut Vec<&'a include_dir::File<'a>>) {
     for file in dir.files() {
         out.push(file);
     }

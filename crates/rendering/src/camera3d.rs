@@ -136,15 +136,16 @@ fn effective_frame(
 
     Camera3DFrame {
         pose: (!flat).then_some(eased),
-        blur: blur_active.then_some(Camera3DBlurFrame {
-            strength,
-            ..*blur
-        }),
+        blur: blur_active.then_some(Camera3DBlurFrame { strength, ..*blur }),
         activity: activity.clamp(0.0, 1.0),
     }
 }
 
-fn pose_from_activity(pose: &Camera3DProperties, activity: f64, fill_zoom: f64) -> Camera3DProperties {
+fn pose_from_activity(
+    pose: &Camera3DProperties,
+    activity: f64,
+    fill_zoom: f64,
+) -> Camera3DProperties {
     let a = activity.clamp(0.0, 1.0);
     let zoom = pose.zoom.clamp(0.05, 100.0);
     Camera3DProperties {
@@ -585,8 +586,7 @@ mod tests {
             content_uv: cap_project::XY::new(0.2, 0.9),
             amount: 1.0,
         };
-        let with_zoom =
-            camera3d_inverse_homography(&props, ASPECT, Some(&identity_zoom)).unwrap();
+        let with_zoom = camera3d_inverse_homography(&props, ASPECT, Some(&identity_zoom)).unwrap();
         let without = camera3d_inverse_homography(&props, ASPECT, None).unwrap();
         assert_eq!(with_zoom.inverse_rows, without.inverse_rows);
     }
@@ -638,7 +638,7 @@ mod tests {
             },
         ];
         assert_eq!(sample_track(5.0, &[], 0.0), 5.0);
-        assert_eq!(sample_track(5.0, &keys, 0.0), 10.0, );
+        assert_eq!(sample_track(5.0, &keys, 0.0), 10.0,);
         // Linear handles ([0,0]/[1,1]) give an exact linear midpoint.
         assert_close(sample_track(5.0, &keys, 2.0), 15.0, 1e-9, "linear mid");
         assert_eq!(sample_track(5.0, &keys, 9.0), 20.0);
@@ -662,7 +662,10 @@ mod tests {
         ];
         // cubic-bezier(0.65, 0, 0.35, 1): slow start, midpoint exactly 0.5.
         let quarter = sample_track(0.0, &keys, 0.25);
-        assert!(quarter < 0.15, "eased quarter should lag linear, got {quarter}");
+        assert!(
+            quarter < 0.15,
+            "eased quarter should lag linear, got {quarter}"
+        );
         assert_close(sample_track(0.0, &keys, 0.5), 0.5, 1e-4, "eased mid");
     }
 

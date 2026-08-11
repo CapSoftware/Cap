@@ -2455,7 +2455,10 @@ mod tests {
             reloaded.camera3d_segments[0].tracks.zoom[0].out_easing,
             Some([0.0, 0.0])
         );
-        assert_eq!(reloaded.camera3d_segments[0].blur.mode, Camera3DBlurMode::Radial);
+        assert_eq!(
+            reloaded.camera3d_segments[0].blur.mode,
+            Camera3DBlurMode::Radial
+        );
     }
 
     #[test]
