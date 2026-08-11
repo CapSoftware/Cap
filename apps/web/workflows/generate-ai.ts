@@ -1,7 +1,6 @@
 import { db } from "@cap/database";
 import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
@@ -10,10 +9,12 @@ import {
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
+import { generateText } from "ai";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { runWithAiProviders } from "@/lib/ai/run";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -117,9 +118,8 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	"use step";
 
-	const groqClient = getGroqClient();
-	if (!groqClient && !serverEnv().OPENAI_API_KEY) {
-		throw new FatalError("Missing Groq or OpenAI API key");
+	if (!isAiConfigured()) {
+		throw new FatalError("No AI provider configured");
 	}
 
 	const query = await db()
@@ -250,7 +250,6 @@ async function generateWithAi(
 ): Promise<AiResult> {
 	"use step";
 
-	const groqClient = getGroqClient();
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
 
 	const videoDuration = getVideoDuration(transcript.segments);
@@ -261,14 +260,12 @@ async function generateWithAi(
 		result = await generateSingleChunk(
 			transcript.segments,
 			videoDuration,
-			groqClient,
 			languageInstruction,
 		);
 	} else {
 		result = await generateMultipleChunks(
 			chunks,
 			videoDuration,
-			groqClient,
 			languageInstruction,
 		);
 	}
@@ -493,49 +490,15 @@ function chunkTranscriptWithTimestamps(
 	return chunks;
 }
 
-async function callAiApi(
-	prompt: string,
-	groqClient: ReturnType<typeof getGroqClient>,
-): Promise<string> {
-	if (groqClient) {
-		try {
-			const completion = await groqClient.chat.completions.create({
-				messages: [{ role: "user", content: prompt }],
-				model: GROQ_MODEL,
-				response_format: { type: "json_object" },
-			});
-			return completion.choices?.[0]?.message?.content || "{}";
-		} catch (groqError) {
-			if (serverEnv().OPENAI_API_KEY) {
-				return callOpenAi(prompt);
-			}
-			throw groqError;
-		}
-	} else if (serverEnv().OPENAI_API_KEY) {
-		return callOpenAi(prompt);
-	}
-	return "{}";
-}
-
-async function callOpenAi(prompt: string): Promise<string> {
-	const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o-mini",
-			messages: [{ role: "user", content: prompt }],
-			response_format: { type: "json_object" },
+async function callAiApi(prompt: string): Promise<string> {
+	const result = await runWithAiProviders("generation", (selection) =>
+		generateText({
+			model: selection.model({ jsonRepair: true }),
+			prompt,
+			maxOutputTokens: selection.defaultMaxOutputTokens,
 		}),
-	});
-	if (!aiRes.ok) {
-		const errorText = await aiRes.text();
-		throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
-	}
-	const aiJson = await aiRes.json();
-	return aiJson.choices?.[0]?.message?.content || "{}";
+	);
+	return result.text;
 }
 
 function cleanJsonResponse(content: string): string {
@@ -589,7 +552,6 @@ function extractJsonObject(content: string): string {
 async function generateSingleChunk(
 	segments: VttSegment[],
 	videoDuration: number,
-	groqClient: ReturnType<typeof getGroqClient>,
 	languageInstruction: string,
 ): Promise<AiResult> {
 	const transcriptWithTimestamps = segments
@@ -625,14 +587,13 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
 ${transcriptWithTimestamps}`;
 
-	const content = await callAiApi(prompt, groqClient);
+	const content = await callAiApi(prompt);
 	return parseAiResponse(content);
 }
 
 async function generateMultipleChunks(
 	chunks: { text: string; startTime: number; endTime: number }[],
 	videoDuration: number,
-	groqClient: ReturnType<typeof getGroqClient>,
 	languageInstruction: string,
 ): Promise<AiResult> {
 	const chunkSummaries: {
@@ -668,9 +629,9 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
 ${chunk.text}`;
 
-		const chunkContent = await callAiApi(chunkPrompt, groqClient);
+		const chunkContent = await callAiApi(chunkPrompt);
 		try {
-			const parsed = JSON.parse(cleanJsonResponse(chunkContent).trim());
+			const parsed = JSON.parse(extractJsonObject(chunkContent));
 			chunkSummaries.push({
 				summary: parsed.summary || "",
 				keyPoints: parsed.keyPoints || [],
@@ -727,9 +688,9 @@ Additional requirements:
 - Keep JSON property names exactly as shown.
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
-	const finalContent = await callAiApi(finalPrompt, groqClient);
+	const finalContent = await callAiApi(finalPrompt);
 	try {
-		const parsed = JSON.parse(cleanJsonResponse(finalContent).trim());
+		const parsed = JSON.parse(extractJsonObject(finalContent));
 		return {
 			title: parsed.title,
 			summary: parsed.summary,

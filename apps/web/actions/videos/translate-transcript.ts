@@ -4,9 +4,11 @@ import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
+import { generateText } from "ai";
 import { eq } from "drizzle-orm";
 import { Effect, Exit, Option } from "effect";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { runWithAiProviders } from "@/lib/ai/run";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
@@ -40,8 +42,7 @@ export async function translateTranscript(
 		};
 	}
 
-	const groq = getGroqClient();
-	if (!groq) {
+	if (!isAiConfigured()) {
 		return {
 			success: false,
 			message: "Translation service not configured",
@@ -109,7 +110,6 @@ export async function translateTranscript(
 	const translatedVtt = await translateVttContent(
 		originalVtt.value,
 		targetLanguage,
-		groq,
 	);
 
 	if (!translatedVtt) {
@@ -139,7 +139,6 @@ export async function translateTranscript(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
-	groq: NonNullable<ReturnType<typeof getGroqClient>>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
 
@@ -159,14 +158,16 @@ VTT content to translate:
 ${vttContent}`;
 
 	try {
-		const response = await groq.chat.completions.create({
-			model: GROQ_MODEL,
-			messages: [{ role: "user", content: prompt }],
-			temperature: 0.3,
-			max_tokens: 8000,
-		});
+		const response = await runWithAiProviders("generation", (selection) =>
+			generateText({
+				model: selection.model(),
+				prompt,
+				maxOutputTokens: 8000,
+				...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
+			}),
+		);
 
-		const content = response.choices[0]?.message?.content;
+		const content = response.text;
 		if (content?.includes("WEBVTT")) {
 			return content.trim();
 		}

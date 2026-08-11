@@ -43,6 +43,7 @@ import {
 	getDashboardData,
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
 import {
@@ -774,7 +775,7 @@ async function AuthorizedContent({
 		!video.isScreenshot &&
 		Boolean(env.ASSEMBLY_API_KEY) &&
 		!rules.settings.disableTranscript;
-	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
+	const aiProviderAvailable = isAiConfigured();
 
 	if (
 		transcriptionGenerationAvailable &&

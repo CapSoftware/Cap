@@ -1,14 +1,9 @@
 import "server-only";
 
 import type { MessengerMessageRole } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import type {
-	ChatCompletionAssistantMessageParam,
-	ChatCompletionMessageParam,
-	ChatCompletionMessageToolCall,
-	ChatCompletionTool,
-} from "groq-sdk/resources/chat";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { generateText, stepCountIs, tool } from "ai";
+import { z } from "zod";
+import { runWithAiProviders } from "@/lib/ai/run";
 import { CAP_REFERENCE_GUIDE, MESSENGER_AGENT_PROMPT } from "./constants";
 import { getKnowledgeTag, searchSupermemory } from "./supermemory";
 
@@ -36,35 +31,16 @@ type SupportEmailTool = {
 	execute: (input: SupportEmailToolInput) => Promise<SupportEmailToolResult>;
 };
 
-type AnthropicTextBlock = {
-	type: "text";
-	text: string;
-};
-
-type AnthropicToolUseBlock = {
-	type: "tool_use";
-	id: string;
-	name: string;
-	input: unknown;
-};
-
-type AnthropicResponseBlock = AnthropicTextBlock | AnthropicToolUseBlock;
-
-type AnthropicToolResultBlock = {
-	type: "tool_result";
-	tool_use_id: string;
-	content: string;
-	is_error?: boolean;
-};
-
 type SupportEmailExecutionResult = {
 	content: string;
 	isError?: boolean;
 };
 
-const MESSENGER_ANTHROPIC_MODEL = "claude-sonnet-5";
 const MESSENGER_MAX_TOKENS = 350;
 const MESSENGER_TOOL_DISPATCH_MAX_TOKENS = 512;
+
+const MESSENGER_APOLOGY_REPLY =
+	"Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!";
 
 const normalizeContext = (sections: string[]) =>
 	sections
@@ -74,36 +50,20 @@ const normalizeContext = (sections: string[]) =>
 		.join("\n\n")
 		.slice(0, 7000);
 
-const supportEmailToolDefinition = {
-	name: "send_support_email",
-	description:
-		"Send a concise support email to the Cap team after the signed-in user explicitly asks or agrees. The server controls the recipient, sender, reply-to address, account email, conversation id, and rate limit.",
-	input_schema: {
-		type: "object",
-		properties: {
-			subject: {
-				type: "string",
-				description: "A concise support email subject.",
-			},
-			message: {
-				type: "string",
-				description:
-					"A concise support email body summarizing the user's issue and relevant context from the chat.",
-			},
-		},
-		required: ["subject", "message"],
-		additionalProperties: false,
-	},
-} as const;
+// zod strips unknown keys (like a spoofed `email`) before `execute` runs;
+// the server alone controls sender, recipient, and reply-to.
+const supportEmailInputSchema = z.object({
+	subject: z.string().describe("A concise support email subject."),
+	message: z
+		.string()
+		.describe(
+			"A concise support email body summarizing the user's issue and relevant context from the chat.",
+		),
+});
 
-const openAiCompatibleSupportEmailToolDefinition = {
-	type: "function",
-	function: {
-		name: supportEmailToolDefinition.name,
-		description: supportEmailToolDefinition.description,
-		parameters: supportEmailToolDefinition.input_schema,
-	},
-} satisfies ChatCompletionTool;
+const SUPPORT_EMAIL_TOOL_NAME = "send_support_email";
+const SUPPORT_EMAIL_TOOL_DESCRIPTION =
+	"Send a concise support email to the Cap team after the signed-in user explicitly asks or agrees. The server controls the recipient, sender, reply-to address, account email, conversation id, and rate limit.";
 
 const buildSystemPrompt = ({
 	userIdentity,
@@ -157,46 +117,6 @@ const mapHistoryForLlm = (history: ConversationMessage[]) =>
 		content: message.content.slice(0, 6000),
 	}));
 
-const parseAnthropicMessage = (payload: unknown) => {
-	if (!payload || typeof payload !== "object") return null;
-	const content = (payload as { content?: unknown }).content;
-	if (!Array.isArray(content)) return null;
-
-	const blocks = content.flatMap((block): AnthropicResponseBlock[] => {
-		if (!block || typeof block !== "object") return [];
-		const type = (block as { type?: unknown }).type;
-		if (type === "text") {
-			const text = (block as { text?: unknown }).text;
-			return typeof text === "string" ? [{ type, text }] : [];
-		}
-		if (type === "tool_use") {
-			const id = (block as { id?: unknown }).id;
-			const name = (block as { name?: unknown }).name;
-			if (typeof id !== "string" || typeof name !== "string") return [];
-			return [
-				{
-					type,
-					id,
-					name,
-					input: (block as { input?: unknown }).input,
-				},
-			];
-		}
-		return [];
-	});
-	if (!blocks.length) return null;
-
-	const text = blocks
-		.map((block) => (block.type === "text" ? block.text : ""))
-		.join("\n")
-		.trim();
-
-	return {
-		content: blocks,
-		text: text.length > 0 ? text : null,
-	};
-};
-
 const readToolString = (input: unknown, key: keyof SupportEmailToolInput) => {
 	if (!input || typeof input !== "object") return null;
 	const value = (input as Record<string, unknown>)[key];
@@ -236,21 +156,12 @@ const fallbackReplyFromSupportEmailToolResults = (
 };
 
 const executeSupportEmailTool = async ({
-	name,
 	input,
 	supportEmailTool,
 }: {
-	name: string;
 	input: unknown;
 	supportEmailTool: SupportEmailTool;
 }): Promise<SupportEmailExecutionResult> => {
-	if (name !== supportEmailToolDefinition.name) {
-		return {
-			content: "Unknown tool.",
-			isError: true,
-		};
-	}
-
 	const parsedInput = readSupportEmailInput(input);
 	if (!parsedInput) {
 		return {
@@ -270,385 +181,6 @@ const executeSupportEmailTool = async ({
 			isError: true,
 		};
 	}
-};
-
-const executeSupportEmailToolUse = async ({
-	toolUse,
-	supportEmailTool,
-}: {
-	toolUse: AnthropicToolUseBlock;
-	supportEmailTool: SupportEmailTool;
-}): Promise<AnthropicToolResultBlock> => {
-	const result = await executeSupportEmailTool({
-		name: toolUse.name,
-		input: toolUse.input,
-		supportEmailTool,
-	});
-	return {
-		type: "tool_result",
-		tool_use_id: toolUse.id,
-		content: result.content,
-		...(result.isError ? { is_error: true } : {}),
-	};
-};
-
-const postAnthropicMessages = async ({
-	key,
-	systemPrompt,
-	messages,
-	tools,
-	maxTokens = MESSENGER_MAX_TOKENS,
-}: {
-	key: string;
-	systemPrompt: string;
-	messages: Array<{
-		role: "user" | "assistant";
-		content: string | AnthropicResponseBlock[] | AnthropicToolResultBlock[];
-	}>;
-	tools?: [typeof supportEmailToolDefinition];
-	maxTokens?: number;
-}) => {
-	const response = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"x-api-key": key,
-			"anthropic-version": "2023-06-01",
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			model: MESSENGER_ANTHROPIC_MODEL,
-			max_tokens: maxTokens,
-			system: systemPrompt,
-			messages,
-			tools,
-		}),
-		signal: AbortSignal.timeout(35000),
-	});
-
-	if (!response.ok) {
-		const text = await response.text();
-		throw new Error(`Anthropic chat failed: ${response.status} ${text}`);
-	}
-
-	const payload = await response.json();
-	return parseAnthropicMessage(payload);
-};
-
-const callAnthropic = async ({
-	systemPrompt,
-	history,
-	supportEmailTool,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-	supportEmailTool: SupportEmailTool | null;
-}) => {
-	const key = serverEnv().ANTHROPIC_API_KEY;
-	if (!key) return null;
-
-	const initial = await postAnthropicMessages({
-		key,
-		systemPrompt,
-		messages: mapHistoryForLlm(history),
-		tools: supportEmailTool ? [supportEmailToolDefinition] : undefined,
-		maxTokens: supportEmailTool
-			? MESSENGER_TOOL_DISPATCH_MAX_TOKENS
-			: MESSENGER_MAX_TOKENS,
-	});
-
-	if (!initial) return null;
-	const toolUses = supportEmailTool
-		? initial.content.filter(
-				(block): block is AnthropicToolUseBlock => block.type === "tool_use",
-			)
-		: [];
-
-	if (!supportEmailTool || toolUses.length === 0) {
-		return initial.text;
-	}
-
-	const toolResults: AnthropicToolResultBlock[] = [];
-	let sentEmailToolResult = false;
-	for (const toolUse of toolUses) {
-		if (sentEmailToolResult) {
-			toolResults.push({
-				type: "tool_result",
-				tool_use_id: toolUse.id,
-				content: "Only one support email can be sent per assistant response.",
-				is_error: true,
-			});
-			continue;
-		}
-		toolResults.push(
-			await executeSupportEmailToolUse({ toolUse, supportEmailTool }),
-		);
-		sentEmailToolResult = true;
-	}
-
-	const final = await postAnthropicMessages({
-		key,
-		systemPrompt,
-		messages: [
-			...mapHistoryForLlm(history),
-			{
-				role: "assistant",
-				content: initial.content,
-			},
-			{
-				role: "user",
-				content: toolResults,
-			},
-		],
-	}).catch(() => null);
-
-	if (final?.text) return final.text;
-	return fallbackReplyFromSupportEmailToolResults(
-		toolResults.map((result) => ({
-			content: result.content,
-			isError: result.is_error,
-		})),
-	);
-};
-
-const parseOpenAiCompatibleToolCalls = (message: { tool_calls?: unknown }) => {
-	if (!Array.isArray(message.tool_calls)) return [];
-
-	return message.tool_calls.flatMap(
-		(toolCall): ChatCompletionMessageToolCall[] => {
-			if (!toolCall || typeof toolCall !== "object") return [];
-			const id = (toolCall as { id?: unknown }).id;
-			const type = (toolCall as { type?: unknown }).type;
-			const fn = (toolCall as { function?: unknown }).function;
-			if (typeof id !== "string" || type !== "function") return [];
-			if (!fn || typeof fn !== "object") return [];
-			const name = (fn as { name?: unknown }).name;
-			const args = (fn as { arguments?: unknown }).arguments;
-			if (typeof name !== "string" || typeof args !== "string") return [];
-			return [
-				{
-					id,
-					type,
-					function: {
-						name,
-						arguments: args,
-					},
-				},
-			];
-		},
-	);
-};
-
-const parseOpenAiCompatibleMessage = (payload: unknown) => {
-	if (!payload || typeof payload !== "object") return null;
-	const choices = (payload as { choices?: unknown }).choices;
-	if (!Array.isArray(choices) || choices.length === 0) return null;
-	const first = choices[0] as {
-		message?: {
-			content?: unknown;
-			tool_calls?: unknown;
-		};
-	};
-	const message = first.message;
-	if (!message) return null;
-	const content =
-		typeof message.content === "string" ? message.content.trim() : "";
-	const toolCalls = parseOpenAiCompatibleToolCalls(message);
-	if (!content && toolCalls.length === 0) return null;
-	return {
-		text: content.length > 0 ? content : null,
-		toolCalls,
-	};
-};
-
-const parseOpenAiToolInput = (args: string) => {
-	try {
-		return JSON.parse(args) as unknown;
-	} catch {
-		return null;
-	}
-};
-
-const executeOpenAiCompatibleToolCalls = async ({
-	toolCalls,
-	supportEmailTool,
-}: {
-	toolCalls: ChatCompletionMessageToolCall[];
-	supportEmailTool: SupportEmailTool;
-}) => {
-	const toolResults: Array<
-		SupportEmailExecutionResult & { toolCall: ChatCompletionMessageToolCall }
-	> = [];
-	let sentEmailToolResult = false;
-
-	for (const toolCall of toolCalls) {
-		if (sentEmailToolResult) {
-			toolResults.push({
-				toolCall,
-				content: "Only one support email can be sent per assistant response.",
-				isError: true,
-			});
-			continue;
-		}
-
-		toolResults.push({
-			toolCall,
-			...(await executeSupportEmailTool({
-				name: toolCall.function.name,
-				input: parseOpenAiToolInput(toolCall.function.arguments),
-				supportEmailTool,
-			})),
-		});
-		sentEmailToolResult = true;
-	}
-
-	return toolResults;
-};
-
-const runOpenAiCompatibleToolLoop = async ({
-	systemPrompt,
-	history,
-	supportEmailTool,
-	createCompletion,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-	supportEmailTool: SupportEmailTool | null;
-	createCompletion: ({
-		messages,
-		tools,
-		maxTokens,
-	}: {
-		messages: ChatCompletionMessageParam[];
-		tools?: ChatCompletionTool[];
-		maxTokens: number;
-	}) => Promise<ReturnType<typeof parseOpenAiCompatibleMessage>>;
-}) => {
-	const messages: ChatCompletionMessageParam[] = [
-		{ role: "system", content: systemPrompt },
-		...mapHistoryForLlm(history),
-	];
-
-	const initial = await createCompletion({
-		messages,
-		tools: supportEmailTool
-			? [openAiCompatibleSupportEmailToolDefinition]
-			: undefined,
-		maxTokens: supportEmailTool
-			? MESSENGER_TOOL_DISPATCH_MAX_TOKENS
-			: MESSENGER_MAX_TOKENS,
-	});
-
-	if (!initial) return null;
-	if (!supportEmailTool || initial.toolCalls.length === 0) {
-		return initial.text;
-	}
-
-	const toolResults = await executeOpenAiCompatibleToolCalls({
-		toolCalls: initial.toolCalls,
-		supportEmailTool,
-	});
-	const assistantMessage: ChatCompletionAssistantMessageParam = {
-		role: "assistant",
-		content: initial.text,
-		tool_calls: initial.toolCalls,
-	};
-	const final = await createCompletion({
-		messages: [
-			...messages,
-			assistantMessage,
-			...toolResults.map(
-				(result): ChatCompletionMessageParam => ({
-					role: "tool",
-					tool_call_id: result.toolCall.id,
-					content: result.content,
-				}),
-			),
-		],
-		maxTokens: MESSENGER_MAX_TOKENS,
-	}).catch(() => null);
-
-	if (final?.text) return final.text;
-	return fallbackReplyFromSupportEmailToolResults(toolResults);
-};
-
-const callOpenAi = async ({
-	systemPrompt,
-	history,
-	supportEmailTool,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-	supportEmailTool: SupportEmailTool | null;
-}) => {
-	const key = serverEnv().OPENAI_API_KEY;
-	if (!key) return null;
-
-	return runOpenAiCompatibleToolLoop({
-		systemPrompt,
-		history,
-		supportEmailTool,
-		createCompletion: async ({ messages, tools, maxTokens }) => {
-			const response = await fetch(
-				"https://api.openai.com/v1/chat/completions",
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${key}`,
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({
-						model: "gpt-4o-mini",
-						temperature: 0.65,
-						max_tokens: maxTokens,
-						messages,
-						tools,
-						tool_choice: tools ? "auto" : undefined,
-						parallel_tool_calls: tools ? false : undefined,
-					}),
-					signal: AbortSignal.timeout(35000),
-				},
-			);
-
-			if (!response.ok) {
-				const text = await response.text();
-				throw new Error(`OpenAI chat failed: ${response.status} ${text}`);
-			}
-
-			const payload = await response.json();
-			return parseOpenAiCompatibleMessage(payload);
-		},
-	});
-};
-
-const callGroq = async ({
-	systemPrompt,
-	history,
-	supportEmailTool,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-	supportEmailTool: SupportEmailTool | null;
-}) => {
-	const client = getGroqClient();
-	if (!client) return null;
-
-	return runOpenAiCompatibleToolLoop({
-		systemPrompt,
-		history,
-		supportEmailTool,
-		createCompletion: async ({ messages, tools, maxTokens }) => {
-			const completion = await client.chat.completions.create({
-				model: GROQ_MODEL,
-				temperature: 0.65,
-				max_tokens: maxTokens,
-				messages,
-				tools,
-				tool_choice: tools ? "auto" : undefined,
-				parallel_tool_calls: tools ? false : undefined,
-			});
-			return parseOpenAiCompatibleMessage(completion);
-		},
-	});
 };
 
 export const generateMessengerAgentReply = async ({
@@ -681,26 +213,86 @@ export const generateMessengerAgentReply = async ({
 		supportEmailAvailable: Boolean(supportEmailTool),
 	});
 
-	const fromAnthropic = await callAnthropic({
-		systemPrompt,
-		history,
-		supportEmailTool,
-	}).catch(() => null);
-	if (fromAnthropic) return fromAnthropic;
+	// Shared across providers on purpose: once a support email attempt has
+	// happened, no other provider may retry the turn (`stopOnError` below).
+	const state: {
+		sent: boolean;
+		toolResults: SupportEmailExecutionResult[];
+	} = { sent: false, toolResults: [] };
 
-	const fromOpenAi = await callOpenAi({
-		systemPrompt,
-		history,
-		supportEmailTool,
-	}).catch(() => null);
-	if (fromOpenAi) return fromOpenAi;
+	const tools = supportEmailTool
+		? {
+				[SUPPORT_EMAIL_TOOL_NAME]: tool({
+					description: SUPPORT_EMAIL_TOOL_DESCRIPTION,
+					inputSchema: supportEmailInputSchema,
+					execute: async (input) => {
+						// In-execute latch: providers without a parallel-tool-call
+						// switch (eg. the AssemblyAI gateway) can emit several tool
+						// calls in one step; only the first may send an email.
+						if (state.sent) {
+							const result: SupportEmailExecutionResult = {
+								content:
+									"Only one support email can be sent per assistant response.",
+								isError: true,
+							};
+							state.toolResults.push(result);
+							return result.content;
+						}
+						state.sent = true;
 
-	const fromGroq = await callGroq({
-		systemPrompt,
-		history,
-		supportEmailTool,
-	}).catch(() => null);
-	if (fromGroq) return fromGroq;
+						const result = await executeSupportEmailTool({
+							input,
+							supportEmailTool,
+						});
+						state.toolResults.push(result);
+						return result.content;
+					},
+				}),
+			}
+		: undefined;
 
-	return "Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!";
+	try {
+		return await runWithAiProviders(
+			"chat",
+			async (selection) => {
+				const result = await generateText({
+					model: selection.model(),
+					system: systemPrompt,
+					messages: mapHistoryForLlm(history),
+					maxOutputTokens: supportEmailTool
+						? MESSENGER_TOOL_DISPATCH_MAX_TOKENS
+						: MESSENGER_MAX_TOKENS,
+					// Parity with the previous per-provider implementations: the
+					// raw Anthropic calls never sent temperature.
+					...(selection.supportsTemperature &&
+					selection.provider !== "anthropic"
+						? { temperature: 0.65 }
+						: {}),
+					abortSignal: AbortSignal.timeout(35000),
+					...(tools
+						? {
+								tools,
+								stopWhen: stepCountIs(2),
+								...(selection.providerOptions
+									? { providerOptions: selection.providerOptions }
+									: {}),
+							}
+						: {}),
+				});
+
+				const text = result.text.trim();
+				if (text) return text;
+				if (state.toolResults.length > 0) {
+					return fallbackReplyFromSupportEmailToolResults(state.toolResults);
+				}
+				throw new Error("Messenger agent returned an empty reply");
+			},
+			{ stopOnError: () => state.sent },
+		);
+	} catch {
+		if (state.toolResults.length > 0) {
+			return fallbackReplyFromSupportEmailToolResults(state.toolResults);
+		}
+		return MESSENGER_APOLOGY_REPLY;
+	}
 };
