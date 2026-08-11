@@ -26,12 +26,11 @@ struct Uniforms {
     // the uniform rounding; the display squares its top corners against
     // decorative frame chrome with (0, 0, 1, 1).
     corner_radii: vec4<f32>,
-    // Color grade: (exposure stops, contrast, saturation, temperature).
+    // (exposure stops, contrast, saturation, temperature).
     color_adjust_a: vec4<f32>,
-    // Color grade: (tint, fade, split_tone, vignette).
+    // (tint, fade, split_tone, vignette).
     color_adjust_b: vec4<f32>,
-    // (grain amount, per-frame grain seed, grade-active flag, full-frame
-    // vignette flag).
+    // (grain amount, grain seed, grade-active flag, full-frame vignette flag).
     grain_params: vec4<f32>,
 };
 
@@ -138,18 +137,16 @@ fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32)
     return coverage * 0.25;
 }
 
-// One-value hash with good distribution (same family as the background
-// layer's gradient noise); sin-free so it stays stable across GPU drivers.
+// Sin-free hash so grain stays stable across GPU drivers.
 fn grain_hash(p: vec2<f32>) -> f32 {
     var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
 
-// Applies the layer's color grade + film grain to a resolved video color.
-// Runs once per output pixel (after any motion-blur resolve), so its cost is
-// independent of blur tap counts, and ungraded layers skip everything in a
-// single coherent uniform branch.
+// Must stay in sync with color-grade.wgsl and cursor.wgsl. Runs once per
+// output pixel after motion-blur resolve; ungraded layers skip everything in
+// a single coherent uniform branch.
 fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
     if uniforms.grain_params.z < 0.5 {
         return color;
@@ -168,8 +165,7 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
     // Exposure in stops.
     var rgb = color.rgb * exp2(exposure);
 
-    // White balance: temperature trades red against blue, tint trades green
-    // against magenta. Multiplicative so black stays black.
+    // White balance, multiplicative so black stays black.
     rgb = rgb * vec3<f32>(
         1.0 + 0.10 * temperature + 0.04 * tint,
         1.0 - 0.07 * tint,
@@ -183,8 +179,7 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
     let luma = dot(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3<f32>(luma), rgb, 1.0 + saturation);
 
-    // Split toning: teal into shadows, orange into highlights (reversed when
-    // the amount is negative), weighted by luma bands.
+    // Split tone: teal shadows / orange highlights, luma-banded.
     let shadow_w = 1.0 - smoothstep(0.2, 0.65, luma);
     let highlight_w = smoothstep(0.35, 0.8, luma);
     rgb += split_tone * (
@@ -195,9 +190,6 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
     // Film fade: raised blacks, gently dulled highlights.
     rgb = rgb * (1.0 - 0.18 * fade) + vec3<f32>(0.09 * fade);
 
-    // Vignette. The screen computes it over the full output frame so the
-    // card and the graded background share one continuous field; the camera
-    // vignettes within its own card.
     if vignette > 0.0 {
         var vig_uv = target_uv;
         if uniforms.grain_params.w > 0.5 {
@@ -207,8 +199,7 @@ fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>
         rgb = rgb * (1.0 - vignette * 0.65 * smoothstep(0.5, 1.5, r));
     }
 
-    // Animated monochrome grain, peaked in the midtones like scanned film.
-    // The per-frame seed decorrelates the hash every frame.
+    // Midtone-peaked monochrome grain.
     if grain > 0.0 {
         let seed = uniforms.grain_params.y;
         let noise = grain_hash(frag_pos + vec2<f32>(seed * 17.0, seed * 29.0));

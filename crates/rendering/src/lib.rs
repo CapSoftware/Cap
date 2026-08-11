@@ -2251,9 +2251,8 @@ pub struct ProjectUniforms {
     /// The recording device's physical notch, redrawn over the capture;
     /// `None` when the overlay is off or the recording has no notch.
     pub notch: Option<layers::NotchUniforms>,
-    /// The screen grade's uniform params, shared verbatim by the display card
-    /// and the background grade pass so grain and vignette stay continuous
-    /// across the card edge.
+    /// Shared verbatim by the display card, background grade pass, and
+    /// cursor — grain/vignette continuity depends on identical params.
     screen_color_grade: ColorGradeUniformParams,
     /// Final placement of the outer display card (chrome included) in output
     /// px. Equals `display.target_bounds` when no frame is active.
@@ -3800,8 +3799,7 @@ impl ProjectUniforms {
                             border_color: [0.0; 4],
                             frame_size: [1.0, 1.0],
                             crop_bounds: [0.0, 0.0, 1.0, 1.0],
-                            // The notch redraw is hardware, not video: never
-                            // graded.
+                            // Hardware redraw, not video: never graded.
                             color_adjust_a: [0.0; 4],
                             color_adjust_b: [0.0; 4],
                             grain_params: [0.0; 4],
@@ -5802,11 +5800,9 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        // Grade the backdrop before any content layers draw, so the screen's
-        // color grade covers the whole scene (padding, wallpaper, blur) and
-        // not just the display card. Content layers apply their own grades.
-        // The pass overwrites every pixel (fullscreen triangle, no blending),
-        // so the target's old contents never need loading.
+        // Runs before content layers so the screen grade covers the whole
+        // backdrop; content layers grade themselves. The fullscreen triangle
+        // overwrites every pixel, so the old target contents never load.
         if self.background_color_grade.is_active() {
             let mut pass = render_pass!(
                 session.other_texture_view(),

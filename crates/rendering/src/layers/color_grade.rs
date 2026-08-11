@@ -3,11 +3,8 @@ use wgpu::util::DeviceExt;
 
 use crate::ProjectUniforms;
 
-/// Full-frame pass that applies the screen's color grade (including grain)
-/// to the background canvas, so the backdrop and the display card read as one
-/// graded scene. Runs between the background (+ its blur) and the display
-/// layer, and only when the screen grade is active — an ungraded project
-/// skips the pass entirely.
+/// Full-frame pass applying the screen grade to the background canvas so the
+/// backdrop and display card read as one graded scene.
 pub struct ColorGradeLayer {
     active: bool,
     uniforms_buffer: wgpu::Buffer,
@@ -32,9 +29,8 @@ impl ColorGradeLayer {
     }
 
     pub fn prepare(&mut self, queue: &wgpu::Queue, uniforms: &ProjectUniforms) {
-        // Reuses the exact params the display card was given: grain and
-        // vignette only stay continuous across the card edge if both passes
-        // grade with identical values.
+        // Must reuse the display card's exact params: grain/vignette only
+        // stay continuous across the card edge with identical values.
         let params = uniforms.screen_color_grade;
         self.active = params.is_active();
         if !self.active {

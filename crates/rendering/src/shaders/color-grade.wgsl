@@ -1,11 +1,7 @@
-// Full-frame color grade for the background canvas. Runs between the
-// background (+ its blur) and the display layer so the backdrop wears the
-// same grade as the screen and the padded scene reads as one frame.
-//
-// The grade math MUST stay in sync with apply_color_grade in
-// composite-video-frame.wgsl: the display card applies the same grade in its
-// own shader, and grain + vignette are computed in the same output-pixel
-// space so the two layers meet seamlessly at the card edge.
+// Full-frame grade for the background canvas. The math MUST stay in sync
+// with apply_color_grade in composite-video-frame.wgsl and cursor.wgsl:
+// grain and vignette share one output-pixel space so the layers meet
+// seamlessly at the card edge.
 
 struct Uniforms {
     // (exposure stops, contrast, saturation, temperature).
@@ -52,8 +48,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Exposure in stops.
     var rgb = color.rgb * exp2(exposure);
 
-    // White balance: temperature trades red against blue, tint trades green
-    // against magenta. Multiplicative so black stays black.
+    // White balance, multiplicative so black stays black.
     rgb = rgb * vec3<f32>(
         1.0 + 0.10 * temperature + 0.04 * tint,
         1.0 - 0.07 * tint,
@@ -67,8 +62,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let luma = dot(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.2126, 0.7152, 0.0722));
     rgb = mix(vec3<f32>(luma), rgb, 1.0 + saturation);
 
-    // Split toning: teal into shadows, orange into highlights (reversed when
-    // the amount is negative), weighted by luma bands.
+    // Split tone: teal shadows / orange highlights, luma-banded.
     let shadow_w = 1.0 - smoothstep(0.2, 0.65, luma);
     let highlight_w = smoothstep(0.35, 0.8, luma);
     rgb += split_tone * (
@@ -79,17 +73,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Film fade: raised blacks, gently dulled highlights.
     rgb = rgb * (1.0 - 0.18 * fade) + vec3<f32>(0.09 * fade);
 
-    // Full-frame vignette (the display card computes its vignette in the
-    // same output space, so the field is continuous across the card edge).
     if vignette > 0.0 {
         let dims = vec2<f32>(textureDimensions(frame_texture));
         let r = length((frag_coord.xy / dims - vec2<f32>(0.5)) * 2.0);
         rgb = rgb * (1.0 - vignette * 0.65 * smoothstep(0.5, 1.5, r));
     }
 
-    // Animated monochrome grain, peaked in the midtones like scanned film.
-    // Same hash, coordinates, and seed as the display layer so the noise
-    // field is continuous across the card boundary.
+    // Midtone-peaked monochrome grain.
     if grain > 0.0 {
         let seed = uniforms.grain_params.y;
         let noise = grain_hash(frag_coord.xy + vec2<f32>(seed * 17.0, seed * 29.0));

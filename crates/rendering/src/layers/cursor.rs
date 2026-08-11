@@ -594,9 +594,6 @@ impl CursorLayer {
             ],
         };
 
-        // The cursor wears the screen's grade so it reads as part of the
-        // graded footage; the same shared params keep its grain and vignette
-        // continuous with the card and backdrop underneath.
         let cursor_grade = if uniforms.project.color_correction.grade_cursor {
             uniforms.screen_color_grade
         } else {
@@ -726,8 +723,8 @@ pub struct CursorUniforms {
     screen_bounds: [f32; 4],
     motion_vector_strength: [f32; 4],
     rotation_params: [f32; 4],
-    /// Screen color grade (see `ColorGradeUniformParams`); identity when the
-    /// user opts the cursor out of the grade.
+    /// Screen grade (see `ColorGradeUniformParams`); identity when the
+    /// cursor opts out.
     color_adjust_a: [f32; 4],
     color_adjust_b: [f32; 4],
     grain_params: [f32; 4],

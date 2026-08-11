@@ -92,13 +92,13 @@ pub struct CompositeVideoFrameUniforms {
     /// squares its top corners against decorative frame chrome with
     /// `[0, 0, 1, 1]`.
     pub corner_radii: [f32; 4],
-    /// Color grade: (exposure in stops, contrast, saturation, temperature).
+    /// (exposure stops, contrast, saturation, temperature).
     pub color_adjust_a: [f32; 4],
-    /// Color grade: (tint, fade, split_tone, vignette).
+    /// (tint, fade, split_tone, vignette).
     pub color_adjust_b: [f32; 4],
-    /// (grain amount, per-frame grain seed, grade-active flag, full-frame
-    /// vignette flag). The active flag lets the shader skip the whole color
-    /// pass in one uniform branch when the layer has no grade.
+    /// (grain amount, grain seed, grade-active flag, full-frame vignette
+    /// flag). The active flag gates the shader's whole color pass in one
+    /// uniform branch, keeping ungraded layers bit-identical to before.
     pub grain_params: [f32; 4],
 }
 
@@ -134,10 +134,9 @@ impl Default for CompositeVideoFrameUniforms {
     }
 }
 
-/// The three uniform vec4s that drive the shader's color pass, derived from a
-/// layer's [`cap_project::ColorCorrection`]. Intensity scaling happens here so
-/// the shader never needs to know about it, and every field is clamped so a
-/// hand-edited config can't push the shader outside its designed ranges.
+/// Intensity scaling and range clamping happen here, Rust-side, so the
+/// shader never sees unscaled values and a hand-edited config can't push it
+/// outside its designed ranges.
 #[derive(Debug, Clone, Copy)]
 pub struct ColorGradeUniformParams {
     pub color_adjust_a: [f32; 4],
@@ -152,17 +151,14 @@ impl ColorGradeUniformParams {
         grain_params: [0.0; 4],
     };
 
-    /// Mirrors the shader's own gate: `grain_params.z` is the active flag
-    /// `from_config` sets when any adjustment survives clamping and intensity
-    /// scaling.
+    /// Must mirror the shader's own gate on `grain_params.z`.
     pub fn is_active(&self) -> bool {
         self.grain_params[2] > 0.5
     }
 
-    /// `full_frame_vignette` selects the vignette's coordinate space:
-    /// the screen uses the full output frame (so the display card and the
-    /// graded background share one continuous vignette field), while the
-    /// camera vignettes within its own card.
+    /// `full_frame_vignette` selects the vignette's coordinate space: full
+    /// output frame for the screen (one continuous field across card and
+    /// backdrop), card-local for the camera.
     pub fn from_config(
         config: &cap_project::ColorCorrection,
         frame_number: u32,
@@ -193,8 +189,7 @@ impl ColorGradeUniformParams {
         .iter()
         .any(|v| v.abs() > 1e-4);
 
-        // Cycling seed keeps grain animated while staying deterministic per
-        // frame number, so preview and export always match.
+        // Seed is deterministic per frame number so preview and export match.
         let grain_seed = (frame_number % 600) as f32;
 
         Self {
