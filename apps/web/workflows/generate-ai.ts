@@ -659,13 +659,9 @@ Transcript section:
 ${chunk.text}`;
 
 		try {
-			const parsed = await callAiApi(chunkPrompt, (text) =>
-				JSON.parse(extractJsonObject(text)),
-			);
+			const parsed = await callAiApi(chunkPrompt, parseChunkAnalysis);
 			chunkSummaries.push({
-				summary: parsed.summary || "",
-				keyPoints: parsed.keyPoints || [],
-				chapters: parsed.chapters || [],
+				...parsed,
 				startTime: chunk.startTime,
 				endTime: chunk.endTime,
 			});
@@ -723,9 +719,7 @@ Additional requirements:
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
 	try {
-		const parsed = await callAiApi(finalPrompt, (text) =>
-			JSON.parse(extractJsonObject(text)),
-		);
+		const parsed = await callAiApi(finalPrompt, parseFinalSummary);
 		return {
 			title: parsed.title,
 			summary: parsed.summary,
@@ -746,6 +740,39 @@ Return ONLY valid JSON without any markdown formatting or code blocks.`;
 			chapters: allChapters,
 		};
 	}
+}
+
+// Like parseAiResponse, these throw on missing or empty required fields —
+// inside the provider loop that sends the attempt to the next provider
+// instead of completing the workflow with an empty analysis.
+export function parseChunkAnalysis(content: string): {
+	summary: string;
+	keyPoints: string[];
+	chapters: { title: string; start: number }[];
+} {
+	const parsed = JSON.parse(extractJsonObject(content));
+	if (typeof parsed.summary !== "string" || !parsed.summary.trim()) {
+		throw new Error("AI response did not contain a valid section summary");
+	}
+	return {
+		summary: parsed.summary,
+		keyPoints: parsed.keyPoints || [],
+		chapters: parsed.chapters || [],
+	};
+}
+
+export function parseFinalSummary(content: string): {
+	title: string;
+	summary: string;
+} {
+	const parsed = JSON.parse(extractJsonObject(content));
+	if (typeof parsed.title !== "string" || !parsed.title.trim()) {
+		throw new Error("AI response did not contain a valid title");
+	}
+	if (typeof parsed.summary !== "string" || !parsed.summary.trim()) {
+		throw new Error("AI response did not contain a valid summary");
+	}
+	return { title: parsed.title, summary: parsed.summary };
 }
 
 export function parseAiResponse(content: string): AiResult {

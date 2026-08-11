@@ -41,7 +41,12 @@ vi.mock("workflow", () => ({
 vi.mock("server-only", () => ({}));
 
 import { AiUnavailableError } from "@/lib/ai/run";
-import { callAiApi, parseAiResponse } from "@/workflows/generate-ai";
+import {
+	callAiApi,
+	parseAiResponse,
+	parseChunkAnalysis,
+	parseFinalSummary,
+} from "@/workflows/generate-ai";
 
 const makeSelection = (provider: string): AiModelSelection => ({
 	provider: provider as AiModelSelection["provider"],
@@ -106,6 +111,20 @@ describe("callAiApi provider fallback on invalid output", () => {
 		expect((error.cause as Error).name).toBe("InvalidAiOutputError");
 	});
 
+	it("falls through when valid JSON is missing required fields", async () => {
+		generateTextMock
+			.mockResolvedValueOnce({ text: '{"chapters":[]}' })
+			.mockResolvedValueOnce({
+				text: '{"title":"Workflow review","summary":"I explain the workflow."}',
+			});
+
+		await expect(callAiApi("prompt", parseFinalSummary)).resolves.toEqual({
+			title: "Workflow review",
+			summary: "I explain the workflow.",
+		});
+		expect(generateTextMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("keeps request-level chain failures distinguishable from invalid output", async () => {
 		const outage = new Error("connect ECONNREFUSED");
 		generateTextMock
@@ -118,5 +137,30 @@ describe("callAiApi provider fallback on invalid output", () => {
 
 		expect(error).toBeInstanceOf(AiUnavailableError);
 		expect(error.cause).toBe(outage);
+	});
+});
+
+describe("map-reduce output parsers", () => {
+	it("parseChunkAnalysis rejects missing or empty section summaries", () => {
+		expect(() => parseChunkAnalysis("{}")).toThrow();
+		expect(() =>
+			parseChunkAnalysis('{"summary":"  ","keyPoints":[],"chapters":[]}'),
+		).toThrow();
+	});
+
+	it("parseChunkAnalysis defaults optional arrays", () => {
+		expect(parseChunkAnalysis('{"summary":"Covers the retry queue."}')).toEqual(
+			{
+				summary: "Covers the retry queue.",
+				keyPoints: [],
+				chapters: [],
+			},
+		);
+	});
+
+	it("parseFinalSummary rejects missing or empty required fields", () => {
+		expect(() => parseFinalSummary('{"title":"Only a title"}')).toThrow();
+		expect(() => parseFinalSummary('{"summary":"Only a summary"}')).toThrow();
+		expect(() => parseFinalSummary('{"title":"","summary":""}')).toThrow();
 	});
 });
