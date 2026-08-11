@@ -100,14 +100,17 @@ const LOOM_CSV_PERMISSION_ERROR =
 async function createLoomImportRateLimitCheck(userId: User.UserId) {
 	if (NODE_ENV !== "production") return async () => false;
 
-	const headersList = await headers();
-	const request = new Request("https://cap.so/api/loom-import-rate-limit", {
-		method: "POST",
-		headers: headersList,
-	});
-
 	return async () => {
 		try {
+			// Built inside the try: a header value that fails the Fetch spec's
+			// Headers validation (raw HTTP allows byte values that WHATWG
+			// Headers.set rejects) throws here, before checkRateLimit ever runs.
+			const headersList = await headers();
+			const request = new Request("https://cap.so/api/loom-import-rate-limit", {
+				method: "POST",
+				headers: headersList,
+			});
+
 			const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
 				request,
 				rateLimitKey: `loom-import:${userId}`,
