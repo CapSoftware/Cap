@@ -7,10 +7,11 @@
 // emitting frames so the video clock never freezes on static content.
 //
 // Usage: node scout-shoot.mjs <url> <outDir> <slug> [--story click|scroll]
-import { chromium } from "playwright-core";
+
 import { execFileSync, execSync } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { chromium } from "playwright-core";
 
 // --- CLI ----------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -28,7 +29,9 @@ for (let i = 0; i < argv.length; i++) {
 }
 const [url, outDir, slug] = positionals;
 if (!url || !outDir || !slug) {
-	throw new Error("usage: node scout-shoot.mjs <url> <outDir> <slug> [--story click|scroll]");
+	throw new Error(
+		"usage: node scout-shoot.mjs <url> <outDir> <slug> [--story click|scroll]",
+	);
 }
 if (forceStory && forceStory !== "click" && forceStory !== "scroll") {
 	throw new Error(`--story must be 'click' or 'scroll' (got '${forceStory}')`);
@@ -79,8 +82,14 @@ const jitter = (b, s) => b + (Math.random() - 0.5) * s;
 // Stale/closing test-chrome windows stay enumerable in `cap record windows` and
 // the first-match can grab the WRONG one. Also close Finder/preview windows so
 // they never composite into the bottom of the window capture.
-try { execSync(`pkill -f "Google Chrome for Testing" || true`); } catch {}
-try { execSync(`osascript -e 'tell application "Finder" to close every window' || true`); } catch {}
+try {
+	execSync(`pkill -f "Google Chrome for Testing" || true`);
+} catch {}
+try {
+	execSync(
+		`osascript -e 'tell application "Finder" to close every window' || true`,
+	);
+} catch {}
 await sleep(800);
 
 const browser = await chromium.launch({
@@ -98,13 +107,20 @@ await page.goto(url, { waitUntil: "load", timeout: 60000 });
 await sleep(2600);
 
 // Dismiss cookie / consent banners so they never leak into a shot.
-await page.evaluate(() => {
-	const re = /^(accept|accept all|allow all|agree|i agree|got it|ok|reject all|decline|dismiss|close)$/i;
-	for (const el of document.querySelectorAll("button, a, [role=button]")) {
-		const t = (el.textContent || "").trim();
-		if (re.test(t)) { try { el.click(); } catch {} }
-	}
-}).catch(() => {});
+await page
+	.evaluate(() => {
+		const re =
+			/^(accept|accept all|allow all|agree|i agree|got it|ok|reject all|decline|dismiss|close)$/i;
+		for (const el of document.querySelectorAll("button, a, [role=button]")) {
+			const t = (el.textContent || "").trim();
+			if (re.test(t)) {
+				try {
+					el.click();
+				} catch {}
+			}
+		}
+	})
+	.catch(() => {});
 await sleep(400);
 
 const geo = await page.evaluate(() => ({
@@ -149,10 +165,17 @@ const scout = await page.evaluate(() => {
 	const vis = (el) => {
 		const r = el.getBoundingClientRect();
 		const s = getComputedStyle(el);
-		return r.width > 8 && r.height > 8 && s.visibility !== "hidden" && s.display !== "none" && r.y < innerHeight * 1.1;
+		return (
+			r.width > 8 &&
+			r.height > 8 &&
+			s.visibility !== "hidden" &&
+			s.display !== "none" &&
+			r.y < innerHeight * 1.1
+		);
 	};
 	const hero =
-		[...document.querySelectorAll("h1")].find(vis) ?? [...document.querySelectorAll("h2")].find(vis);
+		[...document.querySelectorAll("h1")].find(vis) ??
+		[...document.querySelectorAll("h2")].find(vis);
 	const heroBox = hero ? hero.getBoundingClientRect() : null;
 	const sameHost = (href) => {
 		try {
@@ -164,7 +187,8 @@ const scout = await page.evaluate(() => {
 	// Content destinations tell the story; conversion CTAs dead-end at forms.
 	const ctaWords =
 		/how it works|features|product|explore|browse|see|watch|demo|learn|courses|membership|events|about|pricing|showcase|gallery|tools|docs/i;
-	const ctaBad = /try|free|sign ?up|register|get started|start now|join|book|download|log ?in|subscribe|get a demo|book a demo|request a demo|contact|talk to/i;
+	const ctaBad =
+		/try|free|sign ?up|register|get started|start now|join|book|download|log ?in|subscribe|get a demo|book a demo|request a demo|contact|talk to/i;
 	const candidates = [...document.querySelectorAll("a, button")]
 		.filter(vis)
 		.map((el) => {
@@ -183,7 +207,13 @@ const scout = await page.evaluate(() => {
 			if (href && new URL(href).pathname === location.pathname) score -= 3;
 			if (/login|log in|sign in/i.test(text)) score -= 4;
 			if (ctaBad.test(text)) score -= 5;
-			if (href && /\/(blog|changelog|careers|jobs|news|press)(\/|$)/i.test(new URL(href).pathname)) score -= 5;
+			if (
+				href &&
+				/\/(blog|changelog|careers|jobs|news|press)(\/|$)/i.test(
+					new URL(href).pathname,
+				)
+			)
+				score -= 5;
 			if (/↗|↗️|external/i.test(text)) score -= 3;
 			return {
 				text: text.slice(0, 48),
@@ -201,7 +231,11 @@ const scout = await page.evaluate(() => {
 		return m ? [+m[1], +m[2], +m[3]] : null;
 	};
 	let pageBg = null;
-	for (const el of [document.body, document.documentElement, ...document.querySelectorAll("main, header, section")]) {
+	for (const el of [
+		document.body,
+		document.documentElement,
+		...document.querySelectorAll("main, header, section"),
+	]) {
 		const c = parse(getComputedStyle(el).backgroundColor);
 		if (c) {
 			pageBg = c;
@@ -219,7 +253,9 @@ const scout = await page.evaluate(() => {
 });
 const cta = scout.candidates[0] ?? null;
 const story = forceStory ?? (cta?.href ? "click" : "scroll");
-console.log(`STORY=${story} cta=${cta?.text ?? "none"} accent=${scout.accent} bg=${scout.pageBg}`);
+console.log(
+	`STORY=${story} cta=${cta?.text ?? "none"} accent=${scout.accent} bg=${scout.pageBg}`,
+);
 
 // --- Virtual cursor -----------------------------------------------------------
 const events = [];
@@ -243,7 +279,10 @@ async function glide(to, ms) {
 	for (let i = 1; i <= steps; i++) {
 		const t = i / steps,
 			e = t * t * (3 - 2 * t);
-		await vmove({ x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e });
+		await vmove({
+			x: from.x + (to.x - from.x) * e,
+			y: from.y + (to.y - from.y) * e,
+		});
 		await sleep(ms / steps);
 	}
 }
@@ -257,17 +296,38 @@ const vclick = async () => {
 const center = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
 const pageTitle = await page.title();
-const windows = JSON.parse(execFileSync(CAP, ["record", "windows", "--json"], { encoding: "utf8" }));
+const windows = JSON.parse(
+	execFileSync(CAP, ["record", "windows", "--json"], { encoding: "utf8" }),
+);
 const chromeWins = windows.filter(
-	(w) => /Chrome for Testing/i.test(w.ownerName ?? "") || /Chrome for Testing/i.test(w.name ?? ""),
+	(w) =>
+		/Chrome for Testing/i.test(w.ownerName ?? "") ||
+		/Chrome for Testing/i.test(w.name ?? ""),
 );
 let win = chromeWins.find((w) => (w.name ?? "").trim() === pageTitle.trim());
 if (!win && chromeWins.length === 1) win = chromeWins[0];
-if (!win) throw new Error(`window not found (title="${pageTitle}", ${chromeWins.length} chrome windows: ${chromeWins.map((w) => w.name).join(" | ")})`);
+if (!win)
+	throw new Error(
+		`window not found (title="${pageTitle}", ${chromeWins.length} chrome windows: ${chromeWins.map((w) => w.name).join(" | ")})`,
+	);
 
-execFileSync(CAP, ["record", "start", "--detach", "--window", String(win.id), "--fps", "60", "--path", PROJECT], {
-	encoding: "utf8",
-});
+execFileSync(
+	CAP,
+	[
+		"record",
+		"start",
+		"--detach",
+		"--window",
+		String(win.id),
+		"--fps",
+		"60",
+		"--path",
+		PROJECT,
+	],
+	{
+		encoding: "utf8",
+	},
+);
 t0 = Date.now();
 const mark = (n, extra = {}) => {
 	events.push({ name: n, t: now(), ...extra });
@@ -305,7 +365,10 @@ try {
 		await glide({ x: geo.iw * 0.5, y: geo.ih * 0.45 }, 900);
 		await sleep(500);
 		mark("scroll1_start");
-		await page.evaluate((d) => window.scrollBy({ top: d, behavior: "smooth" }), Math.round(geo.ih * 0.95));
+		await page.evaluate(
+			(d) => window.scrollBy({ top: d, behavior: "smooth" }),
+			Math.round(geo.ih * 0.95),
+		);
 		await glide({ x: vpos.x + 90, y: vpos.y + 120 }, 900);
 		await sleep(800);
 		mark("scroll1_settled");
@@ -325,10 +388,16 @@ try {
 	}
 	mark("end");
 } finally {
-	execFileSync(CAP, ["record", "stop", "--path", PROJECT], { encoding: "utf8" });
+	execFileSync(CAP, ["record", "stop", "--path", PROJECT], {
+		encoding: "utf8",
+	});
 	writeFileSync(
 		TIMELINE,
-		JSON.stringify({ story, scout: { ...scout, candidates: undefined }, events, cursorLog }, null, 1),
+		JSON.stringify(
+			{ story, scout: { ...scout, candidates: undefined }, events, cursorLog },
+			null,
+			1,
+		),
 	);
 	await browser.close();
 }

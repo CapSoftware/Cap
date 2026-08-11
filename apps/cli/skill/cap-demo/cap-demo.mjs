@@ -4,10 +4,10 @@
 //
 // Usage: cap-demo <url> [--out DIR] [--slug NAME] [--music ID] [--quality 4k|hd] [--story click|scroll]
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIB = join(__dirname, "lib");
@@ -29,8 +29,10 @@ for (let i = 0; i < argv.length; i++) {
 	else if (a.startsWith("--quality=")) opts.quality = a.slice(10);
 	else if (a === "--story") opts.story = take();
 	else if (a.startsWith("--story=")) opts.story = a.slice(8);
-	else if (a === "-h" || a === "--help") { usage(); process.exit(0); }
-	else positionals.push(a);
+	else if (a === "-h" || a === "--help") {
+		usage();
+		process.exit(0);
+	} else positionals.push(a);
 }
 
 function usage() {
@@ -40,9 +42,14 @@ function usage() {
 }
 
 const url = positionals[0];
-if (!url) { usage(); fail("missing <url>"); }
-if (opts.quality && opts.quality !== "4k" && opts.quality !== "hd") fail("--quality must be 4k or hd");
-if (opts.story && opts.story !== "click" && opts.story !== "scroll") fail("--story must be click or scroll");
+if (!url) {
+	usage();
+	fail("missing <url>");
+}
+if (opts.quality && opts.quality !== "4k" && opts.quality !== "hd")
+	fail("--quality must be 4k or hd");
+if (opts.story && opts.story !== "click" && opts.story !== "scroll")
+	fail("--story must be click or scroll");
 
 function fail(msg) {
 	console.error(`cap-demo: ${msg}`);
@@ -71,7 +78,9 @@ mkdirSync(outDir, { recursive: true });
 
 // playwright-core is vendored into the skill; give a clear hint if missing.
 if (!existsSync(join(__dirname, "node_modules", "playwright-core"))) {
-	fail(`playwright-core not installed. Run: (cd "${__dirname}" && npm install)`);
+	fail(
+		`playwright-core not installed. Run: (cd "${__dirname}" && npm install)`,
+	);
 }
 
 // --- run a child, streaming stdout to the user and optionally capturing it -----
@@ -85,14 +94,19 @@ function run(cmd, cmdArgs, { capture = false } = {}) {
 		});
 		child.on("error", reject);
 		child.on("close", (code) =>
-			code === 0 ? resolve(buf) : reject(new Error(`${cmd} exited with code ${code}`)),
+			code === 0
+				? resolve(buf)
+				: reject(new Error(`${cmd} exited with code ${code}`)),
 		);
 	});
 }
 
 // Parse the scout's final machine-readable JSON line (last line with a `scout` key).
 function parseScoutResult(out) {
-	const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+	const lines = out
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean);
 	for (let i = lines.length - 1; i >= 0; i--) {
 		if (!lines[i].startsWith("{")) continue;
 		try {
@@ -106,14 +120,19 @@ function parseScoutResult(out) {
 // Dark brand -> moody cinematic; light brand -> upbeat lofi.
 function defaultMusic(scoutResult) {
 	const bg = scoutResult?.scout?.pageBg;
-	const light = Array.isArray(bg) && bg.reduce((a, b) => a + b, 0) / bg.length > 150;
-	return light ? "sunday-mood-lofi-cafe-upbeat-bluelike" : "lofi-cinematic-pulsebox";
+	const light =
+		Array.isArray(bg) && bg.reduce((a, b) => a + b, 0) / bg.length > 150;
+	return light
+		? "sunday-mood-lofi-cafe-upbeat-bluelike"
+		: "lofi-cinematic-pulsebox";
 }
 
 // --- pipeline -----------------------------------------------------------------
 (async () => {
 	console.log(`cap-demo: ${url}  ->  ${outDir}`);
-	console.log(`[1/2] scout + shoot (slug=${slug}${opts.story ? `, story=${opts.story}` : ""})`);
+	console.log(
+		`[1/2] scout + shoot (slug=${slug}${opts.story ? `, story=${opts.story}` : ""})`,
+	);
 
 	const shootArgs = [join(LIB, "scout-shoot.mjs"), url, outDir, slug];
 	if (opts.story) shootArgs.push("--story", opts.story);
@@ -131,7 +150,9 @@ function defaultMusic(scoutResult) {
 		? `story=${scoutResult.story} cta=${scoutResult.scout.ctaText ?? "none"}`
 		: "story=?";
 
-	console.log(`[2/2] treat + export (music=${music}${opts.quality ? `, quality=${opts.quality}` : ""})`);
+	console.log(
+		`[2/2] treat + export (music=${music}${opts.quality ? `, quality=${opts.quality}` : ""})`,
+	);
 	const treatArgs = [join(LIB, "treat.py"), outDir, slug, "--music", music];
 	if (opts.quality) treatArgs.push("--quality", opts.quality);
 
@@ -144,5 +165,7 @@ function defaultMusic(scoutResult) {
 	const mp4 = join(outDir, `${slug}-demo.mp4`);
 	console.log("");
 	console.log(`Done: ${mp4}`);
-	console.log(`  ${decided}, music=${music}${opts.quality ? `, ${opts.quality}` : ""}`);
+	console.log(
+		`  ${decided}, music=${music}${opts.quality ? `, ${opts.quality}` : ""}`,
+	);
 })();
