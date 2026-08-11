@@ -64,6 +64,7 @@ import {
 	type ClipTransition,
 	type ClipTransitionInput,
 	clampTransitionDuration,
+	clipDuration,
 	clipTimelineDuration,
 	clipTimelineOffsets,
 	getClipTransition,
@@ -76,6 +77,20 @@ import {
 import type { MaskSegment } from "./masks";
 import type { SnapGuide } from "./snapping";
 import type { TextSegment } from "./text";
+import {
+	applySceneToRange,
+	CAMERA3D_SCENES,
+	type Camera3DSegment,
+	defaultCamera3DTracks,
+	evaluatePose,
+	getEndPose,
+	getMotionEasing,
+	getStartPose,
+	normalizeCamera3DSegments,
+	scaleKeyframeTimes,
+	sceneWithShotCount,
+	setMotion,
+} from "./three-d";
 import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
@@ -156,7 +171,8 @@ export type TimelineTrackType =
 	| "zoom"
 	| "scene"
 	| "mask"
-	| "audio";
+	| "audio"
+	| "3d";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -185,6 +201,7 @@ type EditorTimelineConfiguration = Omit<
 	| "segments"
 	| "audioSegments"
 	| "transitions"
+	| "camera3dSegments"
 > & {
 	segments: EditorTimelineSegment[];
 	transitions: ClipTransition[];
@@ -192,6 +209,7 @@ type EditorTimelineConfiguration = Omit<
 	maskSegments: MaskSegment[];
 	textSegments: TextSegment[];
 	audioSegments?: AudioTrackSegment[];
+	camera3dSegments: Camera3DSegment[];
 };
 
 type EditorCaptionsData = NonNullable<ProjectConfiguration["captions"]> & {
@@ -269,6 +287,9 @@ export function normalizeProject(
 						}
 					).audioSegments ?? [],
 				),
+				camera3dSegments: normalizeCamera3DSegments(
+					config.timeline.camera3dSegments,
+				),
 			}
 		: undefined;
 	const captions = config.captions
@@ -305,6 +326,7 @@ export function serializeProjectConfiguration(
 				maskSegments: project.timeline.maskSegments ?? [],
 				textSegments: project.timeline.textSegments ?? [],
 				audioSegments: project.timeline.audioSegments ?? [],
+				camera3dSegments: project.timeline.camera3dSegments ?? [],
 			}
 		: project.timeline;
 
@@ -372,6 +394,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					}
 
 					if (shift === 0) return;
+					const camera3dSegments = timeline.camera3dSegments ?? [];
+					const previousCamera3dDurations = camera3dSegments.map(
+						(segment) => segment.end - segment.start,
+					);
 					const tracks = [
 						timeline.zoomSegments,
 						timeline.sceneSegments ?? [],
@@ -380,11 +406,66 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						timeline.captionSegments ?? [],
 						timeline.keyboardSegments ?? [],
 						timeline.audioSegments ?? [],
+						camera3dSegments,
 					];
 					for (const track of tracks) {
 						rippleTimelineTrack(track, boundary, shift);
 					}
+					for (let index = 0; index < camera3dSegments.length; index++) {
+						const camera3dSegment = camera3dSegments[index];
+						const previousDuration = previousCamera3dDurations[index];
+						// Keyframe times are relative to the segment start, so a
+						// segment the ripple resized (the straddling case) has to
+						// have them rescaled onto its new length.
+						const nextDuration = camera3dSegment.end - camera3dSegment.start;
+						if (previousDuration <= 0 || nextDuration === previousDuration)
+							continue;
+						scaleKeyframeTimes(
+							camera3dSegment.tracks,
+							nextDuration / previousDuration,
+						);
+					}
 				}),
+			);
+		};
+
+		// Output-time boundaries of every clip that fall strictly inside a range.
+		// A 3D scene lines its cuts up with these so the camera changes shot on
+		// the same frame the footage does.
+		const camera3DClipCuts = (start: number, end: number) => {
+			const timeline = project.timeline;
+			if (!timeline) return [];
+			const offsets = clipTimelineOffsets(
+				timeline.segments,
+				timeline.transitions ?? [],
+			);
+			const cuts: number[] = [];
+			for (let index = 0; index < timeline.segments.length; index++) {
+				const boundaries = [
+					offsets[index],
+					offsets[index] + clipDuration(timeline.segments[index]),
+				];
+				for (const boundary of boundaries)
+					if (boundary > start && boundary < end) cuts.push(boundary);
+			}
+			return cuts;
+		};
+
+		/**
+		 * The chain a scene would lay over the whole timeline. The setup flow's
+		 * ghost placeholder and the action that commits it read this same
+		 * function, so the track previews exactly what lands.
+		 */
+		const camera3DScenePreview = (sceneId: string, shots: number) => {
+			const scene = CAMERA3D_SCENES.find((s) => s.id === sceneId);
+			if (!scene) return [];
+
+			const end = totalDuration();
+			return applySceneToRange(
+				sceneWithShotCount(scene, shots),
+				0,
+				end,
+				camera3DClipCuts(0, end),
 			);
 		};
 
@@ -543,6 +624,124 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						}),
 					);
 					setEditorState("timeline", "selection", null);
+				});
+			},
+			splitCamera3DSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"camera3dSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						// A split must not change what plays: both halves meet on the pose
+						// the segment held at the cut, so the left half moves start -> mid
+						// and the right half picks up mid -> end. Blur is segment-level, so
+						// it is simply carried onto both halves.
+						const startPose = getStartPose(segment);
+						const midPose = evaluatePose(segment, time);
+						const endPose = getEndPose(segment);
+						const easing = getMotionEasing(segment);
+
+						const right: Camera3DSegment = {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+							properties: { ...segment.properties },
+							blur: { ...segment.blur },
+							tracks: defaultCamera3DTracks(),
+						};
+						setMotion(right, midPose, endPose, easing);
+						segments.splice(index + 1, 0, right);
+
+						const left = segments[index];
+						left.end = segment.start + time;
+						left.tracks = defaultCamera3DTracks();
+						setMotion(left, startPose, midPose, easing);
+						sortTrackSegments(segments);
+					}),
+				);
+			},
+			deleteCamera3DSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"camera3dSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							if (sorted.length === 0) return;
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			applyCamera3DScene: (segmentIndex: number, sceneId: string) => {
+				const scene = CAMERA3D_SCENES.find((s) => s.id === sceneId);
+				const segment = project.timeline?.camera3dSegments?.[segmentIndex];
+				if (!scene || !segment) return;
+
+				const { start, end } = segment;
+				const generated = applySceneToRange(
+					scene,
+					start,
+					end,
+					camera3DClipCuts(start, end),
+				);
+				if (generated.length === 0) return;
+
+				batch(() => {
+					setProject(
+						"timeline",
+						"camera3dSegments",
+						produce((segments) => {
+							if (!segments) return;
+							segments.splice(segmentIndex, 1, ...generated);
+							sortTrackSegments(segments);
+						}),
+					);
+					setEditorState("timeline", "selection", {
+						type: "3d",
+						indices: generated.map((_, offset) => segmentIndex + offset),
+					});
+					setEditorState("playbackTime", start);
+					setEditorState("previewTime", null);
+				});
+			},
+			addCamera3DScene: (sceneId: string, shots: number) => {
+				// Only ever an empty-track offer: the scene owns the whole timeline,
+				// so it must not land on top of shots someone has already authored.
+				if (!project.timeline) return;
+				if ((project.timeline.camera3dSegments?.length ?? 0) > 0) return;
+
+				const generated = camera3DScenePreview(sceneId, shots);
+				if (generated.length === 0) return;
+
+				batch(() => {
+					setProject("timeline", "camera3dSegments", (v) => v ?? []);
+					setProject(
+						"timeline",
+						"camera3dSegments",
+						produce((segments) => {
+							if (!segments) return;
+							segments.push(...generated);
+							sortTrackSegments(segments);
+						}),
+					);
+					setEditorState("timeline", "camera3dSetup", null);
+					setEditorState("timeline", "tracks", "3d", true);
+					setEditorState("timeline", "selection", { type: "3d", indices: [0] });
+					setEditorState("playbackTime", 0);
+					setEditorState("previewTime", null);
 				});
 			},
 			splitMaskSegment: (index: number, time: number) => {
@@ -957,6 +1156,23 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							keyboardSegment.start += diff(keyboardSegment.start);
 							keyboardSegment.end += diff(keyboardSegment.end);
 						}
+
+						for (const camera3dSegment of timeline.camera3dSegments ?? []) {
+							const previousDuration =
+								camera3dSegment.end - camera3dSegment.start;
+							camera3dSegment.start += diff(camera3dSegment.start);
+							camera3dSegment.end += diff(camera3dSegment.end);
+							// Keyframe times are relative to the segment start, so they
+							// have to follow the segment's new length rather than the
+							// absolute shift the other tracks use.
+							const nextDuration = camera3dSegment.end - camera3dSegment.start;
+							if (previousDuration <= 0 || nextDuration === previousDuration)
+								continue;
+							scaleKeyframeTimes(
+								camera3dSegment.tracks,
+								nextDuration / previousDuration,
+							);
+						}
 					}),
 				);
 			},
@@ -1188,6 +1404,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			(project.timeline?.captionSegments?.length ?? 0) > 0;
 		const initialKeyboardTrackVisible =
 			project.keyboard?.settings.enabled ?? false;
+		const initialCamera3DTrackVisible =
+			(project.timeline?.camera3dSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -1217,7 +1435,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "caption"; indices: number[] }
 					| { type: "keyboard"; indices: number[] }
 					| { type: "text"; indices: number[] }
-					| { type: "audio"; indices: number[] },
+					| { type: "audio"; indices: number[] }
+					| { type: "3d"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -1260,6 +1479,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					keyboard: initialKeyboardTrackVisible,
 					zoom: true,
 					scene: true,
+					"3d": initialCamera3DTrackVisible,
 					mask: initialMaskTrackCount,
 					text: initialTextTrackCount,
 					audio: initialAudioTrackCount,
@@ -1269,6 +1489,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				hoveredMaskTime: null as number | null,
 				audioPicker: null as number | null,
 				audioReplace: null as number | null,
+				// The empty 3D track's setup flow: the scene and shot count the
+				// sidebar is currently offering, previewed live on the track.
+				camera3dSetup: null as null | { sceneId: string; shots: number },
 				// Index of a just-created text segment that should open its
 				// inline canvas editor as soon as its overlay mounts (set by the
 				// Add-track picker, consumed by TextOverlay).
@@ -1478,6 +1701,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			project,
 			setProject,
 			projectActions,
+			camera3DScenePreview,
 			projectHistory: createStoreHistory(project, setProject),
 			editorState,
 			setEditorState,

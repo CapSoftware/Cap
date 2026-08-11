@@ -53,6 +53,10 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 		description: "Switch layouts between your screen and camera.",
 		unavailableHint: "Record with a camera to use scenes.",
 	},
+	"3d": {
+		description: "Tilt the scene in 3D perspective.",
+		unavailableHint: "",
+	},
 };
 
 // Comes straight from the shared `--track-*` CSS variable defined in theme.css,

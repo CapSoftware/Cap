@@ -129,6 +129,13 @@ function getPreviewProjectConfig(
 		};
 	}
 
+	if (!editorState.timeline.tracks["3d"] && config.timeline) {
+		config.timeline = {
+			...config.timeline,
+			camera3dSegments: [],
+		};
+	}
+
 	return config;
 }
 
@@ -566,6 +573,7 @@ function Inner() {
 				return {
 					caption: editorState.timeline.tracks.caption,
 					keyboard: editorState.timeline.tracks.keyboard,
+					threeD: editorState.timeline.tracks["3d"],
 				};
 			},
 			() => {
