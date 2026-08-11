@@ -693,6 +693,7 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
     if let Some(dir) = exe.parent() {
         for candidate in adjacent_exporter_binary_candidates(dir) {
             if candidate.exists() {
+                warn_if_exporter_stale(&exe, &candidate);
                 return Ok(candidate);
             }
         }
@@ -702,6 +703,7 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
         for root in std::iter::once(cwd.as_path()).chain(cwd.ancestors()) {
             for candidate in exporter_binary_candidates(root) {
                 if candidate.exists() {
+                    warn_if_exporter_stale(&exe, &candidate);
                     return Ok(candidate);
                 }
             }
@@ -712,6 +714,28 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
         "Export worker binary not found; place {} next to the app executable or build the Tauri sidecar bundle",
         exporter_bin_name()
     ))
+}
+
+/// Dev-loop trap: `tauri dev` rebuilds the app but not the exporter sidecar,
+/// so exports can silently run renderer code from days earlier and disagree
+/// with the preview. Debug builds log loudly when that is happening.
+fn warn_if_exporter_stale(app_exe: &Path, exporter: &Path) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if let (Some(app_time), Some(exporter_time)) = (mtime(app_exe), mtime(exporter))
+        && let Ok(lag) = app_time.duration_since(exporter_time)
+        && lag.as_secs() > 60
+    {
+        tracing::warn!(
+            exporter = %exporter.display(),
+            lag_secs = lag.as_secs(),
+            "Export worker binary is older than the app; exports may not match \
+             the preview. Rebuild it (cargo build -p cap) and copy it over \
+             target/debug/cap-exporter."
+        );
+    }
 }
 
 fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
