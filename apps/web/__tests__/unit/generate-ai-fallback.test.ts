@@ -158,6 +158,28 @@ describe("map-reduce output parsers", () => {
 		);
 	});
 
+	it("parseChunkAnalysis sanitizes malformed array fields", () => {
+		expect(
+			parseChunkAnalysis(
+				'{"summary":"Covers the retry queue.","keyPoints":"one point","chapters":{"title":"Intro"}}',
+			),
+		).toEqual({
+			summary: "Covers the retry queue.",
+			keyPoints: [],
+			chapters: [],
+		});
+
+		expect(
+			parseChunkAnalysis(
+				'{"summary":"Covers the retry queue.","keyPoints":["kept",42,null],"chapters":[{"title":"Intro","start":0},{"title":"","start":5},{"title":"No start"},{"start":9},null,"Outro"]}',
+			),
+		).toEqual({
+			summary: "Covers the retry queue.",
+			keyPoints: ["kept"],
+			chapters: [{ title: "Intro", start: 0 }],
+		});
+	});
+
 	it("parseFinalSummary rejects missing or empty required fields", () => {
 		expect(() => parseFinalSummary('{"title":"Only a title"}')).toThrow();
 		expect(() => parseFinalSummary('{"summary":"Only a summary"}')).toThrow();

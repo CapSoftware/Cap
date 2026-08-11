@@ -750,14 +750,32 @@ export function parseChunkAnalysis(content: string): {
 	keyPoints: string[];
 	chapters: { title: string; start: number }[];
 } {
-	const parsed = JSON.parse(extractJsonObject(content));
+	const parsed = JSON.parse(extractJsonObject(content)) as {
+		summary?: unknown;
+		keyPoints?: unknown;
+		chapters?: unknown;
+	};
 	if (typeof parsed.summary !== "string" || !parsed.summary.trim()) {
 		throw new Error("AI response did not contain a valid section summary");
 	}
 	return {
 		summary: parsed.summary,
-		keyPoints: parsed.keyPoints || [],
-		chapters: parsed.chapters || [],
+		keyPoints: Array.isArray(parsed.keyPoints)
+			? parsed.keyPoints.filter(
+					(keyPoint): keyPoint is string => typeof keyPoint === "string",
+				)
+			: [],
+		chapters: Array.isArray(parsed.chapters)
+			? parsed.chapters.filter(
+					(chapter): chapter is { title: string; start: number } =>
+						typeof chapter === "object" &&
+						chapter !== null &&
+						typeof chapter.start === "number" &&
+						chapter.start >= 0 &&
+						typeof chapter.title === "string" &&
+						chapter.title.trim().length > 0,
+				)
+			: [],
 	};
 }
 
@@ -765,7 +783,10 @@ export function parseFinalSummary(content: string): {
 	title: string;
 	summary: string;
 } {
-	const parsed = JSON.parse(extractJsonObject(content));
+	const parsed = JSON.parse(extractJsonObject(content)) as {
+		title?: unknown;
+		summary?: unknown;
+	};
 	if (typeof parsed.title !== "string" || !parsed.title.trim()) {
 		throw new Error("AI response did not contain a valid title");
 	}
