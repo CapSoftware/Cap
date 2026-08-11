@@ -1,0 +1,12 @@
+{
+  "0": {
+    "imagePath": "content/cursors/cursor_0.png",
+    "hotspot": { "x": 0.17857142857142858, "y": 0.125 },
+    "shape": "MacOS|TahoeArrow"
+  },
+  "2": {
+    "imagePath": "content/cursors/cursor_2.png",
+    "hotspot": { "x": 0.40625, "y": 0.25 },
+    "shape": "MacOS|TahoePointingHand"
+  }
+}
