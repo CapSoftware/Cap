@@ -92,6 +92,14 @@ pub struct CompositeVideoFrameUniforms {
     /// squares its top corners against decorative frame chrome with
     /// `[0, 0, 1, 1]`.
     pub corner_radii: [f32; 4],
+    /// Color grade: (exposure in stops, contrast, saturation, temperature).
+    pub color_adjust_a: [f32; 4],
+    /// Color grade: (tint, fade, split_tone, vignette).
+    pub color_adjust_b: [f32; 4],
+    /// (grain amount, per-frame grain seed, grade-active flag, full-frame
+    /// vignette flag). The active flag lets the shader skip the whole color
+    /// pass in one uniform branch when the layer has no grade.
+    pub grain_params: [f32; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -119,6 +127,85 @@ impl Default for CompositeVideoFrameUniforms {
             _padding1: [0.0; 3],
             border_color: [0.0, 0.0, 0.0, 0.0],
             corner_radii: [1.0; 4],
+            color_adjust_a: [0.0; 4],
+            color_adjust_b: [0.0; 4],
+            grain_params: [0.0; 4],
+        }
+    }
+}
+
+/// The three uniform vec4s that drive the shader's color pass, derived from a
+/// layer's [`cap_project::ColorCorrection`]. Intensity scaling happens here so
+/// the shader never needs to know about it, and every field is clamped so a
+/// hand-edited config can't push the shader outside its designed ranges.
+#[derive(Debug, Clone, Copy)]
+pub struct ColorGradeUniformParams {
+    pub color_adjust_a: [f32; 4],
+    pub color_adjust_b: [f32; 4],
+    pub grain_params: [f32; 4],
+}
+
+impl ColorGradeUniformParams {
+    pub const IDENTITY: Self = Self {
+        color_adjust_a: [0.0; 4],
+        color_adjust_b: [0.0; 4],
+        grain_params: [0.0; 4],
+    };
+
+    /// Mirrors the shader's own gate: `grain_params.z` is the active flag
+    /// `from_config` sets when any adjustment survives clamping and intensity
+    /// scaling.
+    pub fn is_active(&self) -> bool {
+        self.grain_params[2] > 0.5
+    }
+
+    /// `full_frame_vignette` selects the vignette's coordinate space:
+    /// the screen uses the full output frame (so the display card and the
+    /// graded background share one continuous vignette field), while the
+    /// camera vignettes within its own card.
+    pub fn from_config(
+        config: &cap_project::ColorCorrection,
+        frame_number: u32,
+        full_frame_vignette: bool,
+    ) -> Self {
+        let intensity = config.intensity.clamp(0.0, 1.0);
+        let exposure_stops = config.exposure.clamp(-1.0, 1.0) * 1.5 * intensity;
+        let contrast = config.contrast.clamp(-1.0, 1.0) * intensity;
+        let saturation = config.saturation.clamp(-1.0, 1.0) * intensity;
+        let temperature = config.temperature.clamp(-1.0, 1.0) * intensity;
+        let tint = config.tint.clamp(-1.0, 1.0) * intensity;
+        let fade = config.fade.clamp(0.0, 1.0) * intensity;
+        let split_tone = config.split_tone.clamp(-1.0, 1.0) * intensity;
+        let vignette = config.vignette.clamp(0.0, 1.0) * intensity;
+        let grain = config.grain.clamp(0.0, 1.0);
+
+        let active = [
+            exposure_stops,
+            contrast,
+            saturation,
+            temperature,
+            tint,
+            fade,
+            split_tone,
+            vignette,
+            grain,
+        ]
+        .iter()
+        .any(|v| v.abs() > 1e-4);
+
+        // Cycling seed keeps grain animated while staying deterministic per
+        // frame number, so preview and export always match.
+        let grain_seed = (frame_number % 600) as f32;
+
+        Self {
+            color_adjust_a: [exposure_stops, contrast, saturation, temperature],
+            color_adjust_b: [tint, fade, split_tone, vignette],
+            grain_params: [
+                grain,
+                grain_seed,
+                if active { 1.0 } else { 0.0 },
+                if full_frame_vignette { 1.0 } else { 0.0 },
+            ],
         }
     }
 }

@@ -5,7 +5,7 @@ use cap_project::{
     FrameStyle, ProjectConfiguration, RecordingMeta, SceneMode, StudioRecordingMeta,
     TimelineFrameMapping, TimelineSource, XY,
 };
-use composite_frame::CompositeVideoFrameUniforms;
+use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
 use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
@@ -18,8 +18,8 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
-    CaptionsLayer, CursorLayer, DisplayLayer, FrameLayer, KeyboardLayer, MaskLayer, NotchLayer,
-    NotchUniforms, TextLayer,
+    CaptionsLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, KeyboardLayer,
+    MaskLayer, NotchLayer, NotchUniforms, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -2251,6 +2251,10 @@ pub struct ProjectUniforms {
     /// The recording device's physical notch, redrawn over the capture;
     /// `None` when the overlay is off or the recording has no notch.
     pub notch: Option<layers::NotchUniforms>,
+    /// The screen grade's uniform params, shared verbatim by the display card
+    /// and the background grade pass so grain and vignette stay continuous
+    /// across the card edge.
+    screen_color_grade: ColorGradeUniformParams,
     /// Final placement of the outer display card (chrome included) in output
     /// px. Equals `display.target_bounds` when no frame is active.
     display_outer_bounds: [f32; 4],
@@ -3286,6 +3290,17 @@ impl ProjectUniforms {
         let current_recording_time = segment_frames.recording_time;
         let prev_recording_time = (segment_frames.recording_time - 1.0 / fps_f32).max(0.0);
 
+        let screen_color_grade = ColorGradeUniformParams::from_config(
+            &project.color_correction.screen,
+            frame_number,
+            true,
+        );
+        let camera_color_grade = ColorGradeUniformParams::from_config(
+            &project.color_correction.camera,
+            frame_number,
+            false,
+        );
+
         let cursor_stop_time = project
             .cursor
             .stop_movement_in_last_seconds
@@ -3719,6 +3734,10 @@ impl ProjectUniforms {
                         _padding1: [0.0; 3],
                         border_color,
                         corner_radii: [1.0; 4],
+                        // Chrome is decoration, not video: never graded.
+                        color_adjust_a: [0.0; 4],
+                        color_adjust_b: [0.0; 4],
+                        grain_params: [0.0; 4],
                     },
                     style: frame.style,
                     theme: frame.theme,
@@ -3781,6 +3800,11 @@ impl ProjectUniforms {
                             border_color: [0.0; 4],
                             frame_size: [1.0, 1.0],
                             crop_bounds: [0.0, 0.0, 1.0, 1.0],
+                            // The notch redraw is hardware, not video: never
+                            // graded.
+                            color_adjust_a: [0.0; 4],
+                            color_adjust_b: [0.0; 4],
+                            grain_params: [0.0; 4],
                         },
                         raster_size: [unzoomed.full_size[0] as f64, unzoomed.full_size[1] as f64],
                         source_crop: placement.source_crop,
@@ -3836,6 +3860,9 @@ impl ProjectUniforms {
                     _padding1: [0.0; 3],
                     border_color,
                     corner_radii: display_corner_radii,
+                    color_adjust_a: screen_color_grade.color_adjust_a,
+                    color_adjust_b: screen_color_grade.color_adjust_b,
+                    grain_params: screen_color_grade.grain_params,
                 },
                 display_parent_motion_px,
                 frame_chrome,
@@ -4038,6 +4065,9 @@ impl ProjectUniforms {
                     _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
+                    color_adjust_a: camera_color_grade.color_adjust_a,
+                    color_adjust_b: camera_color_grade.color_adjust_b,
+                    grain_params: camera_color_grade.grain_params,
                 }
             });
 
@@ -4135,6 +4165,9 @@ impl ProjectUniforms {
                     _padding1: [0.0; 3],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
+                    color_adjust_a: camera_color_grade.color_adjust_a,
+                    color_adjust_b: camera_color_grade.color_adjust_b,
+                    grain_params: camera_color_grade.grain_params,
                 }
             });
 
@@ -4189,6 +4222,7 @@ impl ProjectUniforms {
             texts,
             camera3d,
             camera3d_zoom,
+            screen_color_grade,
         }
     }
 }
@@ -5248,6 +5282,7 @@ impl<'a> FrameRenderer<'a> {
 pub struct RendererLayers {
     background: BackgroundLayer,
     background_blur: BlurLayer,
+    background_color_grade: ColorGradeLayer,
     frame: FrameLayer,
     display: DisplayLayer,
     notch: NotchLayer,
@@ -5280,6 +5315,7 @@ impl RendererLayers {
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
+            background_color_grade: ColorGradeLayer::new(device),
             frame: FrameLayer::new(device, shared_composite_pipeline.clone()),
             notch: NotchLayer::new(device, shared_composite_pipeline.clone()),
             display: DisplayLayer::new_with_all_shared_pipelines(
@@ -5444,6 +5480,9 @@ impl RendererLayers {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
 
+        self.background_color_grade
+            .prepare(&constants.queue, uniforms);
+
         if render_display {
             self.frame.prepare(constants, uniforms);
             self.notch
@@ -5585,6 +5624,8 @@ impl RendererLayers {
         if uniforms.project.background.blur > 0.0 {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
+        self.background_color_grade
+            .prepare(&constants.queue, uniforms);
         timings.background_blur_prepare_duration = start.elapsed();
 
         let start = Instant::now();
@@ -5756,6 +5797,22 @@ impl RendererLayers {
         if self.background_blur.blur_amount > 0.0 {
             let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
             self.background_blur
+                .render(&mut pass, device, session.current_texture_view());
+
+            session.swap_textures();
+        }
+
+        // Grade the backdrop before any content layers draw, so the screen's
+        // color grade covers the whole scene (padding, wallpaper, blur) and
+        // not just the display card. Content layers apply their own grades.
+        // The pass overwrites every pixel (fullscreen triangle, no blending),
+        // so the target's old contents never need loading.
+        if self.background_color_grade.is_active() {
+            let mut pass = render_pass!(
+                session.other_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            );
+            self.background_color_grade
                 .render(&mut pass, device, session.current_texture_view());
 
             session.swap_textures();
