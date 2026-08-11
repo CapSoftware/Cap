@@ -201,7 +201,16 @@ if DUR > 12.0:
     DUR = 12.0
 
 scroll_out = clip_cut + (scroll - cutB[0])
-b2 = min(max(scroll_out + 0.45, clip_cut + 1.2), DUR - 2.2)
+avail = DUR - clip_cut
+if avail >= 3.4:
+    b2 = min(max(scroll_out + 0.45, clip_cut + 1.2), DUR - 2.2)
+else:
+    # A short or stalled capture can leave too little room for the 1.2s/2.2s
+    # pacing minimums above (their sum, 3.4s); the fixed DUR - 2.2 ceiling can
+    # then fall below clip_cut and reverse the second shot's boundaries.
+    # Split whatever duration is available instead so both shots stay forward.
+    margin = avail * 0.25
+    b2 = min(max(scroll_out + 0.45, clip_cut + margin), DUR - margin)
 
 s1a = props(tiltX=26.0, tiltY=-22.0, roll=1.0, zoom=1.05)
 s1a["panX"], s1a["panY"] = aim_pan(s1a, HERO)
