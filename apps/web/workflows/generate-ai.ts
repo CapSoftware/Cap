@@ -14,7 +14,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
-import { runWithAiProviders } from "@/lib/ai/run";
+import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -490,15 +490,45 @@ function chunkTranscriptWithTimestamps(
 	return chunks;
 }
 
-async function callAiApi(prompt: string): Promise<string> {
-	const result = await runWithAiProviders("generation", (selection) =>
-		generateText({
+class InvalidAiOutputError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "InvalidAiOutputError";
+	}
+}
+
+/**
+ * True when the whole provider chain was exhausted and the terminal failure
+ * was a fulfilled-but-unusable response rather than a request-level failure.
+ */
+function failedOnInvalidOutput(error: unknown): boolean {
+	return (
+		error instanceof AiUnavailableError &&
+		error.cause instanceof InvalidAiOutputError
+	);
+}
+
+export async function callAiApi<T>(
+	prompt: string,
+	parse: (text: string) => T,
+): Promise<T> {
+	return runWithAiProviders("generation", async (selection) => {
+		const result = await generateText({
 			model: selection.model({ jsonRepair: true }),
 			prompt,
 			maxOutputTokens: selection.defaultMaxOutputTokens,
-		}),
-	);
-	return result.text;
+		});
+		// Parse inside the provider loop so an empty, malformed, or truncated
+		// fulfilled response falls through to the next provider too.
+		try {
+			return parse(result.text);
+		} catch (error) {
+			throw new InvalidAiOutputError(
+				error instanceof Error ? error.message : String(error),
+				{ cause: error },
+			);
+		}
+	});
 }
 
 function cleanJsonResponse(content: string): string {
@@ -587,8 +617,7 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
 ${transcriptWithTimestamps}`;
 
-	const content = await callAiApi(prompt);
-	return parseAiResponse(content);
+	return callAiApi(prompt, parseAiResponse);
 }
 
 async function generateMultipleChunks(
@@ -629,9 +658,10 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
 ${chunk.text}`;
 
-		const chunkContent = await callAiApi(chunkPrompt);
 		try {
-			const parsed = JSON.parse(extractJsonObject(chunkContent));
+			const parsed = await callAiApi(chunkPrompt, (text) =>
+				JSON.parse(extractJsonObject(text)),
+			);
 			chunkSummaries.push({
 				summary: parsed.summary || "",
 				keyPoints: parsed.keyPoints || [],
@@ -639,7 +669,11 @@ ${chunk.text}`;
 				startTime: chunk.startTime,
 				endTime: chunk.endTime,
 			});
-		} catch {}
+		} catch (error) {
+			// A chunk is skipped only when every provider returned unusable
+			// JSON; a request-level chain failure still fails the workflow.
+			if (!failedOnInvalidOutput(error)) throw error;
+		}
 	}
 
 	const allChapters: { title: string; start: number }[] = [];
@@ -688,15 +722,17 @@ Additional requirements:
 - Keep JSON property names exactly as shown.
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
-	const finalContent = await callAiApi(finalPrompt);
 	try {
-		const parsed = JSON.parse(extractJsonObject(finalContent));
+		const parsed = await callAiApi(finalPrompt, (text) =>
+			JSON.parse(extractJsonObject(text)),
+		);
 		return {
 			title: parsed.title,
 			summary: parsed.summary,
 			chapters: allChapters,
 		};
-	} catch {
+	} catch (error) {
+		if (!failedOnInvalidOutput(error)) throw error;
 		const fallbackSummary = chunkSummaries
 			.map((c, i) => `**Part ${i + 1}:** ${c.summary}`)
 			.join("\n\n");

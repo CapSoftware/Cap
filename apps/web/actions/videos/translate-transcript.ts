@@ -158,21 +158,22 @@ VTT content to translate:
 ${vttContent}`;
 
 	try {
-		const response = await runWithAiProviders("generation", (selection) =>
-			generateText({
+		return await runWithAiProviders("generation", async (selection) => {
+			const response = await generateText({
 				model: selection.model(),
 				prompt,
 				maxOutputTokens: 8000,
 				...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
-			}),
-		);
+			});
 
-		const content = response.text;
-		if (content?.includes("WEBVTT")) {
-			return content.trim();
-		}
+			// Validate inside the provider loop so a fulfilled response that
+			// dropped the WEBVTT header falls through to the next provider.
+			if (!response.text.includes("WEBVTT")) {
+				throw new Error("translation response did not contain WEBVTT");
+			}
 
-		return null;
+			return response.text.trim();
+		});
 	} catch (error) {
 		console.error("[translateVttContent] Translation error:", error);
 		return null;
