@@ -689,8 +689,8 @@ export type Camera3DBlurMode = "none" | "radial" | "directional" | "tiltShift"
  * One scalar keyframe on a per-property track. Interpolation between two
  * keyframes is a linear value lerp with time remapped by a cubic bezier whose
  * P1 comes from the left keyframe's `out_easing` and P2 from the right one's
- * `in_easing` (a split-handle model). Absent handles default to
- * cubic ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
+ * `in_easing` (a split-handle model). Absent handles default to cubic
+ * ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
  */
 export type Camera3DKeyframe = { 
 /**
@@ -732,7 +732,7 @@ roll?: number;
 /**
  * Content plane pitch.
  */
-rotateX?: number;
+rotateX?: number; 
 /**
  * Content plane yaw.
  */
@@ -809,6 +809,66 @@ export type ClipSpeedAudioMode = "mute" | "maintainPitch" | "matchSpeed"
 export type ClipTransition = { segmentIndex: number; type: ClipTransitionType; duration: number }
 export type ClipTransitionType = "cross-fade" | "fade-through-black"
 export type ClipboardSource = "raw" | "rendered"
+/**
+ * Parametric color grade for a single layer (screen or camera). Every field
+ * except `intensity` has 0 as its identity, so a default struct renders
+ * exactly like no grade at all. Adjustment fields are normalized: -1..1 for
+ * bipolar controls, 0..1 for unipolar ones.
+ */
+export type ColorCorrection = { 
+/**
+ * UI preset id ("none", "cinematic", ..., or "custom"). The renderer
+ * ignores this; the numeric fields below are the source of truth.
+ */
+preset: string; 
+/**
+ * 0..1 master strength applied to every adjustment except `grain`,
+ * which has its own dedicated control.
+ */
+intensity: number; 
+/**
+ * -1..1, full scale is ±1.5 stops.
+ */
+exposure: number; 
+/**
+ * -1..1 around a mid-gray pivot.
+ */
+contrast: number; 
+/**
+ * -1..1; -1 is grayscale.
+ */
+saturation: number; 
+/**
+ * -1..1; positive warms, negative cools.
+ */
+temperature: number; 
+/**
+ * -1..1; positive shifts magenta, negative green.
+ */
+tint: number; 
+/**
+ * 0..1 lifted-blacks film fade.
+ */
+fade: number; 
+/**
+ * -1..1 teal-shadows/orange-highlights split toning (negative reverses).
+ */
+splitTone: number; 
+/**
+ * 0..1 edge darkening within the layer's own rect.
+ */
+vignette: number; 
+/**
+ * 0..1 animated film grain.
+ */
+grain: number }
+export type ColorCorrectionConfiguration = { screen: ColorCorrection; camera: ColorCorrection; 
+/**
+ * Whether the screen grade also covers the rendered cursor. On by
+ * default so the pointer reads as part of the graded footage; off keeps
+ * it crisp for legibility over vignettes and grain.
+ */
+gradeCursor: boolean }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Condition = { type: "captureTargetIs"; target: CaptureTargetKind } | { type: "recordingModeIs"; mode: AutomationRecordingMode } | { type: "durationAtLeast"; secs: number } | { type: "durationAtMost"; secs: number } | { type: "windowTitleContains"; pattern: string } | { type: "organizationIs"; id: string }
 export type CornerStyle = "squircle" | "rounded"
@@ -993,6 +1053,12 @@ export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring; 
+/**
+ * Per-layer cinematic color grades. Field-level default keeps old
+ * project files (and old saved presets) deserializing to the identity
+ * grade.
+ */
+colorCorrection?: ColorCorrectionConfiguration; 
 /**
  * How text segment font sizes are interpreted. 0 (legacy): the renderer
  * multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the

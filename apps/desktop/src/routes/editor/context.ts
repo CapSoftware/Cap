@@ -38,6 +38,7 @@ import {
 } from "~/utils/socket";
 import {
 	type ClipSpeedAudioMode,
+	type ColorCorrectionConfiguration,
 	commands,
 	type EditorPreviewQuality,
 	events,
@@ -74,6 +75,7 @@ import {
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
+import { normalizeColorCorrection } from "./colorCorrection";
 import type { MaskSegment } from "./masks";
 import type { SnapGuide } from "./snapping";
 import type { TextSegment } from "./text";
@@ -225,6 +227,7 @@ export type EditorProjectConfiguration = Omit<
 	timeline?: EditorTimelineConfiguration | null;
 	captions: EditorCaptionsData | null;
 	hiddenTextSegments?: number[];
+	colorCorrection: ColorCorrectionConfiguration;
 };
 
 function withCornerDefaults<
@@ -306,6 +309,7 @@ export function normalizeProject(
 		captions,
 		background: withCornerDefaults(config.background),
 		camera: withCornerDefaults(config.camera),
+		colorCorrection: normalizeColorCorrection(config.colorCorrection),
 	};
 }
 
