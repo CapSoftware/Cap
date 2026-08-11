@@ -108,6 +108,7 @@ import {
 	MIN_VOLUME_DB,
 } from "./audio";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
+import { ColorCorrectionSection } from "./ColorCorrectionSection";
 import { syncCaptionWordsWithText } from "./captions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
 import { type CornerRoundingType, useEditorContext } from "./context";
@@ -2982,6 +2983,7 @@ function BackgroundConfig(props: {
 					}}
 				/>
 			</Field>
+			<ColorCorrectionSection target="screen" scrollRef={props.scrollRef} />
 			{/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
               <Slider
@@ -3334,6 +3336,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					/>
 				</div>
 			</Field>
+			<ColorCorrectionSection target="camera" scrollRef={props.scrollRef} />
 			{/* <ComingSoonTooltip>
             <Field name="Shadow" icon={<IconCapShadow />}>
               <Slider

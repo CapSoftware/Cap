@@ -449,6 +449,82 @@ impl Default for BackgroundBlurConfig {
     }
 }
 
+/// Parametric color grade for a single layer (screen or camera). Every field
+/// except `intensity` has 0 as its identity, so a default struct renders
+/// exactly like no grade at all. Adjustment fields are normalized: -1..1 for
+/// bipolar controls, 0..1 for unipolar ones.
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorCorrection {
+    /// UI preset id ("none", "cinematic", ..., or "custom"). The renderer
+    /// ignores this; the numeric fields below are the source of truth.
+    pub preset: String,
+    /// 0..1 master strength applied to every adjustment except `grain`,
+    /// which has its own dedicated control.
+    pub intensity: f32,
+    /// -1..1, full scale is ±1.5 stops.
+    pub exposure: f32,
+    /// -1..1 around a mid-gray pivot.
+    pub contrast: f32,
+    /// -1..1; -1 is grayscale.
+    pub saturation: f32,
+    /// -1..1; positive warms, negative cools.
+    pub temperature: f32,
+    /// -1..1; positive shifts magenta, negative green.
+    pub tint: f32,
+    /// 0..1 lifted-blacks film fade.
+    pub fade: f32,
+    /// -1..1 teal-shadows/orange-highlights split toning (negative reverses).
+    pub split_tone: f32,
+    /// 0..1 edge darkening within the layer's own rect.
+    pub vignette: f32,
+    /// 0..1 animated film grain.
+    pub grain: f32,
+}
+
+impl ColorCorrection {
+    pub const PRESET_NONE: &'static str = "none";
+}
+
+impl Default for ColorCorrection {
+    fn default() -> Self {
+        Self {
+            preset: Self::PRESET_NONE.to_string(),
+            intensity: 1.0,
+            exposure: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            fade: 0.0,
+            split_tone: 0.0,
+            vignette: 0.0,
+            grain: 0.0,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorCorrectionConfiguration {
+    pub screen: ColorCorrection,
+    pub camera: ColorCorrection,
+    /// Whether the screen grade also covers the rendered cursor. On by
+    /// default so the pointer reads as part of the graded footage; off keeps
+    /// it crisp for legibility over vignettes and grain.
+    pub grade_cursor: bool,
+}
+
+impl Default for ColorCorrectionConfiguration {
+    fn default() -> Self {
+        Self {
+            screen: ColorCorrection::default(),
+            camera: ColorCorrection::default(),
+            grade_cursor: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Camera {
@@ -1966,6 +2042,11 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// Per-layer cinematic color grades. Field-level default keeps old
+    /// project files (and old saved presets) deserializing to the identity
+    /// grade.
+    #[serde(default)]
+    pub color_correction: ColorCorrectionConfiguration,
     /// How text segment font sizes are interpreted. 0 (legacy): the renderer
     /// multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
     /// box. 1: `font_size` alone determines glyph size (1080p-relative);
@@ -2006,6 +2087,7 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
         }
     }
