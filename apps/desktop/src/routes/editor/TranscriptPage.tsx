@@ -214,6 +214,7 @@ export function TranscriptPanel() {
 					textSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
+					camera3dSegments: [],
 					transitions: [],
 				};
 

@@ -912,6 +912,7 @@ mod fixture {
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
