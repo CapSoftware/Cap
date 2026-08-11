@@ -402,9 +402,29 @@ async function importLoomVideoForOwner({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writable = await Storage.getWritableAccessForUser(ownerId, orgId).pipe(
-		runPromise,
-	);
+	const writableResult = await Storage.getWritableAccessForUser(
+		ownerId,
+		orgId,
+	)
+		.pipe(runPromise)
+		.then(
+			(value) => ({ ok: true as const, value }),
+			(error) => ({ ok: false as const, error }),
+		);
+
+	if (!writableResult.ok) {
+		console.error(
+			`Loom import: failed to resolve storage access for user ${ownerId} in org ${orgId}:`,
+			writableResult.error,
+		);
+		return {
+			success: false,
+			error:
+				"Could not prepare storage for this import. Please try again or contact support.",
+		};
+	}
+
+	const writable = writableResult.value;
 
 	const videoId = Video.VideoId.make(nanoId());
 	const name =
