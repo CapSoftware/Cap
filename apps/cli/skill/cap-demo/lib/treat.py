@@ -118,6 +118,12 @@ def props(**kw):
             "fov": 45.0, "zoom": 2.0, "panX": 0.0, "panY": 0.0}
     base.update(kw); return base
 
+def clamp_cut(a, b, ceiling, floor=0.0, min_dur=0.4):
+    """Force a (start, end) cut forward within [floor, ceiling] by at least min_dur."""
+    a = max(floor, min(a, ceiling - min_dur))
+    b = max(a + min_dur, min(b, ceiling))
+    return (a, b)
+
 def kf(t, val, first):
     k = {"time": t, "value": val}
     k["outEasing" if first else "inEasing"] = [0.0, 0.0] if first else [1.0, 1.0]
@@ -179,6 +185,12 @@ else:
     scroll = v("scroll_start")
     cutA = (0.25, s1 + 0.9)          # hero through the first scroll's start
     cutB = (s1 + 1.1, vdur - 0.05)   # arrive in section 2 mid-scroll
+
+# A late-starting or stalled capture can align marker events near zero (see
+# v()'s clamp above), which can push a cut's computed end before its start.
+# Force both cuts forward within the actual recording bounds.
+cutA = clamp_cut(*cutA, vdur)
+cutB = clamp_cut(*cutB, vdur)
 
 clip_cut = cutA[1] - cutA[0]
 DUR = clip_cut + (cutB[1] - cutB[0])
