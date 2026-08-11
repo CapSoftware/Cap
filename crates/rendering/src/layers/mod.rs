@@ -1,6 +1,7 @@
 mod background;
 mod blur;
 mod camera;
+mod camera3d;
 mod captions;
 mod cursor;
 mod display;
@@ -64,6 +65,7 @@ pub(crate) fn new_font_system() -> glyphon::FontSystem {
 pub use background::*;
 pub use blur::*;
 pub use camera::*;
+pub use camera3d::*;
 pub use captions::*;
 pub use cursor::*;
 pub use display::*;
