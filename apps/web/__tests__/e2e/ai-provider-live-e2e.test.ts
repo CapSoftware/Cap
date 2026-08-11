@@ -28,6 +28,7 @@ import { db } from "@cap/database";
 import { nanoId as generateNanoId } from "@cap/database/helpers";
 import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -60,7 +61,7 @@ const s3 = new S3Client({
 	},
 });
 
-const createdVideoIds: string[] = [];
+const createdVideoIds: Video.VideoId[] = [];
 const createdObjectKeys: string[] = [];
 
 async function putObject(key: string, body: Buffer | string, type: string) {
@@ -88,8 +89,8 @@ let orgId: string;
 async function seedVideo(options: {
 	vtt?: string;
 	transcriptionStatus?: string;
-}): Promise<string> {
-	const videoId = generateNanoId();
+}): Promise<Video.VideoId> {
+	const videoId = Video.VideoId.make(generateNanoId());
 	const seedRow = {
 		id: videoId,
 		ownerId,
@@ -110,12 +111,8 @@ async function seedVideo(options: {
 	return videoId;
 }
 
-async function fetchVideoRow(videoId: string) {
-	const [row] = await db()
-		.select()
-		.from(videos)
-		// biome-ignore lint/suspicious/noExplicitAny: branded ids in a test seed
-		.where(eq(videos.id, videoId as any));
+async function fetchVideoRow(videoId: Video.VideoId) {
+	const [row] = await db().select().from(videos).where(eq(videos.id, videoId));
 	if (!row) throw new Error(`video ${videoId} missing`);
 	return { row, metadata: (row.metadata ?? {}) as VideoMetadata };
 }
@@ -196,10 +193,7 @@ describe.skipIf(!enabled)("ai provider live e2e", () => {
 
 	afterAll(async () => {
 		for (const videoId of createdVideoIds) {
-			// biome-ignore lint/suspicious/noExplicitAny: branded ids in a test seed
-			await db()
-				.delete(videos)
-				.where(eq(videos.id, videoId as any));
+			await db().delete(videos).where(eq(videos.id, videoId));
 			for (const suffix of [
 				"transcription.vtt",
 				"transcription.edit.v3.json",
