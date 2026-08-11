@@ -23,7 +23,6 @@ const ADJUST_SLIDERS: {
 	label: string;
 	min: number;
 	max: number;
-	/** Sliders that tune the selected look without demoting it to Custom. */
 	keepsPreset?: boolean;
 }[] = [
 	{ key: "intensity", label: "Strength", min: 0, max: 100, keepsPreset: true },

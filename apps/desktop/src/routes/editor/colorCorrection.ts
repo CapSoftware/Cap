@@ -43,24 +43,16 @@ export type ColorPresetDefinition = {
 	label: string;
 	description: string;
 	values: ColorCorrectionValues;
-	/**
-	 * CSS approximation of the grade for the preset thumbnail. Vignette and
-	 * grain overlays are derived from `values` instead so they always match.
-	 */
+	/** CSS approximation for the thumbnail; vignette/grain derive from `values`. */
 	preview: {
 		filter?: string;
 		overlay?: string;
 	};
 };
 
-/**
- * The shared thumbnail "scene" every preset preview grades: sky, warm light,
- * and deep shadow so contrast, temperature, and saturation shifts all read.
- */
 export const COLOR_PREVIEW_SCENE =
 	"linear-gradient(160deg, #60a5fa 0%, #e2e8f0 35%, #fb923c 62%, #1e293b 100%)";
 
-/** Tiny SVG turbulence tile used to preview film grain on preset cards. */
 export const COLOR_PREVIEW_GRAIN = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='64' height='64' filter='url(%23n)'/></svg>")`;
 
 export const COLOR_CORRECTION_PRESETS: ColorPresetDefinition[] = [
