@@ -397,7 +397,11 @@ pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
                 None
             }
         })
-        .unwrap_or(None);
+        .unwrap_or(None)
+        // A remembered camera that isn't connected must not run the init/retry
+        // loop below: it would flash the preview window and toast an error on
+        // every main-window reveal while the device is away.
+        .filter(crate::is_camera_available);
 
     if let Some(camera_id) = camera_to_restore {
         emit_camera_preview_clear(app);
