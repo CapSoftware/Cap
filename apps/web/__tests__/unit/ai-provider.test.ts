@@ -159,6 +159,29 @@ describe("isAiConfigured", () => {
 		envWith({ GROQ_API_KEY: "groq-key" });
 		expect(isAiConfigured()).toBe(true);
 	});
+
+	it("is role-aware: a non-streaming stream model empties the chat-streaming role", () => {
+		envWith({
+			AI_PROVIDER: "assemblyai",
+			ASSEMBLY_API_KEY: "assembly-key",
+			AI_STREAM_MODEL: "claude-sonnet-5",
+		});
+
+		expect(isAiConfigured()).toBe(true);
+		expect(isAiConfigured("chat")).toBe(true);
+		expect(isAiConfigured("chat-streaming")).toBe(false);
+	});
+
+	it("is true for chat-streaming when a streaming fallback provider exists", () => {
+		envWith({
+			AI_PROVIDER: "assemblyai",
+			ASSEMBLY_API_KEY: "assembly-key",
+			AI_STREAM_MODEL: "claude-sonnet-5",
+			GROQ_API_KEY: "groq-key",
+		});
+
+		expect(isAiConfigured("chat-streaming")).toBe(true);
+	});
 });
 
 describe("role model defaults", () => {

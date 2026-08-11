@@ -158,8 +158,12 @@ export function getConfiguredAiProviders(
 	return providers;
 }
 
-export function isAiConfigured(): boolean {
-	return getConfiguredAiProviders().length > 0;
+export function isAiConfigured(role: AiModelRole = "generation"): boolean {
+	// Role-aware on purpose: a provider can be configured yet unusable for a
+	// role (eg. assemblyai with a non-streaming AI_STREAM_MODEL leaves the
+	// chat-streaming chain empty), so count the role's usable chain instead
+	// of the raw provider list.
+	return getAiProviderChain(role).length > 0;
 }
 
 function envModelOverride(role: AiModelRole): string | undefined {

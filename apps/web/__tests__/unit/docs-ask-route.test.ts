@@ -144,6 +144,9 @@ describe("docs ask route", () => {
 		await expect(response.json()).resolves.toEqual({
 			error: "Ask AI is not available right now. Try searching instead.",
 		});
+		// The gate must ask about the streaming role — a generation-only
+		// configuration must not let requests through to an empty chain.
+		expect(isAiConfiguredMock).toHaveBeenCalledWith("chat-streaming");
 	});
 
 	it("returns 502 when every provider fails", async () => {

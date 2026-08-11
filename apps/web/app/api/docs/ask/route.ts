@@ -61,7 +61,7 @@ function toStreamError(error: unknown): Error {
 }
 
 export async function POST(request: NextRequest) {
-	if (!isAiConfigured()) {
+	if (!isAiConfigured("chat-streaming")) {
 		return Response.json(
 			{ error: "Ask AI is not available right now. Try searching instead." },
 			{ status: 503 },
