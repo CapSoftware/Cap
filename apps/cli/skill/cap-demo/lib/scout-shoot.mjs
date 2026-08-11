@@ -325,7 +325,7 @@ try {
 	}
 	mark("end");
 } finally {
-	execFileSync(CAP, ["record", "stop"], { encoding: "utf8" });
+	execFileSync(CAP, ["record", "stop", "--path", PROJECT], { encoding: "utf8" });
 	writeFileSync(
 		TIMELINE,
 		JSON.stringify({ story, scout: { ...scout, candidates: undefined }, events, cursorLog }, null, 1),
