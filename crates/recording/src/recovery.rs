@@ -1498,6 +1498,7 @@ impl RecoveryManager {
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 })
             })
             .collect();

@@ -324,6 +324,7 @@ fn full_timeline_for_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             })
         })
         .collect()
@@ -358,6 +359,7 @@ fn full_timeline_for_source_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             })
         })
         .collect()
@@ -920,6 +922,7 @@ fn source_timeline_segments_for_import(
             end,
             name: None,
             speed_audio_mode: None,
+            audio_muted: segment.audio_muted,
         });
     }
 
@@ -1718,6 +1721,7 @@ async fn append_mp4_to_editor_project(
             end: duration,
             name: None,
             speed_audio_mode: None,
+            audio_muted: false,
         });
     add_clip_configs(
         &mut config,
@@ -1767,13 +1771,21 @@ async fn append_cap_project_to_editor_project(
         };
     };
 
+    append_studio_project_to_editor_project(target_project_path, &source_meta, source_studio_meta)
+}
+
+fn append_studio_project_to_editor_project(
+    target_project_path: PathBuf,
+    source_meta: &RecordingMeta,
+    source_studio_meta: &StudioRecordingMeta,
+) -> Result<usize, String> {
     let source_segments = studio_segments_for_import(source_studio_meta);
     if source_segments.is_empty() {
         return Err("Source Cap project has no recording segments".to_string());
     }
 
-    let source_timeline = source_timeline_segments_for_import(&source_meta, &source_segments)?;
-    let source_cursors = match source_studio_meta.as_ref() {
+    let source_timeline = source_timeline_segments_for_import(source_meta, &source_segments)?;
+    let source_cursors = match source_studio_meta {
         StudioRecordingMeta::MultipleSegments { inner } => Some(&inner.cursors),
         StudioRecordingMeta::SingleSegment { .. } => None,
     };
@@ -1849,6 +1861,7 @@ async fn append_cap_project_to_editor_project(
                 end: source_segment.end,
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
+                audio_muted: source_segment.audio_muted,
             });
         }
     }
@@ -2082,6 +2095,126 @@ pub async fn check_import_ready(project_path: PathBuf) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cap_project_import_preserves_segment_mute() {
+        let _ = ffmpeg::init();
+        let source_project = tempfile::tempdir().unwrap();
+        let target_project = tempfile::tempdir().unwrap();
+        let display_path = RelativePathBuf::from("content/segments/segment-0/display.mp4");
+        let absolute_display_path = display_path.to_path(source_project.path());
+        std::fs::create_dir_all(absolute_display_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &absolute_display_path,
+            include_bytes!("../../../media-server/src/__tests__/fixtures/test-no-audio.mp4"),
+        )
+        .unwrap();
+
+        let source_segment = MultipleSegment {
+            display: VideoMeta {
+                path: display_path,
+                fps: 30,
+                start_time: Some(0.0),
+                device_id: None,
+            },
+            camera: None,
+            mic: None,
+            system_audio: None,
+            cursor: None,
+            keyboard: None,
+            display_notch: None,
+        };
+        let source_meta = RecordingMeta {
+            platform: Some(Platform::default()),
+            project_path: source_project.path().to_path_buf(),
+            pretty_name: "Muted import fixture".to_string(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: vec![source_segment],
+                    cursors: Cursors::default(),
+                    status: Some(StudioRecordingStatus::Complete),
+                },
+            })),
+            upload: None,
+        };
+        source_meta.save_for_project().unwrap();
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![TimelineSegment {
+                    recording_clip: 0,
+                    timescale: 1.0,
+                    start: 0.0,
+                    end: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                    audio_muted: true,
+                }],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            ..Default::default()
+        }
+        .write(source_project.path())
+        .unwrap();
+        let source_meta = RecordingMeta::load_for_project(source_project.path()).unwrap();
+
+        RecordingMeta {
+            platform: Some(Platform::default()),
+            project_path: target_project.path().to_path_buf(),
+            pretty_name: "Target import fixture".to_string(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: Vec::new(),
+                    cursors: Cursors::default(),
+                    status: Some(StudioRecordingStatus::Complete),
+                },
+            })),
+            upload: None,
+        }
+        .save_for_project()
+        .unwrap();
+
+        let RecordingMetaInner::Studio(source_studio) = &source_meta.inner else {
+            panic!("expected Studio source metadata");
+        };
+        let imported = append_studio_project_to_editor_project(
+            target_project.path().to_path_buf(),
+            &source_meta,
+            source_studio,
+        )
+        .unwrap();
+
+        let target_config = ProjectConfiguration::load(target_project.path()).unwrap();
+        let target_timeline = target_config.timeline.unwrap();
+        let target_meta = RecordingMeta::load_for_project(target_project.path()).unwrap();
+        let RecordingMetaInner::Studio(target_studio) = target_meta.inner else {
+            panic!("expected Studio recording metadata");
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = *target_studio else {
+            panic!("expected multiple recording segments");
+        };
+
+        assert_eq!(imported, 1);
+        assert_eq!(target_timeline.segments.len(), 1);
+        assert!(target_timeline.segments[0].audio_muted);
+        assert_eq!(inner.segments.len(), 1);
+        assert!(
+            inner.segments[0]
+                .display
+                .path
+                .to_path(target_project.path())
+                .is_file()
+        );
+    }
 
     #[test]
     fn source_asset_path_allows_file_inside_source_project() {

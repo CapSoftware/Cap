@@ -279,21 +279,20 @@ impl AudioRenderer {
                 samples: self.playhead_to_samples(cursor.segment_time),
             };
 
+            self.render_segment_chunk(
+                project,
+                TimelineSource {
+                    source_time: cursor.segment_time,
+                    segment_index: cursor.segment_index,
+                    segment: cursor.segment,
+                },
+                chunk_samples,
+                written * 2,
+                &mut ret,
+            );
+
             if cursor.segment.timescale == 1.0 {
-                self.render_current_chunk(project, chunk_samples, written * 2, &mut ret);
                 self.cursor.samples += chunk_samples;
-            } else {
-                self.render_speed_audio_chunk(
-                    project,
-                    TimelineSource {
-                        source_time: cursor.segment_time,
-                        segment_index: cursor.segment_index,
-                        segment: cursor.segment,
-                    },
-                    chunk_samples,
-                    written * 2,
-                    &mut ret,
-                );
             }
 
             self.elapsed_samples += chunk_samples;
@@ -487,6 +486,10 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
+        if samples == 0 || project.audio.mute || source.segment.audio_muted {
+            return 0;
+        }
+
         if source.segment.timescale == 1.0 {
             let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
             return self.render_chunk_at_cursor(project, cursor, samples, out_offset, out);
@@ -503,9 +506,7 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
-        if samples == 0
-            || project.audio.mute
-            || source.segment.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
+        if source.segment.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
             || !source.segment.timescale.is_finite()
             || !(0.25..=8.0).contains(&source.segment.timescale)
         {
@@ -1891,6 +1892,7 @@ mod tests {
                         end: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -1899,6 +1901,7 @@ mod tests {
                         end: 2.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -1907,6 +1910,7 @@ mod tests {
                         end: 3.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -1915,6 +1919,7 @@ mod tests {
                         end: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -1923,6 +1928,7 @@ mod tests {
                         end: 2.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -1931,6 +1937,7 @@ mod tests {
                         end: 3.0,
                         name: None,
                         speed_audio_mode: None,
+                        audio_muted: false,
                     },
                 ],
                 transitions: Vec::new(),
@@ -2130,6 +2137,32 @@ mod tests {
         assert!(renderer.speed_audio_processors.iter().all(Option::is_none));
     }
 
+    #[test]
+    fn segment_mute_does_not_mute_adjacent_segments() {
+        let mut muted = segment(0, 0.0, 1.0, 1.0);
+        muted.audio_muted = true;
+        let (_dir, mut renderer, project) =
+            single_clip_fixture(&[8_000, 16_000], vec![muted, segment(0, 1.0, 2.0, 1.0)]);
+
+        let stream = render_export_audio(&mut renderer, &project, 30, 60);
+
+        assert!(left_at_second(&stream, 0).abs() < 0.0001);
+        assert!((left_at_second(&stream, 1) - expected(16_000)).abs() < 0.01);
+    }
+
+    #[test]
+    fn segment_mute_silences_retimed_audio() {
+        let mut muted = segment(0, 0.0, 2.0, 2.0);
+        muted.speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
+        muted.audio_muted = true;
+        let (_dir, mut renderer, project) = single_clip_fixture(&[8_000, 16_000], vec![muted]);
+
+        let stream = render_export_audio(&mut renderer, &project, 30, 30);
+
+        assert!(mean_abs(&stream) < 0.0001);
+        assert!(renderer.speed_audio_processors.iter().all(Option::is_none));
+    }
+
     /// One clip per second `section_values`, on a timeline made of `segments`.
     fn single_clip_fixture(
         section_values: &[i16],
@@ -2181,6 +2214,7 @@ mod tests {
             end,
             name: None,
             speed_audio_mode: None,
+            audio_muted: false,
         }
     }
 
