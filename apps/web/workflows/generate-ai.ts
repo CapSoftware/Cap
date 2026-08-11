@@ -1,7 +1,6 @@
 import { db } from "@cap/database";
 import { organizations, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
@@ -10,10 +9,12 @@ import {
 	parseAiGenerationLanguage,
 	type Video,
 } from "@cap/web-domain";
+import { generateText } from "ai";
 import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -117,9 +118,8 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 	"use step";
 
-	const groqClient = getGroqClient();
-	if (!groqClient && !serverEnv().OPENAI_API_KEY) {
-		throw new FatalError("Missing Groq or OpenAI API key");
+	if (!isAiConfigured()) {
+		throw new FatalError("No AI provider configured");
 	}
 
 	const query = await db()
@@ -250,7 +250,6 @@ async function generateWithAi(
 ): Promise<AiResult> {
 	"use step";
 
-	const groqClient = getGroqClient();
 	const chunks = chunkTranscriptWithTimestamps(transcript.segments);
 
 	const videoDuration = getVideoDuration(transcript.segments);
@@ -261,14 +260,12 @@ async function generateWithAi(
 		result = await generateSingleChunk(
 			transcript.segments,
 			videoDuration,
-			groqClient,
 			languageInstruction,
 		);
 	} else {
 		result = await generateMultipleChunks(
 			chunks,
 			videoDuration,
-			groqClient,
 			languageInstruction,
 		);
 	}
@@ -493,49 +490,45 @@ function chunkTranscriptWithTimestamps(
 	return chunks;
 }
 
-async function callAiApi(
-	prompt: string,
-	groqClient: ReturnType<typeof getGroqClient>,
-): Promise<string> {
-	if (groqClient) {
-		try {
-			const completion = await groqClient.chat.completions.create({
-				messages: [{ role: "user", content: prompt }],
-				model: GROQ_MODEL,
-				response_format: { type: "json_object" },
-			});
-			return completion.choices?.[0]?.message?.content || "{}";
-		} catch (groqError) {
-			if (serverEnv().OPENAI_API_KEY) {
-				return callOpenAi(prompt);
-			}
-			throw groqError;
-		}
-	} else if (serverEnv().OPENAI_API_KEY) {
-		return callOpenAi(prompt);
+class InvalidAiOutputError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "InvalidAiOutputError";
 	}
-	return "{}";
 }
 
-async function callOpenAi(prompt: string): Promise<string> {
-	const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o-mini",
-			messages: [{ role: "user", content: prompt }],
-			response_format: { type: "json_object" },
-		}),
+/**
+ * True when the whole provider chain was exhausted and the terminal failure
+ * was a fulfilled-but-unusable response rather than a request-level failure.
+ */
+function failedOnInvalidOutput(error: unknown): boolean {
+	return (
+		error instanceof AiUnavailableError &&
+		error.cause instanceof InvalidAiOutputError
+	);
+}
+
+export async function callAiApi<T>(
+	prompt: string,
+	parse: (text: string) => T,
+): Promise<T> {
+	return runWithAiProviders("generation", async (selection) => {
+		const result = await generateText({
+			model: selection.model({ jsonRepair: true }),
+			prompt,
+			maxOutputTokens: selection.defaultMaxOutputTokens,
+		});
+		// Parse inside the provider loop so an empty, malformed, or truncated
+		// fulfilled response falls through to the next provider too.
+		try {
+			return parse(result.text);
+		} catch (error) {
+			throw new InvalidAiOutputError(
+				error instanceof Error ? error.message : String(error),
+				{ cause: error },
+			);
+		}
 	});
-	if (!aiRes.ok) {
-		const errorText = await aiRes.text();
-		throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
-	}
-	const aiJson = await aiRes.json();
-	return aiJson.choices?.[0]?.message?.content || "{}";
 }
 
 function cleanJsonResponse(content: string): string {
@@ -589,7 +582,6 @@ function extractJsonObject(content: string): string {
 async function generateSingleChunk(
 	segments: VttSegment[],
 	videoDuration: number,
-	groqClient: ReturnType<typeof getGroqClient>,
 	languageInstruction: string,
 ): Promise<AiResult> {
 	const transcriptWithTimestamps = segments
@@ -625,14 +617,12 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
 ${transcriptWithTimestamps}`;
 
-	const content = await callAiApi(prompt, groqClient);
-	return parseAiResponse(content);
+	return callAiApi(prompt, parseAiResponse);
 }
 
 async function generateMultipleChunks(
 	chunks: { text: string; startTime: number; endTime: number }[],
 	videoDuration: number,
-	groqClient: ReturnType<typeof getGroqClient>,
 	languageInstruction: string,
 ): Promise<AiResult> {
 	const chunkSummaries: {
@@ -668,17 +658,18 @@ Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript section:
 ${chunk.text}`;
 
-		const chunkContent = await callAiApi(chunkPrompt, groqClient);
 		try {
-			const parsed = JSON.parse(cleanJsonResponse(chunkContent).trim());
+			const parsed = await callAiApi(chunkPrompt, parseChunkAnalysis);
 			chunkSummaries.push({
-				summary: parsed.summary || "",
-				keyPoints: parsed.keyPoints || [],
-				chapters: parsed.chapters || [],
+				...parsed,
 				startTime: chunk.startTime,
 				endTime: chunk.endTime,
 			});
-		} catch {}
+		} catch (error) {
+			// A chunk is skipped only when every provider returned unusable
+			// JSON; a request-level chain failure still fails the workflow.
+			if (!failedOnInvalidOutput(error)) throw error;
+		}
 	}
 
 	const allChapters: { title: string; start: number }[] = [];
@@ -727,15 +718,15 @@ Additional requirements:
 - Keep JSON property names exactly as shown.
 Return ONLY valid JSON without any markdown formatting or code blocks.`;
 
-	const finalContent = await callAiApi(finalPrompt, groqClient);
 	try {
-		const parsed = JSON.parse(cleanJsonResponse(finalContent).trim());
+		const parsed = await callAiApi(finalPrompt, parseFinalSummary);
 		return {
 			title: parsed.title,
 			summary: parsed.summary,
 			chapters: allChapters,
 		};
-	} catch {
+	} catch (error) {
+		if (!failedOnInvalidOutput(error)) throw error;
 		const fallbackSummary = chunkSummaries
 			.map((c, i) => `**Part ${i + 1}:** ${c.summary}`)
 			.join("\n\n");
@@ -749,6 +740,60 @@ Return ONLY valid JSON without any markdown formatting or code blocks.`;
 			chapters: allChapters,
 		};
 	}
+}
+
+// Like parseAiResponse, these throw on missing or empty required fields —
+// inside the provider loop that sends the attempt to the next provider
+// instead of completing the workflow with an empty analysis.
+export function parseChunkAnalysis(content: string): {
+	summary: string;
+	keyPoints: string[];
+	chapters: { title: string; start: number }[];
+} {
+	const parsed = JSON.parse(extractJsonObject(content)) as {
+		summary?: unknown;
+		keyPoints?: unknown;
+		chapters?: unknown;
+	};
+	if (typeof parsed.summary !== "string" || !parsed.summary.trim()) {
+		throw new Error("AI response did not contain a valid section summary");
+	}
+	return {
+		summary: parsed.summary,
+		keyPoints: Array.isArray(parsed.keyPoints)
+			? parsed.keyPoints.filter(
+					(keyPoint): keyPoint is string => typeof keyPoint === "string",
+				)
+			: [],
+		chapters: Array.isArray(parsed.chapters)
+			? parsed.chapters.filter(
+					(chapter): chapter is { title: string; start: number } =>
+						typeof chapter === "object" &&
+						chapter !== null &&
+						typeof chapter.start === "number" &&
+						chapter.start >= 0 &&
+						typeof chapter.title === "string" &&
+						chapter.title.trim().length > 0,
+				)
+			: [],
+	};
+}
+
+export function parseFinalSummary(content: string): {
+	title: string;
+	summary: string;
+} {
+	const parsed = JSON.parse(extractJsonObject(content)) as {
+		title?: unknown;
+		summary?: unknown;
+	};
+	if (typeof parsed.title !== "string" || !parsed.title.trim()) {
+		throw new Error("AI response did not contain a valid title");
+	}
+	if (typeof parsed.summary !== "string" || !parsed.summary.trim()) {
+		throw new Error("AI response did not contain a valid summary");
+	}
+	return { title: parsed.title, summary: parsed.summary };
 }
 
 export function parseAiResponse(content: string): AiResult {
