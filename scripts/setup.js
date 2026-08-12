@@ -279,7 +279,6 @@ async function main() {
 			console.log(
 				`Staged ${sonameLibs.length} FFmpeg shared libraries for Linux bundling`,
 			);
-			await writeLinuxTauriConfig(sonameLibs);
 
 			cargoConfigContents += `\n[target.${triple}]\nrustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN", "-C", "link-arg=-Wl,-rpath,$ORIGIN/../lib/cap"]\n`;
 		}
@@ -510,30 +509,6 @@ async function fileExists(path) {
 		.access(path)
 		.then(() => true)
 		.catch(() => false);
-}
-
-async function writeLinuxTauriConfig(sonameLibs) {
-	const configPath = path.join(
-		__root,
-		"apps",
-		"desktop",
-		"src-tauri",
-		"tauri.linux.conf.json",
-	);
-	const files = {};
-
-	for (const name of sonameLibs.toSorted()) {
-		files[`/usr/lib/cap/${name}`] =
-			`../../../target/native-deps/cap-deb-libs/${name}`;
-	}
-
-	await writeFileIfChanged(
-		configPath,
-		`${JSON.stringify({ bundle: { linux: { deb: { files } } } }, null, "\t")}\n`,
-	);
-	console.log(
-		`Generated Linux Tauri deb config with ${sonameLibs.length} shared libraries`,
-	);
 }
 
 async function missingFiles(dir, names) {

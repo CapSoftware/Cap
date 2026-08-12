@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { getCurrentWindow, UserAttentionType } from "~/electron/window";
+import { relaunch } from "~/electron/process";
 import {
 	createResource,
 	createSignal,

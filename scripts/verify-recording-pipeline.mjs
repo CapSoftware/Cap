@@ -41,7 +41,7 @@ const desktopBundleId =
 const signDesktopApp = process.env.CAP_VERIFY_SIGN_DESKTOP !== "0";
 const desktopEntitlementsPath = process.env.CAP_VERIFY_DESKTOP_ENTITLEMENTS
 	? path.resolve(process.env.CAP_VERIFY_DESKTOP_ENTITLEMENTS)
-	: path.join(root, "apps", "desktop", "src-tauri", "Entitlements.plist");
+	: path.join(root, "apps", "desktop", "src-backend", "Entitlements.plist");
 const desktopLogDirs = ["so.cap.desktop.dev", "so.cap.desktop"].map((name) =>
 	path.join(os.homedir(), "Library", "Logs", name),
 );

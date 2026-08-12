@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "~/electron/dialog";
 import { cx } from "cva";
 import {
 	createEffect,

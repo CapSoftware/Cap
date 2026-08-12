@@ -1,5 +1,5 @@
 import { OpenPanel } from "@openpanel/web";
-import { Store } from "@tauri-apps/plugin-store";
+import { Store } from "~/electron/store";
 
 const clientId = import.meta.env.VITE_OPENPANEL_CLIENT_ID as string | undefined;
 const apiUrl = import.meta.env.VITE_OPENPANEL_API_URL as string | undefined;

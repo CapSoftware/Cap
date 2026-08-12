@@ -1,15 +1,15 @@
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalPosition } from "~/electron/dpi";
 import {
 	CheckMenuItem,
 	Menu,
 	MenuItem,
 	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
+} from "~/electron/menu";
+import { getCurrentWindow } from "~/electron/window";
+import * as dialog from "~/electron/dialog";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	type ComponentProps,

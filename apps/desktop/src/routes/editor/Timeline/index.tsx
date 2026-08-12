@@ -1,8 +1,8 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { platform } from "@tauri-apps/plugin-os";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu, MenuItem } from "~/electron/menu";
+import { platform } from "~/electron/os";
 import { cx } from "cva";
 import {
 	batch,

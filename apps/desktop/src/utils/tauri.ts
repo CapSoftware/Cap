@@ -1164,9 +1164,9 @@ export type ZoomSegment = { start: number; end: number; amount: number; mode: Zo
 import {
 	invoke as TAURI_INVOKE,
 	Channel as TAURI_CHANNEL,
-} from "@tauri-apps/api/core";
-import * as TAURI_API_EVENT from "@tauri-apps/api/event";
-import { type WebviewWindow as __WebviewWindow__ } from "@tauri-apps/api/webviewWindow";
+} from "~/electron/core";
+import * as TAURI_API_EVENT from "~/electron/event";
+import { type WebviewWindow as __WebviewWindow__ } from "~/electron/webviewWindow";
 
 type __EventObj__<T> = {
 	listen: (

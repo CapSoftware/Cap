@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { open } from "@tauri-apps/plugin-dialog";
+import { CheckMenuItem, Menu } from "~/electron/menu";
+import { open } from "~/electron/dialog";
 import { cx } from "cva";
 import {
 	type Component,

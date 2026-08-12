@@ -2,8 +2,8 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { debounce } from "@solid-primitives/scheduled";
-import { Menu } from "@tauri-apps/api/menu";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { Menu } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 

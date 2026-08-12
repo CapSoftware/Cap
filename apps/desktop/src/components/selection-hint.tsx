@@ -1,4 +1,4 @@
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype } from "~/electron/os";
 import { Match, Show, Switch } from "solid-js";
 
 export type SelectionHintProps = {

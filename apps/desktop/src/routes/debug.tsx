@@ -1,8 +1,8 @@
 import { useNavigate } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
-import { getVersion } from "@tauri-apps/api/app";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { check } from "@tauri-apps/plugin-updater";
+import { getVersion } from "~/electron/app";
+import * as dialog from "~/electron/dialog";
+import { check } from "~/electron/updater";
 import { createSignal, createUniqueId, For, onMount } from "solid-js";
 import { commands } from "~/utils/tauri";
 

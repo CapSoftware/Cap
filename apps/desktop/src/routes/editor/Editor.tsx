@@ -5,11 +5,11 @@ import { trackDeep } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu } from "@tauri-apps/api/menu";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "~/electron/core";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu } from "~/electron/menu";
+import { getCurrentWindow } from "~/electron/window";
+import { ask } from "~/electron/dialog";
 import {
 	createEffect,
 	createMemo,

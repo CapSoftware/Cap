@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { Menu } from "@tauri-apps/api/menu";
+import { Menu } from "~/electron/menu";
 import { cx } from "cva";
 import { Array, Option } from "effect";
 import {

@@ -1,10 +1,10 @@
 import { Button } from "@cap/ui-solid";
 import { makePersisted } from "@solid-primitives/storage";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { relaunch } from "@tauri-apps/plugin-process";
-import * as shell from "@tauri-apps/plugin-shell";
+import { getCurrentWindow } from "~/electron/window";
+import { ask } from "~/electron/dialog";
+import { type as ostype } from "~/electron/os";
+import { relaunch } from "~/electron/process";
+import * as shell from "~/electron/shell";
 import { cx } from "cva";
 import {
 	createEffect,

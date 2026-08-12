@@ -4,7 +4,7 @@
 	"globalEnv": ["*"],
 	"tasks": {
 		"build": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-backend/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
@@ -32,12 +32,12 @@
 			"outputs": ["dist/**"]
 		},
 		"build:web:docker": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-backend/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
 		"build:web": {
-			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
+			"inputs": ["**/*.ts", "**/*.tsx", "!src-backend/**", "!node_modules/**"],
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},

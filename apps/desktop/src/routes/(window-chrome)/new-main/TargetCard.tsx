@@ -1,8 +1,8 @@
 import { ProgressCircle } from "@cap/ui-solid";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { ask, save } from "@tauri-apps/plugin-dialog";
-import { remove } from "@tauri-apps/plugin-fs";
-import * as shell from "@tauri-apps/plugin-shell";
+import { convertFileSrc } from "~/electron/core";
+import { ask, save } from "~/electron/dialog";
+import { remove } from "~/electron/fs";
+import * as shell from "~/electron/shell";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
 import { createMemo, createSignal, Show, splitProps } from "solid-js";

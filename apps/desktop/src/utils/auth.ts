@@ -1,9 +1,9 @@
 import { createMutation } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import * as shell from "@tauri-apps/plugin-shell";
+import { invoke } from "~/electron/core";
+import { listen } from "~/electron/event";
+import { getCurrentWindow } from "~/electron/window";
+import { onOpenUrl } from "~/electron/deep-link";
+import * as shell from "~/electron/shell";
 import { z } from "zod";
 import callbackTemplate from "~/components/callback.template";
 import { authStore, generalSettingsStore } from "~/store";

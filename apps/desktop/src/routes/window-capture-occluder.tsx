@@ -1,4 +1,4 @@
-import { getAllWindows } from "@tauri-apps/api/window";
+import { getAllWindows } from "~/electron/window";
 import { Show, Suspense } from "solid-js";
 import { isCameraWindowLabel } from "~/utils/camera-window";
 import { createCurrentRecordingQuery } from "~/utils/queries";

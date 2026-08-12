@@ -1,5 +1,5 @@
 import { Button } from "@cap/ui-solid";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "~/electron/window";
 import { createSignal, Match, onCleanup, onMount, Switch } from "solid-js";
 import {
 	events,

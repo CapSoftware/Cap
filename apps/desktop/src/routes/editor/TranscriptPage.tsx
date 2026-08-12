@@ -1,7 +1,7 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { save } from "~/electron/dialog";
+import { writeTextFile } from "~/electron/fs";
 import { cx } from "cva";
 import {
 	batch,

@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { getCurrentWebviewWindow } from "~/electron/webviewWindow";
+import { writeText } from "~/electron/clipboard";
 import { ErrorBoundary, type ParentProps } from "solid-js";
 
 export function CapErrorBoundary(props: ParentProps) {

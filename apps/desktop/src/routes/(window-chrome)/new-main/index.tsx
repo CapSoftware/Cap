@@ -6,21 +6,21 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { Channel } from "~/electron/core";
+import { emit, listen } from "~/electron/event";
 import {
 	getAllWebviewWindows,
 	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+} from "~/electron/webviewWindow";
 import {
 	currentMonitor,
 	getCurrentWindow,
 	LogicalSize,
 	PhysicalPosition,
-} from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
-import * as shell from "@tauri-apps/plugin-shell";
+} from "~/electron/window";
+import * as dialog from "~/electron/dialog";
+import { relaunch } from "~/electron/process";
+import * as shell from "~/electron/shell";
 import { cx } from "cva";
 import {
 	createEffect,

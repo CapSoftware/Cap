@@ -1,4 +1,4 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "~/electron/window";
 import { cx } from "cva";
 import {
 	type ComponentProps,

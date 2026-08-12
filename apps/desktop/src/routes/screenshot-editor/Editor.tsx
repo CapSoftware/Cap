@@ -1,9 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
 import { makePersisted } from "@solid-primitives/storage";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu } from "@tauri-apps/api/menu";
+import { convertFileSrc } from "~/electron/core";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu } from "~/electron/menu";
 import {
 	createEffect,
 	createSignal,

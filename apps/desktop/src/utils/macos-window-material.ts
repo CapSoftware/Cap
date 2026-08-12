@@ -1,12 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "~/electron/core";
+import type { UnlistenFn } from "~/electron/event";
 import {
 	Effect,
 	EffectState,
 	type Effects,
 	getCurrentWindow,
-} from "@tauri-apps/api/window";
-import { type as osType, version as osVersion } from "@tauri-apps/plugin-os";
+} from "~/electron/window";
+import { type as osType, version as osVersion } from "~/electron/os";
 
 type MacOSWindowMaterial = "panel" | "settings" | "teleprompter";
 

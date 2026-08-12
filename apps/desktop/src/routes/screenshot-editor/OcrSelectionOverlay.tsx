@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "~/electron/core";
 import { createEffect, createMemo, createSignal, For } from "solid-js";
 import { type ScreenshotProject, useScreenshotEditorContext } from "./context";
 

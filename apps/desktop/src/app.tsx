@@ -3,8 +3,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import { message } from "@tauri-apps/plugin-dialog";
+} from "~/electron/webviewWindow";
+import { message } from "~/electron/dialog";
 import {
 	createEffect,
 	createSignal,

@@ -1,5 +1,5 @@
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import type { ComponentProps, JSX } from "solid-js";
 

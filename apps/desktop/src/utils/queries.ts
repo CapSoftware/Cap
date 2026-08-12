@@ -6,7 +6,7 @@ import {
 	useMutation,
 	useQuery,
 } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "~/electron/window";
 import { batch, createEffect, createMemo, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";

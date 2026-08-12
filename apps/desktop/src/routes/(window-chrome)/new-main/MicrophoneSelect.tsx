@@ -1,4 +1,4 @@
-import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "~/electron/menu";
 import { cx } from "cva";
 import {
 	type Component,

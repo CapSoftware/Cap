@@ -1,8 +1,8 @@
 import { Button } from "@cap/ui-solid";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import type { UnlistenFn } from "~/electron/event";
+import { ask } from "~/electron/dialog";
+import { revealItemInDir } from "~/electron/opener";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	type ComponentProps,

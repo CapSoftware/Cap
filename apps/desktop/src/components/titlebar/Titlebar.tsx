@@ -1,5 +1,5 @@
 // Credits: tauri-controls
-import { type } from "@tauri-apps/plugin-os";
+import { type } from "~/electron/os";
 import { cx } from "cva";
 import { type ComponentProps, Match, Switch, splitProps } from "solid-js";
 import titlebarState from "~/utils/titlebar-state";

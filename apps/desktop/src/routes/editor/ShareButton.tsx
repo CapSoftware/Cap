@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
+import { Channel } from "~/electron/core";
 import { createSignal, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";

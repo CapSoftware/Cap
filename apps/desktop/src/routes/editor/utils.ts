@@ -12,7 +12,7 @@ export function formatTime(secs: number, fps?: number) {
 	return str;
 }
 
-import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+import { getCurrentWindow, ProgressBarStatus } from "~/electron/window";
 import { createEffect } from "solid-js";
 
 export function createProgressBar(progress: () => number | undefined) {

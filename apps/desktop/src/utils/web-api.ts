@@ -3,7 +3,7 @@ import {
 	licenseContract,
 	orgCustomDomainContract,
 } from "@cap/web-api-contract";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "~/electron/http";
 import { type ApiFetcher, initClient } from "@ts-rest/core";
 
 import { authStore, generalSettingsStore } from "~/store";

@@ -1,0 +1,109 @@
+appId: so.cap.desktop
+productName: Cap
+asar: true
+generateUpdatesFilesForAllChannels: true
+extraMetadata:
+  main: .electron-dist/main.cjs
+directories:
+  output: dist-electron
+files:
+  - .electron-dist/**
+  - .output/public/**
+  - package.json
+  - '!node_modules/**/*'
+extraResources:
+  - from: src-backend/assets
+    to: assets
+  - from: src-backend/icons
+    to: tray-icons
+    filter:
+      - tray-*.png
+  - from: ../../target/native-deps/onnxruntime
+    to: onnxruntime
+mac:
+  icon: src-backend/icons/macos/icon.icns
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  notarize: true
+  entitlements: src-backend/Entitlements.plist
+  entitlementsInherit: src-backend/Entitlements.plist
+  target:
+    - dmg
+    - zip
+  extraFiles:
+    - from: src-backend/binaries
+      to: MacOS
+      filter:
+        - '!**/.gitignore'
+    - from: ../../target/native-deps/Spacedrive.framework
+      to: Frameworks/Spacedrive.framework
+  extendInfo:
+    NSCameraUsageDescription: Cap uses your camera to record you in your Caps
+    NSMicrophoneUsageDescription: Cap uses your microphone to record you in your Caps
+    NSScreenCaptureUsageDescription: Cap captures your screen as part of recording your Caps
+    NSCameraUseContinuityCameraDeviceType: true
+    CFBundleURLTypes:
+      - CFBundleURLName: Cap Desktop
+        CFBundleURLSchemes:
+          - cap-desktop
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Cap Project
+        CFBundleTypeExtensions:
+          - cap
+        CFBundleTypeRole: Editor
+        LSHandlerRank: Default
+        LSTypeIsPackage: true
+dmg:
+  background: src-backend/assets/dmg-background.png
+  contents:
+    - x: 180
+      y: 140
+    - x: 480
+      y: 140
+      type: link
+      path: /Applications
+win:
+  icon: src-backend/icons/icon.ico
+  extraResources:
+    - from: src-backend/binaries
+      to: bin
+      filter:
+        - '!**/.gitignore'
+  target:
+    - nsis
+nsis:
+  installerIcon: src-backend/icons/icon.ico
+  installerHeader: src-backend/assets/nsis-header.bmp
+  installerSidebar: src-backend/assets/nsis-sidebar.bmp
+linux:
+  icon: src-backend/icons
+  category: Utility
+  extraResources:
+    - from: src-backend/binaries
+      to: bin
+      filter:
+        - '!**/.gitignore'
+    - from: ../../target/native-deps/cap-deb-libs
+      to: lib/cap
+  target:
+    - deb
+deb:
+  depends:
+    - libgtk-3-0
+    - libayatana-appindicator3-1
+    - libva2
+    - libva-drm2
+    - libpipewire-0.3-0
+    - libasound2t64 | libasound2
+protocols:
+  - name: Cap Desktop
+    schemes:
+      - cap-desktop
+fileAssociations:
+  - ext: cap
+    name: Cap Project
+    role: Editor
+publish:
+  provider: github
+  owner: CapSoftware
+  repo: Cap

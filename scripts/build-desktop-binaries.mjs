@@ -9,7 +9,7 @@ const binariesDir = path.join(
 	repoRoot,
 	"apps",
 	"desktop",
-	"src-tauri",
+	"src-backend",
 	"binaries",
 );
 
@@ -70,6 +70,17 @@ async function main() {
 
 	for (const sidecar of [
 		{
+			packageName: "cap-desktop",
+			sourceBinary: "cap-desktop",
+			destBinaries: ["cap-desktop"],
+			watchPaths: [
+				path.join(repoRoot, "apps", "desktop", "src-backend"),
+				path.join(repoRoot, "crates", "desktop-runtime"),
+				path.join(repoRoot, "crates", "desktop-runtime-macros"),
+				path.join(repoRoot, "Cargo.lock"),
+			],
+		},
+		{
 			packageName: "cap-muxer",
 			sourceBinary: "cap-muxer",
 			destBinaries: ["cap-muxer"],
@@ -98,6 +109,16 @@ async function main() {
 		},
 	]) {
 		await buildSidecar(sidecar, target, ext);
+	}
+
+	if (target.includes("windows")) await stageWindowsRuntimeLibraries();
+}
+
+async function stageWindowsRuntimeLibraries() {
+	const releaseDir = path.join(repoRoot, "target", "release");
+	for (const name of await fs.readdir(releaseDir)) {
+		if (!name.toLowerCase().endsWith(".dll")) continue;
+		await fs.copyFile(path.join(releaseDir, name), path.join(binariesDir, name));
 	}
 }
 

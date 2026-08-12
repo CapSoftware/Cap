@@ -1,11 +1,11 @@
 import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
 import { createQuery, useQueryClient } from "@tanstack/solid-query";
-import { getVersion } from "@tauri-apps/api/app";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import * as shell from "@tauri-apps/plugin-shell";
+import { getVersion } from "~/electron/app";
+import { writeText } from "~/electron/clipboard";
+import * as dialog from "~/electron/dialog";
+import { fetch as tauriFetch } from "~/electron/http";
+import * as shell from "~/electron/shell";
 import {
 	createEffect,
 	createMemo,

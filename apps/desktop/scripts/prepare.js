@@ -70,7 +70,7 @@ export async function createTauriPlatformConfigs(
 	platform,
 	configOptions = undefined,
 ) {
-	const srcTauri = path.join(__dirname, "../src-tauri/");
+	const srcTauri = path.join(__dirname, "../src-backend/");
 	let baseConfig = {};
 	let configFileName = null;
 

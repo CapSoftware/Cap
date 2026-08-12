@@ -1,9 +1,9 @@
 import { Popover } from "@kobalte/core/popover";
 import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { appDataDir, resolveResource } from "@tauri-apps/api/path";
-import { BaseDirectory, writeFile } from "@tauri-apps/plugin-fs";
+import { convertFileSrc, invoke } from "~/electron/core";
+import { appDataDir, resolveResource } from "~/electron/path";
+import { BaseDirectory, writeFile } from "~/electron/fs";
 import {
 	batch,
 	createMemo,

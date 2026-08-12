@@ -13,15 +13,15 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { appDataDir, resolveResource } from "@tauri-apps/api/path";
+import { convertFileSrc } from "~/electron/core";
+import { appDataDir, resolveResource } from "~/electron/path";
 import {
 	BaseDirectory,
 	exists,
 	readDir,
 	writeFile,
-} from "@tauri-apps/plugin-fs";
-import { type as ostype } from "@tauri-apps/plugin-os";
+} from "~/electron/fs";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	batch,

@@ -1,13 +1,13 @@
 import { makePersisted } from "@solid-primitives/storage";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "~/electron/event";
 import {
 	availableMonitors,
 	currentMonitor,
 	getCurrentWindow,
 	LogicalPosition,
 	LogicalSize,
-} from "@tauri-apps/api/window";
-import { type } from "@tauri-apps/plugin-os";
+} from "~/electron/window";
+import { type } from "~/electron/os";
 import { cx } from "cva";
 import {
 	type Accessor,

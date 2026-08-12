@@ -3,8 +3,8 @@ import { createResizeObserver } from "@solid-primitives/resize-observer";
 import type {
 	CheckMenuItemOptions,
 	PredefinedMenuItemOptions,
-} from "@tauri-apps/api/menu";
-import { type as ostype } from "@tauri-apps/plugin-os";
+} from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
 import {
 	type Accessor,
 	children,

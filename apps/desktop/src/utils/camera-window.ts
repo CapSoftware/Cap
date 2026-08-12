@@ -1,4 +1,4 @@
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { WebviewWindow } from "~/electron/webviewWindow";
 
 const CAMERA_WINDOW_PREFIX = "camera-";
 

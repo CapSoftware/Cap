@@ -5,9 +5,9 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { remove } from "@tauri-apps/plugin-fs";
+import { convertFileSrc } from "~/electron/core";
+import { ask } from "~/electron/dialog";
+import { remove } from "~/electron/fs";
 import {
 	createEffect,
 	createMemo,

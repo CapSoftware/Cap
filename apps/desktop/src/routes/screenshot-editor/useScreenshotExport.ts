@@ -1,5 +1,5 @@
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { save } from "~/electron/dialog";
+import { writeFile } from "~/electron/fs";
 import { createSignal } from "solid-js";
 import { unwrap } from "solid-js/store";
 import toast from "solid-toast";

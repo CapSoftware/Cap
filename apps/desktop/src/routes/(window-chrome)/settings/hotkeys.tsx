@@ -1,5 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype } from "~/electron/os";
 import {
 	batch,
 	createEffect,

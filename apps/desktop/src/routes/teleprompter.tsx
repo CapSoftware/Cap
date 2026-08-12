@@ -1,6 +1,6 @@
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type as ostype } from "@tauri-apps/plugin-os";
+import type { UnlistenFn } from "~/electron/event";
+import { getCurrentWebviewWindow } from "~/electron/webviewWindow";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	createEffect,

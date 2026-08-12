@@ -1,4 +1,4 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc } from "~/electron/core";
 import { cx } from "cva";
 import {
 	createEffect,

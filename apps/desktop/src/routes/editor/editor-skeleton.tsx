@@ -1,4 +1,4 @@
-import { type as ostype } from "@tauri-apps/plugin-os";
+import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 

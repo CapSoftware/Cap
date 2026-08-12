@@ -1,4 +1,4 @@
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "~/electron/clipboard";
 import {
 	createEffect,
 	createMemo,

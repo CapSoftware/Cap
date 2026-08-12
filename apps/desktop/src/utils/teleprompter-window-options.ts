@@ -1,6 +1,6 @@
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import type { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { OsType } from "@tauri-apps/plugin-os";
+import { LogicalPosition } from "~/electron/dpi";
+import type { WebviewWindow } from "~/electron/webviewWindow";
+import type { OsType } from "~/electron/os";
 
 export type TeleprompterWindowOptions = NonNullable<
 	ConstructorParameters<typeof WebviewWindow>[1]

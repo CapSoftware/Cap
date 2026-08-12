@@ -9,16 +9,16 @@ import {
 	LogicalPosition,
 	type PhysicalPosition,
 	type PhysicalSize,
-} from "@tauri-apps/api/dpi";
-import { emit } from "@tauri-apps/api/event";
+} from "~/electron/dpi";
+import { emit } from "~/electron/event";
 import {
 	CheckMenuItem,
 	Menu,
 	MenuItem,
 	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type as ostype } from "@tauri-apps/plugin-os";
+} from "~/electron/menu";
+import { WebviewWindow } from "~/electron/webviewWindow";
+import { type as ostype } from "~/electron/os";
 import {
 	createEffect,
 	createMemo,
