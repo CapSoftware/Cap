@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
-      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      desktop: ${{ steps.filter.outputs.desktop }}
       branch: ${{ steps.branch.outputs.branch }}
     steps:
       - name: Checkout
@@ -37,12 +37,9 @@ jobs:
               - '.github/**'
               - 'apps/cli/**'
               - 'crates/**'
-              - 'apps/desktop/src-tauri/**'
+              - 'apps/desktop/src-backend/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-            tauri-plugins:
-              - 'Cargo.lock'
-              - 'pnpm-lock.yaml'
 
       - name: Output branch name
         id: branch
@@ -242,27 +239,19 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        shell: bash
+        run: |
+          pnpm run preparescript
+          pnpm build
+          pnpm build:electron-main
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            pnpm exec electron-builder --dir --mac --arm64
+          else
+            pnpm exec electron-builder --dir --win --x64
+          fi
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-
-  tauri-plugins:
-    name: Verify Tauri plugin versions
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.tauri-plugins == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
-
-      - name: Run verify
-        shell: bash
-        run: node scripts/check-tauri-plugin-versions.js
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
   rust-cache:
     name: Rust cache

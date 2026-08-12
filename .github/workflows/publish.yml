@@ -1,6 +1,6 @@
 name: "publish"
 
-# Stable release entrypoint. Reads the version from Cargo.toml (bump it before
+# Stable release entrypoint. Reads the version from package.json (bump it before
 # dispatching) and hands off to the reusable desktop-release workflow. The
 # CrabNebula release stays a draft; publishing remains the manual step it has
 # always been (Discord bot / CN dashboard).
@@ -22,11 +22,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Read version number
-        uses: SebRollen/toml-action@v1.0.2
         id: read_version
-        with:
-          file: apps/desktop/src-tauri/Cargo.toml
-          field: "package.version"
+        shell: bash
+        run: echo "value=$(node -p "require('./apps/desktop/package.json').version")" >> "$GITHUB_OUTPUT"
 
   release:
     needs: version

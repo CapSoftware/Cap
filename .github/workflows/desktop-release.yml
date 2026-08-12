@@ -1,44 +1,27 @@
-name: "desktop-release"
-
-# Reusable core of the desktop release pipeline. Callers:
-#   - publish.yml         -> channel: stable, version from Cargo.toml, manual CN publish
-#   - publish-nightly.yml -> channel: nightly, generated prerelease version, auto CN publish
-#   - promote-nightly.yml -> channel: stable, rebuilds a nightly's commit as a plain x.y.z
-#
-# Stable releases get a cap-v{version} git tag + draft GitHub release and are
-# published on CrabNebula manually (Discord bot / dashboard), exactly as before.
-# Nightly releases skip the GitHub side entirely and go to the CrabNebula
-# "nightly" channel, which is invisible to the default update endpoint and to
-# the website's `latest` download URLs.
+name: desktop-release
 
 on:
   workflow_call:
     inputs:
       version:
-        description: "Version to stamp into the build and the CrabNebula release"
         required: true
         type: string
       channel:
-        description: "Release channel: stable or nightly"
         required: true
         type: string
       sha:
-        description: "Commit SHA to build (and to tag, for stable releases)"
         required: true
         type: string
       auto_publish:
-        description: "Publish the CrabNebula release automatically after upload"
         required: false
         type: boolean
         default: false
       interactionId:
-        description: "Discord Interaction ID"
         required: false
         type: string
         default: ""
 
 env:
-  CN_APPLICATION: cap/cap
   SENTRY_ORG: cap-s2
   SENTRY_PROJECT: cap-desktop
 
@@ -46,229 +29,117 @@ jobs:
   draft:
     runs-on: ubuntu-latest
     outputs:
-      tag_name: ${{ steps.create_tag.outputs.tag_name }}
-      needs_release: ${{ steps.create_tag.outputs.release_published != 'true' }}
-      cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
-      gh_release_url: ${{ steps.create_gh_release.outputs.url || steps.create_tag.outputs.release_url }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_url: ${{ steps.release.outputs.release_url }}
     permissions:
       contents: write
-      id-token: write
-    env:
-      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
     steps:
-      - name: Prepare release
-        id: create_tag
-        if: ${{ inputs.channel == 'stable' }}
+      - name: Create or update release tag and draft
+        id: release
         uses: actions/github-script@v7
         with:
           script: |
-            const tag = "cap-v${{ inputs.version }}";
-            const buildSha = "${{ inputs.sha }}";
-            const tagRef = `tags/${tag}`;
+            const tag = "${{ inputs.channel }}" === "nightly"
+              ? `cap-nightly-v${{ inputs.version }}`
+              : `cap-v${{ inputs.version }}`;
+            const sha = "${{ inputs.sha }}";
+            try {
+              await github.rest.git.updateRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${tag}`, sha, force: true });
+            } catch (error) {
+              if (error.status !== 422 && error.status !== 404) throw error;
+              await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `refs/tags/${tag}`, sha });
+            }
 
-            const TAG_EXISTED = "tag_existed";
-            const TAG_NAME = "tag_name";
-            const RELEASE_PUBLISHED = "release_published";
-            const RELEASE_URL = "release_url";
-
-            core.setOutput(TAG_NAME, tag);
-
-            async function main() {
-              let tagExisted = true;
-              let tagSha = "";
-              let releasePublished = false;
-              let releaseUrl = "";
-
-              try {
-                const tagRefResponse = await github.rest.git.getRef({
-                  ref: tagRef,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                });
-
-                tagExisted = true;
-                tagSha = tagRefResponse.data.object.sha;
-                core.notice(`Tag '${tag}' already exists. Reusing it for this release run.`);
-              } catch (error) {
-                if ("status" in error && error.status === 404) tagExisted = false;
-                else throw error;
-              }
-
-              if (!tagExisted)
-                await github.rest.git.createRef({
-                  ref: `refs/${tagRef}`,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  sha: buildSha,
-                });
-
-              const releases = await github.paginate(github.rest.repos.listReleases, {
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag })).data;
+              if (!release.draft) throw new Error(`Release '${tag}' is already published: ${release.html_url}`);
+              release = (await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                per_page: 100,
-              });
-
-              const release = releases.find((release) => release.tag_name === tag);
-
-              if (release) {
-                releaseUrl = release.html_url;
-                releasePublished = !release.draft;
-
-                if (releasePublished)
-                  throw new Error(`Release '${tag}' is already published: ${releaseUrl}. Bump apps/desktop/src-tauri/Cargo.toml before publishing a new build.`);
-                else
-                  core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
-              }
-
-              if (tagExisted && !releasePublished && tagSha !== buildSha) {
-                await github.rest.git.updateRef({
-                  ref: tagRef,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  sha: buildSha,
-                  force: true,
-                });
-
-                core.notice(`Updated unpublished tag '${tag}' to ${buildSha}.`);
-              }
-
-              core.setOutput(TAG_EXISTED, tagExisted);
-              core.setOutput(RELEASE_PUBLISHED, releasePublished);
-              core.setOutput(RELEASE_URL, releaseUrl);
+                release_id: release.id,
+                target_commitish: sha,
+                name: "${{ inputs.version }}",
+                prerelease: "${{ inputs.channel }}" === "nightly",
+              })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                target_commitish: sha,
+                name: "${{ inputs.version }}",
+                draft: true,
+                prerelease: "${{ inputs.channel }}" === "nightly",
+                generate_release_notes: true,
+              })).data;
             }
-
-            await main();
-
-      - name: Create draft CN release
-        id: create_cn_release
-        if: ${{ steps.create_tag.outputs.release_published != 'true' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release draft ${{ env.CN_APPLICATION }} ${{ inputs.version }} --framework tauri ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-
-      - name: Create draft GH release
-        id: create_gh_release
-        if: ${{ inputs.channel == 'stable' && steps.create_tag.outputs.release_published != 'true' }}
-        # TODO: Change to stable version when available
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ inputs.version }}
-          tag_name: ${{ steps.create_tag.outputs.tag_name }}
-          draft: true
-          generate_release_notes: true
-
-      - name: Update Discord interaction
-        if: ${{ inputs.channel == 'stable' && inputs.interactionId != '' && steps.create_tag.outputs.release_published != 'true' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            async function main() {
-              const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
-
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-ready",
-                  tag: "${{ steps.create_tag.outputs.tag_name }}",
-                  version: "${{ inputs.version }}",
-                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
-                  interactionId: "${{ inputs.interactionId }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
-
-              if(resp.status !== 200) throw new Error(await resp.text());
-            }
-
-            main();
+            core.setOutput("tag_name", tag);
+            core.setOutput("release_url", release.html_url);
 
   build:
     needs: draft
-    if: ${{ needs.draft.outputs.needs_release == 'true' }}
     permissions:
       contents: write
       actions: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
         settings:
           - target: x86_64-apple-darwin
             runner: macos-latest-xlarge
+            builder_args: --mac --x64
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
+            builder_args: --mac --arm64
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
+            builder_args: --win --x64
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-24.04
+            builder_args: --linux deb --x64
+    runs-on: ${{ matrix.settings.runner }}
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
-      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
-    runs-on: ${{ matrix.settings.runner }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.sha }}
 
-      # Nightly and promoted builds carry a version that differs from the
-      # committed Cargo.toml; Tauri reads the app version from package.version.
-      - name: Stamp build version
+      - name: Stamp Electron version
         shell: bash
         env:
           BUILD_VERSION: ${{ inputs.version }}
         run: |
           node -e '
             const fs = require("fs");
-            const path = "apps/desktop/src-tauri/Cargo.toml";
-            const version = process.env.BUILD_VERSION;
-            let toml = fs.readFileSync(path, "utf8");
-            const re = /^version = ".*"$/m;
-            if (!re.test(toml)) {
-              console.error("package.version line not found in " + path);
-              process.exit(1);
-            }
-            toml = toml.replace(re, `version = "${version}"`);
-            fs.writeFileSync(path, toml);
-            console.log("Stamped " + path + " with " + version);
+            const path = "apps/desktop/package.json";
+            const json = JSON.parse(fs.readFileSync(path, "utf8"));
+            json.version = process.env.BUILD_VERSION;
+            fs.writeFileSync(path, JSON.stringify(json, null, "\t") + "\n");
           '
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}
         uses: ./.github/actions/install-desktop-deps
 
-      - name: Create API Key File
+      - name: Import macOS signing certificate
         if: ${{ runner.os == 'macOS' }}
-        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
-
-      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2
-        if: ${{ runner.os == 'macOS' }}
+        uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      - name: Verify certificate
+      - name: Write Apple notarization key
         if: ${{ runner.os == 'macOS' }}
-        run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
+        shell: bash
+        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > "$RUNNER_TEMP/AuthKey.p8"
 
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.settings.target }}
-
-      - name: Verify Rust toolchain
-        shell: bash
-        run: |
-          rustc -Vv
-          cargo -V
-          rustup show active-toolchain
 
       - uses: ./.github/actions/setup-rust-cache
         with:
@@ -276,7 +147,7 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
-      - name: Create .env file in root
+      - name: Create build environment
         shell: bash
         run: |
           {
@@ -291,186 +162,71 @@ jobs:
             echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}'
           } >> .env
 
-      - name: Run cap-setup
+      - name: Prepare native dependencies
         shell: bash
         run: pnpm -w cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
 
-      - name: Build desktop binaries
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            export CARGO_PROFILE_RELEASE_DEBUG=0
-          fi
-          ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
-
-      # The release profile uses fat LTO + full debuginfo, so the final link
-      # peaks well above the 16GB stock Linux runner and gets OOM-killed
-      # ("runner received a shutdown signal"). The runner already ships an
-      # active /swapfile (resizing it fails with "Text file busy"), so add a
-      # large swapfile on the roomy /mnt disk on top of the existing swap.
-      # macOS runs on xlarge runners and is unaffected.
-      - name: Increase swap space (Linux)
+      - name: Increase Linux swap
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
-          sudo swapoff /mnt/swapfile 2>/dev/null || true
-          sudo rm -f /mnt/swapfile
-          sudo fallocate -l 16G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          swapon --show
-          free -h
+          sudo fallocate -l 16G /mnt/electron-swapfile
+          sudo chmod 600 /mnt/electron-swapfile
+          sudo mkswap /mnt/electron-swapfile
+          sudo swapon /mnt/electron-swapfile
 
-      # The same fat-LTO link exhausts commit on the 16GB Windows runner
-      # ("rustc-LLVM ERROR: out of memory" while linking cap-desktop), so
-      # raise the pagefile on the roomy D: disk — the Windows analog of the
-      # Linux swapfile above.
-      - name: Increase pagefile size (Windows)
+      - name: Increase Windows pagefile
         if: ${{ runner.os == 'Windows' }}
-        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708
         with:
           minimum-size: 16GB
           maximum-size: 24GB
           disk-root: "D:"
 
-      - name: Build app
-        working-directory: apps/desktop
-        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 ' || '' }}pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--bundles deb --verbose' || '' }}
+      - name: Build Rust backend and sidecars
+        shell: bash
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
         env:
-          # https://github.com/tauri-apps/tauri-action/issues/740
-          CI: false
-          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/{1}/release:{0}/target/native-deps/lib', github.workspace, matrix.settings.target) || '' }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # codesigning
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          # notarization
-          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_KEY_PATH: ${{ runner.os == 'macOS' && format('{0}/api.p8', github.workspace) || '' }}
-          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+          CARGO_PROFILE_RELEASE_DEBUG: ${{ runner.os == 'Linux' && '0' || '' }}
 
-      # Guards against the Linux packaging regressions:
-      #   1. Frontend missing: vinxi must produce apps/desktop/.output/public,
-      #      which Tauri EMBEDS into the binary (it is NOT shipped as a loose
-      #      /usr/lib/Cap/index.html file). A blank webview ships if turbo's cache
-      #      restores an empty .output/public (see @cap/desktop#build outputs in
-      #      turbo.json), so we assert the build output exists and is non-empty.
-      #   2. FFmpeg soname mismatch: every libav*/libsw* the main binary lists as
-      #      NEEDED must be bundled under /usr/lib/cap/ with the exact same soname.
-      #      The bundled libs come from native-deps (FFmpeg 7); if the binary
-      #      linked system FFmpeg 6 the loader fails at launch.
-      #   3. Undeclared runtime dependency: a system lib the binary NEEDs that is
-      #      neither bundled nor part of the declared GTK/webkit stack must appear
-      #      in the .deb Depends, or the loader aborts at launch. This is the
-      #      libpipewire-0.3.so.0 crash that shipped in 0.5.2.
-      - name: Verify Linux deb contents
-        if: ${{ runner.os == 'Linux' }}
+      - name: Build renderer and Electron distributable
+        working-directory: apps/desktop
         shell: bash
         run: |
-          set -euo pipefail
+          pnpm run preparescript
+          pnpm build
+          pnpm build:electron-main
+          pnpm exec electron-builder ${{ matrix.settings.builder_args }} --publish never
+        env:
+          CI: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+          CSC_NAME: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && format('{0}/AuthKey.p8', runner.temp) || '' }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
 
-          # (1) frontend was actually built. Tauri embeds .output/public into the
-          # binary at build time, so an empty/missing dir => blank webview.
-          FE="apps/desktop/.output/public/index.html"
-          if [[ ! -s "$FE" ]]; then
-            echo "::error::Frontend build output missing/empty ($FE) - webview would be blank."
-            ls -la apps/desktop/.output/public 2>/dev/null || echo "(no .output/public dir)"
-            exit 1
-          fi
-          echo "Frontend build output OK ($FE, $(wc -c < "$FE") bytes)"
-
-          UNSUPPORTED_ARTIFACT="$(find target/${{ matrix.settings.target }}/release/bundle -type f \( -name '*.AppImage' -o -name '*.rpm' \) -print -quit)"
-          if [[ -n "$UNSUPPORTED_ARTIFACT" ]]; then
-            echo "::error::Unexpected Linux non-deb artifact produced: $UNSUPPORTED_ARTIFACT"
-            exit 1
-          fi
-
-          DEB="$(find target/${{ matrix.settings.target }}/release/bundle/deb -name '*.deb' | head -n1)"
-          if [[ -z "$DEB" ]]; then echo "::error::No .deb produced"; exit 1; fi
-          if [[ ! -s "$DEB.sig" ]]; then echo "::error::No .deb updater signature produced next to $DEB"; exit 1; fi
-          echo "Inspecting $DEB"
-          WORK="$(mktemp -d)"
-          dpkg-deb -x "$DEB" "$WORK"
-
-          # Best-effort confirmation that the SPA actually got embedded into the
-          # binary (Tauri stores asset path keys as plaintext). Informational only.
-          if strings "$WORK/usr/bin/Cap" 2>/dev/null | grep -q "index.html"; then
-            echo "Binary appears to embed the frontend (index.html key present)"
-          else
-            echo "::warning::Could not confirm embedded frontend key in binary (asset format may differ)"
-          fi
-
-          # (2) every FFmpeg soname the binary NEEDs is bundled
-          BIN="$WORK/usr/bin/Cap"
-          NEEDED="$(objdump -p "$BIN" | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' || true)"
-          echo "Binary NEEDs FFmpeg sonames:"; echo "${NEEDED:-(none)}"
-          echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
-          MISSING=0
-          for so in $NEEDED; do
-            if [[ ! -f "$WORK/usr/lib/cap/$so" ]]; then
-              echo "::error::Binary NEEDs $so but it is not bundled under /usr/lib/cap/"
-              MISSING=1
-            fi
-          done
-          if [[ "$MISSING" -ne 0 ]]; then
-            echo "::error::FFmpeg soname mismatch between binary and bundled libs."
-            exit 1
-          fi
-          echo "FFmpeg soname bundle OK"
-
-          # (3) runtime libs that are NOT bundled and NOT pulled in by the
-          # declared GTK/webkit stack must be declared in the .deb Depends, or
-          # the dynamic loader aborts at launch (the libpipewire-0.3.so.0 crash
-          # in 0.5.2). Assert the curated set of such sonames the binary links.
-          DEPENDS="$(dpkg-deb -f "$DEB" Depends || true)"
-          echo "Declared Depends: ${DEPENDS:-(none)}"
-          NEEDED_ALL="$(objdump -p "$BIN" | awk '/NEEDED/{print $2}')"
-          # soname -> a Depends token that satisfies it. The alsa token is a
-          # substring so it matches both libasound2 and libasound2t64.
-          declare -A SONAME_DEP=(
-            [libpipewire-0.3.so.0]="libpipewire-0.3-0"
-            [libasound.so.2]="libasound2"
-          )
-          DEP_MISSING=0
-          for so in "${!SONAME_DEP[@]}"; do
-            if echo "$NEEDED_ALL" | grep -qx "$so"; then
-              tok="${SONAME_DEP[$so]}"
-              if ! echo "$DEPENDS" | grep -q "$tok"; then
-                echo "::error::Binary NEEDs $so but '$tok' is not declared in .deb Depends (add it to tauri.conf.json bundle.linux.deb.depends)."
-                DEP_MISSING=1
-              else
-                echo "Runtime dep OK: $so -> $tok"
-              fi
-            fi
-          done
-          if [[ "$DEP_MISSING" -ne 0 ]]; then
-            echo "::error::Undeclared runtime dependency in .deb Depends."
-            exit 1
-          fi
-          echo "Runtime dependency declarations OK"
+      - name: Verify packaged application
+        shell: bash
+        run: |
+          test -s apps/desktop/.output/public/index.html
+          test -n "$(find apps/desktop/dist-electron -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.deb' \) -print -quit)"
+          test -n "$(find apps/desktop/dist-electron -type f -name 'cap-desktop-*' -print -quit)"
 
       - name: Upload unsigned Windows installer
         if: ${{ runner.os == 'Windows' }}
-        id: upload_unsigned_windows_installer
+        id: unsigned_windows
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-windows-installer
-          path: target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+          path: apps/desktop/dist-electron/*.exe
           if-no-files-found: error
 
-      - name: Submit SignPath signing request
+      - name: Sign Windows installer with SignPath
         if: ${{ runner.os == 'Windows' }}
-        id: submit_signpath_signing_request
         uses: signpath/github-action-submit-signing-request@v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -478,20 +234,8 @@ jobs:
           project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+          github-artifact-id: ${{ steps.unsigned_windows.outputs.artifact-id }}
           wait-for-completion: true
-          # SignPath Foundation requires a human to approve each signing
-          # request, so this step blocks until someone clicks approve. Raising
-          # wait-for-completion-timeout-in-seconds alone did NOT extend the
-          # window: while a request sits "WaitingForApproval" the action's
-          # per-call retry budget (service-unavailable-timeout-in-seconds,
-          # default 600s) is what expires and fails the job at ~10 min, so both
-          # must be raised. GitHub-hosted jobs are hard-capped at 6h total and
-          # the Windows build already consumes part of that, so ~4h is the
-          # practical ceiling for a blocking wait; the action times out cleanly
-          # here rather than letting GitHub kill the runner mid-build. For a
-          # genuinely longer (12h+) window the signing has to be decoupled from
-          # the build job (submit without waiting, finalise in a later job).
           wait-for-completion-timeout-in-seconds: 14400
           service-unavailable-timeout-in-seconds: 14400
           output-artifact-directory: signed-windows-installer
@@ -500,76 +244,68 @@ jobs:
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
-          $signedDir = "signed-windows-installer"
-          $bundleDir = "target/${{ matrix.settings.target }}/release/bundle/nsis"
+          $signed = Get-ChildItem signed-windows-installer -Filter *.exe -Recurse | Select-Object -First 1
+          if (-not $signed) { throw "No signed installer returned by SignPath" }
+          $destination = Get-ChildItem apps/desktop/dist-electron -Filter *.exe | Select-Object -First 1
+          Copy-Item $signed.FullName $destination.FullName -Force
 
-          if (-not (Test-Path $signedDir)) {
-            throw "Signed artifact directory '$signedDir' not found."
-          }
-
-          $executables = Get-ChildItem -Path $signedDir -Filter *.exe -Recurse
-          if (-not $executables) {
-            throw "No signed executables found in '$signedDir'."
-          }
-
-          Write-Host "Copying signed executables to: $bundleDir"
-          Copy-Item -Path (Join-Path $signedDir '*.exe') -Destination $bundleDir -Force
-
-          Write-Host "Files in bundle directory after signing:"
-          Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
-
-      - name: Re-sign Windows installer for Tauri updater
+      # SignPath mutates the installer after electron-builder has produced the
+      # updater manifest. Recalculate the full-download metadata and remove the
+      # now-stale differential blockmap before publishing the signed artifact.
+      - name: Refresh Windows updater metadata
         if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        working-directory: apps/desktop
+        shell: pwsh
         run: |
-          BUNDLE_DIR="../../target/${{ matrix.settings.target }}/release/bundle/nsis"
-          for exe in "$BUNDLE_DIR"/*.exe; do
-            echo "Re-signing $(basename "$exe") for Tauri updater..."
-            rm -f "${exe}.sig"
-            pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
-          done
-          echo "Signature files after re-signing:"
-          ls -la "$BUNDLE_DIR"/*.sig
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          $dist = Resolve-Path "apps/desktop/dist-electron"
+          $installer = Get-ChildItem $dist -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw "No signed installer found in $dist" }
 
-      - name: Upload assets
-        if: ${{ runner.os != 'Linux' }}
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          working-directory: apps/desktop
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --framework tauri ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
-        env:
-          TAURI_BUNDLE_PATH: ../..
+          $sha512 = [Convert]::ToBase64String(
+            [Security.Cryptography.SHA512]::HashData(
+              [IO.File]::ReadAllBytes($installer.FullName)
+            )
+          )
+          $size = $installer.Length
+          $manifests = Get-ChildItem $dist -Filter *.yml
+          if (-not $manifests) { throw "No Electron updater manifest found in $dist" }
 
-      - name: Upload Linux deb asset
-        if: ${{ runner.os == 'Linux' }}
-        uses: crabnebula-dev/cloud-release@v0
+          foreach ($manifest in $manifests) {
+            $contents = Get-Content $manifest.FullName -Raw
+            $contents = $contents -replace '(?m)^(\s*)sha512:.*$', "`$1sha512: $sha512"
+            $contents = $contents -replace '(?m)^(\s*)size:.*$', "`$1size: $size"
+            $contents = $contents -replace '(?m)^\s*blockMapSize:.*\r?\n?', ''
+            [IO.File]::WriteAllText($manifest.FullName, $contents)
+          }
+
+          Get-ChildItem $dist -Filter *.blockmap | Remove-Item -Force
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
-          working-directory: apps/desktop
-          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "../../target/${{ matrix.settings.target }}/release/bundle/deb/Cap_${{ inputs.version }}_amd64.deb" --signature "../../target/${{ matrix.settings.target }}/release/bundle/deb/Cap_${{ inputs.version }}_amd64.deb.sig" --public-platform deb-x86_64 --update-platform linux-x86_64-deb ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
+          tag_name: ${{ needs.draft.outputs.tag_name }}
+          draft: true
+          prerelease: ${{ inputs.channel == 'nightly' }}
+          files: |
+            apps/desktop/dist-electron/*.dmg
+            apps/desktop/dist-electron/*.zip
+            apps/desktop/dist-electron/*.exe
+            apps/desktop/dist-electron/*.deb
+            apps/desktop/dist-electron/*.yml
 
       - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
 
-      - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'macOS' }}
+      - name: Upload Rust debug symbols to Sentry
+        if: ${{ runner.os == 'macOS' || runner.os == 'Windows' }}
         shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
-
-      - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            dsymutil "target/${{ matrix.settings.target }}/release/cap-desktop" -o target/cap-desktop.dSYM
+            sentry-cli debug-files upload -o "$SENTRY_ORG" -p "$SENTRY_PROJECT" target/cap-desktop.dSYM
+          else
+            sentry-cli debug-files upload -o "$SENTRY_ORG" -p "$SENTRY_PROJECT" "target/${{ matrix.settings.target }}/release/cap_desktop.pdb"
+          fi
 
   done:
     needs: [draft, build]
@@ -577,41 +313,35 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    env:
-      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
     steps:
-      - name: Publish CN release
+      - name: Publish nightly release
         if: ${{ inputs.auto_publish }}
-        uses: crabnebula-dev/cloud-release@v0
+        uses: actions/github-script@v7
         with:
-          command: release publish ${{ env.CN_APPLICATION }} "${{ inputs.version }}" ${{ env.CN_CHANNEL_FLAG }}
-          api-key: ${{ secrets.CN_API_KEY }}
+          script: |
+            const release = await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: "${{ needs.draft.outputs.tag_name }}" });
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              draft: false,
+              prerelease: "${{ inputs.channel }}" === "nightly",
+            });
 
-      - name: Send Discord notification
+      - name: Notify Discord that the stable draft is ready
         if: ${{ inputs.channel == 'stable' && inputs.interactionId != '' }}
         uses: actions/github-script@v7
         with:
           script: |
-            async function main() {
-              const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
-
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-done",
-                  interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ inputs.version }}",
-                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
-
-              if(resp.status !== 200) throw new Error(await resp.text());
-            }
-
-            main();
+            const token = await core.getIDToken("cap-discord-bot");
+            const response = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                type: "release-done",
+                interactionId: "${{ inputs.interactionId }}",
+                version: "${{ inputs.version }}",
+                releaseUrl: "${{ needs.draft.outputs.release_url }}",
+              }),
+            });
+            if (!response.ok) throw new Error(await response.text());
