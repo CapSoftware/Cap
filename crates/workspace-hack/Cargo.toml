@@ -66,7 +66,6 @@ simd-adler32 = { version = "0.3" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 specta = { version = "2.0.0-rc.20", features = ["derive", "function", "serde_json", "uuid"] }
 stable_deref_trait = { version = "1" }
-tauri-utils = { version = "2", default-features = false, features = ["build", "compression", "resources"] }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time", "tracing"] }
@@ -111,7 +110,6 @@ smallvec = { version = "1", default-features = false, features = ["const_new"] }
 specta-macros = { version = "2.0.0-rc.17", features = ["DO_NOT_USE_function"] }
 stable_deref_trait = { version = "1" }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
-tauri-utils = { version = "2", default-features = false, features = ["build", "compression", "resources"] }
 thiserror = { version = "2" }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 

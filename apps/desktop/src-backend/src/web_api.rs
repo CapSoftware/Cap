@@ -1,0 +1,186 @@
+use cap_desktop_runtime::{Emitter, Manager, Runtime};
+use reqwest::StatusCode;
+use thiserror::Error;
+use tracing::{debug, error, warn};
+
+use crate::{
+    ArcLock,
+    auth::{AuthSecret, AuthStore},
+    http_client,
+};
+
+#[derive(Error, Debug)]
+pub enum AuthedApiError {
+    #[error("User is not authenticated or credentials have expired!")]
+    InvalidAuthentication,
+    #[error("User needs to upgrade their account to use this feature!")]
+    UpgradeRequired,
+    #[error("App state is still initializing")]
+    AppStateUnavailable,
+    #[error("AuthedApiError/AuthStore: {0}")]
+    AuthStore(String),
+    #[error("AuthedApiError/Request: {0}")]
+    Request(reqwest::Error),
+    #[error("AuthedApiError/Deserialization: {0}")]
+    Deserialization(#[from] serde_json::Error),
+    #[error("The request has timed out")]
+    Timeout,
+    #[error("AuthedApiError/Other: {0}")]
+    Other(String),
+}
+
+impl From<reqwest::Error> for AuthedApiError {
+    fn from(err: reqwest::Error) -> Self {
+        match err {
+            err if err.is_timeout() => AuthedApiError::Timeout,
+            err => AuthedApiError::Request(err),
+        }
+    }
+}
+
+impl From<&'static str> for AuthedApiError {
+    fn from(value: &'static str) -> Self {
+        AuthedApiError::Other(value.into())
+    }
+}
+
+impl From<String> for AuthedApiError {
+    fn from(value: String) -> Self {
+        AuthedApiError::Other(value)
+    }
+}
+
+fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let mut req = req
+        .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
+        .header("X-Cap-Desktop-Features", "googleDriveUpload");
+
+    if let Ok(s) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
+        req = req.header("x-vercel-protection-bypass", s);
+    }
+
+    req
+}
+
+fn default_server_url() -> String {
+    option_env!("VITE_SERVER_URL")
+        .unwrap_or("https://cap.so")
+        .to_string()
+}
+
+async fn current_server_url<T, R>(manager: &T) -> Result<String, AuthedApiError>
+where
+    T: Manager<R> + ?Sized,
+    R: Runtime,
+{
+    let Some(app_state) = manager.try_state::<ArcLock<crate::App>>() else {
+        return Err(AuthedApiError::AppStateUnavailable);
+    };
+
+    Ok(app_state.read().await.server_url.clone())
+}
+
+async fn do_authed_request(
+    client: &reqwest::Client,
+    auth: &AuthStore,
+    build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
+    url: String,
+) -> Result<reqwest::Response, reqwest::Error> {
+    let req = build(client, url).header(
+        "Authorization",
+        format!(
+            "Bearer {}",
+            match &auth.secret {
+                AuthSecret::ApiKey { api_key } => api_key,
+                AuthSecret::Session { token, .. } => token,
+            }
+        ),
+    );
+
+    apply_env_headers(req).send().await
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ManagerExt<R: Runtime>: Manager<R> {
+    async fn authed_api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, AuthedApiError>;
+
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error>;
+
+    async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
+
+    async fn is_server_url_custom(&self) -> bool;
+}
+
+impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
+    async fn authed_api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, AuthedApiError> {
+        let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
+        else {
+            debug!("Skipping authenticated API request because user is not logged in");
+            return Err(AuthedApiError::InvalidAuthentication);
+        };
+
+        let path = path.into();
+        let server_url = current_server_url(self).await?;
+        let url = format!("{server_url}{path}");
+        let response =
+            do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            error!("Authentication expired. Please log in again.");
+            return Err(AuthedApiError::InvalidAuthentication);
+        }
+
+        Ok(response)
+    }
+
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = self.make_app_url(path.into()).await;
+
+        apply_env_headers(build(&self.state::<http_client::HttpClient>(), url))
+            .send()
+            .await
+    }
+
+    async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {
+        let pathname = pathname.as_ref();
+        match current_server_url(self).await {
+            Ok(server_url) => format!("{server_url}{pathname}"),
+            Err(err) => {
+                warn!("App state unavailable while building app URL: {err}");
+                format!("{}{}", default_server_url(), pathname)
+            }
+        }
+    }
+
+    async fn is_server_url_custom(&self) -> bool {
+        match current_server_url(self).await {
+            Ok(server_url) => {
+                if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
+                    return server_url != env_url;
+                }
+
+                false
+            }
+            Err(err) => {
+                warn!("App state unavailable while reading server URL settings: {err}");
+                false
+            }
+        }
+    }
+}

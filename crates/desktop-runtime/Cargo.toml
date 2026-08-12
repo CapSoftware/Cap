@@ -1,0 +1,18 @@
+[package]
+name = "cap-desktop-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cap-desktop-runtime-macros = { path = "../desktop-runtime-macros" }
+dirs = "6"
+futures = { workspace = true }
+inventory = "0.3.19"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net"] }
+tracing = { workspace = true }
+url = "2"
+
+[lints]
+workspace = true
