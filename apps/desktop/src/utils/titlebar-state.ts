@@ -1,8 +1,8 @@
-import type { UnlistenFn } from "~/electron/event";
-import { getCurrentWindow } from "~/electron/window";
-import { type as ostype } from "~/electron/os";
 import type { JSX } from "solid-js";
 import { createStore } from "solid-js/store";
+import type { UnlistenFn } from "~/electron/event";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWindow } from "~/electron/window";
 
 export interface TitlebarState {
 	height: string;

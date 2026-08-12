@@ -1,7 +1,7 @@
-import { Effect, getCurrentWindow } from "~/electron/window";
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import { createEffect, onMount, Suspense } from "solid-js";
+import { type as ostype } from "~/electron/os";
+import { Effect, getCurrentWindow } from "~/electron/window";
 import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { Editor } from "./Editor";

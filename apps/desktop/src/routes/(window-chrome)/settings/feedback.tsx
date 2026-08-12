@@ -1,10 +1,10 @@
 import { Button } from "@cap/ui-solid";
 import { action, useAction, useSubmission } from "@solidjs/router";
+import { createResource, createSignal, For, Show } from "solid-js";
+import toast from "solid-toast";
 import { getVersion } from "~/electron/app";
 import { type OsType, type as ostype } from "~/electron/os";
 import * as shell from "~/electron/shell";
-import { createResource, createSignal, For, Show } from "solid-js";
-import toast from "solid-toast";
 
 import { commands, type SystemDiagnostics } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";

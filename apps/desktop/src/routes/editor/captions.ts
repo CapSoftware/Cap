@@ -1,5 +1,5 @@
-import { appLocalDataDir, join } from "~/electron/path";
 import { arch, type as osType } from "~/electron/os";
+import { appLocalDataDir, join } from "~/electron/path";
 
 import { defaultCaptionSettings } from "~/store/captions";
 import {

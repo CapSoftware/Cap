@@ -329,7 +329,8 @@ class WindowManager {
 				const source = ["system", "light", "dark"].includes(operation.theme)
 					? operation.theme
 					: "system";
-				if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source;
+				if (nativeTheme.themeSource !== source)
+					nativeTheme.themeSource = source;
 				break;
 			}
 			case "setTrafficLightPosition":

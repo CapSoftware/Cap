@@ -1,6 +1,6 @@
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { type as ostype } from "~/electron/os";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_HEIGHT = 336;

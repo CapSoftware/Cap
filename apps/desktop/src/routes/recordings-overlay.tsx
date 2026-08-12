@@ -3,7 +3,6 @@ import Tooltip from "@corvu/tooltip";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "~/electron/core";
 import { cx } from "cva";
 import {
 	type Accessor,
@@ -23,6 +22,7 @@ import {
 } from "solid-js";
 import { createStore, produce, type SetStoreFunction } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
+import { Channel, convertFileSrc } from "~/electron/core";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createExportToFileTask, exportVideo } from "~/utils/export";

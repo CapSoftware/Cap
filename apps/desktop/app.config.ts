@@ -61,12 +61,7 @@ export default defineConfig({
 			"import.meta.vitest": "undefined",
 		},
 		optimizeDeps: {
-			include: [
-				"@tanstack/solid-query",
-				"@openpanel/web",
-				"uuid",
-				"cva",
-			],
+			include: ["@tanstack/solid-query", "@openpanel/web", "uuid", "cva"],
 		},
 	}),
 });

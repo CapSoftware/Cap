@@ -2,7 +2,6 @@ import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import { convertFileSrc, invoke } from "~/electron/core";
 import {
 	createEffect,
 	createResource,
@@ -11,6 +10,7 @@ import {
 	onCleanup,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
+import { convertFileSrc, invoke } from "~/electron/core";
 import { createLazySignal, type FrameData } from "~/utils/socket";
 import {
 	type Annotation,

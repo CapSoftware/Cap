@@ -4,7 +4,8 @@ export const appCacheDir = () => native<string>("path.cacheDir");
 export const appConfigDir = () => native<string>("path.configDir");
 export const appDataDir = () => native<string>("path.appDataDir");
 export const appLocalDataDir = () => native<string>("path.appLocalDataDir");
-export const appLogDir = () => native<string>("path.appDataDir").then((value) => join(value, "logs"));
+export const appLogDir = () =>
+	native<string>("path.appDataDir").then((value) => join(value, "logs"));
 export const audioDir = () => native<string>("path.audioDir");
 export const cacheDir = () => native<string>("path.cacheDir");
 export const configDir = () => native<string>("path.configDir");
@@ -21,17 +22,32 @@ export const resourceDir = () => native<string>("path.resourceDir");
 export const runtimeDir = () => native<string>("path.tempDir");
 export const templateDir = () => native<string>("path.homeDir");
 export const videoDir = () => native<string>("path.videoDir");
-export const resolveResource = (resourcePath: string) => native<string>("path.resolve", { paths: [resourcePath] }).then(async () => {
-	const root = await resourceDir();
-	return join(root, resourcePath);
-});
+export const resolveResource = (resourcePath: string) =>
+	native<string>("path.resolve", { paths: [resourcePath] }).then(async () => {
+		const root = await resourceDir();
+		return join(root, resourcePath);
+	});
 export const tempDir = () => native<string>("path.tempDir");
-export const join = (...paths: string[]) => native<string>("path.join", { paths });
-export const resolve = (...paths: string[]) => native<string>("path.resolve", { paths });
-export const normalize = (path: string) => native<string>("path.resolve", { paths: [path] });
-export const dirname = (path: string) => native<string>("path.resolve", { paths: [path, ".."] });
-export const extname = (path: string) => Promise.resolve(path.match(/\.[^./\\]+$/)?.[0] ?? "");
-export const basename = (path: string, ext?: string) => Promise.resolve(path.split(/[\\/]/).pop()?.replace(ext ?? /$^/, "") ?? "");
-export const isAbsolute = (path: string) => Promise.resolve(/^(?:[a-zA-Z]:[\\/]|\/)/.test(path));
-export const sep = () => native<string>("os.type").then((value) => value === "windows" ? "\\" : "/");
-export const delimiter = () => native<string>("os.type").then((value) => value === "windows" ? ";" : ":");
+export const join = (...paths: string[]) =>
+	native<string>("path.join", { paths });
+export const resolve = (...paths: string[]) =>
+	native<string>("path.resolve", { paths });
+export const normalize = (path: string) =>
+	native<string>("path.resolve", { paths: [path] });
+export const dirname = (path: string) =>
+	native<string>("path.resolve", { paths: [path, ".."] });
+export const extname = (path: string) =>
+	Promise.resolve(path.match(/\.[^./\\]+$/)?.[0] ?? "");
+export const basename = (path: string, ext?: string) =>
+	Promise.resolve(
+		path
+			.split(/[\\/]/)
+			.pop()
+			?.replace(ext ?? /$^/, "") ?? "",
+	);
+export const isAbsolute = (path: string) =>
+	Promise.resolve(/^(?:[a-zA-Z]:[\\/]|\/)/.test(path));
+export const sep = () =>
+	native<string>("os.type").then((value) => (value === "windows" ? "\\" : "/"));
+export const delimiter = () =>
+	native<string>("os.type").then((value) => (value === "windows" ? ";" : ":"));

@@ -1,4 +1,3 @@
-import { CheckMenuItem, Menu, PredefinedMenuItem } from "~/electron/menu";
 import { cx } from "cva";
 import {
 	type Component,
@@ -6,6 +5,7 @@ import {
 	createSignal,
 	Show,
 } from "solid-js";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "~/electron/menu";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCurrentRecordingQuery } from "~/utils/queries";

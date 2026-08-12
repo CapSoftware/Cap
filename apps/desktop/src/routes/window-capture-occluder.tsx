@@ -1,5 +1,5 @@
-import { getAllWindows } from "~/electron/window";
 import { Show, Suspense } from "solid-js";
+import { getAllWindows } from "~/electron/window";
 import { isCameraWindowLabel } from "~/utils/camera-window";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 

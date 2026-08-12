@@ -6,21 +6,6 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel } from "~/electron/core";
-import { emit, listen } from "~/electron/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "~/electron/webviewWindow";
-import {
-	currentMonitor,
-	getCurrentWindow,
-	LogicalSize,
-	PhysicalPosition,
-} from "~/electron/window";
-import * as dialog from "~/electron/dialog";
-import { relaunch } from "~/electron/process";
-import * as shell from "~/electron/shell";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -40,6 +25,18 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { Channel } from "~/electron/core";
+import * as dialog from "~/electron/dialog";
+import { emit, listen } from "~/electron/event";
+import { relaunch } from "~/electron/process";
+import * as shell from "~/electron/shell";
+import { getAllWebviewWindows, WebviewWindow } from "~/electron/webviewWindow";
+import {
+	currentMonitor,
+	getCurrentWindow,
+	LogicalSize,
+	PhysicalPosition,
+} from "~/electron/window";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,

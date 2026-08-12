@@ -1,8 +1,8 @@
 import { Button } from "@cap/ui-solid";
-import { invoke } from "~/electron/core";
-import { writeText } from "~/electron/clipboard";
 import { createResource, createSignal, Show } from "solid-js";
 import toast from "solid-toast";
+import { writeText } from "~/electron/clipboard";
+import { invoke } from "~/electron/core";
 import { Section, SectionCard, SettingsPageContent } from "./Setting";
 
 type CliInstallStatus = {

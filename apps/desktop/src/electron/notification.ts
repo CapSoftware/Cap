@@ -1,9 +1,18 @@
 import { native } from "./bridge";
 export type Permission = "granted" | "denied" | "default";
-export const isPermissionGranted = () => native<Permission>("notification.permission").then((value) => value === "granted");
-export const requestPermission = () => native<Permission>("notification.requestPermission");
-export const sendNotification = (options: string | { title: string; body?: string; icon?: string }) =>
-	native<void>("notification.show", typeof options === "string" ? { title: options } : options);
+export const isPermissionGranted = () =>
+	native<Permission>("notification.permission").then(
+		(value) => value === "granted",
+	);
+export const requestPermission = () =>
+	native<Permission>("notification.requestPermission");
+export const sendNotification = (
+	options: string | { title: string; body?: string; icon?: string },
+) =>
+	native<void>(
+		"notification.show",
+		typeof options === "string" ? { title: options } : options,
+	);
 export const registerActionTypes = () => Promise.resolve();
 export const pending = () => Promise.resolve([]);
 export const cancel = () => Promise.resolve();

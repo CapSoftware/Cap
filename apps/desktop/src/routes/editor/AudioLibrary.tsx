@@ -1,4 +1,3 @@
-import { open } from "~/electron/dialog";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -11,6 +10,7 @@ import {
 	Show,
 } from "solid-js";
 import toast from "solid-toast";
+import { open } from "~/electron/dialog";
 
 import { commands, type ImportedAudioTrack } from "~/utils/tauri";
 import { AUDIO_IMPORT_EXTENSIONS } from "./audio";

@@ -1,5 +1,12 @@
-export interface CheckOptions { headers?: Record<string, string>; timeout?: number; target?: string; }
-export interface DownloadEvent { event: "Started" | "Progress" | "Finished"; data?: { contentLength?: number; chunkLength?: number }; }
+export interface CheckOptions {
+	headers?: Record<string, string>;
+	timeout?: number;
+	target?: string;
+}
+export interface DownloadEvent {
+	event: "Started" | "Progress" | "Finished";
+	data?: { contentLength?: number; chunkLength?: number };
+}
 export interface Update {
 	version: string;
 	currentVersion: string;
@@ -11,4 +18,6 @@ export interface Update {
 	downloadAndInstall(listener?: (event: DownloadEvent) => void): Promise<void>;
 	close(): Promise<void>;
 }
-export async function check(_options?: CheckOptions): Promise<Update | null> { return null; }
+export async function check(_options?: CheckOptions): Promise<Update | null> {
+	return null;
+}

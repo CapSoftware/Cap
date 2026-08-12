@@ -1,6 +1,6 @@
 import { LogicalPosition } from "~/electron/dpi";
-import type { WebviewWindow } from "~/electron/webviewWindow";
 import type { OsType } from "~/electron/os";
+import type { WebviewWindow } from "~/electron/webviewWindow";
 
 export type TeleprompterWindowOptions = NonNullable<
 	ConstructorParameters<typeof WebviewWindow>[1]

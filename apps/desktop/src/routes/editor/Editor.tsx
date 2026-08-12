@@ -5,11 +5,6 @@ import { trackDeep } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
-import { convertFileSrc } from "~/electron/core";
-import { LogicalPosition } from "~/electron/dpi";
-import { Menu } from "~/electron/menu";
-import { getCurrentWindow } from "~/electron/window";
-import { ask } from "~/electron/dialog";
 import {
 	createEffect,
 	createMemo,
@@ -38,6 +33,11 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
+import { convertFileSrc } from "~/electron/core";
+import { ask } from "~/electron/dialog";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu } from "~/electron/menu";
+import { getCurrentWindow } from "~/electron/window";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";

@@ -1,4 +1,3 @@
-import { convertFileSrc } from "~/electron/core";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -10,6 +9,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import { convertFileSrc } from "~/electron/core";
 import IconLucideClapperboard from "~icons/lucide/clapperboard";
 import IconLucideHistory from "~icons/lucide/history";
 import IconLucideImage from "~icons/lucide/image";

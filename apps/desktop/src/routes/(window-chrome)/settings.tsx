@@ -1,11 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useNavigate } from "@solidjs/router";
 import { createQuery, useQueryClient } from "@tanstack/solid-query";
-import { getVersion } from "~/electron/app";
-import { writeText } from "~/electron/clipboard";
-import * as dialog from "~/electron/dialog";
-import { fetch as tauriFetch } from "~/electron/http";
-import * as shell from "~/electron/shell";
 import {
 	createEffect,
 	createMemo,
@@ -20,6 +15,11 @@ import {
 import toast from "solid-toast";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
+import { getVersion } from "~/electron/app";
+import { writeText } from "~/electron/clipboard";
+import * as dialog from "~/electron/dialog";
+import { fetch as tauriFetch } from "~/electron/http";
+import * as shell from "~/electron/shell";
 
 import { authStore, userProfileStore } from "~/store";
 import { resetUser, trackEvent } from "~/utils/analytics";

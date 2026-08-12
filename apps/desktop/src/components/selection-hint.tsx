@@ -1,5 +1,5 @@
-import { type as ostype } from "~/electron/os";
 import { Match, Show, Switch } from "solid-js";
+import { type as ostype } from "~/electron/os";
 
 export type SelectionHintProps = {
 	show: boolean;

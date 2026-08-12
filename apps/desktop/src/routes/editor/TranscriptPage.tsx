@@ -1,7 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "~/electron/dialog";
-import { writeTextFile } from "~/electron/fs";
 import { cx } from "cva";
 import {
 	batch,
@@ -14,6 +12,8 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import { save } from "~/electron/dialog";
+import { writeTextFile } from "~/electron/fs";
 import { defaultCaptionSettings } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import {

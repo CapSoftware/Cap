@@ -1,11 +1,11 @@
 import { createMutation } from "@tanstack/solid-query";
-import { invoke } from "~/electron/core";
-import { listen } from "~/electron/event";
-import { getCurrentWindow } from "~/electron/window";
-import { onOpenUrl } from "~/electron/deep-link";
-import * as shell from "~/electron/shell";
 import { z } from "zod";
 import callbackTemplate from "~/components/callback.template";
+import { invoke } from "~/electron/core";
+import { onOpenUrl } from "~/electron/deep-link";
+import { listen } from "~/electron/event";
+import * as shell from "~/electron/shell";
+import { getCurrentWindow } from "~/electron/window";
 import { authStore, generalSettingsStore } from "~/store";
 import { identifyUser, trackEvent } from "./analytics";
 import { clientEnv } from "./env";

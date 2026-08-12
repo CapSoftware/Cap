@@ -13,15 +13,6 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
-import { convertFileSrc } from "~/electron/core";
-import { appDataDir, resolveResource } from "~/electron/path";
-import {
-	BaseDirectory,
-	exists,
-	readDir,
-	writeFile,
-} from "~/electron/fs";
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	batch,
@@ -49,6 +40,10 @@ import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
+import { convertFileSrc } from "~/electron/core";
+import { BaseDirectory, exists, readDir, writeFile } from "~/electron/fs";
+import { type as ostype } from "~/electron/os";
+import { appDataDir, resolveResource } from "~/electron/path";
 import { generalSettingsStore } from "~/store";
 import { normalizeOpaqueHexColor } from "~/utils/hex-color";
 import {

@@ -28,7 +28,8 @@ class RustBackend {
 			this.server.listen(0, "127.0.0.1", resolve);
 		});
 		const address = this.server.address();
-		if (!address || typeof address === "string") throw new Error("Invalid backend address");
+		if (!address || typeof address === "string")
+			throw new Error("Invalid backend address");
 		this.child = this.spawn(this.binaryPath, [], {
 			cwd: this.resourceDir,
 			env: {
@@ -45,7 +46,8 @@ class RustBackend {
 		this.child.stderr.on("data", (data) => process.stderr.write(data));
 		this.child.once("error", (error) => this.fail(error));
 		this.child.once("exit", (code, signal) => {
-			if (!this.stopping) this.fail(new Error(`Rust backend exited (${code ?? signal})`));
+			if (!this.stopping)
+				this.fail(new Error(`Rust backend exited (${code ?? signal})`));
 		});
 		return this.ready;
 	}
@@ -61,7 +63,8 @@ class RustBackend {
 		socket.on("data", (data) => this.read(data));
 		socket.once("error", (error) => this.fail(error));
 		socket.once("close", () => {
-			if (!this.stopping) this.fail(new Error("Rust backend connection closed"));
+			if (!this.stopping)
+				this.fail(new Error("Rust backend connection closed"));
 		});
 		this.send({ type: "hello", token, protocolVersion: PROTOCOL_VERSION });
 	}
@@ -71,7 +74,9 @@ class RustBackend {
 		while (this.buffer.length >= 4) {
 			const length = this.buffer.readUInt32BE(0);
 			if (length > MAX_FRAME_SIZE) {
-				this.fail(new Error(`Rust backend frame exceeded ${MAX_FRAME_SIZE} bytes`));
+				this.fail(
+					new Error(`Rust backend frame exceeded ${MAX_FRAME_SIZE} bytes`),
+				);
 				return;
 			}
 			if (this.buffer.length < length + 4) return;
@@ -87,7 +92,8 @@ class RustBackend {
 	}
 
 	receive(message) {
-		if (!this.commands && message.type !== "ready") this.startupMessages.push(message);
+		if (!this.commands && message.type !== "ready")
+			this.startupMessages.push(message);
 		if (message.type === "ready") {
 			if (message.protocolVersion !== PROTOCOL_VERSION) {
 				this.fail(new Error("Rust backend protocol version mismatch"));
@@ -100,7 +106,8 @@ class RustBackend {
 			const pending = this.pending.get(message.id);
 			if (!pending) return;
 			this.pending.delete(message.id);
-			if (message.response.status === "ok") pending.resolve(message.response.value);
+			if (message.response.status === "ok")
+				pending.resolve(message.response.value);
 			else pending.reject(new Error(message.response.error));
 		}
 		for (const listener of this.listeners) listener(message);

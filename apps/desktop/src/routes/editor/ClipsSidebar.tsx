@@ -1,13 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useQuery } from "@tanstack/solid-query";
-import { convertFileSrc } from "~/electron/core";
-import { LogicalPosition } from "~/electron/dpi";
-import { Menu, MenuItem } from "~/electron/menu";
-import { appDataDir, join } from "~/electron/path";
-import { getCurrentWindow } from "~/electron/window";
-import { open } from "~/electron/dialog";
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	type Component,
@@ -26,6 +19,13 @@ import {
 import { produce, reconcile } from "solid-js/store";
 import { Portal } from "solid-js/web";
 import toast from "solid-toast";
+import { convertFileSrc } from "~/electron/core";
+import { open } from "~/electron/dialog";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu, MenuItem } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
+import { appDataDir, join } from "~/electron/path";
+import { getCurrentWindow } from "~/electron/window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,

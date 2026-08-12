@@ -1,5 +1,5 @@
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
+import { type as ostype } from "~/electron/os";
 import IconCapLogo from "~icons/cap/logo";
 
 function SkeletonPulse(props: { class?: string }) {

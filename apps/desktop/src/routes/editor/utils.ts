@@ -12,8 +12,8 @@ export function formatTime(secs: number, fps?: number) {
 	return str;
 }
 
-import { getCurrentWindow, ProgressBarStatus } from "~/electron/window";
 import { createEffect } from "solid-js";
+import { getCurrentWindow, ProgressBarStatus } from "~/electron/window";
 
 export function createProgressBar(progress: () => number | undefined) {
 	const currentWindow = getCurrentWindow();

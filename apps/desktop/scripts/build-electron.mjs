@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
-const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const desktopDir = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"..",
+);
 const outputDir = path.join(desktopDir, ".electron-dist");
 
 await rm(outputDir, { recursive: true, force: true });

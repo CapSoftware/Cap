@@ -1,8 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import type { UnlistenFn } from "~/electron/event";
-import { ask } from "~/electron/dialog";
-import { revealItemInDir } from "~/electron/opener";
-import { type as ostype } from "~/electron/os";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -16,6 +12,10 @@ import {
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { ask } from "~/electron/dialog";
+import type { UnlistenFn } from "~/electron/event";
+import { revealItemInDir } from "~/electron/opener";
+import { type as ostype } from "~/electron/os";
 import { trackEvent } from "~/utils/analytics";
 import { commands } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";

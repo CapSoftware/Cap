@@ -1,5 +1,5 @@
-import { emit } from "~/electron/event";
 import * as dialog from "~/electron/dialog";
+import { emit } from "~/electron/event";
 import { revealItemInDir } from "~/electron/opener";
 import type { createOptionsQuery } from "./queries";
 import { commands, type RecordingAction, type RecordingMode } from "./tauri";

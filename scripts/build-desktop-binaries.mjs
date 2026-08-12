@@ -118,7 +118,10 @@ async function stageWindowsRuntimeLibraries() {
 	const releaseDir = path.join(repoRoot, "target", "release");
 	for (const name of await fs.readdir(releaseDir)) {
 		if (!name.toLowerCase().endsWith(".dll")) continue;
-		await fs.copyFile(path.join(releaseDir, name), path.join(binariesDir, name));
+		await fs.copyFile(
+			path.join(releaseDir, name),
+			path.join(binariesDir, name),
+		);
 	}
 }
 

@@ -1,6 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { CheckMenuItem, Menu } from "~/electron/menu";
-import { open } from "~/electron/dialog";
 import { cx } from "cva";
 import {
 	type Component,
@@ -15,6 +13,8 @@ import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
+import { open } from "~/electron/dialog";
+import { CheckMenuItem, Menu } from "~/electron/menu";
 import { presetsStore } from "~/store";
 import {
 	ACTION_LABELS,

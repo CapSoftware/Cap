@@ -1,5 +1,4 @@
 import { createTimer } from "@solid-primitives/timer";
-import { CheckMenuItem, Menu, PredefinedMenuItem } from "~/electron/menu";
 import { cx } from "cva";
 import {
 	type Component,
@@ -8,6 +7,7 @@ import {
 	createSignal,
 	Show,
 } from "solid-js";
+import { CheckMenuItem, Menu, PredefinedMenuItem } from "~/electron/menu";
 import { trackEvent } from "~/utils/analytics";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 import {

@@ -1,5 +1,4 @@
 import { createEventListener } from "@solid-primitives/event-listener";
-import { type as ostype } from "~/electron/os";
 import {
 	batch,
 	createEffect,
@@ -12,6 +11,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import { type as ostype } from "~/electron/os";
 import { hotkeysStore } from "~/store";
 
 import {

@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
-import { getCurrentWindow } from "~/electron/window";
 import { createSignal, Match, onCleanup, onMount, Switch } from "solid-js";
+import { getCurrentWindow } from "~/electron/window";
 import {
 	events,
 	type VideoImportProgress as VideoImportProgressEvent,

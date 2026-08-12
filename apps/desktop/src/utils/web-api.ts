@@ -3,8 +3,8 @@ import {
 	licenseContract,
 	orgCustomDomainContract,
 } from "@cap/web-api-contract";
-import { fetch } from "~/electron/http";
 import { type ApiFetcher, initClient } from "@ts-rest/core";
+import { fetch } from "~/electron/http";
 
 import { authStore, generalSettingsStore } from "~/store";
 import { clientEnv } from "./env";

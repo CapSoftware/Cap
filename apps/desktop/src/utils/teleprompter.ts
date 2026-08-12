@@ -1,5 +1,5 @@
-import { WebviewWindow } from "~/electron/webviewWindow";
 import { type as ostype } from "~/electron/os";
+import { WebviewWindow } from "~/electron/webviewWindow";
 import { commands } from "./tauri";
 import { getTeleprompterWindowOptions } from "./teleprompter-window-options";
 

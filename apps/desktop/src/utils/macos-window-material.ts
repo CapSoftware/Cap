@@ -1,12 +1,12 @@
 import { invoke } from "~/electron/core";
 import type { UnlistenFn } from "~/electron/event";
+import { type as osType, version as osVersion } from "~/electron/os";
 import {
 	Effect,
 	EffectState,
 	type Effects,
 	getCurrentWindow,
 } from "~/electron/window";
-import { type as osType, version as osVersion } from "~/electron/os";
 
 type MacOSWindowMaterial = "panel" | "settings" | "teleprompter";
 

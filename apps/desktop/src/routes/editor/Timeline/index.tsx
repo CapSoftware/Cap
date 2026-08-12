@@ -1,8 +1,5 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { LogicalPosition } from "~/electron/dpi";
-import { Menu, MenuItem } from "~/electron/menu";
-import { platform } from "~/electron/os";
 import { cx } from "cva";
 import {
 	batch,
@@ -19,6 +16,9 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu, MenuItem } from "~/electron/menu";
+import { platform } from "~/electron/os";
 
 import "./styles.css";
 

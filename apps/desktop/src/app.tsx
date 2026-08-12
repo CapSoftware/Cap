@@ -1,11 +1,6 @@
 import { Route, Router, useCurrentMatches } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
-	getCurrentWebviewWindow,
-	type WebviewWindow,
-} from "~/electron/webviewWindow";
-import { message } from "~/electron/dialog";
-import {
 	createEffect,
 	createSignal,
 	lazy,
@@ -14,6 +9,11 @@ import {
 	Suspense,
 } from "solid-js";
 import { Toaster } from "solid-toast";
+import { message } from "~/electron/dialog";
+import {
+	getCurrentWebviewWindow,
+	type WebviewWindow,
+} from "~/electron/webviewWindow";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";

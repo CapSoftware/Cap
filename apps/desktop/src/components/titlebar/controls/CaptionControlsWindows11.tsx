@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "~/electron/window";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -9,6 +8,7 @@ import {
 	Show,
 	splitProps,
 } from "solid-js";
+import { getCurrentWindow } from "~/electron/window";
 import titlebarState from "~/utils/titlebar-state";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 

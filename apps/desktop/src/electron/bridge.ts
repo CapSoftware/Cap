@@ -31,7 +31,8 @@ declare global {
 }
 
 export function bridge() {
-	if (!window.capElectron) throw new Error("Cap Electron preload bridge is unavailable");
+	if (!window.capElectron)
+		throw new Error("Cap Electron preload bridge is unavailable");
 	return window.capElectron;
 }
 
@@ -39,6 +40,9 @@ export function toIpcValue<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
-export function native<T>(operation: string, payload?: Record<string, unknown>) {
+export function native<T>(
+	operation: string,
+	payload?: Record<string, unknown>,
+) {
 	return bridge().native<T>(operation, toIpcValue(payload ?? {}));
 }

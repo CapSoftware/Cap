@@ -33,12 +33,16 @@ export class Channel<T = unknown> {
 	}
 }
 
-export async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(
+	command: string,
+	args?: Record<string, unknown>,
+): Promise<T> {
 	return bridge().invoke<T>(command, toIpcValue(args ?? {}));
 }
 
 export function convertFileSrc(filePath: string, protocol = "asset") {
-	if (protocol !== "asset") return `${protocol}://localhost/${encodeURIComponent(filePath)}`;
+	if (protocol !== "asset")
+		return `${protocol}://localhost/${encodeURIComponent(filePath)}`;
 	const bytes = new TextEncoder().encode(filePath);
 	let binary = "";
 	for (const byte of bytes) binary += String.fromCharCode(byte);

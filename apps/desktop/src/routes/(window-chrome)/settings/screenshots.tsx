@@ -5,9 +5,6 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { convertFileSrc } from "~/electron/core";
-import { ask } from "~/electron/dialog";
-import { remove } from "~/electron/fs";
 import {
 	createEffect,
 	createMemo,
@@ -17,6 +14,9 @@ import {
 	Show,
 } from "solid-js";
 import toast from "solid-toast";
+import { convertFileSrc } from "~/electron/core";
+import { ask } from "~/electron/dialog";
+import { remove } from "~/electron/fs";
 import { Input } from "~/routes/editor/ui";
 import {
 	createScreenshotShareLinkFromProjectPath,

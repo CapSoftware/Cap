@@ -1,7 +1,7 @@
-import { invoke } from "~/electron/core";
-import { type } from "~/electron/os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
+import { invoke } from "~/electron/core";
+import { type } from "~/electron/os";
 
 import { generalSettingsStore } from "~/store";
 import {

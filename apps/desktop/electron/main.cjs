@@ -1,4 +1,10 @@
-const { app, ipcMain, net: electronNet, protocol, session } = require("electron");
+const {
+	app,
+	ipcMain,
+	net: electronNet,
+	protocol,
+	session,
+} = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -9,8 +15,24 @@ const { NativeBridge } = require("./native.cjs");
 const { WindowManager } = require("./windows.cjs");
 
 protocol.registerSchemesAsPrivileged([
-	{ scheme: "cap", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false } },
-	{ scheme: "cap-asset", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+	{
+		scheme: "cap",
+		privileges: {
+			standard: true,
+			secure: true,
+			supportFetchAPI: true,
+			corsEnabled: false,
+		},
+	},
+	{
+		scheme: "cap-asset",
+		privileges: {
+			standard: true,
+			secure: true,
+			supportFetchAPI: true,
+			stream: true,
+		},
+	},
 ]);
 
 const development = !app.isPackaged;
@@ -24,7 +46,10 @@ app.setPath(
 	"userData",
 	process.env.CAP_ELECTRON_USER_DATA_DIR
 		? path.resolve(process.env.CAP_ELECTRON_USER_DATA_DIR)
-		: path.join(app.getPath("appData"), development ? "Cap Development" : "so.cap.desktop"),
+		: path.join(
+				app.getPath("appData"),
+				development ? "Cap Development" : "so.cap.desktop",
+			),
 );
 if (!development) app.setAsDefaultProtocolClient("cap-desktop");
 
@@ -32,10 +57,13 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
 
 if (hasSingleInstanceLock) {
-	app.whenReady().then(start).catch((error) => {
-		console.error(error);
-		app.exit(1);
-	});
+	app
+		.whenReady()
+		.then(start)
+		.catch((error) => {
+			console.error(error);
+			app.exit(1);
+		});
 }
 
 app.on("window-all-closed", () => {
@@ -91,14 +119,22 @@ async function start() {
 			? path.join(path.dirname(process.execPath), backendFilename)
 			: path.join(process.resourcesPath, "bin", backendFilename);
 	if (!fs.existsSync(binaryPath)) {
-		throw new Error(`Rust backend is missing at ${binaryPath}. Run pnpm build:backend first.`);
+		throw new Error(
+			`Rust backend is missing at ${binaryPath}. Run pnpm build:backend first.`,
+		);
 	}
-	backend = new RustBackend({ binaryPath, resourceDir: process.resourcesPath, spawn });
+	backend = new RustBackend({
+		binaryPath,
+		resourceDir: process.resourcesPath,
+		spawn,
+	});
 	await backend.start();
 
 	const windowManager = new WindowManager({
 		backend,
-		devUrl: development ? process.env.CAP_DESKTOP_DEV_URL ?? "http://localhost:3002" : null,
+		devUrl: development
+			? (process.env.CAP_DESKTOP_DEV_URL ?? "http://localhost:3002")
+			: null,
 		publicDir,
 		preloadPath: path.join(__dirname, "preload.cjs"),
 	});
@@ -111,12 +147,24 @@ async function start() {
 			return;
 		}
 		if (message.type === "nativeOperation") {
-			void nativeBridge.invoke("main", message.operation, message.payload).catch(console.error);
+			void nativeBridge
+				.invoke("main", message.operation, message.payload)
+				.catch(console.error);
 		}
 		if (message.type === "nativeRequest") {
 			void nativeBridge.invoke("main", message.operation, message.payload).then(
-				(value) => backend.send({ type: "nativeResult", id: message.id, result: { Ok: value ?? null } }),
-				(error) => backend.send({ type: "nativeResult", id: message.id, result: { Err: String(error) } }),
+				(value) =>
+					backend.send({
+						type: "nativeResult",
+						id: message.id,
+						result: { Ok: value ?? null },
+					}),
+				(error) =>
+					backend.send({
+						type: "nativeResult",
+						id: message.id,
+						result: { Err: String(error) },
+					}),
 			);
 		}
 	});
@@ -125,17 +173,32 @@ async function start() {
 		backend.invoke(request.windowLabel, request.command, request.arguments),
 	);
 	ipcMain.handle("cap:native", (_event, request) =>
-		nativeBridge.invoke(request.windowLabel, request.operation, request.payload),
+		nativeBridge.invoke(
+			request.windowLabel,
+			request.operation,
+			request.payload,
+		),
 	);
 	ipcMain.on("cap:emit", (_event, request) => {
-		backend.send({ type: "event", event: request.event, payload: request.payload ?? null });
+		backend.send({
+			type: "event",
+			event: request.event,
+			payload: request.payload ?? null,
+		});
 	});
 	ipcMain.on("cap:window-drop", (_event, request) => {
-		windowManager.sendWindowEvent(request.windowLabel, { type: "dragDrop", paths: request.paths });
+		windowManager.sendWindowEvent(request.windowLabel, {
+			type: "dragDrop",
+			paths: request.paths,
+		});
 	});
 	globalThis.__capMenuSelection = (id) => {
 		for (const window of windowManager.windows.values()) {
-			window.webContents.send("cap:event", { type: "event", event: `menu:${id}`, payload: null });
+			window.webContents.send("cap:event", {
+				type: "event",
+				event: `menu:${id}`,
+				payload: null,
+			});
 		}
 	};
 	queueOpenUrls(process.argv, process.cwd());
@@ -148,13 +211,22 @@ function queueOpenUrls(values, workingDirectory = process.cwd()) {
 			pendingOpenUrls.push(value);
 			continue;
 		}
-		const candidate = path.isAbsolute(value) ? value : path.resolve(workingDirectory, value);
-		if (path.extname(candidate).toLowerCase() === ".cap" && fs.existsSync(candidate)) {
+		const candidate = path.isAbsolute(value)
+			? value
+			: path.resolve(workingDirectory, value);
+		if (
+			path.extname(candidate).toLowerCase() === ".cap" &&
+			fs.existsSync(candidate)
+		) {
 			pendingOpenUrls.push(pathToFileURL(candidate).toString());
 		}
 	}
 	if (backend?.socket && pendingOpenUrls.length > 0) {
-		backend.send({ type: "event", event: "electron://open-urls", payload: pendingOpenUrls.splice(0) });
+		backend.send({
+			type: "event",
+			event: "electron://open-urls",
+			payload: pendingOpenUrls.splice(0),
+		});
 	}
 }
 
@@ -167,7 +239,10 @@ function rustTargetTriple() {
 		"linux-arm64": "aarch64-unknown-linux-gnu",
 		"linux-x64": "x86_64-unknown-linux-gnu",
 	}[`${process.platform}-${process.arch}`];
-	if (!triple) throw new Error(`Unsupported Electron target ${process.platform}-${process.arch}`);
+	if (!triple)
+		throw new Error(
+			`Unsupported Electron target ${process.platform}-${process.arch}`,
+		);
 	return triple;
 }
 
@@ -175,9 +250,13 @@ function registerProtocols(publicDir) {
 	protocol.handle("cap", (request) => {
 		const url = new URL(request.url);
 		let relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, "");
-		if (!relativePath || !path.extname(relativePath)) relativePath = "index.html";
+		if (!relativePath || !path.extname(relativePath))
+			relativePath = "index.html";
 		const filePath = path.resolve(publicDir, relativePath);
-		if (!filePath.startsWith(`${path.resolve(publicDir)}${path.sep}`) && filePath !== path.join(publicDir, "index.html")) {
+		if (
+			!filePath.startsWith(`${path.resolve(publicDir)}${path.sep}`) &&
+			filePath !== path.join(publicDir, "index.html")
+		) {
 			return new Response("Not found", { status: 404 });
 		}
 		return electronNet.fetch(pathToFileURL(filePath).toString());
@@ -187,7 +266,8 @@ function registerProtocols(publicDir) {
 		try {
 			const encoded = url.pathname.replace(/^\/+/, "");
 			const filePath = Buffer.from(encoded, "base64url").toString("utf8");
-			if (!path.isAbsolute(filePath)) return new Response("Invalid asset path", { status: 400 });
+			if (!path.isAbsolute(filePath))
+				return new Response("Invalid asset path", { status: 400 });
 			return electronNet.fetch(pathToFileURL(filePath).toString());
 		} catch {
 			return new Response("Invalid asset URL", { status: 400 });
@@ -196,16 +276,23 @@ function registerProtocols(publicDir) {
 }
 
 function configureSecurity() {
-	session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-		callback(["media", "notifications", "clipboard-sanitized-write"].includes(permission));
-	});
+	session.defaultSession.setPermissionRequestHandler(
+		(_webContents, permission, callback) => {
+			callback(
+				["media", "notifications", "clipboard-sanitized-write"].includes(
+					permission,
+				),
+			);
+		},
+	);
 	app.on("web-contents-created", (_event, contents) => {
 		contents.setWindowOpenHandler(({ url }) => {
 			require("electron").shell.openExternal(url);
 			return { action: "deny" };
 		});
 		contents.on("will-navigate", (event, url) => {
-			if (!url.startsWith("cap://") && !url.startsWith("http://localhost:3002")) event.preventDefault();
+			if (!url.startsWith("cap://") && !url.startsWith("http://localhost:3002"))
+				event.preventDefault();
 		});
 	});
 }
