@@ -10,7 +10,10 @@ use std::{
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
     slice::from_raw_parts,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        Arc,
+        mpsc::{Receiver, Sender, channel},
+    },
     time::Duration,
 };
 use tracing::error;
@@ -18,7 +21,7 @@ use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
     System::{
-        Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
+        Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize, CoTaskMemFree},
         Performance::QueryPerformanceCounter,
     },
 };
@@ -73,6 +76,19 @@ impl DeviceSourcesIterator {
     }
 }
 
+impl Drop for DeviceSourcesIterator {
+    fn drop(&mut self) {
+        // MFEnumDeviceSources allocates the IMFActivate array with CoTaskMemAlloc;
+        // the caller owns both the array and each element's reference.
+        unsafe {
+            for i in 0..self.count as usize {
+                std::ptr::drop_in_place(self.devices.add(i));
+            }
+            CoTaskMemFree(Some(self.devices.cast()));
+        }
+    }
+}
+
 impl Iterator for DeviceSourcesIterator {
     type Item = Device;
 
@@ -102,9 +118,28 @@ impl Iterator for DeviceSourcesIterator {
             };
 
             return Some(Device {
-                media_source,
+                media_source: media_source.clone(),
+                shutdown_guard: Arc::new(MediaSourceGuard(media_source)),
                 activate: device.clone(),
             });
+        }
+    }
+}
+
+/// Enforces Media Foundation's documented teardown contract:
+/// `IMFMediaSource::Shutdown()` must be called before the final COM release.
+///
+/// Without it, teardown only happens when the refcount hits zero, on whatever
+/// thread drops the last reference — which races the KS proxy's registered
+/// threadpool waits and kills the process with a non-catchable 0xC000070A
+/// (handle closed while a threadpool wait is still registered on it).
+struct MediaSourceGuard(IMFMediaSource);
+
+impl Drop for MediaSourceGuard {
+    fn drop(&mut self) {
+        // Shutting down an already-shut-down source returns an error; that's fine.
+        unsafe {
+            let _ = self.0.Shutdown();
         }
     }
 }
@@ -112,7 +147,11 @@ impl Iterator for DeviceSourcesIterator {
 #[derive(Clone)]
 pub struct Device {
     activate: IMFActivate,
-    pub media_source: IMFMediaSource,
+    media_source: IMFMediaSource,
+    /// Shared owner of the media source's shutdown. `Shutdown()` fires when the
+    /// last clone of this `Device` (and any `CaptureHandle` borrowing the
+    /// source) drops.
+    shutdown_guard: Arc<MediaSourceGuard>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -333,7 +372,11 @@ impl Device {
             wait_for_event(&event_rx, CaptureEngineEventVariant::PreviewStarted)
                 .map_err(|v| StartCapturingError::StartPreview(v.into()))?;
 
-            Ok(CaptureHandle { engine, event_rx })
+            Ok(CaptureHandle {
+                engine,
+                event_rx,
+                _source_guard: self.shutdown_guard.clone(),
+            })
         }
     }
 }
@@ -368,6 +411,9 @@ fn retry_on_invalid_request<T>(
 pub struct CaptureHandle {
     event_rx: Receiver<CaptureEngineEvent>,
     engine: IMFCaptureEngine,
+    /// Keeps the media source's shutdown deferred until capture ends, even if
+    /// the originating `Device` is dropped while capturing.
+    _source_guard: Arc<MediaSourceGuard>,
 }
 
 impl CaptureHandle {
