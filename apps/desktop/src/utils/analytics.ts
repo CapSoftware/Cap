@@ -130,5 +130,3 @@ export function trackEvent(
 		}
 	});
 }
-
-void isTelemetryEnabled();

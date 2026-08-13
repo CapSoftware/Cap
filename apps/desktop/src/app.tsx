@@ -8,7 +8,6 @@ import {
 	onMount,
 	Suspense,
 } from "solid-js";
-import { Toaster } from "solid-toast";
 import { message } from "~/electron/dialog";
 import {
 	getCurrentWebviewWindow,
@@ -20,13 +19,15 @@ import "unfonts.css";
 import "./styles/theme.css";
 
 import { CapErrorBoundary } from "./components/CapErrorBoundary";
-import WindowChromeLayout from "./routes/(window-chrome)";
-import SettingsLayout from "./routes/(window-chrome)/settings";
 import { authStore, generalSettingsStore } from "./store";
-import { identifyUser, initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
+const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
+const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
+const GlobalToaster = lazy(() =>
+	import("solid-toast").then(({ Toaster }) => ({ default: Toaster })),
+);
 const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
@@ -123,38 +124,39 @@ export default function App() {
 
 function Inner() {
 	const currentWindow = getCurrentWebviewWindow();
-	createThemeListener(currentWindow);
+	if (location.pathname !== "/camera") createThemeListener(currentWindow);
 
 	onMount(() => {
-		initAnonymousUser();
-		// OpenPanel keeps profileId in memory only (PostHog persisted it), so
-		// sign-in-time identify alone loses attribution after an app restart.
-		void authStore.get().then((auth) => {
-			if (auth?.user_id) identifyUser(auth.user_id);
-		});
+		if (shouldInitializeAnalytics(currentWindow.label)) {
+			void initializeAnalytics();
+		}
 		prewarmFontCaches();
 	});
 
 	return (
 		<>
-			<Toaster
-				position="bottom-right"
-				containerStyle={{
-					"margin-top": titlebar.height,
-				}}
-				toastOptions={{
-					duration: 3500,
-					style: {
-						padding: "8px 16px",
-						"border-radius": "15px",
-						"border-color": "var(--gray-200)",
-						"border-width": "1px",
-						"font-size": "1rem",
-						"background-color": "var(--gray-50)",
-						color: "var(--text-secondary)",
-					},
-				}}
-			/>
+			{shouldRenderGlobalToaster(location.pathname) && (
+				<Suspense fallback={null}>
+					<GlobalToaster
+						position="bottom-right"
+						containerStyle={{
+							"margin-top": titlebar.height,
+						}}
+						toastOptions={{
+							duration: 3500,
+							style: {
+								padding: "8px 16px",
+								"border-radius": "15px",
+								"border-color": "var(--gray-200)",
+								"border-width": "1px",
+								"font-size": "1rem",
+								"background-color": "var(--gray-50)",
+								color: "var(--text-secondary)",
+							},
+						}}
+					/>
+				</Suspense>
+			)}
 			<CapErrorBoundary>
 				<Router
 					root={(props) => {
@@ -263,6 +265,44 @@ function Inner() {
 			</CapErrorBoundary>
 		</>
 	);
+}
+
+function shouldRenderGlobalToaster(pathname: string) {
+	switch (pathname) {
+		case "/camera":
+		case "/capture-area":
+		case "/debug":
+		case "/in-progress-recording":
+		case "/mode-select":
+		case "/notifications":
+		case "/recordings-overlay":
+		case "/teleprompter":
+		case "/window-capture-occluder":
+			return false;
+		default:
+			return true;
+	}
+}
+
+function shouldInitializeAnalytics(label: string) {
+	return (
+		label === "main" || label === "settings" || label.startsWith("editor-")
+	);
+}
+
+async function initializeAnalytics() {
+	try {
+		const { identifyUser, initAnonymousUser } = await import(
+			"./utils/analytics"
+		);
+		initAnonymousUser();
+		// OpenPanel keeps profileId in memory only (PostHog persisted it), so
+		// sign-in-time identify alone loses attribution after an app restart.
+		const auth = await authStore.get();
+		if (auth?.user_id) identifyUser(auth.user_id);
+	} catch (error) {
+		console.error("Failed to initialize analytics:", error);
+	}
 }
 
 // WebKit resolves the emoji fallback chain lazily on first glyph paint, which
