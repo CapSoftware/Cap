@@ -43,6 +43,15 @@ jobs:
               ? `cap-nightly-v${{ inputs.version }}`
               : `cap-v${{ inputs.version }}`;
             const sha = "${{ inputs.sha }}";
+
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag })).data;
+              if (!release.draft) throw new Error(`Release '${tag}' is already published: ${release.html_url}`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
             try {
               await github.rest.git.updateRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${tag}`, sha, force: true });
             } catch (error) {
@@ -50,10 +59,7 @@ jobs:
               await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `refs/tags/${tag}`, sha });
             }
 
-            let release;
-            try {
-              release = (await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag })).data;
-              if (!release.draft) throw new Error(`Release '${tag}' is already published: ${release.html_url}`);
+            if (release) {
               release = (await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -62,8 +68,7 @@ jobs:
                 name: "${{ inputs.version }}",
                 prerelease: "${{ inputs.channel }}" === "nightly",
               })).data;
-            } catch (error) {
-              if (error.status !== 404) throw error;
+            } else {
               release = (await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
