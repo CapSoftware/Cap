@@ -307,6 +307,23 @@ jobs:
 
           Get-ChildItem $dist -Filter *.blockmap | Remove-Item -Force
 
+      - name: Verify release is still a draft
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.draft.outputs.tag_name }}
+        with:
+          script: |
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: process.env.RELEASE_TAG,
+            });
+            if (!release.data.draft) {
+              throw new Error(
+                `Release '${process.env.RELEASE_TAG}' was published while assets were building; refusing to mutate it`,
+              );
+            }
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
