@@ -38,13 +38,12 @@ export const dirname = (path: string) =>
 	native<string>("path.resolve", { paths: [path, ".."] });
 export const extname = (path: string) =>
 	Promise.resolve(path.match(/\.[^./\\]+$/)?.[0] ?? "");
-export const basename = (path: string, ext?: string) =>
-	Promise.resolve(
-		path
-			.split(/[\\/]/)
-			.pop()
-			?.replace(ext ?? /$^/, "") ?? "",
+export const basename = (path: string, ext?: string) => {
+	const name = path.split(/[\\/]/).pop() ?? "";
+	return Promise.resolve(
+		ext && name.endsWith(ext) ? name.slice(0, -ext.length) : name,
 	);
+};
 export const isAbsolute = (path: string) =>
 	Promise.resolve(/^(?:[a-zA-Z]:[\\/]|\/)/.test(path));
 export const sep = () =>
