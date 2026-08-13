@@ -94,6 +94,7 @@ pub enum CommandResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelMessage {
+    pub target: String,
     pub channel_id: u64,
     pub index: u64,
     pub message: Option<Value>,

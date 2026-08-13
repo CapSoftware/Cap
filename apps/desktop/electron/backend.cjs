@@ -142,7 +142,10 @@ class RustBackend {
 		}
 		const header = Buffer.allocUnsafe(4);
 		header.writeUInt32BE(payload.length);
-		this.socket.write(Buffer.concat([header, payload]));
+		this.socket.cork();
+		this.socket.write(header);
+		this.socket.write(payload);
+		this.socket.uncork();
 		return true;
 	}
 

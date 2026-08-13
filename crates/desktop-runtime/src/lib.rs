@@ -277,6 +277,10 @@ impl CommandContext {
         &self.app
     }
 
+    pub fn window_label(&self) -> &str {
+        &self.window_label
+    }
+
     pub fn window(&self) -> Window {
         Window::new(self.app.clone(), self.window_label.clone())
     }
@@ -1027,6 +1031,7 @@ impl<R: Runtime> Window<R> {
 #[derive(Clone)]
 pub struct Channel<T> {
     id: u64,
+    target: String,
     next_index: Arc<AtomicU64>,
     sender: Option<mpsc::UnboundedSender<ChannelMessage>>,
     local_sender: Option<Arc<dyn Fn(T) -> Result<()> + Send + Sync>>,
@@ -1037,6 +1042,7 @@ impl<T> Channel<T> {
     pub fn new(sender: impl Fn(T) -> Result<()> + Send + Sync + 'static) -> Self {
         Self {
             id: 0,
+            target: String::new(),
             next_index: Arc::new(AtomicU64::new(0)),
             sender: None,
             local_sender: Some(Arc::new(sender)),
@@ -1044,7 +1050,11 @@ impl<T> Channel<T> {
         }
     }
 
-    pub fn from_value(sender: mpsc::UnboundedSender<ChannelMessage>, value: Value) -> Result<Self> {
+    pub fn from_value(
+        sender: mpsc::UnboundedSender<ChannelMessage>,
+        value: Value,
+        target: impl Into<String>,
+    ) -> Result<Self> {
         let marker = value
             .as_str()
             .and_then(|value| value.strip_prefix("__CHANNEL__:"))
@@ -1054,6 +1064,7 @@ impl<T> Channel<T> {
             .map_err(|error| format!("invalid desktop channel id: {error}"))?;
         Ok(Self {
             id,
+            target: target.into(),
             next_index: Arc::new(AtomicU64::new(0)),
             sender: Some(sender),
             local_sender: None,
@@ -1073,6 +1084,7 @@ impl<T: Serialize> Channel<T> {
             .as_ref()
             .ok_or_else(|| "desktop channel sender is unavailable".to_string())?
             .send(ChannelMessage {
+                target: self.target.clone(),
                 channel_id: self.id,
                 index: self.next_index.fetch_add(1, Ordering::Relaxed),
                 message: Some(message),
@@ -1088,6 +1100,7 @@ impl<T> Drop for Channel<T> {
             return;
         };
         let _ = sender.send(ChannelMessage {
+            target: self.target.clone(),
             channel_id: self.id,
             index: self.next_index.load(Ordering::Relaxed),
             message: None,
@@ -1330,5 +1343,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(project_path, PathBuf::from("/tmp/a.cap"));
+    }
+
+    #[test]
+    fn channel_messages_are_bound_to_the_invoking_window() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let channel =
+            Channel::<u32>::from_value(sender, serde_json::json!("__CHANNEL__:7"), "editor-42")
+                .unwrap();
+
+        channel.send(123).unwrap();
+        drop(channel);
+
+        let message = receiver.try_recv().unwrap();
+        assert_eq!(message.target, "editor-42");
+        assert_eq!(message.channel_id, 7);
+        assert_eq!(message.index, 0);
+        assert_eq!(message.message, Some(serde_json::json!(123)));
+        assert!(!message.end);
+
+        let end = receiver.try_recv().unwrap();
+        assert_eq!(end.target, "editor-42");
+        assert_eq!(end.channel_id, 7);
+        assert_eq!(end.index, 1);
+        assert_eq!(end.message, None);
+        assert!(end.end);
     }
 }

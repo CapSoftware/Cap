@@ -17,9 +17,8 @@ export async function listen<T = unknown>(
 	handler: EventCallback<T>,
 ): Promise<UnlistenFn> {
 	const id = nextEventId++;
-	return bridge().onEvent((message) => {
-		if (message.event === event)
-			handler({ event, id, payload: message.payload as T });
+	return bridge().onEvent(event, (message) => {
+		handler({ event, id, payload: message.payload as T });
 	});
 }
 

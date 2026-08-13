@@ -88,6 +88,7 @@ fn expand_command(function: ItemFn) -> proc_macro2::TokenStream {
                     let #variable = ::cap_desktop_runtime::Channel::<#inner>::from_value(
                         context.channel_sender(),
                         ::cap_desktop_runtime::take_argument(&mut arguments, #key)?,
+                        context.window_label(),
                     )?;
                 });
                 arguments.push(quote! { #variable });

@@ -1,5 +1,8 @@
 const { BrowserWindow, nativeTheme, screen } = require("electron");
 
+const CURSOR_POLL_INTERVAL_MS = 50;
+const CURSOR_POLL_IDLE_MS = 250;
+
 class WindowManager {
 	constructor({ backend, devUrl, publicDir, preloadPath }) {
 		this.backend = backend;
@@ -7,15 +10,15 @@ class WindowManager {
 		this.publicDir = publicDir;
 		this.preloadPath = preloadPath;
 		this.windows = new Map();
+		this.eventSubscriptions = new Map();
 		this.windowMetadata = new WeakMap();
 		this.allowedToClose = new WeakSet();
 		this.allowAllClose = false;
 		backend.onMessage((message) => this.receive(message));
 		this.nativeThemeListener = () => {
 			const theme = nativeTheme.shouldUseDarkColors ? "dark" : "light";
-			for (const [label, window] of this.windows) {
-				if (window.isDestroyed()) continue;
-				window.webContents.send("cap:event", {
+			for (const label of this.windows.keys()) {
+				this.sendEvent(label, {
 					type: "event",
 					event: "tauri://theme-changed",
 					payload: theme,
@@ -25,20 +28,8 @@ class WindowManager {
 		};
 		nativeTheme.on("updated", this.nativeThemeListener);
 		this.lastCursorPosition = null;
-		this.cursorTimer = setInterval(() => {
-			const position = this.dipPointToPhysical(screen.getCursorScreenPoint());
-			if (
-				this.lastCursorPosition?.x === position.x &&
-				this.lastCursorPosition?.y === position.y
-			)
-				return;
-			this.lastCursorPosition = position;
-			this.backend.send({
-				type: "cursorPosition",
-				x: position.x,
-				y: position.y,
-			});
-		}, 50);
+		this.cursorTimer = null;
+		this.cursorPollingUntil = 0;
 	}
 
 	create(options) {
@@ -86,6 +77,7 @@ class WindowManager {
 		});
 		this.windowMetadata.set(window, {
 			decorated: chrome.frame,
+			ignoreCursorEvents: null,
 			loaded: false,
 			pendingShow: options.visible === true,
 			pendingFocus: options.focus === true,
@@ -186,6 +178,7 @@ class WindowManager {
 		});
 		window.on("closed", () => {
 			this.windows.delete(label);
+			this.eventSubscriptions.delete(label);
 			this.sendWindowEvent(label, { type: "destroyed" });
 		});
 		window.webContents.on("did-finish-load", update);
@@ -208,13 +201,37 @@ class WindowManager {
 		if (!window || window.isDestroyed()) return;
 		const rendererEvent = rendererWindowEvent(event, window);
 		if (rendererEvent) {
-			window.webContents.send("cap:event", {
+			this.sendEvent(label, {
 				type: "event",
 				event: rendererEvent.name,
 				payload: rendererEvent.payload,
 				target: label,
 			});
 		}
+	}
+
+	subscribeToEvent(label, event) {
+		if (typeof label !== "string" || typeof event !== "string") return;
+		let subscriptions = this.eventSubscriptions.get(label);
+		if (!subscriptions) {
+			subscriptions = new Set();
+			this.eventSubscriptions.set(label, subscriptions);
+		}
+		subscriptions.add(event);
+	}
+
+	unsubscribeFromEvent(label, event) {
+		const subscriptions = this.eventSubscriptions.get(label);
+		if (!subscriptions) return;
+		subscriptions.delete(event);
+		if (subscriptions.size === 0) this.eventSubscriptions.delete(label);
+	}
+
+	sendEvent(label, message) {
+		if (!this.eventSubscriptions.get(label)?.has(message.event)) return;
+		const window = this.windows.get(label);
+		if (!window || window.isDestroyed()) return;
+		window.webContents.send("cap:event", message);
 	}
 
 	receive(message) {
@@ -225,16 +242,16 @@ class WindowManager {
 				this.operation(window, message.operation);
 		}
 		if (message.type === "event") {
-			for (const [label, window] of this.windows) {
+			for (const label of this.windows.keys()) {
 				if (!message.target || message.target === label) {
-					window.webContents.send("cap:event", message);
+					this.sendEvent(label, message);
 				}
 			}
 		}
 		if (message.type === "channel") {
-			for (const window of this.windows.values()) {
+			const window = this.windows.get(message.target);
+			if (window && !window.isDestroyed())
 				window.webContents.send("cap:channel", message);
-			}
 		}
 	}
 
@@ -320,7 +337,10 @@ class WindowManager {
 				window.setSkipTaskbar(operation.skip);
 				break;
 			case "setIgnoreCursorEvents":
+				this.ensureCursorPolling();
+				if (metadata.ignoreCursorEvents === operation.ignore) break;
 				window.setIgnoreMouseEvents(operation.ignore, { forward: true });
+				metadata.ignoreCursorEvents = operation.ignore;
 				break;
 			case "setOpacity":
 				window.setOpacity(operation.opacity);
@@ -356,6 +376,41 @@ class WindowManager {
 
 	cursorPosition() {
 		return this.dipPointToPhysical(screen.getCursorScreenPoint());
+	}
+
+	ensureCursorPolling() {
+		this.cursorPollingUntil = Date.now() + CURSOR_POLL_IDLE_MS;
+		this.sendCursorPosition();
+		if (this.cursorTimer) return;
+
+		this.cursorTimer = setInterval(() => {
+			if (Date.now() >= this.cursorPollingUntil) {
+				this.stopCursorPolling();
+				return;
+			}
+			this.sendCursorPosition();
+		}, CURSOR_POLL_INTERVAL_MS);
+		this.cursorTimer.unref?.();
+	}
+
+	sendCursorPosition() {
+		const position = this.cursorPosition();
+		if (
+			this.lastCursorPosition?.x === position.x &&
+			this.lastCursorPosition?.y === position.y
+		)
+			return;
+		this.lastCursorPosition = position;
+		this.backend.send({
+			type: "cursorPosition",
+			x: position.x,
+			y: position.y,
+		});
+	}
+
+	stopCursorPolling() {
+		if (this.cursorTimer) clearInterval(this.cursorTimer);
+		this.cursorTimer = null;
 	}
 
 	windowState(window) {
@@ -467,6 +522,8 @@ class WindowManager {
 
 	beginQuit() {
 		this.allowAllClose = true;
+		this.stopCursorPolling();
+		nativeTheme.removeListener("updated", this.nativeThemeListener);
 	}
 }
 

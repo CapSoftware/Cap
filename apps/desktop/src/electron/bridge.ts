@@ -5,7 +5,7 @@ export interface CapElectronBridge {
 	invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 	native<T>(operation: string, payload?: Record<string, unknown>): Promise<T>;
 	emit(event: string, payload?: unknown): void;
-	onEvent(listener: (message: BridgeEvent) => void): () => void;
+	onEvent(event: string, listener: (message: BridgeEvent) => void): () => void;
 	onChannel(listener: (message: BridgeChannelMessage) => void): () => void;
 }
 
@@ -18,6 +18,7 @@ export interface BridgeEvent {
 
 export interface BridgeChannelMessage {
 	type: "channel";
+	target: string;
 	channelId: number;
 	index: number;
 	message?: unknown;

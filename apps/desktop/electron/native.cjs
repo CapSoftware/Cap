@@ -14,7 +14,6 @@ const {
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { autoUpdater } = require("electron-updater");
 
 class NativeBridge {
 	constructor(windowManager) {
@@ -26,6 +25,13 @@ class NativeBridge {
 		this.trayMode = "studio";
 		this.trayRecording = false;
 		this.updateChannel = "stable";
+		this.autoUpdater = null;
+	}
+
+	getAutoUpdater() {
+		if (this.autoUpdater) return this.autoUpdater;
+
+		const { autoUpdater } = require("electron-updater");
 		autoUpdater.autoDownload = false;
 		autoUpdater.autoInstallOnAppQuit = true;
 		autoUpdater.on("download-progress", (progress) => {
@@ -45,6 +51,8 @@ class NativeBridge {
 				payload: { version: info.version, installed: true },
 			});
 		});
+		this.autoUpdater = autoUpdater;
+		return autoUpdater;
 	}
 
 	async invoke(windowLabel, operation, payload = {}) {
@@ -466,17 +474,21 @@ class NativeBridge {
 
 	configureUpdater(channel = "stable") {
 		this.updateChannel = channel;
-		this.setUpdaterFeed(channel);
-		if (this.updateTimer) clearInterval(this.updateTimer);
+		if (this.updateTimer) {
+			clearInterval(this.updateTimer);
+			this.updateTimer = null;
+		}
 		if (!app.isPackaged || channel !== "nightly") return;
 		this.updateTimer = setInterval(
 			() => void this.checkForUpdates(channel).catch(console.error),
 			2 * 60 * 60 * 1000,
 		);
+		this.updateTimer.unref?.();
 	}
 
 	setUpdaterFeed(channel) {
-		if (!app.isPackaged) return;
+		if (!app.isPackaged) return null;
+		const autoUpdater = this.getAutoUpdater();
 		autoUpdater.channel = channel === "nightly" ? "nightly" : "latest";
 		const baseUrl = process.env.CAP_ELECTRON_UPDATE_URL;
 		if (baseUrl)
@@ -490,11 +502,12 @@ class NativeBridge {
 				owner: "CapSoftware",
 				repo: "Cap",
 			});
+		return autoUpdater;
 	}
 
 	async checkForUpdates(channel = this.updateChannel) {
 		if (!app.isPackaged) return null;
-		this.setUpdaterFeed(channel);
+		const autoUpdater = this.setUpdaterFeed(channel);
 		const result = await autoUpdater.checkForUpdates();
 		if (!result?.updateInfo || result.updateInfo.version === app.getVersion())
 			return null;
@@ -511,7 +524,7 @@ class NativeBridge {
 	async downloadAndInstall(channel = this.updateChannel) {
 		const update = await this.checkForUpdates(channel);
 		if (!update) throw new Error("No update available");
-		await autoUpdater.downloadUpdate();
+		await this.getAutoUpdater().downloadUpdate();
 		return { version: update.version, installed: true };
 	}
 }

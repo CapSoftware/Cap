@@ -186,6 +186,12 @@ async function start() {
 			payload: request.payload ?? null,
 		});
 	});
+	ipcMain.on("cap:event-subscribe", (_event, request) => {
+		windowManager.subscribeToEvent(request.windowLabel, request.event);
+	});
+	ipcMain.on("cap:event-unsubscribe", (_event, request) => {
+		windowManager.unsubscribeFromEvent(request.windowLabel, request.event);
+	});
 	ipcMain.on("cap:window-drop", (_event, request) => {
 		windowManager.sendWindowEvent(request.windowLabel, {
 			type: "dragDrop",
@@ -193,8 +199,8 @@ async function start() {
 		});
 	});
 	globalThis.__capMenuSelection = (id) => {
-		for (const window of windowManager.windows.values()) {
-			window.webContents.send("cap:event", {
+		for (const label of windowManager.windows.keys()) {
+			windowManager.sendEvent(label, {
 				type: "event",
 				event: `menu:${id}`,
 				payload: null,

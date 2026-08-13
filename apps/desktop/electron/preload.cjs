@@ -17,11 +17,13 @@ const initialization = initArgument
 	? JSON.parse(Buffer.from(normalizedInitialization, "base64").toString("utf8"))
 	: null;
 
-const eventListeners = new Set();
+const eventListeners = new Map();
 const channelListeners = new Set();
 
 ipcRenderer.on("cap:event", (_event, message) => {
-	for (const listener of eventListeners) listener(message);
+	const listeners = eventListeners.get(message.event);
+	if (!listeners) return;
+	for (const listener of listeners) listener(message);
 });
 ipcRenderer.on("cap:channel", (_event, message) => {
 	for (const listener of channelListeners) listener(message);
@@ -60,9 +62,20 @@ contextBridge.exposeInMainWorld("capElectron", {
 		ipcRenderer.invoke("cap:native", { windowLabel, operation, payload }),
 	emit: (event, payload) =>
 		ipcRenderer.send("cap:emit", { windowLabel, event, payload }),
-	onEvent: (listener) => {
-		eventListeners.add(listener);
-		return () => eventListeners.delete(listener);
+	onEvent: (event, listener) => {
+		let listeners = eventListeners.get(event);
+		if (!listeners) {
+			listeners = new Set();
+			eventListeners.set(event, listeners);
+			ipcRenderer.send("cap:event-subscribe", { windowLabel, event });
+		}
+		listeners.add(listener);
+		return () => {
+			listeners.delete(listener);
+			if (listeners.size > 0) return;
+			eventListeners.delete(event);
+			ipcRenderer.send("cap:event-unsubscribe", { windowLabel, event });
+		};
 	},
 	onChannel: (listener) => {
 		channelListeners.add(listener);
