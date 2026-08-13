@@ -1,8 +1,16 @@
+import {
+	extractLoomVideoId,
+	isValidLoomVideoId,
+	LOOM_ORIGIN,
+	normalizeLoomMediaUrl,
+} from "@/lib/loom-url";
+
 type LoomUrlResponse = {
 	url?: string;
 };
 
 type LoomDownloadMode = "direct-download" | "browser-conversion";
+type LoomEndpoint = "raw-url" | "transcoded-url";
 
 export type LoomBrowserDownloadResult = {
 	success: boolean;
@@ -22,27 +30,7 @@ type LoomOEmbedMetadata = {
 	height?: number;
 };
 
-const LOOM_API_ROOT = "https://www.loom.com";
-
-export function extractLoomVideoId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.includes("loom.com")) {
-			return null;
-		}
-
-		const pathParts = parsed.pathname.split("/").filter(Boolean);
-		const id = pathParts[pathParts.length - 1] ?? null;
-
-		if (!id || id.length < 10) {
-			return null;
-		}
-
-		return id.split("?")[0] ?? null;
-	} catch {
-		return null;
-	}
-}
+export { extractLoomVideoId } from "@/lib/loom-url";
 
 function createAnonId() {
 	if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -64,14 +52,17 @@ function isDirectMp4Url(url: string): boolean {
 
 async function fetchLoomEndpoint(
 	videoId: string,
-	endpoint: string,
+	endpoint: LoomEndpoint,
 	includeBody = true,
 ): Promise<string | null> {
 	try {
+		if (!isValidLoomVideoId(videoId)) return null;
+
 		const options: RequestInit = {
 			method: "POST",
 			mode: "cors",
 			referrerPolicy: "no-referrer",
+			redirect: "error",
 		};
 		if (includeBody) {
 			options.headers = {
@@ -86,8 +77,13 @@ async function fetchLoomEndpoint(
 			});
 		}
 
+		const encodedVideoId = encodeURIComponent(videoId);
+		const endpointPath = endpoint === "raw-url" ? "raw-url" : "transcoded-url";
 		const response = await fetch(
-			`${LOOM_API_ROOT}/api/campaigns/sessions/${videoId}/${endpoint}`,
+			new URL(
+				`/api/campaigns/sessions/${encodedVideoId}/${endpointPath}`,
+				LOOM_ORIGIN,
+			),
 			options,
 		);
 
@@ -101,7 +97,7 @@ async function fetchLoomEndpoint(
 		}
 
 		const data = JSON.parse(text) as LoomUrlResponse;
-		return data.url ?? null;
+		return data.url ? normalizeLoomMediaUrl(data.url) : null;
 	} catch {
 		return null;
 	}
@@ -109,7 +105,7 @@ async function fetchLoomEndpoint(
 
 async function fetchVideoName(videoId: string): Promise<string | null> {
 	try {
-		const response = await fetch(`${LOOM_API_ROOT}/graphql`, {
+		const response = await fetch(`${LOOM_ORIGIN}/graphql`, {
 			method: "POST",
 			mode: "cors",
 			referrerPolicy: "no-referrer",
@@ -144,14 +140,18 @@ async function fetchLoomOEmbed(
 	videoId: string,
 ): Promise<LoomOEmbedMetadata | null> {
 	try {
-		const response = await fetch(
-			`${LOOM_API_ROOT}/v1/oembed?url=https://www.loom.com/share/${videoId}`,
-			{
-				mode: "cors",
-				referrerPolicy: "no-referrer",
-				headers: { Accept: "application/json" },
-			},
+		const shareUrl = new URL(
+			`/share/${encodeURIComponent(videoId)}`,
+			LOOM_ORIGIN,
 		);
+		const oembedUrl = new URL("/v1/oembed", LOOM_ORIGIN);
+		oembedUrl.searchParams.set("url", shareUrl.toString());
+		const response = await fetch(oembedUrl, {
+			mode: "cors",
+			referrerPolicy: "no-referrer",
+			redirect: "error",
+			headers: { Accept: "application/json" },
+		});
 		if (!response.ok) return null;
 		const data = await response.json();
 		return {
@@ -165,7 +165,10 @@ async function fetchLoomOEmbed(
 }
 
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
+	const requestVariants: Array<{
+		endpoint: LoomEndpoint;
+		includeBody: boolean;
+	}> = [
 		{ endpoint: "transcoded-url", includeBody: true },
 		{ endpoint: "raw-url", includeBody: true },
 		{ endpoint: "transcoded-url", includeBody: false },
