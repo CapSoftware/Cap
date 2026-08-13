@@ -2,6 +2,9 @@ appId: so.cap.desktop
 productName: Cap
 asar: true
 generateUpdatesFilesForAllChannels: true
+electronLanguages:
+  - en-US
+  - en-GB
 extraMetadata:
   main: .electron-dist/main.cjs
 directories:
@@ -9,11 +12,21 @@ directories:
 files:
   - .electron-dist/**
   - .output/public/**
+  - '!.output/public/_server/**'
+  - '!.output/public/**/*.br'
+  - '!.output/public/**/*.gz'
   - package.json
   - '!node_modules/**/*'
 extraResources:
   - from: src-backend/assets
     to: assets
+    filter:
+      - '**/*'
+      - '!dmg-background.png'
+      - '!nsis-header.bmp'
+      - '!nsis-sidebar.bmp'
+      - '!wix-banner.bmp'
+      - '!wix-dialog.bmp'
   - from: src-backend/icons
     to: tray-icons
     filter:
