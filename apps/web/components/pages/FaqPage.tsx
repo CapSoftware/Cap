@@ -45,10 +45,19 @@ const faqContent: FaqItem[] = [
 	{
 		title: "Is Cap SOC 2 compliant?",
 		answer:
-			"Yes. Cap is SOC 2 Type II and ISO 27001 compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
+			"Yes. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
 		link: {
 			text: "Visit the Trust Portal",
 			href: "https://trust.cap.so",
+		},
+	},
+	{
+		title: "Is Cap HIPAA compliant?",
+		answer:
+			"Yes. Cap is fully HIPAA compliant. We sign Business Associate Agreements (BAAs) with organizations handling protected health information, and every vendor in Cap's production infrastructure is covered by a BAA. For even more control, you can bring your own storage or self-host Cap entirely.",
+		link: {
+			text: "Learn about HIPAA-compliant recording",
+			href: "/hipaa-compliant-screen-recording",
 		},
 	},
 	{

@@ -114,7 +114,7 @@ const sections: FeatureSection[] = [
 		title: "Security, support & licensing",
 		rows: [
 			{
-				label: "SOC 2 Type II & ISO 27001 compliance",
+				label: "SOC 2 Type II, ISO 27001 & HIPAA compliance",
 				free: false,
 				desktop: false,
 				pro: true,
