@@ -4056,10 +4056,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         return Ok(true);
     }
 
-    println!(
-        "Fetching plan for user {}",
-        auth.user_id.as_deref().unwrap_or("unknown")
-    );
+    println!("Fetching plan for authenticated user");
     let response = app
         .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
         .await
