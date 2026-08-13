@@ -404,12 +404,12 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Is my data secure?",
 				answer:
-					"Security is core to Cap. Cap is SOC 2 Type II and ISO 27001 compliant, and as an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
+					"Security is core to Cap. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, and as an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
 			},
 			{
 				question: "What about SOC 2, ISO 27001, GDPR, and HIPAA compliance?",
 				answer:
-					"Cap is SOC 2 Type II and ISO 27001 compliant. Cap Pro also lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, with signed BAAs available for organizations handling PHI. Cap Pro also lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For teams that want complete control, our self-hosted option keeps everything on your own infrastructure.",
 			},
 		],
 	},

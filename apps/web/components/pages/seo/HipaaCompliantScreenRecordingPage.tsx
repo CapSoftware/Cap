@@ -5,15 +5,20 @@ import type { SeoPageContent } from "../../seo/types";
 export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 	title: "HIPAA-Compliant Screen Recording for Healthcare Teams",
 	description:
-		"Cap enables HIPAA-compliant screen recording workflows for healthcare organizations. Self-host recordings on your own S3-compatible storage, keep PHI off third-party servers, and maintain full audit control. Open-source and auditable.",
+		"Cap is a HIPAA-compliant screen recorder for healthcare organizations. Sign a BAA and record with Cap Cloud, or self-host recordings on your own S3-compatible storage for complete control over PHI. Open-source and auditable.",
 
-	badge: "HIPAA Compliance",
+	badge: "HIPAA Compliant",
 
 	featuresTitle: "Built for HIPAA-Compliant Screen Recording Workflows",
 	featuresDescription:
 		"Cap gives healthcare teams the recording capabilities they need with the data controls HIPAA requires",
 
 	features: [
+		{
+			title: "HIPAA Compliant with Signed BAAs",
+			description:
+				"Cap is fully HIPAA compliant. We sign Business Associate Agreements with healthcare organizations, and every vendor in Cap's production infrastructure, from cloud storage to transcription, is covered by a BAA. Combined with SOC 2 Type II and ISO 27001, Cap Cloud is ready for PHI out of the box.",
+		},
 		{
 			title: "Self-Hosted Storage — PHI Never Leaves Your Infrastructure",
 			description:
@@ -47,7 +52,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			title: "AI Transcription Under Your Control",
 			description:
-				"Cap's AI captioning is optional. If your HIPAA policies restrict audio transcription through external APIs, simply leave auto-captions disabled. The recording and sharing workflow functions fully without any AI processing.",
+				"Cap's AI captioning runs through a BAA-covered transcription provider, so captions are available even in regulated workflows. Auto-captions also remain fully optional: if your policies restrict any external audio processing, leave them disabled and the recording and sharing workflow functions fully without AI processing.",
 		},
 		{
 			title: "Self-Hostable Platform",
@@ -84,8 +89,15 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 
 	comparisonTable: {
 		title: "Cap vs Other Tools for HIPAA Screen Recording",
-		headers: ["Feature", "Cap (Self-Hosted)", "Loom", "Zoom", "Camtasia"],
+		headers: ["Feature", "Cap", "Loom", "Zoom", "Camtasia"],
 		rows: [
+			[
+				"HIPAA compliant",
+				{ text: "Yes, signed BAA", status: "positive" },
+				{ text: "Enterprise only", status: "warning" },
+				{ text: "BAA available", status: "warning" },
+				{ text: "N/A", status: "neutral" },
+			],
 			[
 				"Self-hosted storage",
 				{ text: "Yes — any S3", status: "positive" },
@@ -145,9 +157,9 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTitle: "How Cap Enables HIPAA-Compliant Recording",
+	comparisonTitle: "HIPAA-Compliant Recording Out of the Box",
 	comparisonDescription:
-		"Most screen recorders store recordings on third-party servers by default — Cap gives healthcare teams the controls to change that",
+		"Cap is HIPAA compliant with signed BAAs, and self-hosted storage gives healthcare teams even more control over where PHI lives",
 
 	comparison: [
 		{
@@ -212,7 +224,8 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 	migrationGuide: {
 		title: "How to Set Up HIPAA-Compliant Screen Recording with Cap",
 		steps: [
-			"Create a HIPAA-eligible AWS S3 bucket in your AWS account — ensure your AWS account is covered by an AWS BAA",
+			"Fastest path: use Cap Cloud under a signed BAA. Contact the Cap team via cap.so/support to get your BAA executed, then record and share as normal",
+			"Prefer self-hosted storage? Create a HIPAA-eligible AWS S3 bucket in your AWS account — ensure your AWS account is covered by an AWS BAA",
 			"Configure Cap's storage settings to point to your AWS S3 bucket using your AWS access key and secret",
 			"Download Cap for Mac or Windows — installation takes under 2 minutes",
 			"Disable AI auto-captions in Cap settings if your HIPAA policy restricts external audio transcription",
@@ -228,12 +241,12 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			question: "Can Cap be used for HIPAA-compliant screen recording?",
 			answer:
-				"Cap supports HIPAA-compliant workflows when configured with self-hosted storage. By connecting Cap to your own AWS S3 bucket (covered under your AWS BAA) or another HIPAA-eligible S3-compatible storage provider, all recorded video files are stored on your infrastructure — not Cap's servers. Combined with optional AI caption disabling and password-protected links, Cap gives healthcare organizations the controls needed for compliant screen recording workflows.",
+				"Yes. Cap is HIPAA compliant. We sign Business Associate Agreements (BAAs) with healthcare organizations, and every vendor in Cap's production infrastructure is covered by a BAA. For teams that want additional control, Cap also supports self-hosted storage: connect your own AWS S3 bucket (covered under your AWS BAA) and all recorded video files are stored on your infrastructure rather than Cap's servers.",
 		},
 		{
 			question: "Does Cap store recordings on its own servers?",
 			answer:
-				"By default, Cap uploads recordings to Cap's cloud storage. However, Cap fully supports custom S3-compatible storage — connect your own AWS S3, Cloudflare R2, or private MinIO instance and all recordings go directly to your bucket. With self-hosted storage enabled, no recording data touches Cap's infrastructure.",
+				"By default, Cap uploads recordings to Cap's cloud storage, which is HIPAA compliant and covered by BAAs with every infrastructure vendor. Cap also fully supports custom S3-compatible storage — connect your own AWS S3, Cloudflare R2, or private MinIO instance and all recordings go directly to your bucket. With self-hosted storage enabled, no recording data touches Cap's infrastructure.",
 		},
 		{
 			question:
@@ -244,7 +257,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			question: "Can I disable AI transcription in Cap for HIPAA compliance?",
 			answer:
-				"Yes. Cap's AI auto-captions are optional and can be disabled entirely in settings. If your HIPAA policies restrict sending audio data to external transcription APIs, simply leave auto-captions off. Cap's core recording, uploading to your S3 bucket, and sharing workflow operates fully without AI processing.",
+				"Yes. Cap's AI auto-captions are optional and can be disabled entirely in settings. Cap Cloud transcription runs through a BAA-covered provider, so captions are available even in regulated workflows. If your HIPAA policies restrict any external audio processing, simply leave auto-captions off and Cap's core recording, uploading, and sharing workflow operates fully without AI processing.",
 		},
 		{
 			question: "Does Cap support AWS S3 for HIPAA-eligible storage?",
@@ -265,7 +278,7 @@ export const hipaaCompliantScreenRecordingContent: SeoPageContent = {
 		{
 			question: "What screen recording tools are HIPAA-compliant?",
 			answer:
-				"A screen recorder can support HIPAA-compliant workflows if it allows you to control where recordings are stored, restricts third-party access to data, and provides auditable behavior. Cap with self-hosted S3 storage meets these requirements. Tools that only offer cloud storage on the vendor's servers — like standard Loom — require additional BAA agreements and vendor review. Local-only recorders like Camtasia avoid cloud storage entirely but lack Cap's async sharing capabilities.",
+				"Cap is HIPAA compliant, with signed BAAs available and a fully auditable open-source codebase. Tools that only offer cloud storage on the vendor's servers, like standard Loom, restrict HIPAA support to enterprise plans and require additional vendor review. Local-only recorders like Camtasia avoid cloud storage entirely but lack Cap's async sharing capabilities. Cap also supports self-hosted S3 storage for teams that want recordings to stay entirely within their own infrastructure.",
 		},
 	],
 
