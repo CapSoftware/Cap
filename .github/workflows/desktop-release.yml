@@ -39,7 +39,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Prepare immutable release tag and draft
+      - name: Prepare immutable release staging draft
         id: release
         uses: actions/github-script@v7
         env:
@@ -72,7 +72,6 @@ jobs:
               per_page: 100,
             });
 
-            let tagExists = true;
             try {
               const existingTag = await github.rest.git.getRef({
                 owner: context.repo.owner,
@@ -85,8 +84,7 @@ jobs:
                 );
               }
             } catch (error) {
-              if (error.status === 404) tagExists = false;
-              else throw error;
+              if (error.status !== 404) throw error;
             }
 
             const existingRelease = releases.find(
@@ -97,14 +95,6 @@ jobs:
                 `Release '${tag}' already exists (${existingRelease.draft ? "draft" : "published"}): ${existingRelease.html_url}`,
               );
             }
-
-            if (!tagExists)
-              await github.rest.git.createRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `refs/${tagRef}`,
-                sha,
-              });
 
             let stagingRelease = releases.find(
               (release) => release.tag_name === stagingTag,
@@ -494,6 +484,21 @@ jobs:
               );
             }
 
+            try {
+              const existingTag = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${process.env.FINAL_TAG}`,
+              });
+              if (existingTag.data.object.sha !== process.env.RELEASE_SHA) {
+                throw new Error(
+                  `Final tag '${process.env.FINAL_TAG}' points to ${existingTag.data.object.sha}; expected ${process.env.RELEASE_SHA}`,
+                );
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
             const release = (await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -504,6 +509,16 @@ jobs:
               draft: process.env.AUTO_PUBLISH !== "true",
               prerelease: process.env.RELEASE_CHANNEL === "nightly",
             })).data;
+            const finalTag = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `tags/${process.env.FINAL_TAG}`,
+            });
+            if (finalTag.data.object.sha !== process.env.RELEASE_SHA) {
+              throw new Error(
+                `Promoted tag '${process.env.FINAL_TAG}' points to ${finalTag.data.object.sha}; expected ${process.env.RELEASE_SHA}`,
+              );
+            }
             core.setOutput("release_url", release.html_url);
 
             try {
