@@ -427,16 +427,20 @@ jobs:
           script: |
             const path = require("node:path");
             const releaseId = Number(process.env.STAGING_RELEASE_ID);
-            const stagingRelease = (await github.rest.repos.getRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseId,
-            })).data;
-            if (!stagingRelease.draft || stagingRelease.tag_name !== process.env.STAGING_TAG) {
-              throw new Error(
-                `Staging release '${process.env.STAGING_TAG}' is no longer an unpublished draft`,
-              );
-            }
+            const requireUnpublishedStagingRelease = async () => {
+              const release = (await github.rest.repos.getRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: releaseId,
+              })).data;
+              if (!release.draft || release.tag_name !== process.env.STAGING_TAG) {
+                throw new Error(
+                  `Staging release '${process.env.STAGING_TAG}' is no longer an unpublished draft`,
+                );
+              }
+              return release;
+            };
+            await requireUnpublishedStagingRelease();
 
             const globber = await glob.create("release-assets/*");
             const expectedAssets = [];
@@ -499,6 +503,9 @@ jobs:
               if (error.status !== 404) throw error;
             }
 
+            // Keep this guard adjacent to the mutation. The validations above may
+            // take long enough for an operator to publish the staging release.
+            await requireUnpublishedStagingRelease();
             const release = (await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
