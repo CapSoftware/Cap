@@ -64,7 +64,7 @@ jobs:
             const tag = channel === "nightly"
               ? `cap-nightly-v${version}`
               : `cap-v${version}`;
-            const stagingTag = `${tag}-staging`;
+            const stagingTag = `${tag}-staging-${sha}`;
             const tagRef = `tags/${tag}`;
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
