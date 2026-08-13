@@ -1,6 +1,6 @@
 use serde::Deserialize;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, watch};
@@ -143,6 +143,68 @@ struct WsFrameStatsWindow {
     max_created_to_sent_ns: u64,
 }
 
+#[derive(Default)]
+struct OutputCapabilityCounts {
+    subscribers: usize,
+    nv12_capable_subscribers: usize,
+}
+
+struct SubscriberCapabilityGuard {
+    counts: Arc<Mutex<OutputCapabilityCounts>>,
+    nv12_output_available: Arc<AtomicBool>,
+    nv12_capable: bool,
+}
+
+impl SubscriberCapabilityGuard {
+    fn new(
+        counts: Arc<Mutex<OutputCapabilityCounts>>,
+        nv12_output_available: Arc<AtomicBool>,
+    ) -> Self {
+        let guard = Self {
+            counts,
+            nv12_output_available,
+            nv12_capable: false,
+        };
+        guard.update_counts(|counts| counts.subscribers += 1);
+        guard
+    }
+
+    fn update_counts(&self, update: impl FnOnce(&mut OutputCapabilityCounts)) {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        update(&mut counts);
+        self.nv12_output_available.store(
+            counts.subscribers > 0 && counts.nv12_capable_subscribers == counts.subscribers,
+            Ordering::Release,
+        );
+    }
+
+    fn set_nv12_capable(&mut self, capable: bool) {
+        if capable == self.nv12_capable {
+            return;
+        }
+        self.update_counts(|counts| {
+            if capable {
+                counts.nv12_capable_subscribers += 1;
+            } else {
+                counts.nv12_capable_subscribers = counts.nv12_capable_subscribers.saturating_sub(1);
+            }
+        });
+        self.nv12_capable = capable;
+    }
+}
+
+impl Drop for SubscriberCapabilityGuard {
+    fn drop(&mut self) {
+        let nv12_capable = self.nv12_capable;
+        self.update_counts(|counts| {
+            counts.subscribers = counts.subscribers.saturating_sub(1);
+            if nv12_capable {
+                counts.nv12_capable_subscribers = counts.nv12_capable_subscribers.saturating_sub(1);
+            }
+        });
+    }
+}
+
 struct SubscriberCountGuard {
     subscribers: Arc<AtomicUsize>,
     instant_subscribers: Option<Arc<AtomicUsize>>,
@@ -175,7 +237,15 @@ pub async fn create_watch_frame_ws(
     frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
     subscribers: Arc<AtomicUsize>,
 ) -> (u16, CancellationToken) {
-    create_watch_frame_ws_inner(frame_rx, subscribers, None).await
+    create_watch_frame_ws_inner(frame_rx, subscribers, None, None).await
+}
+
+pub async fn create_watch_frame_ws_with_output_capability(
+    frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
+    subscribers: Arc<AtomicUsize>,
+    nv12_output_available: Arc<AtomicBool>,
+) -> (u16, CancellationToken) {
+    create_watch_frame_ws_inner(frame_rx, subscribers, None, Some(nv12_output_available)).await
 }
 
 pub async fn create_watch_frame_ws_with_instant_tracking(
@@ -183,13 +253,14 @@ pub async fn create_watch_frame_ws_with_instant_tracking(
     subscribers: Arc<AtomicUsize>,
     instant_subscribers: Arc<AtomicUsize>,
 ) -> (u16, CancellationToken) {
-    create_watch_frame_ws_inner(frame_rx, subscribers, Some(instant_subscribers)).await
+    create_watch_frame_ws_inner(frame_rx, subscribers, Some(instant_subscribers), None).await
 }
 
 async fn create_watch_frame_ws_inner(
     frame_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
     subscribers: Arc<AtomicUsize>,
     instant_subscribers: Option<Arc<AtomicUsize>>,
+    nv12_output_available: Option<Arc<AtomicBool>>,
 ) -> (u16, CancellationToken) {
     use axum::{
         extract::{
@@ -200,20 +271,41 @@ async fn create_watch_frame_ws_inner(
         routing::get,
     };
 
+    let output_capability_counts = nv12_output_available
+        .as_ref()
+        .map(|_| Arc::new(Mutex::new(OutputCapabilityCounts::default())));
+
     type RouterState = (
         watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
         Arc<AtomicUsize>,
         Option<Arc<AtomicUsize>>,
+        Option<Arc<AtomicBool>>,
+        Option<Arc<Mutex<OutputCapabilityCounts>>>,
     );
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
         Query(query): Query<WatchFrameQuery>,
-        State((state, subscribers, instant_subscribers)): State<RouterState>,
+        State((
+            state,
+            subscribers,
+            instant_subscribers,
+            nv12_output_available,
+            output_capability_counts,
+        )): State<RouterState>,
     ) -> impl IntoResponse {
         let instant_subscribers = query.instant.then_some(instant_subscribers).flatten();
-        ws.on_upgrade(move |socket| handle_socket(socket, state, subscribers, instant_subscribers))
+        ws.on_upgrade(move |socket| {
+            handle_socket(
+                socket,
+                state,
+                subscribers,
+                instant_subscribers,
+                nv12_output_available,
+                output_capability_counts,
+            )
+        })
     }
 
     async fn handle_socket(
@@ -221,6 +313,8 @@ async fn create_watch_frame_ws_inner(
         mut camera_rx: watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
         subscribers: Arc<AtomicUsize>,
         instant_subscribers: Option<Arc<AtomicUsize>>,
+        nv12_output_available: Option<Arc<AtomicBool>>,
+        output_capability_counts: Option<Arc<Mutex<OutputCapabilityCounts>>>,
     ) {
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
@@ -234,6 +328,9 @@ async fn create_watch_frame_ws_inner(
             subscribers,
             instant_subscribers,
         };
+        let mut subscriber_capability = nv12_output_available
+            .zip(output_capability_counts)
+            .map(|(available, counts)| SubscriberCapabilityGuard::new(counts, available));
 
         {
             let packed = {
@@ -273,6 +370,19 @@ async fn create_watch_frame_ws_inner(
                         Some(Ok(Message::Close(_))) | None => {
                             tracing::info!("WebSocket closed");
                             break;
+                        }
+                        Some(Ok(Message::Text(message))) => {
+                            if let Some(subscriber_capability) = &mut subscriber_capability {
+                                match message.as_str() {
+                                    "cap-preview:nv12-webgpu" => {
+                                        subscriber_capability.set_nv12_capable(true);
+                                    }
+                                    "cap-preview:rgba" => {
+                                        subscriber_capability.set_nv12_capable(false);
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                         Some(Ok(_)) => {}
                         Some(Err(e)) => {
@@ -357,6 +467,8 @@ async fn create_watch_frame_ws_inner(
         frame_rx,
         subscribers,
         instant_subscribers,
+        nv12_output_available,
+        output_capability_counts,
     ));
 
     let cancel_token = CancellationToken::new();
@@ -561,5 +673,35 @@ mod tests {
 
         assert_eq!(subscribers.load(Ordering::Acquire), 0);
         assert_eq!(instant_subscribers.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn last_subscriber_resets_output_capability() {
+        let nv12_output_available = Arc::new(AtomicBool::new(true));
+        let counts = Arc::new(Mutex::new(OutputCapabilityCounts::default()));
+        let mut subscriber = SubscriberCapabilityGuard::new(counts, nv12_output_available.clone());
+        subscriber.set_nv12_capable(true);
+
+        drop(subscriber);
+
+        assert!(!nv12_output_available.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn nv12_requires_every_active_subscriber_to_be_capable() {
+        let counts = Arc::new(Mutex::new(OutputCapabilityCounts::default()));
+        let nv12_output_available = Arc::new(AtomicBool::new(false));
+        let mut capable =
+            SubscriberCapabilityGuard::new(counts.clone(), nv12_output_available.clone());
+        let mut fallback = SubscriberCapabilityGuard::new(counts, nv12_output_available.clone());
+
+        capable.set_nv12_capable(true);
+        assert!(!nv12_output_available.load(Ordering::Acquire));
+        fallback.set_nv12_capable(true);
+        assert!(nv12_output_available.load(Ordering::Acquire));
+        fallback.set_nv12_capable(false);
+        assert!(!nv12_output_available.load(Ordering::Acquire));
+        drop(fallback);
+        assert!(nv12_output_available.load(Ordering::Acquire));
     }
 }

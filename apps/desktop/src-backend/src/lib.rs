@@ -6465,6 +6465,7 @@ async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
     frame_cb: cap_editor::EditorFrameCallback,
+    nv12_output_available: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(Arc<EditorInstance>, cap_desktop_runtime::EventId), String> {
     let app = app.clone();
 
@@ -6485,13 +6486,14 @@ async fn create_editor_instance_impl(
 
     let instance = {
         let app = app.clone();
-        EditorInstance::new(
+        EditorInstance::new_with_output_capability(
             path,
             move |state| {
                 let _ = EditorStateChanged::new(state).emit(&app);
             },
             frame_cb,
             shared_device,
+            nv12_output_available,
         )
         .await?
     };

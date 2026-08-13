@@ -4940,6 +4940,12 @@ impl<'a> FrameRenderer<'a> {
         }
     }
 
+    pub fn release_rgba_readback(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.release_rgba_readback();
+        }
+    }
+
     pub async fn render_immediate_nv12(
         &mut self,
         segment_frames: DecodedSegmentFrames,

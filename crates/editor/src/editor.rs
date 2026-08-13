@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Instant;
 
-use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
+use cap_project::{BackgroundSource, ClipTransitionType, CursorEvents, ProjectConfiguration};
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
-    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, RenderingError,
+    TransitionRenderInput, clean_background_path,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -51,12 +55,17 @@ pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
 
 pub type EditorFrameCallback = Box<dyn FnMut(EditorFrameOutput, FrameLayout) + Send>;
 
+fn should_use_nv12_output(is_software_adapter: bool, nv12_output_available: bool) -> bool {
+    nv12_output_available && !is_software_adapter
+}
+
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_cb: EditorFrameCallback,
     render_constants: Arc<RenderVideoConstants>,
     layers_rx: RendererLayersReceiver,
     telemetry: Option<PlaybackTelemetry>,
+    nv12_output_available: Arc<AtomicBool>,
 }
 
 pub struct RendererHandle {
@@ -68,6 +77,20 @@ pub fn start_renderer_layers_creation(
     render_constants: &Arc<RenderVideoConstants>,
     project: &ProjectConfiguration,
 ) -> RendererLayersReceiver {
+    if let BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } =
+        &project.background.source
+        && let Some(path) = path.as_deref().and_then(clean_background_path)
+        && let Ok(runtime) = tokio::runtime::Handle::try_current()
+    {
+        let constants = render_constants.clone();
+        drop(runtime.spawn(async move {
+            constants
+                .background_textures
+                .ensure(&constants.device, &constants.queue, &path)
+                .await;
+        }));
+    }
+
     let (layers_tx, layers_rx) = oneshot::channel();
     let constants = render_constants.clone();
     let use_svg = project.cursor.use_svg;
@@ -112,6 +135,22 @@ impl Renderer {
         layers_rx: RendererLayersReceiver,
         telemetry: Option<PlaybackTelemetry>,
     ) -> Result<RendererHandle, String> {
+        Self::spawn_with_output_capability(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            telemetry,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    pub fn spawn_with_output_capability(
+        render_constants: Arc<RenderVideoConstants>,
+        frame_cb: EditorFrameCallback,
+        layers_rx: RendererLayersReceiver,
+        telemetry: Option<PlaybackTelemetry>,
+        nv12_output_available: Arc<AtomicBool>,
+    ) -> Result<RendererHandle, String> {
         let (tx, rx) = mpsc::channel(64);
 
         let this = Self {
@@ -120,6 +159,7 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry: telemetry.clone(),
+            nv12_output_available,
         };
 
         tokio::spawn(this.run());
@@ -134,9 +174,11 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry,
+            nv12_output_available,
         } = self;
 
         let mut frame_renderer = FrameRenderer::new(&render_constants);
+        let mut previous_nv12_output = false;
 
         let mut layers = match layers_rx.await {
             Ok(layers) => layers,
@@ -313,9 +355,28 @@ impl Renderer {
 
             let queue_wait = current.queued_at.elapsed();
             let drain_duration = queue_drain_start.elapsed();
+            // Stay on the universally supported RGBA path until the webview
+            // confirms that its WebGPU renderer initialized successfully.
+            let use_nv12_output = should_use_nv12_output(
+                render_constants.is_software_adapter,
+                nv12_output_available.load(Ordering::Acquire),
+            );
+            if use_nv12_output != previous_nv12_output {
+                if use_nv12_output {
+                    let _ = frame_renderer.flush_pipeline().await;
+                    frame_renderer.release_rgba_readback();
+                } else {
+                    let _ = frame_renderer.flush_pipeline_nv12().await;
+                }
+                previous_nv12_output = use_nv12_output;
+            }
             let flush_start = Instant::now();
             if drained_count > 0 {
-                let _ = frame_renderer.flush_pipeline().await;
+                if use_nv12_output {
+                    let _ = frame_renderer.flush_pipeline_nv12().await;
+                } else {
+                    let _ = frame_renderer.flush_pipeline().await;
+                }
             }
             let flush_duration = if drained_count > 0 {
                 flush_start.elapsed()
@@ -326,17 +387,75 @@ impl Renderer {
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
-            let render_result = match current.input {
-                PendingRenderInput::Single(input) => {
-                    frame_renderer
-                        .render_immediate_with_timings(
-                            input.segment_frames,
-                            input.uniforms,
-                            &input.cursor,
-                            true,
-                            &mut layers,
+            let render_result: Result<
+                (EditorFrameOutput, FrameRenderStageTimings),
+                RenderingError,
+            > = match current.input {
+                PendingRenderInput::Single(input) if use_nv12_output => frame_renderer
+                    .render_immediate_nv12(
+                        input.segment_frames,
+                        input.uniforms,
+                        &input.cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Nv12(frame),
+                            FrameRenderStageTimings::default(),
                         )
-                        .await
+                    }),
+                PendingRenderInput::Single(input) => frame_renderer
+                    .render_immediate_with_timings(
+                        input.segment_frames,
+                        input.uniforms,
+                        &input.cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, timings)| (EditorFrameOutput::Rgba(frame), timings)),
+                PendingRenderInput::Transition {
+                    outgoing,
+                    incoming,
+                    kind,
+                    progress,
+                } if use_nv12_output => {
+                    async {
+                        let frame = frame_renderer
+                            .render_transition_nv12(
+                                TransitionRenderInput {
+                                    segment_frames: outgoing.segment_frames,
+                                    uniforms: outgoing.uniforms,
+                                    cursor: &outgoing.cursor,
+                                    render_display: true,
+                                },
+                                TransitionRenderInput {
+                                    segment_frames: incoming.segment_frames,
+                                    uniforms: incoming.uniforms,
+                                    cursor: &incoming.cursor,
+                                    render_display: true,
+                                },
+                                kind,
+                                progress,
+                                &mut layers,
+                            )
+                            .await?;
+                        let frame = if let Some(frame) = frame {
+                            frame
+                        } else {
+                            frame_renderer
+                                .flush_pipeline_nv12()
+                                .await
+                                .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))?
+                        };
+                        Ok((
+                            EditorFrameOutput::Nv12(frame),
+                            FrameRenderStageTimings::default(),
+                        ))
+                    }
+                    .await
                 }
                 PendingRenderInput::Transition {
                     outgoing,
@@ -362,15 +481,26 @@ impl Renderer {
                         &mut layers,
                     )
                     .await
-                    .map(|frame| (frame, FrameRenderStageTimings::default())),
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Rgba(frame),
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
             };
             match render_result {
                 Ok((frame, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
-                    let frame_number = frame.frame_number;
-                    let output_format = PlaybackRenderOutputFormat::Rgba;
+                    let (frame_number, output_format) = match &frame {
+                        EditorFrameOutput::Nv12(frame) => {
+                            (frame.frame_number, PlaybackRenderOutputFormat::Nv12)
+                        }
+                        EditorFrameOutput::Rgba(frame) => {
+                            (frame.frame_number, PlaybackRenderOutputFormat::Rgba)
+                        }
+                    };
                     let callback_start = Instant::now();
-                    (frame_cb)(EditorFrameOutput::Rgba(frame), frame_layout);
+                    (frame_cb)(frame, frame_layout);
                     let callback_duration = callback_start.elapsed();
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
@@ -608,5 +738,17 @@ impl RendererHandle {
             tracing::debug!("Renderer stop message skipped because renderer task already stopped");
         }
         let _ = rx.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_use_nv12_output;
+
+    #[test]
+    fn nv12_output_requires_hardware_and_a_capable_consumer() {
+        assert!(should_use_nv12_output(false, true));
+        assert!(!should_use_nv12_output(true, true));
+        assert!(!should_use_nv12_output(false, false));
     }
 }

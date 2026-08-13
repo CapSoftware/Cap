@@ -8,7 +8,7 @@ use cap_rendering::GpuOutputFormat;
 
 use crate::{
     FrameLayoutEvent, create_editor_instance_impl,
-    frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
+    frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws_with_output_capability},
 };
 
 /// Forwards rendered frames to the preview websocket and mirrors each frame's
@@ -72,10 +72,21 @@ pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>)
 
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
     let (frame_tx, frame_rx) = watch::channel(None);
+    let nv12_output_available = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
-    let (inner, render_frame_event_id) =
-        create_editor_instance_impl(&app, path, make_frame_callback(app.clone(), frame_tx)).await?;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws_with_output_capability(
+        frame_rx,
+        Default::default(),
+        nv12_output_available.clone(),
+    )
+    .await;
+    let (inner, render_frame_event_id) = create_editor_instance_impl(
+        &app,
+        path,
+        make_frame_callback(app.clone(), frame_tx),
+        nv12_output_available,
+    )
+    .await?;
 
     Ok(Arc::new(EditorInstance {
         inner,
@@ -360,14 +371,20 @@ impl EditorInstances {
                 }
 
                 let (frame_tx, frame_rx) = watch::channel(None);
+                let nv12_output_available = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-                let (ws_port, ws_shutdown_token) =
-                    create_watch_frame_ws(frame_rx, Default::default()).await;
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws_with_output_capability(
+                    frame_rx,
+                    Default::default(),
+                    nv12_output_available.clone(),
+                )
+                .await;
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     make_frame_callback(app_handle.clone(), frame_tx),
+                    nv12_output_available,
                 )
                 .await?;
 

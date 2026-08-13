@@ -2,7 +2,7 @@ use cap_project::{
     ClipOffsets, ClipTransitionType, ProjectConfiguration, TimelineFrameMapping, XY,
 };
 use cap_rendering::{
-    DecodedFrame, DecodedSegmentFrames, PixelFormat, PrecomputedCursorTimeline, ProjectUniforms,
+    DecodedFrame, DecodedSegmentFrames, PrecomputedCursorTimeline, ProjectUniforms,
     RecordingSegmentDecoders, RenderVideoConstants, ZoomTransformTimeline,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
@@ -34,11 +34,14 @@ use crate::{
 const INITIAL_PREFETCH_BUFFER_SIZE: usize = 10;
 const MAX_PREFETCH_BUFFER_SIZE: usize = 90;
 const PREFETCH_CHANNEL_SIZE: usize = 4;
-const MAX_PREFETCH_BUFFER_BYTES: usize = 256 * 1024 * 1024;
+const MAX_PREFETCH_BUFFER_BYTES: usize = 128 * 1024 * 1024;
 const PARALLEL_DECODE_TASKS: usize = 4;
 const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
-const FRAME_CACHE_SIZE: usize = 90;
-const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
+// A Playback instance only advances its output frame number. Retaining the
+// preceding 90 output frames therefore consumed memory without producing
+// cache hits; keep only the current frame for a possible same-frame retry.
+const FRAME_CACHE_SIZE: usize = 1;
+const MAX_FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 #[cfg(target_os = "windows")]
@@ -172,15 +175,7 @@ type CachedTransition = (Arc<DecodedSegmentFrames>, u32, ClipTransitionType, f32
 type CachedFrame = (Arc<DecodedSegmentFrames>, u32, Option<CachedTransition>);
 
 fn decoded_frame_byte_len(frame: &DecodedFrame) -> usize {
-    if !frame.data().is_empty() {
-        return frame.data().len();
-    }
-
-    let pixels = (frame.width() as usize).saturating_mul(frame.height() as usize);
-    match frame.format() {
-        PixelFormat::Rgba => pixels.saturating_mul(4),
-        PixelFormat::Nv12 | PixelFormat::Yuv420p => pixels.saturating_mul(3) / 2,
-    }
+    frame.byte_len()
 }
 
 fn decoded_segment_frames_byte_len(frames: &DecodedSegmentFrames) -> usize {
