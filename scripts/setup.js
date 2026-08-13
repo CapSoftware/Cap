@@ -28,6 +28,26 @@ function cargoConfigPath(value) {
 	return value.replaceAll("\\", "/");
 }
 
+async function fetchBytes(url, attempts = 3) {
+	let lastError;
+
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			const response = await fetch(url);
+			if (!response.ok)
+				throw new Error(`Download failed with HTTP ${response.status}`);
+			return Buffer.from(await response.arrayBuffer());
+		} catch (error) {
+			lastError = error;
+			if (attempt === attempts) break;
+			console.warn(`Download attempt ${attempt} failed; retrying...`);
+			await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+		}
+	}
+
+	throw lastError;
+}
+
 async function main() {
 	await fs.mkdir(targetDir, { recursive: true });
 
@@ -66,10 +86,10 @@ async function main() {
 
 		if (!(await fileExists(nativeDepsTarPath))) {
 			console.log(`Downloading ${nativeDepsTar}`);
-			const nativeDepsBytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
-				.then((r) => r.blob())
-				.then((b) => b.arrayBuffer());
-			await fs.writeFile(nativeDepsTarPath, Buffer.from(nativeDepsBytes));
+			const nativeDepsBytes = await fetchBytes(
+				`${NATIVE_DEPS_URL}/${nativeDepsTar}`,
+			);
+			await fs.writeFile(nativeDepsTarPath, nativeDepsBytes);
 			console.log("Downloaded native deps");
 			downloadedNativeDeps = true;
 		} else console.log(`Using cached ${nativeDepsTar}`);
@@ -143,10 +163,8 @@ async function main() {
 		const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
 		const ffmpegZipPath = path.join(targetDir, ffmpegZip);
 		if (!(await fileExists(ffmpegZipPath))) {
-			const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
-				.then((r) => r.blob())
-				.then((b) => b.arrayBuffer());
-			await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
+			const ffmpegZipBytes = await fetchBytes(FFMPEG_ZIP_URL);
+			await fs.writeFile(ffmpegZipPath, ffmpegZipBytes);
 			console.log(`Downloaded ${ffmpegZip}`);
 			downloadedFfmpeg = true;
 		} else console.log(`Using cached ${ffmpegZip}`);
@@ -237,10 +255,8 @@ async function main() {
 			let downloadedNativeDeps = false;
 			if (!(await fileExists(nativeDepsTarPath))) {
 				console.log(`Downloading ${nativeDepsTar}`);
-				const bytes = await fetch(`${NATIVE_DEPS_URL}/${nativeDepsTar}`)
-					.then((r) => r.blob())
-					.then((b) => b.arrayBuffer());
-				await fs.writeFile(nativeDepsTarPath, Buffer.from(bytes));
+				const bytes = await fetchBytes(`${NATIVE_DEPS_URL}/${nativeDepsTar}`);
+				await fs.writeFile(nativeDepsTarPath, bytes);
 				console.log("Downloaded native deps");
 				downloadedNativeDeps = true;
 			} else console.log(`Using cached ${nativeDepsTar}`);
@@ -385,10 +401,8 @@ async function setupMacOSOnnxRuntime() {
 
 	if (!(await fileExists(archivePath))) {
 		console.log(`Downloading ${asset.name}`);
-		const bytes = await fetch(url)
-			.then((r) => r.blob())
-			.then((b) => b.arrayBuffer());
-		await fs.writeFile(archivePath, Buffer.from(bytes));
+		const bytes = await fetchBytes(url);
+		await fs.writeFile(archivePath, bytes);
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
@@ -439,10 +453,8 @@ async function setupWindowsOnnxRuntime() {
 
 	if (!(await fileExists(archivePath))) {
 		console.log(`Downloading ${asset.name}`);
-		const bytes = await fetch(url)
-			.then((r) => r.blob())
-			.then((b) => b.arrayBuffer());
-		await fs.writeFile(archivePath, Buffer.from(bytes));
+		const bytes = await fetchBytes(url);
+		await fs.writeFile(archivePath, bytes);
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 

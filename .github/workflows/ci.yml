@@ -1,4 +1,8 @@
 name: "CI"
+
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -26,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check for changes
-        uses: dorny/paths-filter@v2
+        uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
@@ -44,7 +48,7 @@ jobs:
       - name: Output branch name
         id: branch
         run: |
-          echo "branch=${{ env.BRANCH_NAME }}" >> $GITHUB_OUTPUT
+          echo "branch=${{ env.BRANCH_NAME }}" >> "$GITHUB_OUTPUT"
 
   typecheck:
     name: Typecheck
@@ -144,23 +148,21 @@ jobs:
 
       - name: Create .env file in root
         run: |
-          echo "VITE_ENVIRONMENT=production" >> .env
-          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
-          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
-          echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}' >> .env
-          echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}' >> .env
-          echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          {
+            echo "VITE_ENVIRONMENT=production"
+            echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
+            echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
+            echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
+            echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}'
+            echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+          } >> .env
 
-          cat .env >> $GITHUB_ENV
+          cat .env >> "$GITHUB_ENV"
 
       - name: Run setup
         shell: bash
         run: node scripts/setup.js
-
-      - name: Build desktop binaries
-        shell: bash
-        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-features --locked -- -D warnings
@@ -196,6 +198,10 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      # CI validates release-mode compilation and packaging without paying the
+      # production profile's full-LTO cost on every pull request.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -213,19 +219,18 @@ jobs:
 
       - name: Create .env file in root
         run: |
-          echo "VITE_ENVIRONMENT=production" >> .env
-          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
-          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
-          echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}' >> .env
-          echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}' >> .env
-          echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
+          {
+            echo "VITE_ENVIRONMENT=production"
+            echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568"
+            echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
+            echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
+            echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}'
+            echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+          } >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
-
-      - name: Output .env file
-        run: cat apps/desktop/.env
 
       - name: Run cap-setup
         shell: bash
@@ -283,7 +288,7 @@ jobs:
           save-cache: true
 
       - name: Setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
