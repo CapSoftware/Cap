@@ -405,10 +405,7 @@ async function importLoomVideoForOwner({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writableResult = await Storage.getWritableAccessForUser(
-		ownerId,
-		orgId,
-	)
+	const writableResult = await Storage.getWritableAccessForUser(ownerId, orgId)
 		.pipe(runPromise)
 		.then(
 			(value) => ({ ok: true as const, value }),
