@@ -61,6 +61,19 @@ jobs:
             if (!versionPattern || !versionPattern.test(version))
               throw new Error(`Invalid ${channel} release version '${version}'`);
 
+            const immutableReleases = await github.request(
+              "GET /repos/{owner}/{repo}/immutable-releases",
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              },
+            );
+            if (!immutableReleases.data.enabled) {
+              throw new Error(
+                "Repository immutable releases must be enabled before preparing a desktop release",
+              );
+            }
+
             const tag = channel === "nightly"
               ? `cap-nightly-v${version}`
               : `cap-v${version}`;
