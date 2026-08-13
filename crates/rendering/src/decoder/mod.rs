@@ -2,11 +2,16 @@ use ::ffmpeg::Rational;
 use std::{
     fmt,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{Arc, Weak, mpsc},
     time::Duration,
 };
 use tokio::sync::oneshot;
 use tracing::info;
+
+#[cfg(target_os = "macos")]
+use cidre::{arc::R, cv};
+#[cfg(target_os = "macos")]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -150,8 +155,105 @@ pub struct DecodedFrame {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+    #[cfg(target_os = "macos")]
+    image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+}
+
+#[cfg(target_os = "macos")]
+struct SendableImageBuf {
+    image_buf: Mutex<Option<R<cv::ImageBuf>>>,
+    raw_data: OnceLock<Vec<u8>>,
+}
+
+#[cfg(target_os = "macos")]
+// SAFETY: all CVPixelBuffer access is serialized by `image_buf`, and the Core
+// Foundation object remains retained for the lifetime of this wrapper.
+unsafe impl Send for SendableImageBuf {}
+#[cfg(target_os = "macos")]
+// SAFETY: see the `Send` implementation above.
+unsafe impl Sync for SendableImageBuf {}
+
+#[cfg(target_os = "macos")]
+impl SendableImageBuf {
+    fn new(image_buf: R<cv::ImageBuf>) -> Self {
+        Self {
+            image_buf: Mutex::new(Some(image_buf)),
+            raw_data: OnceLock::new(),
+        }
+    }
+
+    fn with_image_buf<T>(&self, f: impl FnOnce(&cv::ImageBuf) -> T) -> Option<T> {
+        let image_buf = self
+            .image_buf
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        image_buf.as_deref().map(f)
+    }
+
+    fn raw_data(&self) -> &[u8] {
+        self.raw_data.get_or_init(|| {
+            let mut image_buf_guard = self
+                .image_buf
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(image_buf) = image_buf_guard.as_mut() else {
+                return Vec::new();
+            };
+
+            unsafe {
+                image_buf
+                    .lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY)
+                    .result()
+                    .unwrap();
+            }
+
+            let y_size = image_buf.plane_bytes_per_row(0) * image_buf.plane_height(0);
+            let uv_size = image_buf.plane_bytes_per_row(1) * image_buf.plane_height(1);
+            let y_plane =
+                unsafe { std::slice::from_raw_parts(image_buf.plane_base_address(0), y_size) };
+            let uv_plane =
+                unsafe { std::slice::from_raw_parts(image_buf.plane_base_address(1), uv_size) };
+
+            let mut data = Vec::with_capacity(y_size + uv_size);
+            data.extend_from_slice(y_plane);
+            data.extend_from_slice(uv_plane);
+
+            unsafe {
+                image_buf.unlock_lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY);
+            }
+
+            // CPU consumers no longer need the IOSurface after its planes have
+            // been copied. Releasing it keeps cache accounting at one frame
+            // instead of retaining both the CVPixelBuffer and its materialized
+            // bytes for the lifetime of the cache entry.
+            *image_buf_guard = None;
+
+            data
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DecodedFrameStorageIdentity {
+    data: Weak<Vec<u8>>,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
+}
+
+impl DecodedFrameStorageIdentity {
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.data.ptr_eq(&other.data)
+            && self.width == other.width
+            && self.height == other.height
+            && self.format == other.format
+            && self.y_stride == other.y_stride
+            && self.uv_stride == other.uv_stride
+    }
 }
 
 impl fmt::Debug for DecodedFrame {
@@ -176,6 +278,8 @@ impl DecodedFrame {
             format: PixelFormat::Rgba,
             y_stride: width * 4,
             uv_stride: 0,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -189,6 +293,8 @@ impl DecodedFrame {
             format: PixelFormat::Rgba,
             y_stride: width * 4,
             uv_stride: 0,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -202,6 +308,8 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride,
             uv_stride,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -221,8 +329,29 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride,
             uv_stride,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn new_nv12_with_image_buf(
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        image_buf: R<cv::ImageBuf>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
         }
     }
 
@@ -240,6 +369,8 @@ impl DecodedFrame {
             format: PixelFormat::Yuv420p,
             y_stride,
             uv_stride,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -259,6 +390,8 @@ impl DecodedFrame {
             format: PixelFormat::Yuv420p,
             y_stride,
             uv_stride,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -273,6 +406,8 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride: width,
             uv_stride: width,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
         }
     }
@@ -291,6 +426,8 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride: width,
             uv_stride: width,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
                 texture,
                 shared_handle,
@@ -314,6 +451,8 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride: width,
             uv_stride: width,
+            #[cfg(target_os = "macos")]
+            image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_yuv_handles(
                 texture,
                 shared_handle,
@@ -351,7 +490,21 @@ impl DecodedFrame {
     }
 
     pub fn data(&self) -> &[u8] {
+        #[cfg(target_os = "macos")]
+        if self.data.is_empty()
+            && let Some(backing) = &self.image_buf_backing
+        {
+            return backing.raw_data();
+        }
+
         &self.data
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn with_image_buf<T>(&self, f: impl FnOnce(&cv::ImageBuf) -> T) -> Option<T> {
+        self.image_buf_backing
+            .as_ref()
+            .and_then(|backing| backing.with_image_buf(f))
     }
 
     pub fn width(&self) -> u32 {
@@ -366,6 +519,34 @@ impl DecodedFrame {
         self.format
     }
 
+    pub fn byte_len(&self) -> usize {
+        if !self.data.is_empty() {
+            return self.data.len();
+        }
+
+        let y_bytes = (self.y_stride as usize).saturating_mul(self.height as usize);
+        let uv_bytes = (self.uv_stride as usize).saturating_mul((self.height / 2) as usize);
+
+        match self.format {
+            PixelFormat::Rgba => (self.width as usize)
+                .saturating_mul(self.height as usize)
+                .saturating_mul(4),
+            PixelFormat::Nv12 => y_bytes.saturating_add(uv_bytes),
+            PixelFormat::Yuv420p => y_bytes.saturating_add(uv_bytes.saturating_mul(2)),
+        }
+    }
+
+    pub(crate) fn storage_identity(&self) -> DecodedFrameStorageIdentity {
+        DecodedFrameStorageIdentity {
+            data: Arc::downgrade(&self.data),
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            y_stride: self.y_stride,
+            uv_stride: self.uv_stride,
+        }
+    }
+
     pub fn y_plane(&self) -> Option<&[u8]> {
         match self.format {
             PixelFormat::Nv12 | PixelFormat::Yuv420p => {
@@ -373,7 +554,7 @@ impl DecodedFrame {
                     .y_stride
                     .checked_mul(self.height)
                     .and_then(|v| usize::try_from(v).ok())?;
-                self.data.get(..y_size)
+                self.data().get(..y_size)
             }
             PixelFormat::Rgba => None,
         }
@@ -386,7 +567,7 @@ impl DecodedFrame {
                     .y_stride
                     .checked_mul(self.height)
                     .and_then(|v| usize::try_from(v).ok())?;
-                self.data.get(y_size..)
+                self.data().get(y_size..)
             }
             PixelFormat::Yuv420p | PixelFormat::Rgba => None,
         }
@@ -404,7 +585,7 @@ impl DecodedFrame {
                     .checked_mul(self.height / 2)
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_end = y_size.checked_add(u_size)?;
-                self.data.get(y_size..u_end)
+                self.data().get(y_size..u_end)
             }
             _ => None,
         }
@@ -422,7 +603,7 @@ impl DecodedFrame {
                     .checked_mul(self.height / 2)
                     .and_then(|v| usize::try_from(v).ok())?;
                 let v_start = y_size.checked_add(u_size)?;
-                self.data.get(v_start..)
+                self.data().get(v_start..)
             }
             _ => None,
         }
@@ -895,6 +1076,71 @@ pub async fn spawn_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_frame_storage_identity_matches_clones() {
+        let frame = DecodedFrame::new_nv12(vec![0; 6], 2, 2, 2, 2);
+        let cloned = frame.clone();
+
+        assert!(frame.storage_identity().matches(&cloned.storage_identity()));
+    }
+
+    #[test]
+    fn decoded_frame_storage_identity_rejects_distinct_or_reinterpreted_frames() {
+        let data = Arc::new(vec![0; 16]);
+        let original = DecodedFrame::new_with_arc(Arc::clone(&data), 2, 2);
+        let reinterpreted = DecodedFrame::new_with_arc(Arc::clone(&data), 1, 4);
+        let distinct = DecodedFrame::new(vec![0; 16], 2, 2);
+
+        assert!(
+            !original
+                .storage_identity()
+                .matches(&reinterpreted.storage_identity())
+        );
+        assert!(
+            !original
+                .storage_identity()
+                .matches(&distinct.storage_identity())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn iosurface_backed_nv12_materializes_raw_planes_only_on_demand() {
+        let mut image_buf = cv::ImageBuf::new(4, 2, cv::PixelFormat::_420V, None).unwrap();
+
+        unsafe {
+            image_buf
+                .lock_base_addr(cv::pixel_buffer::LockFlags::DEFAULT)
+                .result()
+                .unwrap();
+        }
+
+        let y_stride = image_buf.plane_bytes_per_row(0);
+        let uv_stride = image_buf.plane_bytes_per_row(1);
+        let y_size = y_stride * image_buf.plane_height(0);
+        let uv_size = uv_stride * image_buf.plane_height(1);
+        unsafe {
+            std::ptr::write_bytes(image_buf.plane_base_address(0).cast_mut(), 0x11, y_size);
+            std::ptr::write_bytes(image_buf.plane_base_address(1).cast_mut(), 0x22, uv_size);
+            image_buf.unlock_lock_base_addr(cv::pixel_buffer::LockFlags::DEFAULT);
+        }
+
+        let frame = DecodedFrame::new_nv12_with_image_buf(
+            4,
+            2,
+            y_stride as u32,
+            uv_stride as u32,
+            image_buf,
+        );
+
+        assert_eq!(frame.byte_len(), y_size + uv_size);
+        assert!(frame.with_image_buf(|_| ()).is_some());
+        assert_eq!(frame.y_plane().unwrap(), vec![0x11; y_size]);
+        assert_eq!(frame.uv_plane().unwrap(), vec![0x22; uv_size]);
+        assert_eq!(frame.data().len(), y_size + uv_size);
+        assert!(frame.with_image_buf(|_| ()).is_none());
+    }
 
     #[test]
     fn pts_to_frame_maps_real_presentation_time_to_index() {

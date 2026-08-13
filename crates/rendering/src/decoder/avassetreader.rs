@@ -40,48 +40,14 @@ fn frame_cache_needs_eviction(
 }
 
 #[derive(Clone)]
-struct FrameData {
-    data: Arc<Vec<u8>>,
-    y_stride: u32,
-    uv_stride: u32,
-}
-
-#[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
-    width: u32,
-    height: u32,
-    format: PixelFormat,
-    frame_data: FrameData,
+    frame: DecodedFrame,
 }
 
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
-        let FrameData {
-            data,
-            y_stride,
-            uv_stride,
-        } = &self.frame_data;
-
-        match self.format {
-            PixelFormat::Rgba => {
-                DecodedFrame::new_with_arc(Arc::clone(data), self.width, self.height)
-            }
-            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
-                Arc::clone(data),
-                self.width,
-                self.height,
-                *y_stride,
-                *uv_stride,
-            ),
-            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
-                Arc::clone(data),
-                self.width,
-                self.height,
-                *y_stride,
-                *uv_stride,
-            ),
-        }
+        self.frame.clone()
     }
 }
 
@@ -232,39 +198,41 @@ impl CachedFrame {
             | format::Pixel::RGBA
             | format::Pixel::BGRA
             | format::Pixel::YUV420P => {
-                let mut img = image_buf;
-                let (data, fmt, y_str, uv_str) = processor.extract_raw(&mut img);
-                Self(ProcessedFrame {
-                    number,
-                    width,
-                    height,
-                    format: fmt,
-                    frame_data: FrameData {
-                        data: Arc::new(data),
-                        y_stride: y_str,
-                        uv_stride: uv_str,
-                    },
-                })
+                let frame = if pixel_format == format::Pixel::NV12 && image_buf.io_surf().is_some()
+                {
+                    let y_stride = image_buf.plane_bytes_per_row(0) as u32;
+                    let uv_stride = image_buf.plane_bytes_per_row(1) as u32;
+                    DecodedFrame::new_nv12_with_image_buf(
+                        width, height, y_stride, uv_stride, image_buf,
+                    )
+                } else {
+                    let mut image_buf = image_buf;
+                    let (data, fmt, y_str, uv_str) = processor.extract_raw(&mut image_buf);
+                    let data = Arc::new(data);
+                    match fmt {
+                        PixelFormat::Nv12 => {
+                            DecodedFrame::new_nv12_with_arc(data, width, height, y_str, uv_str)
+                        }
+                        PixelFormat::Rgba => DecodedFrame::new_with_arc(data, width, height),
+                        PixelFormat::Yuv420p => {
+                            DecodedFrame::new_yuv420p_with_arc(data, width, height, y_str, uv_str)
+                        }
+                    }
+                };
+                Self(ProcessedFrame { number, frame })
             }
             _ => {
                 let black_frame = vec![0u8; (width * height * 4) as usize];
                 Self(ProcessedFrame {
                     number,
-                    width,
-                    height,
-                    format: PixelFormat::Rgba,
-                    frame_data: FrameData {
-                        data: Arc::new(black_frame),
-                        y_stride: width * 4,
-                        uv_stride: 0,
-                    },
+                    frame: DecodedFrame::new(black_frame, width, height),
                 })
             }
         }
     }
 
     fn byte_len(&self) -> usize {
-        self.0.frame_data.data.len()
+        self.0.frame.byte_len()
     }
 
     fn data(&self) -> &ProcessedFrame {
@@ -477,34 +445,10 @@ impl AVAssetReaderDecoder {
             keyframe_index_arc.clone(),
         )?;
 
-        let mut decoders = vec![primary_instance];
-
-        let initial_positions = pool_manager.positions();
-        for pos in initial_positions.iter().skip(1) {
-            let start_time = pos.position_secs;
-            match DecoderInstance::new(
-                path.clone(),
-                tokio_handle.clone(),
-                start_time,
-                keyframe_index_arc.clone(),
-            ) {
-                Ok(instance) => {
-                    decoders.push(instance);
-                    tracing::info!(
-                        position_secs = start_time,
-                        decoder_index = decoders.len() - 1,
-                        "Created additional decoder instance for multi-position pool"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        position_secs = start_time,
-                        error = %e,
-                        "Failed to create additional decoder instance, continuing with fewer decoders"
-                    );
-                }
-            }
-        }
+        // Linear playback only needs one reader. Additional readers retain
+        // AVFoundation state and decoded buffers, so create them only when a
+        // non-sequential request would otherwise reposition an active reader.
+        let decoders = vec![primary_instance];
 
         let total_frames_estimate = (duration_secs * fps as f64).ceil() as u32;
 
@@ -542,6 +486,46 @@ impl AVAssetReaderDecoder {
         };
 
         let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
+
+        let max_decoder_count = self
+            .pool_manager
+            .optimal_pool_size()
+            .min(self.pool_manager.positions().len());
+        if should_grow_decoder_pool(is_scrubbing, needs_reset, decoder_count, max_decoder_count) {
+            let (path, tokio_handle, keyframe_index) = {
+                let config = self.pool_manager.config();
+                (
+                    config.path.clone(),
+                    config.tokio_handle.clone(),
+                    config.keyframe_index.clone(),
+                )
+            };
+
+            match DecoderInstance::new(path, tokio_handle, requested_time, keyframe_index) {
+                Ok(instance) => {
+                    let decoder_idx = self.decoders.len();
+                    let position = instance.current_position();
+                    self.decoders.push(instance);
+                    self.pool_manager
+                        .update_decoder_position(decoder_idx, position);
+                    self.active_decoder_idx = decoder_idx;
+                    tracing::info!(
+                        decoder_index = decoder_idx,
+                        requested_time = requested_time,
+                        decoder_count = self.decoders.len(),
+                        "Created decoder instance on demand for non-sequential access"
+                    );
+                    return (decoder_idx, true);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        requested_time = requested_time,
+                        error = %error,
+                        "Failed to create decoder on demand; reusing an existing decoder"
+                    );
+                }
+            }
+        }
 
         if needs_reset && decoder_idx < self.decoders.len() {
             self.decoders[decoder_idx].reset(requested_time);
@@ -1148,6 +1132,15 @@ impl AVAssetReaderDecoder {
     }
 }
 
+fn should_grow_decoder_pool(
+    is_scrubbing: bool,
+    needs_reset: bool,
+    decoder_count: usize,
+    max_decoder_count: usize,
+) -> bool {
+    is_scrubbing && needs_reset && decoder_count < max_decoder_count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,6 +1155,15 @@ mod tests {
         assert!(frame_cache_needs_eviction(FRAME_CACHE_SIZE, 0, 1));
         assert!(frame_cache_needs_eviction(1, MAX_FRAME_CACHE_BYTES, 1,));
         assert!(frame_cache_needs_eviction(1, usize::MAX, 1));
+    }
+
+    #[test]
+    fn decoder_pool_grows_only_for_unserved_non_sequential_access() {
+        assert!(should_grow_decoder_pool(true, true, 1, 5));
+        assert!(!should_grow_decoder_pool(false, true, 1, 5));
+        assert!(!should_grow_decoder_pool(true, false, 1, 5));
+        assert!(!should_grow_decoder_pool(true, true, 5, 5));
+        assert!(!should_grow_decoder_pool(true, true, 1, 1));
     }
 
     #[test]
