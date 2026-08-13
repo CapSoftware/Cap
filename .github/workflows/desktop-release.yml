@@ -21,6 +21,10 @@ on:
         type: string
         default: ""
 
+concurrency:
+  group: desktop-release-${{ inputs.channel }}-${{ inputs.version }}
+  cancel-in-progress: false
+
 env:
   SENTRY_ORG: cap-s2
   SENTRY_PROJECT: cap-desktop
@@ -34,7 +38,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Create or update release tag and draft
+      - name: Prepare immutable release tag and draft
         id: release
         uses: actions/github-script@v7
         with:
@@ -43,6 +47,24 @@ jobs:
               ? `cap-nightly-v${{ inputs.version }}`
               : `cap-v${{ inputs.version }}`;
             const sha = "${{ inputs.sha }}";
+            const tagRef = `tags/${tag}`;
+
+            let tagExists = true;
+            try {
+              const existingTag = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: tagRef,
+              });
+              if (existingTag.data.object.sha !== sha) {
+                throw new Error(
+                  `Tag '${tag}' already points to ${existingTag.data.object.sha}; refusing to move it to ${sha}`,
+                );
+              }
+            } catch (error) {
+              if (error.status === 404) tagExists = false;
+              else throw error;
+            }
 
             let release;
             try {
@@ -52,12 +74,13 @@ jobs:
               if (error.status !== 404) throw error;
             }
 
-            try {
-              await github.rest.git.updateRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${tag}`, sha, force: true });
-            } catch (error) {
-              if (error.status !== 422 && error.status !== 404) throw error;
-              await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo, ref: `refs/tags/${tag}`, sha });
-            }
+            if (!tagExists)
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/${tagRef}`,
+                sha,
+              });
 
             if (release) {
               release = (await github.rest.repos.updateRelease({
