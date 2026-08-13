@@ -34,20 +34,43 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release.outputs.tag_name }}
-      release_url: ${{ steps.release.outputs.release_url }}
+      staging_tag: ${{ steps.release.outputs.staging_tag }}
+      staging_release_id: ${{ steps.release.outputs.staging_release_id }}
     permissions:
       contents: write
     steps:
       - name: Prepare immutable release tag and draft
         id: release
         uses: actions/github-script@v7
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
         with:
           script: |
-            const tag = "${{ inputs.channel }}" === "nightly"
-              ? `cap-nightly-v${{ inputs.version }}`
-              : `cap-v${{ inputs.version }}`;
-            const sha = "${{ inputs.sha }}";
+            const channel = process.env.RELEASE_CHANNEL;
+            const sha = process.env.RELEASE_SHA;
+            const version = process.env.RELEASE_VERSION;
+            if (!/^[0-9a-f]{40}$/.test(sha))
+              throw new Error(`Invalid release SHA '${sha}'`);
+            const versionPattern = channel === "nightly"
+              ? /^\d+\.\d+\.\d+-nightly\.\d{12}$/
+              : channel === "stable"
+                ? /^\d+\.\d+\.\d+$/
+                : null;
+            if (!versionPattern || !versionPattern.test(version))
+              throw new Error(`Invalid ${channel} release version '${version}'`);
+
+            const tag = channel === "nightly"
+              ? `cap-nightly-v${version}`
+              : `cap-v${version}`;
+            const stagingTag = `${tag}-staging`;
             const tagRef = `tags/${tag}`;
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
 
             let tagExists = true;
             try {
@@ -66,12 +89,13 @@ jobs:
               else throw error;
             }
 
-            let release;
-            try {
-              release = (await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag })).data;
-              if (!release.draft) throw new Error(`Release '${tag}' is already published: ${release.html_url}`);
-            } catch (error) {
-              if (error.status !== 404) throw error;
+            const existingRelease = releases.find(
+              (release) => release.tag_name === tag,
+            );
+            if (existingRelease) {
+              throw new Error(
+                `Release '${tag}' already exists (${existingRelease.draft ? "draft" : "published"}): ${existingRelease.html_url}`,
+              );
             }
 
             if (!tagExists)
@@ -82,34 +106,65 @@ jobs:
                 sha,
               });
 
-            if (release) {
-              release = (await github.rest.repos.updateRelease({
+            let stagingRelease = releases.find(
+              (release) => release.tag_name === stagingTag,
+            );
+
+            if (stagingRelease) {
+              if (!stagingRelease.draft) {
+                throw new Error(
+                  `Staging release '${stagingTag}' is published; refusing to mutate it`,
+                );
+              }
+              if (stagingRelease.target_commitish !== sha) {
+                throw new Error(
+                  `Staging release '${stagingTag}' targets ${stagingRelease.target_commitish}; expected ${sha}`,
+                );
+              }
+              for (const asset of await github.paginate(
+                github.rest.repos.listReleaseAssets,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: stagingRelease.id,
+                  per_page: 100,
+                },
+              )) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: asset.id,
+                });
+              }
+              stagingRelease = (await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                release_id: release.id,
+                release_id: stagingRelease.id,
                 target_commitish: sha,
-                name: "${{ inputs.version }}",
-                prerelease: "${{ inputs.channel }}" === "nightly",
+                name: version,
+                draft: true,
+                prerelease: channel === "nightly",
               })).data;
             } else {
-              release = (await github.rest.repos.createRelease({
+              stagingRelease = (await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                tag_name: tag,
+                tag_name: stagingTag,
                 target_commitish: sha,
-                name: "${{ inputs.version }}",
+                name: version,
                 draft: true,
-                prerelease: "${{ inputs.channel }}" === "nightly",
+                prerelease: channel === "nightly",
                 generate_release_notes: true,
               })).data;
             }
             core.setOutput("tag_name", tag);
-            core.setOutput("release_url", release.html_url);
+            core.setOutput("staging_tag", stagingTag);
+            core.setOutput("staging_release_id", stagingRelease.id);
 
   build:
     needs: draft
     permissions:
-      contents: write
+      contents: read
       actions: read
     strategy:
       fail-fast: false
@@ -307,30 +362,13 @@ jobs:
 
           Get-ChildItem $dist -Filter *.blockmap | Remove-Item -Force
 
-      - name: Verify release is still a draft
-        uses: actions/github-script@v7
-        env:
-          RELEASE_TAG: ${{ needs.draft.outputs.tag_name }}
+      - name: Stage release assets
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const release = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag: process.env.RELEASE_TAG,
-            });
-            if (!release.data.draft) {
-              throw new Error(
-                `Release '${process.env.RELEASE_TAG}' was published while assets were building; refusing to mutate it`,
-              );
-            }
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.draft.outputs.tag_name }}
-          draft: true
-          prerelease: ${{ inputs.channel == 'nightly' }}
-          files: |
+          name: release-assets-${{ matrix.settings.target }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
             apps/desktop/dist-electron/*.dmg
             apps/desktop/dist-electron/*.zip
             apps/desktop/dist-electron/*.exe
@@ -357,25 +395,136 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
       id-token: write
     steps:
-      - name: Publish nightly release
-        if: ${{ inputs.auto_publish }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Download staged platform assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: staged-release-assets
+
+      - name: Assemble release assets
+        run: node scripts/prepare-electron-release-assets.mjs staged-release-assets release-assets
+
+      - name: Upload complete staging release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.draft.outputs.staging_tag }}
+          draft: true
+          prerelease: ${{ inputs.channel == 'nightly' }}
+          fail_on_unmatched_files: true
+          files: release-assets/*
+
+      - name: Promote complete staging release
+        id: promote
         uses: actions/github-script@v7
+        env:
+          AUTO_PUBLISH: ${{ inputs.auto_publish }}
+          FINAL_TAG: ${{ needs.draft.outputs.tag_name }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_SHA: ${{ inputs.sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          STAGING_RELEASE_ID: ${{ needs.draft.outputs.staging_release_id }}
+          STAGING_TAG: ${{ needs.draft.outputs.staging_tag }}
         with:
           script: |
-            const release = await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: "${{ needs.draft.outputs.tag_name }}" });
-            await github.rest.repos.updateRelease({
+            const path = require("node:path");
+            const releaseId = Number(process.env.STAGING_RELEASE_ID);
+            const stagingRelease = (await github.rest.repos.getRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: release.data.id,
-              draft: false,
-              prerelease: "${{ inputs.channel }}" === "nightly",
-            });
+              release_id: releaseId,
+            })).data;
+            if (!stagingRelease.draft || stagingRelease.tag_name !== process.env.STAGING_TAG) {
+              throw new Error(
+                `Staging release '${process.env.STAGING_TAG}' is no longer an unpublished draft`,
+              );
+            }
+
+            const globber = await glob.create("release-assets/*");
+            const expectedAssets = [];
+            for await (const file of globber.globGenerator()) {
+              expectedAssets.push(path.basename(file));
+            }
+            expectedAssets.sort();
+            const uploadedAssetRecords = await github.paginate(
+              github.rest.repos.listReleaseAssets,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: releaseId,
+                per_page: 100,
+              },
+            );
+            const incompleteAsset = uploadedAssetRecords.find(
+              (asset) => asset.state !== "uploaded" || asset.size <= 0,
+            );
+            if (incompleteAsset) {
+              throw new Error(
+                `Staging asset '${incompleteAsset.name}' is not completely uploaded`,
+              );
+            }
+            const uploadedAssets = uploadedAssetRecords
+              .map((asset) => asset.name)
+              .sort();
+            if (JSON.stringify(uploadedAssets) !== JSON.stringify(expectedAssets)) {
+              throw new Error(
+                `Staging release assets do not match the assembled set: expected ${expectedAssets.join(", ")}; got ${uploadedAssets.join(", ")}`,
+              );
+            }
+
+            const existingRelease = (await github.paginate(
+              github.rest.repos.listReleases,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              },
+            )).find((release) => release.tag_name === process.env.FINAL_TAG);
+            if (existingRelease) {
+              throw new Error(
+                `Final release '${process.env.FINAL_TAG}' already exists: ${existingRelease.html_url}`,
+              );
+            }
+
+            const release = (await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              tag_name: process.env.FINAL_TAG,
+              target_commitish: process.env.RELEASE_SHA,
+              name: process.env.RELEASE_VERSION,
+              draft: process.env.AUTO_PUBLISH !== "true",
+              prerelease: process.env.RELEASE_CHANNEL === "nightly",
+            })).data;
+            core.setOutput("release_url", release.html_url);
+
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${process.env.STAGING_TAG}`,
+              });
+            } catch (error) {
+              core.warning(
+                `Final release is complete, but staging tag cleanup failed: ${error.message}`,
+              );
+            }
 
       - name: Notify Discord that the stable draft is ready
         if: ${{ inputs.channel == 'stable' && inputs.interactionId != '' }}
         uses: actions/github-script@v7
+        env:
+          INTERACTION_ID: ${{ inputs.interactionId }}
+          RELEASE_URL: ${{ steps.promote.outputs.release_url }}
+          RELEASE_VERSION: ${{ inputs.version }}
         with:
           script: |
             const token = await core.getIDToken("cap-discord-bot");
@@ -384,9 +533,9 @@ jobs:
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({
                 type: "release-done",
-                interactionId: "${{ inputs.interactionId }}",
-                version: "${{ inputs.version }}",
-                releaseUrl: "${{ needs.draft.outputs.release_url }}",
+                interactionId: process.env.INTERACTION_ID,
+                version: process.env.RELEASE_VERSION,
+                releaseUrl: process.env.RELEASE_URL,
               }),
             });
             if (!response.ok) throw new Error(await response.text());

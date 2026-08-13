@@ -58,7 +58,8 @@
 		"mysql2": "^3.15.2",
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"yaml": "^2.9.0"
 	},
 	"pnpm": {
 		"overrides": {
