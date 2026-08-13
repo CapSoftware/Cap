@@ -25,6 +25,19 @@ use super::{
 const MAX_RELAXED_FALLBACK_DISTANCE: u32 = 8;
 const SCRUB_REUSE_THRESHOLD_SECS: f32 = 0.5;
 const DECODER_REQUEST_CLUSTER_GAP_FRAMES: u32 = FRAME_CACHE_SIZE as u32 / 2;
+// A frame-count-only limit can retain more than 1 GiB for high-resolution
+// recordings. Keep the existing temporal cap, but also bound the raw decoded
+// frame data so playback remains viable on memory-constrained devices.
+const MAX_FRAME_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+fn frame_cache_needs_eviction(
+    current_frames: usize,
+    current_bytes: usize,
+    next_frame_bytes: usize,
+) -> bool {
+    current_frames >= FRAME_CACHE_SIZE
+        || current_bytes.saturating_add(next_frame_bytes) > MAX_FRAME_CACHE_BYTES
+}
 
 #[derive(Clone)]
 struct FrameData {
@@ -248,6 +261,10 @@ impl CachedFrame {
                 })
             }
         }
+    }
+
+    fn byte_len(&self) -> usize {
+        self.0.frame_data.data.len()
     }
 
     fn data(&self) -> &ProcessedFrame {
@@ -577,6 +594,7 @@ impl AVAssetReaderDecoder {
         ready_tx.send(Ok(init_result)).ok();
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
+        let mut cache_bytes = 0usize;
 
         #[allow(unused)]
         let mut last_active_frame = None::<u32>;
@@ -765,6 +783,10 @@ impl AVAssetReaderDecoder {
             if was_reset {
                 *last_sent_frame.borrow_mut() = None;
                 cache.retain(|&f, _| f >= cache_min && f <= cache_max);
+                cache_bytes = cache
+                    .values()
+                    .map(CachedFrame::byte_len)
+                    .fold(0usize, usize::saturating_add);
             }
 
             last_active_frame = Some(requested_frame);
@@ -842,7 +864,13 @@ impl AVAssetReaderDecoder {
                     let too_small_for_cache_bounds = current_frame < cache_min;
 
                     if !too_small_for_cache_bounds {
-                        if cache.len() >= FRAME_CACHE_SIZE {
+                        let frame_bytes = cache_frame.byte_len();
+                        if let Some(replaced) = cache.remove(&current_frame) {
+                            cache_bytes = cache_bytes.saturating_sub(replaced.byte_len());
+                        }
+                        while !cache.is_empty()
+                            && frame_cache_needs_eviction(cache.len(), cache_bytes, frame_bytes)
+                        {
                             if let Some(last_active) = &last_active_frame {
                                 let frame_to_remove = if requested_frame > *last_active {
                                     *cache.keys().next().unwrap()
@@ -853,12 +881,16 @@ impl AVAssetReaderDecoder {
                                     let max = *cache.keys().max().unwrap();
                                     if current_frame > max { min } else { max }
                                 };
-                                cache.remove(&frame_to_remove);
+                                if let Some(removed) = cache.remove(&frame_to_remove) {
+                                    cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
+                                }
                             } else {
-                                cache.clear()
+                                cache.clear();
+                                cache_bytes = 0;
                             }
                         }
 
+                        cache_bytes = cache_bytes.saturating_add(frame_bytes);
                         cache.insert(current_frame, cache_frame.clone());
 
                         let mut remaining_requests = Vec::with_capacity(pending_requests.len());
@@ -1119,6 +1151,18 @@ impl AVAssetReaderDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_cache_enforces_frame_and_byte_limits() {
+        assert!(!frame_cache_needs_eviction(
+            FRAME_CACHE_SIZE - 1,
+            MAX_FRAME_CACHE_BYTES - 1,
+            1,
+        ));
+        assert!(frame_cache_needs_eviction(FRAME_CACHE_SIZE, 0, 1));
+        assert!(frame_cache_needs_eviction(1, MAX_FRAME_CACHE_BYTES, 1,));
+        assert!(frame_cache_needs_eviction(1, usize::MAX, 1));
+    }
 
     #[test]
     fn test_decoder_health_new() {
