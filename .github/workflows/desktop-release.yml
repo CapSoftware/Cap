@@ -39,6 +39,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Require immutable releases
+        if: ${{ vars.IMMUTABLE_RELEASES_ENABLED != 'true' }}
+        run: |
+          echo "Repository immutable releases must be enabled before preparing a desktop release" >&2
+          exit 1
+
       - name: Prepare immutable release staging draft
         id: release
         uses: actions/github-script@v7
@@ -60,19 +66,6 @@ jobs:
                 : null;
             if (!versionPattern || !versionPattern.test(version))
               throw new Error(`Invalid ${channel} release version '${version}'`);
-
-            const immutableReleases = await github.request(
-              "GET /repos/{owner}/{repo}/immutable-releases",
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-              },
-            );
-            if (!immutableReleases.data.enabled) {
-              throw new Error(
-                "Repository immutable releases must be enabled before preparing a desktop release",
-              );
-            }
 
             const tag = channel === "nightly"
               ? `cap-nightly-v${version}`
