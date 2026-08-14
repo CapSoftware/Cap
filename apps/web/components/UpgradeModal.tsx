@@ -141,7 +141,7 @@ const UpgradeModalImpl = ({
 		},
 		{
 			icon: <ShieldCheck className={iconStyling} />,
-			title: "SOC 2 Type II & ISO 27001",
+			title: "SOC 2, ISO 27001 & HIPAA",
 			description: "Independently audited security & compliance",
 		},
 	];
