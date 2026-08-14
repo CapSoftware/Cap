@@ -115,6 +115,7 @@ import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import { waitUntilVisible } from "./update-check-visibility";
 import useRequestPermission from "./useRequestPermission";
 
 const MAIN_WINDOW_SIZE = {
@@ -1742,12 +1743,17 @@ function createUpdateCheck() {
 	if (import.meta.env.DEV) return;
 
 	const navigate = useNavigate();
+	const visibilityController = new AbortController();
+	onCleanup(() => visibilityController.abort());
 
 	onMount(async () => {
 		if (hasChecked) return;
 		hasChecked = true;
 
 		await new Promise((res) => setTimeout(res, 10_000));
+		if (visibilityController.signal.aborted) return;
+		if (!(await waitUntilVisible(document, visibilityController.signal)))
+			return;
 
 		// The Rust background loop owns nightly updates.
 		const settings = await generalSettingsStore.get();
