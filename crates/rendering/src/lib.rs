@@ -5792,12 +5792,18 @@ impl RendererLayers {
             self.background.render(&mut pass);
         }
 
+        // Separable gaussian: horizontal into the spare texture, vertical back
+        // into the current one, so the result ends up where it started and no
+        // swap is needed.
         if self.background_blur.blur_amount > 0.0 {
-            let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+            {
+                let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+                self.background_blur
+                    .render_h(&mut pass, device, session.current_texture_view());
+            }
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.background_blur
-                .render(&mut pass, device, session.current_texture_view());
-
-            session.swap_textures();
+                .render_v(&mut pass, device, session.other_texture_view());
         }
 
         // Runs before content layers so the screen grade covers the whole
