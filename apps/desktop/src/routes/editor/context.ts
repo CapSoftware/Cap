@@ -1192,6 +1192,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					speedAudioMode,
 				);
 			},
+			setClipSegmentAudioMuted: (index: number, audioMuted: boolean) => {
+				setProject("timeline", "segments", index, "audioMuted", audioMuted);
+			},
 		};
 
 		let projectSaveTimeout: number | undefined;

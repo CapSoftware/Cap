@@ -172,6 +172,7 @@ impl EditorInstance {
                             timescale: 1.0,
                             name: None,
                             speed_audio_mode: None,
+                            audio_muted: false,
                         }],
                         _ => {
                             warn!(
@@ -205,6 +206,7 @@ impl EditorInstance {
                             timescale: 1.0,
                             name: None,
                             speed_audio_mode: None,
+                            audio_muted: false,
                         })
                     })
                     .collect(),

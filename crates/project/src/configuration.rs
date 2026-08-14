@@ -823,6 +823,8 @@ pub struct TimelineSegment {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_audio_mode: Option<ClipSpeedAudioMode>,
+    #[serde(default)]
+    pub audio_muted: bool,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2321,6 +2323,7 @@ mod tests {
                     end: 4.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -2329,6 +2332,7 @@ mod tests {
                     end: 16.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
             ],
             transitions,
@@ -2362,6 +2366,19 @@ mod tests {
                 .get("transitions")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn timeline_segment_defaults_audio_muted_for_existing_projects() {
+        let segment: TimelineSegment = serde_json::from_value(serde_json::json!({
+            "recordingSegment": 0,
+            "timescale": 1.0,
+            "start": 0.0,
+            "end": 1.0
+        }))
+        .unwrap();
+
+        assert!(!segment.audio_muted);
     }
 
     #[test]

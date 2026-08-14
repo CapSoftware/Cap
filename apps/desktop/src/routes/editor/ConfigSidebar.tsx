@@ -5609,6 +5609,20 @@ function ClipSegmentConfig(props: {
 				</p>
 			</div>
 
+			<Field name="Audio" icon={<IconLucideVolume2 class="size-4" />}>
+				<Subfield name="Mute Audio">
+					<Toggle
+						checked={props.segment.audioMuted}
+						onChange={(audioMuted) =>
+							projectActions.setClipSegmentAudioMuted(
+								props.segmentIndex,
+								audioMuted,
+							)
+						}
+					/>
+				</Subfield>
+			</Field>
+
 			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
 				<KRadioGroup
 					class="flex flex-row gap-1.5 -mt-1"
