@@ -26,9 +26,10 @@ pub struct TakeoverDisplayMorph {
     pub t: f32,
     pub from: [f32; 4],
     pub to: [f32; 4],
-    /// Multiplier for the cursor sprite's opacity (fades with the display in
-    /// Fullscreen, stays 1 for splits where the card remains visible).
-    pub cursor_fade: f32,
+    /// Multiplier for the cursor sprite and recording-anchored overlays
+    /// (captions, keyboard): fades with the display in Fullscreen, stays 1
+    /// for splits where the recording remains visible.
+    pub overlay_fade: f32,
 }
 
 impl InterpolatedTakeover {

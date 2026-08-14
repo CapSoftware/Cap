@@ -616,7 +616,7 @@ impl CursorLayer {
                         crate::lerp_f32(position_size[2], mapped[2], t),
                         crate::lerp_f32(position_size[3], mapped[3], t),
                     ],
-                    cursor_opacity * takeover.cursor_fade,
+                    cursor_opacity * takeover.overlay_fade,
                 )
             }
             _ => (position_size, cursor_opacity),

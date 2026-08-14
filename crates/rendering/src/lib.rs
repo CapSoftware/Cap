@@ -2784,13 +2784,15 @@ pub(crate) struct DisplayLayout {
 }
 
 impl ProjectUniforms {
-    /// 0..1 multiplier for recording-anchored overlays (captions, keyboard)
-    /// while a text takeover hides the recording — they would otherwise hang
-    /// frozen over the title card while the recording clock is paused.
+    /// 0..1 multiplier for recording-anchored overlays (captions, keyboard).
+    /// A Fullscreen takeover hides the recording and pauses its clock, so the
+    /// overlays fade with the display — they would otherwise hang frozen over
+    /// the title card. Split takeovers keep the recording visible and playing,
+    /// so the overlays stay.
     pub fn takeover_overlay_fade(&self) -> f32 {
         self.takeover
             .as_ref()
-            .map_or(1.0, |takeover| 1.0 - takeover.t)
+            .map_or(1.0, |takeover| takeover.overlay_fade)
     }
 
     pub fn frame_layout(&self) -> FrameLayout {
@@ -3979,7 +3981,7 @@ impl ProjectUniforms {
                         t: tk.t,
                         from: pre_takeover_bounds,
                         to: target,
-                        cursor_fade: tk.display_fade(),
+                        overlay_fade: tk.display_fade(),
                     }),
             )
         };
