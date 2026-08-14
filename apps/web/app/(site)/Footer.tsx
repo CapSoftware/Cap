@@ -155,7 +155,7 @@ const complianceBadges: {
 	},
 	{
 		label: "HIPAA",
-		status: "in progress",
+		status: "compliant",
 		content: (
 			<text
 				x="22"
@@ -234,7 +234,7 @@ const ComplianceBadges = () => (
 			))}
 		</div>
 		<p className="mt-2 text-[11px] text-gray-9">
-			SOC 2 Type II & ISO 27001 compliant · HIPAA in progress
+			SOC 2 Type II, ISO 27001 & HIPAA compliant
 		</p>
 	</div>
 );

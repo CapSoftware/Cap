@@ -89,8 +89,8 @@ Core principles:
 
 - Storage targets: Cap Cloud, your own Google Drive (OAuth), any S3-compatible bucket, or fully local.
 - S3-compatible providers: AWS S3, Cloudflare R2, Supabase, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, and more.
-- Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA via self-hosting plus signed BAAs for enterprise.
-- Compliance: SOC 2, HIPAA, and ISO 27001 (certifications in progress). Trust Portal: https://trust.cap.so.
+- Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA compliant with signed BAAs, plus self-hosting for full control.
+- Compliance: SOC 2 Type II, ISO 27001, and HIPAA compliant. Trust Portal: https://trust.cap.so.
 - Self-hosting documentation: https://cap.so/docs/self-hosting.
 
 ## Export
@@ -175,7 +175,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - **vs OBS Studio** — Simpler, no complex scene setup; instant cloud sharing and AI built in; native lightweight app.
 - **vs Camtasia / ScreenFlow** — Free and open source, cross-platform, cloud sharing built in, lighter weight.
 - **vs Vidyard / Panopto** — Open source, bring-your-own storage, transparent pricing, self-hosting option.
-- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA-friendly self-hosting.
+- **vs Zoom recordings** — Purpose-built async video with editing, analytics, and HIPAA compliance with signed BAAs.
 - **vs Scribe** — Real screen video with narration and chapters vs static step screenshots.
 
 ## Use Cases & Solution Pages

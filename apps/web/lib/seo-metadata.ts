@@ -299,7 +299,7 @@ export const seoMetadata = {
 		title:
 			"HIPAA-Compliant Screen Recording — Secure Healthcare Recordings | Cap",
 		description:
-			"Cap enables HIPAA-compliant screen recording for healthcare teams. Self-host recordings on your own AWS S3 bucket, keep PHI off third-party servers, and audit every line of open-source code.",
+			"Cap is a HIPAA-compliant screen recorder for healthcare teams. Signed BAAs, SOC 2 Type II and ISO 27001 certified, plus self-hosting to keep PHI on your own storage.",
 		keywords: [
 			"hipaa compliant screen recording",
 			"hipaa screen recorder",
