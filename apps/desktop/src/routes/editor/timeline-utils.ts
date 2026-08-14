@@ -5,6 +5,12 @@ import {
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
+import {
+	effectiveToOutput,
+	effectiveToOutputEnd,
+	type HoldSourceSegment,
+	holdWindows,
+} from "./timeline-holds";
 
 export function shiftTimeAfterCut(
 	time: number,
@@ -151,7 +157,7 @@ export function rippleDeleteAllTracks(
 		zoomSegments?: Array<{ start: number; end: number }> | null;
 		sceneSegments?: Array<{ start: number; end: number }> | null;
 		maskSegments?: Array<{ start: number; end: number }> | null;
-		textSegments?: Array<{ start: number; end: number }> | null;
+		textSegments?: Array<HoldSourceSegment> | null;
 		captionSegments?: Array<{ start: number; end: number }> | null;
 		keyboardSegments?: Array<{ start: number; end: number }> | null;
 		audioSegments?: Array<{ start: number; end: number }> | null;
@@ -160,6 +166,15 @@ export function rippleDeleteAllTracks(
 	cutEnd: number,
 	requestedSegmentIndex?: number,
 ) {
+	// The clip cut below works in the gapless recording-flow domain, but the
+	// overlay tracks live in output time, which includes fullscreen-text
+	// holds. Convert the cut range before touching them, and let the held
+	// time inside the cut leave with the text segments it belongs to (they
+	// sit inside the converted range, so the overlay pass deletes them).
+	const holds = holdWindows(timeline.textSegments);
+	const overlayCutStart = effectiveToOutput(holds, cutStart);
+	const overlayCutEnd = effectiveToOutputEnd(holds, cutEnd);
+
 	const durationBefore = clipTimelineDuration(
 		timeline.segments,
 		timeline.transitions ?? [],
@@ -176,59 +191,115 @@ export function rippleDeleteAllTracks(
 		durationBefore -
 			clipTimelineDuration(timeline.segments, timeline.transitions),
 	);
+	const overlayShift =
+		shiftDuration + (overlayCutEnd - overlayCutStart - (cutEnd - cutStart));
 	if (timeline.zoomSegments)
 		rippleDeleteFromTrack(
 			timeline.zoomSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.sceneSegments)
 		rippleDeleteFromTrack(
 			timeline.sceneSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.maskSegments)
 		rippleDeleteFromTrack(
 			timeline.maskSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.textSegments)
 		rippleDeleteFromTrack(
 			timeline.textSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.captionSegments)
 		rippleDeleteFromTrack(
 			timeline.captionSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.keyboardSegments)
 		rippleDeleteFromTrack(
 			timeline.keyboardSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 	if (timeline.audioSegments)
 		rippleDeleteFromTrack(
 			timeline.audioSegments,
-			cutStart,
-			cutEnd,
-			shiftDuration,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
 		);
 }
 
 if (import.meta.vitest) {
 	const { expect, it } = import.meta.vitest;
+
+	it("ripple-deletes overlay tracks in hold-extended output time", () => {
+		// Fullscreen text at output [2,4] pauses the recording for 2s, so
+		// gapless recording time g >= 2 plays at output g + 2.
+		const timeline = {
+			segments: [{ start: 0, end: 10, timescale: 1 }],
+			transitions: [] as ClipTransition[],
+			textSegments: [
+				{ start: 2, end: 4, enabled: true, layout: "fullscreen" as const },
+			],
+			// Covers recording content 3.5..4.5 — entirely before the cut.
+			zoomSegments: [{ start: 5.5, end: 6.5 }],
+			// Covers recording content 6..7 — entirely after the cut.
+			keyboardSegments: [{ start: 8, end: 9 }],
+		};
+
+		// Delete recording content [5,6], which plays at output [7,8].
+		rippleDeleteAllTracks(timeline, 5, 6);
+
+		expect(timeline.segments).toEqual([
+			{ start: 0, end: 5, timescale: 1 },
+			{ start: 6, end: 10, timescale: 1 },
+		]);
+		// Before the fix the gapless cut range [5,6] was compared against
+		// these output-time positions and mangled the zoom to [5,5.5].
+		expect(timeline.zoomSegments).toEqual([{ start: 5.5, end: 6.5 }]);
+		expect(timeline.keyboardSegments).toEqual([{ start: 7, end: 8 }]);
+		expect(timeline.textSegments).toHaveLength(1);
+	});
+
+	it("deletes a hold inside the cut together with its inserted time", () => {
+		const timeline = {
+			segments: [{ start: 0, end: 10, timescale: 1 }],
+			transitions: [] as ClipTransition[],
+			textSegments: [
+				{ start: 2, end: 4, enabled: true, layout: "fullscreen" as const },
+			],
+			// Covers recording content 6..7, at output [8,9].
+			zoomSegments: [{ start: 8, end: 9 }],
+		};
+
+		// Delete recording content [1,5]: output [1,7], swallowing the hold.
+		rippleDeleteAllTracks(timeline, 1, 5);
+
+		expect(timeline.segments).toEqual([
+			{ start: 0, end: 1, timescale: 1 },
+			{ start: 5, end: 10, timescale: 1 },
+		]);
+		// The fullscreen text sat inside the cut and leaves with it.
+		expect(timeline.textSegments).toEqual([]);
+		// 4s of recording plus the 2s hold left the output timeline, and no
+		// holds remain, so output equals gapless again.
+		expect(timeline.zoomSegments).toEqual([{ start: 2, end: 3 }]);
+	});
 
 	it("cuts the requested overlap source without discarding the adjacent clip", () => {
 		const segments = [

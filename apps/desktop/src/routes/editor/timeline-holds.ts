@@ -8,8 +8,13 @@ import type { TextSegment } from "./text";
 
 export type HoldWindow = [number, number];
 
+// The slice of TextSegment the hold arithmetic reads; lets callers that only
+// carry plain track rows (start/end plus whatever they know) compute holds.
+export type HoldSourceSegment = Pick<TextSegment, "start" | "end"> &
+	Partial<Pick<TextSegment, "enabled" | "layout">>;
+
 export function holdWindows(
-	textSegments: readonly TextSegment[] | null | undefined,
+	textSegments: readonly HoldSourceSegment[] | null | undefined,
 ): HoldWindow[] {
 	if (!textSegments?.length) return [];
 	const windows = textSegments
