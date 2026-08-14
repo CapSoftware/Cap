@@ -8,7 +8,9 @@ const headersFrom = (init: Record<string, string>) => new Headers(init);
 
 describe("requestShareHostname", () => {
 	it("reads the host header", () => {
-		expect(requestShareHostname(headersFrom({ host: "cap.so" }))).toBe("cap.so");
+		expect(requestShareHostname(headersFrom({ host: "cap.so" }))).toBe(
+			"cap.so",
+		);
 	});
 
 	it("prefers the forwarded host set by the proxy", () => {
@@ -48,9 +50,20 @@ describe("isDefaultShareHostname", () => {
 	);
 
 	it("matches the configured web URL host", () => {
-		expect(isDefaultShareHostname("cap.example.com", "https://cap.example.com")).toBe(
-			true,
-		);
+		expect(
+			isDefaultShareHostname("cap.example.com", "https://cap.example.com"),
+		).toBe(true);
+	});
+
+	it.each([
+		["a bare deployment host", "cap-git-main.vercel.app"],
+		["a deployment host given as a URL", "https://cap-git-main.vercel.app"],
+	])("treats %s as a default host", (_label, deploymentHost) => {
+		expect(
+			isDefaultShareHostname("cap-git-main.vercel.app", "https://cap.so", [
+				deploymentHost,
+			]),
+		).toBe(true);
 	});
 
 	it("rejects a custom domain", () => {

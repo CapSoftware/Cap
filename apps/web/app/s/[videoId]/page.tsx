@@ -14,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { serverEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -262,6 +262,7 @@ export async function generateMetadata(
 							name: video.name,
 							sourceType: video.source.type,
 							webUrl,
+							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
 						}),
 						robots: canRenderSocialPreview

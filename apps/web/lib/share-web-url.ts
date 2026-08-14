@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 
 /**
- * Hosts that always serve the default web URL, even when they do not match
- * `NEXT_PUBLIC_WEB_URL` (preview deployments run on the same origins).
+ * Hosts that never belong to a customer, so they skip the lookup below.
+ * `proxy.ts` treats the same set as a main origin.
  */
 const DEFAULT_HOSTNAMES = ["cap.so", "cap.link", "localhost", "127.0.0.1"];
 
@@ -14,6 +14,15 @@ const normalizeHostname = (value: string | null | undefined) => {
 	if (!first) return "";
 	// Strip the port so `localhost:3000` still matches `localhost`.
 	return first.replace(/:\d+$/, "");
+};
+
+/** Accepts a bare host (`cap-git-x.vercel.app`) or a full URL. */
+const toHostname = (value: string) => {
+	try {
+		return new URL(value).hostname.toLowerCase();
+	} catch {
+		return normalizeHostname(value);
+	}
 };
 
 /** The hostname the visitor asked for, taken from the incoming request. */
@@ -29,13 +38,36 @@ export const requestShareHostname = (headersList: Headers) =>
 export const isDefaultShareHostname = (
 	hostname: string,
 	defaultWebUrl: string,
+	deploymentHostnames: readonly string[] = [],
 ) => {
 	if (!hostname) return true;
 	if (DEFAULT_HOSTNAMES.includes(hostname)) return true;
+	if (deploymentHostnames.some((value) => toHostname(value) === hostname))
+		return true;
 	try {
 		return new URL(defaultWebUrl).hostname.toLowerCase() === hostname;
 	} catch {
+		// A misconfigured origin must not promote the request host.
 		return true;
+	}
+};
+
+/**
+ * The deployment origins that `proxy.ts` treats as main origins. They never
+ * belong to a customer, so recognizing them skips a pointless query on every
+ * preview deployment.
+ */
+const deploymentHostnames = (): string[] => {
+	try {
+		const env = serverEnv();
+		return [
+			env.WEB_URL,
+			env.VERCEL_URL_HOST,
+			env.VERCEL_BRANCH_URL_HOST,
+			env.VERCEL_PROJECT_PRODUCTION_URL_HOST,
+		].filter((value): value is string => Boolean(value));
+	} catch {
+		return [];
 	}
 };
 
@@ -57,7 +89,8 @@ export const resolveShareWebUrl = async (
 	const defaultWebUrl = buildEnv.NEXT_PUBLIC_WEB_URL;
 	const hostname = requestShareHostname(headersList);
 
-	if (isDefaultShareHostname(hostname, defaultWebUrl)) return defaultWebUrl;
+	if (isDefaultShareHostname(hostname, defaultWebUrl, deploymentHostnames()))
+		return defaultWebUrl;
 
 	try {
 		const [organization] = await db()
