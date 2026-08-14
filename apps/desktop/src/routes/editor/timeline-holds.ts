@@ -57,3 +57,19 @@ export function effectiveToOutput(
 	}
 	return output;
 }
+
+// effectiveToOutput for range *end* timestamps: an end landing exactly on a
+// hold boundary binds to the content before the pause instead of jumping past
+// it, so a range that finishes right where a hold begins doesn't stretch
+// across the inserted time.
+export function effectiveToOutputEnd(
+	holds: HoldWindow[],
+	effective: number,
+): number {
+	let output = effective;
+	for (const [start, end] of holds) {
+		if (output > start) output += end - start;
+		else break;
+	}
+	return output;
+}

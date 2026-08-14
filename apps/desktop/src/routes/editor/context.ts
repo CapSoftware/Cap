@@ -1653,7 +1653,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								`${transition.segmentIndex}|${transition.type}|${transition.duration}`,
 						)
 						.join(",");
-					return `${captionsSig}@@${timelineSig}@@${transitionSig}`;
+					// Fullscreen-text holds shift the projected track's output
+					// times, so moving/resizing one must re-derive too.
+					const holdSig = holdWindows(timeline.textSegments)
+						.map(([start, end]) => `${start}|${end}`)
+						.join(",");
+					return `${captionsSig}@@${timelineSig}@@${transitionSig}@@${holdSig}`;
 				},
 				() => {
 					const timeline = project.timeline;
@@ -1665,6 +1670,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						captionRecordingSegments,
 						timeline.captionSegments ?? [],
 						timeline.transitions ?? [],
+						timeline.textSegments,
 					);
 					setProject(
 						"timeline",

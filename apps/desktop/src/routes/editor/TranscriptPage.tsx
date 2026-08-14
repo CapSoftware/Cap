@@ -90,6 +90,7 @@ export function TranscriptPanel() {
 			project.timeline?.segments ?? [],
 			recordingSegments(),
 			project.timeline?.transitions ?? [],
+			project.timeline?.textSegments,
 		),
 	);
 
