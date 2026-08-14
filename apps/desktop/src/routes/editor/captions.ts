@@ -12,6 +12,12 @@ import {
 	type TimelineSegment,
 } from "~/utils/tauri";
 import { type ClipTransition, clipTimelineOffsets } from "./clip-transitions";
+import type { TextSegment } from "./text";
+import {
+	effectiveToOutput,
+	heldTimeBefore,
+	holdWindows,
+} from "./timeline-holds";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -350,6 +356,7 @@ export function mapSourceTimeToEdited(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
 ): number | null {
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
@@ -358,9 +365,12 @@ export function mapSourceTimeToEdited(
 	);
 	for (const mapping of mappings) {
 		if (sourceTime >= mapping.sourceStart && sourceTime <= mapping.sourceEnd) {
-			return (
+			// The mapping is in the gapless recording-flow domain; seeks need
+			// output time, which includes fullscreen-text holds.
+			return effectiveToOutput(
+				holdWindows(textSegments),
 				mapping.editedStart +
-				(sourceTime - mapping.sourceStart) / mapping.timescale
+					(sourceTime - mapping.sourceStart) / mapping.timescale,
 			);
 		}
 	}
@@ -404,7 +414,11 @@ export function mapEditedTimeToSource(
 	transitions: ClipTransition[] = [],
 	sourceRange?: { start: number; end: number },
 	overlapPreference: "outgoing" | "incoming" = "outgoing",
+	textSegments?: readonly TextSegment[],
 ): number | null {
+	// Output time includes fullscreen-text holds; the mappings below live in
+	// the gapless recording-flow domain.
+	editedTime -= heldTimeBefore(holdWindows(textSegments), editedTime);
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,

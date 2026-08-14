@@ -94,6 +94,11 @@ import {
 	setMotion,
 } from "./three-d";
 import {
+	heldTimeBefore,
+	holdWindows,
+	totalHeldDuration,
+} from "./timeline-holds";
+import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
 	sortTrackSegments,
@@ -511,6 +516,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						const timeline = project.timeline;
 						if (!timeline) return;
 						const segments = timeline.segments;
+						// The click position is in held-output time; clip offsets
+						// live in the gapless recording-flow domain.
+						time -= heldTimeBefore(holdWindows(timeline.textSegments), time);
 						const offsets = clipTimelineOffsets(
 							segments,
 							timeline.transitions ?? [],
@@ -1368,7 +1376,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				? clipTimelineDuration(
 						project.timeline.segments,
 						project.timeline.transitions ?? [],
-					)
+					) + totalHeldDuration(holdWindows(project.timeline.textSegments))
 				: props.editorInstance.recordingDuration;
 
 		type State = {
