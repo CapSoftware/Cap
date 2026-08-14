@@ -989,6 +989,43 @@ impl MaskSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAnimation {
+    None,
+    #[default]
+    Fade,
+    SlideUp,
+    SlideDown,
+    Pop,
+    Typewriter,
+}
+
+/// How a text segment shares the frame with the display recording. The
+/// variants name where the TEXT sits; the display card makes room for it.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextLayout {
+    /// Text draws over the untouched display (the original behavior).
+    #[default]
+    Overlay,
+    /// The display card shrinks and fades away; text owns the frame.
+    Fullscreen,
+    /// Text in the left half, display card contained in the right half.
+    SplitLeft,
+    /// Text in the right half, display card contained in the left half.
+    SplitRight,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSegment {
@@ -1014,8 +1051,36 @@ pub struct TextSegment {
     pub italic: bool,
     #[serde(default = "TextSegment::default_color")]
     pub color: String,
+    /// Legacy symmetric fade. Superseded by the animation fields below; kept
+    /// so configs written by new builds still fade in old builds. The
+    /// `text_anim_version` migration seeds the animation durations from it.
     #[serde(default = "TextSegment::default_fade_duration")]
     pub fade_duration: f64,
+    #[serde(default)]
+    pub align: TextAlign,
+    /// Px at the 1080p reference height, like `font_size`.
+    #[serde(default)]
+    pub letter_spacing: f32,
+    #[serde(default = "TextSegment::default_line_height")]
+    pub line_height: f32,
+    #[serde(default = "TextSegment::default_opacity")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub shadow: f32,
+    #[serde(default)]
+    pub animation_in: TextAnimation,
+    #[serde(default)]
+    pub animation_out: TextAnimation,
+    #[serde(default = "TextSegment::default_fade_duration")]
+    pub animation_in_duration: f64,
+    #[serde(default = "TextSegment::default_fade_duration")]
+    pub animation_out_duration: f64,
+    #[serde(default)]
+    pub layout: TextLayout,
+    /// Seconds the display card takes to morph aside (and back) at the
+    /// segment edges when `layout` is not `Overlay`.
+    #[serde(default = "TextSegment::default_layout_transition")]
+    pub layout_transition: f64,
 }
 
 impl TextSegment {
@@ -1053,6 +1118,18 @@ impl TextSegment {
 
     fn default_fade_duration() -> f64 {
         0.15
+    }
+
+    fn default_line_height() -> f32 {
+        1.2
+    }
+
+    fn default_opacity() -> f32 {
+        1.0
+    }
+
+    fn default_layout_transition() -> f64 {
+        0.5
     }
 }
 
@@ -2055,9 +2132,16 @@ pub struct ProjectConfiguration {
     /// `Default::default()` produces the current version.
     #[serde(default)]
     pub text_size_version: u32,
+    /// 0 (legacy): text segments animate with the single symmetric
+    /// `fade_duration`. 1: the enter/exit animation fields drive timing;
+    /// legacy configs are migrated on load by seeding both animation
+    /// durations from `fade_duration`.
+    #[serde(default)]
+    pub text_anim_version: u32,
 }
 
 pub const TEXT_SIZE_VERSION: u32 = 1;
+pub const TEXT_ANIM_VERSION: u32 = 1;
 
 fn camera_config_needs_migration(value: &Value) -> bool {
     value
@@ -2089,6 +2173,7 @@ impl Default for ProjectConfiguration {
             screen_movement_spring: Default::default(),
             color_correction: Default::default(),
             text_size_version: TEXT_SIZE_VERSION,
+            text_anim_version: TEXT_ANIM_VERSION,
         }
     }
 }
@@ -2155,6 +2240,21 @@ impl ProjectConfiguration {
                 }
             }
             config.text_size_version = TEXT_SIZE_VERSION;
+        }
+
+        if config.text_anim_version == 0 {
+            if let Some(timeline) = config.timeline.as_mut() {
+                for segment in &mut timeline.text_segments {
+                    let fade = segment.fade_duration.max(0.0);
+                    segment.animation_in_duration = fade;
+                    segment.animation_out_duration = fade;
+                    if fade == 0.0 {
+                        segment.animation_in = TextAnimation::None;
+                        segment.animation_out = TextAnimation::None;
+                    }
+                }
+            }
+            config.text_anim_version = TEXT_ANIM_VERSION;
         }
 
         config
@@ -2732,6 +2832,17 @@ mod tests {
                     italic: false,
                     color: "#ffffff".to_string(),
                     fade_duration: 0.15,
+                    align: TextAlign::Center,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    opacity: 1.0,
+                    shadow: 0.0,
+                    animation_in: TextAnimation::Fade,
+                    animation_out: TextAnimation::Fade,
+                    animation_in_duration: 0.15,
+                    animation_out_duration: 0.15,
+                    layout: TextLayout::Overlay,
+                    layout_transition: 0.5,
                 }],
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
@@ -2797,6 +2908,110 @@ mod tests {
 
         let segment = &config.timeline.as_ref().unwrap().text_segments[0];
         assert_eq!(segment.font_size, 96.0);
+    }
+
+    fn write_config_with_text_fade(project_path: &std::path::Path, fade_duration: f64) {
+        let mut config = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: vec![TextSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    track: 0,
+                    enabled: true,
+                    content: "Text".to_string(),
+                    center: XY::new(0.5, 0.5),
+                    size: XY::new(0.35, 0.2),
+                    font_family: "sans-serif".to_string(),
+                    font_size: 48.0,
+                    font_weight: 700.0,
+                    italic: false,
+                    color: "#ffffff".to_string(),
+                    fade_duration,
+                    align: TextAlign::Center,
+                    letter_spacing: 0.0,
+                    line_height: 1.2,
+                    opacity: 1.0,
+                    shadow: 0.0,
+                    animation_in: TextAnimation::Fade,
+                    animation_out: TextAnimation::Fade,
+                    animation_in_duration: 0.15,
+                    animation_out_duration: 0.15,
+                    layout: TextLayout::Overlay,
+                    layout_transition: 0.5,
+                }],
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        config.text_anim_version = 0;
+
+        let mut value = serde_json::to_value(&config).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("textAnimVersion");
+        // A legacy file predates the animation fields entirely.
+        if let Some(segments) = value
+            .pointer_mut("/timeline/textSegments")
+            .and_then(Value::as_array_mut)
+        {
+            for segment in segments {
+                let object = segment.as_object_mut().unwrap();
+                for key in [
+                    "align",
+                    "letterSpacing",
+                    "lineHeight",
+                    "opacity",
+                    "shadow",
+                    "animationIn",
+                    "animationOut",
+                    "animationInDuration",
+                    "animationOutDuration",
+                ] {
+                    object.remove(key);
+                }
+            }
+        }
+        std::fs::write(
+            project_path.join("project-config.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_text_fade_seeds_animation_durations() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_fade(dir.path(), 0.5);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.animation_in, TextAnimation::Fade);
+        assert_eq!(segment.animation_out, TextAnimation::Fade);
+        assert_eq!(segment.animation_in_duration, 0.5);
+        assert_eq!(segment.animation_out_duration, 0.5);
+        assert_eq!(config.text_anim_version, TEXT_ANIM_VERSION);
+    }
+
+    #[test]
+    fn legacy_text_zero_fade_disables_animation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_text_fade(dir.path(), 0.0);
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        let segment = &config.timeline.as_ref().unwrap().text_segments[0];
+        assert_eq!(segment.animation_in, TextAnimation::None);
+        assert_eq!(segment.animation_out, TextAnimation::None);
+        assert_eq!(segment.animation_in_duration, 0.0);
+        assert_eq!(segment.animation_out_duration, 0.0);
     }
 
     #[test]
