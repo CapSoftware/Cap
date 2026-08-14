@@ -14,13 +14,12 @@ export type ShareVideoMetadataInput = {
 	videoId: string;
 	name: string;
 	sourceType: ShareVideoSourceType;
-	/** The origin the visitor used. A verified custom domain, or the default. */
 	webUrl: string;
 	/**
-	 * The default Cap origin. Two surfaces only answer there: `proxy.ts`
-	 * redirects `/embed/` away from a custom domain, and `parseCapShareUrl`
-	 * accepts share URLs on `cap.so` and `cap.link` alone, so `/api/oembed`
-	 * rejects a custom domain `url`. Defaults to `webUrl`.
+	 * Two surfaces only answer on the default Cap origin: `proxy.ts` redirects
+	 * `/embed/` away from a custom domain, and `parseCapShareUrl` accepts share
+	 * URLs on `cap.so` and `cap.link` alone, so `/api/oembed` rejects a custom
+	 * domain `url`. Defaults to `webUrl`.
 	 */
 	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;

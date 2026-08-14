@@ -3,20 +3,15 @@ import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 
-/**
- * Hosts that never belong to a customer, so they skip the lookup below.
- * `proxy.ts` treats the same set as a main origin.
- */
 const DEFAULT_HOSTNAMES = ["cap.so", "cap.link", "localhost", "127.0.0.1"];
 
 const normalizeHostname = (value: string | null | undefined) => {
 	const first = value?.split(",")[0]?.trim().toLowerCase();
 	if (!first) return "";
-	// Strip the port so `localhost:3000` still matches `localhost`.
 	return first.replace(/:\d+$/, "");
 };
 
-/** Accepts a bare host (`cap-git-x.vercel.app`) or a full URL. */
+// `WEB_URL` is a full URL while the `VERCEL_*_HOST` values are bare hosts.
 const toHostname = (value: string) => {
 	try {
 		return new URL(value).hostname.toLowerCase();
@@ -25,16 +20,11 @@ const toHostname = (value: string) => {
 	}
 };
 
-/** The hostname the visitor asked for, taken from the incoming request. */
 export const requestShareHostname = (headersList: Headers) =>
 	normalizeHostname(
 		headersList.get("x-forwarded-host") ?? headersList.get("host"),
 	);
 
-/**
- * True when the request arrived on the default Cap origin, so share metadata
- * can use `NEXT_PUBLIC_WEB_URL` without a database lookup.
- */
 export const isDefaultShareHostname = (
 	hostname: string,
 	defaultWebUrl: string,
@@ -52,11 +42,8 @@ export const isDefaultShareHostname = (
 	}
 };
 
-/**
- * The deployment origins that `proxy.ts` treats as main origins. They never
- * belong to a customer, so recognizing them skips a pointless query on every
- * preview deployment.
- */
+// Mirrors the `mainOrigins` list in `proxy.ts`, so a preview deployment does
+// not pay for the organization lookup below.
 const deploymentHostnames = (): string[] => {
 	try {
 		const env = serverEnv();
@@ -72,16 +59,13 @@ const deploymentHostnames = (): string[] => {
 };
 
 /**
- * The public origin that share metadata must advertise.
+ * Slack drops the preview image when `og:url` names a different host than the
+ * link it unfurls, so a share page on a verified custom domain has to advertise
+ * that domain rather than `NEXT_PUBLIC_WEB_URL`. See #2122.
  *
- * A share page on a verified custom domain has to emit `og:url`, `og:image`,
- * `og:video` and `canonical` on that same domain. Slack drops the preview
- * image when those values point at another host, so a custom domain link
- * unfurls as a bare title and description.
- *
- * `proxy.ts` already redirects unverified hosts away from `/s/`, so this
- * lookup is a second check rather than the only one. It returns the default
- * web URL whenever the host is unknown, unverified, or the query fails.
+ * `proxy.ts` already redirects unverified hosts away from `/s/`. This lookup is
+ * a second check, and it falls back whenever the host is unknown, unverified,
+ * or the query throws.
  */
 export const resolveShareWebUrl = async (
 	headersList: Headers,
