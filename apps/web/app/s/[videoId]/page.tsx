@@ -14,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
@@ -56,6 +56,7 @@ import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import { resolveShareWebUrl } from "@/lib/share-web-url";
 import {
 	isIframelyCrawlerUserAgent,
 	isSocialCrawlerUserAgent,
@@ -235,6 +236,13 @@ export async function generateMetadata(
 	const shouldAdvertiseIframelyPlayer =
 		isIframelyCrawlerUserAgent(requestUserAgent) &&
 		(await getPublicShareVideo(videoId).catch(() => null)) !== null;
+	// Share pages also serve verified custom domains. Metadata has to point at
+	// the host the visitor used, or Slack drops the preview image.
+	const webUrl = await resolveShareWebUrl(headersList);
+	const ogImageUrl = new URL(
+		`/api/video/og?videoId=${videoId}`,
+		webUrl,
+	).toString();
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
@@ -253,7 +261,7 @@ export async function generateMetadata(
 							videoId,
 							name: video.name,
 							sourceType: video.source.type,
-							webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+							webUrl,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
 						}),
 						robots: canRenderSocialPreview
@@ -269,16 +277,7 @@ export async function generateMetadata(
 					title: "Cap: This video is restricted",
 					description: "This video has restricted access.",
 					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
+						images: [{ url: ogImageUrl, width: 1200, height: 630 }],
 					},
 					robots: "noindex, nofollow",
 				}),
@@ -287,27 +286,13 @@ export async function generateMetadata(
 					title: "Cap: Password Protected Video",
 					description: "This video is password protected.",
 					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
+						images: [{ url: ogImageUrl, width: 1200, height: 630 }],
 					},
 					twitter: {
 						card: "summary_large_image",
 						title: "Cap: Password Protected Video",
 						description: "This video is password protected.",
-						images: [
-							new URL(
-								`/api/video/og?videoId=${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-						],
+						images: [ogImageUrl],
 					},
 					robots: "noindex, nofollow",
 				}),
