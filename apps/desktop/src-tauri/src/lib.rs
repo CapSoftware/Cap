@@ -3459,6 +3459,15 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(MicrophoneFeed::list_names())
 }
 
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+async fn list_system_fonts() -> Vec<String> {
+    tokio::task::spawn_blocking(cap_rendering::system_font_families)
+        .await
+        .unwrap_or_default()
+}
+
 #[derive(Serialize, Type, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
@@ -4935,6 +4944,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             windows::refresh_window_content_protection,
             general_settings::get_default_excluded_windows,
             list_audio_devices,
+            list_system_fonts,
             close_recordings_overlay_window,
             fake_window::set_fake_window_bounds,
             fake_window::remove_fake_window,

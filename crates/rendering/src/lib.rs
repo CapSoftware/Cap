@@ -71,6 +71,38 @@ pub fn prewarm_fonts() {
     drop(layers::new_font_system());
 }
 
+/// Unique installed font family names, sorted, for the editor's font picker.
+/// Reuses the process-wide font database scan (see [`prewarm_fonts`]).
+/// Dot-prefixed families (macOS-internal UI fonts) are hidden the same way
+/// browser font pickers hide them.
+pub fn system_font_families() -> Vec<String> {
+    let font_system = layers::new_font_system();
+    let mut families = std::collections::BTreeSet::new();
+    for face in font_system.db().faces() {
+        if let Some((name, _)) = face.families.first()
+            && !name.starts_with('.')
+            && !name.is_empty()
+        {
+            families.insert(name.clone());
+        }
+    }
+    families.into_iter().collect()
+}
+
+#[cfg(test)]
+mod font_family_tests {
+    #[test]
+    fn system_font_families_are_deduped_and_visible() {
+        let families = super::system_font_families();
+        assert!(!families.is_empty());
+        assert!(families.iter().all(|name| !name.starts_with('.')));
+        let mut sorted = families.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(families, sorted);
+    }
+}
+
 use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::PrecomputedCursorTimeline;
 use mask::interpolate_masks;
