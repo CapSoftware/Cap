@@ -278,7 +278,8 @@ export const asyncVideoCodeReviewsContent: SeoPageContent = {
 	video: {
 		iframe: {
 			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "Cap async video code review demo showing screen recording of a pull request walkthrough with timestamped comments",
+			title:
+				"Cap async video code review demo showing screen recording of a pull request walkthrough with timestamped comments",
 		},
 	},
 
