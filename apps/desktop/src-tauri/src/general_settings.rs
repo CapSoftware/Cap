@@ -194,6 +194,8 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
+    #[serde(default)]
+    pub default_zoom_amount: Option<f64>,
     /// `None` until [`init`] seeds it from whether this machine has a notched
     /// display. From then on it is the user's preference and nothing re-reads
     /// the hardware, so moving between machines can't silently flip it.
@@ -328,6 +330,7 @@ impl Default for GeneralSettingsStore {
             // Keep aligned with the field's serde `default_true`: auto zooms
             // are on by default, matching configs that never stored the key.
             auto_zoom_on_clicks: true,
+            default_zoom_amount: None,
             macbook_notch_overlay: None,
             capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,

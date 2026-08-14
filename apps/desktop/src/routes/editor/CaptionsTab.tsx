@@ -289,6 +289,8 @@ export function CaptionsTab(props: {
 					recordingSegments,
 					timeline.transitions ?? [],
 					sourceRange,
+					"outgoing",
+					timeline.textSegments,
 				);
 				const end = mapEditedTimeToSource(
 					timelineSegment.end,
@@ -296,6 +298,8 @@ export function CaptionsTab(props: {
 					recordingSegments,
 					timeline.transitions ?? [],
 					sourceRange,
+					"outgoing",
+					timeline.textSegments,
 				);
 				if (start !== null) source.start = start;
 				if (end !== null) source.end = end;

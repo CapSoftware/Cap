@@ -594,6 +594,34 @@ impl CursorLayer {
             ],
         };
 
+        // A text takeover relocates the display card by a uniform scale +
+        // translate (the takeover target preserves the card's aspect), so the
+        // cursor follows with the same affine map — and fades with the card
+        // when a Fullscreen takeover hides it.
+        let (position_size, cursor_opacity) = match &uniforms.takeover {
+            Some(takeover) if takeover.t > 0.001 => {
+                let from_w = (takeover.from[2] - takeover.from[0]).max(f32::EPSILON);
+                let scale = (takeover.to[2] - takeover.to[0]) / from_w;
+                let mapped = [
+                    takeover.to[0] + (position_size[0] - takeover.from[0]) * scale,
+                    takeover.to[1] + (position_size[1] - takeover.from[1]) * scale,
+                    position_size[2] * scale,
+                    position_size[3] * scale,
+                ];
+                let t = takeover.t;
+                (
+                    [
+                        crate::lerp_f32(position_size[0], mapped[0], t),
+                        crate::lerp_f32(position_size[1], mapped[1], t),
+                        crate::lerp_f32(position_size[2], mapped[2], t),
+                        crate::lerp_f32(position_size[3], mapped[3], t),
+                    ],
+                    cursor_opacity * takeover.overlay_fade,
+                )
+            }
+            _ => (position_size, cursor_opacity),
+        };
+
         let cursor_grade = if uniforms.project.color_correction.grade_cursor {
             uniforms.screen_color_grade
         } else {

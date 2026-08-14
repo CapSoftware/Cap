@@ -7,6 +7,7 @@ import type { OrganizationBrandColorSwatch } from "~/utils/organization-branding
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { getColorPreviewBorderColor } from "./color-utils";
 import { TextInput } from "./TextInput";
+import type { TextAnimation } from "./text";
 
 export const FONT_OPTIONS = [
 	{ value: "System Sans-Serif", label: "System Sans-Serif" },
@@ -37,6 +38,28 @@ export const TEXT_WEIGHT_OPTIONS = [
 	{ label: "Normal", value: 400 },
 	{ label: "Medium", value: 500 },
 	{ label: "Bold", value: 700 },
+];
+
+export const TEXT_SEGMENT_WEIGHT_OPTIONS = [
+	{ label: "Light", value: 300 },
+	{ label: "Regular", value: 400 },
+	{ label: "Medium", value: 500 },
+	{ label: "Semibold", value: 600 },
+	{ label: "Bold", value: 700 },
+	{ label: "Extra Bold", value: 800 },
+	{ label: "Black", value: 900 },
+];
+
+export const TEXT_ANIMATION_OPTIONS: {
+	value: TextAnimation;
+	label: string;
+}[] = [
+	{ value: "none", label: "None" },
+	{ value: "fade", label: "Fade" },
+	{ value: "slideUp", label: "Slide up" },
+	{ value: "slideDown", label: "Slide down" },
+	{ value: "pop", label: "Pop" },
+	{ value: "typewriter", label: "Typewriter" },
 ];
 
 export const CAPTION_ANIMATION_OPTIONS = [

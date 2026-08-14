@@ -3701,10 +3701,13 @@ async fn finalize_studio_recording(
     Ok(())
 }
 
+pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
+
 fn generate_zoom_segments_from_clicks_impl(
     mut clicks: Vec<CursorClickEvent>,
     _moves: Vec<CursorMoveEvent>,
     max_duration: f64,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     const MS_PER_SECOND: f64 = 1000.0;
     const START_MIN_MS: f64 = 1.0;
@@ -3713,7 +3716,6 @@ fn generate_zoom_segments_from_clicks_impl(
     const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
     const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
     const MERGE_GAP_MS: f64 = 2500.0;
-    const AUTO_ZOOM_AMOUNT: f64 = 2.0;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -3769,7 +3771,7 @@ fn generate_zoom_segments_from_clicks_impl(
         .map(|(start, end)| ZoomSegment {
             start: start.round() / MS_PER_SECOND,
             end: end.round() / MS_PER_SECOND,
-            amount: AUTO_ZOOM_AMOUNT,
+            amount: zoom_amount,
             mode: ZoomMode::Auto,
             glide_direction: GlideDirection::None,
             glide_speed: 0.5,
@@ -3784,6 +3786,7 @@ fn generate_zoom_segments_from_clicks_impl(
 pub fn generate_zoom_segments_from_clicks(
     recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
     let recording_meta = RecordingMeta {
@@ -3795,7 +3798,7 @@ pub fn generate_zoom_segments_from_clicks(
         upload: None,
     };
 
-    generate_zoom_segments_for_project(&recording_meta, recordings)
+    generate_zoom_segments_for_project(&recording_meta, recordings, zoom_amount)
 }
 
 /// Generates zoom segments from clicks for an existing project.
@@ -3803,6 +3806,7 @@ pub fn generate_zoom_segments_from_clicks(
 pub fn generate_zoom_segments_for_project(
     recording_meta: &RecordingMeta,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     let RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
         return Vec::new();
@@ -3835,7 +3839,12 @@ pub fn generate_zoom_segments_for_project(
         }
     }
 
-    generate_zoom_segments_from_clicks_impl(all_clicks, all_moves, recordings.duration())
+    generate_zoom_segments_from_clicks_impl(
+        all_clicks,
+        all_moves,
+        recordings.duration(),
+        zoom_amount,
+    )
 }
 
 fn project_config_from_recording(
@@ -3898,7 +3907,13 @@ fn project_config_from_recording(
         .collect::<Vec<_>>();
 
     let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
+        generate_zoom_segments_from_clicks(
+            completed_recording,
+            recordings,
+            settings
+                .default_zoom_amount
+                .unwrap_or(DEFAULT_AUTO_ZOOM_AMOUNT),
+        )
     } else {
         Vec::new()
     };
@@ -4271,8 +4286,12 @@ mod tests {
 
     #[test]
     fn skips_trailing_stop_click() {
-        let segments =
-            generate_zoom_segments_from_clicks_impl(vec![click_event(11_900.0)], vec![], 12.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            vec![click_event(11_900.0)],
+            vec![],
+            12.0,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert!(
             segments.is_empty(),
@@ -4289,7 +4308,8 @@ mod tests {
             move_event(1_940.0, 0.74, 0.78),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert!(
             !segments.is_empty(),
@@ -4317,7 +4337,12 @@ mod tests {
             move_event(19_364.0, 0.44, 0.95),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 19.436_667);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            clicks,
+            moves,
+            19.436_667,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].start, 1.971);
@@ -4330,7 +4355,8 @@ mod tests {
     fn extends_segment_until_after_mouse_up() {
         let clicks = vec![click_event(1_000.0), click_up_event(2_500.0)];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].start, 0.7);
@@ -4341,7 +4367,8 @@ mod tests {
     fn clamps_zoom_end_before_recording_end() {
         let clicks = vec![click_event(8_999.0), click_event(9_000.0)];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].start, 8.699);
@@ -4358,7 +4385,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            Vec::new(),
+            jitter_moves,
+            15.0,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert!(
             segments.is_empty(),

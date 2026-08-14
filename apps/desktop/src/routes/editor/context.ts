@@ -94,6 +94,11 @@ import {
 	setMotion,
 } from "./three-d";
 import {
+	heldTimeBefore,
+	holdWindows,
+	totalHeldDuration,
+} from "./timeline-holds";
+import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
 	sortTrackSegments,
@@ -511,6 +516,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						const timeline = project.timeline;
 						if (!timeline) return;
 						const segments = timeline.segments;
+						// The click position is in held-output time; clip offsets
+						// live in the gapless recording-flow domain.
+						time -= heldTimeBefore(holdWindows(timeline.textSegments), time);
 						const offsets = clipTimelineOffsets(
 							segments,
 							timeline.transitions ?? [],
@@ -1368,7 +1376,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				? clipTimelineDuration(
 						project.timeline.segments,
 						project.timeline.transitions ?? [],
-					)
+					) + totalHeldDuration(holdWindows(project.timeline.textSegments))
 				: props.editorInstance.recordingDuration;
 
 		type State = {
@@ -1429,6 +1437,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 			timeline: {
 				interactMode: "seek" as "seek" | "split",
+				splitPreview: null as null | { time: number; snapped: boolean },
 				selection: null as
 					| null
 					| { type: "zoom"; indices: number[] }
@@ -1644,7 +1653,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								`${transition.segmentIndex}|${transition.type}|${transition.duration}`,
 						)
 						.join(",");
-					return `${captionsSig}@@${timelineSig}@@${transitionSig}`;
+					// Fullscreen-text holds shift the projected track's output
+					// times, so moving/resizing one must re-derive too.
+					const holdSig = holdWindows(timeline.textSegments)
+						.map(([start, end]) => `${start}|${end}`)
+						.join(",");
+					return `${captionsSig}@@${timelineSig}@@${transitionSig}@@${holdSig}`;
 				},
 				() => {
 					const timeline = project.timeline;
@@ -1656,6 +1670,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						captionRecordingSegments,
 						timeline.captionSegments ?? [],
 						timeline.transitions ?? [],
+						timeline.textSegments,
 					);
 					setProject(
 						"timeline",
