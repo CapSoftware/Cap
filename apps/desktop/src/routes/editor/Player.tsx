@@ -1,6 +1,6 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { createElementBounds } from "@solid-primitives/bounds";
+import { createElementSize } from "@solid-primitives/resize-observer";
 import { debounce } from "@solid-primitives/scheduled";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
@@ -521,7 +521,7 @@ function PreviewCanvas() {
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
-	const containerBounds = createElementBounds(canvasContainerRef);
+	const containerSize = createElementSize(canvasContainerRef);
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
 		width: 0,
@@ -534,8 +534,8 @@ function PreviewCanvas() {
 	);
 
 	createEffect(() => {
-		const width = containerBounds.width ?? 0;
-		const height = containerBounds.height ?? 0;
+		const width = containerSize.width ?? 0;
+		const height = containerSize.height ?? 0;
 		if (debouncedBounds().width === 0 && debouncedBounds().height === 0) {
 			setDebouncedBounds({ width, height });
 		} else {

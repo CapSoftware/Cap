@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
-import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
+import { createElementSize } from "@solid-primitives/resize-observer";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
@@ -407,7 +407,7 @@ function Inner() {
 	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
-	const layoutBounds = createElementBounds(layoutRef);
+	const layoutSize = createElementSize(layoutRef);
 	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
 		createSignal(DEFAULT_TIMELINE_HEIGHT),
 		{ name: "editorTimelineHeight" },
@@ -419,7 +419,7 @@ function Inner() {
 	} | null>(null);
 
 	const clampTimelineHeight = (value: number) => {
-		const available = layoutBounds.height ?? 0;
+		const available = layoutSize.height ?? 0;
 		const maxHeight =
 			available > 0
 				? Math.max(MIN_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT)
@@ -457,7 +457,7 @@ function Inner() {
 	};
 
 	createEffect(() => {
-		const available = layoutBounds.height;
+		const available = layoutSize.height;
 		if (!available) return;
 		setStoredTimelineHeight((height) => clampTimelineHeight(height));
 	});

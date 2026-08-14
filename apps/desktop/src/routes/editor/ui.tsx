@@ -4,7 +4,6 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cva, cx, type VariantProps } from "cva";
 
@@ -82,8 +81,6 @@ export function Slider(
 
 	const [thumbRef, setThumbRef] = createSignal<HTMLDivElement>();
 
-	const thumbBounds = createElementBounds(thumbRef);
-
 	const [dragging, setDragging] = createSignal(false);
 
 	return (
@@ -119,11 +116,12 @@ export function Slider(
 				<Tooltip
 					open={dragging() ? true : undefined}
 					getAnchorRect={() => {
+						const rect = thumbRef()?.getBoundingClientRect();
 						return {
-							x: thumbBounds.left ?? undefined,
-							y: thumbBounds.top ?? undefined,
-							width: thumbBounds.width ?? undefined,
-							height: thumbBounds.height ?? undefined,
+							x: rect?.left,
+							y: rect?.top,
+							width: rect?.width,
+							height: rect?.height,
 						};
 					}}
 					content={

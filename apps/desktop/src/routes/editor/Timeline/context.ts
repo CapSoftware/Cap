@@ -1,12 +1,10 @@
-import {
-	createElementBounds,
-	type NullableBounds,
-} from "@solid-primitives/bounds";
+import type { NullableBounds } from "@solid-primitives/bounds";
 import { createContextProvider } from "@solid-primitives/context";
 import { type Accessor, createMemo } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { useEditorContext } from "../context";
+import { createResizeDrivenBounds } from "../resize-driven-bounds";
 
 export const MAX_TIMELINE_MARKINGS = 20;
 const TIMELINE_MARKING_RESOLUTIONS = [0.5, 1, 2.5, 5, 10, 30];
@@ -85,7 +83,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
 		const [trackState, setTrackState] = createStore({
 			draggingSegment: false,
 		});
-		const bounds = createElementBounds(() => props.ref());
+		const bounds = createResizeDrivenBounds(() => props.ref());
 
 		const secsPerPixel = () =>
 			state.timeline.transform.zoom / (bounds.width ?? 1);

@@ -1,4 +1,3 @@
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
@@ -19,6 +18,7 @@ import toast from "solid-toast";
 import { LogicalPosition } from "~/electron/dpi";
 import { Menu, MenuItem } from "~/electron/menu";
 import { platform } from "~/electron/os";
+import { createResizeDrivenBounds } from "../resize-driven-bounds";
 
 import "./styles.css";
 
@@ -180,7 +180,7 @@ export function Timeline(props: {
 	const [timelineScrollRef, setTimelineScrollRef] =
 		createSignal<HTMLDivElement>();
 	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
-	const timelineBounds = createElementBounds(timelineRef);
+	const timelineBounds = createResizeDrivenBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
 
