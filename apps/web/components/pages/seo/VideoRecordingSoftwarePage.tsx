@@ -252,9 +252,10 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap video recording software demo showing HD screen capture, webcam overlay, and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap video recording software demo showing HD screen capture, webcam overlay, and instant sharing",
+		},
 	},
 
 	cta: {
