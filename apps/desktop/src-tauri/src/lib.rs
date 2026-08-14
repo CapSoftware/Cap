@@ -3380,14 +3380,22 @@ async fn update_project_config_in_memory(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(editor_instance))]
+#[instrument(skip(app, editor_instance))]
 async fn generate_zoom_segments_from_clicks(
+    app: AppHandle,
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<ZoomSegment>, String> {
     let meta = editor_instance.meta();
     let recordings = &editor_instance.recordings;
 
-    let zoom_segments = recording::generate_zoom_segments_for_project(meta, recordings);
+    let zoom_amount = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.default_zoom_amount)
+        .unwrap_or(recording::DEFAULT_AUTO_ZOOM_AMOUNT);
+
+    let zoom_segments =
+        recording::generate_zoom_segments_for_project(meta, recordings, zoom_amount);
 
     Ok(zoom_segments)
 }
