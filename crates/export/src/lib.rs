@@ -196,7 +196,17 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 
     if let Some(timeline) = project_config.timeline.as_mut() {
         timeline.mask_segments.clear();
-        timeline.text_segments.clear();
+        // Fullscreen text segments pause the recording clock (holds), which
+        // shapes the frame count and cursor motion; dropping them would
+        // desync this overlay pass from the main render. Keep them as
+        // invisible placeholders (empty content draws nothing) and only
+        // remove overlay-layout texts.
+        timeline
+            .text_segments
+            .retain(|text| text.layout == cap_project::TextLayout::Fullscreen);
+        for text in &mut timeline.text_segments {
+            text.content.clear();
+        }
         timeline.caption_segments.clear();
         timeline.keyboard_segments.clear();
     }

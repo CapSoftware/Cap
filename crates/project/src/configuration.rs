@@ -1564,6 +1564,14 @@ pub enum TimelineFrameMapping<'a> {
         duration: f64,
         output_end: f64,
     },
+    /// The recording clock is paused under a fullscreen text segment: the
+    /// frozen `source` frame stands until `output_end` (the hold's end in
+    /// output time). Video shows the frozen frame (hidden behind the takeover
+    /// anyway); audio renders silence.
+    Hold {
+        source: TimelineSource<'a>,
+        output_end: f64,
+    },
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -1628,7 +1636,93 @@ impl TimelineConfiguration {
         })
     }
 
+    /// Output-time windows where a fullscreen text segment pauses the
+    /// recording clock, sorted and merged. Empty for every project without
+    /// fullscreen text — the mapping below then short-circuits to the exact
+    /// pre-hold arithmetic.
+    pub fn hold_windows(&self) -> Vec<(f64, f64)> {
+        let mut windows: Vec<(f64, f64)> = self
+            .text_segments
+            .iter()
+            .filter(|s| s.enabled && s.layout == TextLayout::Fullscreen && s.end > s.start)
+            .map(|s| (s.start, s.end))
+            .collect();
+        if windows.is_empty() {
+            return windows;
+        }
+        windows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64)> = Vec::with_capacity(windows.len());
+        for window in windows {
+            match merged.last_mut() {
+                Some(last) if window.0 <= last.1 => last.1 = last.1.max(window.1),
+                _ => merged.push(window),
+            }
+        }
+        merged
+    }
+
+    /// Total output seconds inserted by fullscreen text holds.
+    pub fn held_duration(&self) -> f64 {
+        self.hold_windows().iter().map(|(s, e)| e - s).sum()
+    }
+
     pub fn get_frame_mapping(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
+        let holds = self.hold_windows();
+        if holds.is_empty() {
+            return self.get_frame_mapping_unheld(frame_time);
+        }
+
+        if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
+            let effective = hold_start - held_time_before(&holds, hold_start);
+            let source = match self.get_frame_mapping_unheld(effective)? {
+                TimelineFrameMapping::Single { source, .. }
+                | TimelineFrameMapping::Hold { source, .. } => source,
+                TimelineFrameMapping::Transition { incoming, .. } => incoming,
+            };
+            return Some(TimelineFrameMapping::Hold {
+                source,
+                output_end: hold_end,
+            });
+        }
+
+        let effective = frame_time - held_time_before(&holds, frame_time);
+        let next_hold_start = holds
+            .iter()
+            .map(|(start, _)| *start)
+            .find(|start| *start > frame_time);
+        // The base mapping's output_end is in the un-held (gapless) domain;
+        // put it back into output time and stop at the next hold so consumers
+        // (audio chunking) never render contiguous recording samples across a
+        // pause.
+        let clamp_end = |output_end: f64| {
+            let output_end = effective_to_output(&holds, output_end);
+            next_hold_start.map_or(output_end, |hold| output_end.min(hold))
+        };
+        Some(match self.get_frame_mapping_unheld(effective)? {
+            TimelineFrameMapping::Single { source, output_end } => TimelineFrameMapping::Single {
+                source,
+                output_end: clamp_end(output_end),
+            },
+            TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind,
+                progress,
+                duration,
+                output_end,
+            } => TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind,
+                progress,
+                duration,
+                output_end: clamp_end(output_end),
+            },
+            hold @ TimelineFrameMapping::Hold { .. } => hold,
+        })
+    }
+
+    fn get_frame_mapping_unheld(&self, frame_time: f64) -> Option<TimelineFrameMapping<'_>> {
         if self.transitions.is_empty() {
             return self.get_segment_time_without_transitions(frame_time).map(
                 |(source_time, segment, segment_index, output_end)| TimelineFrameMapping::Single {
@@ -1701,19 +1795,15 @@ impl TimelineConfiguration {
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
-        if !self.transitions.is_empty() {
-            return match self.get_frame_mapping(frame_time)? {
-                TimelineFrameMapping::Single { source, .. } => {
-                    Some((source.source_time, source.segment))
-                }
-                TimelineFrameMapping::Transition { incoming, .. } => {
-                    Some((incoming.source_time, incoming.segment))
-                }
-            };
+        match self.get_frame_mapping(frame_time)? {
+            TimelineFrameMapping::Single { source, .. }
+            | TimelineFrameMapping::Hold { source, .. } => {
+                Some((source.source_time, source.segment))
+            }
+            TimelineFrameMapping::Transition { incoming, .. } => {
+                Some((incoming.source_time, incoming.segment))
+            }
         }
-
-        self.get_segment_time_without_transitions(frame_time)
-            .map(|(source_time, segment, _, _)| (source_time, segment))
     }
 
     fn get_segment_time_without_transitions(
@@ -1743,17 +1833,47 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
-        let segment_duration = self.segments.iter().map(TimelineSegment::duration).sum();
-        if self.transitions.is_empty() {
-            return segment_duration;
-        }
+        let segment_duration: f64 = self.segments.iter().map(TimelineSegment::duration).sum();
+        let segment_duration = if self.transitions.is_empty() {
+            segment_duration
+        } else {
+            segment_duration
+                - (1..self.segments.len())
+                    .filter_map(|segment_index| self.effective_transition(segment_index))
+                    .map(|transition| transition.duration)
+                    .sum::<f64>()
+        };
 
-        segment_duration
-            - (1..self.segments.len())
-                .filter_map(|segment_index| self.effective_transition(segment_index))
-                .map(|transition| transition.duration)
-                .sum::<f64>()
+        segment_duration + self.held_duration()
     }
+}
+
+fn active_hold_window(windows: &[(f64, f64)], time: f64) -> Option<(f64, f64)> {
+    windows
+        .iter()
+        .find(|(start, end)| time >= *start && time < *end)
+        .copied()
+}
+
+fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
+    windows
+        .iter()
+        .map(|(start, end)| (time.min(*end) - start).max(0.0))
+        .sum()
+}
+
+/// Inverse of the held-output -> gapless transform: places a gapless
+/// timestamp back into output time, landing after every hold it passed.
+fn effective_to_output(windows: &[(f64, f64)], effective: f64) -> f64 {
+    let mut output = effective;
+    for (start, end) in windows {
+        if output >= *start {
+            output += end - start;
+        } else {
+            break;
+        }
+    }
+    output
 }
 
 pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
@@ -2441,6 +2561,111 @@ mod tests {
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
+    }
+
+    fn fullscreen_text(start: f64, end: f64) -> TextSegment {
+        TextSegment {
+            start,
+            end,
+            track: 0,
+            enabled: true,
+            content: "Title".to_string(),
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.35, 0.2),
+            font_family: "sans-serif".to_string(),
+            font_size: 48.0,
+            font_weight: 700.0,
+            italic: false,
+            color: "#ffffff".to_string(),
+            fade_duration: 0.15,
+            align: TextAlign::Center,
+            letter_spacing: 0.0,
+            line_height: 1.2,
+            opacity: 1.0,
+            shadow: 0.0,
+            animation_in: TextAnimation::Fade,
+            animation_out: TextAnimation::Fade,
+            animation_in_duration: 0.15,
+            animation_out_duration: 0.15,
+            layout: TextLayout::Fullscreen,
+            layout_transition: 0.5,
+        }
+    }
+
+    #[test]
+    fn fullscreen_text_inserts_output_time() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(2.0, 5.0)];
+
+        assert_eq!(timeline.duration(), 13.0);
+
+        // Before the hold: unchanged mapping, but the chunk ends at the hold.
+        assert!(matches!(
+            timeline.get_frame_mapping(1.0),
+            Some(TimelineFrameMapping::Single { source, output_end })
+                if source.source_time == 1.0 && output_end == 2.0
+        ));
+
+        // Inside the hold: frozen at the recording instant where it started.
+        assert!(matches!(
+            timeline.get_frame_mapping(3.5),
+            Some(TimelineFrameMapping::Hold { source, output_end })
+                if source.source_time == 2.0 && output_end == 5.0
+        ));
+        let (frozen, _) = timeline.get_segment_time(3.5).unwrap();
+        assert_eq!(frozen, 2.0);
+
+        // After the hold: resumes exactly where it paused.
+        let (resumed, _) = timeline.get_segment_time(5.0).unwrap();
+        assert_eq!(resumed, 2.0);
+        let (later, segment) = timeline.get_segment_time(7.5).unwrap();
+        assert_eq!(later, 10.5);
+        assert_eq!(segment.recording_clip, 1);
+    }
+
+    #[test]
+    fn overlay_and_disabled_texts_do_not_hold() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        let mut overlay = fullscreen_text(2.0, 5.0);
+        overlay.layout = TextLayout::Overlay;
+        let mut disabled = fullscreen_text(6.0, 8.0);
+        disabled.enabled = false;
+        timeline.text_segments = vec![overlay, disabled];
+
+        assert_eq!(timeline.duration(), 10.0);
+        assert!(timeline.hold_windows().is_empty());
+        let (time, _) = timeline.get_segment_time(4.5).unwrap();
+        assert_eq!(time, 10.5);
+    }
+
+    #[test]
+    fn overlapping_fullscreen_texts_merge_into_one_hold() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(2.0, 5.0), fullscreen_text(4.0, 6.0)];
+
+        assert_eq!(timeline.hold_windows(), vec![(2.0, 6.0)]);
+        assert_eq!(timeline.duration(), 14.0);
+        let (frozen, _) = timeline.get_segment_time(5.5).unwrap();
+        assert_eq!(frozen, 2.0);
+        let (after, _) = timeline.get_segment_time(6.5).unwrap();
+        assert_eq!(after, 2.5);
+    }
+
+    #[test]
+    fn holds_compose_with_transitions() {
+        let mut timeline = timeline_with_transitions(vec![ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 1.0,
+        }]);
+        timeline.text_segments = vec![fullscreen_text(1.0, 2.0)];
+
+        assert_eq!(timeline.duration(), 10.0);
+        // 6.0 output = 5.0 effective = 2.0s into the second clip (whose
+        // output start is 3.0 after the 1s cross-fade overlap).
+        let (time, segment) = timeline.get_segment_time(6.0).unwrap();
+        assert_eq!(segment.recording_clip, 1);
+        assert_eq!(time, 12.0);
     }
 
     #[test]
