@@ -277,7 +277,8 @@ export const developerDocumentationVideosContent: SeoPageContent = {
 	video: {
 		iframe: {
 			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "Cap developer documentation video demo showing screen recording of an API walkthrough with narration and instant share link",
+			title:
+				"Cap developer documentation video demo showing screen recording of an API walkthrough with narration and instant share link",
 		},
 	},
 

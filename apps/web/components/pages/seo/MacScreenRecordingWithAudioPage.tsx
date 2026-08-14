@@ -271,7 +271,8 @@ export const macScreenRecordingWithAudioContent: SeoPageContent = {
 	video: {
 		iframe: {
 			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "Cap recording Mac screen with system audio and microphone simultaneously",
+			title:
+				"Cap recording Mac screen with system audio and microphone simultaneously",
 		},
 	},
 
