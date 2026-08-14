@@ -92,6 +92,9 @@ async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
 async listAudioDevices() : Promise<string[]> {
     return await TAURI_INVOKE("list_audio_devices");
 },
+async listSystemFonts() : Promise<string[]> {
+    return await TAURI_INVOKE("list_system_fonts");
+},
 async closeRecordingsOverlayWindow() : Promise<void> {
     await TAURI_INVOKE("close_recordings_overlay_window");
 },
@@ -955,7 +958,7 @@ export type FrameStyle =
 "macbook"
 export type FrameTheme = "dark" | "light"
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; defaultZoomAmount?: number | null; 
 /**
  * `None` until [`init`] seeds it from whether this machine has a notched
  * display. From then on it is the user's preference and nothing re-reads
@@ -1067,7 +1070,14 @@ colorCorrection?: ColorCorrectionConfiguration;
  * `font_size`. The field-level default keeps old files at 0 while
  * `Default::default()` produces the current version.
  */
-textSizeVersion?: number }
+textSizeVersion?: number; 
+/**
+ * 0 (legacy): text segments animate with the single symmetric
+ * `fade_duration`. 1: the enter/exit animation fields drive timing;
+ * legacy configs are migrated on load by seeding both animation
+ * durations from `fade_duration`.
+ */
+textAnimVersion?: number }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }
@@ -1132,7 +1142,45 @@ export type StudioRecordingQuality = "compatibility" | "balanced" | "ultra"
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsRemux" } | { status: "Failed"; error: string } | { status: "Complete" }
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
-export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
+export type TextAlign = "left" | "center" | "right"
+export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "pop" | "typewriter"
+/**
+ * How a text segment shares the frame with the display recording. The
+ * variants name where the TEXT sits; the display card makes room for it.
+ */
+export type TextLayout = 
+/**
+ * Text draws over the untouched display (the original behavior).
+ */
+"overlay" | 
+/**
+ * The display card shrinks and fades away; text owns the frame.
+ */
+"fullscreen" | 
+/**
+ * Text in the left half, display card contained in the right half.
+ */
+"splitLeft" | 
+/**
+ * Text in the right half, display card contained in the left half.
+ */
+"splitRight"
+export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; 
+/**
+ * Legacy symmetric fade. Superseded by the animation fields below; kept
+ * so configs written by new builds still fade in old builds. The
+ * `text_anim_version` migration seeds the animation durations from it.
+ */
+fadeDuration?: number; align?: TextAlign; 
+/**
+ * Px at the 1080p reference height, like `font_size`.
+ */
+letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; animationIn?: TextAnimation; animationOut?: TextAnimation; animationInDuration?: number; animationOutDuration?: number; layout?: TextLayout; 
+/**
+ * Seconds the display card takes to morph aside (and back) at the
+ * segment edges when `layout` is not `Overlay`.
+ */
+layoutTransition?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
