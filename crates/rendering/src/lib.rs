@@ -48,6 +48,7 @@ pub mod notch_shape;
 mod project_recordings;
 mod scene;
 pub mod spring_mass_damper;
+mod takeover;
 mod text;
 mod transition;
 pub mod yuv_converter;
@@ -74,6 +75,8 @@ use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::PrecomputedCursorTimeline;
 use mask::interpolate_masks;
 use scene::*;
+use takeover::InterpolatedTakeover;
+pub use takeover::TakeoverDisplayMorph;
 use text::{PreparedText, prepare_texts};
 use zoom::*;
 pub use zoom_spring::{CursorCropMap, ZoomTransformTimeline};
@@ -2263,6 +2266,10 @@ pub struct ProjectUniforms {
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
     pub split: Option<SplitLayoutComputed>,
+    /// Display-card morph driven by a non-Overlay text segment; `None` when
+    /// no takeover is active. The cursor layer follows it the same way it
+    /// follows `split`.
+    pub takeover: Option<TakeoverDisplayMorph>,
     pub resolution_base: XY<u32>,
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
@@ -2745,6 +2752,15 @@ pub(crate) struct DisplayLayout {
 }
 
 impl ProjectUniforms {
+    /// 0..1 multiplier for recording-anchored overlays (captions, keyboard)
+    /// while a text takeover hides the recording — they would otherwise hang
+    /// frozen over the title card while the recording clock is paused.
+    pub fn takeover_overlay_fade(&self) -> f32 {
+        self.takeover
+            .as_ref()
+            .map_or(1.0, |takeover| 1.0 - takeover.t)
+    }
+
     pub fn frame_layout(&self) -> FrameLayout {
         FrameLayout {
             display: self.display_outer_bounds,
@@ -3519,8 +3535,23 @@ impl ProjectUniforms {
             None
         };
 
+        // Text-takeover morph: a non-Overlay text segment pushes the display
+        // aside (Fullscreen) or into a padded half (Split*). None on every
+        // frame without such a segment, which leaves all the math below
+        // exactly as it was.
+        let takeover = project.timeline.as_ref().and_then(|timeline| {
+            InterpolatedTakeover::sample(frame_time as f64, &timeline.text_segments)
+        });
+
         let mut camera3d_zoom: Option<camera3d::Camera3DScreenZoom> = None;
-        let (display, display_motion_parent, frame_chrome, display_outer_bounds, notch) = {
+        let (
+            display,
+            display_motion_parent,
+            frame_chrome,
+            display_outer_bounds,
+            notch,
+            takeover_morph,
+        ) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
 
@@ -3615,6 +3646,28 @@ impl ProjectUniforms {
             let final_crop_bounds = split_layout.as_ref().map_or(base_crop_bounds, |s| {
                 s.screen.crop_for(final_target_bounds, split_t)
             });
+
+            // Text takeover composes after the split morph at the same seam:
+            // lerp the (possibly split) rect toward the takeover target. The
+            // target preserves the current rect's aspect, so the crop derived
+            // above stays valid and content never distorts.
+            let takeover_t = takeover.map_or(0.0, |tk| tk.t);
+            let takeover_display_fade = takeover.map_or(1.0, |tk| tk.display_fade());
+            let takeover_accessory_fade = takeover.map_or(1.0, |tk| tk.accessory_fade());
+            let takeover_card_t = takeover.map_or(0.0, |tk| tk.card_style_t());
+            let takeover_padding = output_size.x.min(output_size.y) as f32 * FLOATING_PADDING_FRAC;
+            let pre_takeover_bounds = final_target_bounds;
+            let takeover_target = takeover.map(|tk| {
+                tk.display_target(
+                    pre_takeover_bounds,
+                    (output_size.x as f32, output_size.y as f32),
+                    takeover_padding,
+                )
+            });
+            let final_target_bounds = takeover_target.map_or(final_target_bounds, |target| {
+                lerp_bounds(pre_takeover_bounds, target, takeover_t)
+            });
+
             let final_target_size = [
                 final_target_bounds[2] - final_target_bounds[0],
                 final_target_bounds[3] - final_target_bounds[1],
@@ -3624,6 +3677,9 @@ impl ProjectUniforms {
             let display_rounding_px =
                 (project.background.rounding / 100.0 * 0.5 * final_min_axis) as f32 * split_fade
                     + floating_rounding_px * floating_t;
+            // A split takeover styles the display as a floating card.
+            let display_rounding_px =
+                lerp_f32(display_rounding_px, floating_rounding_px, takeover_card_t);
             let frame_active = frame_config.is_some();
             // With a frame active the card decoration (shadow/border) moves to
             // the chrome pass; the video keeps only the floating-card shadow
@@ -3640,16 +3696,23 @@ impl ProjectUniforms {
             // fades out, so the multipliers relax back to uniform rounding.
             let display_corner_radii = match frame_config.as_ref().map(|f| f.style) {
                 Some(FrameStyle::MacOS | FrameStyle::Windows | FrameStyle::Browser) => {
-                    [split_t, split_t, 1.0, 1.0]
+                    // The chrome bar also fades out under a takeover, so the
+                    // top corners regain their rounding the same way they do
+                    // in a split.
+                    let top = split_t.max(takeover_t);
+                    [top, top, 1.0, 1.0]
                 }
                 _ => [1.0; 4],
             };
+            // The shader draws border and shadow outside the card shape,
+            // unscaled by the opacity uniform — fade them explicitly or they
+            // outlive a Fullscreen takeover's fade.
             let border_color = if let Some(b) = project.background.border.as_ref() {
                 [
                     b.color[0] as f32 / 255.0,
                     b.color[1] as f32 / 255.0,
                     b.color[2] as f32 / 255.0,
-                    (b.opacity / 100.0).clamp(0.0, 1.0),
+                    (b.opacity / 100.0).clamp(0.0, 1.0) * takeover_display_fade,
                 ]
             } else {
                 [0.0, 0.0, 0.0, 0.0]
@@ -3678,6 +3741,9 @@ impl ProjectUniforms {
                 let chrome_bounds = split_layout.as_ref().map_or(base_outer_bounds, |s| {
                     lerp_bounds(base_outer_bounds, s.screen.target, split_t)
                 });
+                let chrome_bounds = takeover_target.map_or(chrome_bounds, |target| {
+                    lerp_bounds(chrome_bounds, target, takeover_t)
+                });
                 let chrome_size = [
                     chrome_bounds[2] - chrome_bounds[0],
                     chrome_bounds[3] - chrome_bounds[1],
@@ -3705,7 +3771,10 @@ impl ProjectUniforms {
                             0.0,
                         ],
                         shadow: if decorated {
-                            project.background.shadow * split_fade * camera3d_shadow_fade
+                            project.background.shadow
+                                * split_fade
+                                * camera3d_shadow_fade
+                                * takeover_accessory_fade
                         } else {
                             0.0
                         },
@@ -3720,13 +3789,14 @@ impl ProjectUniforms {
                             .as_ref()
                             .map_or(18.0, |s| s.opacity)
                             * split_fade
-                            * camera3d_shadow_fade,
+                            * camera3d_shadow_fade
+                            * takeover_accessory_fade,
                         shadow_blur: project
                             .background
                             .advanced_shadow
                             .as_ref()
                             .map_or(50.0, |s| s.blur),
-                        opacity: scene.screen_opacity as f32 * split_fade,
+                        opacity: scene.screen_opacity as f32 * split_fade * takeover_accessory_fade,
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
                         border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                         preserve_source_alpha: 1.0,
@@ -3790,9 +3860,12 @@ impl ProjectUniforms {
                             shadow_size: 0.0,
                             shadow_opacity: 0.0,
                             shadow_blur: 0.0,
-                            // Fades out as a split-screen scene morphs in, where
-                            // the geometry above stops describing the pane.
-                            opacity: scene.screen_opacity as f32 * split_fade,
+                            // Fades out as a split-screen scene or a text
+                            // takeover morphs in, where the geometry above
+                            // stops describing the pane.
+                            opacity: scene.screen_opacity as f32
+                                * split_fade
+                                * takeover_accessory_fade,
                             border_enabled: 0.0,
                             border_width: 0.0,
                             _padding1: [0.0; 3],
@@ -3829,7 +3902,8 @@ impl ProjectUniforms {
                     ],
                     shadow: project.background.shadow
                         * display_decoration_fade
-                        * camera3d_shadow_fade,
+                        * camera3d_shadow_fade
+                        * takeover_display_fade,
                     shadow_size: project
                         .background
                         .advanced_shadow
@@ -3841,13 +3915,14 @@ impl ProjectUniforms {
                         .as_ref()
                         .map_or(18.0, |s| s.opacity)
                         * display_decoration_fade
-                        * camera3d_shadow_fade,
+                        * camera3d_shadow_fade
+                        * takeover_display_fade,
                     shadow_blur: project
                         .background
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    opacity: scene.screen_opacity as f32,
+                    opacity: scene.screen_opacity as f32 * takeover_display_fade,
                     border_enabled: if border_on && !frame_active { 1.0 } else { 0.0 },
                     border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                     preserve_source_alpha: if options.preserve_screen_alpha {
@@ -3866,6 +3941,14 @@ impl ProjectUniforms {
                 frame_chrome,
                 display_outer_bounds,
                 notch,
+                takeover
+                    .zip(takeover_target)
+                    .map(|(tk, target)| TakeoverDisplayMorph {
+                        t: tk.t,
+                        from: pre_takeover_bounds,
+                        to: target,
+                        cursor_fade: tk.display_fade(),
+                    }),
             )
         };
 
@@ -3999,6 +4082,10 @@ impl ProjectUniforms {
                 // Same chrome rule as the display layer: classic split strips
                 // rounding/shadow, the floating card keeps them.
                 let chrome_fade = (1.0 - split_t + floating_t).clamp(0.0, 1.0);
+                // The shader draws the drop shadow outside the card without the
+                // opacity uniform, so a takeover must fade the shadow uniforms
+                // explicitly or it outlives the hidden bubble.
+                let takeover_fade = takeover.map_or(1.0, |tk| tk.accessory_fade());
                 let final_target_bounds = snap_bounds_to_output_pixels(
                     split_layout.as_ref().map_or(target_bounds, |s| {
                         lerp_bounds(target_bounds, s.camera.target, split_t)
@@ -4038,7 +4125,10 @@ impl ProjectUniforms {
                         camera_descriptor.zoom_amount,
                         0.0,
                     ],
-                    shadow: project.camera.shadow * chrome_fade * camera3d_shadow_fade,
+                    shadow: project.camera.shadow
+                        * chrome_fade
+                        * camera3d_shadow_fade
+                        * takeover_fade,
                     shadow_size: project
                         .camera
                         .advanced_shadow
@@ -4050,13 +4140,16 @@ impl ProjectUniforms {
                         .as_ref()
                         .map_or(18.0, |s| s.opacity)
                         * chrome_fade
-                        * camera3d_shadow_fade,
+                        * camera3d_shadow_fade
+                        * takeover_fade,
                     shadow_blur: project
                         .camera
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    opacity: scene.regular_camera_transition_opacity() as f32,
+                    // The bubble yields to a text takeover so it can never
+                    // collide with the text's half of the frame.
+                    opacity: scene.regular_camera_transition_opacity() as f32 * takeover_fade,
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
@@ -4156,7 +4249,8 @@ impl ProjectUniforms {
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
-                    opacity: scene.camera_only_transition_opacity() as f32,
+                    opacity: scene.camera_only_transition_opacity() as f32
+                        * takeover.map_or(1.0, |tk| tk.accessory_fade()),
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
@@ -4209,6 +4303,7 @@ impl ProjectUniforms {
             zoom,
             scene,
             split: split_layout,
+            takeover: takeover_morph,
             interpolated_cursor,
             frame_rate: fps,
             frame_number,
@@ -5822,6 +5917,9 @@ impl RendererLayers {
 
         let should_render_screen = render_display
             && uniforms.scene.should_render_screen()
+            // A fully-faded card (e.g. a held Fullscreen text takeover) draws
+            // nothing visible; skip the pass entirely.
+            && uniforms.display.opacity > 0.001
             && self.display.has_valid_frame();
         let should_render_cursor = if render_display {
             uniforms.scene.should_render_screen()
