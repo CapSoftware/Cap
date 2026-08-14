@@ -6,20 +6,6 @@ import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import {
-	LogicalPosition,
-	type PhysicalPosition,
-	type PhysicalSize,
-} from "@tauri-apps/api/dpi";
-import { emit } from "@tauri-apps/api/event";
-import {
-	CheckMenuItem,
-	Menu,
-	MenuItem,
-	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import {
 	createEffect,
 	createMemo,
 	createSignal,
@@ -58,6 +44,20 @@ import {
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import SelectionHint from "~/components/selection-hint";
+import {
+	LogicalPosition,
+	type PhysicalPosition,
+	type PhysicalSize,
+} from "~/electron/dpi";
+import { emit } from "~/electron/event";
+import {
+	CheckMenuItem,
+	Menu,
+	MenuItem,
+	PredefinedMenuItem,
+} from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
+import { WebviewWindow } from "~/electron/webviewWindow";
 import {
 	authStore,
 	generalSettingsStore,

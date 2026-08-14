@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
+import { invoke } from "~/electron/core";
+import * as dialog from "~/electron/dialog";
+import { getCurrentWindow } from "~/electron/window";
 import { commands } from "~/utils/tauri";
 
 const videoExtensions = [

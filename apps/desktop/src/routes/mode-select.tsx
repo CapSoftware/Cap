@@ -1,9 +1,9 @@
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { onCleanup, onMount } from "solid-js";
 import ModeSelect from "~/components/ModeSelect";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import type { UnlistenFn } from "~/electron/event";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWindow, LogicalSize } from "~/electron/window";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 
 const ModeSelectWindow = () => {

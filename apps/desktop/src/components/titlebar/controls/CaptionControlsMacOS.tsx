@@ -1,4 +1,3 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -8,6 +7,7 @@ import {
 	Show,
 	splitProps,
 } from "solid-js";
+import { getCurrentWindow } from "~/electron/window";
 
 export default function CaptionControlsMacOS(
 	props: ComponentProps<"div"> & {

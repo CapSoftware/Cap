@@ -1,4 +1,4 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel } from "~/electron/core";
 import { commands, type ExportSettings, type FramesRendered } from "./tauri";
 
 export async function beginExportSessionGuard() {

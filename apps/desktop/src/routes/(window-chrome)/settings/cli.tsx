@@ -1,8 +1,8 @@
 import { Button } from "@cap/ui-solid";
-import { invoke } from "@tauri-apps/api/core";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { createResource, createSignal, Show } from "solid-js";
 import toast from "solid-toast";
+import { writeText } from "~/electron/clipboard";
+import { invoke } from "~/electron/core";
 import { Section, SectionCard, SettingsPageContent } from "./Setting";
 
 type CliInstallStatus = {

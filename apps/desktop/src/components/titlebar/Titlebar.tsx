@@ -1,7 +1,8 @@
 // Credits: tauri-controls
-import { type } from "@tauri-apps/plugin-os";
+
 import { cx } from "cva";
 import { type ComponentProps, Match, Switch, splitProps } from "solid-js";
+import { type } from "~/electron/os";
 import titlebarState from "~/utils/titlebar-state";
 import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
 

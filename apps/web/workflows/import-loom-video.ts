@@ -7,6 +7,11 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError } from "workflow";
+import {
+	isValidLoomVideoId,
+	LOOM_ORIGIN,
+	normalizeLoomMediaUrl,
+} from "@/lib/loom-url";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 interface ImportLoomPayload {
@@ -46,11 +51,13 @@ function isGoogleDriveResumableUrl(url: string): boolean {
 
 async function fetchLoomCdnUrl(
 	videoId: string,
-	endpoint: string,
+	endpoint: "raw-url" | "transcoded-url",
 	includeBody: boolean,
 ): Promise<string | null> {
 	try {
-		const options: RequestInit = { method: "POST" };
+		if (!isValidLoomVideoId(videoId)) return null;
+
+		const options: RequestInit = { method: "POST", redirect: "error" };
 		if (includeBody) {
 			options.headers = {
 				"Content-Type": "application/json",
@@ -64,8 +71,13 @@ async function fetchLoomCdnUrl(
 			});
 		}
 
+		const encodedVideoId = encodeURIComponent(videoId);
+		const endpointPath = endpoint === "raw-url" ? "raw-url" : "transcoded-url";
 		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
+			new URL(
+				`/api/campaigns/sessions/${encodedVideoId}/${endpointPath}`,
+				LOOM_ORIGIN,
+			),
 			options,
 		);
 
@@ -75,14 +87,17 @@ async function fetchLoomCdnUrl(
 		if (!text.trim()) return null;
 
 		const data = JSON.parse(text) as { url?: string };
-		return data.url ?? null;
+		return data.url ? normalizeLoomMediaUrl(data.url) : null;
 	} catch {
 		return null;
 	}
 }
 
 async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
+	const requestVariants: Array<{
+		endpoint: "raw-url" | "transcoded-url";
+		includeBody: boolean;
+	}> = [
 		{ endpoint: "transcoded-url", includeBody: true },
 		{ endpoint: "raw-url", includeBody: true },
 		{ endpoint: "transcoded-url", includeBody: false },

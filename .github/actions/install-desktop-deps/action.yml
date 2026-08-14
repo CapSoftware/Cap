@@ -19,7 +19,6 @@ runs:
       run: |
         sudo apt update
         sudo apt install -y --no-install-recommends \
-          libwebkit2gtk-4.1-dev \
           build-essential \
           pkg-config \
           curl \

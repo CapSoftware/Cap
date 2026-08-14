@@ -1,13 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useQuery } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { appDataDir, join } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type Component,
@@ -26,6 +19,13 @@ import {
 import { produce, reconcile } from "solid-js/store";
 import { Portal } from "solid-js/web";
 import toast from "solid-toast";
+import { convertFileSrc } from "~/electron/core";
+import { open } from "~/electron/dialog";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu, MenuItem } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
+import { appDataDir, join } from "~/electron/path";
+import { getCurrentWindow } from "~/electron/window";
 import { createDevicesQuery } from "~/utils/devices";
 import {
 	createCameraMutation,

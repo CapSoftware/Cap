@@ -1,10 +1,5 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createResizeObserver } from "@solid-primitives/resize-observer";
-import type {
-	CheckMenuItemOptions,
-	PredefinedMenuItemOptions,
-} from "@tauri-apps/api/menu";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	type Accessor,
 	children,
@@ -21,6 +16,11 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
+import type {
+	CheckMenuItemOptions,
+	PredefinedMenuItemOptions,
+} from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
 import { createKeyDownSignal } from "~/utils/events";
 
 import { commands } from "~/utils/tauri";

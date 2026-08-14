@@ -1,13 +1,4 @@
 import { makePersisted } from "@solid-primitives/storage";
-import { listen } from "@tauri-apps/api/event";
-import {
-	availableMonitors,
-	currentMonitor,
-	getCurrentWindow,
-	LogicalPosition,
-	LogicalSize,
-} from "@tauri-apps/api/window";
-import { type } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type Accessor,
@@ -37,6 +28,15 @@ import {
 	getDefaultCameraWindowState,
 	normalizeBackgroundBlurMode,
 } from "~/components/CameraPreviewChrome";
+import { listen } from "~/electron/event";
+import { type } from "~/electron/os";
+import {
+	availableMonitors,
+	currentMonitor,
+	getCurrentWindow,
+	LogicalPosition,
+	LogicalSize,
+} from "~/electron/window";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {

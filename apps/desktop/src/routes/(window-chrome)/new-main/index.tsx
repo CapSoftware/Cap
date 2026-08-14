@@ -6,21 +6,6 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import {
-	currentMonitor,
-	getCurrentWindow,
-	LogicalSize,
-	PhysicalPosition,
-} from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
-import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -40,6 +25,18 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
+import { Channel } from "~/electron/core";
+import * as dialog from "~/electron/dialog";
+import { emit, listen } from "~/electron/event";
+import { relaunch } from "~/electron/process";
+import * as shell from "~/electron/shell";
+import { getAllWebviewWindows, WebviewWindow } from "~/electron/webviewWindow";
+import {
+	currentMonitor,
+	getCurrentWindow,
+	LogicalSize,
+	PhysicalPosition,
+} from "~/electron/window";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
@@ -118,6 +115,7 @@ import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import { waitUntilVisible } from "./update-check-visibility";
 import useRequestPermission from "./useRequestPermission";
 
 const MAIN_WINDOW_SIZE = {
@@ -1745,12 +1743,17 @@ function createUpdateCheck() {
 	if (import.meta.env.DEV) return;
 
 	const navigate = useNavigate();
+	const visibilityController = new AbortController();
+	onCleanup(() => visibilityController.abort());
 
 	onMount(async () => {
 		if (hasChecked) return;
 		hasChecked = true;
 
 		await new Promise((res) => setTimeout(res, 10_000));
+		if (visibilityController.signal.aborted) return;
+		if (!(await waitUntilVisible(document, visibilityController.signal)))
+			return;
 
 		// The Rust background loop owns nightly updates.
 		const settings = await generalSettingsStore.get();

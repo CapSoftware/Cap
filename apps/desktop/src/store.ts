@@ -1,6 +1,6 @@
 import { createQuery } from "@tanstack/solid-query";
-import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
+import { Store } from "~/electron/store";
 import type { AutomationsStore } from "~/utils/automations";
 import {
 	type GeneralSettingsStore,

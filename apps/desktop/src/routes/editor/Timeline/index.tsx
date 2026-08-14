@@ -1,8 +1,4 @@
-import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	batch,
@@ -19,6 +15,10 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu, MenuItem } from "~/electron/menu";
+import { platform } from "~/electron/os";
+import { createResizeDrivenBounds } from "../resize-driven-bounds";
 
 import "./styles.css";
 
@@ -180,7 +180,7 @@ export function Timeline(props: {
 	const [timelineScrollRef, setTimelineScrollRef] =
 		createSignal<HTMLDivElement>();
 	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
-	const timelineBounds = createElementBounds(timelineRef);
+	const timelineBounds = createResizeDrivenBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
 

@@ -2,11 +2,6 @@ import { Button } from "@cap/ui-solid";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { remove } from "@tauri-apps/plugin-fs";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -25,6 +20,11 @@ import toast from "solid-toast";
 import { SignInButton } from "~/components/SignInButton";
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { Channel } from "~/electron/core";
+import { ask } from "~/electron/dialog";
+import { remove } from "~/electron/fs";
+import { CheckMenuItem, Menu } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";

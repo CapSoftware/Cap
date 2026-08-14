@@ -1,7 +1,4 @@
 import { type RouteSectionProps, useLocation } from "@solidjs/router";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -10,10 +7,12 @@ import {
 	type ParentProps,
 	Suspense,
 } from "solid-js";
-
 import { AbsoluteInsetLoader } from "~/components/Loader";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import type { UnlistenFn } from "~/electron/event";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWindow } from "~/electron/window";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import {

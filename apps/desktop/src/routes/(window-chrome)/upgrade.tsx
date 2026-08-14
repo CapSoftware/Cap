@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
-import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 import { type Accessor, createSignal, Show } from "solid-js";
+import { getCurrentWindow, Window } from "~/electron/window";
 import { generalSettingsStore } from "~/store";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";

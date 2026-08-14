@@ -5,6 +5,7 @@ use wgpu::util::DeviceExt;
 use crate::{
     CompositeVideoFrameUniforms, DecodedFrame, PixelFormat,
     composite_frame::CompositeVideoFramePipeline,
+    decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
@@ -17,6 +18,7 @@ pub struct CameraLayer {
     pipeline: Arc<CompositeVideoFramePipeline>,
     hidden: bool,
     last_recording_time: Option<f32>,
+    last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
     blur_bind_group: Option<wgpu::BindGroup>,
     blur_active: bool,
@@ -75,6 +77,7 @@ impl CameraLayer {
             pipeline: composite_pipeline,
             hidden: false,
             last_recording_time: None,
+            last_frame_storage: None,
             yuv_converter,
             blur_bind_group: None,
             blur_active: false,
@@ -105,12 +108,16 @@ impl CameraLayer {
             return;
         };
 
-        let frame_data_bytes = camera_frame.data();
         let format = camera_frame.format();
+        let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
-            .last_recording_time
-            .is_some_and(|last| (last - recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - recording_time).abs() < 0.001);
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
@@ -136,6 +143,7 @@ impl CameraLayer {
 
             match format {
                 PixelFormat::Rgba => {
+                    let frame_data_bytes = camera_frame.data();
                     let src_bytes_per_row = frame_size.x * 4;
 
                     queue.write_texture(
@@ -198,6 +206,7 @@ impl CameraLayer {
                                             frame_size,
                                         );
                                         self.last_recording_time = Some(recording_time);
+                                        self.last_frame_storage = Some(frame_storage);
                                         self.current_texture = next_texture;
                                         return;
                                     }
@@ -212,7 +221,20 @@ impl CameraLayer {
                         }
                     }
 
-                    if let (Some(y_data), Some(uv_data)) =
+                    #[cfg(target_os = "macos")]
+                    let iosurface_converted = camera_frame
+                        .with_image_buf(|image_buf| {
+                            self.yuv_converter
+                                .convert_nv12_from_iosurface(device, queue, image_buf)
+                                .is_ok()
+                        })
+                        .unwrap_or(false);
+                    #[cfg(not(target_os = "macos"))]
+                    let iosurface_converted = false;
+
+                    if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
+                    } else if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                         && self
                             .yuv_converter
@@ -266,7 +288,10 @@ impl CameraLayer {
             }
 
             self.last_recording_time = Some(recording_time);
+            self.last_frame_storage = Some(frame_storage);
             self.current_texture = next_texture;
+        } else {
+            self.last_recording_time = Some(recording_time);
         }
     }
 
@@ -360,10 +385,15 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
-            .last_recording_time
-            .is_some_and(|last| (last - recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - recording_time).abs() < 0.001);
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
@@ -422,7 +452,20 @@ impl CameraLayer {
                         return;
                     }
 
-                    if let (Some(y_data), Some(uv_data)) =
+                    #[cfg(target_os = "macos")]
+                    let iosurface_converted = camera_frame
+                        .with_image_buf(|image_buf| {
+                            self.yuv_converter
+                                .convert_nv12_from_iosurface_to_encoder(device, encoder, image_buf)
+                                .is_ok()
+                        })
+                        .unwrap_or(false);
+                    #[cfg(not(target_os = "macos"))]
+                    let iosurface_converted = false;
+
+                    if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                    } else if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                         && self
                             .yuv_converter
@@ -478,7 +521,10 @@ impl CameraLayer {
             }
 
             self.last_recording_time = Some(recording_time);
+            self.last_frame_storage = Some(frame_storage);
             self.current_texture = next_texture;
+        } else {
+            self.last_recording_time = Some(recording_time);
         }
     }
 

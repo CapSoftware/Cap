@@ -1,6 +1,3 @@
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -11,10 +8,12 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
-
 import { Toggle } from "~/components/Toggle";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import type { UnlistenFn } from "~/electron/event";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWebviewWindow } from "~/electron/webviewWindow";
 import {
 	type TeleprompterStore,
 	teleprompterDefaults,

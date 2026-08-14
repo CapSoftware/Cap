@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "~/electron/window";
 import { devicesSnapshot } from "~/utils/devices";
 import { requestAndVerifyPermission } from "~/utils/os-permissions";
 import { commands, type OSPermissionStatus } from "~/utils/tauri";

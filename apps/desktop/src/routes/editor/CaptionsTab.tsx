@@ -1,7 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { appLocalDataDir, join } from "@tauri-apps/api/path";
-import { exists } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -17,6 +15,8 @@ import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
+import { exists } from "~/electron/fs";
+import { appLocalDataDir, join } from "~/electron/path";
 import {
 	CAPTION_STYLE_PRESETS,
 	type CaptionAnimation,

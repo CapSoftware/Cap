@@ -790,17 +790,13 @@ impl PipelinedGpuReadback {
     pub fn take_pending(&mut self) -> Option<PendingReadback> {
         self.pending.take()
     }
-
-    pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
-    }
 }
 
 pub struct RenderSession {
     pub textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     pub current_is_left: bool,
-    pub pipelined_readback: PipelinedGpuReadback,
+    pipelined_readback: Option<PipelinedGpuReadback>,
     texture_width: u32,
     texture_height: u32,
 }
@@ -827,8 +823,6 @@ impl RenderSession {
         };
 
         let textures = (make_texture(), make_texture());
-        let padded = padded_bytes_per_row((width, height));
-        let initial_buffer_size = (padded * height) as u64;
 
         Self {
             current_is_left: true,
@@ -837,7 +831,9 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
-            pipelined_readback: PipelinedGpuReadback::new(device, initial_buffer_size),
+            // NV12 output has its own compact readback pool. Allocate the much
+            // larger RGBA staging buffers only if an RGBA consumer is used.
+            pipelined_readback: None,
             texture_width: width,
             texture_height: height,
         }
@@ -882,6 +878,10 @@ impl RenderSession {
         );
         self.texture_width = width;
         self.texture_height = height;
+    }
+
+    pub fn release_rgba_readback(&mut self) {
+        self.pipelined_readback = None;
     }
 
     pub fn current_texture(&self) -> &wgpu::Texture {
@@ -994,9 +994,14 @@ pub async fn finish_encoder_timed(
     encoder: wgpu::CommandEncoder,
 ) -> Result<(Option<RenderedFrame>, FinishEncoderTimings), RenderingError> {
     let mut timings = FinishEncoderTimings::default();
+    let initial_buffer_size =
+        (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
+    let readback = session
+        .pipelined_readback
+        .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
 
     let wait_start = Instant::now();
-    let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
+    let previous_frame = if let Some(prev) = readback.take_pending() {
         Some(prev.wait(device).await?)
     } else {
         None
@@ -1004,7 +1009,7 @@ pub async fn finish_encoder_timed(
     timings.wait_previous_duration = wait_start.elapsed();
 
     let resize_start = Instant::now();
-    session.pipelined_readback.perform_resize_if_needed(device);
+    readback.perform_resize_if_needed(device);
     timings.resize_duration = resize_start.elapsed();
 
     let texture = if session.current_is_left {
@@ -1014,9 +1019,7 @@ pub async fn finish_encoder_timed(
     };
 
     let submit_start = Instant::now();
-    session
-        .pipelined_readback
-        .submit_readback(device, queue, texture, uniforms, encoder)?;
+    readback.submit_readback(device, queue, texture, uniforms, encoder)?;
     timings.submit_readback_duration = submit_start.elapsed();
 
     Ok((previous_frame, timings))
@@ -1083,7 +1086,8 @@ pub async fn flush_pending_readback(
     session: &mut RenderSession,
     device: &wgpu::Device,
 ) -> Option<Result<RenderedFrame, RenderingError>> {
-    if let Some(pending) = session.pipelined_readback.take_pending() {
+    let readback = session.pipelined_readback.as_mut()?;
+    if let Some(pending) = readback.take_pending() {
         Some(pending.wait(device).await)
     } else {
         None

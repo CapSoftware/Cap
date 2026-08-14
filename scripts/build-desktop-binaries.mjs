@@ -9,7 +9,7 @@ const binariesDir = path.join(
 	repoRoot,
 	"apps",
 	"desktop",
-	"src-tauri",
+	"src-backend",
 	"binaries",
 );
 
@@ -61,6 +61,43 @@ async function isUpToDate(destPath, sourcePaths) {
 	return true;
 }
 
+async function unlinkIfExists(targetPath) {
+	await fs.unlink(targetPath).catch((error) => {
+		if (error.code !== "ENOENT") throw error;
+	});
+}
+
+async function stageBuiltBinaries(src, dests, target) {
+	await fs.copyFile(src, dests[0]);
+	console.log(`Copied ${src} -> ${dests[0]}`);
+
+	for (const dest of dests.slice(1)) {
+		if (target.includes("windows")) {
+			await fs.copyFile(src, dest);
+			console.log(`Copied ${src} -> ${dest}`);
+			continue;
+		}
+
+		await unlinkIfExists(dest);
+		const linkTarget = path.basename(dests[0]);
+		await fs.symlink(linkTarget, dest);
+		console.log(`Linked ${dest} -> ${linkTarget}`);
+	}
+}
+
+async function canonicalizeDuplicateBinaries(dests, target) {
+	if (target.includes("windows") || dests.length < 2) return;
+
+	const linkTarget = path.basename(dests[0]);
+	for (const dest of dests.slice(1)) {
+		const existingTarget = await fs.readlink(dest).catch(() => null);
+		if (existingTarget === linkTarget) continue;
+		await unlinkIfExists(dest);
+		await fs.symlink(linkTarget, dest);
+		console.log(`Linked ${dest} -> ${linkTarget}`);
+	}
+}
+
 async function main() {
 	const target =
 		process.argv[2] || process.env.RUST_TARGET_TRIPLE || detectHostTriple();
@@ -69,6 +106,19 @@ async function main() {
 	await fs.mkdir(binariesDir, { recursive: true });
 
 	for (const sidecar of [
+		{
+			packageName: "cap-desktop",
+			sourceBinary: "cap-desktop",
+			destBinaries: ["cap-desktop"],
+			watchPaths: [
+				path.join(repoRoot, "apps", "desktop", "src-backend"),
+				path.join(repoRoot, "crates", "desktop-runtime"),
+				path.join(repoRoot, "crates", "desktop-runtime-macros"),
+				path.join(repoRoot, "crates", "editor"),
+				path.join(repoRoot, "crates", "rendering"),
+				path.join(repoRoot, "Cargo.lock"),
+			],
+		},
 		{
 			packageName: "cap-muxer",
 			sourceBinary: "cap-muxer",
@@ -99,6 +149,19 @@ async function main() {
 	]) {
 		await buildSidecar(sidecar, target, ext);
 	}
+
+	if (target.includes("windows")) await stageWindowsRuntimeLibraries();
+}
+
+async function stageWindowsRuntimeLibraries() {
+	const releaseDir = path.join(repoRoot, "target", "release");
+	for (const name of await fs.readdir(releaseDir)) {
+		if (!name.toLowerCase().endsWith(".dll")) continue;
+		await fs.copyFile(
+			path.join(releaseDir, name),
+			path.join(binariesDir, name),
+		);
+	}
 }
 
 async function buildSidecar(sidecar, target, ext) {
@@ -120,6 +183,7 @@ async function buildSidecar(sidecar, target, ext) {
 			)
 		).every(Boolean)
 	) {
+		await canonicalizeDuplicateBinaries(dests, target);
 		console.log(
 			`${sidecar.destBinaries.join(", ")} desktop binaries up to date`,
 		);
@@ -143,10 +207,7 @@ async function buildSidecar(sidecar, target, ext) {
 		process.exit(1);
 	}
 
-	for (const dest of dests) {
-		await fs.copyFile(src, dest);
-		console.log(`Copied ${src} -> ${dest}`);
-	}
+	await stageBuiltBinaries(src, dests, target);
 }
 
 main().catch((err) => {

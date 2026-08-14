@@ -7,7 +7,7 @@ name: "promote-nightly"
 # GitHub release, draft CrabNebula release on the default channel, published
 # manually as usual.
 #
-# After promoting, bump apps/desktop/src-tauri/Cargo.toml on main past the
+# After promoting, bump apps/desktop/package.json on main past the
 # promoted version so future nightlies and stable releases version correctly.
 
 on:

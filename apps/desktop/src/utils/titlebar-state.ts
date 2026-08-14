@@ -1,8 +1,8 @@
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import type { JSX } from "solid-js";
 import { createStore } from "solid-js/store";
+import type { UnlistenFn } from "~/electron/event";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWindow } from "~/electron/window";
 
 export interface TitlebarState {
 	height: string;

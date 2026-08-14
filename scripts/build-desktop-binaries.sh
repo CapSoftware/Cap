@@ -7,7 +7,7 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BINARIES_DIR="$REPO_ROOT/apps/desktop/src-tauri/binaries"
+BINARIES_DIR="$REPO_ROOT/apps/desktop/src-backend/binaries"
 
 EXT=""
 case "$TARGET" in
@@ -39,5 +39,10 @@ build_sidecar() {
     done
 }
 
+build_sidecar "cap-desktop" "cap-desktop" "cap-desktop"
 build_sidecar "cap-muxer" "cap-muxer" "cap-muxer"
 build_sidecar "cap" "cap" "cap-cli" "cap-exporter"
+
+if [[ "$TARGET" == *windows* ]]; then
+    find "$REPO_ROOT/target/release" -maxdepth 1 -type f -name '*.dll' -exec cp {} "$BINARIES_DIR/" \;
+fi

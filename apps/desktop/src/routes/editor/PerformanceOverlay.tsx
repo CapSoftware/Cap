@@ -1,4 +1,3 @@
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
 	createEffect,
 	createMemo,
@@ -8,6 +7,7 @@ import {
 	Show,
 } from "solid-js";
 import toast from "solid-toast";
+import { writeText } from "~/electron/clipboard";
 import { useEditorContext } from "./context";
 
 type PerformanceOverlayProps = {

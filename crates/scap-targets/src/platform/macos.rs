@@ -510,7 +510,7 @@ impl WindowImpl {
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
         use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSAutoreleasePool, NSString};
+        use cocoa::foundation::{NSArray, NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
         use objc::{class, msg_send, sel, sel_impl};
 
         let owner_name = self.owner_name()?;
@@ -549,13 +549,25 @@ impl WindowImpl {
                     return None;
                 }
 
-                let tiff_data: id = msg_send![icon, TIFFRepresentation];
-                if tiff_data.is_null() {
+                // The target card renders this at 64 points. Asking AppKit for a
+                // proposed 64-point image selects the 128px Retina representation
+                // instead of serializing the full 1024px icon and every TIFF rep.
+                let mut proposed_rect =
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(64.0, 64.0));
+                let cg_image: *mut c_void = msg_send![
+                    icon,
+                    CGImageForProposedRect: &mut proposed_rect
+                    context: nil
+                    hints: nil
+                ];
+                if cg_image.is_null() {
                     return None;
                 }
 
                 let bitmap_rep_class = class!(NSBitmapImageRep);
-                let bitmap_rep: id = msg_send![bitmap_rep_class, imageRepWithData: tiff_data];
+                let bitmap_rep: id = msg_send![bitmap_rep_class, alloc];
+                let bitmap_rep: id = msg_send![bitmap_rep, initWithCGImage: cg_image];
+                let bitmap_rep: id = msg_send![bitmap_rep, autorelease];
                 if bitmap_rep.is_null() {
                     return None;
                 }

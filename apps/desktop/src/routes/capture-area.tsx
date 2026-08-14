@@ -1,13 +1,6 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu } from "@tauri-apps/api/menu";
-import {
-	getCurrentWebviewWindow,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
@@ -20,6 +13,13 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import SelectionHint from "~/components/selection-hint";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
+import {
+	getCurrentWebviewWindow,
+	WebviewWindow,
+} from "~/electron/webviewWindow";
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";

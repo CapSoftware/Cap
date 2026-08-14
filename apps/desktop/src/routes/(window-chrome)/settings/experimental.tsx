@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
+import { invoke } from "~/electron/core";
+import { type } from "~/electron/os";
 
 import { generalSettingsStore } from "~/store";
 import {

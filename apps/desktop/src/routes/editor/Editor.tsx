@@ -1,15 +1,10 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
-import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
+import { createElementSize } from "@solid-primitives/resize-observer";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { Menu } from "@tauri-apps/api/menu";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
 import {
 	createEffect,
 	createMemo,
@@ -38,6 +33,11 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
+import { convertFileSrc } from "~/electron/core";
+import { ask } from "~/electron/dialog";
+import { LogicalPosition } from "~/electron/dpi";
+import { Menu } from "~/electron/menu";
+import { getCurrentWindow } from "~/electron/window";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events } from "~/utils/tauri";
@@ -407,7 +407,7 @@ function Inner() {
 	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
-	const layoutBounds = createElementBounds(layoutRef);
+	const layoutSize = createElementSize(layoutRef);
 	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
 		createSignal(DEFAULT_TIMELINE_HEIGHT),
 		{ name: "editorTimelineHeight" },
@@ -419,7 +419,7 @@ function Inner() {
 	} | null>(null);
 
 	const clampTimelineHeight = (value: number) => {
-		const available = layoutBounds.height ?? 0;
+		const available = layoutSize.height ?? 0;
 		const maxHeight =
 			available > 0
 				? Math.max(MIN_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT)
@@ -457,7 +457,7 @@ function Inner() {
 	};
 
 	createEffect(() => {
-		const available = layoutBounds.height;
+		const available = layoutSize.height;
 		if (!available) return;
 		setStoredTimelineHeight((height) => clampTimelineHeight(height));
 	});

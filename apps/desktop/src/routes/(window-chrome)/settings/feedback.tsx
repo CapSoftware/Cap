@@ -1,10 +1,10 @@
 import { Button } from "@cap/ui-solid";
 import { action, useAction, useSubmission } from "@solidjs/router";
-import { getVersion } from "@tauri-apps/api/app";
-import { type OsType, type as ostype } from "@tauri-apps/plugin-os";
-import * as shell from "@tauri-apps/plugin-shell";
 import { createResource, createSignal, For, Show } from "solid-js";
 import toast from "solid-toast";
+import { getVersion } from "~/electron/app";
+import { type OsType, type as ostype } from "~/electron/os";
+import * as shell from "~/electron/shell";
 
 import { commands, type SystemDiagnostics } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";

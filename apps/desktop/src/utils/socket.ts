@@ -323,6 +323,7 @@ export function createImageDataWS(
 
 	let mainThreadWebGPU: WebGPURenderer | null = null;
 	let mainThreadWebGPUInitializing = false;
+	let nv12WebGPUAvailable = false;
 	let pendingNv12Frame: { buffer: ArrayBuffer; receivedAt: number } | null =
 		null;
 	let pendingRgbaFrame: { buffer: ArrayBuffer; receivedAt: number } | null =
@@ -447,6 +448,13 @@ export function createImageDataWS(
 		}
 
 		setIsConnected(false);
+	}
+
+	function sendOutputCapability() {
+		if (ws.readyState !== WebSocket.OPEN) return;
+		ws.send(
+			nv12WebGPUAvailable ? "cap-preview:nv12-webgpu" : "cap-preview:rgba",
+		);
 	}
 
 	function renderPendingNv12Frame() {
@@ -806,6 +814,8 @@ export function createImageDataWS(
 			const isNewCanvas = directCanvas !== canvas;
 
 			if (isNewCanvas && directCanvas) {
+				nv12WebGPUAvailable = false;
+				sendOutputCapability();
 				if (mainThreadWebGPU) {
 					disposeWebGPU(mainThreadWebGPU);
 					mainThreadWebGPU = null;
@@ -838,7 +848,9 @@ export function createImageDataWS(
 							}
 
 							mainThreadWebGPU = renderer;
+							nv12WebGPUAvailable = true;
 							mainThreadWebGPUInitializing = false;
+							sendOutputCapability();
 							if (pendingNv12Frame && directCanvas) {
 								renderPendingNv12Frame();
 							}
@@ -854,6 +866,8 @@ export function createImageDataWS(
 							}
 
 							mainThreadWebGPUInitializing = false;
+							nv12WebGPUAvailable = false;
+							sendOutputCapability();
 							console.error("[Socket] Main thread WebGPU init failed:", e);
 							directCtx =
 								directCanvas?.getContext("2d", { alpha: false }) ?? null;
@@ -867,6 +881,8 @@ export function createImageDataWS(
 						});
 				} else {
 					mainThreadWebGPUInitializing = false;
+					nv12WebGPUAvailable = false;
+					sendOutputCapability();
 					directCtx = directCanvas?.getContext("2d", { alpha: false }) ?? null;
 					if (pendingNv12Frame && directCanvas && directCtx) {
 						renderPendingFrameCanvas2D();
@@ -1082,6 +1098,7 @@ export function createImageDataWS(
 
 	ws.addEventListener("open", () => {
 		setIsConnected(true);
+		sendOutputCapability();
 	});
 
 	ws.addEventListener("close", () => {

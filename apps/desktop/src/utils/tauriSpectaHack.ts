@@ -1,7 +1,7 @@
 // Workaround for: https://github.com/specta-rs/tauri-specta/issues/187
 
-import type * as TAURI_API_EVENT from "@tauri-apps/api/event";
-import type { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type * as TAURI_API_EVENT from "~/electron/event";
+import type { WebviewWindow } from "~/electron/webviewWindow";
 import type { events } from "./tauri";
 
 type __EventObj__<T> = {

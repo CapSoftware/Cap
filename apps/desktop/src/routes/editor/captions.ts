@@ -1,5 +1,5 @@
-import { appLocalDataDir, join } from "@tauri-apps/api/path";
-import { arch, type as osType } from "@tauri-apps/plugin-os";
+import { arch, type as osType } from "~/electron/os";
+import { appLocalDataDir, join } from "~/electron/path";
 
 import { defaultCaptionSettings } from "~/store/captions";
 import {

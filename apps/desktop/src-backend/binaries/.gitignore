@@ -1,0 +1,5 @@
+cap-muxer-*
+cap-exporter-*
+cap-*
+*.dll
+!.gitignore

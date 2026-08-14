@@ -1,6 +1,6 @@
-import { emit } from "@tauri-apps/api/event";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import * as dialog from "~/electron/dialog";
+import { emit } from "~/electron/event";
+import { revealItemInDir } from "~/electron/opener";
 import type { createOptionsQuery } from "./queries";
 import { commands, type RecordingAction, type RecordingMode } from "./tauri";
 

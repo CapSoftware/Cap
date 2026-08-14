@@ -1,6 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import { Array, Option } from "effect";
 import {
@@ -15,6 +14,7 @@ import {
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { Menu } from "~/electron/menu";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import {

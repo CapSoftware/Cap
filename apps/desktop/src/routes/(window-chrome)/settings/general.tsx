@@ -3,12 +3,10 @@ import { createWritableMemo } from "@solid-primitives/memo";
 import {
 	isPermissionGranted,
 	requestPermission,
-} from "@tauri-apps/plugin-notification";
-import { type OsType, type } from "@tauri-apps/plugin-os";
+} from "~/electron/notification";
+import { type OsType, type } from "~/electron/os";
 import "@total-typescript/ts-reset/filter-boolean";
 import { Collapsible } from "@kobalte/core/collapsible";
-import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -25,6 +23,8 @@ import toast from "solid-toast";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
+import { confirm } from "~/electron/dialog";
+import { CheckMenuItem, Menu, MenuItem } from "~/electron/menu";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,

@@ -115,12 +115,30 @@ impl EditorInstance {
         frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
     ) -> Result<Arc<Self>, String> {
-        Self::new_with_audio_output(
+        Self::new_with_output_capability(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+    }
+
+    pub async fn new_with_output_capability(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        nv12_output_available: Arc<AtomicBool>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
             project_path,
             on_state_change,
             frame_cb,
             shared_device,
             Arc::new(crate::AudioOutput::new()),
+            nv12_output_available,
         )
         .await
     }
@@ -134,6 +152,25 @@ impl EditorInstance {
         frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
         audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            audio_output,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        audio_output: Arc<crate::AudioOutput>,
+        nv12_output_available: Arc<AtomicBool>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
@@ -337,10 +374,12 @@ impl EditorInstance {
             .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
-        let renderer = Arc::new(editor::Renderer::spawn(
+        let renderer = Arc::new(editor::Renderer::spawn_with_output_capability(
             render_constants.clone(),
             frame_cb,
             layers_rx,
+            None,
+            nv12_output_available,
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);

@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => {
 	};
 });
 
-vi.mock("@tauri-apps/api/webviewWindow", () => ({
+vi.mock("~/electron/webviewWindow", () => ({
 	WebviewWindow: class {
 		static getCurrent = mocks.getCurrent;
 		static getByLabel = vi.fn(async () => mocks.state.existingWindow);
@@ -73,7 +73,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 	},
 }));
 
-vi.mock("@tauri-apps/plugin-os", () => ({ type: mocks.osType }));
+vi.mock("~/electron/os", () => ({ type: mocks.osType }));
 
 vi.mock("./tauri", () => ({
 	commands: {

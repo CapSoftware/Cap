@@ -1,7 +1,7 @@
 import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import type { ComponentProps, JSX } from "solid-js";
+import { type as ostype } from "~/electron/os";
 
 interface Props extends ComponentProps<typeof KTooltip> {
 	content?: JSX.Element;

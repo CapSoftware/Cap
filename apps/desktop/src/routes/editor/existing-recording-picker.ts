@@ -1,5 +1,5 @@
-import type { OpenDialogOptions } from "@tauri-apps/plugin-dialog";
-import type { OsType } from "@tauri-apps/plugin-os";
+import type { OpenDialogOptions } from "~/electron/dialog";
+import type { OsType } from "~/electron/os";
 
 export const getExistingRecordingPickerOptions = (
 	platform: OsType,

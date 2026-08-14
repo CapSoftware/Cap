@@ -1,0 +1,145 @@
+[package]
+name = "cap-desktop"
+version = "0.5.9"
+description = "Beautiful screen recordings, owned by you."
+authors = ["you"]
+edition = "2024"
+
+[lints]
+workspace = true
+
+[lib]
+name = "cap_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+swift-rs = { version = "1.0.6", features = ["build"] }
+
+[dependencies]
+cap-desktop-runtime = { path = "../../../crates/desktop-runtime" }
+
+serde = { workspace = true }
+serde_json = "1.0.111"
+specta.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+uuid = { version = "1.10.0", features = ["v4"] }
+image = "0.25.2"
+futures-intrusive = "0.5.0"
+anyhow.workspace = true
+futures = { workspace = true }
+axum = { version = "0.7.5", features = ["ws", "macros"] }
+tracing.workspace = true
+tempfile = "3.9.0"
+ffmpeg.workspace = true
+chrono = { version = "0.4.31", features = ["serde"] }
+regex = "1.10.4"
+rodio = "0.19.0"
+png = "0.17.13"
+device_query = "4.0.1"
+base64 = "0.22.1"
+reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }
+dotenvy_macro = "0.15.7"
+rand = "0.8.5"
+cpal.workspace = true
+keyed_priority_queue = "0.4.2"
+sentry.workspace = true
+clipboard-rs = "0.2.2"
+whisper-rs = "0.11.0"
+lazy_static = "1.4.0"
+log = "0.4.20"
+semver = "1"
+url = "2"
+
+cap-audio = { path = "../../../crates/audio" }
+cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }
+cap-camera-effects = { path = "../../../crates/camera-effects" }
+cap-utils = { path = "../../../crates/utils" }
+cap-project = { path = "../../../crates/project" }
+cap-rendering = { path = "../../../crates/rendering" }
+cap-editor = { path = "../../../crates/editor" }
+cap-media = { path = "../../../crates/media" }
+cap-flags = { path = "../../../crates/flags" }
+cap-recording = { path = "../../../crates/recording" }
+cap-export = { path = "../../../crates/export" }
+cap-automation = { path = "../../../crates/automation" }
+cap-cli-install = { path = "../../../crates/cli-install", features = ["specta"] }
+cap-enc-ffmpeg = { path = "../../../crates/enc-ffmpeg" }
+cap-media-info = { path = "../../../crates/media-info" }
+scap-targets = { path = "../../../crates/scap-targets" }
+scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
+scap-direct3d = { path = "../../../crates/scap-direct3d" }
+
+flume.workspace = true
+tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"
+dirs = "6.0.0"
+relative-path = "1.9.3"
+cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
+md5 = "0.7.0"
+tokio-util = "0.7.15"
+wgpu.workspace = true
+pollster = "0.4"
+bytemuck = "1.23.1"
+kameo = "0.17.2"
+thiserror.workspace = true
+bytes = "1.10.1"
+async-stream = "0.3.6"
+lz4_flex = "0.11"
+sanitize-filename = "0.6.0"
+tracing-futures = { version = "0.2.5", features = ["futures-03"] }
+tracing-opentelemetry = "0.32.0"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
+sysinfo = "0.35"
+workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
+aho-corasick.workspace = true
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24.0"
+core-foundation = "0.10.0"
+objc2-app-kit = { version = "0.3.0", features = [
+    "NSWindow",
+    "NSResponder",
+    "NSHapticFeedback",
+    "NSWorkspace",
+    "NSRunningApplication",
+] }
+objc2 = "0.6.0"
+objc2-foundation = { version = "0.3.0", features = [
+    "NSNotification",
+    "NSString",
+    "NSThread",
+] }
+cocoa = "0.26.0"
+objc = "0.2.7"
+swift-rs = "1.0.6"
+cidre = { workspace = true }
+cap-camera-ffmpeg = { path = "../../../crates/camera-ffmpeg" }
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+parakeet-rs = "0.3.4"
+
+[target.'cfg(target_os= "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
+windows-sys = { workspace = true }
+winreg = "0.55"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29.0", features = ["fs"] }

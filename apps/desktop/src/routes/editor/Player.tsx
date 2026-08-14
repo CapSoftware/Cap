@@ -1,13 +1,12 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { createElementBounds } from "@solid-primitives/bounds";
+import { createElementSize } from "@solid-primitives/resize-observer";
 import { debounce } from "@solid-primitives/scheduled";
-import { Menu } from "@tauri-apps/api/menu";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
-
 import Tooltip from "~/components/Tooltip";
+import { Menu } from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
@@ -522,7 +521,7 @@ function PreviewCanvas() {
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
-	const containerBounds = createElementBounds(canvasContainerRef);
+	const containerSize = createElementSize(canvasContainerRef);
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({
 		width: 0,
@@ -535,8 +534,8 @@ function PreviewCanvas() {
 	);
 
 	createEffect(() => {
-		const width = containerBounds.width ?? 0;
-		const height = containerBounds.height ?? 0;
+		const width = containerSize.width ?? 0;
+		const height = containerSize.height ?? 0;
 		if (debouncedBounds().width === 0 && debouncedBounds().height === 0) {
 			setDebouncedBounds({ width, height });
 		} else {

@@ -1,15 +1,5 @@
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
-import {
-	CheckMenuItem,
-	Menu,
-	MenuItem,
-	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -23,6 +13,16 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
+import * as dialog from "~/electron/dialog";
+import { LogicalPosition } from "~/electron/dpi";
+import {
+	CheckMenuItem,
+	Menu,
+	MenuItem,
+	PredefinedMenuItem,
+} from "~/electron/menu";
+import { type as ostype } from "~/electron/os";
+import { getCurrentWindow } from "~/electron/window";
 import { authStore } from "~/store";
 import { getCameraWindow } from "~/utils/camera-window";
 import { createTauriEventListener } from "~/utils/createEventListener";

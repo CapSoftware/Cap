@@ -1,4 +1,0 @@
-cap-muxer-*
-cap-exporter-*
-cap-*
-!.gitignore

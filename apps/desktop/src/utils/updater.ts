@@ -1,5 +1,5 @@
-import { arch, type as ostype } from "@tauri-apps/plugin-os";
-import type { CheckOptions } from "@tauri-apps/plugin-updater";
+import { arch, type as ostype } from "~/electron/os";
+import type { CheckOptions } from "~/electron/updater";
 
 function updaterArch() {
 	const currentArch = arch();

@@ -2,7 +2,7 @@
 import { mount, StartClient } from "@solidjs/start/client";
 
 function initPlatformClass() {
-	import("@tauri-apps/plugin-os")
+	import("~/electron/os")
 		.then(({ type }) => {
 			const osType = type();
 			document.documentElement.classList.add(`platform-${osType}`);

@@ -34,6 +34,12 @@ import {
 	getOrganizationAccess,
 	requireOrganizationAccess,
 } from "@/actions/organization/authorization";
+import {
+	extractLoomVideoId,
+	isValidLoomVideoId,
+	LOOM_ORIGIN,
+	normalizeLoomMediaUrl,
+} from "@/lib/loom-url";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
@@ -44,6 +50,7 @@ interface LoomUrlResponse {
 }
 
 type LoomDownloadMode = "direct-download" | "browser-conversion";
+type LoomEndpoint = "raw-url" | "transcoded-url";
 
 interface LoomDownloadResult {
 	success: boolean;
@@ -127,33 +134,15 @@ async function createLoomImportRateLimitCheck(userId: User.UserId) {
 	};
 }
 
-function extractLoomVideoId(url: string): string | null {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.includes("loom.com")) {
-			return null;
-		}
-
-		const pathParts = parsed.pathname.split("/").filter(Boolean);
-		const id = pathParts[pathParts.length - 1] ?? null;
-
-		if (!id || id.length < 10) {
-			return null;
-		}
-
-		return id.split("?")[0] ?? null;
-	} catch {
-		return null;
-	}
-}
-
 async function fetchLoomEndpoint(
 	videoId: string,
-	endpoint: string,
+	endpoint: LoomEndpoint,
 	includeBody = true,
 ): Promise<string | null> {
 	try {
-		const options: RequestInit = { method: "POST" };
+		if (!isValidLoomVideoId(videoId)) return null;
+
+		const options: RequestInit = { method: "POST", redirect: "error" };
 		if (includeBody) {
 			options.headers = {
 				"Content-Type": "application/json",
@@ -167,8 +156,13 @@ async function fetchLoomEndpoint(
 			});
 		}
 
+		const encodedVideoId = encodeURIComponent(videoId);
+		const endpointPath = endpoint === "raw-url" ? "raw-url" : "transcoded-url";
 		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
+			new URL(
+				`/api/campaigns/sessions/${encodedVideoId}/${endpointPath}`,
+				LOOM_ORIGIN,
+			),
 			options,
 		);
 
@@ -182,7 +176,7 @@ async function fetchLoomEndpoint(
 		}
 
 		const data: LoomUrlResponse = JSON.parse(text);
-		return data.url ?? null;
+		return data.url ? normalizeLoomMediaUrl(data.url) : null;
 	} catch {
 		return null;
 	}
@@ -230,7 +224,10 @@ function isDirectMp4Url(url: string): boolean {
 }
 
 async function getLoomDownloadUrl(loomVideoId: string): Promise<string | null> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
+	const requestVariants: Array<{
+		endpoint: LoomEndpoint;
+		includeBody: boolean;
+	}> = [
 		{ endpoint: "transcoded-url", includeBody: true },
 		{ endpoint: "raw-url", includeBody: true },
 		{ endpoint: "transcoded-url", includeBody: false },
@@ -255,10 +252,16 @@ async function fetchLoomOEmbed(
 	loomVideoId: string,
 ): Promise<{ duration?: number; width?: number; height?: number } | null> {
 	try {
-		const response = await fetch(
-			`https://www.loom.com/v1/oembed?url=https://www.loom.com/share/${loomVideoId}`,
-			{ headers: { Accept: "application/json" } },
+		const shareUrl = new URL(
+			`/share/${encodeURIComponent(loomVideoId)}`,
+			LOOM_ORIGIN,
 		);
+		const oembedUrl = new URL("/v1/oembed", LOOM_ORIGIN);
+		oembedUrl.searchParams.set("url", shareUrl.toString());
+		const response = await fetch(oembedUrl, {
+			redirect: "error",
+			headers: { Accept: "application/json" },
+		});
 		if (!response.ok) return null;
 		const data = await response.json();
 		return {
@@ -405,10 +408,7 @@ async function importLoomVideoForOwner({
 		fetchLoomOEmbed(loomVideoId),
 	]);
 
-	const writableResult = await Storage.getWritableAccessForUser(
-		ownerId,
-		orgId,
-	)
+	const writableResult = await Storage.getWritableAccessForUser(ownerId, orgId)
 		.pipe(runPromise)
 		.then(
 			(value) => ({ ok: true as const, value }),
@@ -417,7 +417,7 @@ async function importLoomVideoForOwner({
 
 	if (!writableResult.ok) {
 		console.error(
-			`Loom import: failed to resolve storage access for user ${ownerId} in org ${orgId}:`,
+			"Loom import: failed to resolve storage access",
 			writableResult.error,
 		);
 		return {

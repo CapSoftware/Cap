@@ -6,10 +6,6 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask, confirm } from "@tauri-apps/plugin-dialog";
-import { remove } from "@tauri-apps/plugin-fs";
-import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -22,6 +18,10 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import CapTooltip from "~/components/Tooltip";
+import { Channel, convertFileSrc } from "~/electron/core";
+import { ask, confirm } from "~/electron/dialog";
+import { remove } from "~/electron/fs";
+import * as shell from "~/electron/shell";
 import { Input } from "~/routes/editor/ui";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
