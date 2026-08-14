@@ -105,6 +105,44 @@ export function clipTimelineOffsets(
 	return offsets;
 }
 
+/**
+ * Maps an edited-timeline timestamp to the recording-segment file and the
+ * time within that file which plays at that moment. Mirrors the Rust
+ * `TimelineConfiguration::get_segment_time` (minus holds); where a transition
+ * overlaps two segments the incoming segment wins. Times outside the timeline
+ * clamp to the nearest edge. Returns null only when there are no segments.
+ */
+export function clipSourceTimeAt(
+	segments: TimelineSegment[],
+	transitions: ClipTransition[],
+	editedTime: number,
+): {
+	segmentIndex: number;
+	recordingSegment: number;
+	sourceTime: number;
+} | null {
+	if (segments.length === 0) return null;
+
+	const offsets = clipTimelineOffsets(segments, transitions);
+
+	for (let index = segments.length - 1; index >= 0; index--) {
+		const segment = segments[index];
+		const local = editedTime - offsets[index];
+		if (local >= 0 || index === 0) {
+			return {
+				segmentIndex: index,
+				recordingSegment: segment.recordingSegment ?? 0,
+				sourceTime:
+					segment.start +
+					Math.min(Math.max(local, 0), clipDuration(segment)) *
+						segment.timescale,
+			};
+		}
+	}
+
+	return null;
+}
+
 export function normalizeClipTransitions(
 	segments: TimelineSegment[],
 	transitions: ClipTransition[],
