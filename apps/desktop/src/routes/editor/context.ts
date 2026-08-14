@@ -1437,6 +1437,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 			timeline: {
 				interactMode: "seek" as "seek" | "split",
+				splitPreview: null as null | { time: number; snapped: boolean },
 				selection: null as
 					| null
 					| { type: "zoom"; indices: number[] }
