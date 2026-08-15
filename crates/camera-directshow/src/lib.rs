@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     ffi::{OsString, c_void},
     mem::ManuallyDrop,
     ops::Deref,
@@ -359,32 +359,57 @@ impl Iterator for VideoInputDeviceIterator {
     }
 }
 
+/// The parts of a device that require actually instantiating the capture
+/// filter. Binding these opens the camera through its KS driver, which costs a
+/// thread and dozens of kernel handles that are not reclaimed on release - so
+/// it is deferred until something genuinely needs a filter, pin or format.
 #[derive(Clone)]
-pub struct VideoInputDevice {
-    moniker: IMoniker,
-    prop_bag: IPropertyBag,
+struct BoundFilter {
     filter: IBaseFilter,
     output_pin: IPin,
     stream_config: IAMStreamConfig,
 }
 
+#[derive(Clone)]
+pub struct VideoInputDevice {
+    moniker: IMoniker,
+    prop_bag: IPropertyBag,
+    bound: OnceCell<BoundFilter>,
+}
+
 impl VideoInputDevice {
     fn new(moniker: IMoniker) -> windows_core::Result<Self> {
+        // Only BindToStorage here: the property bag is enough for name, id and
+        // model id, which is all plain enumeration ever reads. BindToObject is
+        // deliberately not called - see `bound()`.
         let prop_bag: IPropertyBag = unsafe { moniker.BindToStorage(None, None) }?;
-        let filter: IBaseFilter = unsafe { moniker.BindToObject(None, None) }?;
 
+        Ok(Self {
+            moniker,
+            prop_bag,
+            bound: OnceCell::new(),
+        })
+    }
+
+    /// Instantiates the capture filter on first use and caches it.
+    fn bound(&self) -> windows_core::Result<&BoundFilter> {
+        if let Some(bound) = self.bound.get() {
+            return Ok(bound);
+        }
+
+        let filter: IBaseFilter = unsafe { self.moniker.BindToObject(None, None) }?;
         let output_pin = filter
             .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
             .ok_or(E_FAIL)?;
         let stream_config = output_pin.cast::<IAMStreamConfig>().ok().ok_or(E_FAIL)?;
 
-        Ok(Self {
-            moniker,
-            prop_bag,
+        let _ = self.bound.set(BoundFilter {
             filter,
             output_pin,
             stream_config,
-        })
+        });
+
+        self.bound.get().ok_or_else(|| E_FAIL.into())
     }
 
     pub fn name(&self) -> Option<OsString> {
@@ -410,22 +435,26 @@ impl VideoInputDevice {
     }
 
     pub fn media_types(&self) -> Option<VideoMediaTypesIterator<'_>> {
-        self.stream_config
+        self.bound()
+            .ok()?
+            .stream_config
             .media_types()
             .map(|inner| VideoMediaTypesIterator { inner })
             .ok()
     }
 
-    pub fn filter(&self) -> &IBaseFilter {
-        &self.filter
+    /// Binds the capture filter if it isn't bound yet; `None` if the device
+    /// can't be instantiated (unplugged, in use, driver error).
+    pub fn filter(&self) -> Option<&IBaseFilter> {
+        Some(&self.bound().ok()?.filter)
     }
 
-    pub fn stream_config(&self) -> &IAMStreamConfig {
-        &self.stream_config
+    pub fn stream_config(&self) -> Option<&IAMStreamConfig> {
+        Some(&self.bound().ok()?.stream_config)
     }
 
-    pub fn output_pin(&self) -> &IPin {
-        &self.output_pin
+    pub fn output_pin(&self) -> Option<&IPin> {
+        Some(&self.bound().ok()?.output_pin)
     }
 
     pub fn start_capturing(
@@ -433,8 +462,11 @@ impl VideoInputDevice {
         format: &AMMediaType,
         callback: SinkCallback,
     ) -> Result<CaptureHandle, StartCapturingError> {
+        let bound = self.bound().map_err(StartCapturingError::Other)?.clone();
+
         unsafe {
-            self.stream_config
+            bound
+                .stream_config
                 .SetFormat(&**format)
                 .map_err(StartCapturingError::Other)?;
 
@@ -460,7 +492,7 @@ impl VideoInputDevice {
                 .SetFiltergraph(&graph_builder)
                 .map_err(StartCapturingError::ConfigureGraph)?;
             graph_builder
-                .AddFilter(&self.filter, None)
+                .AddFilter(&bound.filter, None)
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             let sink_filter: IBaseFilter = sink_filter
@@ -476,14 +508,14 @@ impl VideoInputDevice {
                 .FindInterface(
                     Some(&PIN_CATEGORY_CAPTURE),
                     Some(&MEDIATYPE_Video),
-                    &self.filter,
+                    &bound.filter,
                     &IAMStreamConfig::IID,
                     &mut stream_config,
                 )
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             graph_builder
-                .Connect(&self.output_pin, &input_sink_pin)
+                .Connect(&bound.output_pin, &input_sink_pin)
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             media_control.Run().map_err(StartCapturingError::Run)?;
@@ -491,7 +523,7 @@ impl VideoInputDevice {
             Ok(CaptureHandle {
                 media_control,
                 graph_builder,
-                output_capture_pin: self.output_pin,
+                output_capture_pin: bound.output_pin.clone(),
                 input_sink_pin,
             })
         }
