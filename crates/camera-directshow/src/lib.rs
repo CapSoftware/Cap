@@ -379,9 +379,7 @@ pub struct VideoInputDevice {
 
 impl VideoInputDevice {
     fn new(moniker: IMoniker) -> windows_core::Result<Self> {
-        // Only BindToStorage here: the property bag is enough for name, id and
-        // model id, which is all plain enumeration ever reads. BindToObject is
-        // deliberately not called - see `bound()`.
+        // BindToObject is deliberately not called here; see `BoundFilter`.
         let prop_bag: IPropertyBag = unsafe { moniker.BindToStorage(None, None) }?;
 
         Ok(Self {
@@ -391,7 +389,6 @@ impl VideoInputDevice {
         })
     }
 
-    /// Instantiates the capture filter on first use and caches it.
     fn bound(&self) -> windows_core::Result<&BoundFilter> {
         if let Some(bound) = self.bound.get() {
             return Ok(bound);
@@ -443,8 +440,6 @@ impl VideoInputDevice {
             .ok()
     }
 
-    /// Binds the capture filter if it isn't bound yet; `None` if the device
-    /// can't be instantiated (unplugged, in use, driver error).
     pub fn filter(&self) -> Option<&IBaseFilter> {
         Some(&self.bound().ok()?.filter)
     }

@@ -20,15 +20,10 @@ fn main() {
 
     for i in 1..=iterations {
         let n = match mode.as_str() {
-            // MF only: enumerate + activate IMFMediaSource per device,
-            // exactly as DeviceSourcesIterator does inside get_devices().
             "mf" => cap_camera_mediafoundation::DeviceSourcesIterator::new()
                 .map(|it| it.count())
                 .unwrap_or(0),
 
-            // DirectShow only: CoCreateInstance(CLSID_SystemDeviceEnum) plus
-            // BindToStorage/BindToObject per device, which instantiates each
-            // capture filter.
             "ds" => cap_camera_directshow::VideoInputDeviceIterator::new()
                 .map(|it| it.count())
                 .unwrap_or(0),
