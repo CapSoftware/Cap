@@ -1,0 +1,54 @@
+# Standalone workspace on purpose: the gpui dependency tree is enormous and
+# pulls its own git revisions of wgpu/font stacks. Keeping it out of the root
+# workspace leaves the root Cargo.lock, `cargo hakari` workspace-hack and CI
+# untouched, and sidesteps the root `[patch.crates-io]` entries (vendored
+# wgpu-hal, tao) that only exist for the Tauri app.
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "cap-desktop-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[[bin]]
+name = "cap-gpui"
+path = "src/main.rs"
+
+[dependencies]
+# gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
+# ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
+# which our transparent rounded main-window shell depends on.
+gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
+gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = [
+    "wayland",
+    "x11",
+    "font-kit",
+    "runtime_shaders",
+] }
+gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
+
+# Device enumeration reuses the same crates the Tauri app records with, so the
+# device identities here are byte-identical to the ones cap-recording expects.
+cap-camera = { path = "../../crates/camera" }
+scap-targets = { path = "../../crates/scap-targets" }
+# Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.dev]
+# gpui is unusably slow when its dependencies are unoptimized; zed/comet both
+# build deps at opt-level 2 and keep the app crate itself at 0.
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
