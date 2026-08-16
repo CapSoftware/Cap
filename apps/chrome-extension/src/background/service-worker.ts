@@ -85,6 +85,55 @@ let offscreenDocumentCreation: Promise<void> | null = null;
 let browserWindowFocused = true;
 let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
+// The standalone recorder (side panel or fallback popup window) reports its
+// lifecycle so the action click can toggle it and UI teardown can reach it —
+// there is no chrome.sidePanel API to query or close a panel directly.
+let standalonePanelOpen = false;
+
+const closeStandalonePanel = () => {
+	// Unconditional: the flag is best-effort (a restarted worker boots with
+	// false while the panel survives), and a close broadcast with no panel
+	// listening is harmless.
+	standalonePanelOpen = false;
+	chrome.runtime.sendMessage(
+		{ target: "standalone-panel", type: "close" },
+		() => {
+			void chrome.runtime.lastError;
+		},
+	);
+};
+
+// Rebuild the flag after a worker restart: the panel outlives this worker's
+// memory, and without the flag the next icon click would re-open instead of
+// toggling the visible recorder closed.
+const refreshStandalonePanelFlag = (): Promise<void> =>
+	new Promise<void>((resolve) => {
+		try {
+			chrome.runtime.getContexts(
+				{
+					contextTypes: [
+						"SIDE_PANEL",
+						"TAB",
+					] as chrome.runtime.ContextType[],
+					documentUrls: [chrome.runtime.getURL(POPUP_URL)],
+				},
+				(contexts) => {
+					if (!chrome.runtime.lastError) {
+						standalonePanelOpen = (contexts ?? []).length > 0;
+					}
+					resolve();
+				},
+			);
+		} catch {
+			// getContexts is unavailable in older Chrome — fall back to the
+			// message-driven flag alone.
+			resolve();
+		}
+	});
+let isStandaloneFlagReady = false;
+const standaloneFlagReady = refreshStandalonePanelFlag().then(() => {
+	isStandaloneFlagReady = true;
+});
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
 // frame from chrome.storage.session, which is only exposed to trusted
@@ -354,6 +403,29 @@ const sendOverlay = async (
 	if (!injected) return false;
 
 	return sendOverlayMessageWithRetries(tabId, message);
+};
+
+// Delivery for paths that may still need sidePanel.open afterwards: awaits
+// on chrome.* callbacks carry the user's click gesture through, but a single
+// setTimeout voids it — so this variant skips the timed retry loop. The
+// bootstrap content script acknowledges synchronously once injected, making
+// one direct send, one inject, and one post-inject send sufficient.
+const sendOverlayGestureSafe = async (
+	tabId: number,
+	message: OverlayMessage,
+) => {
+	if (await sendOverlayMessage(tabId, message)) return true;
+
+	const injected = await new Promise<boolean>((resolve) => {
+		chrome.scripting.executeScript(
+			{ target: { tabId }, files: ["assets/content-bootstrap.js"] },
+			() => resolve(!chrome.runtime.lastError),
+		);
+	});
+
+	if (!injected) return false;
+
+	return sendOverlayMessage(tabId, message);
 };
 
 const canInjectIntoTab = (tab: chrome.tabs.Tab) => {
@@ -684,6 +756,7 @@ const closeAllExtensionUi = async () => {
 			{ createIfMissing: false },
 		).catch(() => undefined);
 	}
+	closeStandalonePanel();
 	await Promise.all([
 		broadcastOverlayHide(),
 		updateSharedUiState((current) => ({
@@ -732,15 +805,25 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		await closeAllExtensionUi();
 		return;
 	}
+	if (standalonePanelOpen) {
+		closeStandalonePanel();
+		return;
+	}
 
 	const currentStatus = await syncRecordingStatus().catch(
 		() => recordingStatus,
 	);
 	for (const tab of await getRecorderPanelTabs(actionTab)) {
-		const delivered = await sendOverlay(tab.id, {
+		// Gesture-safe delivery: if this tab cannot take the panel the side
+		// panel below still needs the click gesture, which a timed retry
+		// would void.
+		const delivered = await sendOverlayGestureSafe(tab.id, {
 			type: "overlay-panel-toggle",
 		});
 		if (delivered) {
+			// One recorder at a time: the in-page panel supersedes a side panel
+			// left open from an earlier non-injectable page.
+			closeStandalonePanel();
 			await focusTab(tab.id);
 			void showPreviewForRecorderOpen(tab, currentStatus).catch(
 				() => undefined,
@@ -749,8 +832,27 @@ const openRecorderPanel = async (actionTab?: chrome.tabs.Tab) => {
 		}
 	}
 
-	// Pages we cannot inject into (chrome://, the Web Store, etc.) still get a
-	// recorder via a standalone popup window.
+	// No tab could take the panel — chrome:// pages, the Web Store, or an
+	// injectable page whose content script is not answering. Dock the
+	// recorder in the browser's side panel so it stays attached to the window
+	// the user is looking at instead of floating as a separate popup.
+	// sidePanel.open consumes the user gesture that reached this handler;
+	// every await above it is a chrome.* call, which preserves that gesture.
+	// If Chrome still rejects (gesture expired, API missing), fall back to
+	// the standalone window.
+	try {
+		const windowId =
+			actionTab?.windowId ?? (await getActiveTab())?.windowId;
+		if (windowId !== undefined && chrome.sidePanel) {
+			await chrome.sidePanel.open({ windowId });
+			// Set eagerly: the panel page pings standalone-panel-opened on load,
+			// but the toggle must work even if that message loses a race.
+			standalonePanelOpen = true;
+			return;
+		}
+	} catch (error) {
+		console.warn("sidePanel.open failed, using popup window", error);
+	}
 	chrome.windows.create({
 		url: chrome.runtime.getURL(POPUP_URL),
 		type: "popup",
@@ -1636,6 +1738,16 @@ const handleRequest = async (
 		return { ok: true };
 	}
 
+	if (message.type === "standalone-panel-opened") {
+		standalonePanelOpen = true;
+		return { ok: true };
+	}
+
+	if (message.type === "standalone-panel-closed") {
+		standalonePanelOpen = false;
+		return { ok: true };
+	}
+
 	if (message.type === "settings-updated") {
 		await saveSettings(message.settings);
 		if (isWebcamPreviewEnabled(message.settings)) {
@@ -1814,6 +1926,34 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 chrome.action.onClicked.addListener((tab) => {
+	// If the startup flag-refresh hasn't settled yet, the standalonePanelOpen
+	// value may be stale (worker restarted while panel was visible). Fall back
+	// to openRecorderPanel so Chrome's click gesture is never voided by an
+	// async wait — the cost is one extra popup open on a cold-restart race,
+	// which is far better than a dead icon click.
+	if (
+		isStandaloneFlagReady &&
+		chrome.sidePanel &&
+		!canInjectIntoTab(tab) &&
+		!isCapturingRecordingStatus(recordingStatus) &&
+		tab.windowId !== undefined
+	) {
+		// Second click toggles the panel closed, mirroring the overlay panel.
+		if (standalonePanelOpen) {
+			closeStandalonePanel();
+			return;
+		}
+		chrome.sidePanel.open({ windowId: tab.windowId }).then(
+			() => {
+				standalonePanelOpen = true;
+			},
+			(error) => {
+				console.warn("sidePanel.open failed, using popup window", error);
+				return openRecorderPanel(tab);
+			},
+		);
+		return;
+	}
 	void syncRecordingStatus()
 		.catch(() => recordingStatus)
 		.then((currentStatus) => {
