@@ -17,6 +17,17 @@ import "./styles.css";
 
 const FRAME_CAPTURE_INTERVAL_MS = 700;
 const FRAME_CAPTURE_MAX_WIDTH = 320;
+// A failed connect used to leave the tile dead until the user changed camera
+// settings. Most failures self-resolve (camera briefly held by another app or
+// by the previous tab's hand-off, offscreen document mid-restart), so keep
+// retrying with capped backoff while the preview is supposed to be visible.
+const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+// Remote tracks mute briefly during renegotiation; only a sustained mute
+// means the sender's camera stream is gone.
+const REMOTE_TRACK_MUTE_GRACE_MS = 2000;
+// "disconnected" can be a transient blip that recovers to "connected" on its
+// own; only a sustained loss warrants tearing the session down to reconnect.
+const PEER_DISCONNECT_GRACE_MS = 2000;
 
 type ParentMessage =
 	| {
@@ -438,8 +449,99 @@ function App() {
 		}
 
 		let disposed = false;
+		let retryTimer: number | null = null;
+		let muteTimer: number | null = null;
+		let disconnectTimer: number | null = null;
 
-		const startPreview = async () => {
+		const clearRetryTimer = () => {
+			if (retryTimer !== null) {
+				window.clearTimeout(retryTimer);
+				retryTimer = null;
+			}
+		};
+
+		const clearMuteTimer = () => {
+			if (muteTimer !== null) {
+				window.clearTimeout(muteTimer);
+				muteTimer = null;
+			}
+		};
+
+		const clearDisconnectTimer = () => {
+			if (disconnectTimer !== null) {
+				window.clearTimeout(disconnectTimer);
+				disconnectTimer = null;
+			}
+		};
+
+		const scheduleReconnect = (attempt: number) => {
+			if (disposed) return;
+			clearRetryTimer();
+			const delay =
+				CONNECT_RETRY_DELAYS_MS[
+					Math.min(attempt, CONNECT_RETRY_DELAYS_MS.length - 1)
+				];
+			retryTimer = window.setTimeout(() => {
+				retryTimer = null;
+				void startPreview(attempt + 1);
+			}, delay);
+		};
+
+		// The offscreen document stops the shared camera stream when it believes
+		// no tab is watching; when that guess is wrong (a tab hand-off race) this
+		// side sees its remote track die while the peer connection itself stays
+		// "connected" — so the track, not the connection, is the liveness signal.
+		const watchRemoteStream = (
+			peer: RTCPeerConnection,
+			stream: MediaStream,
+		) => {
+			const reconnect = () => {
+				if (disposed || peerRef.current !== peer) return;
+				clearRetryTimer();
+				clearMuteTimer();
+				clearDisconnectTimer();
+				stopPreview();
+				void startPreview(0);
+			};
+			const [track] = stream.getVideoTracks();
+			if (track) {
+				track.addEventListener("ended", reconnect);
+				track.addEventListener("mute", () => {
+					clearMuteTimer();
+					muteTimer = window.setTimeout(() => {
+						muteTimer = null;
+						if (track.muted) reconnect();
+					}, REMOTE_TRACK_MUTE_GRACE_MS);
+				});
+				track.addEventListener("unmute", clearMuteTimer);
+			}
+			peer.addEventListener("connectionstatechange", () => {
+				if (peer.connectionState === "connected") {
+					clearDisconnectTimer();
+					clearMuteTimer();
+					return;
+				}
+				if (
+					peer.connectionState === "failed" ||
+					peer.connectionState === "closed"
+				) {
+					reconnect();
+					return;
+				}
+				if (peer.connectionState === "disconnected") {
+					clearDisconnectTimer();
+					disconnectTimer = window.setTimeout(() => {
+						disconnectTimer = null;
+						if (peer.connectionState === "disconnected") {
+							reconnect();
+						}
+					}, PEER_DISCONNECT_GRACE_MS);
+				}
+			});
+		};
+
+		const startPreview = async (attempt = 0) => {
+			if (disposed) return;
 			const peerActive =
 				peerRef.current &&
 				peerRef.current.connectionState !== "closed" &&
@@ -485,6 +587,7 @@ function App() {
 				peerRef.current = peer;
 				streamRef.current = stream;
 				activeDeviceRef.current = settings.deviceId;
+				watchRemoteStream(peer, stream);
 
 				if (videoRef.current) {
 					videoRef.current.srcObject = stream;
@@ -504,6 +607,11 @@ function App() {
 						reason: details.reason,
 						message: details.message,
 					});
+					// Permission errors need user action; everything else heals on
+					// its own once the camera frees up, so keep trying.
+					if (details.reason !== "permission") {
+						scheduleReconnect(attempt);
+					}
 				}
 			}
 		};
@@ -512,6 +620,9 @@ function App() {
 
 		return () => {
 			disposed = true;
+			clearRetryTimer();
+			clearMuteTimer();
+			clearDisconnectTimer();
 		};
 	}, [
 		previewEnabled,
