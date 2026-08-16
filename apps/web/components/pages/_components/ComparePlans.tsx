@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import { classNames } from "@cap/utils";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useCurrency } from "hooks/useCurrency";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -158,6 +159,7 @@ const getButtonText = (key: PlanKey): string => {
 
 export const ComparePlans = () => {
 	const user = useCurrentUser();
+	const { symbol } = useCurrency();
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
@@ -189,9 +191,14 @@ export const ComparePlans = () => {
 				short: "Desktop",
 				price: "$29/yr",
 			},
-			{ key: "pro", name: "Cap Pro", short: "Pro", price: "$8.16/user/mo" },
+			{
+				key: "pro",
+				name: "Cap Pro",
+				short: "Pro",
+				price: `${symbol}8.16/user/mo`,
+			},
 		],
-		[],
+		[symbol],
 	);
 
 	const handleCheckout = async (
