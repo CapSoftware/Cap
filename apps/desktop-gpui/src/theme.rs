@@ -24,6 +24,12 @@ impl Appearance {
 }
 
 /// Every colour the main window draws with, already resolved for one appearance.
+///
+/// The scales are transcribed whole rather than trimmed to today's callers.
+/// Half a Radix scale is worse than none: the next person needing `red-9` for
+/// the Stop Recording button or `blue-5` for a pressed tile would otherwise
+/// have to go back to the CSS and re-derive which entries were overridden.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     pub appearance: Appearance,

@@ -7,8 +7,9 @@
 //! considerably easier to check against the original than `12.` and `10.`.
 
 use gpui::{
-    Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, rgb, svg,
+    Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, rgb,
+    svg,
 };
 
 use crate::{
@@ -81,6 +82,39 @@ impl TargetType {
     }
 }
 
+/// Which device picker has taken over the window body, if any.
+///
+/// Clicking a device row does not open a popup in the Tauri app either: it
+/// swaps the whole body for a full-height panel and offers a Back button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMenu {
+    Camera,
+    Microphone,
+}
+
+impl DeviceMenu {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Camera => "Camera",
+            Self::Microphone => "Microphone",
+        }
+    }
+
+    fn none_label(self) -> &'static str {
+        match self {
+            Self::Camera => "No Camera",
+            Self::Microphone => "No Microphone",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Camera => "icons/camera.svg",
+            Self::Microphone => "icons/microphone.svg",
+        }
+    }
+}
+
 pub struct MainWindow {
     theme: Theme,
     expanded: bool,
@@ -90,6 +124,10 @@ pub struct MainWindow {
     camera: Option<CameraOption>,
     microphone: Option<MicrophoneOption>,
     system_audio: bool,
+    active_menu: Option<DeviceMenu>,
+    /// True until the background enumeration has reported back, so the panel can
+    /// say "Loading..." rather than "No cameras found".
+    enumerating: bool,
 }
 
 impl MainWindow {
@@ -115,6 +153,7 @@ impl MainWindow {
                     "enumerated capture devices"
                 );
                 this.devices = snapshot;
+                this.enumerating = false;
                 cx.notify();
             })
             .ok();
@@ -130,6 +169,8 @@ impl MainWindow {
             camera: None,
             microphone: None,
             system_audio: false,
+            active_menu: None,
+            enumerating: true,
         };
 
         // The Tauri app restores the persisted expanded state on mount and
@@ -268,12 +309,7 @@ impl MainWindow {
                 .justify_center()
                 .size(px(20.))
                 .flex_shrink_0()
-                .child(
-                    svg()
-                        .path(path)
-                        .size(px(size))
-                        .text_color(theme.gray_11),
-                )
+                .child(svg().path(path).size(px(size)).text_color(theme.gray_11))
                 .hover(|style| style.text_color(theme.gray_12))
         };
 
@@ -331,16 +367,20 @@ impl MainWindow {
 
     /// Page root: `px-[13px] gap-2 pb-[8px]`.
     fn render_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let root = div()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
             .px(px(13.))
             .pb(px(8.))
-            .gap(px(8.))
-            .child(self.render_logo_row(cx))
-            .child(
+            .gap(px(8.));
+
+        // The logo/mode row is hidden while a picker is open -- the panel takes
+        // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
+        match self.active_menu {
+            Some(menu) => root.child(self.render_device_panel(menu, cx)),
+            None => root.child(self.render_logo_row(cx)).child(
                 div()
                     .flex()
                     .flex_col()
@@ -349,13 +389,281 @@ impl MainWindow {
                     .gap(px(8.))
                     .child(self.render_targets(cx))
                     .child(self.render_base_controls(cx)),
+            ),
+        }
+    }
+
+    /// `TargetMenuPanel`: a Back button above a scrolling device list.
+    ///
+    /// The search field the Tauri panel puts next to Back is not here yet --
+    /// it needs real text input, which is its own piece of gpui plumbing.
+    fn render_device_panel(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .mt(px(12.))
+                    .h(px(36.))
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .id("device-panel-back")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.))
+                            .h(px(36.))
+                            .px(px(8.))
+                            .flex_shrink_0()
+                            .rounded(px(6.))
+                            .text_size(px(12.))
+                            .text_color(theme.gray_11)
+                            .child(
+                                svg()
+                                    .path("icons/move-left.svg")
+                                    .size(px(12.))
+                                    .text_color(theme.gray_11),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.gray_12)
+                                    .child("Back"),
+                            )
+                            .hover(|style| style.bg(theme.gray_4))
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.active_menu = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.gray_12)
+                            .child(menu.title()),
+                    ),
             )
+            .child(
+                div()
+                    .id("device-panel-list")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .pt(px(16.))
+                    .px(px(8.))
+                    .gap(px(4.))
+                    .overflow_y_scroll()
+                    .children(self.render_device_list(menu, cx)),
+            )
+    }
+
+    fn render_device_list(
+        &self,
+        menu: DeviceMenu,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let theme = self.theme;
+
+        if self.enumerating {
+            return vec![
+                div()
+                    .py(px(24.))
+                    .w_full()
+                    .text_size(px(14.))
+                    .text_color(theme.gray_11)
+                    .child("Loading...")
+                    .into_any_element(),
+            ];
+        }
+
+        // Index 0 is always the "none" row, matching `DeviceListPanel`.
+        let mut rows = vec![
+            self.render_device_list_row(
+                SharedString::from(format!("{}-none", menu.title())),
+                "icons/circle-x.svg",
+                menu.none_label().to_string(),
+                None,
+                match menu {
+                    DeviceMenu::Camera => self.camera.is_none(),
+                    DeviceMenu::Microphone => self.microphone.is_none(),
+                },
+                cx.listener(move |this, _, _window, cx| {
+                    match menu {
+                        DeviceMenu::Camera => this.camera = None,
+                        DeviceMenu::Microphone => this.microphone = None,
+                    }
+                    this.active_menu = None;
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+        ];
+
+        match menu {
+            DeviceMenu::Camera => {
+                for camera in &self.devices.cameras {
+                    let selected = self
+                        .camera
+                        .as_ref()
+                        .is_some_and(|selected| selected.device_id == camera.device_id);
+                    let chosen = camera.clone();
+
+                    rows.push(
+                        self.render_device_list_row(
+                            SharedString::from(format!("camera-{}", camera.device_id)),
+                            menu.icon(),
+                            camera.label.clone(),
+                            camera.best_format.map(|format| format.describe()),
+                            selected,
+                            cx.listener(move |this, _, _window, cx| {
+                                this.camera = Some(chosen.clone());
+                                this.active_menu = None;
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element(),
+                    );
+                }
+            }
+            DeviceMenu::Microphone => {
+                for mic in &self.devices.microphones {
+                    let selected = self
+                        .microphone
+                        .as_ref()
+                        .is_some_and(|selected| selected.name == mic.name);
+                    let chosen = mic.clone();
+
+                    rows.push(
+                        self.render_device_list_row(
+                            SharedString::from(format!("mic-{}", mic.name)),
+                            menu.icon(),
+                            mic.name.clone(),
+                            mic.describe(),
+                            selected,
+                            cx.listener(move |this, _, _window, cx| {
+                                this.microphone = Some(chosen.clone());
+                                this.active_menu = None;
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element(),
+                    );
+                }
+            }
+        }
+
+        if rows.len() == 1 {
+            rows.push(
+                div()
+                    .py(px(16.))
+                    .w_full()
+                    .text_size(px(14.))
+                    .text_color(theme.gray_11)
+                    .child(match menu {
+                        DeviceMenu::Camera => "No cameras found",
+                        DeviceMenu::Microphone => "No microphones found",
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        rows
+    }
+
+    /// `CameraListItem` / `MicrophoneListItem`: `px-3 py-2.5`, `rounded-lg`,
+    /// 14px label over an optional 11px detail line indented `pl-7`.
+    ///
+    /// Selection is `bg-blue-500` with white text -- note that is the custom
+    /// `--blue-500`, not `blue-9`; the two are different colours.
+    fn render_device_list_row(
+        &self,
+        id: SharedString,
+        icon: &'static str,
+        label: String,
+        detail: Option<String>,
+        selected: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+
+        let foreground = if selected {
+            gpui::white()
+        } else {
+            Hsla::from(theme.gray_12)
+        };
+        let detail_color = if selected {
+            let mut color = gpui::white();
+            color.a = 0.7;
+            color
+        } else {
+            Hsla::from(theme.gray_10)
+        };
+
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(12.))
+            .py(px(10.))
+            .w_full()
+            .rounded(px(8.))
+            .text_size(px(14.))
+            .text_color(foreground)
+            .when(selected, |this| this.bg(theme.blue_500))
+            .when(!selected, |this| this.hover(|style| style.bg(theme.gray_4)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .w_full()
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .text_color(foreground),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .when(selected, |this| {
+                        this.child(
+                            svg()
+                                .path("icons/check.svg")
+                                .size(px(16.))
+                                .flex_shrink_0()
+                                .text_color(foreground),
+                        )
+                    }),
+            )
+            .children(detail.map(|detail| {
+                div()
+                    // `pl-7` = 16px icon + 12px gap.
+                    .pl(px(28.))
+                    .text_size(px(11.))
+                    .text_color(detail_color)
+                    .truncate()
+                    .child(detail)
+            }))
+            .on_click(on_click)
     }
 
     /// `mt-[16px] mb-[6px]`, logo `w-[92px]`, Mode pill on the right.
     fn render_logo_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-
         div()
             .flex()
             .flex_row()
@@ -458,7 +766,11 @@ impl MainWindow {
                 .child(
                     svg()
                         .path(mode.icon())
-                        .size(px(if matches!(mode, Mode::Instant) { 16. } else { 14.4 }))
+                        .size(px(if matches!(mode, Mode::Instant) {
+                            16.
+                        } else {
+                            14.4
+                        }))
                         .text_color(theme.gray_12),
                 )
                 .hover(|style| style.bg(theme.gray_7))
@@ -620,6 +932,15 @@ impl MainWindow {
             .flex()
             .flex_1()
             .py(px(8.))
+            // `hover:bg-blue-4` / `dark:hover:bg-blue-4/40` when selected,
+            // `hover:bg-gray-4` otherwise.
+            .hover(move |style| {
+                style.bg(if selected {
+                    theme.tile_selected_hover_bg()
+                } else {
+                    Hsla::from(theme.gray_4)
+                })
+            })
             .on_click(cx.listener(move |this, _, _window, cx| {
                 this.target = if this.target == Some(target) {
                     None
@@ -676,7 +997,7 @@ impl MainWindow {
     }
 
     /// `BaseControls`: camera, microphone, system audio.
-    fn render_base_controls(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let gap = if self.expanded { 10. } else { 8. };
 
         div()
@@ -684,55 +1005,75 @@ impl MainWindow {
             .flex_col()
             .gap(px(gap))
             .w_full()
-            .child(self.labelled(
-                "Camera",
-                self.render_device_row(
-                    "camera-row",
-                    "icons/camera.svg",
-                    self.camera
-                        .as_ref()
-                        .map(|camera| camera.label.clone())
-                        .unwrap_or_else(|| "No Camera".into()),
-                    if self.camera.is_some() {
-                        PillState::On
-                    } else {
-                        PillState::Off
-                    },
+            .child(
+                self.labelled(
+                    "Camera",
+                    self.render_device_row(
+                        "camera-row",
+                        "icons/camera.svg",
+                        self.camera
+                            .as_ref()
+                            .map(|camera| camera.label.clone())
+                            .unwrap_or_else(|| "No Camera".into()),
+                        if self.camera.is_some() {
+                            PillState::On
+                        } else {
+                            PillState::Off
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.active_menu = Some(DeviceMenu::Camera);
+                        cx.notify();
+                    })),
                 ),
-            ))
-            .child(self.labelled(
-                "Microphone",
-                self.render_device_row(
-                    "microphone-row",
-                    "icons/microphone.svg",
-                    self.microphone
-                        .as_ref()
-                        .map(|mic| mic.name.clone())
-                        .unwrap_or_else(|| "No Microphone".into()),
-                    if self.microphone.is_some() {
-                        PillState::On
-                    } else {
-                        PillState::Off
-                    },
+            )
+            .child(
+                self.labelled(
+                    "Microphone",
+                    self.render_device_row(
+                        "microphone-row",
+                        "icons/microphone.svg",
+                        self.microphone
+                            .as_ref()
+                            .map(|mic| mic.name.clone())
+                            .unwrap_or_else(|| "No Microphone".into()),
+                        if self.microphone.is_some() {
+                            PillState::On
+                        } else {
+                            PillState::Off
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.active_menu = Some(DeviceMenu::Microphone);
+                        cx.notify();
+                    })),
                 ),
-            ))
-            .child(self.labelled(
-                "System audio",
-                self.render_device_row(
-                    "system-audio-row",
-                    "icons/screen.svg",
-                    if self.system_audio {
-                        "Record System Audio".into()
-                    } else {
-                        "No System Audio".into()
-                    },
-                    if self.system_audio {
-                        PillState::On
-                    } else {
-                        PillState::Off
-                    },
+            )
+            .child(
+                self.labelled(
+                    "System audio",
+                    self.render_device_row(
+                        "system-audio-row",
+                        "icons/screen.svg",
+                        if self.system_audio {
+                            "Record System Audio".into()
+                        } else {
+                            "No System Audio".into()
+                        },
+                        if self.system_audio {
+                            PillState::On
+                        } else {
+                            PillState::Off
+                        },
+                    )
+                    // System audio has no device to choose, so the row is a
+                    // plain toggle rather than a picker.
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.system_audio = !this.system_audio;
+                        cx.notify();
+                    })),
                 ),
-            ))
+            )
     }
 
     /// `ExpandedControlLabel`: `mb-1 px-1`, `text-xs font-semibold text-gray-12`.
@@ -766,7 +1107,7 @@ impl MainWindow {
         icon: &'static str,
         label: String,
         pill: PillState,
-    ) -> impl IntoElement {
+    ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
 
         div()
@@ -818,16 +1159,8 @@ enum PillState {
 impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
-            Self::On => (
-                Hsla::from(theme.blue_9),
-                Hsla::from(gpui::white()),
-                "On",
-            ),
-            Self::Off => (
-                Hsla::from(theme.gray_5),
-                Hsla::from(theme.gray_11),
-                "Off",
-            ),
+            Self::On => (Hsla::from(theme.blue_9), gpui::white(), "On"),
+            Self::Off => (Hsla::from(theme.gray_5), Hsla::from(theme.gray_11), "Off"),
         };
 
         div()

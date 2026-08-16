@@ -37,6 +37,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "camera.svg",
     "check.svg",
     "chevron-down.svg",
+    "circle-x.svg",
     "enlarge.svg",
     "film-cut.svg",
     "image.svg",
@@ -47,6 +48,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "logo-wordmark.svg",
     "microphone.svg",
     "minimize.svg",
+    "move-left.svg",
     "play-circle.svg",
     "scan-text.svg",
     "screen.svg",
@@ -87,8 +89,12 @@ impl Assets {
     /// system knows about, so this has to run before the first window renders or
     /// text silently falls back to the system UI font.
     pub fn load_fonts(&self, cx: &App) -> Result<()> {
-        cx.text_system()
-            .add_fonts(FONTS.iter().map(|(_, bytes)| Cow::Borrowed(*bytes)).collect())
+        cx.text_system().add_fonts(
+            FONTS
+                .iter()
+                .map(|(_, bytes)| Cow::Borrowed(*bytes))
+                .collect(),
+        )
     }
 }
 

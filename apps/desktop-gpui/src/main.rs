@@ -37,7 +37,11 @@ fn main() {
 
         // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
         // and the window is fixed at that size there too.
-        let bounds = Bounds::centered(None, size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)), cx);
+        let bounds = Bounds::centered(
+            None,
+            size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)),
+            cx,
+        );
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
