@@ -18,6 +18,34 @@
 /// auto-hide reveal, below context menus.
 pub const MAIN_WINDOW_LEVEL: isize = 100;
 
+/// Which native material sits behind a window's content.
+///
+/// `applyMacOSWindowMaterial` in
+/// `apps/desktop/src/utils/macos-window-material.ts` picks between exactly
+/// these two: `visualSystem = majorVersion >= 26 ? "liquid-glass" :
+/// "vibrancy"`. The main window is material `"panel"`, radius 16 on both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialKind {
+    /// `NSGlassEffectView`, macOS 26+ only.
+    LiquidGlass,
+    /// `NSVisualEffectView` with the `windowBackground` material -- the
+    /// `setEffects({ effects: [Effect.WindowBackground], ... })` fallback.
+    Vibrancy,
+}
+
+/// The material [`install_window_material`] actually installed on the main
+/// window, so `render` can pick the tint that belongs over it. `None` means
+/// the shell paints its opaque `gray-1` self (non-mac, or the install failed).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowMaterial(pub Option<MaterialKind>);
+
+impl gpui::Global for WindowMaterial {}
+
+pub fn active_material(cx: &gpui::App) -> Option<MaterialKind> {
+    cx.try_global::<WindowMaterial>()
+        .and_then(|material| material.0)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PanelBehavior {
     pub level: isize,
@@ -40,7 +68,133 @@ mod mac {
     use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    use super::PanelBehavior;
+    use super::{MaterialKind, PanelBehavior};
+
+    /// `NS_GLASS_EFFECT_VIEW_STYLE_REGULAR` in
+    /// `apps/desktop/src-tauri/src/platform/macos/mod.rs`. The main window
+    /// takes the `SystemManaged` path, which is `setStyle:` and nothing else:
+    /// the always-active pin (`setState:` / `setActive:` probing) is for the
+    /// *other* Cap windows and is deliberately not reproduced here.
+    const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
+
+    /// `LIQUID_GLASS_IDENTIFIER`, kept byte-identical to the Tauri app so the
+    /// two view hierarchies read the same in a debugger.
+    const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
+
+    /// `NSViewWidthSizable | NSViewHeightSizable` -- the mask the Tauri glass
+    /// view gets (`setAutoresizingMask: 18usize`), which is what makes the
+    /// material track the 330x395 <-> 600x660 resize animation.
+    const NS_VIEW_WIDTH_HEIGHT_SIZABLE: usize = 2 | 16;
+
+    /// Put the window's native material behind gpui's content.
+    ///
+    /// This is `apply_liquid_glass_background_inner(.., SystemManaged)` from
+    /// `platform/macos/mod.rs` plus the vibrancy fallback
+    /// `macos-window-material.ts` reaches for when the glass class is missing,
+    /// translated to the one gpui window we own. gpui's `contentView` is a
+    /// plain AppKit container with the Metal-backed view added as a subview
+    /// (`gpui_macos::window`), exactly the shape the Tauri code assumes, so
+    /// the material goes in underneath it with `NSWindowBelow`.
+    ///
+    /// Takes the retained [`NativeWindow`] rather than a `&Window` for the
+    /// same reason [`place_overlay_panel`] does, and more so: subview
+    /// insertion and content-layer mutation synchronously re-enter gpui's own
+    /// window callbacks, so this must run with no gpui borrow held.
+    ///
+    /// Everything here is plain AppKit/Core Animation. No occlusion SPI, no
+    /// CGS, no `setState:`/`setActive:` probing -- see the comment in
+    /// `apply_liquid_glass_background_inner` for what that cost the shipping
+    /// app.
+    pub fn install_window_material(native: &NativeWindow, radius: f64) -> Option<MaterialKind> {
+        use objc2::{msg_send, runtime::AnyClass, sel};
+        use objc2_app_kit::{
+            NSAutoresizingMaskOptions, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+            NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+        };
+        use objc2_foundation::{MainThreadMarker, NSString};
+
+        // Every caller is on gpui's foreground executor, which is the main
+        // thread -- `NSVisualEffectView` is main-thread-only and objc2 wants
+        // that proven.
+        let mtm = MainThreadMarker::new()?;
+        let content_view = native.0.contentView()?;
+
+        // Clip the content view itself to the same continuous (squircle) curve
+        // the material below gets. Without it the material renders a square
+        // corner outside the shell's own `rounded(16.)` quad. The Tauri app
+        // applies this on *both* paths for the same reason, and it is plain
+        // Core Animation -- no private SPI.
+        content_view.setWantsLayer(true);
+        unsafe {
+            let layer: *mut AnyObject = msg_send![&*content_view, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: true];
+                let continuous = NSString::from_str("continuous");
+                let _: () = msg_send![layer, setCornerCurve: &*continuous];
+            }
+        }
+
+        let bounds = content_view.bounds();
+
+        // `NSGlassEffectView` exists only on macOS 26+; its absence is what
+        // sends `macos-window-material.ts` down the vibrancy branch.
+        if let Some(glass_class) = AnyClass::get("NSGlassEffectView") {
+            unsafe {
+                let glass: *mut AnyObject = msg_send![glass_class, alloc];
+                let glass: *mut AnyObject = msg_send![glass, initWithFrame: bounds];
+                if !glass.is_null() {
+                    let identifier = NSString::from_str(LIQUID_GLASS_IDENTIFIER);
+                    let _: () = msg_send![glass, setIdentifier: &*identifier];
+
+                    let responds: bool =
+                        msg_send![glass, respondsToSelector: sel!(setCornerRadius:)];
+                    if responds {
+                        let _: () = msg_send![glass, setCornerRadius: radius];
+                    }
+
+                    let _: () = msg_send![glass, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
+                    let _: () =
+                        msg_send![glass, setAutoresizingMask: NS_VIEW_WIDTH_HEIGHT_SIZABLE];
+                    // The `alloc` claim is deliberately not balanced: the view
+                    // lives for the life of the process (there is no teardown
+                    // path here, unlike the Tauri command that can be called
+                    // with `enabled: false`), and the superview's retain is
+                    // what keeps it alive. Same steady state the shipping app
+                    // sits in after a single apply.
+                    let _: () = msg_send![
+                        &*content_view,
+                        addSubview: glass,
+                        positioned: NSWindowOrderingMode::NSWindowBelow,
+                        relativeTo: std::ptr::null_mut::<AnyObject>(),
+                    ];
+                    return Some(MaterialKind::LiquidGlass);
+                }
+            }
+        }
+
+        // The pre-macOS-26 fallback: `setEffects({ effects:
+        // [Effect.WindowBackground], state: FollowsWindowActiveState, radius:
+        // 16 })`. Tauri's `Effect.WindowBackground` is `NSVisualEffectMaterial`
+        // `windowBackground` (12) blended behind the window; the radius is
+        // already covered by the content-view squircle clip above.
+        let vibrancy = unsafe { NSVisualEffectView::initWithFrame(mtm.alloc(), bounds) };
+        unsafe {
+            vibrancy.setMaterial(NSVisualEffectMaterial::WindowBackground);
+            vibrancy.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+            vibrancy.setState(NSVisualEffectState::FollowsWindowActiveState);
+            vibrancy.setAutoresizingMask(
+                NSAutoresizingMaskOptions::NSViewWidthSizable
+                    | NSAutoresizingMaskOptions::NSViewHeightSizable,
+            );
+            content_view.addSubview_positioned_relativeTo(
+                &vibrancy,
+                NSWindowOrderingMode::NSWindowBelow,
+                None,
+            );
+        }
+        Some(MaterialKind::Vibrancy)
+    }
 
     /// Repair gpui's per-window display link on macOS 26.
     ///
@@ -348,8 +502,11 @@ mod mac {
 mod stub {
     use gpui::Window;
 
-    use super::PanelBehavior;
+    use super::{MaterialKind, PanelBehavior};
 
+    pub fn install_window_material(_native: &NativeWindow, _radius: f64) -> Option<MaterialKind> {
+        None
+    }
     pub fn recording_controls_level() -> isize {
         0
     }

@@ -62,6 +62,8 @@ Everything below is real, not mocked.
   Spaces, exactly as `windows.rs` configures it — applied through a small
   `platform` module that reaches the `NSWindow` behind a gpui window via
   `raw-window-handle` (gpui exposes no level/Spaces API).
+- **The native window material.** The main window sits on real Liquid Glass,
+  with the vibrancy fallback behind it. See below.
 - **Recording controls bar.** The 320×150 always-on-screen panel from
   `in-progress-recording.tsx`: stop with a live timer, pause/resume, restart,
   delete, mic indicator, drag handle. A non-activating panel
@@ -80,6 +82,58 @@ from `apps/desktop/src/styles/theme.css` applied**. Six of the dark grays and
 `gray-11` are not stock Radix, so regenerating the palette from a Radix crate
 would quietly change the app's colours.
 
+### The native window material
+
+The main window is not a `bg-gray-1` slab. `platform::install_window_material`
+does what `applyMacOSWindowMaterial("panel")` plus
+`apply_main_window_liquid_glass_background` do in the shipping app:
+
+- **macOS 26+** — an `NSGlassEffectView`, found by runtime class lookup,
+  `setStyle:` regular (`SystemManaged`, radius 16), inserted `NSWindowBelow`
+  gpui's Metal view. gpui's `contentView` is a plain AppKit container with the
+  renderer view added as a subview, which is exactly the shape the Tauri code
+  assumes, so the material drops in underneath unchanged. The *always-active*
+  pin (`setState:` / `setActive:` probing) is deliberately **not** reproduced:
+  that is the other windows' path, and the main window is system-managed in
+  the shipping app too.
+- **Below that** — an `NSVisualEffectView` on `windowBackground` (12),
+  `BehindWindow`, `FollowsWindowActiveState`: the
+  `setEffects({ effects: [Effect.WindowBackground] })` fallback.
+- **Both paths** clip the content view's layer to a 16px `continuous` corner
+  (`setCornerRadius:` + `setMasksToBounds:`), or the material renders a square
+  corner outside the shell's own rounded quad.
+
+Nothing here is private SPI. No occlusion mutation, no CGS, no window-alpha
+tricks — an occlusion-suppressed surface is what wedged WindowServer
+machine-wide once already, and the comment in
+`apply_liquid_glass_background_inner` is the record of it.
+
+What the shell paints *over* the material is transcribed from `theme.css`:
+
+| | Liquid Glass | Vibrancy |
+|---|---|---|
+| `.cap-window-shell` | `rgba(255,255,255,0.55)` / `rgba(17,17,17,0.88)`, no border | `rgba(244,244,243,0.84)` / `rgba(17,17,17,0.94)` + 1px `--macos-settings-border` |
+| `.cap-window-header` | transparent, hairline transparent | `rgba(250,250,249,0.72)` / `rgba(28,28,28,0.88)` |
+| body `bg-gray-2`, `bg-gray-3` | `--macos-settings-control-fill` | unchanged |
+| body `bg-gray-4` | `--macos-settings-control-hover` | unchanged |
+| body `bg-gray-5` | `--macos-settings-control-active` | unchanged |
+| body `hover:bg-gray-4/5` | `control-hover` | unchanged |
+| body `hover:bg-gray-6/7` | `--macos-settings-selection` | unchanged |
+| body `border-gray-4/5/6` | `--macos-settings-border` | unchanged |
+| body text, `ring-offset-gray-1` | `--macos-settings-text`, transparent | unchanged |
+
+The asymmetry is the CSS's, not ours: every `.cap-window-body` remap in
+`theme.css` is gated on `[data-macos-visual-system="liquid-glass"]`, so
+vibrancy only ever changes the shell and the header. The resolved values live
+in `theme::MaterialTokens` with the rule each came from quoted next to it, and
+`Theme` exposes them as `shell_bg()` / `body_fill(n)` / `body_hover_fill(n)` /
+`body_border(n)` so a call site still reads as the Tailwind class it came from.
+
+The material is installed from a task after the window handle exists — subview
+insertion re-enters gpui's window callbacks, so it cannot run inside an update
+— and the result lands in a `platform::WindowMaterial` global that `render`
+polls through `sync_appearance`.
+
 ## Deviations from the Tauri app
 
 Things that are deliberately different, and why.
@@ -87,7 +141,9 @@ Things that are deliberately different, and why.
 | | |
 |---|---|
 | **Traffic lights are hand-drawn** | The Tauri main window returns `None` from `traffic_lights_position`, which routes it to `decorations(false)`; the lights are HTML there too. `titlebar: None` is the gpui equivalent. Minimize is not drawn, and zoom toggles expand/collapse. |
-| **No vibrancy** | The real macOS shell is a translucent material, not `bg-gray-1`. This is the single largest visual gap. |
+| **Only the main window is on a material** | The main window is native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The windows that will need the material later are the other chrome windows: settings (radius 26), mode select, upgrade. |
+| **No header backdrop filter** | On the vibrancy path `.cap-window-header` is `rgba(250,250,249,0.72)` *plus* `backdrop-filter: blur(28px) saturate(1.45)`. The wash is here, the filter is not — same missing hook as the recording overlay's `backdrop-blur-xs`. |
+| **Appearance changes need a relaunch** | `sync_appearance` runs from `render`, and gpui only renders on invalidation, so flipping the system to light while the app is up leaves the dark palette on screen until something else forces a frame. Pre-existing, not specific to the material. |
 | **NSWindow, not NSPanel** | The Tauri app class-swizzles its windows into `NSPanel`s via `tauri_nspanel`. Here the main window stays a normal `NSWindow` and gets the observable parts — level 100, `CanJoinAllSpaces \| FullScreenPrimary` — from the `platform` module. (`WindowKind::Floating` is *not* a shortcut to this: its panel hides on app deactivation.) The controls bar *is* a real panel via `WindowKind::PopUp`, whose non-activating behavior it genuinely needs. |
 | **Controls bar level 8, faithfully** | `windows.rs` raises the bar with `CGWindowLevelForKey(10)` under a constant named `kCGMaximumWindowLevelKey` — but key 10 is `kCGModalPanelWindowLevelKey` (maximum is 14), so the shipping bar actually runs at level 8. Reproduced verbatim rather than "fixed" from over here. |
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
@@ -108,12 +164,13 @@ without ever scheduling a frame. Both failures are silent. Set the initial size
 through the bounds passed to `open_window`, and start async work from `main`
 once the window handle exists.
 
-**Do not mutate AppKit window state from inside a gpui update.** `setFrame:`
-and `orderFrontRegardless` synchronously fire gpui's own move/resize/frame
-callbacks, which re-borrow the App — inside a window or entity update that
-logs `RefCell already borrowed` and silently drops the callback. Grab the
-`NSWindow` inside the update, then do the AppKit calls from a spawned task
-(`platform::place_overlay_panel`).
+**Do not mutate AppKit window state from inside a gpui update.** `setFrame:`,
+`orderFrontRegardless`, subview insertion and content-view layer mutation all
+synchronously fire gpui's own move/resize/frame callbacks, which re-borrow the
+App — inside a window or entity update that logs `RefCell already borrowed`
+and silently drops the callback. Grab the `NSWindow` inside the update, then
+do the AppKit calls from a spawned task (`platform::place_overlay_panel`,
+`platform::install_window_material`).
 
 **Titled windows cannot cover the menu bar.** Every gpui window — `PopUp`
 panels included — carries `NSTitledWindowMask`, so AppKit's
@@ -128,7 +185,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 
 | Window | Size | Status |
 |---|---|---|
-| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior |
+| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior, native Liquid Glass / vibrancy material |
 | Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar, corner resize, drag, persisted chrome state, capture-excluded in studio / included in instant |
 | Recording controls | 320×150 | **Done** — live timer, pause/resume, restart, delete, live mic level, instant-mode mute, drag; capture-excluded, non-activating |
 | Target select overlay | per display | **Done** — all four variants (display / window / area / camera-only), one transparent non-activating panel per display at the Tauri-verbatim level 7, cursor-following highlight, click-to-pin windows with app icons, draw/move/resize area selection with min-size validation, the real Start Recording flow (overlays close, bar opens, overlays excluded from capture), Escape/close dismiss |
@@ -257,3 +314,13 @@ screencapture -x -o -l<window-id> shot.png
 
 Measure against it rather than trusting the eye — the 2×-scale bug above was
 invisible until the compact and expanded headers were compared pixel by pixel.
+
+A per-window capture flattens only the window's *own* layers, so it never
+contains the behind-window backdrop: the shell comes out as the flat tint over
+black (a useful way to read the tint's alpha back, in fact — a 0.55 white tint
+lands on `#8c8c8c`). Anything about the material actually being live has to be
+judged from a full-screen `screencapture -x`.
+
+`CAP_GPUI_AUTO_EXPAND=1` opens the window expanded, the way clicking the zoom
+light does, for the same reason as the other `CAP_GPUI_AUTO_*` hooks:
+unprivileged synthetic clicks are dropped.

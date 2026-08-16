@@ -25,6 +25,12 @@ use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 const MAIN_WINDOW_WIDTH: f32 = 330.;
 const MAIN_WINDOW_HEIGHT: f32 = 395.;
 
+/// The corner radius the native material is clipped to. `radius = 16` for
+/// material `"panel"` on both visual systems in
+/// `apps/desktop/src/utils/macos-window-material.ts`, and the same 16 the
+/// shell paints with (`rounded-[16px]`).
+const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 16.;
+
 fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
     let (mode, secs) = spec.split_once(':')?;
     let mode = match mode {
@@ -106,7 +112,7 @@ fn main() {
         // The panel behavior (`MAIN_PANEL_LEVEL`, all Spaces -- what the Tauri
         // app does via tauri_nspanel) is applied here for the same reason: the
         // NSWindow does not exist yet inside the builder closure.
-        window_handle
+        let native_main = window_handle
             .update(cx, |view, window, cx| {
                 platform::apply_panel_behavior(
                     window,
@@ -116,9 +122,44 @@ fn main() {
                         shadow: true,
                     },
                 );
-                view.start_enumeration(window, cx)
+                tracing::info!(
+                    number = platform::window_number(window),
+                    "main window opened"
+                );
+                view.start_enumeration(window, cx);
+                view.auto_expand(window, cx);
+                // The AppKit work below must not run inside this update:
+                // inserting a subview and mutating the content view's layer
+                // synchronously re-enters gpui's own window callbacks, which
+                // re-borrow the App. Grab the retained NSWindow here, act on
+                // it from a task (the `place_overlay_panel` rule).
+                platform::native_window(window)
             })
             .expect("failed to start device enumeration");
+
+        // The native window material: `NSGlassEffectView` on macOS 26+,
+        // `NSVisualEffectView` vibrancy below that -- what
+        // `applyMacOSWindowMaterial("panel")` does in the Tauri app. Nothing
+        // paints it; the shell paints a translucent tint *over* it, so the
+        // window has to be told which one landed.
+        cx.spawn(async move |cx| {
+            let Some(native) = native_main else {
+                tracing::error!("no NSWindow behind the main window; material not installed");
+                return;
+            };
+            let kind = platform::install_window_material(&native, MAIN_WINDOW_MATERIAL_RADIUS);
+            match kind {
+                Some(kind) => tracing::info!(?kind, "installed main window material"),
+                None => tracing::info!("no native window material available"),
+            }
+            cx.update(|cx| {
+                cx.set_global(platform::WindowMaterial(kind));
+                // The palette is resolved in `render`, which has already run
+                // by now -- nudge it so the tint replaces the opaque shell.
+                window_handle.update(cx, |_, _, cx| cx.notify()).ok();
+            });
+        })
+        .detach();
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary
         // display and record for N seconds. The end-to-end check drives the

@@ -369,10 +369,28 @@ impl MainWindow {
         }
     }
 
-    fn sync_appearance(&mut self, window: &Window) {
+    /// Re-resolve the palette when the system appearance flips, or when the
+    /// native material lands.
+    ///
+    /// The material is installed from a spawned task after the window exists
+    /// (see `main`), so the first frames paint before it is known -- the
+    /// global is polled here rather than pushed, and the install notifies the
+    /// window once so this runs again.
+    fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
+        let material = crate::platform::active_material(cx);
+        if appearance != self.theme.appearance || material != self.theme.material_kind() {
+            self.theme = Theme::new(appearance).with_material(material);
+        }
+    }
+
+    /// `CAP_GPUI_AUTO_EXPAND=1`: open expanded, the way clicking the zoom
+    /// light does. Same reason as the other `CAP_GPUI_AUTO_*` hooks --
+    /// unprivileged synthetic clicks are dropped, so the screenshot harness
+    /// needs a way in.
+    pub fn auto_expand(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var("CAP_GPUI_AUTO_EXPAND").is_ok_and(|value| value == "1") && !self.expanded {
+            self.toggle_expanded(window, cx);
         }
     }
 
@@ -701,7 +719,7 @@ impl MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_appearance(window);
+        self.sync_appearance(window, cx);
         let theme = self.theme;
 
         div()
@@ -710,9 +728,18 @@ impl Render for MainWindow {
             .flex_col()
             .overflow_hidden()
             // `rounded-[16px]` on `.cap-window-shell`, matched natively by
-            // `apply_squircle_corners(&window, 16.0)` in the Tauri app.
+            // `apply_squircle_corners(&window, 16.0)` in the Tauri app -- and,
+            // when a material is installed, by the content-view squircle clip
+            // in `platform::install_window_material`.
             .rounded(px(16.))
-            .bg(theme.gray_1)
+            // Opaque `bg-gray-1` with no material; a translucent tint over the
+            // live `NSGlassEffectView`/`NSVisualEffectView` backdrop with one.
+            .bg(theme.shell_bg())
+            // Only the vibrancy path draws a shell border -- Liquid Glass sets
+            // `border: 0`.
+            .when_some(theme.shell_border(), |this, color| {
+                this.border_1().border_color(color)
+            })
             .font_family("Geist")
             .text_color(theme.text_primary)
             .child(self.render_header(window, cx))
@@ -741,10 +768,10 @@ impl MainWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
-            .bg(theme.gray_2)
+            .bg(theme.header_bg())
             // `divide-y divide-gray-5` between header and body.
             .border_b_1()
-            .border_color(theme.gray_5)
+            .border_color(theme.header_border())
             .child(self.render_traffic_lights(focused, cx))
             .child(self.render_header_actions(cx))
     }
@@ -871,7 +898,10 @@ impl MainWindow {
             .min_h_0()
             .px(px(13.))
             .pb(px(8.))
-            .gap(px(8.));
+            .gap(px(8.))
+            // `.cap-window-body { color: var(--macos-settings-text) }` under
+            // panel glass; `--text-primary` otherwise.
+            .text_color(self.theme.body_text());
 
         // The logo/mode row is hidden while a picker is open -- the panel takes
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
@@ -1042,7 +1072,7 @@ impl MainWindow {
                                     .text_color(theme.gray_12)
                                     .child("Back"),
                             )
-                            .hover(|style| style.bg(theme.gray_4))
+                            .hover(|style| style.bg(theme.body_hover_fill(4)))
                             .on_click(cx.listener(|this, _, _window, cx| this.close_panel(cx))),
                     )
                     .child(header_trailing),
@@ -1151,8 +1181,8 @@ impl MainWindow {
             .px(px(8.))
             .rounded(px(6.))
             .border_1()
-            .border_color(theme.gray_5)
-            .bg(theme.gray_2)
+            .border_color(theme.body_border(5))
+            .bg(theme.body_fill(2))
             .text_size(px(12.))
             .child(
                 svg()
@@ -1477,7 +1507,7 @@ impl MainWindow {
             } else {
                 gpui::transparent_black()
             })
-            .bg(theme.gray_3)
+            .bg(theme.body_fill(3))
             .child(
                 div()
                     .flex()
@@ -1485,7 +1515,7 @@ impl MainWindow {
                     .justify_center()
                     .w_full()
                     .h(px(76.))
-                    .bg(theme.gray_4)
+                    .bg(theme.body_fill(4))
                     .child(svg().path(icon).size(px(24.)).text_color(theme.gray_9)),
             )
             .child(
@@ -1520,7 +1550,7 @@ impl MainWindow {
                             .child(metadata)
                     })),
             )
-            .hover(|style| style.bg(theme.gray_4))
+            .hover(|style| style.bg(theme.body_hover_fill(4)))
             .on_click(on_click)
     }
 
@@ -1547,16 +1577,16 @@ impl MainWindow {
                     .border_color(if selected {
                         Hsla::from(theme.blue_9)
                     } else if theme.is_dark() {
-                        Hsla::from(theme.gray_5)
+                        theme.body_border(5)
                     } else {
-                        Hsla::from(theme.gray_4)
+                        theme.body_border(4)
                     })
                     .bg(if selected {
                         theme.tile_selected_bg()
                     } else if theme.is_dark() {
-                        Hsla::from(theme.gray_3)
+                        theme.body_fill(3)
                     } else {
-                        Hsla::from(theme.gray_2)
+                        theme.body_fill(2)
                     })
                     .child(
                         svg()
@@ -1594,7 +1624,7 @@ impl MainWindow {
                                     .child(mode.panel_description()),
                             ),
                     )
-                    .hover(|style| style.bg(theme.gray_4))
+                    .hover(|style| style.bg(theme.body_hover_fill(4)))
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.mode = mode;
                         crate::target_overlay::TargetSelect::global(cx)
@@ -1665,7 +1695,9 @@ impl MainWindow {
             .text_size(px(14.))
             .text_color(foreground)
             .when(selected, |this| this.bg(theme.blue_500))
-            .when(!selected, |this| this.hover(|style| style.bg(theme.gray_4)))
+            .when(!selected, |this| {
+                this.hover(|style| style.bg(theme.body_hover_fill(4)))
+            })
             .when_some(audio_level.filter(|_| selected), |this, level| {
                 this.child(
                     div()
@@ -1758,12 +1790,12 @@ impl MainWindow {
             .py(px(2.))
             .rounded(px(8.))
             .border_1()
-            .border_color(theme.gray_5)
-            .bg(theme.gray_3)
+            .border_color(theme.body_border(5))
+            .bg(theme.body_fill(3))
             .text_size(px(9.6))
             .text_color(theme.gray_12)
             .child("Personal")
-            .hover(|style| style.bg(theme.gray_5))
+            .hover(|style| style.bg(theme.body_hover_fill(5)))
         // TODO: opens the Upgrade window (950x850) once that window exists.
     }
 
@@ -1807,13 +1839,17 @@ impl MainWindow {
                 .justify_center()
                 .size(px(28.))
                 .rounded_full()
-                .bg(if selected { theme.gray_7 } else { theme.gray_3 })
+                .bg(if selected {
+                    Hsla::from(theme.gray_7)
+                } else {
+                    theme.body_fill(3)
+                })
                 .when(selected, |this| {
                     // `ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-1`.
                     this.border_2()
                         .border_color(theme.blue_500)
                         .shadow(vec![gpui::BoxShadow {
-                            color: Hsla::from(theme.gray_1),
+                            color: theme.ring_offset(),
                             offset: gpui::point(px(0.), px(0.)),
                             blur_radius: px(0.),
                             spread_radius: px(1.),
@@ -1826,7 +1862,7 @@ impl MainWindow {
                         .size(px(mode.icon_size()))
                         .text_color(theme.gray_12),
                 )
-                .hover(|style| style.bg(theme.gray_7))
+                .hover(|style| style.bg(theme.body_hover_fill(7)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.mode = mode;
                     // Open overlays label their start button with the mode.
@@ -1846,8 +1882,8 @@ impl MainWindow {
             .p(px(6.))
             .rounded_full()
             .border_1()
-            .border_color(theme.gray_5)
-            .bg(theme.gray_3)
+            .border_color(theme.body_border(5))
+            .bg(theme.body_fill(3))
             .child(button(Mode::Instant, "mode-instant"))
             .child(button(Mode::Studio, "mode-studio"))
             .child(button(Mode::Screenshot, "mode-screenshot"))
@@ -1864,7 +1900,7 @@ impl MainWindow {
                     .justify_center()
                     .p(px(4.))
                     .rounded_full()
-                    .bg(theme.gray_5)
+                    .bg(theme.body_fill(5))
                     .child(
                         svg()
                             .path("icons/info.svg")
@@ -1931,11 +1967,15 @@ impl MainWindow {
             .overflow_hidden()
             .rounded(px(8.))
             .border_1()
-            .border_color(if selected { theme.blue_8 } else { theme.gray_6 })
+            .border_color(if selected {
+                Hsla::from(theme.blue_8)
+            } else {
+                theme.body_border(6)
+            })
             .bg(if selected {
                 theme.tile_selected_bg()
             } else {
-                Hsla::from(theme.gray_2)
+                theme.body_fill(2)
             })
             .child(self.target_button_inner(target, true, cx))
             .child(
@@ -1947,15 +1987,15 @@ impl MainWindow {
                     .items_center()
                     .justify_center()
                     .border_l_1()
-                    .border_color(theme.gray_6)
-                    .bg(theme.gray_4)
+                    .border_color(theme.body_border(6))
+                    .bg(theme.body_fill(4))
                     .child(
                         svg()
                             .path("icons/chevron-down.svg")
                             .size(px(16.))
                             .text_color(theme.gray_11),
                     )
-                    .hover(|style| style.bg(theme.gray_6))
+                    .hover(|style| style.bg(theme.body_hover_fill(6)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_panel(Panel::Target(target), window, cx);
                     })),
@@ -1973,11 +2013,15 @@ impl MainWindow {
             .overflow_hidden()
             .rounded(px(8.))
             .border_1()
-            .border_color(if selected { theme.blue_8 } else { theme.gray_6 })
+            .border_color(if selected {
+                Hsla::from(theme.blue_8)
+            } else {
+                theme.body_border(6)
+            })
             .bg(if selected {
                 theme.tile_selected_bg()
             } else {
-                Hsla::from(theme.gray_2)
+                theme.body_fill(2)
             })
             .child(self.target_button_inner(target, false, cx))
     }
@@ -2024,7 +2068,7 @@ impl MainWindow {
                 style.bg(if selected {
                     theme.tile_selected_hover_bg()
                 } else {
-                    Hsla::from(theme.gray_4)
+                    theme.body_hover_fill(4)
                 })
             })
             .on_click(cx.listener(move |this, _, _window, cx| {
@@ -2201,8 +2245,8 @@ impl MainWindow {
                     .rounded(px(12.))
                     .border_dashed()
                     .border_1()
-                    .border_color(theme.gray_5)
-                    .bg(theme.gray_2)
+                    .border_color(theme.body_border(5))
+                    .bg(theme.body_fill(2))
                     .child(
                         svg()
                             .path("icons/history.svg")
@@ -2264,8 +2308,8 @@ impl MainWindow {
             .h(px(DEVICE_ROW_HEIGHT))
             .rounded(px(8.))
             .border_1()
-            .border_color(theme.gray_6)
-            .bg(theme.gray_2)
+            .border_color(theme.body_border(6))
+            .bg(theme.body_fill(2))
             .cursor_default()
             .overflow_hidden()
             .child(
@@ -2286,7 +2330,13 @@ impl MainWindow {
                     .child(label),
             )
             .child(pill.render(theme))
-            .hover(|style| style.bg(theme.gray_4).border_color(theme.gray_8))
+            // `hover:border-gray-8` is not one of the classes theme.css remaps, so
+        // the border keeps its Radix step under the material.
+        .hover(|style| {
+            style
+                .bg(theme.body_hover_fill(4))
+                .border_color(theme.gray_8)
+        })
     }
 }
 
@@ -2320,7 +2370,7 @@ impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
             Self::On => (Hsla::from(theme.blue_9), gpui::white(), "On"),
-            Self::Off => (Hsla::from(theme.gray_5), Hsla::from(theme.gray_11), "Off"),
+            Self::Off => (theme.body_fill(5), Hsla::from(theme.gray_11), "Off"),
         };
 
         div()
