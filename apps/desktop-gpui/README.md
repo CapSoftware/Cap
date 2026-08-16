@@ -115,8 +115,8 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Window | Size | Status |
 |---|---|---|
 | Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior |
-| Camera preview | 460×460 | Not started — needs the camera feed |
-| Recording controls | 320×150 | **Done** — timer, pause/resume, restart, delete, mic indicator, drag; capture-excluded, non-activating |
+| Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar, corner resize, drag, persisted chrome state, capture-excluded in studio / included in instant |
+| Recording controls | 320×150 | **Done** — live timer, pause/resume, restart, delete, live mic level, instant-mode mute, drag; capture-excluded, non-activating |
 | Target select overlay | per display | Not started — one transparent window per display |
 | Window capture occluder | per display | Not started |
 | Capture area | per display | Not started |
@@ -157,10 +157,8 @@ Recording-specific deviations:
 |---|---|
 | **TEMP start button** | The real app starts recording from the fullscreen target-select overlay, which does not exist yet. An armed target (Display selected, or a concrete window picked) shows a pinned blue Start Recording footer instead. |
 | **Bar timer, no countdown** | The countdown variant (`window.COUNTDOWN`) needs the settings store; the bar goes straight from Starting to the timer. |
-| **Mic level is static** | The level track under the mic icon renders, but live levels need the app-scoped feed actors (same work as the camera preview). Mute toggle likewise. |
 | **Settings button is inert** | The bar's recording-settings popover menu is not built. |
 | **Area does not arm** | Area needs the selection overlay. |
-| **Per-recording feed actors** | The Tauri app keeps app-wide `MicrophoneFeed`/`CameraFeed` actors for previews and level meters; here they are spawned per recording and dropped after. Moves to app scope with the camera preview window. |
 | **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. |
 | **Camera id is DeviceID-only** | The Tauri app persists `ModelID` when a camera advertises one, so the same camera survives re-plugging into a different port. |
 | **Defaults are the builder's** | `desktop_recording_defaults` (studio quality, fps caps, custom cursor) is not applied yet — it reads the Tauri settings store. |
@@ -170,6 +168,50 @@ drives a start/stop through the button code paths — the end-to-end check uses
 it because unprivileged synthetic clicks are dropped. Add
 `CAP_GPUI_AUTO_PAUSE=1` to pause for the middle third: two segments whose
 summed duration is ~⅔ of wall time is the proof the pause reached the engine.
+`CAP_GPUI_AUTO_CAMERA=1` selects the first camera at startup the way a click
+would, opening the preview bubble; combined with `CAP_GPUI_AUTO_RECORD` it
+verifies the camera track end to end.
+
+## Camera preview and app-scoped feeds
+
+Selecting a camera spins up an app-scoped `CameraFeed` actor and opens the
+preview bubble immediately, before any recording — the Tauri model. The same
+applies to the microphone: an app-scoped `MicrophoneFeed` keeps a meter
+running, which is what feeds the live level bar in the mic picker rows and on
+the recording bar. Starting a recording locks the already-running feeds
+(`feeds::camera::Lock` / `feeds::microphone::Lock`), so the preview never
+stutters across a start, and the bar's mute button (instant mode only, like
+the real app) flips the recording-scoped payload-zeroing mute on the mic lock.
+
+Frames arrive as `420v` CoreMedia sample buffers on a bounded flume channel.
+gpui's zero-copy `surface()` element turned out to be unusable for this on the
+pinned rev — its Metal path hard-asserts `420f`, and surface primitives ignore
+rounded-corner clipping (fatal when the default shape is a circle). Instead
+VideoToolbox converts `420v` → BGRA in hardware, one row-copy lifts the frame
+into a gpui `RenderImage`, and the previous frame's image is explicitly
+dropped from the sprite atlas each frame. Cover-fit and the circular clip both
+hold on the image path. Camera-window deviations: no mirroring (no flip
+transform exists in this gpui rev — the toolbar button is present but
+disabled), background blur cycles and persists but does not process frames
+(the `cap-camera-effects` pipeline is its own unit), the window position is
+not persisted per-monitor, and chrome state persists to `gpui-state.json`
+next to the Tauri store rather than `localStorage`.
+
+### The macOS 26 display-link fix
+
+The single most important platform finding so far: on macOS 26,
+`NSWindow.occlusionState` reports visible windows with an undocumented bit
+(`0x2000`) instead of the documented `NSWindowOcclusionStateVisible` (`0x2`)
+— and gpui only starts a window's CVDisplayLink when it sees `0x2`. Result:
+**no window in this app ever received frame callbacks** — first paint, then
+frozen. Every earlier "inactive repaint" workaround (250ms `refresh()` ticks)
+was painting nothing; the bar's timer sat on "Starting" through entire
+recordings. `platform::install_occlusion_shim` overrides `occlusionState` on
+gpui's own window classes to OR the documented bit back in whenever AppKit
+reports any visibility, and `apply_panel_behavior` re-fires the occlusion
+handler so the link starts. With it, the bar timer ticks and the camera
+renders at capture cadence while another app is frontmost. Remove the shim
+when the gpui pin understands the macOS 26 bit.
 
 Running from a dev build needs the ffmpeg dylibs the binary's install names
 point at (`@executable_path/../Frameworks/Spacedrive.framework/...`):
