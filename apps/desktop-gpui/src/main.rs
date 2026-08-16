@@ -14,6 +14,7 @@ mod platform;
 mod recording;
 mod session;
 mod store;
+mod target_overlay;
 mod theme;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -57,6 +58,7 @@ fn main() {
         // and the window is fixed at that size there too.
         let session = RecordingSession::init(cx);
         crate::feeds::Feeds::init(cx);
+        crate::target_overlay::TargetSelect::init(cx);
 
         let bounds = Bounds::centered(
             None,
@@ -129,6 +131,14 @@ fn main() {
                     view.auto_record(mode, secs, window, cx)
                 })
                 .expect("failed to arm auto-record");
+        } else if let Some(kind) = main_window::auto_overlay_kind() {
+            // `CAP_GPUI_AUTO_OVERLAY` without a recording: put the overlays up
+            // and leave them there, which is how they get screenshotted.
+            window_handle
+                .update(cx, |view, window, cx| {
+                    view.auto_open_overlay(kind, window, cx)
+                })
+                .expect("failed to arm the target overlay");
         }
         cx.activate(true);
     });

@@ -36,6 +36,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "arrows.svg",
     "bell.svg",
     "camera.svg",
+    "caret-down.svg",
     "circle.svg",
     "check.svg",
     "chevron-down.svg",
@@ -43,6 +44,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "circle-x.svg",
     "enlarge.svg",
     "film-cut.svg",
+    "gear.svg",
     "history.svg",
     "image.svg",
     "info.svg",
@@ -52,6 +54,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "mic-off.svg",
     "microphone.svg",
     "minimize.svg",
+    "monitor.svg",
     "more-vertical.svg",
     "move-left.svg",
     "pause-circle.svg",
@@ -68,6 +71,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "search.svg",
     "settings.svg",
     "window.svg",
+    "x.svg",
 );
 
 pub struct Assets;
@@ -119,6 +123,7 @@ mod tests {
         include_str!("main_window.rs"),
         include_str!("controls_window.rs"),
         include_str!("camera_window.rs"),
+        include_str!("target_overlay.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

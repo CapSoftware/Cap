@@ -105,6 +105,54 @@ mod mac {
                 tracing::info!("installed macOS 26 occlusion shim on {name}");
             }
         }
+
+        // Same per-class, retried-from-the-same-spots lifecycle, so it rides
+        // along here.
+        install_frame_constraint_shim();
+    }
+
+    /// Let windows cover the menu bar.
+    ///
+    /// AppKit's `constrainFrameRect:toScreen:` pushes any titled window below
+    /// the menu bar -- and gpui's windows all carry `NSTitledWindowMask`, even
+    /// `WindowKind::PopUp` panels. A fullscreen target-select overlay set to
+    /// cover the display therefore lands 33pt down (and hangs 33pt off the
+    /// bottom). The Tauri app never sees this because tao's `NSWindow`
+    /// subclass overrides the method to return the rect unchanged; this shim
+    /// gives gpui's window classes the same override.
+    fn install_frame_constraint_shim() {
+        use objc2::ffi::class_addMethod;
+        use objc2_foundation::NSRect;
+
+        unsafe extern "C" fn constrain_shim(
+            _this: *mut AnyObject,
+            _sel: Sel,
+            frame: NSRect,
+            _screen: *mut AnyObject,
+        ) -> NSRect {
+            frame
+        }
+
+        for name in ["GPUIWindow", "GPUIPanel"] {
+            let Some(class) = objc2::runtime::AnyClass::get(name) else {
+                continue;
+            };
+            let added = unsafe {
+                class_addMethod(
+                    (class as *const objc2::runtime::AnyClass as *mut objc2::ffi::objc_class)
+                        .cast(),
+                    objc2::sel!(constrainFrameRect:toScreen:).as_ptr(),
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(*mut AnyObject, Sel, NSRect, *mut AnyObject) -> NSRect,
+                        unsafe extern "C" fn(),
+                    >(constrain_shim)),
+                    c"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@".as_ptr(),
+                )
+            };
+            if added {
+                tracing::info!("installed frame-constraint shim on {name}");
+            }
+        }
     }
 
     /// Re-run gpui's occlusion handler so a window whose display link never
@@ -133,6 +181,81 @@ mod mac {
     /// shipping app beats fixing its constant from over here.
     pub fn recording_controls_level() -> isize {
         unsafe { CGWindowLevelForKey(10) as isize }
+    }
+
+    /// The level `windows.rs` gives every `TargetSelectOverlay`:
+    /// `CGWindowLevelForKey(10) - 1`, i.e. one below the recording controls
+    /// bar. Same mislabeled constant as [`recording_controls_level`] (key 10 is
+    /// `kCGModalPanelWindowLevelKey`, level 8), so the shipping overlay really
+    /// runs at level 7 -- above ordinary app windows, below the bar. Reproduced
+    /// verbatim rather than "fixed" from over here.
+    pub fn target_overlay_level() -> isize {
+        recording_controls_level() - 1
+    }
+
+    /// A retained `NSWindow` that can outlive a `&Window` borrow -- what
+    /// [`place_overlay_panel`] operates on.
+    pub struct NativeWindow(Id<NSWindow>);
+
+    /// The retained `NSWindow` behind a gpui window, for AppKit calls that
+    /// must run *outside* any gpui update (see [`place_overlay_panel`]).
+    pub fn native_window(window: &Window) -> Option<NativeWindow> {
+        ns_window(window).map(NativeWindow)
+    }
+
+    /// Everything that puts a target-select overlay onto its display: frame,
+    /// level, Spaces behavior, no shadow, ordered front without focus.
+    ///
+    /// The rect comes in as CoreGraphics coordinates -- global, top-left
+    /// origin, y down, points, exactly what `scap_targets` reports for a
+    /// display (`CGDisplayBounds`). Not gpui `WindowBounds`: gpui's macOS
+    /// origin math is display-relative and disagrees with its own `bounds()`
+    /// getter by the window height, so a window asked to cover a display lands
+    /// a screenful away. AppKit's coordinates are unambiguous, so the frame is
+    /// set here instead. The window frame equals the content rect for our
+    /// windows -- gpui gives titlebar-less windows `NSFullSizeContentView`.
+    ///
+    /// Takes the retained [`NativeWindow`] rather than `&Window` because
+    /// `setFrame:` and `orderFrontRegardless` synchronously re-enter gpui's
+    /// own move/resize/frame callbacks, which need the App RefCell -- so the
+    /// caller must run this with no gpui borrow held (a spawned task, not a
+    /// window update; running it inside one logs "RefCell already borrowed"
+    /// and the callbacks are dropped).
+    pub fn place_overlay_panel(
+        native: &NativeWindow,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        level: isize,
+    ) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+        let ns_window = &native.0;
+        // AppKit's global space has its origin at the bottom-left of the
+        // primary display (`CGMainDisplayID`, which is what
+        // `scap_targets::Display::primary` wraps); CG's is that display's
+        // top-left.
+        let primary_height = scap_targets::Display::primary()
+            .logical_size()
+            .map(|size| size.height())
+            .unwrap_or(height);
+        let appkit_y = primary_height - (y + height);
+
+        ns_window.setFrame_display(
+            NSRect::new(NSPoint::new(x, appkit_y), NSSize::new(width, height)),
+            true,
+        );
+        ns_window.setLevel(level);
+        unsafe {
+            ns_window.setCollectionBehavior(
+                NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::FullScreenPrimary,
+            );
+        }
+        // `.shadow(false)` in the Tauri builder.
+        ns_window.setHasShadow(false);
+        unsafe { ns_window.orderFrontRegardless() };
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -230,6 +353,22 @@ mod stub {
 
     pub fn recording_controls_level() -> isize {
         0
+    }
+    pub fn target_overlay_level() -> isize {
+        0
+    }
+    pub struct NativeWindow;
+    pub fn native_window(_window: &Window) -> Option<NativeWindow> {
+        None
+    }
+    pub fn place_overlay_panel(
+        _native: &NativeWindow,
+        _x: f64,
+        _y: f64,
+        _width: f64,
+        _height: f64,
+        _level: isize,
+    ) {
     }
     pub fn install_occlusion_shim() {}
     pub fn kick_display_link(_window: &Window) {}

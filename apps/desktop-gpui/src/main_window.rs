@@ -376,10 +376,49 @@ impl MainWindow {
         }
     }
 
+    /// Bring the target-select overlays in line with the armed target.
+    ///
+    /// Deferred, because opening a window inside an entity update paints it
+    /// synchronously and double-leases this very view. This mirrors
+    /// `toggleTargetMode` / `selectDisplayTarget` / `selectWindowTarget` in
+    /// the Tauri main window, which each call `openTargetSelectOverlays` (or
+    /// `closeTargetSelectOverlays`) right after setting the mode.
+    fn sync_overlays(&self, cx: &mut Context<Self>) {
+        let Some(mode) = self.target else {
+            cx.defer(app_windows::close_target_overlays);
+            return;
+        };
+        let request = app_windows::OverlayRequest {
+            mode,
+            recording_mode: self.mode,
+            // A display picked from the dropdown narrows the overlays to that
+            // display; otherwise every display gets one.
+            display: match mode {
+                TargetType::Display => self
+                    .selected_display
+                    .as_ref()
+                    .map(|display| display.id.clone()),
+                _ => None,
+            },
+            pinned_window: match mode {
+                TargetType::Window => self.selected_window.as_ref().map(|window| window.id.clone()),
+                _ => None,
+            },
+        };
+        cx.defer(move |cx: &mut gpui::App| app_windows::open_target_overlays(request, cx));
+    }
+
+    /// Called when the overlays are dismissed (Escape, their close button) so
+    /// the armed tile stops looking armed.
+    pub fn clear_target(&mut self, cx: &mut Context<Self>) {
+        if self.target.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// The concrete capture target the current UI state describes, or `None`
     /// when starting makes no sense yet (no target mode, Window mode with no
-    /// window picked, Area mode -- which needs the selection overlay that does
-    /// not exist yet).
+    /// window picked, Area mode -- which is drawn on the overlay).
     fn armed_target(&self) -> Option<ScreenCaptureTarget> {
         match self.target? {
             TargetType::Display => {
@@ -416,8 +455,14 @@ impl MainWindow {
 
     /// Dev-only end-to-end driver (`CAP_GPUI_AUTO_RECORD=studio:5`): synthetic
     /// clicks are dropped without Accessibility permission, so the automated
-    /// check arms the primary display and drives start/stop through the same
-    /// methods the buttons call.
+    /// check arms a target and drives start/stop through the same methods the
+    /// buttons call.
+    ///
+    /// `CAP_GPUI_AUTO_OVERLAY=display|window|area` routes the start through the
+    /// target-select overlay instead of straight off this window --
+    /// `CAP_GPUI_AUTO_AREA=x,y,w,h` seeds the crop the drag would have drawn,
+    /// and the window variant pins the first enumerated window the way picking
+    /// one from the dropdown does.
     pub fn auto_record(
         &mut self,
         mode: Mode,
@@ -425,8 +470,11 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let overlay = auto_overlay_kind();
+        let area = auto_area_rect();
+
         self.mode = mode;
-        self.target = Some(TargetType::Display);
+        self.target = Some(overlay.unwrap_or(TargetType::Display));
         cx.notify();
 
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
@@ -481,10 +529,38 @@ impl MainWindow {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(1500))
                 .await;
-            if this
-                .update_in(cx, |this, window, cx| this.start_recording(window, cx))
-                .is_err()
-            {
+
+            let started = match overlay {
+                None => this
+                    .update_in(cx, |this, window, cx| this.start_recording(window, cx))
+                    .is_ok(),
+                Some(kind) => {
+                    // The overlay route: arm the mode (which opens the
+                    // overlays), let them come up, seed what a drag or a hover
+                    // would have produced, then press their Start button.
+                    if this
+                        .update_in(cx, |this, _window, cx| this.arm_overlay(kind, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1500))
+                        .await;
+                    if let Some(area) = area {
+                        tracing::info!(?area, "seeding area selection");
+                        cx.update(|_, cx| app_windows::seed_area_selection(None, area, cx))
+                            .ok();
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(300))
+                            .await;
+                    }
+                    cx.update(|_, cx| app_windows::start_from_overlay(None, cx))
+                        .unwrap_or(false)
+                }
+            };
+            if !started {
+                tracing::error!("auto-record could not start");
                 return;
             }
 
@@ -516,17 +592,79 @@ impl MainWindow {
         .detach();
     }
 
+    /// Arm a target mode the way clicking its tile does, picking a concrete
+    /// window for the window variant since the harness cannot hover one.
+    fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        if kind == TargetType::Window {
+            self.selected_window = self.devices.windows.first().cloned();
+            if let Some(window) = &self.selected_window {
+                tracing::info!(app = %window.app, title = %window.label, "auto window target");
+            }
+        }
+        self.target = Some(kind);
+        self.sync_overlays(cx);
+        cx.notify();
+    }
+
+    /// `CAP_GPUI_AUTO_OVERLAY` on its own (no `CAP_GPUI_AUTO_RECORD`): open the
+    /// overlays and leave them up, which is how the screenshots are taken.
+    pub fn auto_open_overlay(
+        &mut self,
+        kind: TargetType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let crop = auto_area_rect();
+        cx.spawn_in(window, async move |this, cx| {
+            // Enumeration first: the window variant pins a real window.
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            if this
+                .update_in(cx, |this, _window, cx| this.arm_overlay(kind, cx))
+                .is_err()
+            {
+                return;
+            }
+            if let Some(crop) = crop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1500))
+                    .await;
+                cx.update(|_, cx| app_windows::seed_area_selection(None, crop, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Start with the target the UI state describes. The overlays own the real
+    /// start affordance now; this is the harness path
+    /// (`CAP_GPUI_AUTO_RECORD` without `CAP_GPUI_AUTO_OVERLAY`).
+    pub fn start_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.armed_target() else {
+            return;
+        };
+        self.start_recording_with_target(target, Vec::new(), window, cx);
+    }
+
     /// Collect the UI state into a start config and hand it to the
     /// orchestrator, which opens the controls bar, hides this window, and
     /// starts the engine. Deferred because the orchestrator updates this very
     /// window (hide), which would re-enter the update we are inside of.
-    pub fn start_recording(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// The target comes in rather than being read off this view: it is the
+    /// overlay that knows which display was clicked, which window is under the
+    /// cursor, or what area was drawn.
+    pub fn start_recording_with_target(
+        &mut self,
+        target: ScreenCaptureTarget,
+        excluded_windows: Vec<scap_targets::WindowId>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.session.read(cx).phase != Phase::Idle {
             return;
         }
-        let Some(target) = self.armed_target() else {
-            return;
-        };
         let Some(mode) = self.recording_mode() else {
             return;
         };
@@ -552,7 +690,7 @@ impl MainWindow {
                 .as_ref()
                 .map(|camera| recording::DeviceOrModelID::DeviceID(camera.device_id.clone())),
             system_audio: self.system_audio,
-            excluded_windows: Vec::new(),
+            excluded_windows,
             camera_feed,
             mic_feed,
         };
@@ -759,67 +897,26 @@ impl MainWindow {
                         .child(self.render_base_controls(cx))
                         .when(self.expanded, |this| this.child(self.render_recents())),
                 )
-                .when(self.can_start_recording(cx), |this| {
-                    this.child(self.render_start_footer(cx))
-                }),
+                // A failed start has nowhere else to surface: the overlays are
+                // gone by then and the bar closed itself.
+                .when_some(
+                    self.session
+                        .read(cx)
+                        .error
+                        .clone()
+                        .filter(|_| self.session.read(cx).phase == Phase::Idle),
+                    |this, error| {
+                        this.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(11.))
+                                .text_color(self.theme.red_9)
+                                .text_center()
+                                .child(error),
+                        )
+                    },
+                ),
         }
-    }
-
-    /// TEMP: the real app has no start button in the main window -- clicking a
-    /// target tile opens the fullscreen target-select overlay, which owns
-    /// "Start Recording". Until that overlay window exists, an armed target
-    /// gets a pinned footer button here so the recorder is drivable at all.
-    fn can_start_recording(&self, cx: &Context<Self>) -> bool {
-        self.session.read(cx).phase == Phase::Idle
-            && self.recording_mode().is_some()
-            && self.armed_target().is_some()
-    }
-
-    fn render_start_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .flex_shrink_0()
-            .when_some(self.session.read(cx).error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(theme.red_9)
-                        .text_center()
-                        .child(error),
-                )
-            })
-            .child(
-                div()
-                    .id("start-recording")
-                    .h(px(44.))
-                    .w_full()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(8.))
-                    .rounded(px(12.))
-                    .bg(theme.blue_500)
-                    .hover(|style| style.opacity(0.9))
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(gpui::white())
-                    .child(
-                        svg()
-                            .path("icons/instant.svg")
-                            .size(px(16.))
-                            .text_color(gpui::white()),
-                    )
-                    .child("Start Recording")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.start_recording(window, cx);
-                    })),
-            )
     }
 
     /// The recording takeover, from index.tsx 3510-3529: an absolute overlay
@@ -1276,6 +1373,7 @@ impl MainWindow {
                                 this.selected_display = Some(chosen.clone());
                                 this.target = Some(TargetType::Display);
                                 this.close_panel(cx);
+                                this.sync_overlays(cx);
                             }),
                         )
                         .into_any_element(),
@@ -1307,6 +1405,7 @@ impl MainWindow {
                                 this.selected_window = Some(chosen.clone());
                                 this.target = Some(TargetType::Window);
                                 this.close_panel(cx);
+                                this.sync_overlays(cx);
                             }),
                         )
                         .into_any_element(),
@@ -1498,6 +1597,8 @@ impl MainWindow {
                     .hover(|style| style.bg(theme.gray_4))
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.mode = mode;
+                        crate::target_overlay::TargetSelect::global(cx)
+                            .update(cx, |select, cx| select.set_recording_mode(mode, cx));
                         this.close_panel(cx);
                     }))
             }),
@@ -1728,6 +1829,10 @@ impl MainWindow {
                 .hover(|style| style.bg(theme.gray_7))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.mode = mode;
+                    // Open overlays label their start button with the mode.
+                    crate::target_overlay::TargetSelect::global(cx)
+                        .update(cx, |select, cx| select.set_recording_mode(mode, cx));
+                    cx.defer(app_windows::refresh_target_overlays);
                     cx.notify();
                 }))
         };
@@ -1923,11 +2028,14 @@ impl MainWindow {
                 })
             })
             .on_click(cx.listener(move |this, _, _window, cx| {
+                // `toggleTargetMode`: clicking the armed tile again is a
+                // cancel, which takes the overlays down with it.
                 this.target = if this.target == Some(target) {
                     None
                 } else {
                     Some(target)
                 };
+                this.sync_overlays(cx);
                 cx.notify();
             }));
 
@@ -2180,6 +2288,24 @@ impl MainWindow {
             .child(pill.render(theme))
             .hover(|style| style.bg(theme.gray_4).border_color(theme.gray_8))
     }
+}
+
+/// `CAP_GPUI_AUTO_OVERLAY=display|window|area|camera`, the harness's stand-in
+/// for clicking a target tile.
+pub fn auto_overlay_kind() -> Option<TargetType> {
+    match std::env::var("CAP_GPUI_AUTO_OVERLAY").ok()?.as_str() {
+        "display" => Some(TargetType::Display),
+        "window" => Some(TargetType::Window),
+        "area" => Some(TargetType::Area),
+        "camera" => Some(TargetType::CameraOnly),
+        _ => None,
+    }
+}
+
+/// `CAP_GPUI_AUTO_AREA=x,y,width,height`, the harness's stand-in for drawing a
+/// crop with the mouse.
+fn auto_area_rect() -> Option<crate::target_overlay::AreaRect> {
+    crate::target_overlay::AreaRect::parse(&std::env::var("CAP_GPUI_AUTO_AREA").ok()?)
 }
 
 /// `InfoPill` + `TargetSelectInfoPill`: 24px tall, min 40px wide, `px-2.5`,

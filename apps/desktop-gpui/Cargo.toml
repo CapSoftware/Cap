@@ -62,6 +62,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # versions gpui's own tree compiles, so no second objc2 universe gets built.
 objc2 = "0.5.2"
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard"] }
+# NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
+# objc2-app-kit's own dependency, so this adds nothing to the build.
+objc2-foundation = "0.2.2"
 raw-window-handle = "0.6"
 # Camera preview frames become gpui `RenderImage`s; the frame container type
 # must match gpui's image crate version exactly (`image = "0.25.1"` in the zed

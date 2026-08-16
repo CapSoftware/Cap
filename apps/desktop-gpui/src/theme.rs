@@ -55,6 +55,8 @@ pub struct Theme {
     pub blue_10: Rgba,
     pub blue_11: Rgba,
 
+    pub red_2: Rgba,
+    pub red_4: Rgba,
     pub red_9: Rgba,
     pub red_10: Rgba,
 
@@ -102,6 +104,8 @@ impl Theme {
             blue_10: rgb(0x0588f0),
             blue_11: rgb(0x0d74ce),
 
+            red_2: rgb(0xfff7f7),
+            red_4: rgb(0xffdbdc),
             red_9: rgb(0xe5484d),
             red_10: rgb(0xdc3e42),
 
@@ -138,6 +142,8 @@ impl Theme {
             blue_10: rgb(0x3b9eff),
             blue_11: rgb(0x70b8ff),
 
+            red_2: rgb(0x201314),
+            red_4: rgb(0x500f1c),
             red_9: rgb(0xe5484d),
             red_10: rgb(0xec5d5e),
 
@@ -181,6 +187,12 @@ impl Theme {
             self.blue_4.into()
         }
     }
+
+    /// Tailwind v4's stock `blue-600` -- the target-select overlay's highlight
+    /// wash (`bg-blue-600/40`). Not a Radix step and not one of the app's own
+    /// `--blue-*` overrides: the overlay reaches straight for the Tailwind
+    /// palette there.
+    pub const TARGET_HIGHLIGHT: u32 = 0x155dfc;
 
     /// Traffic light fills. Minimize is never drawn in the main window
     /// (`showMinimize={false}`), so only close and zoom are needed.
