@@ -16,6 +16,8 @@ use gpui::{
 };
 
 use crate::{
+    feeds::{self, Feeds},
+    recording::RecordingMode,
     session::{Phase, RecordingSession},
     theme::{Appearance, Theme},
 };
@@ -146,30 +148,52 @@ impl ControlsWindow {
             )
     }
 
-    /// The mic presence indicator: icon plus the level track underneath. The
-    /// track is static for now -- the live level channel comes with the
-    /// app-scoped feeds.
-    fn render_microphone(&self) -> impl IntoElement {
+    /// The mic indicator: icon plus the live level track underneath
+    /// (`createAudioInputLevel` in the bar: -60..0 dB linear, blue-9 fill on a
+    /// gray-10 track). In instant mode with a live mic it doubles as the mute
+    /// button -- studio deliberately does not expose mute, since the mic is an
+    /// editable track and muted spans would bake zeros in.
+    fn render_microphone(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let session = self.session.read(cx);
+        let muted = session.mic_muted;
+        let can_mute = session.mode() == Some(RecordingMode::Instant)
+            && session.has_microphone()
+            && matches!(session.phase, Phase::Recording { .. });
+        let level = feeds::bar_level(Feeds::global(cx).read(cx).mic_level_db);
+
+        let icon = if !self.has_microphone || muted {
+            "icons/mic-off.svg"
+        } else {
+            "icons/microphone.svg"
+        };
+        let icon_color: gpui::Hsla = if muted {
+            theme.red_9.into()
+        } else if self.has_microphone {
+            theme.gray_12.into()
+        } else {
+            // `IconLucideMicOff text-gray-7`.
+            Theme::with_alpha(theme.gray_12, 0.35)
+        };
+
         div()
+            .id("microphone")
             .size(px(32.))
             .relative()
             .flex()
             .items_center()
             .justify_center()
-            .child(
-                svg()
-                    .path("icons/microphone.svg")
-                    .size(px(20.))
-                    .text_color(if self.has_microphone {
-                        theme.gray_12.into()
-                    } else {
-                        // `IconLucideMicOff text-gray-7` in the bar; same
-                        // glyph dimmed until a mic-off asset exists.
-                        Theme::with_alpha(theme.gray_12, 0.35)
-                    }),
-            )
-            .when(self.has_microphone, |this| {
+            .when(can_mute, |this| {
+                this.rounded(px(8.))
+                    .hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
+                    .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.session
+                            .update(cx, |session, cx| session.toggle_mic_mute(cx));
+                    }))
+            })
+            .child(svg().path(icon).size(px(20.)).text_color(icon_color))
+            .when(self.has_microphone && !muted, |this| {
                 this.child(
                     div()
                         .absolute()
@@ -178,7 +202,17 @@ impl ControlsWindow {
                         .right(px(4.))
                         .h(px(2.))
                         .rounded_full()
-                        .bg(theme.gray_10),
+                        .overflow_hidden()
+                        .bg(theme.gray_10)
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(gpui::relative(level as f32))
+                                .bg(theme.blue_9),
+                        ),
                 )
             })
     }
@@ -222,7 +256,7 @@ impl ControlsWindow {
                             .flex_row()
                             .items_center()
                             .gap(px(4.))
-                            .child(self.render_microphone())
+                            .child(self.render_microphone(cx))
                             .child(
                                 self.action_button(
                                     "pause",

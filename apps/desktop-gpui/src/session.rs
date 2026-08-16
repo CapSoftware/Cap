@@ -32,6 +32,10 @@ pub struct RecordingSession {
     /// True while the controls bar window is open, so the main window knows to
     /// fall back to its in-window overlay when the bar failed to open.
     pub controls_open: bool,
+    /// Mirror of the recording-scoped mic mute flag (the engine zeroes the
+    /// payloads; the flag itself lives on the live recording's mic lock and
+    /// resets with every new session).
+    pub mic_muted: bool,
     started_at: Option<Instant>,
     paused_accum: Duration,
     paused_since: Option<Instant>,
@@ -48,6 +52,7 @@ impl RecordingSession {
             error: None,
             last_config: None,
             controls_open: false,
+            mic_muted: false,
             started_at: None,
             paused_accum: Duration::ZERO,
             paused_since: None,
@@ -78,6 +83,34 @@ impl RecordingSession {
         matches!(self.phase, Phase::Recording { paused: true })
     }
 
+    /// The live (or last) recording's mode -- the bar exposes mic mute for
+    /// instant recordings only (studio records the mic as an editable track,
+    /// where muted spans would silently bake zeros in).
+    pub fn mode(&self) -> Option<crate::recording::RecordingMode> {
+        self.last_config.as_ref().map(|config| config.mode)
+    }
+
+    /// Whether the live recording actually has a microphone attached.
+    pub fn has_microphone(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.mic_mute.is_some())
+    }
+
+    /// Flip the recording-scoped mic mute. No-op without a live mic.
+    pub fn toggle_mic_mute(&mut self, cx: &mut Context<Self>) {
+        let Some(mute) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.mic_mute.clone())
+        else {
+            return;
+        };
+        self.mic_muted = !self.mic_muted;
+        mute.store(self.mic_muted, std::sync::atomic::Ordering::Relaxed);
+        cx.notify();
+    }
+
     pub fn set_controls_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.controls_open != open {
             self.controls_open = open;
@@ -103,6 +136,8 @@ impl RecordingSession {
                         tracing::info!(dir = %active.project_dir.display(), "recording started");
                         this.active = Some(active);
                         this.phase = Phase::Recording { paused: false };
+                        // A fresh mic lock always starts unmuted.
+                        this.mic_muted = false;
                         this.started_at = Some(Instant::now());
                         this.paused_accum = Duration::ZERO;
                         this.paused_since = None;
@@ -258,6 +293,7 @@ impl RecordingSession {
 
     fn finish(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Idle;
+        self.mic_muted = false;
         self.started_at = None;
         self.paused_accum = Duration::ZERO;
         self.paused_since = None;

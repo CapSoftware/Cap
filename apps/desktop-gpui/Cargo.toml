@@ -52,6 +52,7 @@ anyhow = "1"
 chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -62,6 +63,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 objc2 = "0.5.2"
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard"] }
 raw-window-handle = "0.6"
+# Camera preview frames become gpui `RenderImage`s; the frame container type
+# must match gpui's image crate version exactly (`image = "0.25.1"` in the zed
+# fork's workspace) or `Frame` would be two different types.
+image = { version = "0.25.1", default-features = false }
+smallvec = "1"
 # ScreenCaptureKit shareable content, acquired the same way recording.rs in
 # src-tauri does. Same fork/rev/features as the root workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [

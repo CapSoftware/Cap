@@ -5,12 +5,15 @@
 
 mod app_windows;
 mod assets;
+mod camera_window;
 mod controls_window;
 mod devices;
+mod feeds;
 mod main_window;
 mod platform;
 mod recording;
 mod session;
+mod store;
 mod theme;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -53,6 +56,7 @@ fn main() {
         // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
         // and the window is fixed at that size there too.
         let session = RecordingSession::init(cx);
+        crate::feeds::Feeds::init(cx);
 
         let bounds = Bounds::centered(
             None,

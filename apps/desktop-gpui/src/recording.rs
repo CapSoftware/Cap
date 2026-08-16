@@ -38,9 +38,13 @@ pub struct StartConfig {
     pub microphone: Option<String>,
     pub camera: Option<DeviceOrModelID>,
     pub system_audio: bool,
-    /// Our own windows (the recording controls bar), excluded from capture the
-    /// way the Tauri app excludes its bar.
+    /// Our own windows (the recording controls bar; the camera bubble in studio
+    /// mode), excluded from capture the way the Tauri app excludes them.
     pub excluded_windows: Vec<scap_targets::WindowId>,
+    /// The app-scoped feed actors (running previews/meters). When present a
+    /// recording locks these instead of spawning its own -- the Tauri model.
+    pub camera_feed: Option<ActorRef<CameraFeed>>,
+    pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
 }
 
 enum Handle {
@@ -55,8 +59,12 @@ enum Handle {
 pub struct ActiveRecording {
     handle: Handle,
     pub project_dir: PathBuf,
+    /// Recording-scoped mic mute (payload zeroing at the consumer seam; the
+    /// stream cadence is unaffected). `None` when the recording has no mic.
+    pub mic_mute: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     // Held for the duration of the recording: dropping an ActorRef early would
-    // stop the feed under the pipeline.
+    // stop the feed under the pipeline. Only populated by the per-recording
+    // fallback path; app-scoped feeds are owned by `Feeds`.
     _mic_feed: Option<ActorRef<MicrophoneFeed>>,
     _camera_feed: Option<ActorRef<CameraFeed>>,
     // The mic error channel must outlive the stream or error sends panic the
@@ -214,6 +222,7 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
             tracing::warn!("start failed on the microphone path, retrying without: {error:#}");
             start_attempt(StartConfig {
                 microphone: None,
+                mic_feed: None,
                 ..config
             })
             .await
@@ -226,40 +235,55 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
     let project_dir = create_project_dir(&config.target)?;
     tracing::info!(dir = %project_dir.display(), "starting recording");
 
-    // Feed actors are per-recording here, where the Tauri app keeps app-wide
-    // ones (it needs them for previews and level meters between recordings).
-    // Once the camera preview window exists this moves to app scope too.
+    // The app-scoped feeds (running previews/meters, owned by `Feeds`) are
+    // locked in place when available -- the Tauri model. The per-recording
+    // spawn below is the fallback for a feed that died between selection and
+    // start.
     // A microphone that enumerates but fails to open (Bluetooth profile
     // switch, a Continuity iPhone that wandered off) must not kill the whole
     // recording -- degrade to no-mic, the way the Tauri app's app-scoped feed
     // surfaces "Not connected" and records on.
-    let (mic_feed, mic_lock, mic_errors) = match &config.microphone {
-        Some(label) => match setup_microphone(label).await {
+    let (mic_feed, mic_lock, mic_errors) = match (&config.mic_feed, &config.microphone) {
+        (Some(actor), Some(label)) => match actor.ask(microphone::Lock).await {
+            Ok(lock) => (None, Some(Arc::new(lock)), None),
+            Err(error) => {
+                tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
+                match setup_microphone(label).await {
+                    Ok((feed, lock, error_rx)) => (Some(feed), Some(lock), Some(error_rx)),
+                    Err(error) => {
+                        tracing::warn!(
+                            "microphone '{label}' unavailable, recording without: {error:#}"
+                        );
+                        (None, None, None)
+                    }
+                }
+            }
+        },
+        (None, Some(label)) => match setup_microphone(label).await {
             Ok((feed, lock, error_rx)) => (Some(feed), Some(lock), Some(error_rx)),
             Err(error) => {
                 tracing::warn!("microphone '{label}' unavailable, recording without: {error:#}");
                 (None, None, None)
             }
         },
-        None => (None, None, None),
+        _ => (None, None, None),
     };
 
     let (camera_feed, camera_lock) = match &config.camera {
         Some(id) => {
-            let feed = CameraFeed::spawn(CameraFeed::default());
-            let ready = feed
-                .ask(camera::SetInput {
-                    id: id.clone(),
-                    settings: None,
-                })
-                .await
-                .map_err(|e| anyhow!("camera setup: {e}"))?;
-            ready.await.map_err(|e| anyhow!("camera init: {e}"))?;
-            let lock = feed
-                .ask(camera::Lock)
-                .await
-                .map_err(|e| anyhow!("camera lock: {e}"))?;
-            (Some(feed), Some(Arc::new(lock)))
+            if let Some(actor) = &config.camera_feed {
+                match actor.ask(camera::Lock).await {
+                    Ok(lock) => (None, Some(Arc::new(lock))),
+                    Err(error) => {
+                        tracing::warn!("app camera feed lock failed ({error}), spawning one");
+                        let (feed, lock) = setup_camera(id).await?;
+                        (Some(feed), Some(Arc::new(lock)))
+                    }
+                }
+            } else {
+                let (feed, lock) = setup_camera(id).await?;
+                (Some(feed), Some(Arc::new(lock)))
+            }
         }
         None => {
             if matches!(config.target, ScreenCaptureTarget::CameraOnly) {
@@ -270,6 +294,10 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
             (None, None)
         }
     };
+
+    let mic_mute = mic_lock
+        .as_ref()
+        .map(|lock| lock.recording_muted_handle());
 
     // ScreenCaptureKit content, exactly as `read_recording_shareable_content`
     // does it: the current-process fallback covers the sandboxed case where the
@@ -328,10 +356,33 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
     Ok(ActiveRecording {
         handle,
         project_dir,
+        mic_mute,
         _mic_feed: mic_feed,
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
     })
+}
+
+async fn setup_camera(
+    id: &DeviceOrModelID,
+) -> anyhow::Result<(
+    ActorRef<CameraFeed>,
+    cap_recording::feeds::camera::CameraFeedLock,
+)> {
+    let feed = CameraFeed::spawn(CameraFeed::default());
+    let ready = feed
+        .ask(camera::SetInput {
+            id: id.clone(),
+            settings: None,
+        })
+        .await
+        .map_err(|e| anyhow!("camera setup: {e}"))?;
+    ready.await.map_err(|e| anyhow!("camera init: {e}"))?;
+    let lock = feed
+        .ask(camera::Lock)
+        .await
+        .map_err(|e| anyhow!("camera lock: {e}"))?;
+    Ok((feed, lock))
 }
 
 async fn setup_microphone(

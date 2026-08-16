@@ -16,6 +16,7 @@ use gpui::{
 use crate::{
     MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
+    feeds::{self, Feeds},
     recording,
     session::{Phase, RecordingSession},
     theme::{Appearance, Theme},
@@ -219,6 +220,23 @@ impl MainWindow {
         let theme = Theme::new(Appearance::from_window(window.appearance()));
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
 
+        // Track the app-scoped feeds: the camera bubble's close button
+        // deselects the camera there, and this window's selection has to
+        // follow. Repaints are gated to what is actually visible -- the mic
+        // meter notifies at ~20Hz and would otherwise repaint the home view
+        // for a level bar only the microphone picker shows.
+        let feeds = Feeds::global(cx);
+        cx.observe(&feeds, |this: &mut Self, feeds, cx| {
+            let feeds = feeds.read(cx);
+            if this.camera.is_some() && feeds.camera.is_none() {
+                this.camera = None;
+                cx.notify();
+            } else if matches!(this.panel, Some(Panel::Device(_))) {
+                cx.notify();
+            }
+        })
+        .detach();
+
         // Enumeration hits AVFoundation and the window server, so it must not
         // run on the main thread -- doing it inline here costs ~180ms of a
         // blank window on this machine, and more on a machine with more
@@ -270,6 +288,26 @@ impl MainWindow {
                 );
                 this.devices = snapshot;
                 this.enumerating = false;
+
+                // `CAP_GPUI_AUTO_CAMERA=1`: select the first camera the way a
+                // click would -- the automated check drives the preview window
+                // this way because synthetic clicks are dropped.
+                if std::env::var("CAP_GPUI_AUTO_CAMERA").is_ok_and(|v| v == "1")
+                    && this.camera.is_none()
+                    && let Some(first) = this.devices.cameras.first().cloned()
+                {
+                    tracing::info!(camera = %first.label, "auto-selecting camera");
+                    this.camera = Some(first.clone());
+                    Feeds::global(cx).update(cx, |feeds, cx| {
+                        feeds.set_camera(
+                            Some(feeds::SelectedCamera {
+                                id: recording::DeviceOrModelID::DeviceID(first.device_id.clone()),
+                                label: first.label,
+                            }),
+                            cx,
+                        )
+                    });
+                }
                 cx.notify();
             })
             .unwrap_or_else(|error| tracing::error!("device enumeration update failed: {error:#}"));
@@ -414,7 +452,7 @@ impl MainWindow {
                 })
                 .await;
             if this
-                .update_in(cx, |this, window, cx| {
+                .update_in(cx, |this, _window, cx| {
                     this.microphone = default_mic
                         .and_then(|name| {
                             this.devices
@@ -426,9 +464,25 @@ impl MainWindow {
                         .or_else(|| this.devices.microphones.first().cloned());
                     if let Some(mic) = &this.microphone {
                         tracing::info!(mic = %mic.name, "auto-record microphone");
+                        // Through the app-scoped feed, so the automated run
+                        // exercises the same lock path a clicked selection uses.
+                        let name = mic.name.clone();
+                        Feeds::global(cx)
+                            .update(cx, |feeds, cx| feeds.set_microphone(Some(name), cx));
                     }
-                    this.start_recording(window, cx)
                 })
+                .is_err()
+            {
+                return;
+            }
+            // Give the app-scoped feed a moment to connect its input; locking
+            // an input-less feed would fall back to a per-recording one and
+            // dodge the path this harness exists to exercise.
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            if this
+                .update_in(cx, |this, window, cx| this.start_recording(window, cx))
                 .is_err()
             {
                 return;
@@ -484,6 +538,11 @@ impl MainWindow {
             return;
         }
 
+        let (camera_feed, mic_feed) = {
+            let feeds = Feeds::global(cx);
+            let feeds = feeds.read(cx);
+            (feeds.camera_actor(), feeds.mic_actor())
+        };
         let config = recording::StartConfig {
             mode,
             target,
@@ -494,6 +553,8 @@ impl MainWindow {
                 .map(|camera| recording::DeviceOrModelID::DeviceID(camera.device_id.clone())),
             system_audio: self.system_audio,
             excluded_windows: Vec::new(),
+            camera_feed,
+            mic_feed,
         };
 
         cx.defer(move |cx: &mut gpui::App| app_windows::begin_recording(config, cx));
@@ -1058,10 +1119,18 @@ impl MainWindow {
                     DeviceMenu::Camera => self.camera.is_none(),
                     DeviceMenu::Microphone => self.microphone.is_none(),
                 },
+                None,
                 cx.listener(move |this, _, _window, cx| {
                     match menu {
-                        DeviceMenu::Camera => this.camera = None,
-                        DeviceMenu::Microphone => this.microphone = None,
+                        DeviceMenu::Camera => {
+                            this.camera = None;
+                            Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(None, cx));
+                        }
+                        DeviceMenu::Microphone => {
+                            this.microphone = None;
+                            Feeds::global(cx)
+                                .update(cx, |feeds, cx| feeds.set_microphone(None, cx));
+                        }
                     }
                     this.close_panel(cx);
                 }),
@@ -1092,8 +1161,20 @@ impl MainWindow {
                             camera.label.clone(),
                             camera.best_format.map(|format| format.describe()),
                             selected,
+                            None,
                             cx.listener(move |this, _, _window, cx| {
                                 this.camera = Some(chosen.clone());
+                                Feeds::global(cx).update(cx, |feeds, cx| {
+                                    feeds.set_camera(
+                                        Some(feeds::SelectedCamera {
+                                            id: recording::DeviceOrModelID::DeviceID(
+                                                chosen.device_id.clone(),
+                                            ),
+                                            label: chosen.label.clone(),
+                                        }),
+                                        cx,
+                                    )
+                                });
                                 this.close_panel(cx);
                             }),
                         )
@@ -1122,8 +1203,14 @@ impl MainWindow {
                             mic.name.clone(),
                             mic.describe(),
                             selected,
+                            selected.then(|| {
+                                feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
+                            }),
                             cx.listener(move |this, _, _window, cx| {
                                 this.microphone = Some(chosen.clone());
+                                Feeds::global(cx).update(cx, |feeds, cx| {
+                                    feeds.set_microphone(Some(chosen.name.clone()), cx)
+                                });
                                 this.close_panel(cx);
                             }),
                         )
@@ -1433,6 +1520,8 @@ impl MainWindow {
     /// Selection is `bg-blue-500` with white text -- note that is the custom
     /// `--blue-500`, not `blue-9` used by the pills; the two are different
     /// colours.
+    // Mirrors the web list-item's prop list; a struct would rename, not reduce.
+    #[allow(clippy::too_many_arguments)]
     fn render_device_list_row(
         &self,
         id: SharedString,
@@ -1440,6 +1529,10 @@ impl MainWindow {
         label: String,
         detail: Option<String>,
         selected: bool,
+        // `MicrophoneListItem`'s live level wash: a white 25% overlay whose
+        // right edge sits at `level * 100%` (1 = silence, the web app's
+        // orientation). Only the selected microphone row gets one.
+        audio_level: Option<f64>,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
@@ -1459,6 +1552,8 @@ impl MainWindow {
 
         div()
             .id(id)
+            .relative()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -1470,6 +1565,18 @@ impl MainWindow {
             .text_color(foreground)
             .when(selected, |this| this.bg(theme.blue_500))
             .when(!selected, |this| this.hover(|style| style.bg(theme.gray_4)))
+            .when_some(audio_level.filter(|_| selected), |this, level| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .right(gpui::relative(level.clamp(0., 1.) as f32))
+                        .rounded(px(8.))
+                        .bg(gpui::hsla(0., 0., 1., 0.25)),
+                )
+            })
             .child(
                 div()
                     .flex()

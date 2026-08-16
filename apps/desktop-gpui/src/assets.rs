@@ -33,8 +33,10 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
 /// illustration would come out as a filled silhouette.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
     "area.svg",
+    "arrows.svg",
     "bell.svg",
     "camera.svg",
+    "circle.svg",
     "check.svg",
     "chevron-down.svg",
     "circle-help.svg",
@@ -47,13 +49,17 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "instant.svg",
     "logo-full-dark.svg",
     "logo-full.svg",
+    "mic-off.svg",
     "microphone.svg",
     "minimize.svg",
     "more-vertical.svg",
     "move-left.svg",
     "pause-circle.svg",
+    "person-standing.svg",
     "play-circle.svg",
+    "rectangle-horizontal.svg",
     "restart.svg",
+    "square.svg",
     "trash.svg",
     "scan-text.svg",
     "screen.svg",
@@ -112,6 +118,7 @@ mod tests {
     const ICON_SOURCES: &[&str] = &[
         include_str!("main_window.rs"),
         include_str!("controls_window.rs"),
+        include_str!("camera_window.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

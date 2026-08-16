@@ -13,10 +13,11 @@ use gpui::{
 };
 
 use crate::{
+    camera_window::{self, CameraWindow},
     controls_window::ControlsWindow,
     main_window::MainWindow,
     platform,
-    recording::StartConfig,
+    recording::{RecordingMode, StartConfig},
     session::{Phase, RecordingSession},
 };
 
@@ -30,6 +31,7 @@ const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 pub struct AppWindows {
     pub main: WindowHandle<MainWindow>,
     pub controls: Option<WindowHandle<ControlsWindow>>,
+    pub camera: Option<WindowHandle<CameraWindow>>,
 }
 
 impl Global for AppWindows {}
@@ -40,6 +42,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     cx.set_global(AppWindows {
         main,
         controls: None,
+        camera: None,
     });
 
     let mut last_phase = Phase::Idle;
@@ -64,7 +67,19 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
         return;
     }
 
-    let excluded = open_controls(&config, session.clone(), cx);
+    let mut excluded: Vec<scap_targets::WindowId> =
+        open_controls(&config, session.clone(), cx).into_iter().collect();
+    // The camera bubble is excluded from studio captures (the camera is its own
+    // track, composited in the editor) but *included* in instant captures --
+    // `filter_for_instant_mode` in the Tauri app strips the camera exclusion
+    // there because instant has no compositing step.
+    if config.mode == RecordingMode::Studio
+        && let Some(number) = camera_window_number(cx)
+        && let Ok(id) = number.to_string().parse()
+    {
+        excluded.push(id);
+    }
+
     let bar_open = cx.global::<AppWindows>().controls.is_some();
     session.update(cx, |session, cx| {
         session.set_controls_open(bar_open, cx);
@@ -76,10 +91,117 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     }
 
     let config = StartConfig {
-        excluded_windows: excluded.into_iter().collect(),
+        excluded_windows: excluded,
         ..config
     };
     session.update(cx, |session, cx| session.start(config, cx));
+}
+
+/// Open the camera preview bubble (idempotent). Placement mirrors the Tauri
+/// default: bottom-right of the main window's display, 100px in from the
+/// corner. Position is not persisted yet (deviation; the Tauri app remembers it
+/// per monitor).
+pub fn open_camera_window(cx: &mut App) {
+    if cx.global::<AppWindows>().camera.is_some() {
+        return;
+    }
+
+    let state = crate::store::load().camera_window.unwrap_or_default();
+    let (width, height) = camera_window::window_size(&state, None);
+
+    let display = scap_targets::Display::get_containing_cursor()
+        .unwrap_or_else(scap_targets::Display::primary);
+    let (x, y) = match display.raw_handle().logical_bounds() {
+        Some(bounds) => (
+            (bounds.position().x() + bounds.size().width() - width as f64 - 100.) as f32,
+            (bounds.position().y() + bounds.size().height() - height as f64 - 100.) as f32,
+        ),
+        None => (100., 100.),
+    };
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(x), px(y)),
+                size: size(px(width), px(height)),
+            })),
+            titlebar: None,
+            // Non-activating panel, same as the bar: the bubble is clickable
+            // without stealing focus from what is being recorded.
+            kind: WindowKind::PopUp,
+            focus: false,
+            show: true,
+            is_resizable: false,
+            is_minimizable: false,
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        |window, cx| cx.new(|cx| CameraWindow::new(window, cx)),
+    );
+
+    match handle {
+        Ok(handle) => {
+            cx.global_mut::<AppWindows>().camera = Some(handle);
+            handle
+                .update(cx, |_, window, _| {
+                    platform::apply_panel_behavior(
+                        window,
+                        platform::PanelBehavior {
+                            // `set_level(max_level)` in windows.rs -- the same
+                            // `CGWindowLevelForKey(10)` the bar uses.
+                            level: platform::recording_controls_level(),
+                            join_all_spaces: true,
+                            // `.shadow(false)` in the Tauri builder; the shape
+                            // container draws its own look.
+                            shadow: false,
+                        },
+                    );
+                    platform::show_window_without_focus(window);
+                })
+                .ok();
+        }
+        Err(error) => tracing::error!("camera window failed to open: {error:#}"),
+    }
+}
+
+pub fn close_camera_window(cx: &mut App) {
+    if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+}
+
+/// Hand a camera frame to the preview window. Returns false when no window is
+/// open (the pump drops the frame and keeps draining).
+pub fn deliver_camera_frame(frame: cap_recording::NativeCameraFrame, cx: &mut App) -> bool {
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        return false;
+    };
+    handle
+        .update(cx, |view, window, cx| view.frame_arrived(frame, window, cx))
+        .is_ok()
+}
+
+/// Repaint the bar between its own 250ms ticks -- the mic meter updates at
+/// ~20Hz and the bar is never the active window.
+pub fn refresh_controls_window(cx: &mut App) {
+    if let Some(handle) = cx.global::<AppWindows>().controls {
+        handle
+            .update(cx, |_, window, cx| {
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+    }
+}
+
+fn camera_window_number(cx: &mut App) -> Option<isize> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |_, window, _| platform::window_number(window))
+        .ok()
+        .flatten()
 }
 
 /// Where the bar goes, from `fake_window.rs`: centered under a window target
