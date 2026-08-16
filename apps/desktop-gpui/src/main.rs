@@ -5,19 +5,25 @@
 
 mod assets;
 mod devices;
+mod main_window;
+mod theme;
 
-use gpui::{
-    App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, div, prelude::*, px,
-    size,
-};
+use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
-use crate::assets::Assets;
+use crate::{assets::Assets, main_window::MainWindow};
+
+/// Matches the Tauri main window exactly (`CapWindowId::Main`).
+const MAIN_WINDOW_WIDTH: f32 = 330.;
+const MAIN_WINDOW_HEIGHT: f32 = 395.;
 
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
+            // The binary is `cap-gpui`, so the crate these spans are recorded
+            // under is `cap_gpui` -- not `cap_desktop_gpui`, which is the
+            // package name and matches nothing.
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cap_desktop_gpui=info".into()),
+                .unwrap_or_else(|_| "cap_gpui=info".into()),
         )
         .init();
 
@@ -29,42 +35,32 @@ fn main() {
             tracing::error!("failed to load embedded fonts: {error:#}");
         }
 
-        let bounds = Bounds::centered(None, size(px(330.), px(395.)), cx);
+        // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
+        // and the window is fixed at that size there too.
+        let bounds = Bounds::centered(None, size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: None,
-                    appears_transparent: true,
-                    traffic_light_position: Some(gpui::point(px(12.), px(12.))),
-                }),
+                // `None`, not a transparent titlebar with repositioned traffic
+                // lights: the Tauri main window returns `None` from
+                // `traffic_lights_position`, which routes it to
+                // `.decorations(false)`. There is no titlebar and there are no
+                // traffic lights -- the whole shell is custom-drawn. In gpui a
+                // `None` titlebar drops NSClosable/NSMiniaturizable/NSResizable
+                // from the style mask, which is the equivalent.
+                titlebar: None,
+                // The header is dragged by the app via `start_window_move`
+                // rather than by AppKit, so mark the content view as app-owned
+                // titlebar content.
                 app_owns_titlebar_drag: true,
                 window_background: gpui::WindowBackgroundAppearance::Transparent,
                 is_resizable: false,
+                is_minimizable: false,
                 ..Default::default()
             },
-            |_window, cx| {
-                cx.new(|_cx| Placeholder {
-                    _private: std::marker::PhantomData,
-                })
-            },
+            |window, cx| cx.new(|cx| MainWindow::new(window, cx)),
         )
         .expect("failed to open the main window");
         cx.activate(true);
     });
-}
-
-struct Placeholder {
-    _private: std::marker::PhantomData<()>,
-}
-
-impl Render for Placeholder {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .rounded(px(16.))
-            .bg(gpui::rgb(0x111111))
-            .text_color(gpui::rgb(0xa1a1a1))
-            .child("Cap")
-    }
 }
