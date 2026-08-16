@@ -98,7 +98,7 @@ Things that are deliberately different, and why.
 | **Recents is header + empty state** | Thumbnails need the recordings library. |
 | **Window filter is duplicated** | The level-0 listability rule is copied from `cap_recording::sources::screen_capture` rather than imported — that crate drags in ffmpeg and the whole encode stack, which this app has no other reason to build. |
 
-### One gpui trap worth knowing
+### gpui traps worth knowing
 
 **Do not touch the window from inside `open_window`'s builder closure.**
 `MainWindow::new` runs before the platform window is finished. A `resize` there
@@ -107,6 +107,20 @@ comes out at exactly twice its size — and a task spawned there updates the mod
 without ever scheduling a frame. Both failures are silent. Set the initial size
 through the bounds passed to `open_window`, and start async work from `main`
 once the window handle exists.
+
+**Do not mutate AppKit window state from inside a gpui update.** `setFrame:`
+and `orderFrontRegardless` synchronously fire gpui's own move/resize/frame
+callbacks, which re-borrow the App — inside a window or entity update that
+logs `RefCell already borrowed` and silently drops the callback. Grab the
+`NSWindow` inside the update, then do the AppKit calls from a spawned task
+(`platform::place_overlay_panel`).
+
+**Titled windows cannot cover the menu bar.** Every gpui window — `PopUp`
+panels included — carries `NSTitledWindowMask`, so AppKit's
+`constrainFrameRect:toScreen:` pushes a display-covering window 33pt down.
+The Tauri app never sees this because tao's `NSWindow` subclass overrides the
+method to return the rect unchanged; `platform::install_occlusion_shim`
+installs the same override on gpui's window classes.
 
 ## Parity roadmap
 
@@ -117,9 +131,9 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior |
 | Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar, corner resize, drag, persisted chrome state, capture-excluded in studio / included in instant |
 | Recording controls | 320×150 | **Done** — live timer, pause/resume, restart, delete, live mic level, instant-mode mute, drag; capture-excluded, non-activating |
-| Target select overlay | per display | Not started — one transparent window per display |
+| Target select overlay | per display | **Done** — all four variants (display / window / area / camera-only), one transparent non-activating panel per display at the Tauri-verbatim level 7, cursor-following highlight, click-to-pin windows with app icons, draw/move/resize area selection with min-size validation, the real Start Recording flow (overlays close, bar opens, overlays excluded from capture), Escape/close dismiss |
 | Window capture occluder | per display | Not started |
-| Capture area | per display | Not started |
+| Capture area | per display | Superseded — area selection is the target-select overlay's area variant; the Tauri app still registers a standalone `capture-area` window but nothing in its frontend opens it |
 | Recordings overlay | per display | Not started |
 | Mode select | 580×340 | Partial — exists as a panel, not a window |
 | Settings | 782×775 (min 780×560) | Not started |
@@ -155,11 +169,12 @@ Recording-specific deviations:
 
 | | |
 |---|---|
-| **TEMP start button** | The real app starts recording from the fullscreen target-select overlay, which does not exist yet. An armed target (Display selected, or a concrete window picked) shows a pinned blue Start Recording footer instead. |
 | **Bar timer, no countdown** | The countdown variant (`window.COUNTDOWN`) needs the settings store; the bar goes straight from Starting to the timer. |
-| **Settings button is inert** | The bar's recording-settings popover menu is not built. |
-| **Area does not arm** | Area needs the selection overlay. |
-| **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. |
+| **Settings button is inert** | The bar's recording-settings popover menu is not built; the same applies to the gear button in the overlay's start cluster. |
+| **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. The target-select overlay's liquid-glass surfaces drop their `backdrop-blur-xl` for the same reason. |
+| **Escape is a focused key handler** | The Tauri app registers Escape as a *global* shortcut while the overlays are up; here it is a key handler on the overlay that holds focus (the one on the cursor's display). Escape pressed while another app is active does not dismiss. |
+| **Overlay cluster is start-only** | The device row (camera/microphone selects under the start pill), the mode dropdown behind the caret, and the "What is X Mode?" link are deferred — device pickers live in the main window. The area toolbar shows the size readout but not the aspect-ratio/reset/fill/lock controls. |
+| **Camera-only keeps the bubble** | The TSX inlines a camera preview into the camera-only overlay; ours keeps the separate camera preview window it already has. |
 | **Camera id is DeviceID-only** | The Tauri app persists `ModelID` when a camera advertises one, so the same camera survives re-plugging into a different port. |
 | **Defaults are the builder's** | `desktop_recording_defaults` (studio quality, fps caps, custom cursor) is not applied yet — it reads the Tauri settings store. |
 
@@ -171,6 +186,15 @@ summed duration is ~⅔ of wall time is the proof the pause reached the engine.
 `CAP_GPUI_AUTO_CAMERA=1` selects the first camera at startup the way a click
 would, opening the preview bubble; combined with `CAP_GPUI_AUTO_RECORD` it
 verifies the camera track end to end.
+
+`CAP_GPUI_AUTO_OVERLAY=display|window|area|camera` arms a target mode the way
+clicking its tile does and opens the target-select overlays; on its own it
+leaves them up (how the screenshots are taken), combined with
+`CAP_GPUI_AUTO_RECORD` it routes the start through the overlay's own Start
+button. `CAP_GPUI_AUTO_AREA=x,y,width,height` seeds the crop a drag would have
+drawn (synthetic drags are dropped without Accessibility). The area variant
+was verified end to end: a seeded 800×500 crop recorded a 1600×1000 (2×)
+display track.
 
 ## Camera preview and app-scoped feeds
 
