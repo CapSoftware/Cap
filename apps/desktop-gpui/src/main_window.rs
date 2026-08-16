@@ -22,6 +22,9 @@ use crate::{
 const EXPANDED_WIDTH: f32 = 600.;
 const EXPANDED_HEIGHT: f32 = 660.;
 
+/// `duration: 180` in `resizeMainWindow`.
+const RESIZE_DURATION_SECS: f32 = 0.18;
+
 /// `h-9` on `.cap-window-header`.
 const HEADER_HEIGHT: f32 = 36.;
 /// `h-[42px]` in deviceRowStyles.ts.
@@ -189,6 +192,9 @@ pub struct MainWindow {
     selected_display: Option<DisplayOption>,
     selected_window: Option<WindowOption>,
     panel: Option<Panel>,
+    /// Holds the in-flight expand/collapse animation. Dropping it cancels,
+    /// which is how a second toggle mid-animation takes over cleanly.
+    resize_task: Option<gpui::Task<()>>,
     /// Live filter text for the device and target panels.
     search: String,
     search_focus: gpui::FocusHandle,
@@ -218,6 +224,7 @@ impl MainWindow {
             selected_display: None,
             selected_window: None,
             panel: None,
+            resize_task: None,
             search: String::new(),
             search_focus: cx.focus_handle(),
             enumerating: true,
@@ -258,25 +265,57 @@ impl MainWindow {
     }
 
     fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self.window_size();
         self.expanded = !self.expanded;
+        let to = self.window_size();
         tracing::info!(expanded = self.expanded, "toggling main window size");
-        self.apply_window_size(window);
+
+        // Matches `resizeMainWindow`: 180ms, ease-out cubic.
+        //
+        // Assigning over the previous task drops it, which cancels a toggle
+        // that is still in flight -- otherwise two animations would fight over
+        // `resize` and the window could settle at an interpolated size.
+        self.resize_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let start = std::time::Instant::now();
+
+            loop {
+                let elapsed = start.elapsed().as_secs_f32();
+                let t = (elapsed / RESIZE_DURATION_SECS).clamp(0., 1.);
+                // ease-out cubic
+                let eased = 1. - (1. - t).powi(3);
+
+                let size = gpui::size(
+                    px(from.0 + (to.0 - from.0) * eased),
+                    px(from.1 + (to.1 - from.1) * eased),
+                );
+
+                if this
+                    .update_in(cx, |_this, window, _cx| window.resize(size))
+                    .is_err()
+                {
+                    return;
+                }
+
+                if t >= 1. {
+                    return;
+                }
+
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(8))
+                    .await;
+            }
+        }));
+
         cx.notify();
     }
 
-    /// Resize the window to match `expanded`.
-    ///
-    /// The Tauri version animates this over 180ms with an ease-out cubic and
-    /// re-clamps the window into the monitor work area with 12px of padding.
-    /// This is the un-animated version of the same size change; the animation
-    /// is deliberately left for a later pass rather than faked with a timer
-    /// that would fight gpui's own frame pacing.
-    fn apply_window_size(&self, window: &mut Window) {
-        window.resize(if self.expanded {
-            gpui::size(px(EXPANDED_WIDTH), px(EXPANDED_HEIGHT))
+    /// The window size the current state should be drawn at.
+    fn window_size(&self) -> (f32, f32) {
+        if self.expanded {
+            (EXPANDED_WIDTH, EXPANDED_HEIGHT)
         } else {
-            gpui::size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))
-        });
+            (MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+        }
     }
 
     fn sync_appearance(&mut self, window: &Window) {
