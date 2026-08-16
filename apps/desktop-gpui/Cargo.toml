@@ -85,6 +85,10 @@ wgpu-hal = { path = "../../vendor/wgpu-hal" }
 # gpui is unusably slow when its dependencies are unoptimized; zed/comet both
 # build deps at opt-level 2 and keep the app crate itself at 0.
 opt-level = 0
+# Incremental caches for this dep tree run to gigabytes on a disk that has
+# already been filled to zero once; the app crate is small enough that full
+# recompiles cost seconds.
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
