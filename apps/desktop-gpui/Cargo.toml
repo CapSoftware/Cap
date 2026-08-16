@@ -38,8 +38,48 @@ scap-targets = { path = "../../crates/scap-targets" }
 # Same fork/rev as the root workspace: MicrophoneFeed enumerates through this.
 cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 
+# The actual recording engine -- the same studio/instant actors the Tauri app
+# drives. Drags in the ffmpeg encode stack; that is the point.
+cap-recording = { path = "../../crates/recording" }
+cap-utils = { path = "../../crates/utils" }
+cap-project = { path = "../../crates/project" }
+# spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
+tokio = { version = "1", features = ["rt"] }
+# cap-recording's actor system; version must match its `kameo = "0.17.2"`.
+kameo = "0.17.2"
+flume = "0.11.0"
+anyhow = "1"
+chrono = "0.4"
+# Read the Tauri app's settings store so both apps share one recordings library.
+serde_json = "1"
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# ScreenCaptureKit shareable content, acquired the same way recording.rs in
+# src-tauri does. Same fork/rev/features as the root workspace.
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
+    "macos_12_7",
+    "cv",
+    "cf",
+    "cg",
+    "core_audio",
+    "sc",
+    "av",
+    "blocks",
+    "async",
+    "dispatch",
+    "io_surface",
+    "mtl",
+    "vt",
+    "vn",
+], default-features = false }
+
+# Mirror of the root workspace patch: cap-recording's converter stack is built
+# and tested against the vendored wgpu-hal, not the crates.io release.
+[patch.crates-io]
+wgpu-hal = { path = "../../vendor/wgpu-hal" }
 
 [profile.dev]
 # gpui is unusably slow when its dependencies are unoptimized; zed/comet both
