@@ -6,6 +6,7 @@ mod audio_library;
 mod audio_meter;
 mod auth;
 mod automation;
+mod barcode;
 mod camera;
 mod camera_legacy;
 #[cfg(target_os = "macos")]
@@ -4896,6 +4897,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            recording::capture_ocr_text,
             recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
@@ -4979,6 +4981,7 @@ fn specta_builder() -> tauri_specta::Builder {
             clip_thumbnails::get_clip_thumbnail,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::show_window_without_activating,
             windows::set_teleprompter_window_level,
             windows::set_teleprompter_window_opacity,
             windows::apply_macos_liquid_glass_background,
