@@ -47,7 +47,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "instant.svg",
     "logo-full-dark.svg",
     "logo-full.svg",
-    "logo-wordmark.svg",
     "microphone.svg",
     "minimize.svg",
     "move-left.svg",
@@ -57,7 +56,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "screenshot.svg",
     "search.svg",
     "settings.svg",
-    "support.svg",
     "window.svg",
 );
 
@@ -134,6 +132,24 @@ mod tests {
         assert!(
             missing.is_empty(),
             "icons referenced but not embedded: {missing:?}"
+        );
+    }
+
+    /// And the other direction: an icon that stopped being drawn during a
+    /// refactor is dead weight in the binary, and nothing else would notice.
+    #[test]
+    fn every_embedded_icon_is_referenced() {
+        let source = include_str!("main_window.rs");
+
+        let unused: Vec<&str> = ICONS
+            .iter()
+            .map(|(path, _)| *path)
+            .filter(|path| !source.contains(path))
+            .collect();
+
+        assert!(
+            unused.is_empty(),
+            "icons embedded but never drawn: {unused:?}"
         );
     }
 
