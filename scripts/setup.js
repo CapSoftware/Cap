@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { resolveLocalCargo, usesCinder } from "./local-cargo.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -47,6 +48,15 @@ async function main() {
 		);
 
 	if (process.platform === "darwin") {
+		const localCargo = resolveLocalCargo();
+		if (usesCinder(localCargo))
+			console.log(
+				`Using Cinder at ${localCargo} for local macOS Cargo commands`,
+			);
+		else if (env.CAP_USE_CINDER === "0")
+			console.log("Cinder disabled (CAP_USE_CINDER=0), using Cargo");
+		else console.log("Cinder not found. Install with: pnpm cinder:install");
+
 		cargoConfigContents += FFMPEG_CARGO_ENV;
 
 		const NATIVE_DEPS_VERSION = "v0.25";
