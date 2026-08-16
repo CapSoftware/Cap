@@ -58,8 +58,19 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
             let main = cx.global::<AppWindows>().main;
-            main.update(cx, |_, window, _| platform::show_window(window))
-                .ok();
+            // `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it
+            // runs from a task, not inside this observer's borrow (the
+            // `place_overlay_panel` rule).
+            let native = main
+                .update(cx, |_, window, _| platform::native_window(window))
+                .ok()
+                .flatten();
+            cx.spawn(async move |_| {
+                if let Some(native) = &native {
+                    platform::show_native(native);
+                }
+            })
+            .detach();
         }
         last_phase = phase;
     })
@@ -404,8 +415,18 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     });
     if bar_open {
         let main = cx.global::<AppWindows>().main;
-        main.update(cx, |_, window, _| platform::hide_window(window))
-            .ok();
+        // Same rule as the reshow in `init`: `orderOut:` runs outside the
+        // borrow.
+        let native = main
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::hide_native(native);
+            }
+        })
+        .detach();
     }
 
     let config = StartConfig {

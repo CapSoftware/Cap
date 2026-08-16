@@ -298,19 +298,18 @@ mod mac {
         ns_window.setHasShadow(behavior.shadow);
     }
 
-    /// `orderOut:` -- hide without closing, the way the Tauri main window hides
-    /// while the recording controls bar is up.
-    pub fn hide_window(window: &Window) {
-        if let Some(ns_window) = ns_window(window) {
-            ns_window.orderOut(None);
-        }
+    /// `orderOut:` -- hide without closing, the way the Tauri main window
+    /// hides while the recording controls bar is up. Takes the retained
+    /// handle for the same reason [`place_overlay_panel`] does: ordering a
+    /// window in or out synchronously re-enters gpui's window callbacks, so
+    /// it must run with no gpui borrow held.
+    pub fn hide_native(native: &NativeWindow) {
+        native.0.orderOut(None);
     }
 
-    /// Reverse of [`hide_window`].
-    pub fn show_window(window: &Window) {
-        if let Some(ns_window) = ns_window(window) {
-            ns_window.makeKeyAndOrderFront(None);
-        }
+    /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
+    pub fn show_native(native: &NativeWindow) {
+        native.0.makeKeyAndOrderFront(None);
     }
 
     /// Show without stealing key status -- `orderFrontRegardless`, what the
@@ -373,8 +372,8 @@ mod stub {
     pub fn install_occlusion_shim() {}
     pub fn kick_display_link(_window: &Window) {}
     pub fn apply_panel_behavior(_window: &Window, _behavior: PanelBehavior) {}
-    pub fn hide_window(_window: &Window) {}
-    pub fn show_window(_window: &Window) {}
+    pub fn hide_native(_native: &NativeWindow) {}
+    pub fn show_native(_native: &NativeWindow) {}
     pub fn show_window_without_focus(_window: &Window) {}
     pub fn window_number(_window: &Window) -> Option<isize> {
         None
