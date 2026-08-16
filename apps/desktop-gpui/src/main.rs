@@ -3,10 +3,15 @@
 //! Milestone 1 is the main recording window (compact + expanded) with real
 //! device enumeration. No tauri, no webview: the whole UI is gpui.
 
+mod assets;
+mod devices;
+
 use gpui::{
     App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, div, prelude::*, px,
     size,
 };
+
+use crate::assets::Assets;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -16,9 +21,13 @@ fn main() {
         )
         .init();
 
-    let app = gpui_platform::application();
+    let app = gpui_platform::application().with_assets(Assets);
     app.run(|cx: &mut App| {
         gpui_tokio::init(cx);
+
+        if let Err(error) = Assets.load_fonts(cx) {
+            tracing::error!("failed to load embedded fonts: {error:#}");
+        }
 
         let bounds = Bounds::centered(None, size(px(330.), px(395.)), cx);
         cx.open_window(
