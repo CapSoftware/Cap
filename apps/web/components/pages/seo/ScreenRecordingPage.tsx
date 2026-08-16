@@ -1,4 +1,5 @@
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -87,8 +88,7 @@ export const screenRecordingContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Cap is significantly more affordable than Loom, starting at $8.16/month compared to Loom's $18/month. Cap is also open-source, supports custom S3 storage, and offers Studio Mode on the free plan. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Cap is significantly more affordable than Loom, starting at $${PRICING.pro.annualPerMonth}/month compared to Loom's $18/month. Cap is also open-source, supports custom S3 storage, and offers Studio Mode on the free plan. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs OBS Studio",

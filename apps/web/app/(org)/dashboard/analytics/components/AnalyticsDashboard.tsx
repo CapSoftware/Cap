@@ -15,6 +15,7 @@ import { memo, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { PRICING } from "@/data/pricing";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
@@ -61,7 +62,9 @@ export function AnalyticsDashboard() {
 	const [proQuantity, setProQuantity] = useState(1);
 
 	const showOverlay = buildEnv.NEXT_PUBLIC_IS_CAP === "true" && !user?.isPro;
-	const pricePerUser = isAnnual ? 8.16 : 12;
+	const pricePerUser = isAnnual
+		? PRICING.pro.annualPerMonth
+		: PRICING.pro.monthly;
 	const totalPrice = pricePerUser * proQuantity;
 	const billingText = isAnnual ? "billed annually" : "billed monthly";
 

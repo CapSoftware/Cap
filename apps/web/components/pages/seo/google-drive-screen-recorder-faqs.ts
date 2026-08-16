@@ -1,3 +1,5 @@
+import { PRICING } from "@/data/pricing";
+
 export const googleDriveScreenRecorderFaqs = [
 	{
 		question: "Can I connect Google Drive to Cap?",
@@ -31,8 +33,7 @@ export const googleDriveScreenRecorderFaqs = [
 	},
 	{
 		question: "Is the Google Drive integration free?",
-		answer:
-			"Creating a Cap account is free, and Studio Mode is free for personal use. Connecting your own Google Drive is part of Cap Pro, which starts at $8.16 per month per user, less than half the price of Loom.",
+		answer: `Creating a Cap account is free, and Studio Mode is free for personal use. Connecting your own Google Drive is part of Cap Pro, which starts at $${PRICING.pro.annualPerMonth} per month per user, less than half the price of Loom.`,
 	},
 	{
 		question: "What happens to my existing recordings when I connect Drive?",

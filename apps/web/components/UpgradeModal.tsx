@@ -25,6 +25,7 @@ import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { PRICING } from "@/data/pricing";
 import { Fit, Layout, useRive } from "@/lib/rive";
 
 interface UpgradeModalProps {
@@ -75,7 +76,9 @@ const UpgradeModalImpl = ({
 	const [proQuantity, setProQuantity] = useState(1);
 	const { push } = useRouter();
 
-	const pricePerUser = isAnnual ? 8.16 : 12;
+	const pricePerUser = isAnnual
+		? PRICING.pro.annualPerMonth
+		: PRICING.pro.monthly;
 	const totalPrice = pricePerUser * proQuantity;
 	const billingText = isAnnual ? "billed annually" : "billed monthly";
 

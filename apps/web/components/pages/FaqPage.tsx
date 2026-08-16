@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PRICING } from "@/data/pricing";
 
 interface FaqItem {
 	title: string;
@@ -19,8 +20,7 @@ const faqContent: FaqItem[] = [
 	},
 	{
 		title: "How much does it cost?",
-		answer:
-			"Cap offers a free version for personal use. You can upgrade to Cap Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
+		answer: `Cap offers a free version for personal use. You can upgrade to Cap Pro for just $${PRICING.pro.annualPerMonth}/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.`,
 	},
 	{
 		title: "Which platforms does Cap support?",

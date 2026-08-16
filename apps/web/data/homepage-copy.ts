@@ -1,3 +1,5 @@
+import { PRICING } from "./pricing";
+
 export interface HeaderCopyVariants {
 	default: {
 		title: string;
@@ -314,8 +316,8 @@ export const homepageCopy: HomePageCopy = {
 			],
 			cta: "Get Desktop License",
 			pricing: {
-				yearly: 29,
-				lifetime: 58,
+				yearly: PRICING.commercial.yearly,
+				lifetime: PRICING.commercial.lifetime,
 			},
 			labels: {
 				licenses: "License type",
@@ -343,8 +345,8 @@ export const homepageCopy: HomePageCopy = {
 			],
 			cta: "Get Started",
 			pricing: {
-				annual: 8.16,
-				monthly: 12,
+				annual: PRICING.pro.annualPerMonth,
+				monthly: PRICING.pro.monthly,
 			},
 			labels: {
 				users: "Per user",

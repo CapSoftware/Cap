@@ -1,4 +1,5 @@
 import { Clapperboard, Zap } from "lucide-react";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -86,7 +87,10 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		rows: [
 			[
 				"Price",
-				{ text: "Free / $9.99/mo", status: "positive" },
+				{
+					text: `Free / $${PRICING.pro.annualPerMonth}/mo`,
+					status: "positive",
+				},
 				{ text: "Free / $18/mo", status: "warning" },
 				{ text: "$299.99 one-time", status: "negative" },
 				{ text: "Free", status: "positive" },
@@ -150,8 +154,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Cap starts at $9.99/month versus Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap records at up to 4K, is open-source, and supports custom S3 storage — quality and flexibility that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month versus Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap records at up to 4K, is open-source, and supports custom S3 storage — quality and flexibility that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs Camtasia",
@@ -221,8 +224,7 @@ export const videoRecordingSoftwareContent: SeoPageContent = {
 		},
 		{
 			question: "Is Cap video recording software free?",
-			answer:
-				"Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Cap Pro at $9.99/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.",
+			answer: `Yes. Cap's Studio Mode is completely free for personal use with no time limits, no watermarks, and no hidden fees. Instant Mode is free for recordings up to 5 minutes. Cap Pro at $${PRICING.pro.annualPerMonth}/month removes Instant Mode limits and adds team features — but the core video recording software is free to use forever.`,
 		},
 		{
 			question: "Does Cap video recording software work on Mac and Windows?",

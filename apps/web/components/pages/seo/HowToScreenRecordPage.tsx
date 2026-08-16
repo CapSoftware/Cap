@@ -1,3 +1,4 @@
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -49,7 +50,10 @@ export const howToScreenRecordContent: SeoPageContent = {
 		rows: [
 			[
 				"Price",
-				{ text: "Free / from $8.16/mo", status: "positive" },
+				{
+					text: `Free / from $${PRICING.pro.annualPerMonth}/mo`,
+					status: "positive",
+				},
 				{ text: "Free", status: "positive" },
 				{ text: "From $18/mo", status: "warning" },
 				{ text: "Free", status: "positive" },
