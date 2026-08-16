@@ -80,6 +80,8 @@ const MAX_SPACE_NAME_LENGTH = 255;
 const MAX_LOOM_CSV_IMPORT_ROWS = 500;
 const LOOM_CSV_BATCH_SIZE = 10;
 const LOOM_CSV_BATCH_DELAY_MS = 1500;
+const LOOM_CSV_RATE_LIMIT_RETRY_DELAY_MS = 30000;
+const LOOM_CSV_NOT_ATTEMPTED_MESSAGE = "Not attempted.";
 const LOOM_CSV_LIMIT_MESSAGE =
 	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
 const LOOM_CSV_PERMISSION_MESSAGE =
@@ -113,6 +115,89 @@ function buildCsvImportResult(
 			error ??
 			(importedCount > 0 ? undefined : "No Loom videos were imported."),
 	};
+}
+
+function buildRowFailure(
+	row: MappedRow,
+	error: string,
+): LoomCsvImportRowResult {
+	return {
+		rowNumber: row.rowNumber,
+		userEmail: row.userEmail,
+		spaceName: row.spaceName || undefined,
+		success: false,
+		error,
+	};
+}
+
+function withNotAttemptedRows(
+	rows: MappedRow[],
+	results: LoomCsvImportRowResult[],
+): LoomCsvImportRowResult[] {
+	const attempted = new Set(results.map((row) => row.rowNumber));
+	const missing = rows.filter((row) => !attempted.has(row.rowNumber));
+	if (missing.length === 0) return results;
+
+	return [
+		...results,
+		...missing.map((row) =>
+			buildRowFailure(row, LOOM_CSV_NOT_ATTEMPTED_MESSAGE),
+		),
+	].sort((a, b) => a.rowNumber - b.rowNumber);
+}
+
+function isRateLimitError(message: string | undefined) {
+	if (!message) return false;
+	const normalized = message.toLowerCase();
+	return normalized.includes("rate limit") || normalized.includes("too many");
+}
+
+function rateLimitedBatchRows(
+	batch: MappedRow[],
+	results: LoomCsvImportRowResult[],
+) {
+	const limited = new Set(
+		results
+			.filter((row) => !row.success && isRateLimitError(row.error))
+			.map((row) => row.rowNumber),
+	);
+	return batch.filter((row) => limited.has(row.rowNumber));
+}
+
+function importErrorMessage(error: unknown) {
+	return error instanceof Error && error.message
+		? error.message
+		: "The import request failed for this batch.";
+}
+
+function escapeCsvValue(value: string) {
+	if (/[",\n\r]/.test(value)) {
+		return `"${value.replace(/"/g, '""')}"`;
+	}
+	return value;
+}
+
+function buildResultsCsv(
+	results: LoomCsvImportRowResult[],
+	sourceRows: MappedRow[],
+) {
+	const rowsByNumber = new Map(sourceRows.map((row) => [row.rowNumber, row]));
+	const lines = [
+		["row", "loom_video_url", "user_email", "space_name", "status", "error"],
+		...results.map((row) => [
+			String(row.rowNumber),
+			rowsByNumber.get(row.rowNumber)?.loomUrl ?? "",
+			row.userEmail,
+			row.spaceName ?? "",
+			row.success
+				? "started"
+				: row.error === LOOM_CSV_NOT_ATTEMPTED_MESSAGE
+					? "not_attempted"
+					: "failed",
+			row.error ?? "",
+		]),
+	];
+	return `${lines.map((line) => line.map(escapeCsvValue).join(",")).join("\n")}\n`;
 }
 
 function parseCsvRecords(text: string) {
@@ -261,6 +346,7 @@ export const ImportLoomPage = () => {
 	const [isCsvImporting, setIsCsvImporting] = useState(false);
 	const [csvImportProgress, setCsvImportProgress] = useState(0);
 	const [result, setResult] = useState<LoomCsvImportResult | null>(null);
+	const importRowsRef = useRef<MappedRow[]>([]);
 
 	const selectedColumnValues = [
 		mapping.loomUrl,
@@ -461,27 +547,71 @@ export const ImportLoomPage = () => {
 
 		if (!activeOrganization || !canImport) return;
 
+		const orgId = activeOrganization.organization.id;
+		const importRows = readyRows;
+		importRowsRef.current = importRows;
+		let combinedResults: LoomCsvImportRowResult[] = [];
+
 		setIsCsvImporting(true);
 		setResult(null);
 		setCsvImportProgress(0);
 
 		try {
-			const batches = chunkRows(readyRows, LOOM_CSV_BATCH_SIZE);
-			let combinedResults: LoomCsvImportRowResult[] = [];
+			const batches = chunkRows(importRows, LOOM_CSV_BATCH_SIZE);
 			let blockedError: string | undefined;
 
 			for (const [batchIndex, batch] of batches.entries()) {
-				const importResult = await importFromLoomCsv({
-					orgId: activeOrganization.organization.id,
-					rows: batch,
-				});
+				let batchResults: LoomCsvImportRowResult[];
+				let retryRows: MappedRow[] = [];
 
-				if (importResult.results.length === 0 && importResult.error) {
-					blockedError = importResult.error;
-					break;
+				try {
+					const importResult = await importFromLoomCsv({
+						orgId,
+						rows: batch,
+					});
+
+					if (importResult.results.length === 0 && importResult.error) {
+						blockedError = importResult.error;
+						const message = importResult.error;
+						combinedResults = [
+							...combinedResults,
+							...batch.map((row) => buildRowFailure(row, message)),
+						];
+						setCsvImportProgress(combinedResults.length);
+						break;
+					}
+
+					batchResults = importResult.results;
+					retryRows = rateLimitedBatchRows(batch, batchResults);
+				} catch (error) {
+					const message = importErrorMessage(error);
+					batchResults = batch.map((row) => buildRowFailure(row, message));
+					if (isRateLimitError(message)) retryRows = batch;
 				}
 
-				combinedResults = [...combinedResults, ...importResult.results];
+				if (retryRows.length > 0) {
+					await delay(LOOM_CSV_RATE_LIMIT_RETRY_DELAY_MS);
+
+					try {
+						const retryResult = await importFromLoomCsv({
+							orgId,
+							rows: retryRows,
+						});
+
+						if (retryResult.results.length > 0) {
+							const retriedByRowNumber = new Map(
+								retryResult.results.map((row) => [row.rowNumber, row]),
+							);
+							batchResults = batchResults.map(
+								(row) => retriedByRowNumber.get(row.rowNumber) ?? row,
+							);
+						}
+					} catch {
+						// Keep the first attempt's failures for this batch.
+					}
+				}
+
+				combinedResults = [...combinedResults, ...batchResults];
 				setCsvImportProgress(combinedResults.length);
 				setResult(buildCsvImportResult(combinedResults));
 
@@ -490,7 +620,10 @@ export const ImportLoomPage = () => {
 				}
 			}
 
-			const finalResult = buildCsvImportResult(combinedResults, blockedError);
+			const finalResult = buildCsvImportResult(
+				withNotAttemptedRows(importRows, combinedResults),
+				blockedError,
+			);
 			setResult(finalResult);
 
 			if (finalResult.importedCount > 0) {
@@ -508,10 +641,28 @@ export const ImportLoomPage = () => {
 
 			setConfirmOpen(false);
 		} catch {
+			setResult(
+				buildCsvImportResult(withNotAttemptedRows(importRows, combinedResults)),
+			);
 			toast.error("An unexpected error occurred. Please try again.");
 		} finally {
 			setIsCsvImporting(false);
 		}
+	};
+
+	const handleResultsDownload = () => {
+		if (!result) return;
+
+		const blob = new Blob(
+			[buildResultsCsv(result.results, importRowsRef.current)],
+			{ type: "text/csv;charset=utf-8" },
+		);
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = "cap-loom-import-results.csv";
+		link.click();
+		URL.revokeObjectURL(url);
 	};
 
 	return (
@@ -906,7 +1057,7 @@ export const ImportLoomPage = () => {
 											{pluralize(result.failedCount, "failed", "failed")}
 										</p>
 									</div>
-									<div className="flex gap-2 items-center">
+									<div className="flex flex-wrap gap-2 items-center">
 										<StatusPill
 											ready
 											label={`${result.importedCount} started`}
@@ -917,6 +1068,17 @@ export const ImportLoomPage = () => {
 												label={`${result.failedCount} failed`}
 											/>
 										)}
+										<Button
+											type="button"
+											variant="white"
+											size="sm"
+											onClick={handleResultsDownload}
+											disabled={isCsvImporting}
+											className="flex-shrink-0"
+										>
+											<FontAwesomeIcon className="size-3.5" icon={faDownload} />
+											Download Results
+										</Button>
 									</div>
 								</div>
 								<div className="overflow-hidden">
