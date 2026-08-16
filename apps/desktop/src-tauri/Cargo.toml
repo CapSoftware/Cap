@@ -167,6 +167,7 @@ windows = { workspace = true, features = [
     "Win32_System_Power",
     "Win32_System_Threading",
     "Win32_System_WinRT",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }

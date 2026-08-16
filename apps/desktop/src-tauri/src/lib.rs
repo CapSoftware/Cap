@@ -38,6 +38,7 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
+mod scrolling_capture;
 mod target_select_overlay;
 mod telemetry;
 mod thumbnails;
@@ -4896,6 +4897,8 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            recording::capture_ocr_text,
+            scrolling_capture::capture_scrolling_window,
             recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
@@ -4979,6 +4982,7 @@ fn specta_builder() -> tauri_specta::Builder {
             clip_thumbnails::get_clip_thumbnail,
             windows::position_traffic_lights,
             windows::set_theme,
+            windows::show_window_without_activating,
             windows::set_teleprompter_window_level,
             windows::set_teleprompter_window_opacity,
             windows::apply_macos_liquid_glass_background,
