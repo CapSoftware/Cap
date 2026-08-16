@@ -103,7 +103,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 
 | Window | Size | Status |
 |---|---|---|
-| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes |
+| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording |
 | Camera preview | 460×460 | Not started — needs the camera feed |
 | Recording controls | 320×150 | Not started — needs a recording session |
 | Target select overlay | per display | Not started — one transparent window per display |
@@ -118,8 +118,40 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Editor | 1275×800 | Not started — by far the largest |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
-Nothing here records yet. Milestone 1 is the window; wiring the buttons to
-`cap-recording` is milestone 2.
+## Recording
+
+The app records for real, through the same `cap-recording` actors the Tauri
+app drives — studio and instant, screen + microphone, written into the same
+recordings library (`recordingsPath` from the Tauri settings store, falling
+back to `<app data>/recordings`; `CAP_GPUI_RECORDINGS_DIR` overrides both for
+tests). Studio projects are finalized with `RecoveryManager::remux_if_needed`,
+instant projects get `content/output.mp4` plus the
+`recording-meta.json`/`project-config.json` pair, mirroring the CLI's
+`finalize_completed` — a project recorded here exports cleanly with
+`cap export`.
+
+Recording-specific deviations:
+
+| | |
+|---|---|
+| **TEMP start button** | The real app starts recording from the fullscreen target-select overlay, which does not exist yet. An armed target (Display selected, or a concrete window picked) shows a pinned blue Start Recording footer instead. |
+| **Area does not arm** | Area needs the selection overlay. |
+| **Per-recording feed actors** | The Tauri app keeps app-wide `MicrophoneFeed`/`CameraFeed` actors for previews and level meters; here they are spawned per recording and dropped after. Moves to app scope with the camera preview window. |
+| **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. |
+| **Camera id is DeviceID-only** | The Tauri app persists `ModelID` when a camera advertises one, so the same camera survives re-plugging into a different port. |
+| **Defaults are the builder's** | `desktop_recording_defaults` (studio quality, fps caps, custom cursor) is not applied yet — it reads the Tauri settings store. |
+
+`CAP_GPUI_AUTO_RECORD=studio:5` (or `instant:4`) arms the primary display and
+drives a start/stop through the button code paths — the end-to-end check uses
+it because unprivileged synthetic clicks are dropped.
+
+Running from a dev build needs the ffmpeg dylibs the binary's install names
+point at (`@executable_path/../Frameworks/Spacedrive.framework/...`):
+
+```sh
+mkdir -p target/Frameworks
+ln -sfn "$(pwd)/../../target/native-deps/Spacedrive.framework" target/Frameworks/Spacedrive.framework
+```
 
 ## Verifying changes
 
