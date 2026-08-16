@@ -6,6 +6,7 @@
 mod assets;
 mod devices;
 mod main_window;
+mod recording;
 mod theme;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -15,6 +16,16 @@ use crate::{assets::Assets, main_window::MainWindow};
 /// Matches the Tauri main window exactly (`CapWindowId::Main`).
 const MAIN_WINDOW_WIDTH: f32 = 330.;
 const MAIN_WINDOW_HEIGHT: f32 = 395.;
+
+fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
+    let (mode, secs) = spec.split_once(':')?;
+    let mode = match mode {
+        "studio" => main_window::Mode::Studio,
+        "instant" => main_window::Mode::Instant,
+        _ => return None,
+    };
+    Some((mode, secs.parse().ok()?))
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -82,6 +93,19 @@ fn main() {
         window_handle
             .update(cx, |view, window, cx| view.start_enumeration(window, cx))
             .expect("failed to start device enumeration");
+
+        // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary
+        // display and record for N seconds. The end-to-end check drives the
+        // recorder this way because unprivileged synthetic clicks are dropped.
+        if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
+            && let Some((mode, secs)) = parse_auto_record(&auto)
+        {
+            window_handle
+                .update(cx, |view, window, cx| {
+                    view.auto_record(mode, secs, window, cx)
+                })
+                .expect("failed to arm auto-record");
+        }
         cx.activate(true);
     });
 }

@@ -6,6 +6,7 @@
 //! quoted next to the values they turn into, because `pl-3` and `gap-2.5` are
 //! considerably easier to check against the original than `12.` and `10.`.
 
+use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
     Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
@@ -15,6 +16,7 @@ use gpui::{
 use crate::{
     MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
+    recording::{self, ActiveRecording},
     theme::{Appearance, Theme},
 };
 
@@ -201,6 +203,22 @@ pub struct MainWindow {
     /// True until the background enumeration has reported back, so the panel can
     /// say "Loading..." rather than "No cameras found".
     enumerating: bool,
+    recording_phase: RecordingPhase,
+    /// The live recording while `recording_phase` is `Recording`. Taken (moved
+    /// into the stop future) the moment stopping starts.
+    active_recording: Option<ActiveRecording>,
+    /// Why the last start attempt failed, shown above the start button.
+    recording_error: Option<String>,
+}
+
+/// `Idle -> Starting -> Recording -> Stopping -> Idle`, with failed starts
+/// falling straight back to `Idle` + `recording_error`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingPhase {
+    Idle,
+    Starting,
+    Recording,
+    Stopping,
 }
 
 impl MainWindow {
@@ -228,6 +246,9 @@ impl MainWindow {
             search: String::new(),
             search_focus: cx.focus_handle(),
             enumerating: true,
+            recording_phase: RecordingPhase::Idle,
+            active_recording: None,
+            recording_error: None,
         }
     }
 
@@ -324,6 +345,192 @@ impl MainWindow {
             self.theme = Theme::new(appearance);
         }
     }
+
+    /// The concrete capture target the current UI state describes, or `None`
+    /// when starting makes no sense yet (no target mode, Window mode with no
+    /// window picked, Area mode -- which needs the selection overlay that does
+    /// not exist yet).
+    fn armed_target(&self) -> Option<ScreenCaptureTarget> {
+        match self.target? {
+            TargetType::Display => {
+                // The Tauri flow preselects the primary display the moment the
+                // Display tile is clicked; mirror that when nothing specific
+                // was picked from the dropdown.
+                let id = self
+                    .selected_display
+                    .as_ref()
+                    .map(|display| display.id.clone())
+                    .unwrap_or_else(|| scap_targets::Display::primary().id());
+                Some(ScreenCaptureTarget::Display { id })
+            }
+            TargetType::Window => self
+                .selected_window
+                .as_ref()
+                .map(|window| ScreenCaptureTarget::Window {
+                    id: window.id.clone(),
+                }),
+            TargetType::Area => None,
+            TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
+        }
+    }
+
+    /// The recording mode the Mode pill maps to, `None` for Screenshot (that
+    /// path does not go through the recording actors at all).
+    fn recording_mode(&self) -> Option<recording::RecordingMode> {
+        match self.mode {
+            Mode::Instant => Some(recording::RecordingMode::Instant),
+            Mode::Studio => Some(recording::RecordingMode::Studio),
+            Mode::Screenshot => None,
+        }
+    }
+
+    /// Dev-only end-to-end driver (`CAP_GPUI_AUTO_RECORD=studio:5`): synthetic
+    /// clicks are dropped without Accessibility permission, so the automated
+    /// check arms the primary display and drives start/stop through the same
+    /// methods the buttons call.
+    pub fn auto_record(
+        &mut self,
+        mode: Mode,
+        record_secs: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mode = mode;
+        self.target = Some(TargetType::Display);
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            // Give enumeration and the first paint a moment; the recorder
+            // itself does not depend on it, but the screenshots should show
+            // real device rows.
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            if this
+                .update_in(cx, |this, window, cx| {
+                    // Exercise the microphone path too: record with the default
+                    // input when the machine has one.
+                    this.microphone = this.devices.microphones.first().cloned();
+                    this.start_recording(window, cx)
+                })
+                .is_err()
+            {
+                return;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(record_secs))
+                .await;
+            this.update_in(cx, |this, window, cx| this.stop_recording(window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    pub fn start_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_phase != RecordingPhase::Idle {
+            return;
+        }
+        let Some(target) = self.armed_target() else {
+            return;
+        };
+        let Some(mode) = self.recording_mode() else {
+            return;
+        };
+        if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
+            self.recording_error =
+                Some("Camera-only recording requires a selected camera.".into());
+            cx.notify();
+            return;
+        }
+
+        let config = recording::StartConfig {
+            mode,
+            target,
+            microphone: self.microphone.as_ref().map(|mic| mic.name.clone()),
+            camera: self
+                .camera
+                .as_ref()
+                .map(|camera| recording::DeviceOrModelID::DeviceID(camera.device_id.clone())),
+            system_audio: self.system_audio,
+        };
+
+        self.recording_phase = RecordingPhase::Starting;
+        self.recording_error = None;
+        cx.notify();
+
+        // The engine lives on tokio (kameo actors + the capture pipeline);
+        // gpui_tokio bridges its completion back into this entity.
+        let task = gpui_tokio::Tokio::spawn(cx, recording::start(config));
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, _window, cx| {
+                match result {
+                    Ok(Ok(active)) => {
+                        tracing::info!(dir = %active.project_dir.display(), "recording started");
+                        this.active_recording = Some(active);
+                        this.recording_phase = RecordingPhase::Recording;
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!("recording failed to start: {error:#}");
+                        this.recording_error = Some(format!("{error:#}"));
+                        this.recording_phase = RecordingPhase::Idle;
+                    }
+                    Err(join_error) => {
+                        tracing::error!("recording start task died: {join_error}");
+                        this.recording_error = Some("Recording task failed.".into());
+                        this.recording_phase = RecordingPhase::Idle;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn stop_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_phase != RecordingPhase::Recording {
+            return;
+        }
+        let Some(active) = self.active_recording.take() else {
+            return;
+        };
+        self.recording_phase = RecordingPhase::Stopping;
+        cx.notify();
+
+        let task = gpui_tokio::Tokio::spawn(cx, active.stop());
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, _window, cx| {
+                match result {
+                    Ok(Ok(project_dir)) => {
+                        tracing::info!(dir = %project_dir.display(), "recording finished");
+                        // v1 completion affordance until the editor window and
+                        // Recents thumbnails exist: reveal the project.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = std::process::Command::new("open")
+                                .arg("-R")
+                                .arg(&project_dir)
+                                .spawn();
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!("recording failed to stop cleanly: {error:#}");
+                        this.recording_error = Some(format!("{error:#}"));
+                    }
+                    Err(join_error) => {
+                        tracing::error!("recording stop task died: {join_error}");
+                        this.recording_error = Some("Stop task failed.".into());
+                    }
+                }
+                this.recording_phase = RecordingPhase::Idle;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl Render for MainWindow {
@@ -344,6 +551,9 @@ impl Render for MainWindow {
             .text_color(theme.text_primary)
             .child(self.render_header(window, cx))
             .child(self.render_body(cx))
+            .when(self.recording_phase != RecordingPhase::Idle, |this| {
+                this.child(self.render_recording_overlay(cx))
+            })
     }
 }
 
@@ -495,25 +705,147 @@ impl MainWindow {
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
         match self.panel {
             Some(panel) => root.child(self.render_panel(panel, cx)),
-            None => root.child(self.render_logo_row(cx)).child(
-                // `flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1
-                // w-full` -- expanded overflows 660px once Recents is in, so
-                // this column has to scroll.
-                div()
-                    .id("home-scroll")
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .pb(px(4.))
-                    .gap(px(8.))
-                    .overflow_y_scroll()
-                    .child(self.render_targets(cx))
-                    .child(self.render_base_controls(cx))
-                    .when(self.expanded, |this| this.child(self.render_recents())),
-            ),
+            None => root
+                .child(self.render_logo_row(cx))
+                .child(
+                    // `flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1
+                    // w-full` -- expanded overflows 660px once Recents is in, so
+                    // this column has to scroll.
+                    div()
+                        .id("home-scroll")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .pb(px(4.))
+                        .gap(px(8.))
+                        .overflow_y_scroll()
+                        .child(self.render_targets(cx))
+                        .child(self.render_base_controls(cx))
+                        .when(self.expanded, |this| this.child(self.render_recents())),
+                )
+                .when(self.can_start_recording(), |this| {
+                    this.child(self.render_start_footer(cx))
+                }),
         }
+    }
+
+    /// TEMP: the real app has no start button in the main window -- clicking a
+    /// target tile opens the fullscreen target-select overlay, which owns
+    /// "Start Recording". Until that overlay window exists, an armed target
+    /// gets a pinned footer button here so the recorder is drivable at all.
+    fn can_start_recording(&self) -> bool {
+        self.recording_phase == RecordingPhase::Idle
+            && self.recording_mode().is_some()
+            && self.armed_target().is_some()
+    }
+
+    fn render_start_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .flex_shrink_0()
+            .when_some(self.recording_error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.red_9)
+                        .text_center()
+                        .child(error),
+                )
+            })
+            .child(
+                div()
+                    .id("start-recording")
+                    .h(px(44.))
+                    .w_full()
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .rounded(px(12.))
+                    .bg(theme.blue_500)
+                    .hover(|style| style.opacity(0.9))
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(gpui::white())
+                    .child(
+                        svg()
+                            .path("icons/instant.svg")
+                            .size(px(16.))
+                            .text_color(gpui::white()),
+                    )
+                    .child("Start Recording")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.start_recording(window, cx);
+                    })),
+            )
+    }
+
+    /// The recording takeover, from index.tsx 3510-3529: an absolute overlay
+    /// (`bg-gray-1/80 backdrop-blur-xs` -- the blur is skipped here, this gpui
+    /// rev has no per-element backdrop blur hook) with the Stop button pinned
+    /// to the bottom (`px-6 pb-8`, `h-11 rounded-xl bg-red-9`).
+    fn render_recording_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let stopping = self.recording_phase == RecordingPhase::Stopping;
+        let starting = self.recording_phase == RecordingPhase::Starting;
+
+        let mut wash: Hsla = theme.gray_1.into();
+        wash.a = 0.8;
+
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(px(16.))
+            .flex()
+            .flex_col()
+            .justify_end()
+            .px(px(24.))
+            .pb(px(32.))
+            .bg(wash)
+            .child(
+                div()
+                    .id("stop-recording")
+                    .h(px(44.))
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .rounded(px(12.))
+                    .bg(theme.red_9)
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(gpui::white())
+                    // `disabled:opacity-60` while pending.
+                    .when(stopping || starting, |this| this.opacity(0.6))
+                    .when(!stopping && !starting, |this| {
+                        this.hover(|style| style.bg(theme.red_10)).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.stop_recording(window, cx);
+                            },
+                        ))
+                    })
+                    .child(
+                        svg()
+                            .path("icons/stop-circle.svg")
+                            .size(px(16.))
+                            .text_color(gpui::white()),
+                    )
+                    .child(match self.recording_phase {
+                        RecordingPhase::Starting => "Starting...",
+                        RecordingPhase::Stopping => "Stopping...",
+                        _ => "Stop Recording",
+                    }),
+            )
     }
 
     /// Shared panel chrome: a Back button, then either a title or a search
