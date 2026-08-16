@@ -42,29 +42,46 @@ fn main() {
             size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)),
             cx,
         );
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                // `None`, not a transparent titlebar with repositioned traffic
-                // lights: the Tauri main window returns `None` from
-                // `traffic_lights_position`, which routes it to
-                // `.decorations(false)`. There is no titlebar and there are no
-                // traffic lights -- the whole shell is custom-drawn. In gpui a
-                // `None` titlebar drops NSClosable/NSMiniaturizable/NSResizable
-                // from the style mask, which is the equivalent.
-                titlebar: None,
-                // The header is dragged by the app via `start_window_move`
-                // rather than by AppKit, so mark the content view as app-owned
-                // titlebar content.
-                app_owns_titlebar_drag: true,
-                window_background: gpui::WindowBackgroundAppearance::Transparent,
-                is_resizable: false,
-                is_minimizable: false,
-                ..Default::default()
-            },
-            |window, cx| cx.new(|cx| MainWindow::new(window, cx)),
-        )
-        .expect("failed to open the main window");
+        let window_handle = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // `None`, not a transparent titlebar with repositioned traffic
+                    // lights: the Tauri main window returns `None` from
+                    // `traffic_lights_position`, which routes it to
+                    // `.decorations(false)`. There is no titlebar and there are no
+                    // traffic lights -- the whole shell is custom-drawn. In gpui a
+                    // `None` titlebar drops NSClosable/NSMiniaturizable/NSResizable
+                    // from the style mask, which is the equivalent.
+                    titlebar: None,
+                    // TODO: always-on-top, `visible_on_all_workspaces(true)`
+                    // and the NSPanel level-100 treatment the Tauri window
+                    // gets. `WindowKind::Floating` is not the answer: it does
+                    // float at NSFloatingWindowLevel, but it allocates an
+                    // NSPanel, and a panel hides itself when the application
+                    // deactivates -- the window vanishes the moment you click
+                    // another app, which is exactly wrong for a recorder. This
+                    // needs the AppKit calls `windows.rs` makes, on a normal
+                    // window.
+                    kind: gpui::WindowKind::Normal,
+                    // The header is dragged by the app via `start_window_move`
+                    // rather than by AppKit, so mark the content view as app-owned
+                    // titlebar content.
+                    app_owns_titlebar_drag: true,
+                    window_background: gpui::WindowBackgroundAppearance::Transparent,
+                    is_resizable: false,
+                    is_minimizable: false,
+                    ..Default::default()
+                },
+                |window, cx| cx.new(|cx| MainWindow::new(window, cx)),
+            )
+            .expect("failed to open the main window");
+
+        // Enumeration is started here rather than in `MainWindow::new`, which
+        // runs before the window is fully built -- see `start_enumeration`.
+        window_handle
+            .update(cx, |view, window, cx| view.start_enumeration(window, cx))
+            .expect("failed to start device enumeration");
         cx.activate(true);
     });
 }

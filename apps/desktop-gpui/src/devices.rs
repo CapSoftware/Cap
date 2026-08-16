@@ -66,6 +66,15 @@ impl MicrophoneOption {
 pub struct DisplayOption {
     pub id: DisplayId,
     pub label: String,
+    pub refresh_rate: f64,
+}
+
+impl DisplayOption {
+    /// `formatRefreshRate`: `60 Hz`, or nothing when the display does not
+    /// report one.
+    pub fn describe_refresh_rate(&self) -> Option<String> {
+        (self.refresh_rate > 0.).then(|| format!("{} Hz", self.refresh_rate.round() as u32))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +84,30 @@ pub struct WindowOption {
     pub label: String,
     /// Owning application, shown as the secondary line.
     pub app: String,
+    pub size: Option<(u32, u32)>,
+    pub refresh_rate: Option<f64>,
+}
+
+impl WindowOption {
+    /// The card's third line. The Tauri card joins resolution and refresh rate
+    /// with `@` when it has both and falls back to whichever it has:
+    /// `1920×1080 @ 60 Hz`. Note the multiplication sign, not a letter x.
+    pub fn describe_metadata(&self) -> Option<String> {
+        let resolution = self
+            .size
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .map(|(width, height)| format!("{width}×{height}"));
+        let refresh = self
+            .refresh_rate
+            .filter(|rate| *rate > 0.)
+            .map(|rate| format!("{} Hz", rate.round() as u32));
+
+        match (resolution, refresh) {
+            (Some(resolution), Some(refresh)) => Some(format!("{resolution} @ {refresh}")),
+            (Some(only), None) | (None, Some(only)) => Some(only),
+            (None, None) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -175,7 +208,11 @@ fn list_displays() -> Vec<DisplayOption> {
         .map(|display| {
             let id = display.id();
             let label = display.name().unwrap_or_else(|| format!("Display {}", id));
-            DisplayOption { id, label }
+            DisplayOption {
+                id,
+                label,
+                refresh_rate: display.refresh_rate(),
+            }
         })
         .collect()
 }
@@ -210,6 +247,10 @@ fn list_windows() -> Vec<WindowOption> {
                 id: window.id(),
                 label,
                 app,
+                size: window
+                    .logical_size()
+                    .map(|size| (size.width() as u32, size.height() as u32)),
+                refresh_rate: window.display().map(|display| display.refresh_rate()),
             })
         })
         .collect()

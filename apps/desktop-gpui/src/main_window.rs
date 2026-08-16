@@ -8,13 +8,13 @@
 
 use gpui::{
     Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, rgb,
-    svg,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
+    rgb, svg,
 };
 
 use crate::{
     MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    devices::{CameraOption, DeviceSnapshot, MicrophoneOption},
+    devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     theme::{Appearance, Theme},
 };
 
@@ -40,6 +40,42 @@ impl Mode {
             Self::Instant => "icons/instant.svg",
             Self::Studio => "icons/film-cut.svg",
             Self::Screenshot => "icons/screenshot.svg",
+        }
+    }
+
+    /// `size-4` for instant, `size-[0.9rem]` for the other two.
+    fn icon_size(self) -> f32 {
+        match self {
+            Self::Instant => 16.,
+            Self::Studio | Self::Screenshot => 14.4,
+        }
+    }
+
+    /// `ModeInfoPanel`'s `modeOptions`, which is *not* `MODE_BUTTONS` -- the
+    /// hover cards and the info panel describe the modes differently and the
+    /// app carries both sets of strings.
+    fn panel_title(self) -> &'static str {
+        match self {
+            Self::Instant => "Instant",
+            Self::Studio => "Studio",
+            Self::Screenshot => "Screenshot",
+        }
+    }
+
+    fn panel_description(self) -> &'static str {
+        match self {
+            Self::Instant => {
+                "Share instantly with a link. Your recording uploads as you record, so you \
+                 can share it immediately when you're done."
+            }
+            Self::Studio => {
+                "Record locally in the highest quality for editing later. Perfect for \
+                 creating polished content with effects and transitions."
+            }
+            Self::Screenshot => {
+                "Capture and annotate screenshots instantly. Great for quick captures, bug \
+                 reports, and visual communication."
+            }
         }
     }
 }
@@ -113,6 +149,31 @@ impl DeviceMenu {
             Self::Microphone => "icons/microphone.svg",
         }
     }
+
+    fn empty_message(self, searching: bool) -> &'static str {
+        match (self, searching) {
+            (Self::Camera, false) => "No cameras found",
+            (Self::Camera, true) => "No matching cameras",
+            (Self::Microphone, false) => "No microphones found",
+            (Self::Microphone, true) => "No matching microphones",
+        }
+    }
+}
+
+/// Whatever has taken over the window body in place of the home screen.
+///
+/// The Tauri app opens some of these as separate windows (mode info is the
+/// 580x340 ModeSelect window) and some as in-place panels. There is only one
+/// window here, so they are all panels; the ones that differ are called out
+/// in the README's deviations table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    /// Pick a camera or a microphone.
+    Device(DeviceMenu),
+    /// Pick which display or which window to capture.
+    Target(TargetType),
+    /// What the three recording modes do.
+    ModeInfo,
 }
 
 pub struct MainWindow {
@@ -124,7 +185,13 @@ pub struct MainWindow {
     camera: Option<CameraOption>,
     microphone: Option<MicrophoneOption>,
     system_audio: bool,
-    active_menu: Option<DeviceMenu>,
+    /// Which display/window is selected for each split target.
+    selected_display: Option<DisplayOption>,
+    selected_window: Option<WindowOption>,
+    panel: Option<Panel>,
+    /// Live filter text for the device and target panels.
+    search: String,
+    search_focus: gpui::FocusHandle,
     /// True until the background enumeration has reported back, so the panel can
     /// say "Loading..." rather than "No cameras found".
     enumerating: bool,
@@ -138,13 +205,42 @@ impl MainWindow {
         // run on the main thread -- doing it inline here costs ~180ms of a
         // blank window on this machine, and more on a machine with more
         // capture devices.
-        cx.spawn(async move |this, cx| {
+
+        Self {
+            theme,
+            expanded: false,
+            mode: Mode::Instant,
+            target: None,
+            devices: DeviceSnapshot::default(),
+            camera: None,
+            microphone: None,
+            system_audio: false,
+            selected_display: None,
+            selected_window: None,
+            panel: None,
+            search: String::new(),
+            search_focus: cx.focus_handle(),
+            enumerating: true,
+        }
+    }
+
+    /// Kick off device enumeration.
+    ///
+    /// Deliberately *not* called from `new`. `new` runs inside `open_window`'s
+    /// builder closure, before the window is fully constructed, and a task
+    /// spawned there resolves against a window whose invalidator is not yet
+    /// wired to the platform window -- the update runs, the model updates, and
+    /// no frame is ever scheduled, so the panels stay on "Loading..." until
+    /// some unrelated event forces a redraw. Calling this once the window
+    /// handle exists is what makes the refresh land.
+    pub fn start_enumeration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
             let snapshot = cx
                 .background_executor()
                 .spawn(async { DeviceSnapshot::enumerate() })
                 .await;
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 tracing::info!(
                     cameras = snapshot.cameras.len(),
                     microphones = snapshot.microphones.len(),
@@ -156,29 +252,9 @@ impl MainWindow {
                 this.enumerating = false;
                 cx.notify();
             })
-            .ok();
+            .unwrap_or_else(|error| tracing::error!("device enumeration update failed: {error:#}"));
         })
         .detach();
-
-        let this = Self {
-            theme,
-            expanded: false,
-            mode: Mode::Instant,
-            target: None,
-            devices: DeviceSnapshot::default(),
-            camera: None,
-            microphone: None,
-            system_audio: false,
-            active_menu: None,
-            enumerating: true,
-        };
-
-        // The Tauri app restores the persisted expanded state on mount and
-        // resizes without animating. There is nothing persisted yet, but the
-        // window size still has to agree with the state the view starts in.
-        this.apply_window_size(window);
-
-        this
     }
 
     fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -320,7 +396,7 @@ impl MainWindow {
             .gap(px(4.))
             .mx(px(8.))
             .min_w_0()
-            .child(icon_button("help", "icons/support.svg", 16.))
+            .child(icon_button("help", "icons/circle-help.svg", 16.))
             // The drag handle, and *only* this. The Tauri header puts
             // `data-tauri-drag-region` on the header and this spacer but not on
             // the buttons; putting the handler on the header root instead makes
@@ -378,27 +454,50 @@ impl MainWindow {
 
         // The logo/mode row is hidden while a picker is open -- the panel takes
         // the full body, exactly as `!activeMenu() && ...` does in index.tsx.
-        match self.active_menu {
-            Some(menu) => root.child(self.render_device_panel(menu, cx)),
+        match self.panel {
+            Some(panel) => root.child(self.render_panel(panel, cx)),
             None => root.child(self.render_logo_row(cx)).child(
+                // `flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1
+                // w-full` -- expanded overflows 660px once Recents is in, so
+                // this column has to scroll.
                 div()
+                    .id("home-scroll")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .w_full()
+                    .pb(px(4.))
                     .gap(px(8.))
+                    .overflow_y_scroll()
                     .child(self.render_targets(cx))
-                    .child(self.render_base_controls(cx)),
+                    .child(self.render_base_controls(cx))
+                    .when(self.expanded, |this| this.child(self.render_recents())),
             ),
         }
     }
 
-    /// `TargetMenuPanel`: a Back button above a scrolling device list.
-    ///
-    /// The search field the Tauri panel puts next to Back is not here yet --
-    /// it needs real text input, which is its own piece of gpui plumbing.
-    fn render_device_panel(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
+    /// Shared panel chrome: a Back button, then either a title or a search
+    /// field, then a scrolling body. `TargetMenuPanel` and `ModeInfoPanel` in
+    /// the Tauri app are the same shape, so they share one implementation here.
+    fn render_panel(&self, panel: Panel, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
+
+        // Mode info has a static title where the target and device panels put a
+        // search field.
+        let header_trailing = match panel {
+            Panel::ModeInfo => div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.gray_11)
+                .child("Recording Modes")
+                .into_any_element(),
+            Panel::Device(_) | Panel::Target(_) => {
+                self.render_search_field(panel, cx).into_any_element()
+            }
+        };
 
         div()
             .flex()
@@ -412,11 +511,12 @@ impl MainWindow {
                     .items_center()
                     .gap(px(12.))
                     .mt(px(12.))
+                    // `min-h-[36px]`.
                     .h(px(36.))
                     .flex_shrink_0()
                     .child(
                         div()
-                            .id("device-panel-back")
+                            .id("panel-back")
                             .flex()
                             .flex_row()
                             .items_center()
@@ -440,56 +540,169 @@ impl MainWindow {
                                     .child("Back"),
                             )
                             .hover(|style| style.bg(theme.gray_4))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.active_menu = None;
-                                cx.notify();
-                            })),
+                            .on_click(cx.listener(|this, _, _window, cx| this.close_panel(cx))),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.gray_12)
-                            .child(menu.title()),
-                    ),
+                    .child(header_trailing),
             )
             .child(
                 div()
-                    .id("device-panel-list")
+                    .id("panel-body")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
                     .pt(px(16.))
                     .px(px(8.))
-                    .gap(px(4.))
+                    .gap(px(8.))
                     .overflow_y_scroll()
-                    .children(self.render_device_list(menu, cx)),
+                    .child(match panel {
+                        Panel::Device(menu) => self.render_device_list(menu, cx).into_any_element(),
+                        Panel::Target(target) => {
+                            self.render_target_grid(target, cx).into_any_element()
+                        }
+                        Panel::ModeInfo => self.render_mode_info(cx).into_any_element(),
+                    }),
             )
     }
 
-    fn render_device_list(
-        &self,
-        menu: DeviceMenu,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
+    fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.panel = None;
+        self.search.clear();
+        cx.notify();
+    }
+
+    fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = Some(panel);
+        self.search.clear();
+        if matches!(panel, Panel::Device(_) | Panel::Target(_)) {
+            window.focus(&self.search_focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// A single-line text input, hand-rolled: gpui ships no stock one.
+    ///
+    /// Focus is tracked so the panel keeps receiving keys, `key_char` supplies
+    /// the typed character (which is what handles dead keys and option-layouts,
+    /// rather than reading `key` directly), and the caret is a plain 1px div --
+    /// it does not blink, and there is no selection or cursor movement. That is
+    /// enough for a filter field and nothing more.
+    fn render_search_field(&self, panel: Panel, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let placeholder = match panel {
+            Panel::Target(TargetType::Display) => "Search displays",
+            Panel::Target(TargetType::Window) => "Search windows",
+            Panel::Device(DeviceMenu::Camera) => "Search cameras",
+            Panel::Device(DeviceMenu::Microphone) => "Search microphones",
+            _ => "Search",
+        };
+        let empty = self.search.is_empty();
+
+        div()
+            .track_focus(&self.search_focus)
+            .on_key_down(
+                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    let keystroke = &event.keystroke;
+
+                    match keystroke.key.as_str() {
+                        // First Escape clears the filter, a second one leaves.
+                        "escape" => {
+                            if this.search.is_empty() {
+                                this.close_panel(cx);
+                            } else {
+                                this.search.clear();
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "backspace" => {
+                            this.search.pop();
+                            cx.notify();
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Command/control chords are shortcuts, not text.
+                    if keystroke.modifiers.platform || keystroke.modifiers.control {
+                        return;
+                    }
+
+                    if let Some(text) = keystroke.key_char.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        this.search.push_str(text);
+                        cx.notify();
+                    }
+                }),
+            )
+            .relative()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .flex_1()
+            .min_w_0()
+            .h(px(36.))
+            .px(px(8.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.gray_5)
+            .bg(theme.gray_2)
+            .text_size(px(12.))
+            .child(
+                svg()
+                    .path("icons/search.svg")
+                    .size(px(12.))
+                    .flex_shrink_0()
+                    .text_color(theme.gray_10),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if empty { theme.gray_10 } else { theme.gray_12 })
+                    .child(if empty {
+                        placeholder.to_string()
+                    } else {
+                        self.search.clone()
+                    }),
+            )
+            .when(!empty, |this| {
+                this.child(div().w(px(1.)).h(px(14.)).flex_shrink_0().bg(theme.gray_12))
+            })
+    }
+
+    /// Case-insensitive substring match, the same test the Tauri panels filter
+    /// on before they highlight the matched run.
+    fn matches_search(&self, haystack: &str) -> bool {
+        if self.search.is_empty() {
+            return true;
+        }
+        haystack
+            .to_lowercase()
+            .contains(&self.search.to_lowercase())
+    }
+
+    fn render_device_list(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let list = div().flex().flex_col().gap(px(4.)).w_full();
 
         if self.enumerating {
-            return vec![
+            return list.child(
                 div()
                     .py(px(24.))
                     .w_full()
                     .text_size(px(14.))
                     .text_color(theme.gray_11)
-                    .child("Loading...")
-                    .into_any_element(),
-            ];
+                    .child("Loading..."),
+            );
         }
 
-        // Index 0 is always the "none" row, matching `DeviceListPanel`.
+        // The "none" row is always offered and is never filtered out -- it is
+        // how you turn the device off, not a search result.
         let mut rows = vec![
             self.render_device_list_row(
                 SharedString::from(format!("{}-none", menu.title())),
@@ -505,16 +718,22 @@ impl MainWindow {
                         DeviceMenu::Camera => this.camera = None,
                         DeviceMenu::Microphone => this.microphone = None,
                     }
-                    this.active_menu = None;
-                    cx.notify();
+                    this.close_panel(cx);
                 }),
             )
             .into_any_element(),
         ];
 
+        let mut matched = 0usize;
         match menu {
             DeviceMenu::Camera => {
-                for camera in &self.devices.cameras {
+                for camera in self
+                    .devices
+                    .cameras
+                    .iter()
+                    .filter(|camera| self.matches_search(&camera.label))
+                {
+                    matched += 1;
                     let selected = self
                         .camera
                         .as_ref()
@@ -530,8 +749,7 @@ impl MainWindow {
                             selected,
                             cx.listener(move |this, _, _window, cx| {
                                 this.camera = Some(chosen.clone());
-                                this.active_menu = None;
-                                cx.notify();
+                                this.close_panel(cx);
                             }),
                         )
                         .into_any_element(),
@@ -539,7 +757,13 @@ impl MainWindow {
                 }
             }
             DeviceMenu::Microphone => {
-                for mic in &self.devices.microphones {
+                for mic in self
+                    .devices
+                    .microphones
+                    .iter()
+                    .filter(|mic| self.matches_search(&mic.name))
+                {
+                    matched += 1;
                     let selected = self
                         .microphone
                         .as_ref()
@@ -555,8 +779,7 @@ impl MainWindow {
                             selected,
                             cx.listener(move |this, _, _window, cx| {
                                 this.microphone = Some(chosen.clone());
-                                this.active_menu = None;
-                                cx.notify();
+                                this.close_panel(cx);
                             }),
                         )
                         .into_any_element(),
@@ -565,29 +788,306 @@ impl MainWindow {
             }
         }
 
-        if rows.len() == 1 {
-            rows.push(
+        if matched == 0 {
+            rows.push(self.render_empty_state(menu.empty_message(!self.search.is_empty())));
+        }
+
+        list.children(rows)
+    }
+
+    /// `TargetMenuGrid`: two columns of cards.
+    ///
+    /// The real cards lead with a live thumbnail of the display or window; that
+    /// needs the capture pipeline, so these render the same fallback the Tauri
+    /// card falls back to when no thumbnail has arrived -- the target's icon on
+    /// `gray-4`.
+    fn render_target_grid(&self, target: TargetType, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let grid = div().flex().flex_col().gap(px(8.)).w_full();
+
+        if self.enumerating {
+            return grid.child(
                 div()
-                    .py(px(16.))
+                    .py(px(24.))
                     .w_full()
                     .text_size(px(14.))
                     .text_color(theme.gray_11)
-                    .child(match menu {
-                        DeviceMenu::Camera => "No cameras found",
-                        DeviceMenu::Microphone => "No microphones found",
-                    })
-                    .into_any_element(),
+                    .child("Loading..."),
             );
         }
 
-        rows
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+
+        match target {
+            TargetType::Display => {
+                for display in self
+                    .devices
+                    .displays
+                    .iter()
+                    .filter(|display| self.matches_search(&display.label))
+                {
+                    let selected = self
+                        .selected_display
+                        .as_ref()
+                        .is_some_and(|current| current.id == display.id);
+                    let chosen = display.clone();
+
+                    cards.push(
+                        self.render_target_card(
+                            SharedString::from(format!("display-{}", display.id)),
+                            "icons/screen.svg",
+                            display.label.clone(),
+                            None,
+                            display.describe_refresh_rate(),
+                            selected,
+                            cx.listener(move |this, _, _window, cx| {
+                                this.selected_display = Some(chosen.clone());
+                                this.target = Some(TargetType::Display);
+                                this.close_panel(cx);
+                            }),
+                        )
+                        .into_any_element(),
+                    );
+                }
+            }
+            TargetType::Window => {
+                for window in self
+                    .devices
+                    .windows
+                    .iter()
+                    .filter(|w| self.matches_search(&w.label) || self.matches_search(&w.app))
+                {
+                    let selected = self
+                        .selected_window
+                        .as_ref()
+                        .is_some_and(|current| current.id == window.id);
+                    let chosen = window.clone();
+
+                    cards.push(
+                        self.render_target_card(
+                            SharedString::from(format!("window-{}", window.id)),
+                            "icons/window.svg",
+                            window.label.clone(),
+                            Some(window.app.clone()),
+                            window.describe_metadata(),
+                            selected,
+                            cx.listener(move |this, _, _window, cx| {
+                                this.selected_window = Some(chosen.clone());
+                                this.target = Some(TargetType::Window);
+                                this.close_panel(cx);
+                            }),
+                        )
+                        .into_any_element(),
+                    );
+                }
+            }
+            // Area and Camera Only have nothing to pick between.
+            TargetType::Area | TargetType::CameraOnly => {}
+        }
+
+        if cards.is_empty() {
+            return grid.child(
+                self.render_empty_state(match (target, self.search.is_empty()) {
+                    (TargetType::Display, true) => "No displays found",
+                    (TargetType::Display, false) => "No matching displays",
+                    (_, true) => "No windows found",
+                    (_, false) => "No matching windows",
+                }),
+            );
+        }
+
+        // Two columns, laid out as rows of two so the cards stretch evenly.
+        grid.children(
+            cards
+                .into_iter()
+                .collect::<Vec<_>>()
+                .chunks_mut(2)
+                .map(|pair| {
+                    let mut row = div().flex().flex_row().gap(px(8.)).w_full().items_stretch();
+                    for card in pair.iter_mut() {
+                        row = row.child(std::mem::replace(card, div().into_any_element()));
+                    }
+                    // Keep a lone trailing card at half width rather than
+                    // letting it span the grid.
+                    if pair.len() == 1 {
+                        row = row.child(div().flex_1());
+                    }
+                    row
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// `TargetCard`: a 76px (`h-19`) thumbnail area over three 11px lines.
+    #[allow(clippy::too_many_arguments)]
+    fn render_target_card(
+        &self,
+        id: SharedString,
+        icon: &'static str,
+        label: String,
+        subtitle: Option<String>,
+        metadata: Option<String>,
+        selected: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if selected {
+                Hsla::from(theme.blue_8)
+            } else {
+                gpui::transparent_black()
+            })
+            .bg(theme.gray_3)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w_full()
+                    .h(px(76.))
+                    .bg(theme.gray_4)
+                    .child(svg().path(icon).size(px(24.)).text_color(theme.gray_9)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_w_0()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.gray_12)
+                            .child(label),
+                    )
+                    .children(subtitle.map(|subtitle| {
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(theme.gray_11)
+                            .child(subtitle)
+                    }))
+                    .children(metadata.map(|metadata| {
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(theme.gray_10)
+                            .child(metadata)
+                    })),
+            )
+            .hover(|style| style.bg(theme.gray_4))
+            .on_click(on_click)
+    }
+
+    /// `ModeInfoPanel`. Its copy is deliberately not the copy in `MODE_BUTTONS`
+    /// -- the hover cards and this panel describe the modes differently, so
+    /// both sets of strings are carried.
+    fn render_mode_info(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+
+        div().flex().flex_col().gap(px(8.)).w_full().children(
+            [Mode::Instant, Mode::Studio, Mode::Screenshot].map(|mode| {
+                let selected = mode == self.mode;
+
+                div()
+                    .id(SharedString::from(mode.panel_title()))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .p(px(12.))
+                    .w_full()
+                    .rounded(px(12.))
+                    .border_2()
+                    .border_color(if selected {
+                        Hsla::from(theme.blue_9)
+                    } else if theme.is_dark() {
+                        Hsla::from(theme.gray_5)
+                    } else {
+                        Hsla::from(theme.gray_4)
+                    })
+                    .bg(if selected {
+                        theme.tile_selected_bg()
+                    } else if theme.is_dark() {
+                        Hsla::from(theme.gray_3)
+                    } else {
+                        Hsla::from(theme.gray_2)
+                    })
+                    .child(
+                        svg()
+                            .path(mode.icon())
+                            .size(px(20.))
+                            .flex_shrink_0()
+                            .text_color(if selected {
+                                theme.blue_11
+                            } else {
+                                theme.gray_12
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(if selected {
+                                        theme.blue_11
+                                    } else {
+                                        theme.gray_12
+                                    })
+                                    .child(mode.panel_title()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme.gray_11)
+                                    .child(mode.panel_description()),
+                            ),
+                    )
+                    .hover(|style| style.bg(theme.gray_4))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.mode = mode;
+                        this.close_panel(cx);
+                    }))
+            }),
+        )
+    }
+
+    fn render_empty_state(&self, message: &'static str) -> gpui::AnyElement {
+        div()
+            .py(px(24.))
+            .w_full()
+            .text_size(px(14.))
+            .text_color(self.theme.gray_11)
+            .child(message)
+            .into_any_element()
     }
 
     /// `CameraListItem` / `MicrophoneListItem`: `px-3 py-2.5`, `rounded-lg`,
     /// 14px label over an optional 11px detail line indented `pl-7`.
     ///
     /// Selection is `bg-blue-500` with white text -- note that is the custom
-    /// `--blue-500`, not `blue-9`; the two are different colours.
+    /// `--blue-500`, not `blue-9` used by the pills; the two are different
+    /// colours.
     fn render_device_list_row(
         &self,
         id: SharedString,
@@ -672,66 +1172,70 @@ impl MainWindow {
             .mt(px(16.))
             .mb(px(6.))
             .flex_shrink_0()
-            .child(self.render_logo())
+            .child(
+                // `flex items-center space-x-1` around the logo and its badge.
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(self.render_logo())
+                    .child(self.render_plan_badge()),
+            )
             .child(self.render_mode_pill(cx))
     }
 
-    /// `*:w-[92px]` on the logo link, against a 103x40 viewBox, so the whole
-    /// lockup is 92x35.7 and everything below is that scale factor applied to
-    /// the SVG's own coordinates.
+    /// The plan badge: `text-[0.6rem] ml-2 rounded-lg border border-gray-5
+    /// px-1 py-0.5 bg-gray-3 hover:bg-gray-5`.
     ///
-    /// The mark is rebuilt out of divs rather than drawn from `logo-full.svg`,
-    /// because gpui keeps only an SVG's alpha and tints it with one colour --
-    /// the mark's three concentric circles would collapse into a solid block.
-    /// Only the wordmark, which really is single-colour, goes through `svg()`,
-    /// which also means it picks up `gray_12` and so swaps between the app's
-    /// light and dark logo variants for free.
-    fn render_logo(&self) -> impl IntoElement {
-        const SCALE: f32 = 92. / 103.;
-
+    /// Only the free variant is drawn. The Pro and Commercial badges are a
+    /// non-interactive span on `--blue-400`, and which one applies comes from
+    /// the license query -- there is no auth or license plumbing here yet, so
+    /// claiming a plan would be worse than showing the free one.
+    fn render_plan_badge(&self) -> impl IntoElement {
         let theme = self.theme;
-        let ring = |diameter: f32, color: u32| {
-            div()
-                .absolute()
-                .size(px(diameter * SCALE))
-                .rounded_full()
-                .bg(rgb(color))
-        };
 
         div()
+            .id("plan-badge")
             .flex()
-            .flex_row()
             .items_center()
-            // The mark ends at x=40 and the wordmark starts at x=49; re-framing
-            // the wordmark's viewBox to start at 49 dropped that gap, so it is
-            // put back here.
-            .gap(px(9. * SCALE))
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(40. * SCALE))
-                    .flex_shrink_0()
-                    .rounded(px(7.75 * SCALE))
-                    .bg(gpui::white())
-                    // Without this the white tile is invisible against gray-1
-                    // in light mode.
-                    .border_1()
-                    .border_color(rgb(0xe7eaf0))
-                    .child(ring(32., 0x4785ff))
-                    .child(ring(26., 0xadc9ff))
-                    .child(ring(20., 0xffffff)),
-            )
-            .child(
-                svg()
-                    .path("icons/logo-wordmark.svg")
-                    // 54x40 of the original viewBox.
-                    .w(px(54. * SCALE))
-                    .h(px(40. * SCALE))
-                    .text_color(theme.gray_12),
-            )
+            .flex_shrink_0()
+            .ml(px(8.))
+            .px(px(4.))
+            .py(px(2.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_5)
+            .bg(theme.gray_3)
+            .text_size(px(9.6))
+            .text_color(theme.gray_12)
+            .child("Personal")
+            .hover(|style| style.bg(theme.gray_5))
+        // TODO: opens the Upgrade window (950x850) once that window exists.
+    }
+
+    /// `*:w-[92px]` on the logo link, against a 103x40 viewBox, so the lockup
+    /// is 92x35.7.
+    ///
+    /// This goes through `img()`, not `svg()`. The two take different paths in
+    /// gpui: `svg()` keeps only the alpha and tints it with one colour, which
+    /// would flatten the badge, the three blue rings and the wordmark into a
+    /// single silhouette, whereas `img()` rasterises through resvg and keeps
+    /// the colour. `img()` also renders at `SMOOTH_SVG_SCALE_FACTOR` (2x), so
+    /// the 103px-wide source becomes a 206px raster -- more than the 184 device
+    /// pixels a 92px lockup needs on a 2x display.
+    ///
+    /// The app ships two files rather than recolouring one, so this picks the
+    /// same way it does.
+    fn render_logo(&self) -> impl IntoElement {
+        img(if self.theme.is_dark() {
+            "icons/logo-full-dark.svg"
+        } else {
+            "icons/logo-full.svg"
+        })
+        .w(px(92.))
+        .h(px(92. * 40. / 103.))
+        .flex_shrink_0()
     }
 
     /// `Mode.tsx`: `p-1.5 gap-2 rounded-full border border-gray-5 bg-gray-3`,
@@ -766,11 +1270,7 @@ impl MainWindow {
                 .child(
                     svg()
                         .path(mode.icon())
-                        .size(px(if matches!(mode, Mode::Instant) {
-                            16.
-                        } else {
-                            14.4
-                        }))
+                        .size(px(mode.icon_size()))
                         .text_color(theme.gray_12),
                 )
                 .hover(|style| style.bg(theme.gray_7))
@@ -781,6 +1281,7 @@ impl MainWindow {
         };
 
         div()
+            .relative()
             .flex()
             .flex_row()
             .items_center()
@@ -793,6 +1294,31 @@ impl MainWindow {
             .child(button(Mode::Instant, "mode-instant"))
             .child(button(Mode::Studio, "mode-studio"))
             .child(button(Mode::Screenshot, "mode-screenshot"))
+            // `absolute -left-1.5 -top-2 p-1 rounded-full bg-gray-5`, hanging
+            // off the pill's top-left corner.
+            .child(
+                div()
+                    .id("mode-info")
+                    .absolute()
+                    .left(px(-6.))
+                    .top(px(-8.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p(px(4.))
+                    .rounded_full()
+                    .bg(theme.gray_5)
+                    .child(
+                        svg()
+                            .path("icons/info.svg")
+                            .size(px(10.))
+                            .text_color(theme.gray_12),
+                    )
+                    .hover(|style| style.opacity(0.5))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_panel(Panel::ModeInfo, window, cx);
+                    })),
+            )
     }
 
     fn render_targets(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -872,7 +1398,10 @@ impl MainWindow {
                             .size(px(16.))
                             .text_color(theme.gray_11),
                     )
-                    .hover(|style| style.bg(theme.gray_6)),
+                    .hover(|style| style.bg(theme.gray_6))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_panel(Panel::Target(target), window, cx);
+                    })),
             )
     }
 
@@ -1022,7 +1551,7 @@ impl MainWindow {
                         },
                     )
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.active_menu = Some(DeviceMenu::Camera);
+                        this.panel = Some(Panel::Device(DeviceMenu::Camera));
                         cx.notify();
                     })),
                 ),
@@ -1044,7 +1573,7 @@ impl MainWindow {
                         },
                     )
                     .on_click(cx.listener(|this, _, _window, cx| {
-                        this.active_menu = Some(DeviceMenu::Microphone);
+                        this.panel = Some(Panel::Device(DeviceMenu::Microphone));
                         cx.notify();
                     })),
                 ),
@@ -1073,6 +1602,59 @@ impl MainWindow {
                         cx.notify();
                     })),
                 ),
+            )
+    }
+
+    /// `Recents.tsx`, expanded only.
+    ///
+    /// Thumbnails need the recordings library, so only the header and the empty
+    /// state are here -- which is what the real section shows on a machine with
+    /// no captures yet anyway.
+    fn render_recents(&self) -> impl IntoElement {
+        let theme = self.theme;
+
+        div()
+            // `<div class="pt-2">` around the section in index.tsx.
+            .pt(px(8.))
+            .w_full()
+            .flex_shrink_0()
+            .child(
+                // `mb-2 flex items-center px-0.5`.
+                div().flex().items_center().mb(px(8.)).px(px(2.)).child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.gray_12)
+                        .child("Recents"),
+                ),
+            )
+            .child(
+                // `h-28 ... rounded-xl border border-dashed border-gray-5 bg-gray-2`.
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .w_full()
+                    .h(px(112.))
+                    .rounded(px(12.))
+                    .border_dashed()
+                    .border_1()
+                    .border_color(theme.gray_5)
+                    .bg(theme.gray_2)
+                    .child(
+                        svg()
+                            .path("icons/history.svg")
+                            .size(px(20.))
+                            .text_color(theme.gray_9),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.gray_10)
+                            .child("Your latest captures will appear here."),
+                    ),
             )
     }
 
