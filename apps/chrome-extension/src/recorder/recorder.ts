@@ -16,7 +16,7 @@ import {
 	RECORDING_SPOOL_LIVE_MIN_IDLE_MS,
 	RecordingSpool,
 	recoverRecordingSpoolSession,
-	selectRecordingPipeline,
+	selectRecordingPipelineFromSupport,
 	type VideoId,
 } from "@cap/recorder-core";
 
@@ -548,6 +548,9 @@ const addAudioTracks = ({
 	if (streamsWithAudio.length === 0) return undefined;
 
 	const audioContext = new AudioContext();
+	// Autoplay policy can hand back a suspended context in a document that has
+	// never seen user activation, which would silently mute the mixed tracks.
+	void audioContext.resume().catch(() => undefined);
 	const destination = audioContext.createMediaStreamDestination();
 
 	streamsWithAudio.forEach((stream, index) => {
@@ -818,7 +821,15 @@ const startRecording = async (request: StartRecordingRequest) => {
 			routeFirstStreamToSpeakers: request.mode === "tab",
 		});
 		const hasAudio = recordingStream.getAudioTracks().length > 0;
-		const pipeline = selectRecordingPipeline(hasAudio);
+		// The extension always streams the recording through
+		// InstantRecordingUploader, so the container must stay streamable
+		// regardless of what selectRecordingPipeline's user-agent heuristic
+		// (written for the web recorder, and false on Firefox) would decide.
+		const pipeline = selectRecordingPipelineFromSupport(
+			hasAudio,
+			(candidate) => MediaRecorder.isTypeSupported(candidate),
+			{ preferStreamingUpload: true },
+		);
 		if (!pipeline) throw new Error("No supported recorder format is available");
 
 		const { videoCodec, audioCodec } = describeRecordingCodecs(
