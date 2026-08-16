@@ -8,6 +8,7 @@ import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect } from "effect";
 import { AnimatePresence, motion } from "framer-motion";
+import { useCurrency } from "hooks/useCurrency";
 import { Minus, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useState } from "react";
@@ -48,6 +49,7 @@ export function AnalyticsDashboard() {
 	const capId = searchParams.get("capId");
 	const user = useCurrentUser();
 	const stripeCtx = useStripeContext();
+	const { currency } = useCurrency();
 	const { push } = useRouter();
 	const { activeOrganization, organizationData, spacesData } =
 		useDashboardContext();
@@ -245,7 +247,7 @@ export function AnalyticsDashboard() {
 												className="text-3xl font-medium tabular-nums text-gray-12"
 												format={{
 													style: "currency",
-													currency: "USD",
+													currency: currency.toUpperCase(),
 												}}
 											/>
 											<span className="mb-2 ml-2 text-gray-11">

@@ -86,8 +86,9 @@ PLATFORM SUPPORT:
 
 PRICING (early adopter beta pricing, locked in for lifetime of subscription):
 - Free plan: personal use, Studio Mode, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF, web recorder
-- Desktop License: $58 one-time (lifetime) or $29/year, commercial usage rights, Studio Mode with full editor, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF
-- Cap Pro: $8.16/mo per user (billed annually) or $12/mo per user (billed monthly), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket and Google Drive support, priority support
+- Desktop License: $58 one-time (lifetime) or $29/year, commercial usage rights, Studio Mode with full editor, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF. USD only, no local currency option.
+- Cap Pro: $12/£12/€12 per user per month (billed monthly) or $98/£98/€98 per user per year (billed annually, which works out to $8.16/£8.16/€8.16 per user per month), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket and Google Drive support, priority support
+- Cap Pro currency: the price is the same number in every currency, only the symbol changes. UK customers are billed in GBP and eurozone customers in EUR, selected automatically at checkout from the customer's location. Everyone else is billed in USD. There is nothing the customer needs to do to pick a currency.
 - Enterprise: custom pricing, contact via https://cal.com/cap.so/15min, includes SLAs, priority support, Loom video importer, bulk discounts, managed self-hosting, SAML SSO via WorkOS, advanced security controls
 - Early adopters keep their pricing forever, even after beta ends and regular prices change.
 - Student discount available at https://cap.so/student-discount

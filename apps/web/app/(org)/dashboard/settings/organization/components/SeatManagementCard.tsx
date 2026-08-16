@@ -13,6 +13,7 @@ import {
 	updateSeatQuantity,
 } from "@/actions/organization/update-seat-quantity";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { formatAmount } from "@/utils/currency";
 import { calculateSeats } from "@/utils/organization";
 
 const DEBOUNCE_MS = 500;
@@ -169,7 +170,7 @@ export function SeatManagementCard() {
 								<span className="text-sm text-gray-11">
 									{preview.proratedAmount === 0
 										? "No prorated adjustment"
-										: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: $${Math.abs(preview.proratedAmount / 100).toFixed(2)} ${preview.currency.toUpperCase()}`}
+										: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: ${formatAmount(Math.abs(preview.proratedAmount / 100), preview.currency)}`}
 								</span>
 							) : null}
 							<Button
