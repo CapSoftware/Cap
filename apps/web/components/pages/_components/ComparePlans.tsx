@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
+import { PRICING } from "@/data/pricing";
 
 type PlanKey = "free" | "desktop" | "pro";
 
@@ -189,13 +190,13 @@ export const ComparePlans = () => {
 				key: "desktop",
 				name: "Desktop License",
 				short: "Desktop",
-				price: "$29/yr",
+				price: `${symbol}${PRICING.commercial.yearly}/yr`,
 			},
 			{
 				key: "pro",
 				name: "Cap Pro",
 				short: "Pro",
-				price: `${symbol}8.16/user/mo`,
+				price: `${symbol}${PRICING.pro.annualPerMonth}/user/mo`,
 			},
 		],
 		[symbol],
