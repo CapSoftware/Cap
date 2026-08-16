@@ -881,7 +881,22 @@ impl MainWindow {
                             this.toggle_expanded(window, cx);
                         })),
                     )
-                    .child(icon_button("settings", "icons/settings.svg", 16.))
+                    .child(icon_button("settings", "icons/settings.svg", 16.).on_click(
+                        cx.listener(|_, _, _window, cx| {
+                            // `await commands.showWindow({ Settings: {
+                            //  page: "general" } }); getCurrentWindow()
+                            //  .hide()` -- both halves live in
+                            // `open_settings`. Deferred because opening a
+                            // window inside this update would double-lease
+                            // the view (the `sync_overlays` rule).
+                            cx.defer(|cx: &mut gpui::App| {
+                                app_windows::open_settings(
+                                    crate::settings_window::Page::General,
+                                    cx,
+                                )
+                            });
+                        }),
+                    ))
                     .child(icon_button("screenshots", "icons/image.svg", 16.))
                     .child(icon_button("recordings", "icons/play-circle.svg", 16.))
                     .child(icon_button("teleprompter", "icons/scan-text.svg", 16.))

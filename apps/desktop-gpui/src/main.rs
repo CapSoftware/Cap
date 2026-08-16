@@ -13,6 +13,7 @@ mod main_window;
 mod platform;
 mod recording;
 mod session;
+mod settings_window;
 mod store;
 mod target_overlay;
 mod theme;
@@ -160,6 +161,18 @@ fn main() {
             });
         })
         .detach();
+
+        // `CAP_GPUI_AUTO_SETTINGS=1` (or a page slug, e.g. `hotkeys`): open
+        // the settings window the way the header gear does. Same reason as
+        // every other `CAP_GPUI_AUTO_*` hook -- unprivileged synthetic clicks
+        // are dropped, so the screenshot harness needs a way in.
+        if let Ok(page) = std::env::var("CAP_GPUI_AUTO_SETTINGS")
+            && !page.is_empty()
+        {
+            let page =
+                settings_window::Page::from_slug(&page).unwrap_or(settings_window::Page::General);
+            app_windows::open_settings(page, cx);
+        }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary
         // display and record for N seconds. The end-to-end check drives the

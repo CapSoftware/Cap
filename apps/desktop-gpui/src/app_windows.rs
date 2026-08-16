@@ -21,6 +21,7 @@ use crate::{
     platform,
     recording::{RecordingMode, StartConfig},
     session::{Phase, RecordingSession},
+    settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
 };
 
@@ -35,6 +36,7 @@ pub struct AppWindows {
     pub main: WindowHandle<MainWindow>,
     pub controls: Option<WindowHandle<ControlsWindow>>,
     pub camera: Option<WindowHandle<CameraWindow>>,
+    pub settings: Option<WindowHandle<SettingsWindow>>,
     /// One target-select overlay per display, keyed by display so a mode
     /// switch can keep the ones it still wants.
     pub overlays: Vec<(DisplayId, WindowHandle<OverlayWindow>)>,
@@ -49,6 +51,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         main,
         controls: None,
         camera: None,
+        settings: None,
         overlays: Vec::new(),
     });
 
@@ -57,24 +60,209 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         let phase = session.read(cx).phase;
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
-            let main = cx.global::<AppWindows>().main;
-            // `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it
-            // runs from a task, not inside this observer's borrow (the
-            // `place_overlay_panel` rule).
-            let native = main
-                .update(cx, |_, window, _| platform::native_window(window))
-                .ok()
-                .flatten();
-            cx.spawn(async move |_| {
-                if let Some(native) = &native {
-                    platform::show_native(native);
-                }
-            })
-            .detach();
+            show_main_window(cx);
         }
         last_phase = phase;
     })
     .detach();
+}
+
+/// `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it runs from
+/// a task, never inside the borrow that decided to call it (the
+/// `place_overlay_panel` rule).
+fn show_main_window(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    let native = main
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |_| {
+        if let Some(native) = &native {
+            platform::show_native(native);
+        }
+    })
+    .detach();
+}
+
+/// `getCurrentWindow().hide()` -- same rule, same reason.
+fn hide_main_window(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    let native = main
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |_| {
+        if let Some(native) = &native {
+            platform::hide_native(native);
+        }
+    })
+    .detach();
+}
+
+/// Open the settings window on a page, and hide the main window.
+///
+/// The header gear in `new-main/index.tsx` is
+/// `await commands.showWindow({ Settings: { page: "general" } });
+/// getCurrentWindow().hide();` -- both halves, in that order. Must be reached
+/// through `cx.defer` from anything inside an entity update: opening a window
+/// paints it synchronously and would double-lease the caller.
+pub fn open_settings(page: Page, cx: &mut App) {
+    if let Some(handle) = cx.global::<AppWindows>().settings {
+        // `ShowCapWindow::show` reuses a live window: show, focus, and let
+        // the page argument re-target it.
+        let native = handle
+            .update(cx, |view, window, cx| {
+                view.set_page(page, cx);
+                platform::native_window(window)
+            })
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        hide_main_window(cx);
+        return;
+    }
+
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(settings_window::SETTINGS_WIDTH),
+            px(settings_window::SETTINGS_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // A real titlebar this time, transparent with the buttons moved
+            // to (22, 22): `CapWindowId::Settings::traffic_lights_position` is
+            // `Some(Some(...))`, which is what keeps the native lights and
+            // repositions them. (The main window returns `None` there and
+            // hand-draws its own.)
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Settings".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(settings_window::TRAFFIC_LIGHTS),
+            }),
+            // A normal window, not a panel: the Tauri Settings window is an
+            // ordinary window that activates the dock icon
+            // (`activates_dock()`), with no level or Spaces treatment.
+            // `WindowKind::Floating` would hide it whenever the app
+            // deactivates.
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            // `.resizable(true).maximized(false)`, and `min_inner_size`.
+            is_resizable: true,
+            is_minimizable: true,
+            window_min_size: Some(size(
+                px(settings_window::SETTINGS_MIN_WIDTH),
+                px(settings_window::SETTINGS_MIN_HEIGHT),
+            )),
+            // `builder.transparent(true)` on macOS -- the panes paint, the
+            // material shows through the gap.
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        move |window, cx| cx.new(|cx| SettingsWindow::new(page, window, cx)),
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("settings window failed to open: {error:#}");
+            return;
+        }
+    };
+
+    cx.global_mut::<AppWindows>().settings = Some(handle);
+
+    // Read the native handle inside the update; act on it outside.
+    let native = handle
+        .update(cx, |view, window, cx| {
+            platform::kick_display_link(window);
+            view.start_enumeration(window, cx);
+            view.focus_root(window, cx);
+            tracing::info!(
+                number = platform::window_number(window),
+                "settings window opened"
+            );
+            platform::native_window(window)
+        })
+        .ok()
+        .flatten();
+
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            // `applyMacOSWindowMaterial("settings")`: same install as the main
+            // window, radius 26 instead of 16.
+            let kind = platform::install_window_material(
+                native,
+                settings_window::SETTINGS_MATERIAL_RADIUS,
+            );
+            match kind {
+                Some(kind) => tracing::info!(
+                    ?kind,
+                    radius = settings_window::SETTINGS_MATERIAL_RADIUS,
+                    "installed settings window material"
+                ),
+                None => tracing::info!("no native window material available for settings"),
+            }
+            cx.update(|cx| {
+                // The main window's install normally gets here first and both
+                // windows resolve the same kind; this only fills the global in
+                // if the settings window won the race.
+                if platform::active_material(cx).is_none() {
+                    cx.set_global(platform::WindowMaterial(kind));
+                }
+            });
+        }
+        handle
+            .update(cx, |_, window, cx| {
+                // The unit-3 macOS 26 display-link repair, once the window is
+                // actually on screen.
+                platform::kick_display_link(window);
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+    })
+    .detach();
+
+    hide_main_window(cx);
+}
+
+/// Close the settings window from our side (Cmd-W). The close button goes
+/// through `on_window_should_close` -> [`settings_closed`] instead.
+pub fn close_settings(cx: &mut App) {
+    if let Some(handle) = cx.global_mut::<AppWindows>().settings.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    restore_after_settings(cx);
+}
+
+/// The settings window is going away on its own. `CapWindowId::Settings`'s
+/// `Destroyed` arm calls `restore_main_and_target_select_windows`, so the main
+/// window comes back -- otherwise closing settings from the gear flow would
+/// leave the app with no visible window at all.
+pub fn settings_closed(cx: &mut App) {
+    cx.global_mut::<AppWindows>().settings.take();
+    restore_after_settings(cx);
+}
+
+fn restore_after_settings(cx: &mut App) {
+    // Not while recording: the main window is deliberately hidden then, and
+    // the session observer brings it back when the recording ends.
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        show_main_window(cx);
+    }
 }
 
 /// What the main window is asking the overlays to show.
@@ -414,19 +602,7 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
         session.set_controls_open(bar_open, cx);
     });
     if bar_open {
-        let main = cx.global::<AppWindows>().main;
-        // Same rule as the reshow in `init`: `orderOut:` runs outside the
-        // borrow.
-        let native = main
-            .update(cx, |_, window, _| platform::native_window(window))
-            .ok()
-            .flatten();
-        cx.spawn(async move |_| {
-            if let Some(native) = &native {
-                platform::hide_native(native);
-            }
-        })
-        .detach();
+        hide_main_window(cx);
     }
 
     let config = StartConfig {

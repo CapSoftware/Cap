@@ -70,6 +70,11 @@ Everything below is real, not mocked.
   (`WindowKind::PopUp`), so its buttons work without stealing focus from the
   app being recorded. While it is up the main window hides, and the bar's own
   window is excluded from the capture.
+- **The settings window.** 782×775, resizable down to 780×560, on the
+  `"settings"` material (radius 26) with the real traffic lights repositioned
+  to (22, 22). The sidebar lists all twelve pages; **General** is built in
+  full and writes to the same tauri-plugin-store file the shipping app uses.
+  See below.
 
 ### Layout fidelity
 
@@ -84,8 +89,10 @@ would quietly change the app's colours.
 
 ### The native window material
 
-The main window is not a `bg-gray-1` slab. `platform::install_window_material`
-does what `applyMacOSWindowMaterial("panel")` plus
+The main window is not a `bg-gray-1` slab, and neither is the settings window.
+`platform::install_window_material` does what
+`applyMacOSWindowMaterial("panel")` (radius 16) or
+`applyMacOSWindowMaterial("settings")` (radius 26) plus
 `apply_main_window_liquid_glass_background` do in the shipping app:
 
 - **macOS 26+** — an `NSGlassEffectView`, found by runtime class lookup,
@@ -129,6 +136,26 @@ in `theme::MaterialTokens` with the rule each came from quoted next to it, and
 `Theme` exposes them as `shell_bg()` / `body_fill(n)` / `body_hover_fill(n)` /
 `body_border(n)` so a call site still reads as the Tailwind class it came from.
 
+The settings window uses the *same* token set — the `--macos-settings-*`
+custom properties are set by the visual-system blocks, not per material, so
+one struct serves both windows and only the elements differ. It adds the
+surfaces the panel material never lands on:
+
+| | Liquid Glass | Vibrancy |
+|---|---|---|
+| `--macos-settings-window-radius` | 26 | 16 |
+| `--macos-settings-sidebar-radius` | 18, then zeroed again by the settings rule | 0 |
+| `.cap-settings-sidebar` | `rgba(255,255,255,0.58)` / `rgba(28,28,28,0.88)` | `rgba(250,250,249,0.74)` / `rgba(22,22,22,0.9)` |
+| `.cap-settings-content` | `#f6f6f5` (opaque) / `rgba(17,17,17,0.92)` | `rgba(244,244,243,0.84)` / `rgba(17,17,17,0.94)` |
+| `.cap-settings-card`, page `bg-gray-2` | `rgba(255,255,255,0.92)` / `rgba(28,28,28,0.94)` | `rgba(249,249,248,0.94)` / `rgba(28,28,28,0.96)` |
+| page `bg-gray-3/4/5` → `--macos-settings-fill` | `rgba(0,0,0,0.045)` / `rgba(255,255,255,0.05)` | `rgba(0,0,0,0.055)` / `rgba(255,255,255,0.05)` |
+| nav/profile `:hover` → `--macos-settings-hover` | `rgba(0,0,0,0.065)` / `rgba(255,255,255,0.05)` | `rgba(0,0,0,0.055)` / `rgba(255,255,255,0.05)` |
+| description text → `--macos-settings-muted` | `rgba(0,0,0,0.48)` / `#a1a1a1` | same |
+
+Only the sidebar is translucent under Liquid Glass; `--macos-settings-content`
+is `#f6f6f5`, fully opaque, so the glass reads as a single lit edge down the
+left rather than a see-through window.
+
 The material is installed from a task after the window handle exists — subview
 insertion re-enters gpui's window callbacks, so it cannot run inside an update
 — and the result lands in a `platform::WindowMaterial` global that `render`
@@ -141,7 +168,8 @@ Things that are deliberately different, and why.
 | | |
 |---|---|
 | **Traffic lights are hand-drawn** | The Tauri main window returns `None` from `traffic_lights_position`, which routes it to `decorations(false)`; the lights are HTML there too. `titlebar: None` is the gpui equivalent. Minimize is not drawn, and zoom toggles expand/collapse. |
-| **Only the main window is on a material** | The main window is native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The windows that will need the material later are the other chrome windows: settings (radius 26), mode select, upgrade. |
+| **Only the chrome windows are on a material** | The main and settings windows are native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The chrome windows still to come are mode select and upgrade. |
+| **No always-active pin on the settings glass** | `apply_liquid_glass_background_inner` gives the *non-main* Tauri windows an "always active" pin (`setState:` / `setActive:` probing on the glass view) so the material does not dim when the app deactivates. It is not reproduced: it broke on 26.3 and falls back to the plain `SystemManaged` install anyway, and the hard rule here is to make only the AppKit calls the shipping app can be shown to rely on. The settings window therefore takes the same `setStyle:`-only path the main window does. |
 | **No header backdrop filter** | On the vibrancy path `.cap-window-header` is `rgba(250,250,249,0.72)` *plus* `backdrop-filter: blur(28px) saturate(1.45)`. The wash is here, the filter is not — same missing hook as the recording overlay's `backdrop-blur-xs`. |
 | **Appearance changes need a relaunch** | `sync_appearance` runs from `render`, and gpui only renders on invalidation, so flipping the system to light while the app is up leaves the dark palette on screen until something else forces a frame. Pre-existing, not specific to the material. |
 | **NSWindow, not NSPanel** | The Tauri app class-swizzles its windows into `NSPanel`s via `tauri_nspanel`. Here the main window stays a normal `NSWindow` and gets the observable parts — level 100, `CanJoinAllSpaces \| FullScreenPrimary` — from the `platform` module. (`WindowKind::Floating` is *not* a shortcut to this: its panel hides on app deactivation.) The controls bar *is* a real panel via `WindowKind::PopUp`, whose non-activating behavior it genuinely needs. |
@@ -193,7 +221,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Capture area | per display | Superseded — area selection is the target-select overlay's area variant; the Tauri app still registers a standalone `capture-area` window but nothing in its frontend opens it |
 | Recordings overlay | per display | Not started |
 | Mode select | 580×340 | Partial — exists as a panel, not a window |
-| Settings | 782×775 (min 780×560) | Not started |
+| Settings | 782×775 (min 780×560) | **Done — General** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 22), resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store. The other eleven pages are placeholder bodies |
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | Not started |
@@ -302,6 +330,68 @@ mkdir -p target/Frameworks
 ln -sfn "$(pwd)/../../target/native-deps/Spacedrive.framework" target/Frameworks/Spacedrive.framework
 ```
 
+## Settings, and the store both apps share
+
+The header gear opens the real second window — 782×775, resizable to a
+780×560 minimum, the `"settings"` material at radius 26 — and hides the main
+window, which is exactly what `new-main/index.tsx` does
+(`showWindow({ Settings: { page: "general" } })` then
+`getCurrentWindow().hide()`). Closing it brings the main window back, matching
+the `CapWindowId::Settings` arm of the Tauri app's `Destroyed` handler
+(`restore_main_and_target_select_windows`) — without that the gear would leave
+the app with no visible window at all. Cmd-W closes it, as
+`(window-chrome).tsx` binds for every chrome window; Escape is not bound
+there and is not bound here.
+
+Unlike the main window these are the **real** traffic lights: the Tauri
+settings window returns `Some(Some(LogicalPosition::new(22.0, 22.0)))` from
+`traffic_lights_position`, i.e. it keeps AppKit's buttons and moves them, and
+the chrome layout returns `null` for its own header on the settings route.
+gpui expresses that as `TitlebarOptions { appears_transparent: true,
+traffic_light_position: Some(point(px(22.), px(22.))) }`, and the min size as
+`window_min_size` — no `setContentMinSize:` helper was needed.
+
+The sidebar carries all twelve entries of `settingsItems`, in order, none of
+them gated: General, Shortcuts (route `hotkeys`), CLI, Recordings,
+Screenshots, Automations, Transcription, Integrations, License, Experimental,
+Feedback, Changelog. Only **General** is built.
+
+### The store contract
+
+`general.tsx` writes through `generalSettingsStore`, i.e. the
+tauri-plugin-store file `Store.load("store")` — `store` (no extension) inside
+`so.cap.desktop`'s app-data dir. This app writes the same file, and every
+write is a read-modify-write on the raw JSON that replaces exactly
+`store[section][key]`: `store::set_store_setting`. Serializing a typed struct
+back over the file would silently drop `auth`, `presets`, the migration flags
+and the two thirds of `general_settings` no page here renders — the store test
+`writing_one_setting_preserves_unknown_keys` is what holds that line. A store
+file that exists but does not parse is never written to at all, because
+replacing it with a fresh object would delete someone's auth token.
+
+Reads are field-by-field rather than `derive(Deserialize)` on a struct: one
+enum value written by a newer Tauri build would otherwise fail the whole
+deserialize and blank every row on the page. `CAP_GPUI_TAURI_STORE` points the
+whole module at a copy, which is how the tests — and any verification run that
+must not touch real settings — work.
+
+Settings-specific deviations:
+
+| | |
+|---|---|
+| **Eleven placeholder pages** | Shortcuts, CLI, Recordings, Screenshots, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; the bodies are not. |
+| **No auth, so the free-plan variant** | There is no auth store here (same gap as the main window's plan badge), so the profile row shows the signed-out "Click to sign in" state and does nothing when clicked, and the Cap Pro section renders as it does for a free user: Instant Mode quality pinned to 720p, the other tiers inert. In the Tauri app clicking a locked tier raises an upgrade toast. `instantModeMaxResolution` is therefore displayed but never written. |
+| **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. Ours draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks and the same click-away dismiss. |
+| **Text fields are the search field's cousin** | gpui ships no text input, so the project-name template and the server URL use the same hand-rolled field as the main window's search: focus tracking, `key_char` for the typed character, a static caret, Escape to revert. No selection, no cursor movement, no blink. |
+| **The project-name preview is literal-only** | `commands.formatProjectName` understands `{moment:<format>}` and custom `{date:...}`/`{time:...}` formats through a moment-to-chrono translation. The preview here substitutes the six literal placeholders the card documents and leaves anything else alone — which is also what an unknown placeholder does there. |
+| **Theme tiles keep a fixed height** | `aspect-[5/3]` has no gpui equivalent, so the three previews are 93px tall, the height they have at the window's default 782 width. Widen the window and they stay 93. |
+| **`AccentColor` is macOS blue** | `--macos-settings-accent: AccentColor` resolves to the user's system accent; gpui exposes no query for it, so the checked toggles and the selected sidebar icon use `#007aff`. A user on a non-blue accent sees blue here and their own colour in the shipping app. |
+| **No toggle bevel** | `.cap-toggle` carries `box-shadow: inset 0 1px 2px rgba(0,0,0,0.16)`; there is no inset-shadow hook in this gpui rev, so the track is flat. |
+| **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
+| **The theme setting is stored, not applied** | Selecting Light or Dark writes `theme`, which the Tauri app uses to force an appearance. This app follows the system appearance only (`sync_appearance`), so the tile is persisted parity, not behaviour. The same is true of `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel: they persist, and the machinery that would obey them is not built yet. |
+| **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
+| **Version is this crate's** | The sidebar footer shows `v0.1.0` from `CARGO_PKG_VERSION`, not `getVersion()`; "Check for updates" is drawn in its disabled state because there is no updater. |
+
 ## Verifying changes
 
 `screencapture` cannot see windows without Screen Recording permission, but
@@ -324,3 +414,14 @@ judged from a full-screen `screencapture -x`.
 `CAP_GPUI_AUTO_EXPAND=1` opens the window expanded, the way clicking the zoom
 light does, for the same reason as the other `CAP_GPUI_AUTO_*` hooks:
 unprivileged synthetic clicks are dropped.
+
+`CAP_GPUI_AUTO_SETTINGS=1` opens the settings window at startup, exactly as
+the header gear does (main window hidden included). Pass a page slug instead
+of `1` — `CAP_GPUI_AUTO_SETTINGS=hotkeys` — to land on another sidebar entry;
+an unknown slug falls back to General.
+
+`CAP_GPUI_TAURI_STORE=<path>` points every settings read and write at another
+file. Use it for anything that toggles a setting: the default is the store the
+shipping app is also writing, and a probe run should not be editing the real
+one. `cp "$HOME/Library/Application Support/so.cap.desktop/store" /tmp/probe`
+first, so the copy carries the real unknown keys.

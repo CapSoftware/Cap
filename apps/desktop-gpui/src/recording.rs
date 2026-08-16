@@ -439,19 +439,9 @@ pub fn recordings_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
 
-    let app_data = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-        .join("Library/Application Support/so.cap.desktop");
-
-    let custom = std::fs::read(app_data.join("store"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|store| {
-            store
-                .get("general_settings")?
-                .get("recordingsPath")?
-                .as_str()
-                .map(PathBuf::from)
-        })
+    let custom = crate::store::GeneralSettings::load()
+        .recordings_path
+        .map(PathBuf::from)
         .filter(|path| path.is_absolute());
 
     if let Some(path) = custom
@@ -460,7 +450,7 @@ pub fn recordings_dir() -> PathBuf {
         return path;
     }
 
-    app_data.join("recordings")
+    crate::store::app_data_dir().join("recordings")
 }
 
 /// `format_project_name` with the default template

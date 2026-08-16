@@ -30,15 +30,22 @@ impl Appearance {
 ///
 /// The web app expresses this as `--macos-settings-*` custom properties
 /// (`apps/desktop/src/styles/theme.css`) selected by two data attributes on
-/// `<html>`: `data-macos-native-material` ("panel" for the main window) and
-/// `data-macos-visual-system` ("liquid-glass" or "vibrancy"). Only the panel
-/// material's resolved values are transcribed here -- the settings and
-/// teleprompter materials belong to windows this app does not have yet.
+/// `<html>`: `data-macos-native-material` ("panel" for the main window,
+/// "settings" for the settings window) and `data-macos-visual-system`
+/// ("liquid-glass" or "vibrancy").
+///
+/// The custom properties themselves are set by the *visual system* blocks, not
+/// per material, so one token set serves both windows; what differs is which
+/// element each variable lands on, plus the two material-specific shell rules
+/// (`[..native-material="panel"] .cap-window-shell`). `shell` and `header`
+/// below are the panel's; `sidebar` / `content` / `card` are the settings
+/// window's surfaces. The teleprompter material is still absent -- that window
+/// does not exist here yet.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialTokens {
     pub kind: MaterialKind,
 
-    /// `.cap-window-shell`'s background.
+    /// `.cap-window-shell`'s background, material "panel".
     pub shell: Rgba,
     /// `.cap-window-header`'s background.
     pub header: Rgba,
@@ -54,6 +61,31 @@ pub struct MaterialTokens {
     pub selection: Rgba,
     /// `--macos-settings-text`.
     pub text: Rgba,
+    /// `--macos-settings-muted`.
+    pub muted: Rgba,
+    /// `--macos-settings-fill`.
+    pub fill: Rgba,
+    /// `--macos-settings-hover`.
+    pub hover: Rgba,
+    /// `--macos-settings-sidebar`, the settings window's left pane.
+    pub sidebar: Rgba,
+    /// `--macos-settings-content`, the settings window's right pane.
+    pub content: Rgba,
+    /// `--macos-settings-card`, a `.cap-settings-card` / `.bg-gray-2` surface
+    /// inside that pane.
+    pub card: Rgba,
+    /// `--macos-settings-window-radius`. The settings shell takes it as-is;
+    /// the main window overrides it back to 16
+    /// (`[data-macos-native-material="panel"] .cap-window-shell
+    /// { border-radius: 16px }`), which is why `MAIN_WINDOW_MATERIAL_RADIUS`
+    /// is a constant and this is not.
+    pub window_radius: f32,
+    /// `--macos-settings-sidebar-radius`. Transcribed for the record: the
+    /// liquid-glass settings rule zeroes it again
+    /// (`[..visual-system="liquid-glass"][..native-material="settings"]
+    /// .cap-settings-sidebar { border-radius: 0 }`), so the pane is square on
+    /// both paths and the window's own radius does the clipping.
+    pub sidebar_radius: f32,
 }
 
 impl MaterialTokens {
@@ -95,6 +127,26 @@ impl MaterialTokens {
                 selection: rgba(0x0000001a),
                 // `--macos-settings-text: rgba(0, 0, 0, 0.88)`
                 text: rgba(0x000000e0),
+                // `:root { --macos-settings-muted: rgba(0, 0, 0, 0.48) }`,
+                // not overridden by the glass block.
+                muted: rgba(0x0000007a),
+                // The glass block *does* override these three:
+                // `--macos-settings-fill: rgba(0, 0, 0, 0.045)`
+                fill: rgba(0x0000000b),
+                // `--macos-settings-hover: rgba(0, 0, 0, 0.065)`
+                hover: rgba(0x00000011),
+                // `--macos-settings-sidebar: rgba(255, 255, 255, 0.58)`
+                sidebar: rgba(0xffffff94),
+                // `--macos-settings-content: #f6f6f5` -- opaque, unlike every
+                // other surface here: under Liquid Glass only the sidebar
+                // shows the backdrop.
+                content: rgba(0xf6f6f5ff),
+                // `--macos-settings-card: rgba(255, 255, 255, 0.92)`
+                card: rgba(0xffffffeb),
+                // `--macos-settings-window-radius: 26px`
+                window_radius: 26.,
+                // `--macos-settings-sidebar-radius: 18px`
+                sidebar_radius: 18.,
             },
             Appearance::Dark => Self {
                 kind: MaterialKind::LiquidGlass,
@@ -115,6 +167,21 @@ impl MaterialTokens {
                 selection: rgb(0x2c2c2c),
                 // `--macos-settings-text: rgba(255, 255, 255, 0.95)`
                 text: rgba(0xfffffff2),
+                // `--macos-settings-muted: #a1a1a1`
+                muted: rgb(0xa1a1a1),
+                // `--macos-settings-fill: rgba(255, 255, 255, 0.05)`
+                fill: rgba(0xffffff0d),
+                // `--macos-settings-hover: rgba(255, 255, 255, 0.05)`
+                hover: rgba(0xffffff0d),
+                // `--macos-settings-sidebar: rgba(28, 28, 28, 0.88)`
+                sidebar: rgba(0x1c1c1ce0),
+                // `--macos-settings-content: rgba(17, 17, 17, 0.92)`
+                content: rgba(0x111111eb),
+                // `--macos-settings-card: rgba(28, 28, 28, 0.94)`
+                card: rgba(0x1c1c1cf0),
+                // The radii are set once, outside the `.dark` block.
+                window_radius: 26.,
+                sidebar_radius: 18.,
             },
         }
     }
@@ -143,6 +210,22 @@ impl MaterialTokens {
                 control_active: rgba(0x00000014),
                 selection: rgba(0x0000001a),
                 text: rgba(0x000000e0),
+                muted: rgba(0x0000007a),
+                // The `:root` values, none of them overridden without the
+                // glass block: `--macos-settings-fill: rgba(0, 0, 0, 0.055)`
+                fill: rgba(0x0000000e),
+                // `--macos-settings-hover: rgba(0, 0, 0, 0.055)`
+                hover: rgba(0x0000000e),
+                // `--macos-settings-sidebar: rgba(250, 250, 249, 0.74)`
+                sidebar: rgba(0xfafaf9bd),
+                // `--macos-settings-content: rgba(244, 244, 243, 0.84)`
+                content: rgba(0xf4f4f3d6),
+                // `--macos-settings-card: rgba(249, 249, 248, 0.94)`
+                card: rgba(0xf9f9f8f0),
+                // `--macos-settings-window-radius: 16px`
+                window_radius: 16.,
+                // `--macos-settings-sidebar-radius: 0px`
+                sidebar_radius: 0.,
             },
             Appearance::Dark => Self {
                 kind: MaterialKind::Vibrancy,
@@ -158,6 +241,21 @@ impl MaterialTokens {
                 control_active: rgba(0xffffff0f),
                 selection: rgb(0x2c2c2c),
                 text: rgba(0xfffffff2),
+                // `:root.dark { --macos-settings-muted: #a1a1a1 }`
+                muted: rgb(0xa1a1a1),
+                // `--macos-settings-fill: rgba(255, 255, 255, 0.05)`
+                fill: rgba(0xffffff0d),
+                // `--macos-settings-hover: rgba(255, 255, 255, 0.05)`
+                hover: rgba(0xffffff0d),
+                // `--macos-settings-sidebar: rgba(22, 22, 22, 0.9)` -- the one
+                // settings surface the glass block does *not* just re-tint.
+                sidebar: rgba(0x161616e6),
+                // `--macos-settings-content: rgba(17, 17, 17, 0.94)`
+                content: rgba(0x111111f0),
+                // `--macos-settings-card: rgba(28, 28, 28, 0.96)`
+                card: rgba(0x1c1c1cf5),
+                window_radius: 16.,
+                sidebar_radius: 0.,
             },
         }
     }
@@ -213,6 +311,13 @@ pub struct Theme {
     pub red_9: Rgba,
     pub red_10: Rgba,
 
+    /// The settings page's one non-gray, non-blue accent: the "recommended Cap
+    /// windows are not excluded" warning is `border-amber-6 bg-amber-3/30
+    /// text-amber-11`. Stock Radix -- `theme.css` overrides no amber step.
+    pub amber_3: Rgba,
+    pub amber_6: Rgba,
+    pub amber_11: Rgba,
+
     /// `--blue-500`: the device-list selection fill and the Mode pill's ring.
     /// Distinct from `blue-9`; the two are not interchangeable.
     pub blue_500: Rgba,
@@ -263,6 +368,10 @@ impl Theme {
             red_9: rgb(0xe5484d),
             red_10: rgb(0xdc3e42),
 
+            amber_3: rgb(0xfff7c2),
+            amber_6: rgb(0xf3d673),
+            amber_11: rgb(0xab6400),
+
             blue_500: rgb(0x3666c5),
             red_300: rgb(0xff4766),
 
@@ -301,6 +410,10 @@ impl Theme {
             red_4: rgb(0x500f1c),
             red_9: rgb(0xe5484d),
             red_10: rgb(0xec5d5e),
+
+            amber_3: rgb(0x302008),
+            amber_6: rgb(0x5c3d05),
+            amber_11: rgb(0xffca16),
 
             blue_500: rgb(0x0a84ff),
             red_300: rgb(0xff4766),
@@ -456,6 +569,117 @@ impl Theme {
         }
     }
 
+    // ---- The settings window's surfaces -------------------------------
+    //
+    // Same tokens, a different set of elements. Every rule quoted below is
+    // under `[data-macos-native-material="settings"]`; the fallbacks are the
+    // Tailwind classes the TSX carries when no material was installed, which
+    // is what the window would paint on a non-mac.
+
+    /// `.cap-settings-shell`'s corner: `border-radius:
+    /// var(--macos-settings-window-radius)` with no per-material override
+    /// (unlike `.cap-window-shell`'s `16px` for "panel").
+    pub fn settings_window_radius(&self) -> f32 {
+        self.material
+            .map(|material| material.window_radius)
+            .unwrap_or(16.)
+    }
+
+    /// `.cap-settings-sidebar { background: var(--macos-settings-sidebar) }`,
+    /// `bg-gray-2` without a material.
+    pub fn settings_sidebar_bg(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.sidebar.into(),
+            None => self.gray_2.into(),
+        }
+    }
+
+    /// `.cap-settings-content { background: var(--macos-settings-content) }`.
+    /// Bare, the pane has no background of its own and shows the shell's
+    /// `bg-gray-1`.
+    pub fn settings_content_bg(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.content.into(),
+            None => self.gray_1.into(),
+        }
+    }
+
+    /// `.cap-settings-card, .cap-settings-content .bg-gray-2
+    /// { background-color: var(--macos-settings-card) }`.
+    pub fn settings_card_bg(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.card.into(),
+            None => self.gray_2.into(),
+        }
+    }
+
+    /// `.cap-settings-content .bg-gray-3, .bg-gray-4, .bg-gray-5
+    /// { background-color: var(--macos-settings-fill) }` -- selects, inline
+    /// code chips, the summary boxes.
+    pub fn settings_fill(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.fill.into(),
+            None => self.gray_3.into(),
+        }
+    }
+
+    /// `.cap-settings-nav-item:hover`, `.cap-settings-profile:hover`
+    /// `{ background: var(--macos-settings-hover) }`; `hover:bg-gray-3` bare.
+    pub fn settings_hover(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.hover.into(),
+            None => self.gray_3.into(),
+        }
+    }
+
+    /// `.cap-settings-nav-item.bg-gray-5 { background:
+    /// var(--macos-settings-selection) }` -- the selected sidebar row.
+    pub fn settings_selection(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.selection.into(),
+            None => self.gray_5.into(),
+        }
+    }
+
+    /// `--macos-settings-border`: the row dividers, the account footer's top
+    /// rule, and the sidebar/content divider.
+    pub fn settings_border(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.border.into(),
+            None => self.gray_3.into(),
+        }
+    }
+
+    /// The divider between the sidebar and the content pane:
+    /// `[..liquid-glass][..settings] .cap-settings-shell > * + *
+    /// { border-color: var(--macos-settings-border) }`. Only the glass path
+    /// remaps it; on the others the shell's own `divide-x divide-gray-3`
+    /// stands.
+    pub fn settings_divider(&self) -> Hsla {
+        match self.material {
+            Some(material) if material.kind == MaterialKind::LiquidGlass => material.border.into(),
+            _ => self.gray_3.into(),
+        }
+    }
+
+    /// `.cap-settings-page { color: var(--macos-settings-text) }`; the page's
+    /// `text-gray-12` bare.
+    pub fn settings_text(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.text.into(),
+            None => self.gray_12.into(),
+        }
+    }
+
+    /// `.cap-settings-page .text-gray-10, .text-gray-11 { color:
+    /// var(--macos-settings-muted) }` -- every description line.
+    pub fn settings_muted(&self) -> Hsla {
+        match self.material {
+            Some(material) => material.muted.into(),
+            None => self.gray_10.into(),
+        }
+    }
+
     pub fn is_dark(&self) -> bool {
         self.appearance == Appearance::Dark
     }
@@ -495,6 +719,13 @@ impl Theme {
     /// `--blue-*` overrides: the overlay reaches straight for the Tailwind
     /// palette there.
     pub const TARGET_HIGHLIGHT: u32 = 0x155dfc;
+
+    /// `--macos-settings-accent: AccentColor` -- the selected sidebar icon and
+    /// the checked toggle. `AccentColor` is the system-wide accent the user
+    /// picked in System Settings; gpui exposes no query for it, so this is
+    /// macOS's default blue. A user on a non-blue accent sees blue here and
+    /// their own colour in the Tauri app (README deviation).
+    pub const SETTINGS_ACCENT: u32 = 0x007aff;
 
     /// Traffic light fills. Minimize is never drawn in the main window
     /// (`showMinimize={false}`), so only close and zoom are needed.
@@ -587,6 +818,62 @@ mod tests {
             }
             assert_eq!(theme.body_border(8), theme.gray(8));
         }
+    }
+
+    /// The settings window's own surfaces, material "settings".
+    #[test]
+    fn liquid_glass_settings_surfaces() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let theme = Theme::new(appearance).with_material(Some(MaterialKind::LiquidGlass));
+            let material = theme.material.expect("material was just installed");
+
+            // `--macos-settings-window-radius: 26px` under the glass block,
+            // and the settings shell takes it unmodified -- 16 is the panel's
+            // override, which must not leak over here.
+            assert_eq!(theme.settings_window_radius(), 26.);
+            assert_eq!(material.sidebar_radius, 18.);
+
+            assert_eq!(theme.settings_sidebar_bg(), Hsla::from(material.sidebar));
+            assert_eq!(theme.settings_content_bg(), Hsla::from(material.content));
+            assert_eq!(theme.settings_card_bg(), Hsla::from(material.card));
+            assert_eq!(theme.settings_fill(), Hsla::from(material.fill));
+            assert_eq!(theme.settings_hover(), Hsla::from(material.hover));
+            assert_eq!(theme.settings_selection(), Hsla::from(material.selection));
+            assert_eq!(theme.settings_border(), Hsla::from(material.border));
+            assert_eq!(theme.settings_divider(), Hsla::from(material.border));
+            assert_eq!(theme.settings_text(), Hsla::from(material.text));
+            assert_eq!(theme.settings_muted(), Hsla::from(material.muted));
+        }
+
+        // The sidebar is a wash over the live backdrop; the content pane is
+        // `#f6f6f5`, fully opaque, in light mode only.
+        let light = Theme::light().with_material(Some(MaterialKind::LiquidGlass));
+        assert!((light.settings_sidebar_bg().a - 0.58).abs() < 0.01);
+        assert_eq!(light.settings_content_bg().a, 1.);
+        let dark = Theme::dark().with_material(Some(MaterialKind::LiquidGlass));
+        assert!((dark.settings_sidebar_bg().a - 0.88).abs() < 0.01);
+        assert!((dark.settings_content_bg().a - 0.92).abs() < 0.01);
+    }
+
+    /// Vibrancy keeps the `:root` radius and the pre-Tahoe surface set, and
+    /// the sidebar/content divider falls back to the shell's own
+    /// `divide-x divide-gray-3`.
+    #[test]
+    fn vibrancy_settings_surfaces() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let theme = Theme::new(appearance).with_material(Some(MaterialKind::Vibrancy));
+            assert_eq!(theme.settings_window_radius(), 16.);
+            assert_eq!(theme.settings_divider(), theme.gray(3));
+        }
+        // No material at all: the Tailwind classes, unremapped.
+        let bare = Theme::light();
+        assert_eq!(bare.settings_sidebar_bg(), bare.gray(2));
+        assert_eq!(bare.settings_card_bg(), bare.gray(2));
+        assert_eq!(bare.settings_fill(), bare.gray(3));
+        assert_eq!(bare.settings_selection(), bare.gray(5));
+        assert_eq!(bare.settings_text(), bare.gray(12));
+        assert_eq!(bare.settings_muted(), bare.gray(10));
+        assert_eq!(bare.settings_window_radius(), 16.);
     }
 
     /// The light panel tint is `rgba(255, 255, 255, 0.55)` and the dark one

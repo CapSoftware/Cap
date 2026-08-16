@@ -37,6 +37,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "bell.svg",
     "camera.svg",
     "caret-down.svg",
+    "captions.svg",
     "circle.svg",
     "check.svg",
     "chevron-down.svg",
@@ -45,12 +46,15 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "enlarge.svg",
     "film-cut.svg",
     "gear.svg",
+    "gift.svg",
     "history.svg",
+    "hotkeys.svg",
     "image.svg",
     "info.svg",
     "instant.svg",
     "logo-full-dark.svg",
     "logo-full.svg",
+    "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
     "minimize.svg",
@@ -60,25 +64,41 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "pause-circle.svg",
     "person-standing.svg",
     "play-circle.svg",
+    "plus.svg",
     "rectangle-horizontal.svg",
     "restart.svg",
     "square.svg",
+    "square-play.svg",
+    "terminal.svg",
     "trash.svg",
+    "triangle-alert.svg",
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
     "stop-circle.svg",
     "search.svg",
     "settings.svg",
+    "unplug.svg",
+    "user-round.svg",
     "window.svg",
     "x.svg",
+    "zap.svg",
+);
+
+/// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The
+/// three theme previews in the settings window's Appearance section are the
+/// app's own `~/assets/theme-previews/*.jpg`, drawn with `img()`.
+const IMAGES: &[(&str, &[u8])] = assets!("images":
+    "auto.jpg",
+    "light.jpg",
+    "dark.jpg",
 );
 
 pub struct Assets;
 
 impl Assets {
     fn all() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-        FONTS.iter().chain(ICONS.iter())
+        FONTS.iter().chain(ICONS.iter()).chain(IMAGES.iter())
     }
 }
 
@@ -124,6 +144,7 @@ mod tests {
         include_str!("controls_window.rs"),
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),
+        include_str!("settings_window.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws
@@ -179,12 +200,47 @@ mod tests {
         );
     }
 
+    /// Same contract for the bitmaps, which `img()` resolves through the
+    /// identical `AssetSource` path and fails just as silently.
+    #[test]
+    fn every_referenced_image_is_embedded_and_vice_versa() {
+        let source = ICON_SOURCES.concat();
+        let source = source.as_str();
+
+        let referenced: Vec<&str> = source
+            .match_indices("\"images/")
+            .filter_map(|(start, _)| source[start + 1..].split('"').next())
+            .collect();
+        assert!(!referenced.is_empty(), "found no image references to check");
+
+        let missing: Vec<&str> = referenced
+            .into_iter()
+            .filter(|path| Assets.load(path).unwrap().is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "images referenced but not embedded: {missing:?}"
+        );
+
+        let unused: Vec<&str> = IMAGES
+            .iter()
+            .map(|(path, _)| *path)
+            .filter(|path| !source.contains(path))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "images embedded but never drawn: {unused:?}"
+        );
+    }
+
     #[test]
     fn fonts_and_icons_resolve() {
         assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
         assert!(Assets.load("icons/camera.svg").unwrap().is_some());
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
+        assert!(Assets.load("images/auto.jpg").unwrap().is_some());
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
+        assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
     }
 }
