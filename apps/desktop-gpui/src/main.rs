@@ -3,15 +3,19 @@
 //! Milestone 1 is the main recording window (compact + expanded) with real
 //! device enumeration. No tauri, no webview: the whole UI is gpui.
 
+mod app_windows;
 mod assets;
+mod controls_window;
 mod devices;
 mod main_window;
+mod platform;
 mod recording;
+mod session;
 mod theme;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
-use crate::{assets::Assets, main_window::MainWindow};
+use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
 /// Matches the Tauri main window exactly (`CapWindowId::Main`).
 const MAIN_WINDOW_WIDTH: f32 = 330.;
@@ -48,6 +52,8 @@ fn main() {
 
         // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
         // and the window is fixed at that size there too.
+        let session = RecordingSession::init(cx);
+
         let bounds = Bounds::centered(
             None,
             size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)),
@@ -65,15 +71,11 @@ fn main() {
                     // `None` titlebar drops NSClosable/NSMiniaturizable/NSResizable
                     // from the style mask, which is the equivalent.
                     titlebar: None,
-                    // TODO: always-on-top, `visible_on_all_workspaces(true)`
-                    // and the NSPanel level-100 treatment the Tauri window
-                    // gets. `WindowKind::Floating` is not the answer: it does
-                    // float at NSFloatingWindowLevel, but it allocates an
+                    // Stays `Normal` and gets its panel treatment (level 100,
+                    // all Spaces) from `platform::apply_panel_behavior` below.
+                    // `WindowKind::Floating` is not the answer: it allocates an
                     // NSPanel, and a panel hides itself when the application
-                    // deactivates -- the window vanishes the moment you click
-                    // another app, which is exactly wrong for a recorder. This
-                    // needs the AppKit calls `windows.rs` makes, on a normal
-                    // window.
+                    // deactivates -- exactly wrong for a recorder.
                     kind: gpui::WindowKind::Normal,
                     // The header is dragged by the app via `start_window_move`
                     // rather than by AppKit, so mark the content view as app-owned
@@ -84,14 +86,32 @@ fn main() {
                     is_minimizable: false,
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| MainWindow::new(window, cx)),
+                {
+                    let session = session.clone();
+                    move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
+                },
             )
             .expect("failed to open the main window");
 
+        app_windows::init(window_handle, session, cx);
+
         // Enumeration is started here rather than in `MainWindow::new`, which
         // runs before the window is fully built -- see `start_enumeration`.
+        // The panel behavior (`MAIN_PANEL_LEVEL`, all Spaces -- what the Tauri
+        // app does via tauri_nspanel) is applied here for the same reason: the
+        // NSWindow does not exist yet inside the builder closure.
         window_handle
-            .update(cx, |view, window, cx| view.start_enumeration(window, cx))
+            .update(cx, |view, window, cx| {
+                platform::apply_panel_behavior(
+                    window,
+                    platform::PanelBehavior {
+                        level: platform::MAIN_WINDOW_LEVEL,
+                        join_all_spaces: true,
+                        shadow: true,
+                    },
+                );
+                view.start_enumeration(window, cx)
+            })
             .expect("failed to start device enumeration");
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary

@@ -49,8 +49,12 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "logo-full.svg",
     "microphone.svg",
     "minimize.svg",
+    "more-vertical.svg",
     "move-left.svg",
+    "pause-circle.svg",
     "play-circle.svg",
+    "restart.svg",
+    "trash.svg",
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
@@ -103,12 +107,20 @@ impl Assets {
 mod tests {
     use super::*;
 
-    /// Every icon `main_window` asks for must be in the table. gpui draws
+    /// Every source file that draws icons; both directions of the asset checks
+    /// scan the same list.
+    const ICON_SOURCES: &[&str] = &[
+        include_str!("main_window.rs"),
+        include_str!("controls_window.rs"),
+    ];
+
+    /// Every icon a window asks for must be in the table. gpui draws
     /// nothing at all for a path it cannot resolve, and does not log, so a typo
     /// here is otherwise only visible by looking at the window.
     #[test]
     fn every_referenced_icon_is_embedded() {
-        let source = include_str!("main_window.rs");
+        let source = ICON_SOURCES.concat();
+        let source = source.as_str();
 
         let referenced: Vec<&str> = source
             .match_indices("\"icons/")
@@ -140,7 +152,8 @@ mod tests {
     /// refactor is dead weight in the binary, and nothing else would notice.
     #[test]
     fn every_embedded_icon_is_referenced() {
-        let source = include_str!("main_window.rs");
+        let source = ICON_SOURCES.concat();
+        let source = source.as_str();
 
         let unused: Vec<&str> = ICONS
             .iter()

@@ -57,6 +57,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Native window treatment (panel levels, Spaces) gpui does not expose. Same
+# versions gpui's own tree compiles, so no second objc2 universe gets built.
+objc2 = "0.5.2"
+objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard"] }
+raw-window-handle = "0.6"
 # ScreenCaptureKit shareable content, acquired the same way recording.rs in
 # src-tauri does. Same fork/rev/features as the root workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [

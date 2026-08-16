@@ -62,6 +62,9 @@ pub struct Theme {
     /// Distinct from `blue-9`; the two are not interchangeable.
     pub blue_500: Rgba,
 
+    /// `--red-300`, the recording bar's stop button. Same value in both themes.
+    pub red_300: Rgba,
+
     /// `--text-primary`, the root text colour. Slightly translucent by design.
     pub text_primary: Rgba,
 }
@@ -103,6 +106,7 @@ impl Theme {
             red_10: rgb(0xdc3e42),
 
             blue_500: rgb(0x3666c5),
+            red_300: rgb(0xff4766),
 
             text_primary: rgba(0x12161ff2),
         }
@@ -138,6 +142,7 @@ impl Theme {
             red_10: rgb(0xec5d5e),
 
             blue_500: rgb(0x0a84ff),
+            red_300: rgb(0xff4766),
 
             text_primary: rgba(0xfffffff2),
         }
@@ -157,6 +162,14 @@ impl Theme {
         } else {
             self.blue_3.into()
         }
+    }
+
+    /// A colour at an alpha, for Tailwind's `/N` overlay fills
+    /// (`hover:bg-gray-12/6`, `hover:bg-red-500/8`).
+    pub fn with_alpha(color: Rgba, alpha: f32) -> Hsla {
+        let mut color: Hsla = color.into();
+        color.a = alpha;
+        color
     }
 
     pub fn tile_selected_hover_bg(&self) -> Hsla {

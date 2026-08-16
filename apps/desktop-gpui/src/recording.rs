@@ -28,7 +28,9 @@ pub enum RecordingMode {
 }
 
 /// Everything `start` needs, captured from UI state up front so the future is
-/// `'static` and owns its inputs.
+/// `'static` and owns its inputs. `Clone` because the session keeps the last
+/// config around for the bar's restart button.
+#[derive(Clone)]
 pub struct StartConfig {
     pub mode: RecordingMode,
     pub target: ScreenCaptureTarget,
@@ -36,11 +38,16 @@ pub struct StartConfig {
     pub microphone: Option<String>,
     pub camera: Option<DeviceOrModelID>,
     pub system_audio: bool,
+    /// Our own windows (the recording controls bar), excluded from capture the
+    /// way the Tauri app excludes its bar.
+    pub excluded_windows: Vec<scap_targets::WindowId>,
 }
 
 enum Handle {
+    // Studio's handle is `Clone`; instant's is not, so it rides in an `Arc`.
+    // Both give the owned handles pause/resume need for `'static` futures.
     Studio(studio_recording::ActorHandle),
-    Instant(instant_recording::ActorHandle),
+    Instant(Arc<instant_recording::ActorHandle>),
 }
 
 /// A live recording. Stopping consumes it; dropping it without stopping leaves
@@ -65,6 +72,57 @@ impl ActiveRecording {
     /// mp4s), instant projects get their DASH segments muxed into
     /// `content/output.mp4` plus a `recording-meta.json`/`project-config.json`
     /// pair so the library and share flows recognize the project.
+    /// An owned future pausing the recording; `'static` so the session can
+    /// spawn it on tokio without borrowing itself.
+    pub fn pause_handle(
+        &self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+        match &self.handle {
+            Handle::Studio(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.pause().await })
+            }
+            Handle::Instant(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.pause().await })
+            }
+        }
+    }
+
+    /// Owned resume future; see [`Self::pause_handle`].
+    pub fn resume_handle(
+        &self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+        match &self.handle {
+            Handle::Studio(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.resume().await })
+            }
+            Handle::Instant(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.resume().await })
+            }
+        }
+    }
+
+    /// Cancel without finalizing and delete the project directory -- the
+    /// delete and restart flows. Deleting a directory this app just created is
+    /// app behavior, same as the Tauri delete button.
+    pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
+        match &self.handle {
+            Handle::Studio(handle) => handle.cancel().await?,
+            Handle::Instant(handle) => handle.cancel().await?,
+        }
+        tokio::task::spawn_blocking({
+            let dir = self.project_dir.clone();
+            move || std::fs::remove_dir_all(&dir)
+        })
+        .await
+        .context("delete task")?
+        .with_context(|| format!("deleting {}", self.project_dir.display()))?;
+        Ok(())
+    }
+
     pub async fn stop(self) -> anyhow::Result<PathBuf> {
         match self.handle {
             Handle::Studio(handle) => {
@@ -144,32 +202,45 @@ fn persist_instant_meta(
 }
 
 pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
+    match start_attempt(config.clone()).await {
+        Ok(active) => Ok(active),
+        // The mic actor can die between our health checks and the recording
+        // actor's own audio setup (flaky Bluetooth/Continuity devices, or
+        // CoreAudio still tearing down a previous session). One retry without
+        // the mic keeps the screen recording alive; the real fix is app-scoped
+        // feeds with reconnect, which arrive with the camera preview window.
+        Err(error) if config.microphone.is_some() && format!("{error:#}").contains("microphone") =>
+        {
+            tracing::warn!("start failed on the microphone path, retrying without: {error:#}");
+            start_attempt(StartConfig {
+                microphone: None,
+                ..config
+            })
+            .await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
     let project_dir = create_project_dir(&config.target)?;
     tracing::info!(dir = %project_dir.display(), "starting recording");
 
     // Feed actors are per-recording here, where the Tauri app keeps app-wide
     // ones (it needs them for previews and level meters between recordings).
     // Once the camera preview window exists this moves to app scope too.
+    // A microphone that enumerates but fails to open (Bluetooth profile
+    // switch, a Continuity iPhone that wandered off) must not kill the whole
+    // recording -- degrade to no-mic, the way the Tauri app's app-scoped feed
+    // surfaces "Not connected" and records on.
     let (mic_feed, mic_lock, mic_errors) = match &config.microphone {
-        Some(label) => {
-            let (error_tx, error_rx) = flume::unbounded();
-            let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
-            let ready = feed
-                .ask(microphone::SetInput {
-                    label: label.clone(),
-                    settings: None,
-                })
-                .await
-                .map_err(|e| anyhow!("microphone '{label}' setup: {e}"))?;
-            ready
-                .await
-                .map_err(|e| anyhow!("microphone '{label}' init: {e}"))?;
-            let lock = feed
-                .ask(microphone::Lock)
-                .await
-                .map_err(|e| anyhow!("microphone '{label}' lock: {e}"))?;
-            (Some(feed), Some(Arc::new(lock)), Some(error_rx))
-        }
+        Some(label) => match setup_microphone(label).await {
+            Ok((feed, lock, error_rx)) => (Some(feed), Some(lock), Some(error_rx)),
+            Err(error) => {
+                tracing::warn!("microphone '{label}' unavailable, recording without: {error:#}");
+                (None, None, None)
+            }
+        },
         None => (None, None, None),
     };
 
@@ -213,7 +284,8 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         RecordingMode::Studio => {
             let mut builder =
                 studio_recording::Actor::builder(project_dir.clone(), config.target.clone())
-                    .with_system_audio(config.system_audio);
+                    .with_system_audio(config.system_audio)
+                    .with_excluded_windows(config.excluded_windows.clone());
             if let Some(lock) = camera_lock.clone() {
                 builder = builder.with_camera_feed(lock);
             }
@@ -233,14 +305,15 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         RecordingMode::Instant => {
             let mut builder =
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
-                    .with_system_audio(config.system_audio);
+                    .with_system_audio(config.system_audio)
+                    .with_excluded_windows(config.excluded_windows.clone());
             if let Some(lock) = camera_lock.clone() {
                 builder = builder.with_camera_feed(lock);
             }
             if let Some(lock) = mic_lock.clone() {
                 builder = builder.with_mic_feed(lock);
             }
-            Handle::Instant(
+            Handle::Instant(Arc::new(
                 builder
                     .build(
                         #[cfg(target_os = "macos")]
@@ -248,7 +321,7 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
                     )
                     .await
                     .context("instant recording actor")?,
-            )
+            ))
         }
     };
 
@@ -259,6 +332,30 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
     })
+}
+
+async fn setup_microphone(
+    label: &str,
+) -> anyhow::Result<(
+    ActorRef<MicrophoneFeed>,
+    Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
+    flume::Receiver<cpal::StreamError>,
+)> {
+    let (error_tx, error_rx) = flume::unbounded();
+    let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    let ready = feed
+        .ask(microphone::SetInput {
+            label: label.to_string(),
+            settings: None,
+        })
+        .await
+        .map_err(|e| anyhow!("setup: {e}"))?;
+    ready.await.map_err(|e| anyhow!("init: {e}"))?;
+    let lock = feed
+        .ask(microphone::Lock)
+        .await
+        .map_err(|e| anyhow!("lock: {e}"))?;
+    Ok((feed, Arc::new(lock), error_rx))
 }
 
 #[cfg(target_os = "macos")]

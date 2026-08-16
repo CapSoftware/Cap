@@ -14,11 +14,13 @@ use gpui::{
 };
 
 use crate::{
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
-    recording::{self, ActiveRecording},
+    recording,
+    session::{Phase, RecordingSession},
     theme::{Appearance, Theme},
 };
+use gpui::Entity;
 
 /// `MAIN_WINDOW_SIZE.expanded` in index.tsx.
 const EXPANDED_WIDTH: f32 = 600.;
@@ -203,27 +205,19 @@ pub struct MainWindow {
     /// True until the background enumeration has reported back, so the panel can
     /// say "Loading..." rather than "No cameras found".
     enumerating: bool,
-    recording_phase: RecordingPhase,
-    /// The live recording while `recording_phase` is `Recording`. Taken (moved
-    /// into the stop future) the moment stopping starts.
-    active_recording: Option<ActiveRecording>,
-    /// Why the last start attempt failed, shown above the start button.
-    recording_error: Option<String>,
-}
-
-/// `Idle -> Starting -> Recording -> Stopping -> Idle`, with failed starts
-/// falling straight back to `Idle` + `recording_error`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecordingPhase {
-    Idle,
-    Starting,
-    Recording,
-    Stopping,
+    /// The app-wide recording session; the lifecycle itself lives there so the
+    /// controls bar window can drive the same recording.
+    session: Entity<RecordingSession>,
 }
 
 impl MainWindow {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        session: Entity<RecordingSession>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let theme = Theme::new(Appearance::from_window(window.appearance()));
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
 
         // Enumeration hits AVFoundation and the window server, so it must not
         // run on the main thread -- doing it inline here costs ~180ms of a
@@ -246,9 +240,7 @@ impl MainWindow {
             search: String::new(),
             search_focus: cx.focus_handle(),
             enumerating: true,
-            recording_phase: RecordingPhase::Idle,
-            active_recording: None,
-            recording_error: None,
+            session,
         }
     }
 
@@ -399,6 +391,10 @@ impl MainWindow {
         self.target = Some(TargetType::Display);
         cx.notify();
 
+        // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
+        // ffprobe duration < wall time proves the pause reached the engine.
+        let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
+
         cx.spawn_in(window, async move |this, cx| {
             // Give enumeration and the first paint a moment; the recorder
             // itself does not depend on it, but the screenshots should show
@@ -406,28 +402,72 @@ impl MainWindow {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(2))
                 .await;
+            // Exercise the microphone path too: record with the system default
+            // input. "First in the list" is wrong on a machine with a
+            // Continuity iPhone mic -- it enumerates but dies on stream start,
+            // which kills the whole recording.
+            let default_mic = cx
+                .background_executor()
+                .spawn(async {
+                    cap_recording::feeds::microphone::MicrophoneFeed::default_device()
+                        .map(|(name, _, _)| name)
+                })
+                .await;
             if this
                 .update_in(cx, |this, window, cx| {
-                    // Exercise the microphone path too: record with the default
-                    // input when the machine has one.
-                    this.microphone = this.devices.microphones.first().cloned();
+                    this.microphone = default_mic
+                        .and_then(|name| {
+                            this.devices
+                                .microphones
+                                .iter()
+                                .find(|mic| mic.name == name)
+                                .cloned()
+                        })
+                        .or_else(|| this.devices.microphones.first().cloned());
+                    if let Some(mic) = &this.microphone {
+                        tracing::info!(mic = %mic.name, "auto-record microphone");
+                    }
                     this.start_recording(window, cx)
                 })
                 .is_err()
             {
                 return;
             }
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(record_secs))
-                .await;
-            this.update_in(cx, |this, window, cx| this.stop_recording(window, cx))
+
+            let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
+            let toggle = |this: &gpui::WeakEntity<Self>,
+                          cx: &mut gpui::AsyncWindowContext| {
+                this.update_in(cx, |this, _, cx| {
+                    this.session
+                        .update(cx, |session, cx| session.toggle_pause(cx));
+                })
                 .ok();
+            };
+            if pause_wiggle {
+                cx.background_executor().timer(third).await;
+                toggle(&this, cx);
+                cx.background_executor().timer(third).await;
+                toggle(&this, cx);
+                cx.background_executor().timer(third).await;
+            } else {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(record_secs))
+                    .await;
+            }
+            this.update_in(cx, |this, _, cx| {
+                this.session.update(cx, |session, cx| session.stop(cx));
+            })
+            .ok();
         })
         .detach();
     }
 
-    pub fn start_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.recording_phase != RecordingPhase::Idle {
+    /// Collect the UI state into a start config and hand it to the
+    /// orchestrator, which opens the controls bar, hides this window, and
+    /// starts the engine. Deferred because the orchestrator updates this very
+    /// window (hide), which would re-enter the update we are inside of.
+    pub fn start_recording(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.read(cx).phase != Phase::Idle {
             return;
         }
         let Some(target) = self.armed_target() else {
@@ -437,9 +477,10 @@ impl MainWindow {
             return;
         };
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
-            self.recording_error =
-                Some("Camera-only recording requires a selected camera.".into());
-            cx.notify();
+            self.session.update(cx, |session, cx| {
+                session.error = Some("Camera-only recording requires a selected camera.".into());
+                cx.notify();
+            });
             return;
         }
 
@@ -452,84 +493,10 @@ impl MainWindow {
                 .as_ref()
                 .map(|camera| recording::DeviceOrModelID::DeviceID(camera.device_id.clone())),
             system_audio: self.system_audio,
+            excluded_windows: Vec::new(),
         };
 
-        self.recording_phase = RecordingPhase::Starting;
-        self.recording_error = None;
-        cx.notify();
-
-        // The engine lives on tokio (kameo actors + the capture pipeline);
-        // gpui_tokio bridges its completion back into this entity.
-        let task = gpui_tokio::Tokio::spawn(cx, recording::start(config));
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            this.update_in(cx, |this, _window, cx| {
-                match result {
-                    Ok(Ok(active)) => {
-                        tracing::info!(dir = %active.project_dir.display(), "recording started");
-                        this.active_recording = Some(active);
-                        this.recording_phase = RecordingPhase::Recording;
-                    }
-                    Ok(Err(error)) => {
-                        tracing::error!("recording failed to start: {error:#}");
-                        this.recording_error = Some(format!("{error:#}"));
-                        this.recording_phase = RecordingPhase::Idle;
-                    }
-                    Err(join_error) => {
-                        tracing::error!("recording start task died: {join_error}");
-                        this.recording_error = Some("Recording task failed.".into());
-                        this.recording_phase = RecordingPhase::Idle;
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    pub fn stop_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.recording_phase != RecordingPhase::Recording {
-            return;
-        }
-        let Some(active) = self.active_recording.take() else {
-            return;
-        };
-        self.recording_phase = RecordingPhase::Stopping;
-        cx.notify();
-
-        let task = gpui_tokio::Tokio::spawn(cx, active.stop());
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            this.update_in(cx, |this, _window, cx| {
-                match result {
-                    Ok(Ok(project_dir)) => {
-                        tracing::info!(dir = %project_dir.display(), "recording finished");
-                        // v1 completion affordance until the editor window and
-                        // Recents thumbnails exist: reveal the project.
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = std::process::Command::new("open")
-                                .arg("-R")
-                                .arg(&project_dir)
-                                .spawn();
-                        }
-                    }
-                    Ok(Err(error)) => {
-                        tracing::error!("recording failed to stop cleanly: {error:#}");
-                        this.recording_error = Some(format!("{error:#}"));
-                    }
-                    Err(join_error) => {
-                        tracing::error!("recording stop task died: {join_error}");
-                        this.recording_error = Some("Stop task failed.".into());
-                    }
-                }
-                this.recording_phase = RecordingPhase::Idle;
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        cx.defer(move |cx: &mut gpui::App| app_windows::begin_recording(config, cx));
     }
 }
 
@@ -551,9 +518,15 @@ impl Render for MainWindow {
             .text_color(theme.text_primary)
             .child(self.render_header(window, cx))
             .child(self.render_body(cx))
-            .when(self.recording_phase != RecordingPhase::Idle, |this| {
-                this.child(self.render_recording_overlay(cx))
-            })
+            .when(
+                // The controls bar owns the live-recording UI; this overlay is
+                // the fallback for when the bar window failed to open.
+                {
+                    let session = self.session.read(cx);
+                    session.phase != Phase::Idle && !session.controls_open
+                },
+                |this| this.child(self.render_recording_overlay(cx)),
+            )
     }
 }
 
@@ -725,7 +698,7 @@ impl MainWindow {
                         .child(self.render_base_controls(cx))
                         .when(self.expanded, |this| this.child(self.render_recents())),
                 )
-                .when(self.can_start_recording(), |this| {
+                .when(self.can_start_recording(cx), |this| {
                     this.child(self.render_start_footer(cx))
                 }),
         }
@@ -735,8 +708,8 @@ impl MainWindow {
     /// target tile opens the fullscreen target-select overlay, which owns
     /// "Start Recording". Until that overlay window exists, an armed target
     /// gets a pinned footer button here so the recorder is drivable at all.
-    fn can_start_recording(&self) -> bool {
-        self.recording_phase == RecordingPhase::Idle
+    fn can_start_recording(&self, cx: &Context<Self>) -> bool {
+        self.session.read(cx).phase == Phase::Idle
             && self.recording_mode().is_some()
             && self.armed_target().is_some()
     }
@@ -749,7 +722,7 @@ impl MainWindow {
             .flex_col()
             .gap(px(4.))
             .flex_shrink_0()
-            .when_some(self.recording_error.clone(), |this, error| {
+            .when_some(self.session.read(cx).error.clone(), |this, error| {
                 this.child(
                     div()
                         .text_size(px(11.))
@@ -794,8 +767,9 @@ impl MainWindow {
     /// to the bottom (`px-6 pb-8`, `h-11 rounded-xl bg-red-9`).
     fn render_recording_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let stopping = self.recording_phase == RecordingPhase::Stopping;
-        let starting = self.recording_phase == RecordingPhase::Starting;
+        let phase = self.session.read(cx).phase;
+        let stopping = phase == Phase::Stopping;
+        let starting = phase == Phase::Starting;
 
         let mut wash: Hsla = theme.gray_1.into();
         wash.a = 0.8;
@@ -829,8 +803,8 @@ impl MainWindow {
                     .when(stopping || starting, |this| this.opacity(0.6))
                     .when(!stopping && !starting, |this| {
                         this.hover(|style| style.bg(theme.red_10)).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                this.stop_recording(window, cx);
+                            |this, _, _window, cx| {
+                                this.session.update(cx, |session, cx| session.stop(cx));
                             },
                         ))
                     })
@@ -840,9 +814,9 @@ impl MainWindow {
                             .size(px(16.))
                             .text_color(gpui::white()),
                     )
-                    .child(match self.recording_phase {
-                        RecordingPhase::Starting => "Starting...",
-                        RecordingPhase::Stopping => "Stopping...",
+                    .child(match phase {
+                        Phase::Starting => "Starting...",
+                        Phase::Stopping => "Stopping...",
                         _ => "Stop Recording",
                     }),
             )

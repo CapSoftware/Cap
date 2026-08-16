@@ -58,6 +58,16 @@ Everything below is real, not mocked.
 - **Mode selector**, with the info panel behind its dot.
 - **Light and dark**, following the system appearance, from the app's real
   resolved Radix values.
+- **Native panel behavior.** The main window runs at window level 100 on all
+  Spaces, exactly as `windows.rs` configures it — applied through a small
+  `platform` module that reaches the `NSWindow` behind a gpui window via
+  `raw-window-handle` (gpui exposes no level/Spaces API).
+- **Recording controls bar.** The 320×150 always-on-screen panel from
+  `in-progress-recording.tsx`: stop with a live timer, pause/resume, restart,
+  delete, mic indicator, drag handle. A non-activating panel
+  (`WindowKind::PopUp`), so its buttons work without stealing focus from the
+  app being recorded. While it is up the main window hides, and the bar's own
+  window is excluded from the capture.
 
 ### Layout fidelity
 
@@ -78,7 +88,8 @@ Things that are deliberately different, and why.
 |---|---|
 | **Traffic lights are hand-drawn** | The Tauri main window returns `None` from `traffic_lights_position`, which routes it to `decorations(false)`; the lights are HTML there too. `titlebar: None` is the gpui equivalent. Minimize is not drawn, and zoom toggles expand/collapse. |
 | **No vibrancy** | The real macOS shell is a translucent material, not `bg-gray-1`. This is the single largest visual gap. |
-| **Not always-on-top** | `WindowKind::Floating` is *not* the fix: it floats, but it allocates an `NSPanel`, and a panel hides itself when the app deactivates — the window would vanish the moment you click another app. This needs the AppKit calls `windows.rs` makes, on a normal window. Same for `visible_on_all_workspaces` and the NSPanel level-100 treatment. |
+| **NSWindow, not NSPanel** | The Tauri app class-swizzles its windows into `NSPanel`s via `tauri_nspanel`. Here the main window stays a normal `NSWindow` and gets the observable parts — level 100, `CanJoinAllSpaces \| FullScreenPrimary` — from the `platform` module. (`WindowKind::Floating` is *not* a shortcut to this: its panel hides on app deactivation.) The controls bar *is* a real panel via `WindowKind::PopUp`, whose non-activating behavior it genuinely needs. |
+| **Controls bar level 8, faithfully** | `windows.rs` raises the bar with `CGWindowLevelForKey(10)` under a constant named `kCGMaximumWindowLevelKey` — but key 10 is `kCGModalPanelWindowLevelKey` (maximum is 14), so the shipping bar actually runs at level 8. Reproduced verbatim rather than "fixed" from over here. |
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
 | **Panels instead of windows** | Mode info is the 580×340 ModeSelect *window* in the Tauri app; here it is a body panel, because there is only one window so far. The device and target pickers are body panels in both. |
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
@@ -103,9 +114,9 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 
 | Window | Size | Status |
 |---|---|---|
-| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording |
+| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior |
 | Camera preview | 460×460 | Not started — needs the camera feed |
-| Recording controls | 320×150 | Not started — needs a recording session |
+| Recording controls | 320×150 | **Done** — timer, pause/resume, restart, delete, mic indicator, drag; capture-excluded, non-activating |
 | Target select overlay | per display | Not started — one transparent window per display |
 | Window capture occluder | per display | Not started |
 | Capture area | per display | Not started |
@@ -130,11 +141,24 @@ instant projects get `content/output.mp4` plus the
 `finalize_completed` — a project recorded here exports cleanly with
 `cap export`.
 
+The flow matches the real app: starting opens the controls bar first (in its
+"Starting" state) and hides the main window; the bar's window number is passed
+to the recording actors as an excluded window so the bar never appears in the
+capture; stop, delete, and a failed start all close the bar and bring the main
+window back. Pause closes the live segment and resume opens the next one —
+a paused recording produces exactly the multi-segment `.cap` the editor
+expects. A microphone that enumerates but fails to open (Bluetooth profile
+switches, Continuity devices) degrades to a no-mic recording instead of
+failing the start.
+
 Recording-specific deviations:
 
 | | |
 |---|---|
 | **TEMP start button** | The real app starts recording from the fullscreen target-select overlay, which does not exist yet. An armed target (Display selected, or a concrete window picked) shows a pinned blue Start Recording footer instead. |
+| **Bar timer, no countdown** | The countdown variant (`window.COUNTDOWN`) needs the settings store; the bar goes straight from Starting to the timer. |
+| **Mic level is static** | The level track under the mic icon renders, but live levels need the app-scoped feed actors (same work as the camera preview). Mute toggle likewise. |
+| **Settings button is inert** | The bar's recording-settings popover menu is not built. |
 | **Area does not arm** | Area needs the selection overlay. |
 | **Per-recording feed actors** | The Tauri app keeps app-wide `MicrophoneFeed`/`CameraFeed` actors for previews and level meters; here they are spawned per recording and dropped after. Moves to app scope with the camera preview window. |
 | **No overlay blur** | The recording overlay is `bg-gray-1/80` without `backdrop-blur-xs`; this gpui rev has no per-element backdrop blur hook. |
@@ -143,7 +167,9 @@ Recording-specific deviations:
 
 `CAP_GPUI_AUTO_RECORD=studio:5` (or `instant:4`) arms the primary display and
 drives a start/stop through the button code paths — the end-to-end check uses
-it because unprivileged synthetic clicks are dropped.
+it because unprivileged synthetic clicks are dropped. Add
+`CAP_GPUI_AUTO_PAUSE=1` to pause for the middle third: two segments whose
+summed duration is ~⅔ of wall time is the proof the pause reached the engine.
 
 Running from a dev build needs the ffmpeg dylibs the binary's install names
 point at (`@executable_path/../Frameworks/Spacedrive.framework/...`):
