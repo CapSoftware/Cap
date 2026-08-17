@@ -197,6 +197,31 @@ fn main() {
         })
         .detach();
 
+        // `CAP_GPUI_DEBUG_LIGHTS=1`: poll the main window's style mask and
+        // standard-button set, logging on change -- pins down *when* AppKit
+        // materializes titlebar buttons on the buttonless main window.
+        if std::env::var("CAP_GPUI_DEBUG_LIGHTS").is_ok_and(|v| v == "1") {
+            cx.spawn(async move |cx| {
+                let mut last = None::<String>;
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(250))
+                        .await;
+                    let state = cx.update(|cx| {
+                        window_handle
+                            .update(cx, |_, window, _| platform::debug_titlebar_state(window))
+                            .ok()
+                            .flatten()
+                    });
+                    if state != last {
+                        tracing::info!(?state, "titlebar state changed");
+                        last = state;
+                    }
+                }
+            })
+            .detach();
+        }
+
         // `CAP_GPUI_AUTO_SETTINGS=1` (or a page slug, e.g. `hotkeys`): open
         // the settings window the way the header gear does. Same reason as
         // every other `CAP_GPUI_AUTO_*` hook -- unprivileged synthetic clicks

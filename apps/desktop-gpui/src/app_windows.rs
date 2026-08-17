@@ -109,6 +109,10 @@ fn show_main_window(cx: &mut App) {
         .flatten();
     cx.spawn(async move |_| {
         if let Some(native) = &native {
+            // The recording flow leaves foreign titlebar buttons on the
+            // hidden window (see `restore_borderless_style`); strip them
+            // before the window is visible again.
+            platform::restore_borderless_style(native);
             platform::show_native(native);
         }
     })

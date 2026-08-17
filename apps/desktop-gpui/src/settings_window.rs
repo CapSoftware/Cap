@@ -44,10 +44,13 @@ pub const SETTINGS_MIN_HEIGHT: f32 = 560.;
 /// LogicalPosition::new(22.0, 22.0)))`. Unlike the main window these are the
 /// *real* AppKit buttons, repositioned; `(window-chrome).tsx` returns `null`
 /// for its own header on the settings route, so there is nothing hand-drawn to
-/// mirror here.
+/// mirror here. The Tauri inset resolves to a top-left of
+/// `(inset.x, inset.y / 2 + 4)` (see `editor_window::TRAFFIC_LIGHTS` for the
+/// `position_window_controls` derivation), and gpui takes the literal
+/// top-left: (22, 22) -> (22, 15).
 pub const TRAFFIC_LIGHTS: Point<Pixels> = Point {
     x: px(22.),
-    y: px(22.),
+    y: px(15.),
 };
 
 /// `applyMacOSWindowMaterial("settings")` -> `radius = 26` under liquid glass.

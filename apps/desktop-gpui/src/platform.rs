@@ -372,6 +372,51 @@ mod mac {
         ns_window(window).map(NativeWindow)
     }
 
+    /// Re-assert the buttonless style mask the main window was created with:
+    /// `NSTitledWindowMask | NSFullSizeContentViewWindowMask` (gpui's
+    /// `titlebar: None`). During the recording flow -- after the hidden main
+    /// window's `orderOut:` and the in-process ScreenCaptureKit start -- macOS
+    /// 26 adds `NSMiniaturizableWindowMask` to the hidden window on its own
+    /// (no app or gpui code writes the mask; verified with a breakpoint on
+    /// `setStyleMask:` and a mask poll), which materializes all three standard
+    /// titlebar buttons on top of the hand-drawn lights. Setting the mask back
+    /// tears the buttons down. Same borrow rule as [`show_native`]: call from
+    /// a task, never inside a gpui update.
+    pub fn restore_borderless_style(native: &NativeWindow) {
+        use objc2::msg_send;
+        const TITLED: usize = 1 << 0;
+        const FULL_SIZE_CONTENT_VIEW: usize = 1 << 15;
+        let want = TITLED | FULL_SIZE_CONTENT_VIEW;
+        unsafe {
+            let mask: usize = msg_send![&*native.0, styleMask];
+            if mask != want {
+                tracing::info!(mask, "clearing foreign style-mask bits on the main window");
+                let _: () = msg_send![&*native.0, setStyleMask: want];
+            }
+        }
+    }
+
+    /// Dev probe (`CAP_GPUI_DEBUG_LIGHTS=1`): the window's style mask plus
+    /// which standard titlebar buttons AppKit has materialized. Read-only
+    /// `msg_send`s, safe inside a gpui update.
+    pub fn debug_titlebar_state(window: &Window) -> Option<String> {
+        use objc2::msg_send;
+        let ns = ns_window(window)?;
+        unsafe {
+            let mask: usize = msg_send![&*ns, styleMask];
+            let close: *mut AnyObject = msg_send![&*ns, standardWindowButton: 0usize];
+            let min: *mut AnyObject = msg_send![&*ns, standardWindowButton: 1usize];
+            let zoom: *mut AnyObject = msg_send![&*ns, standardWindowButton: 2usize];
+            let visible: bool = msg_send![&*ns, isVisible];
+            Some(format!(
+                "mask={mask:#x} visible={visible} close={} min={} zoom={}",
+                !close.is_null(),
+                !min.is_null(),
+                !zoom.is_null()
+            ))
+        }
+    }
+
     /// Everything that puts a target-select overlay onto its display: frame,
     /// level, Spaces behavior, no shadow, ordered front without focus.
     ///
@@ -845,6 +890,10 @@ mod stub {
     pub fn native_window(_window: &Window) -> Option<NativeWindow> {
         None
     }
+    pub fn debug_titlebar_state(_window: &Window) -> Option<String> {
+        None
+    }
+    pub fn restore_borderless_style(_native: &NativeWindow) {}
     pub fn place_overlay_panel(
         _native: &NativeWindow,
         _x: f64,

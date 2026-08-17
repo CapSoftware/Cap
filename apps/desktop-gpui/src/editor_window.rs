@@ -80,9 +80,15 @@ pub const EDITOR_WIDTH: f32 = 1275.;
 pub const EDITOR_HEIGHT: f32 = 800.;
 
 /// `CapWindowId::Editor::traffic_lights_position` is
-/// `Some(Some(LogicalPosition::new(20.0, 32.0)))` (`windows.rs:1092-1094`):
-/// the native buttons are kept and inset, the way the settings window's are.
-pub const TRAFFIC_LIGHTS: Option<Point<Pixels>> = Some(point(px(20.), px(32.)));
+/// `Some(Some(LogicalPosition::new(20.0, 32.0)))` (`windows.rs:1092-1094`) --
+/// but the Tauri inset is NOT the button's top-left corner.
+/// `position_window_controls` (`platform/macos/delegates.rs`) builds a
+/// titlebar of height `button_height + inset.y`, centers the buttons in it and
+/// nudges them 4px down, which lands the close button's top-left at
+/// `(inset.x, inset.y / 2 + 4)` -- button height cancels out. gpui's
+/// `traffic_light_position` IS the literal top-left, so the value here is the
+/// resolved position, not the raw Tauri inset: (20, 32) -> (20, 20).
+pub const TRAFFIC_LIGHTS: Option<Point<Pixels>> = Some(point(px(20.), px(20.)));
 
 // ---------------------------------------------------------------------------
 // Preview numbers -- the app's, not the crate's

@@ -45,11 +45,14 @@ pub const TELEPROMPTER_MIN_HEIGHT: f32 = 220.;
 
 /// `trafficLightPosition: new LogicalPosition(14, 14)`, which
 /// `CapWindowId::Teleprompter::traffic_lights_position` repeats on the Rust
-/// side. Real AppKit buttons, moved -- like the settings window's (22, 22) and
-/// unlike the main window's hand-drawn pair.
+/// side. Real AppKit buttons, moved -- like the settings window's and unlike
+/// the main window's hand-drawn pair. The Tauri inset resolves to a top-left
+/// of `(inset.x, inset.y / 2 + 4)` (see `editor_window::TRAFFIC_LIGHTS` for
+/// the `position_window_controls` derivation), and gpui takes the literal
+/// top-left: (14, 14) -> (14, 11).
 pub const TRAFFIC_LIGHTS: Point<Pixels> = Point {
     x: px(14.),
-    y: px(14.),
+    y: px(11.),
 };
 
 /// `applyMacOSWindowMaterial("teleprompter")` -> radius 22 under liquid glass
