@@ -100,9 +100,10 @@ Everything below is real, not mocked.
   audio, click and drag-scrub seeking on the timeline, and the source's
   end-of-media stop. Measured at 59.9 fps sustained with zero dropped frames.
   The timeline edits the project — trim, move, split, delete, undo — and the
-  config sidebar's rail, scroll body, selection routing and **whole Background
-  tab** are real, writing `project-config.json` through the same debounced
-  path. The controls the later units own render in place, disabled. See below.
+  **whole config sidebar** is real: six tabs, the colour-grade section they
+  share and the eight per-segment panels, all writing `project-config.json`
+  through the same debounced path. The controls the later units own render in
+  place, disabled. See below.
 - **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
   Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
   at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
@@ -223,6 +224,8 @@ alike.
 | `ui/editor_button.rs` | `EditorButton` | `ui.tsx`'s `EditorButton`: the header's undo/redo/delete, the background section's Reset and Import actions, and every selection panel's Done/Delete pair |
 | `ui/radio_cards.rs` | `RadioCards` | the "radio as a full-width bordered card" idiom the cursor settings build twice and the screenshot editor a third time |
 | `ui/number_field.rs` | `NumberFieldState` (the value/rawValue state machine) + `NumberField` | Kobalte's `NumberField` as the Camera3D durations and the clip sync-offset use it |
+| `ui/position_pad.rs` | `PositionPad` + `pad_position` | `ConfigSidebar.tsx`'s 2D focal-point pad: the scene panel's two, the multi-zoom panel's one, and (see the deviations) the single-zoom panel's. The pointer maths is a free function because the zoom panel's source draws the same gesture over its own backdrop |
+| `ui/selection_header.rs` | `SelectionHeader` + `selection_label` / `zoom_selection_label` | the Done / "N … selected" / Delete row seven of the eight segment panels open with, and the zoom track's "1 of 3 selected · Select all" variant |
 | `ui/progress.rs` | `CircularProgress`, determinate + indeterminate | replaces all three of the Solid app's rings ahead of the export unit |
 | `ui/kbd.rs` | `KbdChip` + `kbd_symbol` | the three divergent keycap looks, and the ⌘⌃⇧⌥-vs-`Ctrl`/`Shift`/`Alt` mapping each re-implements |
 | `ui/tooltip.rs` | `Tooltip` over gpui's own `.tooltip()` | `Tooltip.tsx` and `ComingSoonTooltip`, for `EditorButton`'s `kbd`/`tooltipText`/`comingSoon` arms |
@@ -440,7 +443,7 @@ otherwise latches whatever the real keyboard last reported):
   `#4785FF`. Two ⌘Z with the field blurred walked the project history back
   through the colour to `#FFFFFF`.
 
-Regressions: **none**. `cargo test` is 183 unit tests + the frame-0 integration
+Regressions: **none**. `cargo test` is 226 unit tests + the frame-0 integration
 test, green. `CAP_GPUI_AUTO_PLAYBACK=16` measured
 `playback fps=59.8 frames=968 dropped=0 (convert_avg=446us over 16.19s)` — the
 same 59.8–59.9 the timeline unit measured — with zero errors, zero warnings and
@@ -520,7 +523,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
-| Editor | 1275×800 | **E1–E4 done — window, shell, playback, timeline, editing.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar**: the live six-tab rail, the scroll body, selection routing, and the Background tab at 1:1. The other five tabs and the eight segment panels are placeholder cards |
+| Editor | 1275×800 | **E1–E5 done — window, shell, playback, timeline, editing, config sidebar.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar in full**: the six-tab rail, the scroll body, selection routing, all six tabs at 1:1, the shared colour-correction section on both its targets, and the eight per-segment panels with multi-select where the source has it. Crop and export are the remaining units |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -1156,7 +1159,6 @@ Editor-specific deviations:
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
-| **Five of the sidebar's six tabs are placeholders** | Background is built in full (see [The config sidebar](#the-config-sidebar)); Camera, Audio, Cursor, Keyboard and Captions render the same "not part of this unit" card the settings window's unbuilt pages do, as do the eight per-segment panels the selection routes to. |
 | **The timeline's height is fixed** | The strip sits at the default 260px with the `MIN_TIMELINE_HEIGHT` floor expressed but its 16px drag handle inert, so the player/timeline split cannot be resized. Everything else in the strip — including editing — is real; see [Timeline editing](#timeline-editing). |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
@@ -1567,7 +1569,7 @@ its baseline values, every drag and delete having been undone.
 |---|---|
 | **Clips cannot be reordered, and their body drag does nothing** | The clip body's 4px drag is a **crossfade-duration** drag, not a move (`TL/ClipTrack.tsx:849-945`) — it grows the incoming transition and selects it. Transitions have no drawn affordance in this rev (E3 renders their effect on the boxes but not the handle or the marker), so the press only ever selects. Reordering exists in the shipping app but **not on the timeline**: it is the Clips layout mode's list (`ClipsSidebar.tsx:650`, behind the header's Clips button), which is its own unit. |
 | **The 3D track's split is not reproduced** | `splitCamera3DSegment` rebuilds both halves' nine pose tracks around the pose the segment held at the cut (`ED/context.ts:640-676`), which needs the keyframe evaluator. Splitting a 3D segment is refused rather than done wrongly; every other track's split is real. |
-| **Only the zoom track creates by click** | The mask, text and audio tracks also add a segment when their empty lane is clicked (`TL/MaskTrack.tsx:120-184` and siblings), each with its own gap-finding placement and default segment. Those are creation flows for objects the sidebar has to configure, so they wait for the sidebar unit; the zoom track's is here because its ghost was already drawn. |
+| **Only the zoom track creates by click** | The mask, text and audio tracks also add a segment when their empty lane is clicked (`TL/MaskTrack.tsx:120-184` and siblings), each with its own gap-finding placement and default segment. Those are creation flows for objects the sidebar has to configure; the zoom track's is here because its ghost was already drawn. The sidebar now configures all four, so the remaining three are a timeline-side gap rather than a dependency — each needs its own gap-finding placement and default segment, and the mask track's also has to seed a rect on the canvas. |
 | **A no-op drag records no undo entry** | The source pushes a history entry on *every* `resume`, because the tracked memo re-runs when `pauseCount` changes — so a click that selected and never moved leaves a duplicate snapshot behind, and the first undo after one appears to do nothing. Here the resume only records when something actually changed during the bracket. |
 | **No context menus** | Right-clicking a segment opens a real `Menu.popup()` with "Select all" and "Delete" (`TL/ZoomTrack.tsx:544-595`), and the zoom track's own dev-only "Generate zoom segments from clicks". None is reproduced. |
 | **No double-click fill** | Double-clicking a zoom or scene handle expands the segment as far as it can go in that direction (`fillStart`/`fillEnd`, `TL/ZoomTrack.tsx:353-399`). gpui delivers `click_count`, but the behaviour is not wired. |
@@ -1578,12 +1580,29 @@ its baseline values, every drag and delete having been undone.
 
 ## The config sidebar
 
-`editor_sidebar.rs` is the panel on the right: the shell — the live six-tab
-rail, the scroll body, and the routing that swaps a selected segment's panel in
-over the top of it — plus **the whole Background tab at 1:1**
-(`ConfigSidebar.tsx:2185-2976`). The other five tabs and the eight segment
-panels are the next unit, and render the same honest card the settings window's
-unbuilt pages do.
+The panel on the right, **complete**: six tabs, the colour-grade section they
+share, and the eight per-segment panels the timeline selection routes to.
+`ConfigSidebar.tsx` is 6500 lines and really twenty small panels in a
+trenchcoat, so it lands in four modules:
+
+| module | what it draws | source |
+|---|---|---|
+| `editor_sidebar.rs` | the shell — the six-tab rail, the scroll body, the selection routing — and the whole **Background** tab | `ConfigSidebar.tsx:2185-2976` |
+| `editor_tabs.rs` | **Camera**, **Audio**, **Cursor**, **Keyboard**, **Captions** | `:2978-3330`, `:942-1016` + `:6081-6178`, `:820-1052`, `KeyboardTab.tsx`, `CaptionsTab.tsx` |
+| `editor_color.rs` | `ColorCorrectionSection`, once per target | `ColorCorrectionSection.tsx`, `colorCorrection.ts` |
+| `editor_panels.rs` | the eight segment panels, and every text field the sidebar shares | `:3613-6495` |
+
+The three later modules reach back into `editor_sidebar.rs` for what the whole
+pane shares: one `SliderKey` table and **one** drag handler for every slider in
+it, one `ColorTarget` enum over both colour-storage shapes, the `PadKey` and
+`PanelSection` maps, and the collapsible and dashed-divider primitives.
+
+| | | | |
+|---|---|---|---|
+| ![camera tab](docs/sidebar-camera.png) | ![colour correction](docs/sidebar-color-correction.png) | ![cursor tab](docs/sidebar-cursor.png) | ![captions tab](docs/sidebar-captions.png) |
+| Camera | Colour correction | Cursor | Captions |
+| ![zoom panel](docs/sidebar-panel-zoom.png) | ![text panel](docs/sidebar-panel-text.png) | ![audio panel](docs/sidebar-panel-audio.png) | ![3D panel](docs/sidebar-panel-3d.png) |
+| Zoom segment | Text segment | Audio segment | 3D segment |
 
 Every control writes a real `ProjectConfiguration` key path through the **same
 path a timeline edit takes**: `project_changed` — the undo stack, then
@@ -1599,14 +1618,13 @@ to disk itself, and nothing in it renders a frame itself.
   recording has no cursor data — the two data-driven states, from the same
   facts. A tab click clears any selection first, then switches and **puts the
   scroll body back to the top** (`:632-650`).
-- **Selection routing is real, the panels are not.** `sidebarSelection()`
-  (`:577-580`) is the timeline selection *excluding clip*: selecting a clip is
-  a timeline-only affordance and must not swap the sidebar away from its tab.
-  When a non-clip selection exists, `KTabs`'s value is forced to `undefined`
-  (`:586-592`) — so the rail shows **no** selected tab and hides its indicator
-  — the scroll body takes `hidden` (`:685-691`) and the selection panel is
-  drawn in its place (`:1077-1093`). All of that is reproduced; what the panel
-  *contains* is E5b. Verified in both directions with real clicks: a click on a
+- **Selection routing.** `sidebarSelection()` (`:577-580`) is the timeline
+  selection *excluding clip*: selecting a clip is a timeline-only affordance
+  and must not swap the sidebar away from its tab. When a non-clip selection
+  exists, `KTabs`'s value is forced to `undefined` (`:586-592`) — so the rail
+  shows **no** selected tab and hides its indicator — the scroll body takes
+  `hidden` (`:685-691`) and the selection panel is drawn in its place
+  (`:1077-1093`). Verified in both directions with real clicks: a click on a
   caption segment swapped the sidebar and cleared the rail's pill, Escape
   brought the Background tab and the pill back.
 - **The scroll body** is `overflow-y-scroll text-[0.875rem] flex-1 min-h-0`
@@ -1656,6 +1674,134 @@ panel is subtly wrong:
   cutout grows both ways (`:2873-2882`), and every untouched field stays
   `null` — `null` means "use the recording's own measurements", so writing the
   displayed value would silently pin it.
+
+### The other five tabs, control by control
+
+Same rule as the Background tab: every row is a real key path, and the ranges,
+steps and side effects are the call site's.
+
+| Tab | Field | Control | Range / step | Key path |
+|---|---|---|---|---|
+| **Camera** | Position | 3×2 grid of dots | — | `camera.position.{x,y}` |
+| | Hide Camera | toggle | — | `camera.hide` |
+| | Mirror Camera | toggle | — | `camera.mirror` |
+| | Background Blur | select: Off / Light / Heavy | — | `camera.backgroundBlur.mode` |
+| | Shape | select: Square / Source | — | `camera.shape` |
+| | Size | slider | 20–80 / 0.1 `%` | `camera.size` |
+| | Size During Zoom | slider | 20–100 / 0.1 `%` | `camera.zoomSize` |
+| | Keep original size during zoom | toggle | — | `camera.scaleDuringZoom` (1 vs 0.7) |
+| | Rounded Corners | slider + Corner Style select | 0–100 / 0.1 `%` | `camera.rounding`, `camera.roundingType` |
+| | Shadow | slider + `ShadowSettings` reveal (Size, Opacity, Blur) | 0–100 / 0.1 | `camera.shadow`, `camera.advancedShadow.{size,opacity,blur}` |
+| | Color Correction | the shared section, `target="camera"` | — | `colorCorrection.camera.*` |
+| **Audio** | Mute Audio | toggle | — | `audio.mute` |
+| | Microphone Stereo Mode | select, **only for a 2-channel mic** (`:709-711`) | — | `audio.micStereoMode` |
+| | Microphone Volume | slider, disabled while muted, **only with a mic** | −30–12 / 0.1 `db` | `audio.micVolumeDb` |
+| | System Audio Volume | slider, disabled while muted, **only with system audio** | −30–12 / 0.1 `db` | `audio.systemVolumeDb` |
+| | Sync → System / Microphone / Camera Offset | one `NumberField` per source, per recording clip, with the auto-calculated badge | −5–5 / 0.001 s | `clips[i].offsets.{systemAudio,microphone,camera}` |
+| **Cursor** | Show cursor | header toggle (inverted: it writes `hide`) | — | `cursor.hide` |
+| | Cursor Type | three `RadioCards` | — | `cursor.type` |
+| | Size | slider | 20–300 / 1 | `cursor.size` |
+| | Tilt | slider | 0–100 / 1 `%` | `cursor.rotationAmount` |
+| | Hide When Idle + Inactivity Delay | toggle, then a slider only when on | 0.5–10 / 0.1 s | `cursor.hideWhenIdle`, `cursor.hideWhenIdleDelay` |
+| | Cursor Movement Style | three `RadioCards` (Slow / Regular / Fast) | — | `cursor.animationStyle` + the three physics values |
+| | Smooth Movement → Tension / Friction / Mass | collapsible, open while `!cursor.raw`; any change falls the style back to Custom | 1–500 / 1, 0–50 / 0.1, 0.1–10 / 0.1 | `cursor.{tension,friction,mass}` |
+| | High Quality SVG Cursors | toggle | — | `cursor.useSvg` |
+| **Keyboard** | Show keyboard | header toggle + `Beta` badge; everything below dims when off | — | `keyboard.settings.enabled` |
+| | Font Settings → Family / Size / Text Color | select, slider, hex field + swatch | 20–120 / 1 | `keyboard.settings.{font,size,color}` |
+| | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `keyboard.settings.{backgroundColor,backgroundOpacity}` |
+| | Position / Font Weight / Animation | three selects | — | `keyboard.settings.{position,fontWeight}`, `{fade,linger}Duration` |
+| | Behavior → Show Modifiers / Show Special Keys / Uppercase | three toggles | — | `keyboard.settings.{showModifiers,showSpecialKeys,uppercase}` |
+| **Captions** | Model / Language | two selects | — | local UI state in the source too, not project config |
+| | Style | six preset cards, each a live sample of the look it writes | — | writes the whole `captions.settings` block |
+| | Font Settings → Family / Size / Text Color | select, slider, hex field + swatch | 12–80 / 1 | `captions.settings.{font,size,color}` |
+| | Uppercase / Active Word Highlight (+ Highlight Color, Style) | toggles, then a hex field and a select | — | `captions.settings.{uppercase,activeWordHighlight,highlightColor,highlightStyle}` |
+| | Background Settings → Color / Opacity | hex field + swatch, slider | 0–100 / 1 `%` | `captions.settings.{backgroundColor,backgroundOpacity}` |
+| | Position / Animation / Font Weight | three selects | — | `captions.settings.{position,fontWeight}`, `{fade,linger,wordTransition}Duration` |
+| | Export Options → Export with Subtitles | toggle | — | `captions.settings.exportWithSubtitles` |
+
+Two things in these tabs are honest dead ends rather than key paths, and both
+say so in the UI:
+
+- **Transcription.** "Download model", "Generate Captions" and "Regenerate
+  Captions" are `commands.*` on the Tauri backend. The rows render, disabled,
+  under a line of copy that says the commands are not in this build; every
+  caption *style* setting below them is live, and the fixture's caption
+  segments render in the player from the config alone.
+- **`Generate Keyboard Segments`** is `commands.generateKeyboardSegments`,
+  which reads the recording's own key log through a command this app does not
+  have. Same treatment: the button renders and says so.
+
+### Colour correction, and why its previews are not a decoded frame
+
+`ColorCorrectionSection` is **one component, two instances**: the Background
+tab ends with `target="screen"` (`:2962`) and the Camera tab with
+`target="camera"` (`:3324`). They differ in exactly one row — "Apply to cursor"
+(`colorCorrection.gradeCursor`) renders only on the screen instance
+(`ColorCorrectionSection.tsx:151`). Nine preset tiles, a Grain slider, and a
+"Fine-tune colors" reveal over nine adjustment sliders, all of which write
+`colorCorrection.{screen,camera}.*`; every slider is `Math.round(v * 100)` in
+the UI and `v / 100` back into the config.
+
+The preset tile is the interesting part, and E5a deferred the whole section on
+it: each tile is a fixed CSS gradient with the preset's own `filter` string
+applied, then up to three overlays — a tinted gradient at `mix-blend-mode:
+overlay`, a radial vignette, and a tiled `feTurbulence` grain
+(`ColorCorrectionSection.tsx:39-77`). gpui has no per-element filter hook, and
+E5a's suggestion was to preview each look on a decoded frame instead.
+
+**A decoded frame would be the deviation.** The source's scene is a synthetic
+four-stop gradient chosen so every grade reads the same way for every
+recording; swapping in real footage changes what the nine tiles show. Every
+operation in the chain is instead *arithmetic with a spec*:
+`contrast`/`brightness`/`saturate`/`grayscale`/`sepia`/`hue-rotate` are the
+Filter Effects colour matrices, evaluated in sRGB because that is what the CSS
+shorthand filter functions are defined to use; `overlay` is the Compositing
+spec's blend formula; the vignette is an `ellipse at center`/farthest-corner
+ramp. So each tile is generated pixel by pixel in Rust and comes out as *the
+same picture*, not an approximation of one — and the maths is unit-tested
+against hand-computed values rather than eyeballed (eleven tests in
+`editor_color.rs`, including "the noir tile is neutral and vignetted" and "the
+none tile is the scene untouched"). Nine 216×122 tiles are generated once on
+first paint and cached for the process, because the catalogue is static.
+
+The one honest gap is the grain, which is the same value-noise stand-in for
+`feTurbulence` the gradient editor's grain already documents — at
+`numOctaves="2"` here rather than 4.
+
+### The eight segment panels
+
+`sidebarSelection()` routes a non-clip timeline selection here. Seven of the
+eight open with the shared Done / "N … selected" / Delete row, which is
+`ui::SelectionHeader`; the zoom header counts against the whole track ("1 of 3
+selected", with a "Select all") because the source's does.
+
+| Panel | Contents | Multi-select |
+|---|---|---|
+| **zoom** | Amount slider, Auto/Manual mode tabs, the "How does it work?" reveal, and — in Manual — a `PositionPad` writing `mode.manual.{x,y}` | `ZoomMultiSegmentConfig`: shared Amount and Mode with a **Mixed** badge when the selection disagrees, one shared pad, and a removable row per segment |
+| **text** | multi-line content box, Enabled, Layout, **Templates** (8 preset cards), Font family / weight / italic / size, alignment, line height, letter spacing, colour, opacity, shadow, position, and in/out animations with durations | one card per segment |
+| **caption** | text box and Timing (Start / End `NumberField`s with a live duration) | one card per segment |
+| **mask** | Sensitive / Highlight kind, Enabled, then either Effect (Blur / Pixelate) + amount, or Outside Darkness + Fade Duration | one card per segment |
+| **scene** | Camera Layout (5 modes, two disabled without a camera), a description card, Transition In/Out, and — for Split Screen and Floating — Screen/Camera Zoom and two `PositionPad`s | header **alone**, which is the source's own unfinished state (`:1667-1678` renders the body only for a single selection) and is reproduced rather than invented over |
+| **3D** | **Templates** (3 scenes, 5 angle presets, 8 motion templates), the Start/End pose cards with swap and flips, Camera (9 sliders), Blur (mode, bokeh, per-mode sliders), Advanced (transitions, motion style) | header alone, same as the source |
+| **audio** | track card, name box, Volume, Fade In, Fade Out | one card per segment |
+| **keyboard** | display-text box, Timing, Fade Duration | one card per segment |
+
+Three behaviours in here are worth naming because they are easy to get wrong:
+
+- **A text edit is live, and it is one undo entry.** Typing into the content
+  box fires `Changed` on every keystroke, which writes the segment and pokes
+  `preview_tx` — the player's text re-renders as you type. The field holds a
+  `history.pause()` for the whole edit and resumes on commit, so the whole
+  typed run is one Cmd-Z.
+- **A `PositionPad` drag is one undo entry too**, on the same contract as a
+  slider: `pause()` on the press, `resume()` on the release, with the pointer
+  maths (`pad_position`) clamping rather than escaping the pad and refusing to
+  move a pad that has never been laid out.
+- **A 3D scene replaces its segment with a chain.** Clicking one of the three
+  scene cards lays its shots across the segment's range by weight, snaps each
+  interior boundary to a clip cut within 15 % of the range (dropping the snap
+  rather than starving a later shot), splices the result in place of the one
+  segment and moves the selection onto every segment it generated.
 
 ### The wallpapers are loaded, not embedded
 
@@ -1737,7 +1883,7 @@ the sidebar's 112px preview is an approximation.
 | **The hex field commits, and skips a no-op** | Real entry now (`color-utils.tsx:27-96` transcribed): typing commits live the moment the text holds a complete 6- or 8-digit colour, Return and blur commit whatever is in the box, and anything that does not parse snaps back to the value in force. Each commit goes through `set_color`, so it takes a **project history entry** and the debounced `project-config.json` write like any other sidebar edit. One deliberate difference: `props.onChange(props.value)` on an invalid blur re-fires with the value already in force, and a history step for a no-op would cost the user an extra Cmd-Z, so a commit that changes nothing is skipped. The `createWritableMemo` half — re-deriving the text whenever the colour moves under the field, but never while it has focus — runs from `render` (`sync_hex_inputs`), because the focus test needs a `&Window` and the sidebar's render chain is threaded with `&self` alone. |
 | **The colour panel coalesces harder than the source does** | `RgbInput.onChange` takes no history pause at all (`color-utils.tsx:57-63`), so in the Tauri app every wheel movement is its own undo entry. Here a panel session is one entry, which is the [slider's](#the-config-sidebar) contract applied to the same kind of gesture. The bracket closes on the panel closing, on another swatch opening it, and on **any unrelated edit** — the panel is a system window that stays up while the user does other things, and a padding drag made with it open must not be swallowed into the colour's entry. |
 | **No brand-colour dropdown** | `BrandColorsDropdown` renders only when the signed-in organisation has brand colours configured (`BrandColorsDropdown.tsx:16`). There is no auth here (the same gap as the plan badge), so it never renders — which is also exactly what a user without them sees. |
-| **Colour correction is deferred** | The Background tab ends with `<ColorCorrectionSection target="screen">` (`:2962`), which is **one component shared with the Camera tab** and previews each of its presets with a live CSS filter on a demo tile. There is no per-element filter hook in this gpui rev, so the preset grid is not reproducible as it stands; the section renders its placeholder card and belongs with the Camera tab's unit. |
+| **The preset tiles' grain is value noise** | The only part of a colour-grade tile that is not the spec's own arithmetic — see [Colour correction](#colour-correction-and-why-its-previews-are-not-a-decoded-frame). The rendered frame is unaffected: `cap-rendering` applies `grain` itself. |
 | **Dashed borders are painted, or solid** | The two dashed *dividers* are painted 4-on-4-off by a canvas. The two dashed *cards* (the empty desktop and image drop targets) take a solid hairline of the same colour: gpui has no dashed border style, and four painted edges per card is not worth the elements. |
 | **The wallpaper grid's overflow has no fade** | The theme sub-tab row scrolls exactly as the source's does, but its edge fade is a `mask-image` (`:2351-2363`) — the same missing hook as the timeline's edge fade, which is painted there because it sits on an opaque background and this one does not. |
 | **The wallpaper "show more" collapsible is dead in both apps** | `filteredWallpapers().slice(0, 21)` is followed by a `<Collapsible>` holding the *whole* list — with **no trigger** (`:2438-2461`). No theme has more than 18 wallpapers, so the slice never truncates and the collapsible can never be opened. The grid here simply draws the theme's wallpapers. |
@@ -1745,6 +1891,12 @@ the sidebar's 112px preview is an approximation.
 | **The value tooltip is hover-only** | The Solid `Slider` forces its tooltip open mid-drag and anchors it to the thumb (`ui.tsx:119-128`); gpui's tooltip is hover-driven and pointer-anchored. Hovering a slider still shows the same formatted value, which is what the source does when it is *not* dragging. |
 | **No drag-and-drop onto the image card** | The card says "Click to select or drag and drop image" in both apps; the drop half needs a file-drop hook this rev does not wire. Clicking opens the real `NSOpenPanel`. |
 | **The tab indicator does not slide** | Same as every other tab strip here: no transform in this gpui rev, so the selected item paints its own `size-9 bg-gray-3` box. |
+| **Transcription and keyboard generation are Tauri commands** | `download_whisper_model`, `transcribe_audio`, `generate_keyboard_segments` and friends live on the Tauri backend. Their buttons render in their disabled state, with a line of copy under them saying so. Everything downstream of them is live: the caption style block, the six style presets, and the caption and keyboard **segment** panels, which edit segments the config already holds. |
+| **The zoom panel's manual pad has no footage under it** | The source draws the manual focal point over a decoded frame seeked to the segment's own source time (`:5764-5867`, `zoomPreviewSource`), and the multi-zoom panel draws one such frame per selected segment (`:6046-6068`). There is no `<video>` element here and the editor's decoder feeds the player alone, so both draw `ui::PositionPad` — the same gesture, the same maths, the same key path, on the plain pad the scene panel uses. The remove-from-selection affordance the preview grid carries is reproduced as a plain row. |
+| **`Camera3DPosePreview` is a flat plate** | Every 3D template card, and the Start/End pose cards, preview their pose as a CSS-3D plane under a `perspective` (`:4689-4724`). No transform in this rev, so the card shows the flat plate it would fold, and the hover state that swaps the preview to the shot's *end* pose is not drawn either. The names, the shot-count pills, the selected ring and everything the cards **write** are real. |
+| **The audio library panel is not wired** | A segment's "Tap to change track" row opens `AudioLibraryPanel` through `editorState.timeline.audioPicker` (`AudioLibrary.tsx`), which is a library-and-upload surface of its own. The row renders with its swatch and name; the Change button is drawn in its disabled state. The segment's name, volume and fades are all live. |
+| **The font picker is a menu, not a combobox** | `FontPicker` (`FontPicker.tsx`) is the one select in the sidebar the source builds as a **combobox**: it lists all 306 installed families here, so it filters as you type. `ui::Menu` scrolls and takes the arrow keys but has no filter field, so the list is scrolled rather than typed at. The options are the same — the three generics then every installed family, from `cap_rendering::system_font_families`, the same function the Tauri command wraps. Enumeration builds a `fontdb`, far too slow for a render pass, so it happens once on a background thread and the picker shows the three generics until it lands — which is what the source's `createResource` does on its first frame too. |
+| **Two "Selected Segment Override" blocks are dead in the source** | `KeyboardTab.tsx:444-520` and `CaptionsTab.tsx:1480-1560` render a start/end/text editor inside the *tab* when a segment of that kind is selected. But a selection of that kind is exactly the condition that gives the tab body `hidden` and draws the segment panel over it (`:1077-1093`), so neither block can ever be seen. Omitted; their working equivalents are the caption and keyboard segment panels. |
 
 ### Verified end to end
 
@@ -1769,18 +1921,70 @@ The picture follows every one of them: white → gradient → wallpaper → imag
 desktop picture all re-rendered the player immediately, because each edit pokes
 `preview_tx` at the current frame.
 
-**Playback is unchanged.** Same fixture and binary as the timeline-editing
-unit, with the whole sidebar live:
+And the same again for the rest of the pane, one representative control per
+tab, plus the segment panels' three distinctive gestures. The fixture is a real
+studio recording with every track type populated; each run resets it from a
+saved baseline first, and every value is read back out of
+`project-config.json` after the debounce:
+
+| probe | predicted | actual |
+|---|---|---|
+| Camera → Mirror Camera | `camera.mirror` false → true | `true` |
+| Camera → Shape → Source | `camera.shape` `"square"` → `"source"` | `"source"` |
+| Audio → Mute Audio | `audio.mute` false → true | `true` |
+| Cursor → Circle card | `cursor.type` `"auto"` → `"circle"` | `"circle"` |
+| Keyboard → Show keyboard | `keyboard.settings.enabled` true → false | `false` |
+| Captions → Uppercase | `captions.settings.uppercase` false → true | `true` |
+| Background → colour grade → Midnight | `colorCorrection.screen` = preset `midnight` with exposure −0.08, contrast 0.16, saturation −0.22, temperature −0.1, splitTone 0.3, vignette 0.28, grain 0.18 — and `colorCorrection.camera` untouched | all eleven fields, and camera still `"none"` |
+| Text panel: click into the box, type `" world"` | `textSegments[0].content` = `"Hello Cap world"`, live in the player | `"Hello Cap world"`, and the player's title wrapped to two lines mid-type |
+| …then Escape and one Cmd-Z | back to `"Hello Cap"` — the typed run is one entry | `"Hello Cap"` |
+| Text panel → Templates → **Title** | fontSize 96, weight 700, align center, letterSpacing −1, lineHeight 1.1, shadow 0.35, animationIn `slideUp` 0.35, animationOut `fade` 0.25, fadeDuration 0.35, fontFamily = first installed of the stack; **content unchanged** | all eleven, `fontFamily = "Helvetica Neue"`, `content = "Hello Cap"`, and the card took the active ring |
+| Zoom panel → Manual, then drag the pad from (1150, 520) to (973, 477) | the pad's rect was calibrated from two presses at 0.18208092 / 0.7601156 → origin 887.0, width 346.0, height 110.0; so `x = 86/346 = 0.2485549`, `y = 27/110 = 0.2454545` | `0.24855492`, `0.24545455` |
+| …then one Cmd-Z | back to the pre-drag point — the whole drag is one entry | `0.7601156`, `0.6363636` |
+| 3D panel → Templates → **Showcase** on segment `[0, 4]` | weights 0.27 / 0.25 / 0.48 give boundaries at 1.08 and 2.08; the only clip cut in range (3.2295) is 2.15s away and the snap window is 0.6s, so neither moves. `camera3dSegments` 2 → 4 | 4 segments at `[0, 1.08] [1.08, 2.08] [2.08, 4] [4, 8]`, selection on all three generated |
+| Mask panel → Delete | `maskSegments` 2 → 1, exactly one `reason="delete"` | `1`, one delete of the `1.0..3.0` segment |
+
+The player follows these too. Switching the camera shape from Square to Source
+visibly changed the bubble from a centre-cropped rounded square to the camera's
+own aspect, and the text edit above re-rendered the title as it was typed —
+both captured before and after.
+
+**Playback is unchanged**, measured with `CAP_GPUI_MUTE_AUDIO=1` so the probes
+could run silently. Three runs each of the Camera tab, the 3D panel and the
+text panel — the two heaviest things the sidebar can draw:
 
 ```
-playback fps=59.8 frames=967 dropped=0 (rendered=968 rendered_fps=59.8 paints=1405 convert_avg=436us over 16.18s)
+camera  59.7 / 59.6 / 59.6   3d  59.8 / 59.8 / 59.8   text  59.8 / 59.7 / 59.8
 ```
 
-E4 measured 59.9 with zero drops on the same fixture, so the sidebar costs
-nothing measurable — it only paints, and only when something changes. A
-record cycle (`CAP_GPUI_AUTO_RECORD=studio:5`) still starts, writes its
-thumbnail and finalizes with zero errors, and no run anywhere in this unit
-logged an error, a warning, a panic or a `RefCell already borrowed`.
+zero dropped frames in eight of the nine runs and one dropped frame in the
+ninth. A record cycle (`CAP_GPUI_AUTO_RECORD=studio:5`) still starts, writes
+its 14 MB `display.mp4`, its audio, its thumbnail and its meta, and finalizes
+with zero errors; across 45 runs in this unit nothing logged a panic or a
+`RefCell already borrowed`.
+
+#### One real performance trap, found and fixed
+
+The 3D panel's template grids first measured **19.1 fps** with 353 dropped
+frames, reproducibly, while the renderer kept producing 519 frames at 59.8 —
+the main thread was starving the display, not the decoder. Bisecting by env
+gate found it: removing the cards' *labels* restored 59.8 exactly, and the cost
+scaled with card count (16 cards → 19 fps, 13 → 26, 11 → 39, 8 → 59.9).
+
+The cause is **`flex_1` on a card that contains text**. gpui only re-renders by
+rebuilding the whole view, and the playhead notifies 60 times a second, so the
+sidebar is rebuilt every frame; a flex item with no fixed basis makes taffy ask
+for the item's intrinsic size, which shapes the label once per sizing probe.
+Sixteen of those is ~40 ms a frame. The grids are fixed-column anyway, so the
+fix is arithmetic — `card_grid_width(columns, gap)` over the panel's 350px of
+content — and every card takes an explicit `w()` with `flex_none()`. **The rule
+for later units: inside the sidebar, a repeated card that holds text takes a
+computed width, never `flex_1`.**
+
+Machine load makes this class of measurement noisy — an unrelated baseline run
+measured 25.3 fps in the middle of the session and 59.8 a minute later — so the
+numbers above are three back-to-back repetitions of each configuration rather
+than single runs.
 
 ## Verifying changes
 
@@ -1940,6 +2144,26 @@ decoders are warm and the stopwatch measures playback rather than startup:
   into playback via `performClose:` — the traffic light's own path, so
   `on_window_should_close` and `editor_closed` both run — then reopens it 2s
   later. Once per process, or the reopened window would close itself forever.
+
+Two more drive the config sidebar, both through the handlers a click uses:
+
+- `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a rail tab and optionally
+  scrolls its body. The scroll half exists because **a synthetic wheel does not
+  scroll the tab body** — a `CGEvent` scroll delivered over the sidebar reaches
+  the app (the timeline's own wheel handler logs one when the pointer is over
+  the strip) but moves nothing when it lands there, so a tab taller than 470px
+  cannot be photographed below the fold without it. The *selection* panel is
+  the exception: a wheel does scroll that one.
+- `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects timeline segments so their
+  panel opens, through `set_selection` — the same call a timeline click makes.
+
+And one that exists for the person running the probes rather than the app:
+
+- `CAP_GPUI_MUTE_AUDIO=1` swaps `EditorInstance`'s audio output for the
+  headless one the integration test uses, so a probe can run while its author
+  is on a call. The editor otherwise prewarms the default output at load and
+  plays the recording the moment Play is pressed. The video pump is identical
+  on both paths, and the fps numbers are the same.
 
 Real mouse and keyboard events *do* reach the app when the terminal has
 Accessibility permission, which is how the seek and Space paths were checked

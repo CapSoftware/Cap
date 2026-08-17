@@ -38,7 +38,11 @@ pub const COLLAPSIBLE_DURATION_SECS: f32 = 0.2;
 /// [`CollapsibleState::height_for`]).
 #[derive(Debug, Clone)]
 pub struct CollapsibleState {
-    open: bool,
+    /// A `Cell` for the same reason `transition` is one: the windows that own
+    /// these render from `&self`, and the editor's sidebar toggles several of
+    /// them (the colour-grade reveal, the 3D panel's sections) from inside a
+    /// render-built click handler that only has the state by shared reference.
+    open: Cell<bool>,
     /// The content's natural height, written from prepaint.
     measured: Rc<Cell<Option<Pixels>>>,
     /// When the current open/close transition started, and the height it
@@ -58,14 +62,14 @@ impl Default for CollapsibleState {
 impl CollapsibleState {
     pub fn new(open: bool) -> Self {
         Self {
-            open,
+            open: Cell::new(open),
             measured: Rc::new(Cell::new(None)),
             transition: Cell::new(None),
         }
     }
 
     pub fn is_open(&self) -> bool {
-        self.open
+        self.open.get()
     }
 
     /// The cell the content's `canvas` writes its prepaint bounds into.
@@ -79,16 +83,16 @@ impl CollapsibleState {
     }
 
     /// Flip the panel, starting a transition from wherever it is now.
-    pub fn toggle(&mut self) {
-        self.set_open(!self.open);
+    pub fn toggle(&self) {
+        self.set_open(!self.open.get());
     }
 
-    pub fn set_open(&mut self, open: bool) {
-        if self.open == open {
+    pub fn set_open(&self, open: bool) {
+        if self.open.get() == open {
             return;
         }
         let from = self.current_height();
-        self.open = open;
+        self.open.set(open);
         // With no measurement yet there is nothing to animate towards, so the
         // first expand of a never-rendered panel is instant.
         self.transition
@@ -107,13 +111,13 @@ impl CollapsibleState {
     /// pinning a height would stop the panel reflowing if its content changes.
     pub fn height_for(&self, now: Instant) -> (Option<Pixels>, bool) {
         let Some(target) = self.measured.get().map(f32::from) else {
-            return (if self.open { None } else { Some(px(0.)) }, false);
+            return (if self.open.get() { None } else { Some(px(0.)) }, false);
         };
-        let target = if self.open { target } else { 0. };
+        let target = if self.open.get() { target } else { 0. };
 
         let Some((started, from)) = self.transition.get() else {
             return (
-                if self.open { None } else { Some(px(0.)) },
+                if self.open.get() { None } else { Some(px(0.)) },
                 false,
             );
         };
@@ -126,7 +130,7 @@ impl CollapsibleState {
 
         if t >= 1. {
             self.transition.set(None);
-            return (if self.open { None } else { Some(px(0.)) }, false);
+            return (if self.open.get() { None } else { Some(px(0.)) }, false);
         }
         (Some(px(height)), true)
     }
@@ -134,12 +138,12 @@ impl CollapsibleState {
     fn current_height(&self) -> f32 {
         match (self.transition.get(), self.measured.get()) {
             (Some((started, from)), Some(measured)) => {
-                let target = if self.open { f32::from(measured) } else { 0. };
+                let target = if self.open.get() { f32::from(measured) } else { 0. };
                 let t = (started.elapsed().as_secs_f32() / COLLAPSIBLE_DURATION_SECS).clamp(0., 1.);
                 let eased = 1. - (1. - t).powi(3);
                 from + (target - from) * eased
             }
-            (None, Some(measured)) if self.open => f32::from(measured),
+            (None, Some(measured)) if self.open.get() => f32::from(measured),
             (None, Some(_)) => 0.,
             _ => 0.,
         }
@@ -230,7 +234,7 @@ mod tests {
 
     #[test]
     fn the_first_expand_of_an_unmeasured_panel_is_instant() {
-        let mut state = CollapsibleState::new(false);
+        let state = CollapsibleState::new(false);
         state.toggle();
         assert!(state.is_open());
         // No measurement yet, so no transition was started and nothing has to
@@ -240,7 +244,7 @@ mod tests {
 
     #[test]
     fn expanding_animates_from_zero_to_the_measured_height() {
-        let mut state = CollapsibleState::new(false);
+        let state = CollapsibleState::new(false);
         measured(&state, 200.);
         state.toggle();
 
@@ -263,7 +267,7 @@ mod tests {
 
     #[test]
     fn collapsing_animates_back_down_to_zero() {
-        let mut state = CollapsibleState::new(true);
+        let state = CollapsibleState::new(true);
         measured(&state, 200.);
         state.toggle();
         assert!(!state.is_open());
@@ -280,7 +284,7 @@ mod tests {
 
     #[test]
     fn re_opening_mid_collapse_starts_from_where_it_is() {
-        let mut state = CollapsibleState::new(true);
+        let state = CollapsibleState::new(true);
         measured(&state, 200.);
         state.toggle();
         // Interrupt immediately: the panel is still near its full height, so
@@ -293,7 +297,7 @@ mod tests {
 
     #[test]
     fn setting_the_state_it_already_has_does_nothing() {
-        let mut state = CollapsibleState::new(true);
+        let state = CollapsibleState::new(true);
         measured(&state, 200.);
         state.set_open(true);
         assert_eq!(state.height_for(Instant::now()), (None, false));

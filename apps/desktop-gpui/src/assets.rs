@@ -138,6 +138,34 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "user-round.svg",
     "window.svg",
     "x.svg",
+    // E5b's field glyphs: the rest of the sidebar's Lucide set, drawn from the
+    // same 24x24 originals `~icons/lucide/*` resolves to. `ease-curve` stands
+    // in for `~icons/hugeicons/ease-curve-control-points`, which is the one
+    // non-Lucide glyph in the sidebar (Smooth Movement's header).
+    "align-center.svg",
+    "align-left.svg",
+    "align-right.svg",
+    "arrow-left-right.svg",
+    "download.svg",
+    "ease-curve.svg",
+    "flip-vertical-2.svg",
+    "grid.svg",
+    "grip.svg",
+    "italic.svg",
+    "maximize.svg",
+    "moon.svg",
+    "mouse-pointer-2.svg",
+    "move.svg",
+    "move-right.svg",
+    "palette.svg",
+    "rabbit.svg",
+    "refresh-cw.svg",
+    "rotate-ccw.svg",
+    "rotate-cw.svg",
+    "sliders-horizontal.svg",
+    "sparkles.svg",
+    "timer.svg",
+    "volume-2.svg",
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
@@ -236,6 +264,13 @@ mod tests {
         // The config sidebar's field glyphs and the background section's
         // source tiles, same split.
         include_str!("editor_sidebar.rs"),
+        // The five later tabs, the colour-grade section and the eight segment
+        // panels each name their own glyphs.
+        include_str!("editor_tabs.rs"),
+        include_str!("editor_color.rs"),
+        include_str!("editor_panels.rs"),
+        // `ui::SelectionHeader` names the check and the trash itself.
+        include_str!("ui/selection_header.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

@@ -126,6 +126,9 @@ pub struct Button {
     width: Option<Pixels>,
     full_width: bool,
     height: Option<Pixels>,
+    /// Whether the disabled look is the plain surface's `opacity-50` rather
+    /// than the settings surface's repaint.
+    dim_disabled: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -152,6 +155,7 @@ impl Button {
             width: None,
             full_width: false,
             height: None,
+            dim_disabled: false,
             on_click: None,
         }
     }
@@ -238,6 +242,15 @@ impl Button {
 
     pub fn right_icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.right_icon = Some(icon.into());
+        self
+    }
+
+    /// The plain surface's `:disabled`. `@cap/ui-solid`'s `Button` carries
+    /// `disabled:opacity-50 disabled:cursor-not-allowed` on every variant, so
+    /// this dims rather than repainting.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self.dim_disabled = disabled;
         self
     }
 
@@ -394,6 +407,7 @@ impl RenderOnce for Button {
             paint,
             radius,
             disabled,
+            dim_disabled,
             gap,
             font_weight,
             width,
@@ -428,6 +442,7 @@ impl RenderOnce for Button {
             .when_some(paint.border, |this, border| {
                 this.border_1().border_color(border)
             })
+            .when(dim_disabled, |this| this.opacity(0.5))
             .when(!disabled, |this| {
                 this.hover(move |style| {
                     let style = match paint.hover_bg {

@@ -46,11 +46,13 @@ mod editor_button;
 mod field;
 mod kbd;
 mod number_field;
+mod position_pad;
 mod radio_cards;
 mod menu;
 mod progress;
 mod segmented;
 mod select;
+mod selection_header;
 mod slider;
 mod surface;
 mod tab_rail;
@@ -79,6 +81,8 @@ pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
 };
 #[allow(unused_imports)]
+pub use position_pad::{PAD_HEIGHT, PositionPad, pad_position};
+#[allow(unused_imports)]
 pub use radio_cards::{RadioCard, RadioCards};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
@@ -88,6 +92,8 @@ pub use progress::CircularProgress;
 pub use segmented::{SegmentOption, SegmentedControl, option_at};
 #[allow(unused_imports)]
 pub use select::Select;
+#[allow(unused_imports)]
+pub use selection_header::{SelectionHeader, selection_label, zoom_selection_label};
 #[allow(unused_imports)]
 pub use slider::{
     Slider, SliderDrag, SliderTrack, fraction_from_x, snap_to_step, value_at as slider_value_at,

@@ -334,9 +334,12 @@ pub struct Theme {
     /// config sidebar actually uses are carried: the background section's
     /// dashed dividers are `border-gray-300`, and every selected swatch in it
     /// (wallpaper, colour preset, gradient preset) is `ring-2 ring-gray-500
-    /// ring-offset-2 ring-offset-gray-200`.
+    /// ring-offset-2 ring-offset-gray-200`. E5b adds `gray-400`, the
+    /// `PositionPad` knob's ring (`ConfigSidebar.tsx:6283`) and the manual-zoom
+    /// dot's (`:5843`).
     pub gray_200_legacy: Rgba,
     pub gray_300_legacy: Rgba,
+    pub gray_400_legacy: Rgba,
     pub gray_500_legacy: Rgba,
 
     /// `--text-primary`, the root text colour. Slightly translucent by design.
@@ -392,6 +395,8 @@ impl Theme {
             // `theme.css:38-44`.
             gray_200_legacy: rgb(0xe4e6ed),
             gray_300_legacy: rgb(0xc7ccda),
+            // `--gray-400: #868e9f` (`theme.css:42`).
+            gray_400_legacy: rgb(0x868e9f),
             gray_500_legacy: rgb(0x161b26),
 
             text_primary: rgba(0x12161ff2),
@@ -440,6 +445,8 @@ impl Theme {
             // `theme.css:101-107`.
             gray_200_legacy: rgb(0x282828),
             gray_300_legacy: rgb(0x323232),
+            // `--gray-400: #a1a1a1` (`theme.css:105`).
+            gray_400_legacy: rgb(0xa1a1a1),
             gray_500_legacy: rgb(0xffffff),
 
             text_primary: rgba(0xfffffff2),

@@ -1259,23 +1259,38 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
             let frame_stats = stats.clone();
             let playhead = playhead.clone();
             gpui_tokio::Tokio::spawn(cx, async move {
-                // `EditorInstance::new`, not `new_with_audio_output`: the real
-                // constructor, exactly as the Tauri app calls it
-                // (`lib.rs:6592`). `AudioOutput::new` only spawns its control
-                // thread -- the device is opened lazily on the first play --
-                // so no cpal stream is grabbed by merely opening a project.
+                // `EditorInstance::new`: the real constructor, exactly as the
+                // Tauri app calls it (`lib.rs:6592`) -- except under
+                // `CAP_GPUI_MUTE_AUDIO=1`, which swaps in the headless audio
+                // output (the integration test's constructor) so playback
+                // stays silent: verification probes must be able to run while
+                // the user is on a call, and the editor otherwise plays the
+                // recording's audio through the default output the moment
+                // Play is pressed (the stream prewarms at load,
+                // `editor_instance.rs:305`). The video pump is identical on
+                // both paths.
                 //
                 // `shared_device: None`: gpui on macOS is Metal-direct and
                 // exposes no wgpu device to share, so cap-rendering owns its
                 // own. Two GPU contexts in-process is the shape the Tauri app
                 // already has.
-                cap_editor::EditorInstance::new(
-                    instance_path,
-                    editor_window::make_state_callback(playhead),
-                    editor_window::make_frame_callback(frame_tx, frame_stats),
-                    None,
-                )
-                .await
+                let state_cb = editor_window::make_state_callback(playhead);
+                let frame_cb = editor_window::make_frame_callback(frame_tx, frame_stats);
+                if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
+                    let silent = std::sync::Arc::new(cap_editor::AudioOutput::new_headless(
+                        Box::new(|_samples, _at| {}),
+                    ));
+                    cap_editor::EditorInstance::new_with_audio_output(
+                        instance_path,
+                        state_cb,
+                        frame_cb,
+                        None,
+                        silent,
+                    )
+                    .await
+                } else {
+                    cap_editor::EditorInstance::new(instance_path, state_cb, frame_cb, None).await
+                }
             })
         });
 
@@ -1431,6 +1446,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // and `set_playhead_position` render nothing.
         editor_window::request_frame(&instance, 0);
 
+        drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
     })
     .detach();
@@ -1524,6 +1540,45 @@ fn load_editor_waveforms(
         });
     })
     .detach();
+}
+
+/// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
+/// optionally scrolls its body, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`
+/// selects timeline segments so their panel opens.
+///
+/// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
+/// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
+/// body.** A `CGEvent` scroll delivered over the sidebar reaches the app (the
+/// timeline's own wheel handler logs one when the pointer is over the strip)
+/// but moves nothing when it lands on the scroll body, so a tab taller than
+/// 470px cannot be photographed below the fold without this.
+async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    let tab = std::env::var("CAP_GPUI_AUTO_SIDEBAR").ok();
+    let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
+    if tab.is_none() && select.is_none() {
+        return;
+    }
+    cx.background_executor()
+        .timer(std::time::Duration::from_millis(1200))
+        .await;
+
+    if let Some(spec) = tab {
+        let (name, scroll) = match spec.split_once(':') {
+            Some((name, scroll)) => (name.to_string(), scroll.parse::<f32>().ok()),
+            None => (spec, None),
+        };
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_select_sidebar_tab(&name, scroll, window, cx)
+            })
+            .ok();
+    }
+
+    if let Some(spec) = select {
+        handle
+            .update(cx, |view, _window, cx| view.auto_select_segments(&spec, cx))
+            .ok();
+    }
 }
 
 /// `CAP_GPUI_AUTO_PLAYBACK=<seconds>` presses play once the project is up and

@@ -37,6 +37,7 @@
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -218,6 +219,17 @@ pub struct ProjectSummary {
     /// Whether the bundle has more than one recording clip, which decides
     /// `"Clip"` vs `"Clip N"`. Kept so the model can be rebuilt after an edit.
     pub multiple_clips: bool,
+    /// `meta().hasMicrophone` / `hasSystemAudio` (`ED/context.ts:1776-1783`):
+    /// the first segment's tracks, which is what the audio tab's two volume
+    /// fields and the sync-offset block are gated on.
+    pub has_microphone: bool,
+    pub has_system_audio: bool,
+    /// `recordings.segments[0].mic?.channels` -- the stereo-mode row appears
+    /// only for a two-channel microphone (`ConfigSidebar.tsx:712`).
+    pub mic_channels: Option<u16>,
+    /// `editorInstance.recordings.segments.length`, which is what
+    /// `SyncOffsetsConfig` iterates: offsets are per *recording* clip.
+    pub recording_clips: usize,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -256,6 +268,19 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             inner.segments.iter().any(|s| s.camera.is_some()),
             inner.segments.len() > 1,
         ),
+    };
+
+    // `hasMicrophone` reads `audio` on a single-segment recording and `mic` on
+    // a multi-segment one; `hasSystemAudio` is a multi-segment concept only
+    // (`ED/context.ts:1776-1783`).
+    let (has_microphone, has_system_audio) = match studio.as_ref() {
+        StudioRecordingMeta::SingleSegment { segment } => (segment.audio.is_some(), false),
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .first()
+            .map_or((false, false), |segment| {
+                (segment.mic.is_some(), segment.system_audio.is_some())
+            }),
     };
 
     if segment_count == 0 {
@@ -329,6 +354,14 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             .collect(),
         recording_duration: recordings.duration(),
         multiple_clips: multiple_recording_segments,
+        has_microphone,
+        has_system_audio,
+        mic_channels: recordings
+            .segments
+            .first()
+            .and_then(|segment| segment.mic.as_ref())
+            .map(|mic| mic.channels),
+        recording_clips: recordings.segments.len(),
     })
 }
 
@@ -884,10 +917,16 @@ pub struct EditorWindow {
     /// project's own debounced write -- and, exactly as in the Tauri app, it is
     /// therefore not part of the project undo history.
     pub(crate) name_input: Entity<ui::TextInputState>,
-    /// One hex field per `RgbInput` the sidebar can show. Built up front
-    /// because `TextInputState` needs a `&mut Window` and the sidebar renders
-    /// from `&self`.
-    pub(crate) hex_inputs: Vec<(crate::editor_sidebar::ColorTarget, Entity<ui::TextInputState>)>,
+    /// One hex field per `RgbInput` / `HexColorInput` the sidebar can show.
+    /// The background tab's four exist up front; the tabs' and panels' are
+    /// created on the first frame that draws them, because `TextInputState`
+    /// needs a `&mut Window` and the sidebar renders from `&self`.
+    pub(crate) hex_inputs: HashMap<crate::editor_sidebar::ColorTarget, Entity<ui::TextInputState>>,
+    /// Every other text field the sidebar can show -- segment content, names,
+    /// numeric boxes -- same lazy story, keyed by what it edits.
+    pub(crate) fields: HashMap<crate::editor_panels::FieldKey, Entity<ui::TextInputState>>,
+    /// Whether a field is currently holding a `history.pause()`, and which.
+    pub(crate) field_editing: Option<crate::editor_panels::FieldKey>,
     _text_events: Vec<gpui::Subscription>,
 
     // -- Config sidebar (E5a) -------------------------------------------------
@@ -895,6 +934,11 @@ pub struct EditorWindow {
     /// collapsibles, the live slider drag and the colour panel. Everything it
     /// *writes* lives in `project` like every other edit.
     pub(crate) sidebar: crate::editor_sidebar::SidebarState,
+    /// `generalSettings.data?.custom_cursor_capture2` -- the one shared-store
+    /// setting the sidebar reads (`ConfigSidebar.tsx:5633, 6008`). The source
+    /// resolves it through a `createResource` and never refetches inside the
+    /// editor, so one read at open is the same behaviour.
+    pub(crate) cursor_capture: bool,
 }
 
 impl EditorWindow {
@@ -917,7 +961,7 @@ impl EditorWindow {
             crate::editor_sidebar::ColorTarget::GradientTo,
             crate::editor_sidebar::ColorTarget::BorderColor,
         ];
-        let hex_inputs: Vec<_> = hex_targets
+        let hex_inputs: HashMap<_, _> = hex_targets
             .iter()
             .map(|target| (*target, cx.new(|cx| ui::TextInputState::single_line(window, cx))))
             .collect();
@@ -978,8 +1022,11 @@ impl EditorWindow {
             save_task: None,
             name_input,
             hex_inputs,
+            fields: HashMap::new(),
+            field_editing: None,
             _text_events: text_events,
             sidebar: crate::editor_sidebar::SidebarState::new(&ProjectConfiguration::default()),
+            cursor_capture: crate::store::GeneralSettings::load().custom_cursor_capture,
         }
     }
 
@@ -988,6 +1035,18 @@ impl EditorWindow {
     /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
     pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
         self.pending_save.clone()
+    }
+
+    /// Every lazily-created field's subscription lives here for the window's
+    /// lifetime; dropping one would stop the field reporting.
+    pub(crate) fn push_text_subscription(&mut self, subscription: gpui::Subscription) {
+        self._text_events.push(subscription);
+    }
+
+    /// Where focus goes when a menu opens or a field commits: the root, so the
+    /// window's own key handling (and the menu's arrows) resume.
+    pub(crate) fn focus_handle_for_menu(&self) -> FocusHandle {
+        self.focus.clone()
     }
 
     pub fn focus_root(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1460,6 +1519,15 @@ impl EditorWindow {
         // a binding is matched *before* AppKit hands the event to the input
         // context (`gpui_macos/src/window.rs:2217-2250`), so binding a
         // printable key would mean it could never be typed. Hence the gate.
+        // An open `KSelect` menu takes its own keys first -- arrows, Home /
+        // End, Enter, Escape -- and consuming Escape here is what keeps it from
+        // also clearing the timeline selection underneath.
+        if self.sidebar.menu.is_some()
+            && self.sidebar_menu_key(event.keystroke.key.as_str(), window, cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         if ui::text_input_has_focus(window, cx) {
             return;
         }
@@ -2429,7 +2497,7 @@ impl EditorWindow {
     /// Every track deletes its selected indices; the clip track alone walks
     /// them in reverse and refuses to empty itself, and the scene track's
     /// action takes one index at a time for the same reason.
-    fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(selection) = self.selection.clone() else {
             return;
         };
@@ -2596,10 +2664,30 @@ impl EditorWindow {
         &self,
         target: crate::editor_sidebar::ColorTarget,
     ) -> Option<&Entity<ui::TextInputState>> {
-        self.hex_inputs
-            .iter()
-            .find(|(candidate, _)| *candidate == target)
-            .map(|(_, input)| input)
+        self.hex_inputs.get(&target)
+    }
+
+    /// Create a hex field the first time a frame draws it, and subscribe to it.
+    /// The three-line dance is the same one `new` does for the four the
+    /// background tab always has.
+    pub(crate) fn ensure_hex_input(
+        &mut self,
+        target: crate::editor_sidebar::ColorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.hex_inputs.contains_key(&target) {
+            return;
+        }
+        let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        self.push_text_subscription(cx.subscribe_in(
+            &input,
+            window,
+            move |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
+                this.on_hex_event(target, event, window, cx)
+            },
+        ));
+        self.hex_inputs.insert(target, input);
     }
 
     /// `createWritableMemo(() => rgbToHex(props.value))`: each hex field
@@ -3816,6 +3904,10 @@ fn is_at_end(total: f64, playhead: f64) -> bool {
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window);
+        // Fields first: a field created this frame has no text yet, and gpui
+        // only renders on invalidation, so syncing before creating would leave
+        // a brand-new box empty until something else asked for a frame.
+        self.prepare_sidebar_fields(window, cx);
         self.sync_hex_inputs(window, cx);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
@@ -3988,6 +4080,24 @@ impl Render for EditorWindow {
                     }),
                 )
             }))
+            // The `PositionPad`s use it too: `createEventListenerMap(window,
+            // {mousemove, mouseup})` is exactly what the pad's own press
+            // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
+            // what closes the pad's undo bracket.
+            .children(self.pad_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "sidebar-pad-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.pad_mouse_move(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.pad_mouse_up(cx);
+                    }),
+                )
+            }))
+            // The open `KSelect` menu, painted last of all so it is over the
+            // sidebar and the drag layers alike.
+            .children(self.render_sidebar_menu(cx))
     }
 }
 

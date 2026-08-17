@@ -4,9 +4,19 @@
 //! trenchcoat. This module is its shell -- the live six-tab rail, the scroll
 //! body, and the selection routing that swaps a segment's panel in over the top
 //! of the tab content -- plus the whole of the first tab
-//! (`ConfigSidebar.tsx:2185-2976`). The other five tabs and the eight segment
-//! panels are E5b; they render the same honest placeholder card the settings
-//! window's unbuilt pages do.
+//! (`ConfigSidebar.tsx:2185-2976`). The rest of the sidebar lives next door and
+//! comes back through this module's rail and routing:
+//!
+//! | module | what it draws |
+//! |---|---|
+//! | [`crate::editor_tabs`] | Camera, Audio, Cursor, Keyboard, Captions |
+//! | [`crate::editor_color`] | `ColorCorrectionSection`, once per target |
+//! | [`crate::editor_panels`] | the eight segment panels, and the shared fields |
+//!
+//! Those three reach back in here for the pieces the whole sidebar shares: one
+//! [`SliderKey`] table and one drag handler for every slider in the pane, one
+//! [`ColorTarget`] enum over both colour-storage shapes, the [`PadKey`] and
+//! [`PanelSection`] maps, and the collapsible / dashed-divider primitives.
 //!
 //! Every control here writes a real `ProjectConfiguration` key path through the
 //! **same** path a timeline edit takes -- [`EditorWindow::project_changed`]:
@@ -44,6 +54,9 @@ use gpui::{
 };
 
 use crate::{
+    editor_color::{GradeSlider, GradeTarget},
+    editor_panels::PanelSlider,
+    editor_tabs::{AudioSlider, CameraSlider, CaptionSlider, CursorSlider, KeyboardSlider},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
     ui::{self, CollapsibleState, SliderTrack},
@@ -235,6 +248,9 @@ impl SidebarTab {
         }
     }
 
+    /// The tab's own name. Used by the timeline's own logging and by the tests
+    /// that pin the rail's order; the rail itself is icon-only.
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Background => "Background",
@@ -531,8 +547,15 @@ fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImag
 /// Four octaves, each twice the frequency and half the amplitude -- what
 /// `numOctaves="4"` means.
 fn fractal_noise(x: f32, y: f32, seed: u32) -> f32 {
+    fractal_noise_octaves(x, y, seed, 4)
+}
+
+/// The same, at whatever `numOctaves` the call site's `feTurbulence` declares.
+/// The colour-grade previews' grain is `numOctaves="2"`
+/// (`colorCorrection.ts:56`).
+pub(crate) fn fractal_noise_octaves(x: f32, y: f32, seed: u32, octaves: u32) -> f32 {
     let (mut value, mut amplitude, mut total, mut frequency) = (0., 1., 0., 1.);
-    for octave in 0..4 {
+    for octave in 0..octaves {
         value += amplitude * value_noise(x * frequency, y * frequency, seed + octave);
         total += amplitude;
         amplitude *= 0.5;
@@ -612,13 +635,57 @@ impl BgSlider {
     }
 }
 
+/// Every slider in the sidebar, so one drag handler, one track table and one
+/// undo bracket serve all of them.
+///
+/// The background tab's own set stays [`BgSlider`] -- it is the one group with
+/// real side effects per arm -- and the five later tabs, the two colour grades
+/// and the eight segment panels each bring their own enum. The panel arm
+/// carries the **segment index** as well as the field, because a multi-select
+/// draws one panel per segment and each row needs its own track rect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SliderKey {
+    Bg(BgSlider),
+    Grade(GradeTarget, GradeSlider),
+    Camera(CameraSlider),
+    Audio(AudioSlider),
+    Cursor(CursorSlider),
+    Caption(CaptionSlider),
+    Keyboard(KeyboardSlider),
+    Panel(PanelSlider, usize),
+}
+
 /// Which colour the open `NSColorPanel` is editing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// The first four are the background tab's `RgbInput`s, which store a
+/// `[u8; 3]`. The rest are `HexColorInput`s (`text-style.tsx:82-163`), which
+/// store a `#RRGGBB` **string** -- the same control with a different storage
+/// type, so they share this enum and convert at the edges through
+/// [`hex_to_rgb`] / [`rgb_to_hex`], both of which are exact for an opaque
+/// colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorTarget {
     BackgroundColor,
     GradientFrom,
     GradientTo,
     BorderColor,
+    CaptionColor,
+    CaptionBackground,
+    CaptionHighlight,
+    KeyboardColor,
+    KeyboardBackground,
+    /// A text segment's colour, per segment index.
+    TextColor(usize),
+}
+
+impl ColorTarget {
+    /// Whether the target stores a hex string rather than an `[u8; 3]`.
+    pub fn is_hex_string(self) -> bool {
+        !matches!(
+            self,
+            Self::BackgroundColor | Self::GradientFrom | Self::GradientTo | Self::BorderColor
+        )
+    }
 }
 
 /// The sidebar's own state -- everything `ConfigSidebar`'s signals hold that is
@@ -641,16 +708,45 @@ pub struct SidebarState {
     pub shadow_open: CollapsibleState,
 
     /// The live slider drag and its undo bracket.
-    pub slider_drag: ui::SliderDrag<BgSlider>,
+    pub slider_drag: ui::SliderDrag<SliderKey>,
     /// Each slider's track rect, written by its own prepaint canvas. Behind a
     /// `RefCell` because `render` only has `&self` and a slider that has never
     /// been drawn has to be able to claim its cell there.
-    tracks: std::cell::RefCell<HashMap<BgSlider, SliderTrack>>,
+    tracks: std::cell::RefCell<HashMap<SliderKey, SliderTrack>>,
+
+    /// The `PositionPad`s' rects, same story, keyed by the pad's own id.
+    pads: std::cell::RefCell<HashMap<PadKey, SliderTrack>>,
+    /// The live pad drag, and whether it is holding a `history.pause()`.
+    pub pad_drag: Option<PadKey>,
+
+    /// `ColorCorrectionSection`'s `adjustOpen` signal -- one per instance, so
+    /// the Background tab's and the Camera tab's open independently.
+    grade_adjust: [CollapsibleState; 2],
+    /// The nine preset tiles, generated once for the process. The catalogue is
+    /// static, so nothing can invalidate them.
+    pub(crate) grade_previews: std::cell::RefCell<HashMap<&'static str, Arc<RenderImage>>>,
+    /// The camera tab's own `ShadowSettings` reveal, and the cursor tab's
+    /// `KCollapsible open={!project.cursor.raw}` physics panel.
+    pub camera_shadow_open: CollapsibleState,
+    pub cursor_physics_open: CollapsibleState,
+    /// The 3D panel's three `Camera3DSection`s and the zoom panel's helper.
+    pub panel_sections: std::cell::RefCell<HashMap<PanelSection, std::rc::Rc<CollapsibleState>>>,
 
     /// The gradient preview's grain, cached by the grain-scale step it was
     /// generated for -- regenerating 42k pixels of noise on every frame of a
     /// slider drag would be the one expensive thing in this panel.
     noise: std::cell::RefCell<Option<(i32, Arc<RenderImage>)>>,
+
+    /// The open `KSelect`'s menu, if any -- one slot for every select in the
+    /// sidebar, the settings window's `Menu.popup()` stand-in.
+    pub menu: Option<crate::editor_tabs::OpenMenu>,
+    /// `selectedModel` / `selectedLanguage` on the captions tab: local UI
+    /// state in the source too, not project config.
+    pub caption_model: &'static str,
+    pub caption_language: &'static str,
+    /// `editingEnd` on the 3D panel -- which of the two poses the camera
+    /// sliders point at (`ConfigSidebar.tsx:4908`).
+    pub editing_end_pose: bool,
 
     /// The open colour panel, if any, and the task draining its changes.
     pub color_target: Option<ColorTarget>,
@@ -697,7 +793,18 @@ impl SidebarState {
             shadow_open: CollapsibleState::new(false),
             slider_drag: ui::SliderDrag::new(),
             tracks: std::cell::RefCell::new(HashMap::new()),
+            pads: std::cell::RefCell::new(HashMap::new()),
+            pad_drag: None,
+            grade_adjust: [CollapsibleState::new(false), CollapsibleState::new(false)],
+            grade_previews: std::cell::RefCell::new(HashMap::new()),
+            camera_shadow_open: CollapsibleState::new(false),
+            cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
+            panel_sections: std::cell::RefCell::new(HashMap::new()),
             noise: std::cell::RefCell::new(None),
+            menu: None,
+            caption_model: "best",
+            caption_language: "auto",
+            editing_end_pose: false,
             color_target: None,
             color_task: None,
             color_paused: false,
@@ -712,7 +819,7 @@ impl SidebarState {
         }
     }
 
-    fn track(&self, slider: BgSlider) -> SliderTrack {
+    pub(crate) fn track(&self, slider: SliderKey) -> SliderTrack {
         self.tracks
             .borrow_mut()
             .entry(slider)
@@ -739,12 +846,58 @@ impl SidebarState {
 
     /// The stored track rect, without creating one -- the pointer maths reads
     /// this and a slider that has never been laid out simply does not move.
-    fn track_bounds(&self, slider: BgSlider) -> Option<Bounds<Pixels>> {
+    fn track_bounds(&self, slider: SliderKey) -> Option<Bounds<Pixels>> {
         self.tracks
             .borrow()
             .get(&slider)
             .and_then(|cell| cell.get())
     }
+
+    pub(crate) fn pad(&self, key: PadKey) -> SliderTrack {
+        self.pads.borrow_mut().entry(key).or_default().clone()
+    }
+
+    pub(crate) fn pad_bounds_for(&self, key: PadKey) -> Option<Bounds<Pixels>> {
+        self.pads.borrow().get(&key).and_then(|cell| cell.get())
+    }
+
+    pub(crate) fn grade_open(&self, target: GradeTarget) -> &CollapsibleState {
+        &self.grade_adjust[usize::from(target == GradeTarget::Camera)]
+    }
+
+    pub(crate) fn set_grade_open(&self, target: GradeTarget, open: bool) {
+        self.grade_adjust[usize::from(target == GradeTarget::Camera)].set_open(open);
+    }
+
+    /// A panel section's reveal state, created closed on first sight. Panel
+    /// state is per-panel and transient -- `createSignal(false)` inside the
+    /// component -- so it lives in a map rather than in named fields.
+    pub(crate) fn section(&self, key: PanelSection) -> std::rc::Rc<CollapsibleState> {
+        self.panel_sections
+            .borrow_mut()
+            .entry(key)
+            .or_insert_with(|| std::rc::Rc::new(CollapsibleState::new(false)))
+            .clone()
+    }
+}
+
+/// Every `PositionPad` the sidebar can draw. The scene panel has two per
+/// segment and the multi-zoom panel one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PadKey {
+    SceneScreen(usize),
+    SceneCamera(usize),
+    ZoomManual(usize),
+    ZoomMulti,
+}
+
+/// The collapsible sections a segment panel owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PanelSection {
+    Camera3DCamera,
+    Camera3DBlur,
+    Camera3DAdvanced,
+    ZoomHelper,
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +923,10 @@ impl EditorWindow {
         if self.sidebar_selection().is_some() {
             self.set_selection(None, cx);
         }
+        // A tab switch also dismisses whatever the previous tab had open: the
+        // `KSelect` menu, and a field's history bracket.
+        self.sidebar.menu = None;
+        self.end_field_edit(cx);
         self.sidebar.tab = tab;
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
         cx.notify();
@@ -808,6 +965,61 @@ impl EditorWindow {
         }
         self.project_changed(window, cx);
         self.note_sidebar_edit(reason);
+    }
+
+    /// One project write, through the shared fan-out, for every control
+    /// outside the background tab. `change` returns whether anything actually
+    /// moved, so a no-op slider tick records no history entry and schedules no
+    /// save -- the same contract [`Self::edit_background`] has.
+    pub(crate) fn edit_project(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) {
+        self.end_color_history();
+        if !change(&mut self.project) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_project_edit(reason);
+    }
+
+    /// The same line `note_sidebar_edit` writes for the background tab, for
+    /// the rest of the sidebar: one `info` record per committed edit so a
+    /// scripted click's predicted value is checkable against what the running
+    /// app resolved rather than against a screenshot.
+    pub(crate) fn note_project_edit(&self, reason: &'static str) {
+        let project = &self.project;
+        tracing::info!(
+            reason,
+            camera = format!(
+                "hide={} mirror={} shape={:?} size={:.4} rounding={:.4} shadow={:.4}",
+                project.camera.hide,
+                project.camera.mirror,
+                project.camera.shape,
+                project.camera.size,
+                project.camera.rounding,
+                project.camera.shadow
+            ),
+            audio = format!(
+                "mute={} mic={:.4} system={:.4}",
+                project.audio.mute, project.audio.mic_volume_db, project.audio.system_volume_db
+            ),
+            cursor = format!(
+                "hide={} size={} style={:?} raw={}",
+                project.cursor.hide,
+                project.cursor.size,
+                project.cursor.animation_style,
+                project.cursor.raw
+            ),
+            grade_screen = format!("{:?}", project.color_correction.screen),
+            grade_camera = format!("{:?}", project.color_correction.camera),
+            selection = ?self.selection.as_ref().map(|s| (s.track, s.indices.clone())),
+            undo = self.history.can_undo(),
+            "sidebar edit"
+        );
     }
 
     /// One line per committed sidebar edit, at `info`, for the same reason
@@ -856,7 +1068,61 @@ impl EditorWindow {
         }
     }
 
-    fn slider_limits(&self, slider: BgSlider) -> (f32, f32, f32) {
+    /// The range for any slider in the sidebar. Every arm is its own call
+    /// site's `minValue` / `maxValue` / `step`.
+    pub(crate) fn slider_limits(&self, slider: SliderKey) -> (f32, f32, f32) {
+        match slider {
+            SliderKey::Bg(slider) => self.bg_slider_limits(slider),
+            SliderKey::Grade(_, slider) => slider.limits(),
+            SliderKey::Camera(slider) => slider.limits(),
+            SliderKey::Audio(slider) => slider.limits(),
+            SliderKey::Cursor(slider) => slider.limits(),
+            SliderKey::Caption(slider) => slider.limits(),
+            SliderKey::Keyboard(slider) => slider.limits(),
+            SliderKey::Panel(slider, index) => self.panel_slider_limits(slider, index),
+        }
+    }
+
+    pub(crate) fn slider_value(&self, slider: SliderKey) -> f32 {
+        match slider {
+            SliderKey::Bg(slider) => self.bg_slider_value(slider),
+            // Every grade slider is `Math.round(value * 100)` in the UI and
+            // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
+            SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
+            SliderKey::Camera(slider) => slider.read(&self.project),
+            SliderKey::Audio(slider) => slider.read(&self.project),
+            SliderKey::Cursor(slider) => slider.read(&self.project),
+            SliderKey::Caption(slider) => slider.read(&self.project),
+            SliderKey::Keyboard(slider) => slider.read(&self.project),
+            SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
+        }
+    }
+
+    /// The one place a slider's value reaches the project.
+    fn apply_slider(
+        &mut self,
+        slider: SliderKey,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match slider {
+            SliderKey::Bg(slider) => self.apply_bg_slider(slider, value, window, cx),
+            SliderKey::Grade(target, slider) => {
+                self.set_grade_value(target, slider, value / 100., window, cx)
+            }
+            SliderKey::Camera(slider) => self.apply_camera_slider(slider, value, window, cx),
+            SliderKey::Audio(slider) => self.apply_audio_slider(slider, value, window, cx),
+            SliderKey::Cursor(slider) => self.apply_cursor_slider(slider, value, window, cx),
+            SliderKey::Caption(slider) => self.apply_caption_slider(slider, value, window, cx),
+            SliderKey::Keyboard(slider) => self.apply_keyboard_slider(slider, value, window, cx),
+            SliderKey::Panel(slider, index) => {
+                self.apply_panel_slider(slider, index, value, window, cx)
+            }
+        }
+    }
+
+    fn bg_slider_limits(&self, slider: BgSlider) -> (f32, f32, f32) {
         let (min, max, step) = slider.limits();
         if slider == BgSlider::NotchX {
             let width = self
@@ -871,7 +1137,7 @@ impl EditorWindow {
         (min, max, step)
     }
 
-    fn slider_value(&self, slider: BgSlider) -> f32 {
+    fn bg_slider_value(&self, slider: BgSlider) -> f32 {
         let background = &self.project.background;
         match slider {
             BgSlider::Blur => background.blur as f32,
@@ -921,9 +1187,9 @@ impl EditorWindow {
         }
     }
 
-    /// The one place a slider's value reaches the project. Every arm is the
-    /// call site's `onChange` verbatim, side effects included.
-    fn apply_slider(
+    /// The background tab's own arms -- each one the call site's `onChange`
+    /// verbatim, side effects included.
+    fn apply_bg_slider(
         &mut self,
         slider: BgSlider,
         value: f32,
@@ -1043,7 +1309,7 @@ impl EditorWindow {
     /// pointer on mousedown.
     fn slider_mouse_down(
         &mut self,
-        slider: BgSlider,
+        slider: SliderKey,
         event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1124,7 +1390,12 @@ impl EditorWindow {
     /// * the first change takes `history.pause()` and closing the panel
     ///   resumes it, so a colour dragged around the wheel is **one** undo
     ///   entry, exactly as a slider drag is.
-    fn open_color_panel(&mut self, target: ColorTarget, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_color_panel_for(
+        &mut self,
+        target: ColorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let initial = self.color_for(target).unwrap_or([0, 0, 0]);
         let initial = [
             initial[0].min(255) as u8,
@@ -1228,6 +1499,29 @@ impl EditorWindow {
                     .as_ref()
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
+            _ => self.hex_string_for(target).and_then(|hex| {
+                hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
+            }),
+        }
+    }
+
+    /// The stored string for a `HexColorInput` target.
+    pub(crate) fn hex_string_for(&self, target: ColorTarget) -> Option<String> {
+        let captions = crate::editor_tabs::caption_settings(&self.project);
+        let keyboard = crate::editor_tabs::keyboard_settings(&self.project);
+        match target {
+            ColorTarget::CaptionColor => Some(captions.color),
+            ColorTarget::CaptionBackground => Some(captions.background_color),
+            ColorTarget::CaptionHighlight => Some(captions.highlight_color),
+            ColorTarget::KeyboardColor => Some(keyboard.color),
+            ColorTarget::KeyboardBackground => Some(keyboard.background_color),
+            ColorTarget::TextColor(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .map(|segment| segment.color.clone()),
+            _ => None,
         }
     }
 
@@ -1238,6 +1532,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if target.is_hex_string() {
+            return self.set_hex_color(target, color, window, cx);
+        }
         self.edit_background(
             "color",
             |project| {
@@ -1269,12 +1566,62 @@ impl EditorWindow {
                         border.color = color;
                         background.border = Some(border);
                     }
+                    _ => unreachable!("hex-string targets go through set_hex_color"),
                 }
                 true
             },
             window,
             cx,
         );
+    }
+
+    /// The hex-string half of [`Self::set_color`]. Kept separate because these
+    /// targets do not live under `background`, so they take the general
+    /// project fan-out rather than `edit_background`.
+    pub(crate) fn set_hex_color(
+        &mut self,
+        target: ColorTarget,
+        color: Color,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hex = rgb_to_hex(color);
+        match target {
+            ColorTarget::CaptionColor => {
+                self.set_caption_setting("caption-color", window, cx, move |s| s.color = hex)
+            }
+            ColorTarget::CaptionBackground => self.set_caption_setting(
+                "caption-background-color",
+                window,
+                cx,
+                move |s| s.background_color = hex,
+            ),
+            ColorTarget::CaptionHighlight => self.set_caption_setting(
+                "caption-highlight-color",
+                window,
+                cx,
+                move |s| s.highlight_color = hex,
+            ),
+            ColorTarget::KeyboardColor => {
+                self.set_keyboard_setting("keyboard-color", window, cx, move |s| s.color = hex)
+            }
+            ColorTarget::KeyboardBackground => self.set_keyboard_setting(
+                "keyboard-background-color",
+                window,
+                cx,
+                move |s| s.background_color = hex,
+            ),
+            ColorTarget::TextColor(index) => {
+                self.edit_text_segment("text-color", index, window, cx, move |segment| {
+                    if segment.color == hex {
+                        return false;
+                    }
+                    segment.color = hex;
+                    true
+                })
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1872,7 +2219,11 @@ impl EditorWindow {
     fn render_tab_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let content: AnyElement = match self.sidebar.tab {
             SidebarTab::Background => self.render_background_tab(cx).into_any_element(),
-            tab => self.render_pending_tab(tab).into_any_element(),
+            SidebarTab::Camera => self.render_camera_tab(cx),
+            SidebarTab::Audio => self.render_audio_tab(cx),
+            SidebarTab::Cursor => self.render_cursor_tab(cx),
+            SidebarTab::Keyboard => self.render_keyboard_tab(cx),
+            SidebarTab::Captions => self.render_captions_tab(cx),
         };
 
         div()
@@ -1896,77 +2247,17 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// The five tabs E5b owns, and the eight segment panels, render the same
-    /// card the settings window's eleven unbuilt pages do.
-    fn placeholder_card(&self, title: &'static str, body: SharedString) -> impl IntoElement {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .p(px(16.))
-            .rounded(px(12.))
-            .bg(Hsla::from(theme.gray_3))
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(Hsla::from(theme.gray_11))
-                    .child(body),
-            )
-    }
-
-    fn render_pending_tab(&self, tab: SidebarTab) -> impl IntoElement {
-        self.placeholder_card(
-            tab.label(),
-            SharedString::from(format!(
-                "The {} tab is not part of this unit. The rail, the scroll body and \
-                 the Background tab are real.",
-                tab.label()
-            )),
-        )
-    }
-
     /// The selection panel region (`:1077-1093`): `custom-scroll p-4 top-16
     /// left-0 right-0 bottom-0 text-[0.875rem] space-y-4`, entering with
     /// `animate-in slide-in-from-bottom-2 fade-in`.
     ///
-    /// The panels themselves -- eight of them, one per selectable track type,
-    /// each with the shared Done / "N segments selected" / Delete header -- are
-    /// E5b. The **routing** is real: which selections reach here, which do not
-    /// (a clip selection never does), and what the rail does while one is up.
+    /// The routing is E5a's; what lands in it is [`crate::editor_panels`].
     fn render_selection_panel(
         &self,
         selection: &crate::editor_edits::Selection,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
-        let count = selection.indices.len();
-        let label = selection.track.label();
-        div()
-            .id("sidebar-selection")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p(px(16.))
-            .gap(px(16.))
-            .text_size(px(14.))
-            .child(self.placeholder_card(
-                "Segment settings",
-                SharedString::from(format!(
-                    "{count} {} segment{} selected. The per-segment panels are not part of \
-                     this unit; the routing that brings you here is.",
-                    label.to_lowercase(),
-                    if count == 1 { "" } else { "s" }
-                )),
-            ))
-            .into_any_element()
+        self.render_segment_panel(selection, cx)
     }
 }
 
@@ -1989,14 +2280,14 @@ impl EditorWindow {
             .child(
                 ui::Field::plain(&theme, "Background Blur")
                     .icon("icons/bg-blur.svg")
-                    .child(self.slider(BgSlider::Blur, "%", cx)),
+                    .child(self.slider(SliderKey::Bg(BgSlider::Blur), "%", cx)),
             )
             // `<div class="w-full border-t border-gray-300 border-dashed" />`
             .child(dashed_divider(Hsla::from(theme.gray_300_legacy)))
             .child(
                 ui::Field::plain(&theme, "Padding")
                     .icon("icons/padding.svg")
-                    .child(self.slider(BgSlider::Padding, "%", cx))
+                    .child(self.slider(SliderKey::Bg(BgSlider::Padding), "%", cx))
                     // The custom screen position row, shown only once the
                     // display has been dragged on the canvas (`:2656-2667`).
                     .children(background.display_position.map(|_| {
@@ -2038,27 +2329,20 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(self.slider(BgSlider::Rounding, "%", cx))
+                            .child(self.slider(SliderKey::Bg(BgSlider::Rounding), "%", cx))
                             .child(self.render_corner_style(cx)),
                     ),
             )
             .child(
                 ui::Field::plain(&theme, "Motion Blur")
                     .icon("icons/wind.svg")
-                    .child(self.slider(BgSlider::MotionBlur, "x100%", cx)),
+                    .child(self.slider(SliderKey::Bg(BgSlider::MotionBlur), "x100%", cx)),
             )
             .child(self.render_border_field(cx))
             .child(self.render_notch_field(cx))
             .child(self.render_shadow_field(cx))
             // `<ColorCorrectionSection target="screen" />` (`:2962`).
-            .child(self.placeholder_card(
-                "Color Correction",
-                SharedString::from(
-                    "Not part of this unit: the section is one component shared with the \
-                     Camera tab, and its preset grid previews each look with a live CSS \
-                     filter, which this gpui rev has no per-element hook for.",
-                ),
-            ))
+            .child(self.render_color_correction(GradeTarget::Screen, cx))
     }
 
     // -- Source ------------------------------------------------------------
@@ -2649,7 +2933,7 @@ impl EditorWindow {
                         this.border_2().border_color(Hsla::from(theme.blue_9))
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_color_panel(target, window, cx);
+                        this.open_color_panel_for(target, window, cx);
                     })),
             )
             .children(input.map(|input| {
@@ -2754,7 +3038,7 @@ impl EditorWindow {
                             .flex_row()
                             .items_center()
                             .gap(px(12.))
-                            .child(self.slider_flex(BgSlider::GradientAngle, "deg", cx))
+                            .child(self.slider_flex(SliderKey::Bg(BgSlider::GradientAngle), "deg", cx))
                             .child(
                                 div()
                                     .w(px(48.))
@@ -2773,7 +3057,7 @@ impl EditorWindow {
                 ui::Subfield::plain(&theme, "Noise").child(
                     div()
                         .w(px(120.))
-                        .child(self.slider(BgSlider::GradientNoise, "%", cx)),
+                        .child(self.slider(SliderKey::Bg(BgSlider::GradientNoise), "%", cx)),
                 ),
             )
             // Grain Scale appears only while noise is on (`:204-221`).
@@ -2782,7 +3066,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .w(px(120.))
-                            .child(self.slider(BgSlider::GradientGrain, "%", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::GradientGrain), "%", cx)),
                     )
                     .into_any_element()
             }))
@@ -3016,7 +3300,7 @@ impl EditorWindow {
                     .child(
                         ui::Field::plain(&theme, "Border Width")
                             .icon("icons/enlarge.svg")
-                            .child(self.slider(BgSlider::BorderWidth, "px", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::BorderWidth), "px", cx)),
                     )
                     .child(
                         ui::Field::plain(&theme, "Border Color")
@@ -3031,7 +3315,7 @@ impl EditorWindow {
                     .child(
                         ui::Field::plain(&theme, "Border Opacity")
                             .icon("icons/shadow.svg")
-                            .child(self.slider(BgSlider::BorderOpacity, "%", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::BorderOpacity), "%", cx)),
                     )
                     .into_any_element(),
             ))
@@ -3101,17 +3385,17 @@ impl EditorWindow {
                     .child(
                         ui::Field::plain(&theme, "Notch Width")
                             .icon("icons/enlarge.svg")
-                            .child(self.slider(BgSlider::NotchWidth, "pct", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::NotchWidth), "pct", cx)),
                     )
                     .child(
                         ui::Field::plain(&theme, "Notch Height")
                             .icon("icons/enlarge.svg")
-                            .child(self.slider(BgSlider::NotchHeight, "pct", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::NotchHeight), "pct", cx)),
                     )
                     .child(
                         ui::Field::plain(&theme, "Notch Position")
                             .icon("icons/enlarge.svg")
-                            .child(self.slider(BgSlider::NotchX, "pct", cx)),
+                            .child(self.slider(SliderKey::Bg(BgSlider::NotchX), "pct", cx)),
                     )
                     .into_any_element(),
             ))
@@ -3123,7 +3407,7 @@ impl EditorWindow {
 
         ui::Field::plain(&theme, "Shadow")
             .icon("icons/shadow.svg")
-            .child(self.slider(BgSlider::Shadow, "%", cx))
+            .child(self.slider(SliderKey::Bg(BgSlider::Shadow), "%", cx))
             // `ShadowSettings` (`ShadowSettings.tsx:37-86`): its own trigger
             // row with a rotating chevron, over three sliders.
             .child(
@@ -3169,15 +3453,15 @@ impl EditorWindow {
                             .mt(px(16.))
                             .child(
                                 ui::Field::plain(&theme, "Size")
-                                    .child(self.slider(BgSlider::ShadowSize, "", cx)),
+                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowSize), "", cx)),
                             )
                             .child(
                                 ui::Field::plain(&theme, "Opacity")
-                                    .child(self.slider(BgSlider::ShadowOpacity, "", cx)),
+                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowOpacity), "", cx)),
                             )
                             .child(
                                 ui::Field::plain(&theme, "Blur")
-                                    .child(self.slider(BgSlider::ShadowBlur, "", cx)),
+                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowBlur), "", cx)),
                             )
                             .into_any_element(),
                     )),
@@ -3187,7 +3471,7 @@ impl EditorWindow {
     /// gpui only renders on invalidation, so a height transition needs someone
     /// to ask for the next frame. Same ticker the settings window's collapsible
     /// uses.
-    fn animate_collapsibles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn animate_collapsibles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.notify();
         window.refresh();
         cx.spawn_in(window, async move |this, cx| {
@@ -3215,9 +3499,9 @@ impl EditorWindow {
     /// prints. gpui's tooltip is hover-driven only -- the Solid slider *also*
     /// forces it open mid-drag, which this rev cannot do (the README's
     /// standing tooltip deviation).
-    fn slider(
+    pub(crate) fn slider(
         &self,
-        slider: BgSlider,
+        slider: SliderKey,
         unit: &'static str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -3229,20 +3513,45 @@ impl EditorWindow {
     /// `<Slider class="flex-1">` (`GradientEditor.tsx:169`). A flex item with
     /// no basis collapses to its content, which for a track with no intrinsic
     /// width is zero.
-    fn slider_flex(
+    pub(crate) fn slider_flex(
         &self,
-        slider: BgSlider,
+        slider: SliderKey,
         unit: &'static str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         self.slider_sized(slider, unit, true, cx)
     }
 
+    /// `<Slider disabled>`: Kobalte stops the pointer reaching the track and
+    /// the fill repaints `data-disabled:bg-gray-8` (`editor/ui.tsx:118`). The
+    /// two audio volumes are the sidebar's only disabled sliders, and both are
+    /// disabled by `project.audio.mute` (`:786, :804`).
+    pub(crate) fn slider_disabled(
+        &self,
+        slider: SliderKey,
+        unit: &'static str,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.slider_sized_state(slider, unit, false, disabled, cx)
+    }
+
     fn slider_sized(
         &self,
-        slider: BgSlider,
+        slider: SliderKey,
         unit: &'static str,
         flex: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.slider_sized_state(slider, unit, flex, false, cx)
+    }
+
+    fn slider_sized_state(
+        &self,
+        slider: SliderKey,
+        unit: &'static str,
+        flex: bool,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
@@ -3276,7 +3585,7 @@ impl EditorWindow {
                 .row_height(px(32.))
                 // `h-[0.3rem] bg-gray-4 rounded-full`
                 .track(px(4.8), Hsla::from(theme.gray_4))
-                .fill(Hsla::from(theme.blue_9))
+                .fill(Hsla::from(if disabled { theme.gray_8 } else { theme.blue_9 }))
                 // `bg-gray-1 dark:bg-gray-12 border border-gray-6 size-4`
                 .thumb(
                     px(16.),
@@ -3287,9 +3596,13 @@ impl EditorWindow {
                     }),
                     Some(Hsla::from(theme.gray_6)),
                 )
-                .on_drag_start(cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    this.slider_mouse_down(slider, event, window, cx);
-                })),
+                .when(!disabled, |this| {
+                    this.on_drag_start(cx.listener(
+                        move |this, event: &MouseDownEvent, window, cx| {
+                            this.slider_mouse_down(slider, event, window, cx);
+                        },
+                    ))
+                }),
             )
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label.clone()).view(cx))
     }
@@ -3298,7 +3611,7 @@ impl EditorWindow {
 /// `formatTooltip`: a plain string suffix means `value.toFixed(1)` plus it, and
 /// the two formatter call sites are motion blur (`${round(v * 100)}%`) and the
 /// notch's three (`${(v * 100).toFixed(1)}%`).
-fn format_slider_value(value: f32, unit: &str) -> String {
+pub(crate) fn format_slider_value(value: f32, unit: &str) -> String {
     match unit {
         "" => format!("{value:.1}"),
         "deg" => format!("{}\u{b0}", value.round() as i32),
@@ -3310,7 +3623,7 @@ fn format_slider_value(value: f32, unit: &str) -> String {
 
 /// The dashed dividers. gpui has no dashed border, so the dashes are painted:
 /// 4px on, 4px off, one pixel tall.
-fn dashed_divider(color: Hsla) -> impl IntoElement {
+pub(crate) fn dashed_divider(color: Hsla) -> impl IntoElement {
     div().w_full().h(px(1.)).child(
         canvas(
             |_, _, _| {},
@@ -3338,7 +3651,7 @@ fn dashed_divider(color: Hsla) -> impl IntoElement {
 /// shut, so the reveal has something to collapse into -- the settings window's
 /// rule, and the same reason: an unmounted panel would leave the parent's `gap`
 /// as a hole under the trigger.
-fn collapsible(state: &CollapsibleState, content: AnyElement) -> AnyElement {
+pub(crate) fn collapsible(state: &CollapsibleState, content: AnyElement) -> AnyElement {
     if !(state.is_open() || state.is_animating()) {
         return div().into_any_element();
     }
@@ -3348,7 +3661,7 @@ fn collapsible(state: &CollapsibleState, content: AnyElement) -> AnyElement {
         .into_any_element()
 }
 
-fn with_alpha(color: impl Into<Hsla>, alpha: f32) -> Hsla {
+pub(crate) fn with_alpha(color: impl Into<Hsla>, alpha: f32) -> Hsla {
     let mut color = color.into();
     color.a = alpha;
     color
@@ -3513,5 +3826,74 @@ mod tests {
         let ring = preview_border_color([255, 255, 255]);
         let rgba = gpui::Rgba::from(ring);
         assert_eq!((rgba.r * 255.).round() as u8, 209);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verification hooks
+// ---------------------------------------------------------------------------
+
+impl EditorWindow {
+    /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]`, through the rail's own handler
+    /// so the tab switch is the one a click makes -- selection cleared, menu
+    /// dismissed, body back to the top -- with the scroll applied afterwards.
+    pub(crate) fn auto_select_sidebar_tab(
+        &mut self,
+        name: &str,
+        scroll: Option<f32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = SidebarTab::ALL
+            .iter()
+            .position(|tab| tab.label().eq_ignore_ascii_case(name))
+        else {
+            tracing::warn!(name, "unknown sidebar tab");
+            return;
+        };
+        self.select_sidebar_tab(index, window, cx);
+        if let Some(offset) = scroll {
+            self.sidebar
+                .scroll
+                .set_offset(gpui::point(px(0.), px(-offset)));
+        }
+        tracing::info!(tab = name, scroll = ?scroll, "auto sidebar tab");
+        cx.notify();
+        window.refresh();
+    }
+
+    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`, through `set_selection` so the
+    /// panel opens exactly as a timeline click opens it.
+    pub(crate) fn auto_select_segments(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let Some((track, indices)) = spec.split_once(':') else {
+            tracing::warn!(spec, "auto select needs <track>:<index>");
+            return;
+        };
+        let track = match track.to_ascii_lowercase().as_str() {
+            "zoom" => TrackKind::Zoom,
+            "text" => TrackKind::Text,
+            "caption" => TrackKind::Caption,
+            "mask" => TrackKind::Mask,
+            "audio" => TrackKind::Audio,
+            "keyboard" => TrackKind::Keyboard,
+            "scene" => TrackKind::Scene,
+            "3d" | "three_d" => TrackKind::ThreeD,
+            other => {
+                tracing::warn!(track = other, "unknown track");
+                return;
+            }
+        };
+        let indices: Vec<usize> = indices
+            .split(',')
+            .filter_map(|value| value.trim().parse().ok())
+            .collect();
+        if indices.is_empty() {
+            return;
+        }
+        tracing::info!(?track, ?indices, "auto select segments");
+        self.set_selection(
+            Some(crate::editor_edits::Selection { track, indices }),
+            cx,
+        );
     }
 }
