@@ -2111,6 +2111,13 @@ impl SettingsWindow {
                                 this.settings.hide_dock_icon = !this.settings.hide_dock_icon;
                                 let value = this.settings.hide_dock_icon;
                                 this.write_bool("hideDockIcon", value, cx);
+                                // `GeneralSettingsStore::set` -> the store
+                                // listener -> `schedule_macos_dock_visibility_sync`.
+                                // Deferred past the debounced write, which is
+                                // what the sync then reads back.
+                                cx.defer(|cx: &mut gpui::App| {
+                                    crate::menus::schedule_dock_sync(cx)
+                                });
                             },
                         )
                         .into_any_element(),

@@ -583,6 +583,38 @@ mod mac {
         unsafe { native.0.performClose(None) };
     }
 
+    /// `performMiniaturize:` -- the selector muda gives the Window menu's
+    /// Minimize item. Same retained-handle discipline as [`hide_native`]:
+    /// miniaturizing re-enters gpui's own window callbacks.
+    pub fn minimize_native(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let _: () = msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// `performZoom:` -- muda's Window > Zoom.
+    pub fn zoom_native(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let _: () = msg_send![&*native.0, performZoom: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// `toggleFullScreen:` -- muda's View > (Enter|Exit) Full Screen.
+    pub fn toggle_fullscreen_native(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let _: () = msg_send![&*native.0, toggleFullScreen: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// `window.is_visible()` -- what `sync_macos_dock_visibility` asks every
+    /// window. A plain getter, so it is safe inside a gpui update.
+    pub fn window_is_visible(window: &Window) -> bool {
+        ns_window(window).is_some_and(|ns| ns.isVisible())
+    }
+
     /// Show without stealing key status -- `orderFrontRegardless`, what the
     /// Tauri app calls on the recording controls panel.
     pub fn show_window_without_focus(window: &Window) {
@@ -900,6 +932,97 @@ mod mac {
         }
     }
 
+    // -- Activation policy (the dock icon) -----------------------------------
+
+    /// `NSApplicationActivationPolicyRegular`: dock icon, menu bar, the lot.
+    const NS_ACTIVATION_POLICY_REGULAR: isize = 0;
+    /// `NSApplicationActivationPolicyAccessory`: no dock icon, and **no menu
+    /// bar** -- which is why [`crate::menus`] re-activates the app after
+    /// putting the policy back.
+    const NS_ACTIVATION_POLICY_ACCESSORY: isize = 1;
+
+    /// `macos_sync_activation_policy` (`src-tauri/src/permissions.rs:173-183`):
+    /// `Regular` when the dock icon should show, `Accessory` when it should
+    /// not. Tauri's `set_dock_visibility` is the same `setActivationPolicy:`
+    /// underneath, so the pair of calls over there is this one call here.
+    ///
+    /// `setActivationPolicy:` takes an `NSInteger`, so the argument must be
+    /// `isize` -- objc2's message-send verification *aborts* the process on the
+    /// unsigned spelling ("expected argument at index 0 to have type code 'q',
+    /// but found 'Q'"), the same trap [`confirm_dialog`] documents in the other
+    /// direction.
+    pub fn set_activation_policy(regular: bool) -> bool {
+        use objc2::{class, msg_send};
+        let policy = if regular {
+            NS_ACTIVATION_POLICY_REGULAR
+        } else {
+            NS_ACTIVATION_POLICY_ACCESSORY
+        };
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return false;
+            }
+            msg_send![app, setActivationPolicy: policy]
+        }
+    }
+
+    /// The policy AppKit currently reports, for the dock-policy probe.
+    pub fn activation_policy() -> isize {
+        use objc2::{class, msg_send};
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return -1;
+            }
+            msg_send![app, activationPolicy]
+        }
+    }
+
+    // -- The About panel ------------------------------------------------------
+
+    /// `PredefinedMenuItem::about(.., AboutMetadata { name, version, .. })`,
+    /// which on macOS is `orderFrontStandardAboutPanelWithOptions:`.
+    ///
+    /// The Tauri metadata also carries `copyright` and `publisher` from
+    /// `tauri.conf.json` -- neither key exists in that file, so both are `None`
+    /// there and there is nothing to pass here either.
+    ///
+    /// Spins no modal run loop of its own (the panel is an ordinary window), but
+    /// ordering a window front re-enters gpui's window callbacks, so it keeps
+    /// the [`place_overlay_panel`] rule: call it from a task, never inside an
+    /// update.
+    pub fn show_about_panel(name: &str, version: &str) {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSArray, NSString};
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            // `dictionaryWithObjects:forKeys:` rather than a typed
+            // `NSDictionary` constructor, for the reason
+            // [`desktop_picture_path`] gives: the typed binding needs another
+            // objc2-app-kit/foundation feature, and the rule here is that those
+            // versions stay pinned to gpui's.
+            let values = NSArray::from_vec(vec![
+                NSString::from_str(name),
+                NSString::from_str(version),
+            ]);
+            let keys = NSArray::from_vec(vec![
+                NSString::from_str("ApplicationName"),
+                NSString::from_str("ApplicationVersion"),
+            ]);
+            let options: *mut AnyObject = msg_send![
+                class!(NSDictionary),
+                dictionaryWithObjects: &*values,
+                forKeys: &*keys,
+            ];
+            let _: () = msg_send![app, orderFrontStandardAboutPanelWithOptions: options];
+        }
+    }
+
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.
@@ -965,6 +1088,12 @@ mod stub {
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
     pub fn close_native(_native: &NativeWindow) {}
+    pub fn minimize_native(_native: &NativeWindow) {}
+    pub fn zoom_native(_native: &NativeWindow) {}
+    pub fn toggle_fullscreen_native(_native: &NativeWindow) {}
+    pub fn window_is_visible(_window: &Window) -> bool {
+        false
+    }
     pub fn show_window_without_focus(_window: &Window) {}
     pub fn window_number(_window: &Window) -> Option<isize> {
         None
@@ -994,6 +1123,13 @@ mod stub {
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         None
     }
+    pub fn set_activation_policy(_regular: bool) -> bool {
+        false
+    }
+    pub fn activation_policy() -> isize {
+        -1
+    }
+    pub fn show_about_panel(_name: &str, _version: &str) {}
 }
 
 #[cfg(not(target_os = "macos"))]

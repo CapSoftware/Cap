@@ -56,7 +56,10 @@ mod selection_header;
 mod slider;
 mod surface;
 mod tab_rail;
-mod text_input;
+// `pub` where its siblings are private: the app menu's Edit items are built
+// from this module's actions by name (`crate::menus::build_menus`), and a
+// re-export would not give the menu a path to `text_input::Undo` as a type.
+pub mod text_input;
 mod toggle;
 mod tooltip;
 

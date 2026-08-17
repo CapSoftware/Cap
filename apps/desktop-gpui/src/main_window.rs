@@ -49,6 +49,34 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// `cap_recording::RecordingMode`'s serialized spelling -- the value the
+    /// store's `recording_settings.mode` holds, shared with the Tauri app.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Instant => "instant",
+            Self::Studio => "studio",
+            Self::Screenshot => "screenshot",
+        }
+    }
+
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "instant" => Some(Self::Instant),
+            "studio" => Some(Self::Studio),
+            "screenshot" => Some(Self::Screenshot),
+            _ => None,
+        }
+    }
+
+    /// `get_current_mode` (`src-tauri/src/tray.rs:355-361`): the stored mode,
+    /// falling back to `RecordingMode::default()`, which is Instant.
+    pub fn from_store() -> Self {
+        crate::store::recording_mode_slug()
+            .as_deref()
+            .and_then(Self::from_slug)
+            .unwrap_or(Self::Instant)
+    }
+
     pub fn icon(self) -> &'static str {
         match self {
             Self::Instant => "icons/instant.svg",
@@ -278,7 +306,11 @@ impl MainWindow {
         Self {
             theme,
             expanded: false,
-            mode: Mode::Instant,
+            // `rawOptions.mode` -- the recording mode is a persisted setting,
+            // and the tray's Select Mode submenu writes the same key, so the
+            // window has to start where the store left it rather than at a
+            // hardcoded Instant.
+            mode: Mode::from_store(),
             target: None,
             devices: DeviceSnapshot::default(),
             camera: None,
@@ -653,6 +685,18 @@ impl MainWindow {
             target_select = select.read(cx).recording_mode.panel_title(),
             "recording mode changed"
         );
+        // `commands.setRecordingMode(mode)`, which is
+        // `RecordingSettingsStore::set_mode` plus the two tray refreshes it
+        // triggers (`handle_mode_selection`). Every mode affordance -- the
+        // pill, the info panel, the mode select window and the tray's own
+        // Select Mode submenu -- reaches this method, so this is the one place
+        // the setting is written.
+        // Written inline, like every other store write in this app (and like
+        // `RecordingSettingsStore::set_mode` itself): a background write would
+        // land *after* the tray re-read the setting, and the tick would stay on
+        // the old mode.
+        crate::store::set_recording_mode_slug(mode.slug());
+        cx.defer(move |cx: &mut gpui::App| crate::tray::mode_changed(mode, cx));
         cx.notify();
     }
 
@@ -834,7 +878,11 @@ impl MainWindow {
 
     /// Arm a target mode the way clicking its tile does, picking a concrete
     /// window for the window variant since the harness cannot hover one.
-    fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+    ///
+    /// Also the tray's Record Display/Window/Area path: those items are
+    /// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there,
+    /// which is the same "set the target mode, open the overlays" pair.
+    pub fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
         if kind == TargetType::Window {
             self.selected_window = self.devices.windows.first().cloned();
             if let Some(window) = &self.selected_window {
@@ -1059,8 +1107,15 @@ impl MainWindow {
                     10.,
                     "traffic-close",
                 )
+                // `getCurrentWindow().close()` in `CaptionControlsMacOS`, which
+                // reaches `CapWindowId::Main`'s `CloseRequested` arm -- and
+                // that arm *prevents* the close and hides the window
+                // (`lib.rs:5644-5697`). With the tray present, closing the main
+                // window must not quit Cap. Deferred out of the listener: the
+                // hide path touches the window registry and orders the NSWindow
+                // out, neither of which may happen inside this update.
                 .on_click(cx.listener(|_, _, _window, cx| {
-                    cx.quit();
+                    cx.defer(crate::app_windows::request_close_main);
                 })),
             )
             .child(

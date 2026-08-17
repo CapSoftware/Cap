@@ -206,6 +206,35 @@ impl Feeds {
         }
     }
 
+    /// Drop the live camera and microphone inputs without forgetting what was
+    /// selected.
+    ///
+    /// `CapWindowId::Main`'s `CloseRequested` arm (`lib.rs:5666-5697`): when
+    /// nothing is recording, hiding the main window pauses the camera preview
+    /// and `ask`s both feeds for `RemoveInput`. It does *not* clear the
+    /// frontend's `rawOptions` -- the pickers still show the device that was
+    /// chosen -- so neither does this: only the hardware is released.
+    pub fn release_inputs(&mut self, cx: &mut Context<Self>) {
+        if let Some(actor) = self.camera_actor.clone() {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                if let Err(error) = actor.ask(camera::RemoveInput).await {
+                    tracing::warn!("releasing the camera feed: {error}");
+                }
+            })
+            .detach();
+        }
+        if let Some(actor) = self.mic_actor.clone() {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                if let Err(error) = actor.ask(microphone::RemoveInput).await {
+                    tracing::warn!("releasing the microphone feed: {error}");
+                }
+            })
+            .detach();
+        }
+        self.mic_level_db = -96.0;
+        cx.notify();
+    }
+
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
         if let Some(actor) = self.camera_actor.clone()
             && actor.is_alive()

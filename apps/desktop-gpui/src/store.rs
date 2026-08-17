@@ -570,6 +570,35 @@ pub struct GeneralSettings {
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+/// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
+/// the section the tray's Select Mode submenu reads and writes.
+pub const RECORDING_SETTINGS: &str = "recording_settings";
+
+/// `RecordingSettingsStore.mode`, i.e. `cap_recording::RecordingMode` under
+/// `#[serde(rename_all = "camelCase")]` -- one lowercase word per variant
+/// (`studio`, `instant`, `screenshot`). `None` when the key is absent, which
+/// `get_current_mode` turns into `RecordingMode::default()` (Instant).
+pub fn recording_mode_slug() -> Option<String> {
+    store_section(RECORDING_SETTINGS)
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// `RecordingSettingsStore::set_mode`.
+///
+/// The Tauri version re-serialises the whole `recording_settings` object, which
+/// fills in defaults for every field it does not know about;
+/// [`set_store_setting`] replaces only `mode` and leaves the target, the device
+/// settings maps and the rest byte-identical. Strictly the safer half of the
+/// same write, and the two apps read the same key.
+pub fn set_recording_mode_slug(slug: &str) -> bool {
+    set_store_setting(
+        RECORDING_SETTINGS,
+        "mode",
+        Value::String(slug.to_string()),
+    )
+}
 
 impl Default for GeneralSettings {
     fn default() -> Self {

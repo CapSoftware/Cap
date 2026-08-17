@@ -77,9 +77,19 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     let mut last_phase = Phase::Idle;
     cx.observe(&session, move |session, cx| {
         let phase = session.read(cx).phase;
+        let recording = matches!(phase, Phase::Recording { .. });
+        if recording != matches!(last_phase, Phase::Recording { .. }) {
+            // `RecordingStarted` / `RecordingStopped` in `create_tray`: the
+            // status item becomes a stop button while a capture runs.
+            crate::tray::set_recording(recording, cx);
+        }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
             show_main_window(cx);
+            // `NewStudioRecordingAdded` -> `add_new_item_to_cache` +
+            // `refresh_tray_menu`. The reshow is where the main window's own
+            // Recents is rescanned, so the tray's Previous rides the same seam.
+            crate::tray::refresh_previous(cx);
             // `apply_content_protection(app, false)` when the recording ends:
             // an always-excluded window is invisible on capture-based displays,
             // so the protection only holds while a capture is running.
@@ -93,7 +103,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
 /// `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it runs from
 /// a task, never inside the borrow that decided to call it (the
 /// `place_overlay_panel` rule).
-fn show_main_window(cx: &mut App) {
+///
+/// Public because the tray's "Open Main Window" is exactly this
+/// (`ShowCapWindow::Main { init_target_mode: None }`).
+pub fn show_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |view, window, cx| {
@@ -107,7 +120,7 @@ fn show_main_window(cx: &mut App) {
         })
         .ok()
         .flatten();
-    cx.spawn(async move |_| {
+    cx.spawn(async move |cx| {
         if let Some(native) = &native {
             // The recording flow leaves foreign titlebar buttons on the
             // hidden window (see `restore_borderless_style`); strip them
@@ -115,23 +128,56 @@ fn show_main_window(cx: &mut App) {
             platform::restore_borderless_style(native);
             platform::show_native(native);
         }
+        // `ShowCapWindow::show` ends with `sync_macos_dock_visibility` for
+        // every window that `activates_dock()`, and Main is one. Scheduled
+        // *after* the window is on screen, or the policy would be computed
+        // from a still-hidden window. An Accessory app also has no menu bar,
+        // so the sync's `cx.activate(true)` is what brings both back.
+        cx.update(crate::menus::schedule_dock_sync);
     })
     .detach();
 }
 
 /// `getCurrentWindow().hide()` -- same rule, same reason.
-fn hide_main_window(cx: &mut App) {
+pub fn hide_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |_, window, _| platform::native_window(window))
         .ok()
         .flatten();
-    cx.spawn(async move |_| {
+    cx.spawn(async move |cx| {
         if let Some(native) = &native {
             platform::hide_native(native);
         }
+        cx.update(crate::menus::schedule_dock_sync);
     })
     .detach();
+}
+
+/// ⌘W, the File/Window menus' Close Window, and the main window's own red
+/// traffic light.
+///
+/// `CapWindowId::Main`'s `CloseRequested` arm (`lib.rs:5644-5697`), transcribed:
+/// prevent the close and hide the window, sync the dock, and -- when nothing is
+/// recording -- hide the camera bubble, close the target-select overlays, pause
+/// the camera preview and release the mic and camera feeds.
+///
+/// Two deviations, both noted in the report: the camera bubble is *closed*
+/// rather than hidden (this app has no hide-in-place path for it, and the
+/// observable result is the same bubble-off-screen), and `camera_preview.pause()`
+/// has no counterpart because there is no preview stream server here -- the
+/// preview is the bubble, and closing it stops the pump.
+pub fn request_close_main(cx: &mut App) {
+    hide_main_window(cx);
+
+    // `state.is_recording_active_or_pending()`: everything but Idle.
+    if RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+        return;
+    }
+
+    close_camera_window(cx);
+    close_target_overlays(cx);
+    crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.release_inputs(cx));
 }
 
 /// Open the settings window on a page, and hide the main window.
@@ -302,7 +348,11 @@ fn restore_after_settings(cx: &mut App) {
     // the session observer brings it back when the recording ends.
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
+        return;
     }
+    // `sync_macos_dock_visibility` still has to run: a dock-activating window
+    // just went away and nothing else scheduled the sync.
+    crate::menus::schedule_dock_sync(cx);
 }
 
 // -- Mode select ------------------------------------------------------------
@@ -1751,7 +1801,22 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
     );
     if editors_left == 0 && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
+    } else {
+        // A dock-activating window closed; the policy has to be recomputed
+        // even when the main window is not the thing coming back.
+        crate::menus::schedule_dock_sync(cx);
     }
+}
+
+/// The tray's Record Display / Record Window / Record Area.
+///
+/// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there, which
+/// sets the target mode on the main window and opens the overlays; here the
+/// main window owns that state, so it is the same `arm_overlay` the tiles call.
+pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _window, cx| view.arm_overlay(kind, cx))
+        .ok();
 }
 
 /// Repaint the bar between its own 250ms ticks -- the mic meter updates at

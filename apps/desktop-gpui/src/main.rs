@@ -18,6 +18,7 @@ mod editor_window;
 mod feeds;
 mod library;
 mod main_window;
+mod menus;
 mod mode_select_window;
 mod platform;
 mod recording;
@@ -27,6 +28,7 @@ mod store;
 mod target_overlay;
 mod teleprompter_window;
 mod theme;
+mod tray;
 mod ui;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -141,6 +143,21 @@ fn main() {
             .expect("failed to open the main window");
 
         app_windows::init(window_handle, session, cx);
+
+        // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
+        // reach into the window registry, so they come after it -- and the menu
+        // before the tray, because the tray's Quit item is the menu's Quit.
+        if !std::env::var("CAP_GPUI_NO_MENUS").is_ok_and(|v| v == "1") {
+            menus::init(cx);
+        }
+        if !std::env::var("CAP_GPUI_NO_TRAY").is_ok_and(|v| v == "1") {
+            tray::init(cx);
+        }
+        // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
+        tray::drive_from_env(cx);
+        // The Tauri app syncs the dock the moment a dock-activating window is
+        // shown; the main window is up by here.
+        menus::sync_dock_visibility(cx);
 
         // Enumeration is started here rather than in `MainWindow::new`, which
         // runs before the window is fully built -- see `start_enumeration`.
