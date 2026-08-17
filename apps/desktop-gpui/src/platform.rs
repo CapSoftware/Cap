@@ -584,31 +584,66 @@ mod mac {
     /// part the contract loses, so the two real steps are spelled out
     /// directly. Same retained-handle discipline as [`hide_native`].
     /// The dock icon. An unbundled dev binary carries no Info.plist icon, so
-    /// the shipping app's `icon.png` is set at runtime with
-    /// `setApplicationIconImage:` -- the same image a bundled .app would get
-    /// from its icns, minus the bundle. (Zed ships the icon in the bundle;
-    /// the runtime setter is the unbundled equivalent, and harmless once a
-    /// bundle exists.)
-    pub fn set_dock_icon(png: &[u8]) {
+    /// one is set at runtime with `setApplicationIconImage:`.
+    ///
+    /// The shape matters more than the bytes on macOS 26: the system
+    /// re-renders every *bundle* icon onto its standard squircle plate (the
+    /// legacy-icon treatment), which is what the shipping Cap.app's dock tile
+    /// shows -- but a raw `setApplicationIconImage:` bypasses that pipeline,
+    /// so the classic `icon.png` renders with its own pre-26 rounded-rect
+    /// shape and looks visibly different next to the original. NSWorkspace's
+    /// `iconForFile:` hands back the icon *as the system presents it*,
+    /// treatment included, so the installed Cap.app's is used when it exists
+    /// and the raw asset only as a fallback. A future .app bundle with its
+    /// own (Icon Composer) icon supersedes all of this.
+    pub fn set_dock_icon(fallback_png: &[u8]) {
         use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
         unsafe {
-            let data: *mut AnyObject = msg_send![
-                class!(NSData),
-                dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
-                length: png.len(),
-            ];
-            if data.is_null() {
-                return;
-            }
-            let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
-            let Some(image) = Id::from_raw(raw) else {
-                return;
+            let mut image: Option<Id<AnyObject>> = None;
+
+            let cap_app = NSString::from_str("/Applications/Cap.app");
+            let exists: bool = {
+                let manager: *mut AnyObject = msg_send![class!(NSFileManager), defaultManager];
+                !manager.is_null() && msg_send![manager, fileExistsAtPath: &*cap_app]
             };
+            if exists {
+                let workspace: *mut AnyObject =
+                    msg_send![class!(NSWorkspace), sharedWorkspace];
+                if !workspace.is_null() {
+                    let raw: *mut AnyObject = msg_send![workspace, iconForFile: &*cap_app];
+                    // `iconForFile:` is autoreleased; retain for the setter.
+                    image = Id::retain(raw);
+                    if let Some(image) = &image {
+                        // The workspace icon's nominal size is small (32pt);
+                        // the reps go up to 1024. Ask for dock resolution.
+                        let _: () = msg_send![
+                            &**image,
+                            setSize: objc2_foundation::NSSize::new(512., 512.)
+                        ];
+                    }
+                }
+            }
+
+            if image.is_none() {
+                let data: *mut AnyObject = msg_send![
+                    class!(NSData),
+                    dataWithBytes: fallback_png.as_ptr().cast::<std::ffi::c_void>(),
+                    length: fallback_png.len(),
+                ];
+                if !data.is_null() {
+                    let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
+                    let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
+                    image = Id::from_raw(raw);
+                }
+            }
+
+            let Some(image) = image else { return };
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             if !app.is_null() {
                 let _: () = msg_send![app, setApplicationIconImage: &*image];
             }
+            tracing::info!(from_installed_app = exists, "dock icon set");
         }
     }
 
