@@ -337,6 +337,20 @@ mod mac {
         unsafe { CGWindowLevelForKey(10) as isize }
     }
 
+    /// `TELEPROMPTER_PANEL_LEVEL` in `windows.rs`, spelled there as
+    /// `MAIN_PANEL_LEVEL + 1` -- i.e. 101, one step above the main window, so
+    /// the script stays over the app being read from. Applied by
+    /// `set_teleprompter_window_level(true)`, which the route calls once on
+    /// mount; the `false` branch (back to `NSNormalWindowLevel`) has no caller
+    /// and is not reproduced.
+    ///
+    /// A literal rather than a `CGWindowLevelForKey` lookup because that is
+    /// what the constant is over there: `pub const TELEPROMPTER_PANEL_LEVEL:
+    /// NSWindowLevel = MAIN_PANEL_LEVEL + 1`.
+    pub fn teleprompter_level() -> isize {
+        super::MAIN_WINDOW_LEVEL + 1
+    }
+
     /// The level `windows.rs` gives every `TargetSelectOverlay`:
     /// `CGWindowLevelForKey(10) - 1`, i.e. one below the recording controls
     /// bar. Same mislabeled constant as [`recording_controls_level`] (key 10 is
@@ -452,6 +466,53 @@ mod mac {
         ns_window.setHasShadow(behavior.shadow);
     }
 
+    /// `NSWindow.setAlphaValue:` -- the whole of
+    /// `crate::platform::set_window_opacity` in the Tauri app, which is what
+    /// `set_teleprompter_window_opacity` calls with
+    /// `windowOpacityPercent / 100`. The clamp is theirs too
+    /// (`opacity.clamp(0.45, 1.0)`), and it is the reason the slider's floor is
+    /// 45.
+    ///
+    /// Takes the retained handle for the [`place_overlay_panel`] reason:
+    /// changing a window's alpha re-enters gpui's own window callbacks
+    /// (occlusion, in particular), so it must run with no gpui borrow held.
+    ///
+    /// Returns the value AppKit reports back, for the probe log.
+    pub fn set_window_alpha(native: &NativeWindow, alpha: f64) -> f64 {
+        use objc2::msg_send;
+        let alpha = alpha.clamp(0.45, 1.0);
+        unsafe {
+            let _: () = msg_send![&*native.0, setAlphaValue: alpha];
+            native.0.alphaValue()
+        }
+    }
+
+    /// `NSWindowSharingType`: `ReadOnly` (1) is the default, `None` (0) is the
+    /// content-protected state.
+    const NS_WINDOW_SHARING_NONE: usize = 0;
+    const NS_WINDOW_SHARING_READ_ONLY: usize = 1;
+
+    /// `window.set_content_protected(..)` -- what `apply_content_protection`
+    /// does to every Cap window whose title `window_capture_excluded` matches,
+    /// which for the teleprompter is unconditionally true
+    /// (`if window_title == CapWindowId::Teleprompter.title() { return true }`).
+    /// Tauri's implementation of `set_content_protected` on macOS is
+    /// `setSharingType: None`/`ReadOnly`, so that is what this is.
+    ///
+    /// Returns the value AppKit reports back, for the probe log.
+    pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
+        use objc2::msg_send;
+        let sharing = if hidden {
+            NS_WINDOW_SHARING_NONE
+        } else {
+            NS_WINDOW_SHARING_READ_ONLY
+        };
+        unsafe {
+            let _: () = msg_send![&*native.0, setSharingType: sharing];
+            msg_send![&*native.0, sharingType]
+        }
+    }
+
     /// `orderOut:` -- hide without closing, the way the Tauri main window
     /// hides while the recording controls bar is up. Takes the retained
     /// handle for the same reason [`place_overlay_panel`] does: ordering a
@@ -513,7 +574,16 @@ mod stub {
     pub fn target_overlay_level() -> isize {
         0
     }
+    pub fn teleprompter_level() -> isize {
+        0
+    }
     pub struct NativeWindow;
+    pub fn set_window_alpha(_native: &NativeWindow, _alpha: f64) -> f64 {
+        1.
+    }
+    pub fn set_window_capture_hidden(_native: &NativeWindow, _hidden: bool) -> usize {
+        0
+    }
     pub fn native_window(_window: &Window) -> Option<NativeWindow> {
         None
     }

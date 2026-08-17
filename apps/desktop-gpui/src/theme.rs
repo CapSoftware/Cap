@@ -39,8 +39,10 @@ impl Appearance {
 /// element each variable lands on, plus the two material-specific shell rules
 /// (`[..native-material="panel"] .cap-window-shell`). `shell` and `header`
 /// below are the panel's; `sidebar` / `content` / `card` are the settings
-/// window's surfaces. The teleprompter material is still absent -- that window
-/// does not exist here yet.
+/// window's surfaces. Material `"teleprompter"` adds no custom properties at
+/// all -- its whole block in `theme.css` is two `border-radius` rules (16, and
+/// 22 under liquid glass) -- so it reuses this set through
+/// [`Theme::teleprompter_shell_bg`] and [`Theme::teleprompter_window_radius`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MaterialTokens {
     pub kind: MaterialKind,
@@ -680,6 +682,61 @@ impl Theme {
         }
     }
 
+    // ---- The teleprompter window's shell -------------------------------
+    //
+    // `applyMacOSWindowMaterial("teleprompter")` sets the same two data
+    // attributes as the other two windows, and `theme.css` gives the material
+    // exactly two rules of its own:
+    //
+    // ```text
+    // [data-macos-native-material="teleprompter"] .cap-window-shell { border-radius: 16px }
+    // [..visual-system="liquid-glass"][..native-material="teleprompter"]
+    //   .cap-window-shell { border-radius: 22px }
+    // ```
+    //
+    // Everything else it paints comes from the shared blocks: the base
+    // `[data-macos-native-material] .cap-window-shell` wash + border under
+    // vibrancy, and `[..="liquid-glass"] .cap-window-shell { background:
+    // transparent; border: 0 }` under glass. The panel's `rgba(255,255,255,
+    // 0.55)` tint is *not* inherited -- that rule is `[..="panel"]`-gated --
+    // so under Liquid Glass this window is bare glass. The body remaps are
+    // panel-gated too, so the footer and script keep their Radix grays.
+
+    /// `.cap-window-shell` under material `"teleprompter"`.
+    pub fn teleprompter_shell_bg(&self) -> Hsla {
+        match self.material {
+            // `[data-macos-visual-system="liquid-glass"] .cap-window-shell
+            //  { background: transparent }`, with no panel-style tint on top.
+            Some(material) if material.remaps_body() => gpui::transparent_black(),
+            // `background: var(--macos-settings-window)`, which is what
+            // `MaterialTokens::shell` already holds on the vibrancy path.
+            Some(material) => material.shell.into(),
+            // No material (non-mac): the route's own
+            // `bg-gray-1/90 rounded-2xl border border-gray-5` fallback.
+            None => Self::with_alpha(self.gray_1, 0.9),
+        }
+    }
+
+    /// The teleprompter shell's `1px solid var(--macos-settings-border)` --
+    /// the same base rule the panel material takes, erased by the glass block.
+    /// Without a material the route draws `border border-gray-5`.
+    pub fn teleprompter_shell_border(&self) -> Option<Hsla> {
+        match self.material {
+            Some(material) if material.remaps_body() => None,
+            Some(material) => Some(material.border.into()),
+            None => Some(self.gray_5.into()),
+        }
+    }
+
+    /// 22 under Liquid Glass, 16 under vibrancy; `rounded-2xl` (16) is also
+    /// what the non-mac fallback draws.
+    pub fn teleprompter_window_radius(&self) -> f32 {
+        match self.material_kind() {
+            Some(MaterialKind::LiquidGlass) => 22.,
+            _ => 16.,
+        }
+    }
+
     pub fn is_dark(&self) -> bool {
         self.appearance == Appearance::Dark
     }
@@ -874,6 +931,35 @@ mod tests {
         assert_eq!(bare.settings_text(), bare.gray(12));
         assert_eq!(bare.settings_muted(), bare.gray(10));
         assert_eq!(bare.settings_window_radius(), 16.);
+    }
+
+    /// Material `"teleprompter"` differs from `"panel"` in exactly one thing:
+    /// the radius. It gets no tint under Liquid Glass (that rule is
+    /// `[..native-material="panel"]`-gated) and the shared vibrancy wash
+    /// otherwise.
+    #[test]
+    fn the_teleprompter_material_is_the_shared_one_at_radius_22() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let glass = Theme::new(appearance).with_material(Some(MaterialKind::LiquidGlass));
+            assert_eq!(glass.teleprompter_window_radius(), 22.);
+            assert_eq!(glass.teleprompter_shell_bg(), gpui::transparent_black());
+            assert_eq!(glass.teleprompter_shell_border(), None);
+            // The panel's tint must not leak over: it is a different window.
+            assert_ne!(glass.teleprompter_shell_bg(), glass.shell_bg());
+
+            let vibrancy = Theme::new(appearance).with_material(Some(MaterialKind::Vibrancy));
+            assert_eq!(vibrancy.teleprompter_window_radius(), 16.);
+            // `background: var(--macos-settings-window)` -- the same value the
+            // panel and settings shells take on this path.
+            assert_eq!(vibrancy.teleprompter_shell_bg(), vibrancy.shell_bg());
+            assert!(vibrancy.teleprompter_shell_border().is_some());
+        }
+
+        // No material at all: the route's own non-macOS classes.
+        let bare = Theme::dark();
+        assert_eq!(bare.teleprompter_window_radius(), 16.);
+        assert!((bare.teleprompter_shell_bg().a - 0.9).abs() < 0.01);
+        assert_eq!(bare.teleprompter_shell_border(), Some(bare.gray(5)));
     }
 
     /// The light panel tint is `rgba(255, 255, 255, 0.55)` and the dark one

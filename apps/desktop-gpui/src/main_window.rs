@@ -43,7 +43,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn icon(self) -> &'static str {
+    pub fn icon(self) -> &'static str {
         match self {
             Self::Instant => "icons/instant.svg",
             Self::Studio => "icons/film-cut.svg",
@@ -62,7 +62,7 @@ impl Mode {
     /// `ModeInfoPanel`'s `modeOptions`, which is *not* `MODE_BUTTONS` -- the
     /// hover cards and the info panel describe the modes differently and the
     /// app carries both sets of strings.
-    fn panel_title(self) -> &'static str {
+    pub fn panel_title(self) -> &'static str {
         match self {
             Self::Instant => "Instant",
             Self::Studio => "Studio",
@@ -432,6 +432,32 @@ impl MainWindow {
         if self.target.take().is_some() {
             cx.notify();
         }
+    }
+
+    /// The recording mode, for whoever is showing it -- the mode select window
+    /// seeds its cards from here, the way that route reads `rawOptions.mode`.
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// `handleModeChange`: `setOptions({ mode })` plus
+    /// `commands.setRecordingMode(mode)`. The pill, the info panel and the mode
+    /// select window all land here, so there is one place a mode change
+    /// happens.
+    pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        // Open overlays label their start button with the mode.
+        let select = crate::target_overlay::TargetSelect::global(cx);
+        select.update(cx, |select, cx| select.set_recording_mode(mode, cx));
+        tracing::info!(
+            mode = mode.panel_title(),
+            target_select = select.read(cx).recording_mode.panel_title(),
+            "recording mode changed"
+        );
+        cx.notify();
     }
 
     /// The concrete capture target the current UI state describes, or `None`
@@ -899,7 +925,16 @@ impl MainWindow {
                     ))
                     .child(icon_button("screenshots", "icons/image.svg", 16.))
                     .child(icon_button("recordings", "icons/play-circle.svg", 16.))
-                    .child(icon_button("teleprompter", "icons/scan-text.svg", 16.))
+                    .child(
+                        icon_button("teleprompter", "icons/scan-text.svg", 16.).on_click(
+                            cx.listener(|_, _, _window, cx| {
+                                // `onClick={() => void openTeleprompter()}` on
+                                // the header's `IconLucideScanText` button.
+                                // Deferred for the same reason the gear is.
+                                cx.defer(app_windows::open_teleprompter);
+                            }),
+                        ),
+                    )
                     .child(icon_button("changelog", "icons/bell.svg", 16.)),
             )
     }
@@ -1119,7 +1154,7 @@ impl MainWindow {
         cx.notify();
     }
 
-    fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
         self.panel = Some(panel);
         self.search.clear();
         if matches!(panel, Panel::Device(_) | Panel::Target(_)) {
@@ -1641,9 +1676,7 @@ impl MainWindow {
                     )
                     .hover(|style| style.bg(theme.body_hover_fill(4)))
                     .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.mode = mode;
-                        crate::target_overlay::TargetSelect::global(cx)
-                            .update(cx, |select, cx| select.set_recording_mode(mode, cx));
+                        this.set_mode(mode, cx);
                         this.close_panel(cx);
                     }))
             }),
@@ -1879,12 +1912,8 @@ impl MainWindow {
                 )
                 .hover(|style| style.bg(theme.body_hover_fill(7)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.mode = mode;
-                    // Open overlays label their start button with the mode.
-                    crate::target_overlay::TargetSelect::global(cx)
-                        .update(cx, |select, cx| select.set_recording_mode(mode, cx));
+                    this.set_mode(mode, cx);
                     cx.defer(app_windows::refresh_target_overlays);
-                    cx.notify();
                 }))
         };
 
@@ -1924,6 +1953,13 @@ impl MainWindow {
                     )
                     .hover(|style| style.opacity(0.5))
                     .on_click(cx.listener(|this, _, window, cx| {
+                        // What shipping new-main actually does: it passes
+                        // `onInfoClick` into `Mode.tsx`, so the dot opens the
+                        // in-window info panel -- `showWindow("ModeSelect")` is
+                        // `Mode.tsx`'s *fallback*, and nothing in the shipping
+                        // frontend reaches it. The standalone window exists
+                        // here for parity (`CAP_GPUI_AUTO_MODE_SELECT` opens
+                        // it), but the dot mirrors the observed behavior.
                         this.open_panel(Panel::ModeInfo, window, cx);
                     })),
             )

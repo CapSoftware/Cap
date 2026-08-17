@@ -278,6 +278,10 @@ fn opt_f32_at(map: &Map<String, Value>, key: &str) -> Option<f32> {
         .map(|value| value as f32)
 }
 
+fn f32_at(map: &Map<String, Value>, key: &str, default: f32) -> f32 {
+    opt_f32_at(map, key).unwrap_or(default)
+}
+
 fn opt_string_at(map: &Map<String, Value>, key: &str) -> Option<String> {
     map.get(key)
         .and_then(Value::as_str)
@@ -618,6 +622,93 @@ impl GeneralSettings {
     }
 }
 
+// -- The teleprompter section -----------------------------------------------
+
+/// `teleprompterStore`'s key in the shared store file:
+/// `declareStore<TeleprompterStore>("teleprompter")` in
+/// `apps/desktop/src/store.ts`. A top-level section of its own, like
+/// `general_settings`, not a key inside one.
+pub const TELEPROMPTER: &str = "teleprompter";
+
+/// `TeleprompterStore` (`store.ts:17-35`), with `teleprompterDefaults` as the
+/// defaults: `{ script: "", fontSize: 30, wordsPerMinute: 150, lineHeight: 1.5,
+/// showCueMarkers: true, mirror: false, windowOpacityPercent: 92 }`.
+///
+/// Read field by field for the same reason `GeneralSettings` is: a value
+/// written by a newer build that this app cannot parse costs that one field its
+/// value, not the whole script.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TeleprompterState {
+    pub script: String,
+    pub font_size: f32,
+    pub words_per_minute: u32,
+    pub line_height: f32,
+    pub show_cue_markers: bool,
+    pub mirror: bool,
+    pub window_opacity_percent: u32,
+}
+
+impl TeleprompterState {
+    /// The store keys, so a write call reads as the key it writes.
+    pub const SCRIPT: &'static str = "script";
+    pub const FONT_SIZE: &'static str = "fontSize";
+    pub const WORDS_PER_MINUTE: &'static str = "wordsPerMinute";
+    pub const LINE_HEIGHT: &'static str = "lineHeight";
+    pub const SHOW_CUE_MARKERS: &'static str = "showCueMarkers";
+    pub const MIRROR: &'static str = "mirror";
+    pub const WINDOW_OPACITY_PERCENT: &'static str = "windowOpacityPercent";
+
+    pub fn load() -> Self {
+        Self::from_section(&store_section(TELEPROMPTER))
+    }
+
+    fn from_section(map: &Map<String, Value>) -> Self {
+        let defaults = Self::default();
+        Self {
+            script: opt_string_at(map, Self::SCRIPT).unwrap_or(defaults.script),
+            font_size: f32_at(map, Self::FONT_SIZE, defaults.font_size),
+            words_per_minute: u32_at(map, Self::WORDS_PER_MINUTE, defaults.words_per_minute),
+            line_height: f32_at(map, Self::LINE_HEIGHT, defaults.line_height),
+            show_cue_markers: bool_at(map, Self::SHOW_CUE_MARKERS, defaults.show_cue_markers),
+            mirror: bool_at(map, Self::MIRROR, defaults.mirror),
+            window_opacity_percent: u32_at(
+                map,
+                Self::WINDOW_OPACITY_PERCENT,
+                defaults.window_opacity_percent,
+            ),
+        }
+    }
+
+    /// One field as the JSON the Tauri app would have written, so the debounced
+    /// flush can write exactly the keys that changed.
+    pub fn value_for(&self, key: &str) -> Value {
+        match key {
+            Self::SCRIPT => Value::from(self.script.clone()),
+            Self::FONT_SIZE => Value::from(self.font_size),
+            Self::WORDS_PER_MINUTE => Value::from(self.words_per_minute),
+            Self::LINE_HEIGHT => Value::from(self.line_height),
+            Self::SHOW_CUE_MARKERS => Value::Bool(self.show_cue_markers),
+            Self::MIRROR => Value::Bool(self.mirror),
+            Self::WINDOW_OPACITY_PERCENT => Value::from(self.window_opacity_percent),
+            _ => Value::Null,
+        }
+    }
+}
+
+impl Default for TeleprompterState {
+    fn default() -> Self {
+        Self {
+            script: String::new(),
+            font_size: 30.,
+            words_per_minute: 150,
+            line_height: 1.5,
+            show_cue_markers: true,
+            mirror: false,
+            window_opacity_percent: 92,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,6 +874,51 @@ mod tests {
         assert!(settings.crash_recovery_recording);
         assert!(settings.confirm_without_microphone);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
+    }
+
+    /// The teleprompter's own section: defaults when absent, and a per-key
+    /// write that leaves the rest of the section (and the rest of the store)
+    /// alone -- the window writes only the fields the user touched.
+    #[test]
+    fn the_teleprompter_section_round_trips_per_key() {
+        let store = TempStore::new(
+            "teleprompter",
+            Some(r#"{ "auth": { "user_id": "u_1" }, "teleprompter": { "script": "hello" } }"#),
+        );
+
+        let loaded = TeleprompterState::load();
+        assert_eq!(loaded.script, "hello");
+        // Everything the section does not carry takes `teleprompterDefaults`.
+        assert_eq!(loaded.font_size, 30.);
+        assert_eq!(loaded.words_per_minute, 150);
+        assert_eq!(loaded.line_height, 1.5);
+        assert!(loaded.show_cue_markers);
+        assert!(!loaded.mirror);
+        assert_eq!(loaded.window_opacity_percent, 92);
+
+        let mut next = loaded.clone();
+        next.script = "hello there".into();
+        next.font_size = 34.;
+        for key in [TeleprompterState::SCRIPT, TeleprompterState::FONT_SIZE] {
+            assert!(super::set_store_setting(
+                TELEPROMPTER,
+                key,
+                next.value_for(key)
+            ));
+        }
+
+        let after = store.read();
+        assert_eq!(after["teleprompter"]["script"], "hello there");
+        assert_eq!(after["teleprompter"]["fontSize"], 34.0);
+        // The two untouched keys were never written, and the rest of the store
+        // is where it was.
+        assert!(after["teleprompter"].get("mirror").is_none());
+        assert_eq!(after["auth"]["user_id"], "u_1");
+
+        let reloaded = TeleprompterState::load();
+        assert_eq!(reloaded.script, "hello there");
+        assert_eq!(reloaded.font_size, 34.);
+        assert!(reloaded.show_cue_markers);
     }
 
     /// An absent store is an empty one -- a fresh install must not be a write

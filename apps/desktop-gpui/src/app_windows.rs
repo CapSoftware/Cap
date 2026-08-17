@@ -18,11 +18,13 @@ use crate::{
     camera_window::{self, CameraWindow},
     controls_window::ControlsWindow,
     main_window::{MainWindow, Mode, TargetType},
+    mode_select_window::{self, ModeSelectWindow},
     platform,
     recording::{RecordingMode, StartConfig},
     session::{Phase, RecordingSession},
     settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
+    teleprompter_window::{self, TeleprompterWindow},
 };
 
 /// Matches the Tauri `InProgressRecording` window and
@@ -37,6 +39,8 @@ pub struct AppWindows {
     pub controls: Option<WindowHandle<ControlsWindow>>,
     pub camera: Option<WindowHandle<CameraWindow>>,
     pub settings: Option<WindowHandle<SettingsWindow>>,
+    pub mode_select: Option<WindowHandle<ModeSelectWindow>>,
+    pub teleprompter: Option<WindowHandle<TeleprompterWindow>>,
     /// One target-select overlay per display, keyed by display so a mode
     /// switch can keep the ones it still wants.
     pub overlays: Vec<(DisplayId, WindowHandle<OverlayWindow>)>,
@@ -52,6 +56,8 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         controls: None,
         camera: None,
         settings: None,
+        mode_select: None,
+        teleprompter: None,
         overlays: Vec::new(),
     });
 
@@ -61,6 +67,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
             show_main_window(cx);
+            // `apply_content_protection(app, false)` when the recording ends:
+            // an always-excluded window is invisible on capture-based displays,
+            // so the protection only holds while a capture is running.
+            set_teleprompter_content_protection(false, cx);
         }
         last_phase = phase;
     })
@@ -263,6 +273,344 @@ fn restore_after_settings(cx: &mut App) {
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
     }
+}
+
+// -- Mode select ------------------------------------------------------------
+
+/// Open the 580x340 mode picker, and hide the main window.
+///
+/// `ShowCapWindow::ModeSelect` hides Main first (`windows.rs:2083-2085`) and
+/// its `Destroyed` arm brings it back, exactly like Settings. Returns false if
+/// the window could not be opened, which is the main window's cue to fall back
+/// to its in-body mode-info panel.
+///
+/// Must be reached through `cx.defer` from inside an entity update: opening a
+/// window paints it synchronously and would double-lease the caller.
+pub fn open_mode_select(cx: &mut App) -> bool {
+    let main = cx.global::<AppWindows>().main;
+    let mode = main
+        .update(cx, |view, _window, _cx| view.mode())
+        .unwrap_or(Mode::Instant);
+
+    if let Some(handle) = cx.global::<AppWindows>().mode_select {
+        // A live window is reused, re-reading the mode the way a re-shown
+        // webview re-reads the options store.
+        let native = handle
+            .update(cx, |view, window, cx| {
+                view.set_mode(mode, cx);
+                platform::native_window(window)
+            })
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        hide_main_window(cx);
+        return true;
+    }
+
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(mode_select_window::MODE_SELECT_WIDTH),
+            px(mode_select_window::MODE_SELECT_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // `traffic_lights_position` has no ModeSelect arm, so it takes the
+            // `_ => Some(None)` catch-all: the native buttons stay where AppKit
+            // puts them and only the title is hidden (`hidden_title(true)` +
+            // `TitleBarStyle::Overlay`).
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Mode Selection".into()),
+                appears_transparent: true,
+                traffic_light_position: mode_select_window::TRAFFIC_LIGHTS,
+            }),
+            // An ordinary window that activates the dock icon
+            // (`activates_dock()` lists ModeSelect); no level or Spaces
+            // treatment, and no always-on-top (that is Upgrade's).
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            // `.resizable(false).maximized(false).maximizable(false)`, with
+            // `min_inner_size == inner_size`.
+            is_resizable: false,
+            is_minimizable: true,
+            // Not in `is_transparent()`'s list: this window is opaque and
+            // paints its own `bg-gray-1`, with no native material behind it
+            // (`applyMacOSWindowMaterial` runs in the `(window-chrome)` layout,
+            // which this route is not part of).
+            ..Default::default()
+        },
+        move |window, cx| cx.new(|cx| ModeSelectWindow::new(mode, window, cx)),
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("mode select window failed to open: {error:#}");
+            return false;
+        }
+    };
+
+    cx.global_mut::<AppWindows>().mode_select = Some(handle);
+    handle
+        .update(cx, |view, window, cx| {
+            platform::kick_display_link(window);
+            view.focus_root(window, cx);
+            tracing::info!(
+                number = platform::window_number(window),
+                "mode select window opened"
+            );
+        })
+        .ok();
+
+    hide_main_window(cx);
+    true
+}
+
+/// The mode select window is going away: same `Destroyed` arm as Upgrade,
+/// which calls `restore_main_and_target_select_windows`.
+pub fn mode_select_closed(cx: &mut App) {
+    cx.global_mut::<AppWindows>().mode_select.take();
+    restore_after_settings(cx);
+}
+
+/// Click a mode card in the open mode select window (harness path for
+/// `CAP_GPUI_AUTO_MODE_SELECT=<mode>`; synthetic clicks are dropped).
+pub fn choose_mode_in_mode_select(mode: Mode, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().mode_select else {
+        return;
+    };
+    handle
+        .update(cx, |view, window, cx| {
+            view.choose(mode, cx);
+            window.refresh();
+        })
+        .ok();
+}
+
+/// `handleModeChange`: the recording option, then `setRecordingMode`. Every
+/// mode affordance -- the main window's pill, its info panel, and the mode
+/// select window -- lands here.
+pub fn set_recording_mode(mode: Mode, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _window, cx| view.set_mode(mode, cx))
+        .ok();
+    // Open overlays label their start button with the mode.
+    refresh_target_overlays(cx);
+}
+
+// -- Teleprompter -----------------------------------------------------------
+
+/// Open (or re-show) the teleprompter -- `openTeleprompter()` in
+/// `utils/teleprompter.ts`, which reuses a live window with
+/// `unminimize()`/`show()`/`setFocus()` and otherwise builds a new one.
+pub fn open_teleprompter(cx: &mut App) {
+    if let Some(handle) = cx.global::<AppWindows>().teleprompter {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        return;
+    }
+
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(teleprompter_window::TELEPROMPTER_WIDTH),
+            px(teleprompter_window::TELEPROMPTER_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // `decorations: true`, `titleBarStyle: "overlay"`, `hiddenTitle:
+            // true`, `trafficLightPosition: (14, 14)` -- the real AppKit
+            // buttons, moved, as on the settings window.
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Teleprompter".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(teleprompter_window::TRAFFIC_LIGHTS),
+            }),
+            // `alwaysOnTop: true` + `visibleOnAllWorkspaces: true` are applied
+            // below as level 101 + `CanJoinAllSpaces`, the same way the main
+            // window gets level 100 -- a `WindowKind::PopUp` panel would be
+            // non-activating, and this window has to take keystrokes for the
+            // script.
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            // `resizable: true`, `minWidth: 420, minHeight: 220`.
+            is_resizable: true,
+            is_minimizable: true,
+            window_min_size: Some(size(
+                px(teleprompter_window::TELEPROMPTER_MIN_WIDTH),
+                px(teleprompter_window::TELEPROMPTER_MIN_HEIGHT),
+            )),
+            // `transparent: true`, `shadow: true`: the shell paints a tint and
+            // the material shows through.
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        |window, cx| cx.new(|cx| TeleprompterWindow::new(window, cx)),
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("teleprompter window failed to open: {error:#}");
+            return;
+        }
+    };
+
+    cx.global_mut::<AppWindows>().teleprompter = Some(handle);
+
+    let opened = handle
+        .update(cx, |view, window, cx| {
+            // `commands.setTeleprompterWindowLevel(true)` -- level 101, and the
+            // `visibleOnAllWorkspaces` half.
+            platform::apply_panel_behavior(
+                window,
+                platform::PanelBehavior {
+                    level: platform::teleprompter_level(),
+                    join_all_spaces: true,
+                    // `shadow: true` in the window options.
+                    shadow: true,
+                },
+            );
+            view.focus_root(window, cx);
+            tracing::info!(
+                number = platform::window_number(window),
+                level = platform::teleprompter_level(),
+                "teleprompter window opened"
+            );
+            (platform::native_window(window), view.window_alpha())
+        })
+        .ok();
+
+    let Some((native, alpha)) = opened else {
+        return;
+    };
+
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            // `applyMacOSWindowMaterial("teleprompter")`: radius 22 on glass.
+            let kind = platform::install_window_material(
+                native,
+                teleprompter_window::TELEPROMPTER_MATERIAL_RADIUS,
+            );
+            match kind {
+                Some(kind) => tracing::info!(
+                    ?kind,
+                    radius = teleprompter_window::TELEPROMPTER_MATERIAL_RADIUS,
+                    "installed teleprompter window material"
+                ),
+                None => tracing::info!("no native window material available for the teleprompter"),
+            }
+            // The opacity effect's first run.
+            let applied = platform::set_window_alpha(native, alpha);
+            tracing::info!(requested = alpha, applied, "teleprompter window alpha");
+            cx.update(|cx| {
+                if platform::active_material(cx).is_none() {
+                    cx.set_global(platform::WindowMaterial(kind));
+                }
+            });
+        }
+        handle
+            .update(cx, |_, window, cx| {
+                platform::kick_display_link(window);
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+    })
+    .detach();
+}
+
+/// Type into the open teleprompter (harness path for
+/// `CAP_GPUI_AUTO_TELEPROMPTER=<script>`; synthetic key events are dropped
+/// without Accessibility, and this drives the same `edit_script` the key
+/// handler does, debounced write included).
+pub fn type_into_teleprompter(text: String, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().teleprompter else {
+        return;
+    };
+    handle
+        .update(cx, |view, window, cx| {
+            view.type_script(&text, window, cx);
+            window.refresh();
+        })
+        .ok();
+}
+
+/// Drive the teleprompter's play button (harness path for
+/// `CAP_GPUI_AUTO_PLAY=1`). Only meaningful once the window has painted --
+/// the scrollable height does not exist before that.
+pub fn play_teleprompter(cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().teleprompter else {
+        return;
+    };
+    handle
+        .update(cx, |view, window, cx| {
+            view.toggle_playback(window, cx);
+            tracing::info!(playing = view.is_playing(), "teleprompter playback toggled");
+            window.refresh();
+        })
+        .ok();
+}
+
+/// The teleprompter closed itself. Nothing to restore: unlike ModeSelect and
+/// Settings this window never hid the main one.
+pub fn teleprompter_closed(cx: &mut App) {
+    cx.global_mut::<AppWindows>().teleprompter.take();
+}
+
+/// `apply_content_protection`: `setSharingType: None` while a capture is
+/// running, back to `ReadOnly` when it stops. `window_capture_excluded` returns
+/// true for the teleprompter's title unconditionally, so this window needs no
+/// settings lookup -- but the gating on an active recording is theirs, and the
+/// reason is in the comment above `capture_exclusion_hides_ui`: a permanently
+/// excluded window is invisible on capture-based displays.
+fn set_teleprompter_content_protection(hidden: bool, cx: &mut App) {
+    let Some(handle) = cx.global::<AppWindows>().teleprompter else {
+        return;
+    };
+    let native = handle
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |_| {
+        if let Some(native) = &native {
+            let sharing = platform::set_window_capture_hidden(native, hidden);
+            tracing::info!(hidden, sharing, "teleprompter content protection");
+        }
+    })
+    .detach();
+}
+
+/// The teleprompter's native window number, for capture exclusion.
+fn teleprompter_window_number(cx: &mut App) -> Option<isize> {
+    let handle = cx.global::<AppWindows>().teleprompter?;
+    handle
+        .update(cx, |_, window, _| platform::window_number(window))
+        .ok()
+        .flatten()
 }
 
 /// What the main window is asking the overlays to show.
@@ -596,6 +944,17 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     {
         excluded.push(id);
     }
+    // `recording.rs:1897-1904` adds a `teleprompter_exclusion` to every active
+    // recording, in both modes -- the script is for the presenter, never for
+    // the audience. The window number is the exclusion; the content protection
+    // below is the second half, for captures that are not ours.
+    if let Some(number) = teleprompter_window_number(cx)
+        && let Ok(id) = number.to_string().parse()
+    {
+        tracing::info!(number, "excluding the teleprompter window from the capture");
+        excluded.push(id);
+    }
+    set_teleprompter_content_protection(true, cx);
 
     let bar_open = cx.global::<AppWindows>().controls.is_some();
     session.update(cx, |session, cx| {

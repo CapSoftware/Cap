@@ -55,7 +55,9 @@ Everything below is real, not mocked.
 - **Pickers.** Camera, microphone, display and window, each a full-body panel
   with a live filter field. Displays and windows render as a two-column card
   grid with real refresh rates and bounds.
-- **Mode selector**, with the info panel behind its dot.
+- **Mode selector**, whose dot opens the in-body info panel — what shipping
+  `new-main` does (it passes `onInfoClick` into `Mode.tsx`). The standalone
+  mode select window exists too; see below.
 - **Light and dark**, following the system appearance, from the app's real
   resolved Radix values.
 - **Native panel behavior.** The main window runs at window level 100 on all
@@ -75,6 +77,18 @@ Everything below is real, not mocked.
   to (22, 22). The sidebar lists all twelve pages; **General** is built in
   full and writes to the same tauri-plugin-store file the shipping app uses.
   See below.
+- **The mode select window.** The real 580×340 `mode-select` route — three
+  cards, fixed size, opaque `bg-gray-1`, native traffic lights where AppKit
+  puts them. Picking a mode goes through the same path the main window's own
+  pill does. Opening it hides the main window and gets it back on close.
+  Nothing in the shipping frontend reaches this window (see the deviation),
+  so here it opens via `CAP_GPUI_AUTO_MODE_SELECT`.
+- **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
+  Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
+  at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
+  font-size controls, cue markers, and window opacity through the NSWindow's
+  own `alphaValue`. Excluded from Cap's own captures and content-protected
+  while one is running. See below.
 
 ### Layout fidelity
 
@@ -168,14 +182,14 @@ Things that are deliberately different, and why.
 | | |
 |---|---|
 | **Traffic lights are hand-drawn** | The Tauri main window returns `None` from `traffic_lights_position`, which routes it to `decorations(false)`; the lights are HTML there too. `titlebar: None` is the gpui equivalent. Minimize is not drawn, and zoom toggles expand/collapse. |
-| **Only the chrome windows are on a material** | The main and settings windows are native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The chrome windows still to come are mode select and upgrade. |
+| **Only the chrome windows are on a material** | The main and settings windows are native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The teleprompter is the exception that proves it: it is not a chrome route, so it calls `applyMacOSWindowMaterial("teleprompter")` itself, and it is native here too. Mode select calls neither and is an opaque slab in both apps. The chrome window still to come is upgrade. |
 | **No always-active pin on the settings glass** | `apply_liquid_glass_background_inner` gives the *non-main* Tauri windows an "always active" pin (`setState:` / `setActive:` probing on the glass view) so the material does not dim when the app deactivates. It is not reproduced: it broke on 26.3 and falls back to the plain `SystemManaged` install anyway, and the hard rule here is to make only the AppKit calls the shipping app can be shown to rely on. The settings window therefore takes the same `setStyle:`-only path the main window does. |
 | **No header backdrop filter** | On the vibrancy path `.cap-window-header` is `rgba(250,250,249,0.72)` *plus* `backdrop-filter: blur(28px) saturate(1.45)`. The wash is here, the filter is not — same missing hook as the recording overlay's `backdrop-blur-xs`. |
 | **Appearance changes need a relaunch** | `sync_appearance` runs from `render`, and gpui only renders on invalidation, so flipping the system to light while the app is up leaves the dark palette on screen until something else forces a frame. Pre-existing, not specific to the material. |
 | **NSWindow, not NSPanel** | The Tauri app class-swizzles its windows into `NSPanel`s via `tauri_nspanel`. Here the main window stays a normal `NSWindow` and gets the observable parts — level 100, `CanJoinAllSpaces \| FullScreenPrimary` — from the `platform` module. (`WindowKind::Floating` is *not* a shortcut to this: its panel hides on app deactivation.) The controls bar *is* a real panel via `WindowKind::PopUp`, whose non-activating behavior it genuinely needs. |
 | **Controls bar level 8, faithfully** | `windows.rs` raises the bar with `CGWindowLevelForKey(10)` under a constant named `kCGMaximumWindowLevelKey` — but key 10 is `kCGModalPanelWindowLevelKey` (maximum is 14), so the shipping bar actually runs at level 8. Reproduced verbatim rather than "fixed" from over here. |
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
-| **Panels instead of windows** | Mode info is the 580×340 ModeSelect *window* in the Tauri app; here it is a body panel, because there is only one window so far. The device and target pickers are body panels in both. |
+| **The mode select window is harness-only** | `Mode.tsx`'s info button is `commands.showWindow("ModeSelect")` *unless* its host passes `onInfoClick` — and shipping `new-main` passes one, so the dot opens the in-body `ModeInfoPanel` in both apps. Nothing else in the shipping frontend calls `showWindow("ModeSelect")` either, so the standalone window is dead code there; here it is built for parity and reachable via `CAP_GPUI_AUTO_MODE_SELECT`. The device and target pickers are body panels in both apps. |
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
 | **Search is minimal** | gpui ships no text input. Ours tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. |
 | **Plan badge is always "Personal"** | Which of Pro/Commercial applies comes from the license query. There is no auth or license plumbing yet, and claiming a plan would be worse than showing none. |
@@ -220,11 +234,11 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Window capture occluder | per display | Not started |
 | Capture area | per display | Superseded — area selection is the target-select overlay's area variant; the Tauri app still registers a standalone `capture-area` window but nothing in its frontend opens it |
 | Recordings overlay | per display | Not started |
-| Mode select | 580×340 | Partial — exists as a panel, not a window |
+| Mode select | 580×340 | **Done** — the real fixed-size window, opaque `bg-gray-1` with the native traffic lights at their default position, three cards with the selected one's blue border / tint / check badge, main window hidden while it is up and restored on close |
 | Settings | 782×775 (min 780×560) | **Done — General** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 22), resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store. The other eleven pages are placeholder bodies |
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
-| Teleprompter | 560×320 | Not started |
+| Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
 | Editor | 1275×800 | Not started — by far the largest |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
@@ -392,6 +406,81 @@ Settings-specific deviations:
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
 | **Version is this crate's** | The sidebar footer shows `v0.1.0` from `CARGO_PKG_VERSION`, not `getVersion()`; "Check for updates" is drawn in its disabled state because there is no updater. |
 
+## Mode select
+
+The 580×340 picker behind the mode dot. It is *not* a `(window-chrome)` route,
+so it has no shared header, no `applyMacOSWindowMaterial` and no Cmd-W: an
+opaque `bg-gray-1` slab, the native traffic lights where AppKit puts them
+(`traffic_lights_position` has no ModeSelect arm and takes the `_ => Some(None)`
+catch-all), and the close button as the only way out. `ShowCapWindow::ModeSelect`
+hides the main window first and its `Destroyed` arm calls
+`restore_main_and_target_select_windows`, so both halves are here too — the same
+pair the settings window uses.
+
+Picking a card is `setOptions({ mode })` + `commands.setRecordingMode(mode)`.
+Both live in `app_windows::set_recording_mode`, which the main window's pill and
+its info panel also call, so a mode change happens in exactly one place and the
+target-select overlay's start button relabels from it either way.
+
+## Teleprompter
+
+The one window the Tauri app does not build through `ShowCapWindow` — it is
+constructed straight from JS (`new WebviewWindow("teleprompter", ...)`) — but
+from over here it is just another window.
+
+- **Level 101 on all Spaces.** `set_teleprompter_window_level(true)` sets
+  `TELEPROMPTER_PANEL_LEVEL`, which `windows.rs` defines as `MAIN_PANEL_LEVEL +
+  1`; `platform::teleprompter_level` is that literal, applied through the same
+  `apply_panel_behavior` the main window's level 100 goes through. It stays a
+  `WindowKind::Normal` window rather than a `PopUp` panel: it has to take
+  keystrokes for the script, and a non-activating panel cannot.
+- **The material.** `applyMacOSWindowMaterial("teleprompter")` at radius 22
+  (16 on vibrancy). The material adds no custom properties of its own — its
+  whole block in `theme.css` is two `border-radius` rules — so it reuses the
+  shared `--macos-settings-*` token set. What it does *not* inherit is the
+  panel's `rgba(255,255,255,0.55)` tint: that rule is gated on
+  `[data-macos-native-material="panel"]`, so under Liquid Glass this window is
+  bare glass, and its body keeps the Radix grays because the body remaps are
+  panel-gated too.
+- **Window opacity is native.** `windowOpacityPercent` (45–100, default 92)
+  drives `NSWindow.setAlphaValue:` through `platform::set_window_alpha`, the
+  same clamp (`0.45..1.0`) `crate::platform::set_window_opacity` applies — which
+  is where the slider's floor of 45 comes from.
+- **Auto-scroll.** `calculatePlaybackSpeed` / `advancePlaybackPosition` are
+  ported verbatim as pure functions, with `teleprompter-utils.test.ts`'s four
+  cases translated next to them. Play spawns a 16ms ticker that clamps each
+  tick's elapsed time to 0.05s, advances the position, and calls `refresh` as
+  well as `notify` — an inactive window only repaints when asked. It stops
+  within 0.5px of the bottom, and an emptied script stops it too.
+- **Persistence.** `{script, fontSize, wordsPerMinute, lineHeight,
+  showCueMarkers, mirror, windowOpacityPercent}` under the store's top-level
+  `teleprompter` key, defaults `{"", 30, 150, 1.5, true, false, 92}`, written
+  250ms after the last change through `store::set_store_setting` — one key at a
+  time, and only the keys that actually moved, so a field a newer Tauri build
+  adds to the section survives. `onCloseRequested` force-saves before the window
+  goes, so a script typed in the last 250ms is not lost; the pending write lives
+  in an `Rc<RefCell<..>>` shared with that handler, which only ever gets an
+  `&mut App`.
+- **Hidden from recordings.** Both halves of the shipping behaviour: the
+  window's number joins the excluded-windows list handed to the recording actors
+  (`recording.rs`'s `teleprompter_exclusion`), and `apply_content_protection`'s
+  `setSharingType: None` is applied for the duration of the recording and
+  cleared afterwards. The gating is theirs, and the reason is in the comment
+  above `capture_exclusion_hides_ui`: a permanently excluded window is invisible
+  on capture-based displays.
+
+Teleprompter-specific deviations:
+
+| | |
+|---|---|
+| **The editor is append-only** | gpui ships no text input. Typing appends, Return inserts a newline, Backspace deletes the last character, and the caret is a `\|` glyph drawn at the end while the window has focus. No selection, no arrow-key navigation, no click-to-position, no paste — a longer script has to arrive through the store (or `CAP_GPUI_AUTO_TELEPROMPTER`). This is the same gap as the main window's search field, one dimension bigger. |
+| **Mirror is persisted but inert** | `scale-x-[-1]` needs a flip transform, and this gpui rev has none — the same finding that leaves the camera bubble's mirror button disabled. The toggle stores `mirror` so the setting survives for the shipping app; nothing on screen changes. |
+| **The vignette is a wash, not a mask** | The script area's `mask-image` fades the *glyphs'* alpha to 0.4 at the top and bottom. With no mask hook, two `gray-1` gradient layers over the same 34% / 66% stops stand in. Over vibrancy that is nearly the same picture; over Liquid Glass it tints the backdrop instead of the text. |
+| **No backdrop blur** | The settings popover is `bg-gray-1/80` *plus* `backdrop-blur-2xl`, and the footer pills add their own `backdrop-blur-xl`. The washes are here, the blur is not — the same missing hook as the header's `backdrop-filter` and the recording overlay's `backdrop-blur-xs`. |
+| **No letter-spacing** | The script is `tracking-[-0.025em]` in the TSX; this gpui rev exposes no letter-spacing, so it renders at the font's own tracking. |
+| **Cmd-W does not close it** | `(window-chrome).tsx` binds Cmd-W for the chrome windows only, and `/teleprompter` is not one of them — so, faithfully, neither is this. The traffic lights close it. |
+| **Content protection is not refreshed on open** | `openTeleprompter` calls `refreshWindowContentProtection()` when it re-shows an existing window; that call is a no-op unless a recording is running, and here the recording start/stop transitions are the only thing that drives it. |
+
 ## Verifying changes
 
 `screencapture` cannot see windows without Screen Recording permission, but
@@ -419,6 +508,19 @@ unprivileged synthetic clicks are dropped.
 the header gear does (main window hidden included). Pass a page slug instead
 of `1` — `CAP_GPUI_AUTO_SETTINGS=hotkeys` — to land on another sidebar entry;
 an unknown slug falls back to General.
+
+`CAP_GPUI_AUTO_MODE_SELECT=1` opens the mode select window at startup, exactly
+as the mode dot does (main window hidden included). A mode name instead of `1`
+— `CAP_GPUI_AUTO_MODE_SELECT=studio` — also clicks that card, which is how the
+selection is checked end to end: the run logs `recording mode changed` with both
+the main window's mode and the target-select overlay's.
+
+`CAP_GPUI_AUTO_TELEPROMPTER=1` opens the teleprompter, as the header's
+scan-text button does. Any other value is *typed into the script* through the
+same `edit_script` a keystroke takes, debounced write included — how the
+persistence round trip is checked without synthetic key events. Add
+`CAP_GPUI_AUTO_PLAY=1` to press play 1.2s after opening, once the window has
+painted and there is a scrollable height to move through.
 
 `CAP_GPUI_TAURI_STORE=<path>` points every settings read and write at another
 file. Use it for anything that toggles a setting: the default is the store the

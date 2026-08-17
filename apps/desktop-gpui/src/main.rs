@@ -10,12 +10,14 @@ mod controls_window;
 mod devices;
 mod feeds;
 mod main_window;
+mod mode_select_window;
 mod platform;
 mod recording;
 mod session;
 mod settings_window;
 mod store;
 mod target_overlay;
+mod teleprompter_window;
 mod theme;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -172,6 +174,49 @@ fn main() {
             let page =
                 settings_window::Page::from_slug(&page).unwrap_or(settings_window::Page::General);
             app_windows::open_settings(page, cx);
+        }
+
+        // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
+        // the mode dot does, main window hidden included. A mode name instead
+        // of `1` also clicks that card.
+        if let Ok(mode) = std::env::var("CAP_GPUI_AUTO_MODE_SELECT")
+            && !mode.is_empty()
+        {
+            app_windows::open_mode_select(cx);
+            if let Some(mode) = match mode.as_str() {
+                "instant" => Some(main_window::Mode::Instant),
+                "studio" => Some(main_window::Mode::Studio),
+                "screenshot" => Some(main_window::Mode::Screenshot),
+                _ => None,
+            } {
+                app_windows::choose_mode_in_mode_select(mode, cx);
+            }
+        }
+
+        // `CAP_GPUI_AUTO_TELEPROMPTER=1`: open the teleprompter the way the
+        // header's scan-text button does. Same reason as the other hooks:
+        // unprivileged synthetic clicks are dropped. Any other value is typed
+        // into the script through the same path a keystroke takes, which is how
+        // the persistence round trip is checked.
+        if let Ok(script) = std::env::var("CAP_GPUI_AUTO_TELEPROMPTER")
+            && !script.is_empty()
+        {
+            app_windows::open_teleprompter(cx);
+            if script != "1" {
+                app_windows::type_into_teleprompter(script, cx);
+            }
+            // `CAP_GPUI_AUTO_PLAY=1`: press play once the window has painted --
+            // the scrollable height, which is what decides whether playback can
+            // start at all, does not exist before the first frame.
+            if std::env::var("CAP_GPUI_AUTO_PLAY").is_ok_and(|value| value == "1") {
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1200))
+                        .await;
+                    cx.update(app_windows::play_teleprompter);
+                })
+                .detach();
+            }
         }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary
