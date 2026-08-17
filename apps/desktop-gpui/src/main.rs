@@ -155,6 +155,33 @@ fn main() {
         }
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
+        // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
+        // that window after a delay -- exercises the exact deferred close path
+        // without synthetic keypresses (which race whatever the user has
+        // focused).
+        if let Ok(spec) = std::env::var("CAP_GPUI_AUTO_CLOSE")
+            && let Some((which, secs)) = spec.split_once(':')
+            && let Ok(secs) = secs.parse::<u64>()
+        {
+            let which = which.to_string();
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(secs))
+                    .await;
+                cx.update(|cx| {
+                    let windows = cx.global::<app_windows::AppWindows>();
+                    let handle: Option<gpui::AnyWindowHandle> = match which.as_str() {
+                        "settings" => windows.settings.map(Into::into),
+                        "main" => Some(windows.main.into()),
+                        _ => None,
+                    };
+                    if let Some(handle) = handle {
+                        menus::close_window_by_handle(handle, cx);
+                    }
+                });
+            })
+            .detach();
+        }
         // The Tauri app syncs the dock the moment a dock-activating window is
         // shown; the main window is up by here.
         menus::sync_dock_visibility(cx);

@@ -631,7 +631,10 @@ impl MainWindow {
     /// `closeTargetSelectOverlays`) right after setting the mode.
     fn sync_overlays(&self, cx: &mut Context<Self>) {
         let Some(mode) = self.target else {
-            cx.defer(app_windows::close_target_overlays);
+            // Toggling the armed tile off is a dismissal ("cancelled" in the
+            // Tauri dismissal vocabulary), so it takes the same path Escape
+            // does -- which also reveals the main window if the picker hid it.
+            cx.defer(app_windows::dismiss_target_overlays);
             return;
         };
         let request = app_windows::OverlayRequest {

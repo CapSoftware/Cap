@@ -573,14 +573,208 @@ mod mac {
         native.0.makeKeyAndOrderFront(None);
     }
 
-    /// `performClose:` -- exactly what clicking the red traffic light sends,
-    /// so it goes through `windowShouldClose:` and gpui's
-    /// `on_window_should_close` rather than tearing the window out from under
-    /// it. Harness only (`CAP_GPUI_AUTO_EDITOR_CLOSE`), for the same reason as
-    /// the rest: unprivileged synthetic clicks are dropped. Same retained
-    /// handle discipline as [`hide_native`].
+    /// Close the window the way the red traffic light does: ask the
+    /// delegate's `windowShouldClose:` (gpui's `on_window_should_close`,
+    /// where every window's close bookkeeping lives), then `close`.
+    ///
+    /// NOT `performClose:`. That is the obvious spelling and it silently
+    /// refuses here -- observed on macOS 26 with the close button present,
+    /// enabled, and the delegate wired (the ⌘W action logged, `performClose:`
+    /// returned, the window stayed). Its close-button simulation is the only
+    /// part the contract loses, so the two real steps are spelled out
+    /// directly. Same retained-handle discipline as [`hide_native`].
+    /// Debug: the AppKit-side state of a window, for chasing order-front
+    /// no-shows.
+    pub fn debug_window_state(native: &NativeWindow) -> String {
+        use objc2::msg_send;
+        unsafe {
+            let visible: bool = msg_send![&*native.0, isVisible];
+            let alpha: f64 = msg_send![&*native.0, alphaValue];
+            let on_active_space: bool = msg_send![&*native.0, isOnActiveSpace];
+            let frame: objc2_foundation::NSRect = msg_send![&*native.0, frame];
+            let level: isize = msg_send![&*native.0, level];
+            format!(
+                "visible={visible} alpha={alpha:.2} active_space={on_active_space} level={level} frame=({}, {}, {}x{})",
+                frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
+            )
+        }
+    }
+
     pub fn close_native(native: &NativeWindow) {
-        unsafe { native.0.performClose(None) };
+        use objc2::{msg_send, sel};
+        unsafe {
+            let delegate: *mut AnyObject = msg_send![&*native.0, delegate];
+            let should_close: bool = if delegate.is_null() {
+                true
+            } else {
+                let responds: bool =
+                    msg_send![delegate, respondsToSelector: sel!(windowShouldClose:)];
+                if responds {
+                    msg_send![delegate, windowShouldClose: &*native.0]
+                } else {
+                    true
+                }
+            };
+            tracing::info!(should_close, "close_native");
+            if should_close {
+                let _: () = msg_send![&*native.0, close];
+            }
+        }
+    }
+
+    // -- The global Escape hotkey (Carbon) -------------------------------
+
+    /// `tauri_plugin_global_shortcut`'s macOS backend is Carbon
+    /// `RegisterEventHotKey`, and `target_select_overlay.rs:595-617` registers
+    /// a plain `Escape` while the target-select overlays are up (and only
+    /// then -- a permanently-registered global Escape would swallow the key
+    /// system-wide). The overlays need it because the main window hides while
+    /// the picker is up, which usually leaves the app with no key window, and
+    /// the overlays themselves are non-activating panels: an ordinary key
+    /// handler has nothing to be delivered to.
+    ///
+    /// The Carbon handler fires on the main thread inside the event
+    /// dispatcher, not inside a gpui update -- but the established discipline
+    /// applies anyway: it posts into a channel and a foreground task drains it
+    /// with a clean borrow (the tray's shape).
+    mod escape_hotkey {
+        use std::cell::{Cell, RefCell};
+        use std::ffi::c_void;
+
+        type OsStatus = i32;
+        #[repr(C)]
+        struct EventTypeSpec {
+            event_class: u32,
+            event_kind: u32,
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct EventHotKeyId {
+            signature: u32,
+            id: u32,
+        }
+
+        /// `'keyb'` / `kEventHotKeyPressed` / `kVK_Escape` / `'CapG'`.
+        const K_EVENT_CLASS_KEYBOARD: u32 = 0x6b65_7962;
+        const K_EVENT_HOT_KEY_PRESSED: u32 = 5;
+        const KVK_ESCAPE: u32 = 53;
+        const SIGNATURE: u32 = 0x4361_7047;
+
+        #[link(name = "Carbon", kind = "framework")]
+        unsafe extern "C" {
+            fn GetEventDispatcherTarget() -> *mut c_void;
+            fn InstallEventHandler(
+                target: *mut c_void,
+                handler: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> OsStatus,
+                num_types: usize,
+                types: *const EventTypeSpec,
+                user_data: *mut c_void,
+                out_ref: *mut *mut c_void,
+            ) -> OsStatus;
+            fn RegisterEventHotKey(
+                key_code: u32,
+                modifiers: u32,
+                id: EventHotKeyId,
+                target: *mut c_void,
+                options: u32,
+                out_ref: *mut *mut c_void,
+            ) -> OsStatus;
+            fn UnregisterEventHotKey(hotkey: *mut c_void) -> OsStatus;
+        }
+
+        thread_local! {
+            static ESCAPE_TX: RefCell<Option<flume::Sender<()>>> = const { RefCell::new(None) };
+            static HOTKEY: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+            static HANDLER_INSTALLED: Cell<bool> = const { Cell::new(false) };
+        }
+
+        extern "C" fn escape_pressed(
+            _call_ref: *mut c_void,
+            _event: *mut c_void,
+            _user_data: *mut c_void,
+        ) -> OsStatus {
+            ESCAPE_TX.with(|tx| {
+                if let Some(sender) = tx.borrow().as_ref() {
+                    let _ = sender.send(());
+                }
+            });
+            0
+        }
+
+        /// The press stream. First call wires the channel; the handler itself
+        /// is installed lazily by [`register`] so an app that never opens a
+        /// picker never touches Carbon.
+        pub fn events() -> flume::Receiver<()> {
+            let (tx, rx) = flume::unbounded();
+            ESCAPE_TX.with(|slot| *slot.borrow_mut() = Some(tx));
+            rx
+        }
+
+        /// Register the global Escape. Idempotent; main thread only (every
+        /// caller is a window-orchestration function, which run there).
+        pub fn register() {
+            if !HOTKEY.with(|slot| slot.get().is_null()) {
+                return;
+            }
+            unsafe {
+                let target = GetEventDispatcherTarget();
+                if !HANDLER_INSTALLED.with(Cell::get) {
+                    let spec = EventTypeSpec {
+                        event_class: K_EVENT_CLASS_KEYBOARD,
+                        event_kind: K_EVENT_HOT_KEY_PRESSED,
+                    };
+                    let mut handler_ref = std::ptr::null_mut();
+                    let status = InstallEventHandler(
+                        target,
+                        escape_pressed,
+                        1,
+                        &spec,
+                        std::ptr::null_mut(),
+                        &mut handler_ref,
+                    );
+                    if status != 0 {
+                        tracing::warn!(status, "InstallEventHandler failed; no global Escape");
+                        return;
+                    }
+                    HANDLER_INSTALLED.with(|slot| slot.set(true));
+                }
+                let id = EventHotKeyId {
+                    signature: SIGNATURE,
+                    id: 1,
+                };
+                let mut hotkey = std::ptr::null_mut();
+                let status =
+                    RegisterEventHotKey(KVK_ESCAPE, 0, id, GetEventDispatcherTarget(), 0, &mut hotkey);
+                if status != 0 {
+                    tracing::warn!(status, "RegisterEventHotKey(Escape) failed");
+                    return;
+                }
+                HOTKEY.with(|slot| slot.set(hotkey));
+                tracing::info!("global Escape hotkey registered");
+            }
+        }
+
+        /// Unregister. Idempotent; Escape goes back to the system.
+        pub fn unregister() {
+            let hotkey = HOTKEY.with(|slot| slot.replace(std::ptr::null_mut()));
+            if hotkey.is_null() {
+                return;
+            }
+            unsafe {
+                let _ = UnregisterEventHotKey(hotkey);
+            }
+            tracing::info!("global Escape hotkey unregistered");
+        }
+    }
+
+    pub fn escape_hotkey_events() -> flume::Receiver<()> {
+        escape_hotkey::events()
+    }
+    pub fn register_escape_hotkey() {
+        escape_hotkey::register();
+    }
+    pub fn unregister_escape_hotkey() {
+        escape_hotkey::unregister();
     }
 
     /// `performMiniaturize:` -- the selector muda gives the Window menu's
@@ -1088,6 +1282,16 @@ mod stub {
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
     pub fn close_native(_native: &NativeWindow) {}
+    pub fn debug_window_state(_native: &NativeWindow) -> String {
+        String::new()
+    }
+    pub fn escape_hotkey_events() -> flume::Receiver<()> {
+        // A channel whose sender is dropped immediately: the drain task's
+        // `recv` errors once and the task exits.
+        flume::unbounded().1
+    }
+    pub fn register_escape_hotkey() {}
+    pub fn unregister_escape_hotkey() {}
     pub fn minimize_native(_native: &NativeWindow) {}
     pub fn zoom_native(_native: &NativeWindow) {}
     pub fn toggle_fullscreen_native(_native: &NativeWindow) {}

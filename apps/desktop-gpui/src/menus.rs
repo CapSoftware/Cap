@@ -190,17 +190,23 @@ fn with_key_native(cx: &mut App, action: fn(&platform::NativeWindow)) {
         tracing::info!("window command: no key window");
         return;
     };
-    tracing::info!("window command on the key window");
-    let native = handle
-        .update(cx, |_, window, _| platform::native_window(window))
-        .ok()
-        .flatten();
-    cx.spawn(async move |_| {
-        if let Some(native) = &native {
-            action(native);
-        }
-    })
-    .detach();
+    // A ⌘-keystroke action arrives *inside* the key window's own dispatch,
+    // which holds that window's lease -- `handle.update` on the same window
+    // returns Err there (observed: ⌘W resolved no native handle and silently
+    // did nothing). Deferred, so the lease is back first. The menu-click path
+    // has no lease and rides the same defer unharmed.
+    cx.defer(move |cx| {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                action(native);
+            }
+        })
+        .detach();
+    });
 }
 
 /// ⌘W, the File > Close Window item, and the Window > Close Window item.
@@ -220,24 +226,35 @@ pub fn close_key_window(cx: &mut App) {
         tracing::info!("close window: no key window");
         return;
     };
+    close_window_by_handle(handle, cx);
+}
+
+/// The ⌘W body, keyed by handle -- split out so the harness can close a
+/// specific window without depending on focus (synthetic activation races
+/// whatever the user has focused).
+pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
     tracing::info!(
         main = handle.downcast::<MainWindow>().is_some(),
         "close window"
     );
-    if handle.downcast::<MainWindow>().is_some() {
-        app_windows::request_close_main(cx);
-        return;
-    }
-    let native = handle
-        .update(cx, |_, window, _| platform::native_window(window))
-        .ok()
-        .flatten();
-    cx.spawn(async move |_| {
-        if let Some(native) = &native {
-            platform::close_native(native);
+    // Deferred for the `with_key_native` reason: the ⌘W keystroke's dispatch
+    // holds the key window's lease, and both arms below update windows.
+    cx.defer(move |cx| {
+        if handle.downcast::<MainWindow>().is_some() {
+            app_windows::request_close_main(cx);
+            return;
         }
-    })
-    .detach();
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::close_native(native);
+            }
+        })
+        .detach();
+    });
 }
 
 /// ⌘Q, the Cap menu's Quit item, and the tray's "Quit Cap".

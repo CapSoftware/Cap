@@ -56,6 +56,14 @@ pub struct AppWindows {
     /// (`windows.rs:3656-3659`). The Tauri app keys its label off an
     /// incrementing id; the path is the identity in both.
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    /// `hasHiddenMainWindowForPicker` (`new-main/index.tsx:2016-2059`): the
+    /// main window hides while the target picker is up, and comes back only on
+    /// a dismissal that reveals ("cancelled" -- Escape, the overlay's close
+    /// button, the tile toggled off). A recording start hands the foreground
+    /// to the bar instead. Set even when the window was already hidden (the
+    /// tray path): the Tauri effect does the same, which is why cancelling a
+    /// tray-opened picker reveals the main window.
+    pub main_hidden_for_picker: bool,
 }
 
 impl Global for AppWindows {}
@@ -72,7 +80,20 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         teleprompter: None,
         overlays: Vec::new(),
         editors: Vec::new(),
+        main_hidden_for_picker: false,
     });
+
+    // The global-Escape drain: the Carbon hotkey (registered only while the
+    // target picker is up -- `open_target_overlays`) posts here, and the
+    // dismissal runs with a clean borrow. One task for the life of the
+    // process, the tray-channel shape.
+    let escape = platform::escape_hotkey_events();
+    cx.spawn(async move |cx| {
+        while escape.recv_async().await.is_ok() {
+            let _ = cx.update(dismiss_target_overlays);
+        }
+    })
+    .detach();
 
     let mut last_phase = Phase::Idle;
     cx.observe(&session, move |session, cx| {
@@ -128,6 +149,19 @@ pub fn show_main_window(cx: &mut App) {
             platform::restore_borderless_style(native);
             platform::show_native(native);
         }
+        // The unit-3 macOS 26 display-link repair, and the reason a window
+        // hidden before its FIRST paint reshows as nothing at all: AppKit
+        // reports it visible (alpha 1, on the active Space) but it has no
+        // backing surface and the frozen link never delivers one. Kick it and
+        // ask for a frame, the `open_settings` recipe.
+        let _ = cx.update(|cx| {
+            main.update(cx, |_, window, cx| {
+                platform::kick_display_link(window);
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        });
         // `ShowCapWindow::show` ends with `sync_macos_dock_visibility` for
         // every window that `activates_dock()`, and Main is one. Scheduled
         // *after* the window is on screen, or the policy would be computed
@@ -148,6 +182,7 @@ pub fn hide_main_window(cx: &mut App) {
     cx.spawn(async move |cx| {
         if let Some(native) = &native {
             platform::hide_native(native);
+            tracing::info!("main window hidden");
         }
         cx.update(crate::menus::schedule_dock_sync);
     })
@@ -177,6 +212,9 @@ pub fn request_close_main(cx: &mut App) {
 
     close_camera_window(cx);
     close_target_overlays(cx);
+    // Closing the main window explicitly is not a picker dismissal; a stale
+    // flag here would reveal the window the user just closed.
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.release_inputs(cx));
 }
 
@@ -339,6 +377,7 @@ pub fn close_settings(cx: &mut App) {
 /// window comes back -- otherwise closing settings from the gear flow would
 /// leave the app with no visible window at all.
 pub fn settings_closed(cx: &mut App) {
+    tracing::info!("settings window closed");
     cx.global_mut::<AppWindows>().settings.take();
     restore_after_settings(cx);
 }
@@ -782,14 +821,39 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
         }
         open_overlay(&display, select.clone(), Some(&id) == focus_display.as_ref(), cx);
     }
+
+    // `global_shortcut.register("Escape")` while the overlays are up
+    // (`target_select_overlay.rs:595-617`): with the main window hidden below
+    // and the overlays non-activating, a plain key handler has nothing to be
+    // delivered to.
+    platform::register_escape_hotkey();
+
+    // `pickerActive && !hasHidden && !recording` -> `getCurrentWindow().hide()`
+    // (`new-main/index.tsx:2024-2028`): the picker owns the screen; the main
+    // window would otherwise float above the overlays at level 100.
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = true;
+        hide_main_window(cx);
+    }
 }
 
 /// Close the overlays and clear the main window's armed target -- Escape, the
 /// overlay's own close button, or the main window toggling the mode off.
+///
+/// A "cancelled" dismissal in the Tauri vocabulary, which is the kind that
+/// reveals the main window again (`dismissalReveals`,
+/// `new-main/index.tsx:2047-2058`).
 pub fn dismiss_target_overlays(cx: &mut App) {
     close_target_overlays(cx);
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, _window, cx| view.clear_target(cx)).ok();
+
+    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+    tracing::info!(hidden, idle, "picker dismissed");
+    if hidden && idle {
+        show_main_window(cx);
+    }
 }
 
 /// Close the overlays and disarm the cursor probe, leaving the main window's
@@ -850,6 +914,9 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     // the recording.
     let excluded = overlay_window_ids(cx);
     close_target_overlays(cx);
+    // A "recordingStudio" dismissal does not reveal the main window -- the bar
+    // owns the foreground now, and the stop flow's reshow brings it back.
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
 
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, window, cx| {
@@ -996,6 +1063,9 @@ fn close_overlay(id: &DisplayId, cx: &mut App) {
 }
 
 fn close_overlay_windows(cx: &mut App) {
+    // The Tauri unregister lives next to the close for the same reason: a
+    // global Escape may only be swallowed while a picker is actually up.
+    platform::unregister_escape_hotkey();
     let overlays = std::mem::take(&mut cx.global_mut::<AppWindows>().overlays);
     for (_, handle) in overlays {
         handle
