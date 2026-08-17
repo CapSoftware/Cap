@@ -27,7 +27,10 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+use cap_project::{
+    InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+    StudioRecordingStatus,
+};
 use gpui::RenderImage;
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
@@ -161,50 +164,309 @@ pub fn screenshots_dir() -> PathBuf {
     crate::store::app_data_dir().join("screenshots")
 }
 
-/// `list_recordings`: every subdirectory of every known recordings folder whose
-/// `recording-meta.json` parses. Note there is no `.cap` extension filter here
-/// -- that is the screenshots scan's rule, not this one.
+/// `list_recordings`, narrowed to what a Recents card draws.
+///
+/// The scan itself is [`list_recordings_in`] -- one implementation, so the
+/// carousel and the settings page can never disagree about what is in the
+/// library.
 fn scan_recordings(dir: &Path, out: &mut Vec<RecentItem>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    out.extend(list_recordings_in(std::slice::from_ref(&dir.to_path_buf())).into_iter().map(
+        |item| RecentItem {
+            kind: match item.mode {
+                RecordingMode::Studio => MediaKind::Studio,
+                RecordingMode::Instant => MediaKind::Instant,
+            },
+            pretty_name: item.pretty_name,
+            clip_count: item.clip_count,
+            sort_time_millis: item.sort_time_millis,
+            thumbnail: item.thumbnail,
+            bundle: item.path,
+        },
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// The whole library -- what the settings Recordings page lists
+// ---------------------------------------------------------------------------
+
+/// `RecordingMode`, i.e. `RecordingMetaWithMetadata::mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingMode {
+    Studio,
+    Instant,
+}
+
+impl RecordingMode {
+    /// The tab id and the serialized value: `meta.mode === activeTab()`
+    /// compares against `"studio"` / `"instant"`.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Studio => "studio",
+            Self::Instant => "instant",
+        }
+    }
+
+    /// `firstLetterUpperCase()` on the badge -- the mode with its first letter
+    /// capitalized, which for these two values is just the label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Studio => "Studio",
+            Self::Instant => "Instant",
+        }
+    }
+
+    /// `IconCapInstant` / `IconCapFilmCut`, the badge and tab glyphs.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Studio => "icons/film-cut.svg",
+            Self::Instant => "icons/instant.svg",
+        }
+    }
+}
+
+/// `StudioRecordingStatus` as the page reads it -- the enum is shared by both
+/// modes in `RecordingMetaWithMetadata` (an instant recording's own
+/// `InProgress` / `Failed` / `Complete` is mapped onto it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordingStatus {
+    InProgress,
+    NeedsRemux,
+    Failed { error: String },
+    Complete,
+}
+
+impl RecordingStatus {
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self, Self::InProgress)
+    }
+
+    /// The tooltip text on the "Recording failed" badge.
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            Self::Failed { error } => Some(error.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// One `(path, RecordingMetaWithMetadata)` pair out of `list_recordings`,
+/// carrying only the fields `recordings.tsx` reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordingItem {
+    /// The `.cap` bundle -- the `path` half of the tuple, and what every row
+    /// action takes.
+    pub path: PathBuf,
+    pub mode: RecordingMode,
+    pub status: RecordingStatus,
+    /// `clip_count`, which drives the `"N clips"` badge.
+    pub clip_count: u32,
+    pub pretty_name: String,
+    /// `meta.sharing.link`, which the "Open link" button opens. The id and the
+    /// content hash are not read by this page.
+    pub sharing: Option<String>,
+    pub sort_time_millis: f64,
+    /// `${path}/screenshots/display.jpg`, existence-checked here rather than
+    /// left to an `<img onError>`.
+    pub thumbnail: Option<PathBuf>,
+}
+
+impl RecordingItem {
+    /// `hasActiveRecording` (`recordings.tsx:66-73`) minus its upload half:
+    /// there are no uploads in this app, so `MultipartUpload` /
+    /// `SinglePartUpload` can never be the reason to keep polling.
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+        )
+    }
+
+    /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
+    pub fn opens_editor(&self) -> bool {
+        self.mode == RecordingMode::Studio && self.status.is_complete()
+    }
+}
+
+/// `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`).
+fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> RecordingItem {
+    let mode = match &meta.inner {
+        RecordingMetaInner::Studio(_) => RecordingMode::Studio,
+        RecordingMetaInner::Instant(_) => RecordingMode::Instant,
+    };
+    let clip_count = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => match &**studio {
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+        },
+        RecordingMetaInner::Instant(_) => 1,
+    };
+    let status = match &meta.inner {
+        RecordingMetaInner::Studio(studio) => match &**studio {
+            // A `MultipleSegments` meta with no `status` key at all is
+            // Complete -- `.unwrap_or(StudioRecordingStatus::Complete)`.
+            StudioRecordingMeta::MultipleSegments { inner } => match &inner.status {
+                Some(StudioRecordingStatus::InProgress) => RecordingStatus::InProgress,
+                Some(StudioRecordingStatus::NeedsRemux) => RecordingStatus::NeedsRemux,
+                Some(StudioRecordingStatus::Failed { error }) => RecordingStatus::Failed {
+                    error: error.clone(),
+                },
+                Some(StudioRecordingStatus::Complete) | None => RecordingStatus::Complete,
+            },
+            StudioRecordingMeta::SingleSegment { .. } => RecordingStatus::Complete,
+        },
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+            RecordingStatus::InProgress
+        }
+        RecordingMetaInner::Instant(InstantRecordingMeta::Failed { error }) => {
+            RecordingStatus::Failed {
+                error: error.clone(),
+            }
+        }
+        RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
+            RecordingStatus::Complete
+        }
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Ok(meta) = RecordingMeta::load_for_project(&path) else {
-            continue;
-        };
-
-        // `RecordingMetaWithMetadata::new` (`lib.rs:3888-3925`): the mode and
-        // the clip count both come off the meta's inner variant, and a
-        // single-segment studio meta counts as one clip.
-        let (kind, clip_count) = match &meta.inner {
-            RecordingMetaInner::Studio(studio) => (
-                MediaKind::Studio,
-                match &**studio {
-                    StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len() as u32,
-                    StudioRecordingMeta::SingleSegment { .. } => 1,
-                },
-            ),
-            RecordingMetaInner::Instant(_) => (MediaKind::Instant, 1),
-        };
-
-        // `previewPath = ${target.path}/screenshots/display.jpg`.
-        let thumbnail = path.join("screenshots").join("display.jpg");
-        let sort_time_millis = media_sort_time_millis(&path);
-
-        out.push(RecentItem {
-            kind,
-            pretty_name: meta.pretty_name,
-            clip_count,
-            sort_time_millis,
-            thumbnail: thumbnail.is_file().then_some(thumbnail),
-            bundle: path,
-        });
+    let thumbnail = bundle_thumbnail_path(&path);
+    RecordingItem {
+        mode,
+        status,
+        clip_count,
+        pretty_name: meta.pretty_name,
+        sharing: meta.sharing.map(|sharing| sharing.link),
+        sort_time_millis,
+        thumbnail: thumbnail.is_file().then_some(thumbnail),
+        path,
     }
+}
+
+/// `list_recordings` (`lib.rs:3971-3999`), against explicit directories.
+///
+/// Every subdirectory of every known recordings folder whose
+/// `recording-meta.json` parses; a directory whose meta is missing or corrupt
+/// is skipped without a word, because `get_recording_meta` returns `Err` and
+/// the `if let Ok` drops it. There is no `.cap` extension filter -- that is the
+/// screenshots scan's rule, not this one. Sorted newest first by
+/// `sort_time_millis`, which is the directory's own creation time recomputed on
+/// every call.
+///
+/// Recordings only: `list_screenshots` is a separate command behind a separate
+/// settings page.
+pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+                continue;
+            };
+            let sort_time_millis = media_sort_time_millis(&path);
+            out.push(recording_item(path, meta, sort_time_millis));
+        }
+    }
+    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+    out
+}
+
+/// `list_recordings` against the real library.
+pub fn list_recordings() -> Vec<RecordingItem> {
+    list_recordings_in(&known_recordings_dirs())
+}
+
+/// `delete_recording_directory` (`lib.rs:4001-4046`), guards verbatim.
+///
+/// Three of them, and each one covers a hole the others leave:
+///
+/// 1. a `ParentDir` component anywhere is rejected up front, because
+///    `Path::starts_with` compares raw components and would happily accept
+///    `<recordings>/../../etc`;
+/// 2. the path must start with one of the known recordings directories, which
+///    is the same set the listing walks;
+/// 3. both sides are canonicalized before the recursive delete, so a symlink
+///    inside a recordings directory cannot point the delete somewhere else.
+///
+/// A path that does not exist is a no-op success, exactly as it is there.
+pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<(), String> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Invalid path".to_string());
+    }
+
+    if !dirs.iter().any(|dir| path.starts_with(dir)) {
+        return Err("Path is not inside a recordings directory".to_string());
+    }
+
+    if path.exists() {
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve recording path: {error}"))?;
+
+        let inside_known_dir = dirs.iter().any(|dir| {
+            dir.canonicalize()
+                .map(|dir| canonical_path.starts_with(&dir))
+                .unwrap_or(false)
+        });
+        if !inside_known_dir {
+            return Err("Path is not inside a recordings directory".to_string());
+        }
+
+        std::fs::remove_dir_all(&canonical_path)
+            .map_err(|error| format!("Failed to delete recording: {error}"))?;
+    }
+
+    Ok(())
+}
+
+/// `delete_recording_directory` against the real library.
+///
+/// The Tauri command also emits `RecordingDeleted`, which the page listens for
+/// to refetch; here the caller refreshes its own list instead.
+pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
+    delete_recording_directory_in(&known_recordings_dirs(), path)
+}
+
+/// `openRecordingFolder` (`utils/recording.ts:53-70`).
+///
+/// An instant recording opens its `content` directory in Finder --
+/// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
+/// bundle with no `content` directory, is revealed with `open -R`. The trailing
+/// separator the TS strips and re-adds does not survive `PathBuf`, and Finder
+/// does not need it.
+///
+/// One deviation, deliberate: the TS treats *spawning* the opener as success,
+/// so an instant bundle with no `content` directory silently opens nothing.
+/// Here the directory is stat'd first and the bundle is revealed instead.
+pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
+    #[cfg(target_os = "macos")]
+    {
+        let content = path.join("content");
+        let (argument, target) = if mode == RecordingMode::Instant && content.is_dir() {
+            (None, content)
+        } else {
+            (Some("-R"), path.to_path_buf())
+        };
+        let mut command = std::process::Command::new("open");
+        if let Some(argument) = argument {
+            command.arg(argument);
+        }
+        if let Err(error) = command.arg(&target).spawn() {
+            tracing::warn!(path = %target.display(), "opening the recording folder failed: {error}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (path, mode);
 }
 
 /// `list_screenshots`: `*.cap` directories only, and the sort key is the PNG's
@@ -563,6 +825,213 @@ mod tests {
         let items = recent_media_in(&[recordings.clone()], &root.join("missing-screenshots"));
         assert_eq!(items.len(), 1, "only the bundle with a meta is listed");
         assert_eq!(items[0].thumbnail.as_deref(), Some(thumbnail.as_path()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // -- The settings page's listing ------------------------------------
+
+    /// A bundle with a hand-written meta, so a test can spell out exactly the
+    /// JSON `RecordingMeta` has to survive.
+    fn write_bundle(dir: &Path, name: &str, meta: &str) -> PathBuf {
+        let bundle = dir.join(format!("{name}.cap"));
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("recording-meta.json"), meta).unwrap();
+        bundle
+    }
+
+    /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the
+    /// status for each shape of meta the two recorders write.
+    #[test]
+    fn every_meta_shape_derives_its_mode_status_and_clip_count() {
+        let root = temp_dir("listing");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+
+        let segment = r#"{"display":{"path":"content/segments/segment-0/display.mp4","fps":30}}"#;
+        // Oldest first, so the sort assertion below has something to do.
+        write_bundle(
+            &recordings,
+            "studio-multi",
+            &format!(
+                r#"{{"pretty_name":"Studio multi","sharing":{{"id":"abc","link":"https://cap.so/s/abc"}},"segments":[{segment},{segment},{segment}]}}"#
+            ),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "studio-single",
+            r#"{"pretty_name":"Studio single","sharing":null,"display":{"path":"content/display.mp4","fps":30}}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "studio-failed",
+            &format!(
+                r#"{{"pretty_name":"Studio failed","sharing":null,"segments":[{segment}],"status":{{"status":"Failed","error":"encoder died"}}}}"#
+            ),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "studio-remux",
+            &format!(
+                r#"{{"pretty_name":"Studio remux","sharing":null,"segments":[{segment}],"status":{{"status":"NeedsRemux"}}}}"#
+            ),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "instant-complete",
+            r#"{"pretty_name":"Instant complete","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "instant-progress",
+            r#"{"pretty_name":"Instant in progress","sharing":null,"recording":true}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &recordings,
+            "instant-failed",
+            r#"{"pretty_name":"Instant failed","sharing":null,"error":"upload died"}"#,
+        );
+        // Corrupt bundles are skipped in silence, exactly as `if let Ok` does.
+        std::fs::create_dir_all(recordings.join("empty-dir")).unwrap();
+        write_bundle(&recordings, "unparseable", "{ not json ");
+        std::fs::write(recordings.join("loose-file.mp4"), b"").unwrap();
+
+        let items = list_recordings_in(&[recordings.clone()]);
+        let names: Vec<&str> = items
+            .iter()
+            .map(|item| item.pretty_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Instant failed",
+                "Instant in progress",
+                "Instant complete",
+                "Studio remux",
+                "Studio failed",
+                "Studio single",
+                "Studio multi",
+            ],
+            "newest first, and only the seven parseable bundles"
+        );
+
+        let by_name = |name: &str| {
+            items
+                .iter()
+                .find(|item| item.pretty_name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+
+        let multi = by_name("Studio multi");
+        assert_eq!(multi.mode, RecordingMode::Studio);
+        assert_eq!(multi.clip_count, 3, "one clip per segment");
+        assert_eq!(
+            multi.status,
+            RecordingStatus::Complete,
+            "a MultipleSegments meta with no status key is Complete"
+        );
+        assert_eq!(multi.sharing.as_deref(), Some("https://cap.so/s/abc"));
+        assert!(multi.opens_editor(), "studio + Complete is the clickable row");
+        assert!(!multi.is_active());
+
+        let single = by_name("Studio single");
+        assert_eq!(single.mode, RecordingMode::Studio);
+        assert_eq!(single.clip_count, 1);
+        assert_eq!(single.status, RecordingStatus::Complete);
+        assert_eq!(single.sharing, None);
+
+        let failed = by_name("Studio failed");
+        assert_eq!(
+            failed.status,
+            RecordingStatus::Failed {
+                error: "encoder died".to_string()
+            }
+        );
+        assert_eq!(failed.status.error(), Some("encoder died"));
+        assert!(!failed.opens_editor(), "a failed studio row is inert");
+        assert!(!failed.is_active(), "Failed does not keep the poll running");
+
+        let remux = by_name("Studio remux");
+        assert_eq!(remux.status, RecordingStatus::NeedsRemux);
+        assert!(remux.is_active(), "NeedsRemux keeps the 2s poll running");
+
+        let complete = by_name("Instant complete");
+        assert_eq!(complete.mode, RecordingMode::Instant);
+        assert_eq!(complete.clip_count, 1, "an instant recording is one clip");
+        assert_eq!(complete.status, RecordingStatus::Complete);
+        assert!(
+            !complete.opens_editor(),
+            "instant rows never open the editor, complete or not"
+        );
+
+        let progress = by_name("Instant in progress");
+        assert_eq!(progress.status, RecordingStatus::InProgress);
+        assert!(progress.is_active());
+
+        assert_eq!(
+            by_name("Instant failed").status,
+            RecordingStatus::Failed {
+                error: "upload died".to_string()
+            }
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The three `delete_recording_directory` guards, one test each.
+    #[test]
+    fn delete_rejects_traversal_paths_outside_and_symlink_escapes() {
+        let root = temp_dir("delete");
+        let recordings = root.join("recordings");
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let dirs = vec![recordings.clone()];
+
+        // 1. A `..` component anywhere, even one that resolves back inside.
+        let bundle = write_studio_bundle(&recordings, "keep-me", 1);
+        let traversal = recordings.join("..").join("elsewhere");
+        assert_eq!(
+            delete_recording_directory_in(&dirs, &traversal),
+            Err("Invalid path".to_string())
+        );
+        assert!(elsewhere.is_dir(), "the traversal target survives");
+
+        // 2. A real path that is simply not in a recordings directory.
+        assert_eq!(
+            delete_recording_directory_in(&dirs, &elsewhere),
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert!(elsewhere.is_dir());
+
+        // 3. A symlink *inside* the recordings directory pointing out of it.
+        let victim = elsewhere.join("precious");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("recording.mp4"), b"irreplaceable").unwrap();
+        let escape = recordings.join("escape.cap");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, &escape).unwrap();
+        assert_eq!(
+            delete_recording_directory_in(&dirs, &escape),
+            Err("Path is not inside a recordings directory".to_string()),
+            "canonicalizing catches the symlink the prefix check let through"
+        );
+        assert!(
+            victim.join("recording.mp4").is_file(),
+            "the symlink's target is untouched"
+        );
+
+        // And the happy path still deletes.
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        assert!(!bundle.exists());
+        // A path that is already gone is a no-op success, as it is there.
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
 
         std::fs::remove_dir_all(&root).ok();
     }

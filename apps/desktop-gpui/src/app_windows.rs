@@ -147,7 +147,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
         // the page argument re-target it.
         let native = handle
             .update(cx, |view, window, cx| {
-                view.set_page(page, cx);
+                view.set_page(page, window, cx);
                 platform::native_window(window)
             })
             .ok()
@@ -222,6 +222,11 @@ pub fn open_settings(page: Page, cx: &mut App) {
         .update(cx, |view, window, cx| {
             platform::kick_display_link(window);
             view.start_enumeration(window, cx);
+            // Whatever the page it opened on has to fetch -- the Recordings
+            // page's library scan. Started here rather than in
+            // `SettingsWindow::new` for the `start_enumeration` reason: a task
+            // spawned inside the builder closure never schedules a frame.
+            view.page_shown(window, cx);
             view.focus_root(window, cx);
             tracing::info!(
                 number = platform::window_number(window),

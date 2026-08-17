@@ -169,6 +169,16 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
+    // The settings Recordings page. `link` is Cap's own
+    // (`packages/ui-solid/icons/link.svg`, which is Lucide's glyph); `import`
+    // and `edit` are the Lucide 24x24 originals `~icons/lucide/*` resolves to;
+    // `record-fill` and `warning-bold` are Phosphor's 256x256 originals, which
+    // is what `IconPhRecordFill` / `IconPhWarningBold` are in `recordings.tsx`.
+    "link.svg",
+    "import.svg",
+    "edit.svg",
+    "record-fill.svg",
+    "warning-bold.svg",
 );
 
 /// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The

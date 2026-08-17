@@ -812,6 +812,62 @@ mod mac {
         }
     }
 
+    // -- Confirmation alerts -------------------------------------------------
+
+    /// `@tauri-apps/plugin-dialog`'s `ask()` / `confirm()`, which on macOS are
+    /// an `NSAlert` with two buttons: `messageText` is the dialog's title
+    /// (defaulting to the app name for `ask`), `informativeText` the question,
+    /// and the return is "was the *first* button pressed" --
+    /// `NSAlertFirstButtonReturn`.
+    ///
+    /// `runModal` spins AppKit's own modal run loop, which re-enters gpui's
+    /// window callbacks for as long as the alert is up. It must therefore be
+    /// called with no gpui borrow held -- from a spawned task, never inside an
+    /// update ([`place_overlay_panel`]'s rule). gpui's foreground executor is
+    /// the main thread, which is where AppKit requires this to run, so a
+    /// `cx.spawn` task is both the correct thread and the correct borrow state.
+    pub fn confirm_dialog(
+        title: &str,
+        message: &str,
+        accept: &str,
+        cancel: &str,
+        warning: bool,
+    ) -> bool {
+        use objc2::{class, msg_send, msg_send_id};
+        use objc2_foundation::NSString;
+
+        /// `NSAlertStyle`: `Warning = 0`, `Informational = 1`. `NSUInteger`,
+        /// not `NSInteger` -- objc2's message-send verification rejects the
+        /// signed spelling at runtime ("expected argument at index 0 to have
+        /// type code 'Q', but found 'q'"), which is a panic, not a warning.
+        const NS_ALERT_STYLE_WARNING: usize = 0;
+        const NS_ALERT_STYLE_INFORMATIONAL: usize = 1;
+        /// `NSAlertFirstButtonReturn`. This one *is* an `NSInteger`.
+        const NS_ALERT_FIRST_BUTTON_RETURN: isize = 1000;
+
+        unsafe {
+            let alert: Id<AnyObject> = msg_send_id![class!(NSAlert), new];
+            let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(title)];
+            let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(message)];
+            let _: () = msg_send![
+                &*alert,
+                setAlertStyle: if warning {
+                    NS_ALERT_STYLE_WARNING
+                } else {
+                    NS_ALERT_STYLE_INFORMATIONAL
+                }
+            ];
+            // Order matters: the first button added is the default one, and
+            // the one `NSAlertFirstButtonReturn` reports.
+            let _: *mut AnyObject =
+                msg_send![&*alert, addButtonWithTitle: &*NSString::from_str(accept)];
+            let _: *mut AnyObject =
+                msg_send![&*alert, addButtonWithTitle: &*NSString::from_str(cancel)];
+            let response: isize = msg_send![&*alert, runModal];
+            response == NS_ALERT_FIRST_BUTTON_RETURN
+        }
+    }
+
     /// `current_desktop_background_source_path` (`src-tauri/recording.rs:271-305`):
     /// the file behind the main screen's desktop picture.
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
@@ -925,6 +981,15 @@ mod stub {
     pub fn close_color_panel(_order_out: bool) {}
     pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
         None
+    }
+    pub fn confirm_dialog(
+        _title: &str,
+        _message: &str,
+        _accept: &str,
+        _cancel: &str,
+        _warning: bool,
+    ) -> bool {
+        false
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         None

@@ -320,6 +320,11 @@ pub struct Theme {
     pub amber_6: Rgba,
     pub amber_11: Rgba,
 
+    /// `--blue-100`: the settings Recordings page's Instant badge
+    /// (`bg-blue-100`). Part of the same legacy ramp as `--blue-500`, and like
+    /// it not a Radix step -- `theme.css:77` / `:144`.
+    pub blue_100: Rgba,
+
     /// `--blue-500`: the device-list selection fill and the Mode pill's ring.
     /// Distinct from `blue-9`; the two are not interchangeable.
     pub blue_500: Rgba,
@@ -389,6 +394,7 @@ impl Theme {
             amber_6: rgb(0xf3d673),
             amber_11: rgb(0xab6400),
 
+            blue_100: rgb(0xadc9ff),
             blue_500: rgb(0x3666c5),
             red_300: rgb(0xff4766),
 
@@ -439,6 +445,7 @@ impl Theme {
             amber_6: rgb(0x5c3d05),
             amber_11: rgb(0xffca16),
 
+            blue_100: rgb(0x243352),
             blue_500: rgb(0x0a84ff),
             red_300: rgb(0xff4766),
 

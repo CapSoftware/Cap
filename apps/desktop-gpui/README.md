@@ -519,7 +519,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Capture area | per display | Superseded — area selection is the target-select overlay's area variant; the Tauri app still registers a standalone `capture-area` window but nothing in its frontend opens it |
 | Recordings overlay | per display | Not started |
 | Mode select | 580×340 | **Done** — the real fixed-size window, opaque `bg-gray-1` with the native traffic lights at their default position, three cards with the selected one's blue border / tint / check badge, main window hidden while it is up and restored on close |
-| Settings | 782×775 (min 780×560) | **Done — General** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 22), resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store. The other eleven pages are placeholder bodies |
+| Settings | 782×775 (min 780×560) | **Done — General, Recordings** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 22), resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store, and the Recordings page at 1:1: the library scan with real thumbnails, the three tab pills, the search field, mode / clip-count / in-progress / failed badges, the per-row action buttons, `PAGE_SIZE` pagination, both empty states, the 2s poll while a recording is still being written, click-through into the gpui editor, and delete behind a native confirm. The other ten pages are placeholder bodies |
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
@@ -736,7 +736,7 @@ traffic_light_position: Some(point(px(22.), px(22.))) }`, and the min size as
 The sidebar carries all twelve entries of `settingsItems`, in order, none of
 them gated: General, Shortcuts (route `hotkeys`), CLI, Recordings,
 Screenshots, Automations, Transcription, Integrations, License, Experimental,
-Feedback, Changelog. Only **General** is built.
+Feedback, Changelog. **General** and **Recordings** are built.
 
 ### The store contract
 
@@ -757,11 +757,77 @@ deserialize and blank every row on the page. `CAP_GPUI_TAURI_STORE` points the
 whole module at a copy, which is how the tests — and any verification run that
 must not touch real settings — work.
 
+### The Recordings page
+
+`settings/recordings.tsx`, transcribed whole. The data behind it is not a
+Tauri command here but `library::list_recordings`, which is `list_recordings`
+(`lib.rs:3971-3999`) plus `RecordingMetaWithMetadata::new` (`:3888-3925`)
+ported into the module the main window's Recents already scans with: every
+subdirectory of every known recordings folder whose `recording-meta.json`
+parses, sorted newest first by the directory's own creation time, with the
+mode, the clip count and the status derived from the meta's inner variant. A
+directory whose meta is missing or corrupt is skipped in silence, exactly as
+`if let Ok(meta)` does there. Recordings only — screenshots are a separate
+command behind a separate page.
+
+Delete carries `delete_recording_directory`'s three guards verbatim, and they
+are unit-tested one by one: a `..` component anywhere is rejected before the
+prefix check (`Path::starts_with` compares raw components), the path must
+start with one of the known recordings directories, and **both sides are
+canonicalized** before the recursive delete so a symlink planted inside a
+recordings folder cannot point it somewhere else. The test plants exactly that
+symlink and asserts its target survives.
+
+Two things the page does that no other window here does:
+
+- **Native confirms.** `ask()` before a delete and `confirm()` before opening
+  a failed recording in the editor are `NSAlert`s
+  (`platform::confirm_dialog`). `runModal` spins AppKit's own modal run loop,
+  which re-enters gpui's window callbacks for the whole time the sheet is up,
+  so it is called from a spawned task and never from inside an update — the
+  `place_overlay_panel` rule. gpui's foreground executor is the main thread,
+  which is where `NSAlert` has to run, so one `cx.spawn_in` satisfies both
+  constraints. The poll below keeps ticking while an alert is up and no
+  "RefCell already borrowed" appears, which is what says the rule was kept.
+  One objc2 trap on the way: `setAlertStyle:` takes an `NSUInteger`, and
+  passing the constant as `isize` **aborts the process** at the first call —
+  objc2 verifies the encoded argument types and panics with "expected argument
+  at index 0 to have type code 'Q', but found 'q'". Signedness of an AppKit
+  enum argument is not a detail the compiler can catch for you here.
+- **A background poll.** `refetchInterval` re-runs the query every 2s while
+  anything in the list is `InProgress` or `NeedsRemux`. It is armed at the end
+  of each scan, so a recording that finishes stops it and one that starts
+  restarts it, and it is dropped when the page changes. The window is not
+  necessarily focused while a recording is being written into the library, and
+  an unfocused gpui window does not repaint from a background-driven model
+  update, so every poll-driven state change calls `window.refresh()`.
+  `reconcile: "path"` on the query turns out to be load-bearing once that poll
+  exists: the first fixture run blanked all five thumbnails every 2s and
+  re-decoded them one at a time, a visible flicker. `set_recordings` now keeps
+  the decoded image of any row whose bundle path is still in the library and
+  only decodes what is new, which is also why a steady-state poll does no
+  image work at all.
+
+A row's buttons sit inside a row that is itself clickable, and the TSX's
+`e.stopPropagation()` has a precise gpui equivalent: stop the **mouse-down**,
+not the click. gpui arms a click by recording the press on every element whose
+hitbox is under the pointer, so blocking the press at the button leaves the
+row's click unarmed — while the button's own still fires, because its
+click-tracking listener is registered *after* the custom `on_mouse_down` and
+therefore runs first in the bubble phase. Verified both ways: clicking a row's
+folder button opens Finder and no editor, clicking the row body opens the
+editor.
+
 Settings-specific deviations:
 
 | | |
 |---|---|
-| **Eleven placeholder pages** | Shortcuts, CLI, Recordings, Screenshots, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; the bodies are not. |
+| **Ten placeholder pages** | Shortcuts, CLI, Screenshots, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; those bodies are not. |
+| **Import and Reupload are disabled** | `importVideoFromPicker` remuxes the picked file through `commands.importVideoToProject`, and Reupload is `commands.uploadExportedVideo(path, "Reupload", ..)`. Neither has a counterpart in this app — no import remux, no upload infrastructure — so both buttons are drawn in their disabled state, the same precedent as the editor sidebar's transcription buttons. |
+| **No upload progress on a recording row** | The Tauri row draws a `ProgressCircle` while `uploadProgressEvent` is arriving for that video, and `hasActiveRecording` also keeps polling while `upload.state` is `MultipartUpload` / `SinglePartUpload`. There are no uploads here, so the ring is not drawn and the poll's upload half is not reproduced — only `InProgress` / `NeedsRemux` keep it running. |
+| **An instant bundle with no `content` directory is revealed, not opened** | `openRecordingFolder` treats *spawning* `open` as success, so an instant bundle missing its `content` directory opens nothing at all. Here the directory is stat'd first and the bundle is revealed instead. |
+| **`onClick` on a recording row is dead in both apps** | `handleRecordingClick` (which emits `newStudioRecordingAdded`) and `handleCopyVideoToClipboard` are passed into `RecordingItem` and never called — the `<li>`'s own handler calls `onOpenEditor` instead. The row here opens the editor, which is what the shipping app actually does. |
+| **The recording name truncates** | The `<span>` carries no text class, so it is the 16px document default in both apps; unlike the webview this window cannot reflow a long name onto the buttons, so the name column truncates with an ellipsis. |
 | **No auth, so the free-plan variant** | There is no auth store here (same gap as the main window's plan badge), so the profile row shows the signed-out "Click to sign in" state and does nothing when clicked, and the Cap Pro section renders as it does for a free user: Instant Mode quality pinned to 720p, the other tiers inert. In the Tauri app clicking a locked tier raises an upgrade toast. `instantModeMaxResolution` is therefore displayed but never written. |
 | **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. `ui::Menu` draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks, the same click-away dismiss, and the `KSelect` keyboard contract on top: arrows, Home/End, Enter, Escape. It does not flip or shift to stay inside the window, so a menu opened near the right edge is clipped by it — as it was before the consolidation. |
 | **Text fields commit on the button, not on Return** | The project-name template and the server URL are `ui::TextInput::settings` — the same field as the search, differing only in its fills. Both are drafts committed by Save / Update, which is the Tauri card's own shape: neither `<input>` there binds `onKeyDown`, so Return does nothing in either app. Escape reverts to what is stored. The recordings folder is *not* a text field in either app — `pickRecordingsFolder` opens an `NSOpenPanel` and the path is a readout. |

@@ -12,18 +12,19 @@
 //! file the shipping app uses, one key at a time, through
 //! [`crate::store::set_store_setting`].
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, MouseButton,
-    ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, img, prelude::FluentBuilder, px, rgb, svg,
+    ParentElement, Pixels, Point, Render, RenderImage, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
 };
 use serde_json::Value;
 
 use crate::{
     devices::WindowOption,
+    library::{self, RecordingItem, RecordingMode},
     ui,
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
@@ -284,11 +285,171 @@ fn theme_preview(theme: AppTheme) -> &'static str {
     }
 }
 
-/// Which text field has focus, so one key handler can serve both.
+/// Which text field an event came from, so one handler can serve all three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     ProjectName,
     ServerUrl,
+    /// The Recordings page's filter.
+    RecordingsSearch,
+}
+
+// ---------------------------------------------------------------------------
+// The Recordings page (`settings/recordings.tsx`)
+// ---------------------------------------------------------------------------
+
+/// `PAGE_SIZE` (`recordings.tsx:64`).
+const RECORDINGS_PAGE_SIZE: usize = 20;
+
+/// `hasActiveRecording`'s poll: `refetchInterval` returns 2000 while anything
+/// in the list is still being written.
+const RECORDINGS_POLL: Duration = Duration::from_millis(2000);
+
+/// `Tabs` (`recordings.tsx:47-62`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingsTab {
+    All,
+    Instant,
+    Studio,
+}
+
+impl RecordingsTab {
+    const ALL: &'static [RecordingsTab] = &[Self::All, Self::Instant, Self::Studio];
+
+    /// The tab's `id`, which for the two mode tabs is the mode's own
+    /// serialized name -- `emptyMessage()` interpolates it directly.
+    fn id(self) -> &'static str {
+        match self.mode() {
+            Some(mode) => mode.slug(),
+            None => "all",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "Show all",
+            Self::Instant => "Instant",
+            Self::Studio => "Studio",
+        }
+    }
+
+    /// `Show all` has no glyph; the other two carry the mode's own.
+    fn icon(self) -> Option<&'static str> {
+        self.mode().map(RecordingMode::icon)
+    }
+
+    /// What `data.filter(r => r.meta.mode === activeTab())` compares against;
+    /// `None` for the tab that filters nothing.
+    fn mode(self) -> Option<RecordingMode> {
+        match self {
+            Self::All => None,
+            Self::Instant => Some(RecordingMode::Instant),
+            Self::Studio => Some(RecordingMode::Studio),
+        }
+    }
+}
+
+/// One row: the scanned recording, plus its thumbnail once the background
+/// decode lands -- the Recents shape, for the same reason (the bundle's
+/// `display.jpg` is a native-resolution JPEG and must not be decoded on the UI
+/// thread).
+struct RecordingRow {
+    item: RecordingItem,
+    thumbnail: Option<Arc<RenderImage>>,
+}
+
+/// Everything the page owns. The Solid route keeps this in a `createQuery` plus
+/// three signals; the lifetimes are the same, they just live on the window here.
+struct Recordings {
+    /// The scan. `None` until the first one lands -- which the page draws the
+    /// same as an empty library, because `recordings.data && length > 0` is
+    /// false for both and the route has no loading branch.
+    items: Option<Vec<RecordingRow>>,
+    tab: RecordingsTab,
+    /// The filter field. `search()` is mirrored here so the filter math reads a
+    /// plain `String`.
+    search_input: Entity<ui::TextInputState>,
+    search: String,
+    /// `visibleCount`, reset to `PAGE_SIZE` by a tab or search change.
+    visible_count: usize,
+    /// The scan + thumbnail decode task. Dropping it cancels, so a refresh that
+    /// arrives mid-scan replaces the old one rather than racing it.
+    scan: Option<gpui::Task<()>>,
+    /// The 2s poll, armed only while something in the list is still being
+    /// written (`refetchInterval`).
+    tick: Option<gpui::Task<()>>,
+}
+
+impl Recordings {
+    fn new(search_input: Entity<ui::TextInputState>) -> Self {
+        Self {
+            items: None,
+            tab: RecordingsTab::All,
+            search_input,
+            search: String::new(),
+            visible_count: RECORDINGS_PAGE_SIZE,
+            scan: None,
+            tick: None,
+        }
+    }
+
+    /// `trimmedSearch()`.
+    fn trimmed_search(&self) -> &str {
+        self.search.trim()
+    }
+
+    /// `filteredRecordings()`: the tab, then the case-insensitive substring.
+    fn filtered(&self) -> Vec<&RecordingRow> {
+        let query = self.trimmed_search().to_lowercase();
+        self.items
+            .iter()
+            .flatten()
+            .filter(|row| matches_recording_filters(&row.item, self.tab, &query))
+            .collect()
+    }
+}
+
+/// One row against the tab and the already-lowercased, already-trimmed query.
+fn matches_recording_filters(item: &RecordingItem, tab: RecordingsTab, query: &str) -> bool {
+    if let Some(mode) = tab.mode()
+        && item.mode != mode
+    {
+        return false;
+    }
+    query.is_empty() || item.pretty_name.to_lowercase().contains(query)
+}
+
+/// `visibleRecordings()`: an active search shows every match, unpaginated.
+fn visible_recordings_len(total: usize, has_search: bool, visible_count: usize) -> usize {
+    if has_search {
+        total
+    } else {
+        total.min(visible_count)
+    }
+}
+
+/// `hasMoreRecordings()`.
+fn has_more_recordings(total: usize, has_search: bool, visible_count: usize) -> bool {
+    !has_search && total > visible_count
+}
+
+/// `setVisibleCount(count => Math.min(count + PAGE_SIZE, filtered.length))`.
+fn load_more_count(visible_count: usize, total: usize) -> usize {
+    (visible_count + RECORDINGS_PAGE_SIZE).min(total)
+}
+
+/// `emptyMessage()`.
+fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> String {
+    let tab_label = match tab {
+        RecordingsTab::All => "recordings".to_string(),
+        tab => format!("{} recordings", tab.id()),
+    };
+    let prefix = if trimmed_search.is_empty() {
+        "No"
+    } else {
+        "No matching"
+    };
+    format!("{prefix} {tab_label}")
 }
 
 pub struct SettingsWindow {
@@ -305,7 +466,9 @@ pub struct SettingsWindow {
     /// Save/Update are the commit, not Return.
     project_name_input: Entity<ui::TextInputState>,
     server_url_input: Entity<ui::TextInputState>,
-    _field_events: [gpui::Subscription; 2],
+    _field_events: [gpui::Subscription; 3],
+    /// The Recordings page.
+    recordings: Recordings,
     /// `Collapsible` under the project-name input, with the content's measured
     /// height so the reveal animates a real layout property.
     placeholders: ui::CollapsibleState,
@@ -356,12 +519,21 @@ impl SettingsWindow {
             input.set_text(settings.server_url.clone(), cx);
             input
         });
+        let recordings_search = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            // `placeholder="Search"`.
+            input.set_placeholder("Search");
+            input
+        });
         let field_events = [
             cx.subscribe(&project_name_input, |this, input, event, cx| {
                 this.on_field_event(Field::ProjectName, input, event, cx)
             }),
             cx.subscribe(&server_url_input, |this, input, event, cx| {
                 this.on_field_event(Field::ServerUrl, input, event, cx)
+            }),
+            cx.subscribe(&recordings_search, |this, input, event, cx| {
+                this.on_field_event(Field::RecordingsSearch, input, event, cx)
             }),
         ];
 
@@ -378,6 +550,7 @@ impl SettingsWindow {
             project_name_input,
             server_url_input,
             _field_events: field_events,
+            recordings: Recordings::new(recordings_search),
             placeholders: ui::CollapsibleState::new(false),
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
@@ -413,14 +586,265 @@ impl SettingsWindow {
 
     /// Re-target an already-open window, the way `showWindow({ Settings: {
     /// page } })` navigates a live one.
-    pub fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
+    pub fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
         // background (the Tauri app writing, or a recording updating a
         // window position).
         self.settings = GeneralSettings::load();
+        self.page_shown(window, cx);
         cx.notify();
+    }
+
+    /// Whatever the newly shown page has to fetch.
+    ///
+    /// The Recordings page's `createQuery` runs on mount and again on every
+    /// remount, which is what navigating to it is. Leaving the page drops the
+    /// scan and the poll -- `@tanstack/solid-query` stops refetching for an
+    /// unmounted observer, and a poll running behind a page nobody is looking
+    /// at is filesystem work for nothing.
+    ///
+    /// Called from the window's own open path rather than from `new` for the
+    /// [`Self::start_enumeration`] reason: a task spawned inside
+    /// `open_window`'s builder closure updates the model without ever
+    /// scheduling a frame.
+    pub fn page_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page == Page::Recordings {
+            self.refresh_recordings(window, cx);
+            return;
+        }
+        // Safe to drop here and nowhere else: both tasks are asleep whenever a
+        // page change can be observed (a click, or `showWindow`), never
+        // executing. Dropping a task from inside its own body would cancel a
+        // running future.
+        self.recordings.scan = None;
+        self.recordings.tick = None;
+    }
+
+    /// The `recordings` query: scan the library on the background executor,
+    /// then decode each thumbnail there too.
+    ///
+    /// Same two-stage shape as the main window's Recents (`refresh_recents`):
+    /// the list lands first so the rows can paint with their grey placeholder,
+    /// and each thumbnail replaces its own row's as it arrives. A library with
+    /// several hundred bundles is several hundred `read_dir` + JSON parses and
+    /// as many native-resolution JPEG decodes; none of it may happen on the UI
+    /// thread.
+    pub fn refresh_recordings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page != Page::Recordings {
+            return;
+        }
+
+        self.recordings.scan = Some(cx.spawn_in(window, async move |this, cx| {
+            let items = cx
+                .background_executor()
+                .spawn(async { library::list_recordings() })
+                .await;
+            tracing::info!(count = items.len(), "scanned the recordings library");
+
+            let Ok(thumbnails) =
+                this.update_in(cx, |this, window, cx| this.set_recordings(items, window, cx))
+            else {
+                return;
+            };
+
+            for (index, path) in thumbnails {
+                let image = cx
+                    .background_executor()
+                    .spawn({
+                        let path = path.clone();
+                        async move { library::decode_thumbnail(&path) }
+                    })
+                    .await;
+                let Some(image) = image else { continue };
+
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        let Some(row) = this
+                            .recordings
+                            .items
+                            .as_mut()
+                            .and_then(|rows| rows.get_mut(index))
+                        else {
+                            return;
+                        };
+                        // A refresh may have landed while this decode was in
+                        // flight, and the row at this index may now be a
+                        // different recording.
+                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                            return;
+                        }
+                        if let Some(old) = row.thumbnail.replace(image) {
+                            let _ = window.drop_image(old);
+                        }
+                        cx.notify();
+                        // An unfocused window only repaints when asked.
+                        window.refresh();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+
+            this.update_in(cx, |this, window, cx| this.arm_recordings_poll(window, cx))
+                .ok();
+        }));
+    }
+
+    /// Install a scan result, and hand back the thumbnails that still have to
+    /// be decoded.
+    ///
+    /// `reconcile: "path"` on the query is doing real work here: the 2s poll
+    /// re-runs the whole scan, and a row that is still in the library must keep
+    /// the image it already has. Without that every tick blanked all five
+    /// thumbnails and re-decoded them one by one, which is visible as a flicker
+    /// (found on the first fixture run). A row that has gone away releases its
+    /// image from the sprite atlas, the same explicit drop `set_recents` does.
+    ///
+    /// A bundle's `display.jpg` is written once, when the recording finishes,
+    /// so keying the cache on the bundle path cannot serve a stale image: the
+    /// row that gains a thumbnail mid-poll has none cached and decodes.
+    fn set_recordings(
+        &mut self,
+        items: Vec<RecordingItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(usize, PathBuf)> {
+        let mut cached: std::collections::HashMap<PathBuf, Arc<RenderImage>> = self
+            .recordings
+            .items
+            .take()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.thumbnail.map(|image| (row.item.path, image)))
+            .collect();
+
+        let mut pending = Vec::new();
+        let rows: Vec<RecordingRow> = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let thumbnail = cached.remove(&item.path);
+                if thumbnail.is_none()
+                    && let Some(path) = item.thumbnail.clone()
+                {
+                    pending.push((index, path));
+                }
+                RecordingRow { item, thumbnail }
+            })
+            .collect();
+
+        for (_, image) in cached {
+            let _ = window.drop_image(image);
+        }
+
+        self.recordings.items = Some(rows);
+        cx.notify();
+        // The settings window is not necessarily the active one while a
+        // recording is being written into the library, and an inactive gpui
+        // window does not repaint from a background-driven model update.
+        window.refresh();
+        pending
+    }
+
+    /// `refetchInterval: data.some(hasActiveRecording) ? 2000 : false` -- armed
+    /// at the end of a scan, so a recording that finishes stops the poll and a
+    /// recording that starts restarts it.
+    fn arm_recordings_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self
+            .recordings
+            .items
+            .iter()
+            .flatten()
+            .any(|row| row.item.is_active());
+        if !active || self.page != Page::Recordings {
+            self.recordings.tick = None;
+            return;
+        }
+        self.recordings.tick = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(RECORDINGS_POLL).await;
+            this.update_in(cx, |this, window, cx| this.refresh_recordings(window, cx))
+                .ok();
+        }));
+    }
+
+    /// The row's own delete: `ask(..)`, then the guarded recursive delete, then
+    /// a refetch.
+    ///
+    /// The alert runs in a spawned task rather than in the click handler: it
+    /// spins AppKit's modal run loop, which re-enters gpui's window callbacks
+    /// for as long as it is up, and doing that with the App RefCell held is the
+    /// `place_overlay_panel` failure. gpui's foreground executor is the main
+    /// thread, which is where `NSAlert` has to run, so the task is both the
+    /// right thread and the right borrow state.
+    fn delete_recording(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let confirmed = crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this recording?",
+                "Yes",
+                "No",
+                false,
+            );
+            if !confirmed {
+                return;
+            }
+
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { library::delete_recording_directory(&path) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                return;
+            }
+            tracing::info!(path = %path.display(), "deleted a recording");
+
+            this.update_in(cx, |this, window, cx| this.refresh_recordings(window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The Edit button on a `Failed` studio recording, which asks first.
+    fn open_editor_confirmed(
+        &mut self,
+        path: PathBuf,
+        confirm: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !confirm {
+            // Deferred: opening a window paints it synchronously, which would
+            // double-lease the app from inside this update.
+            cx.defer(move |cx| crate::app_windows::open_editor(path, cx));
+            return;
+        }
+        cx.spawn_in(window, async move |_this, cx| {
+            let confirmed = crate::platform::confirm_dialog(
+                "Recording is potentially corrupted",
+                "The recording failed so this file may have issues in the editor! If your \
+                 having issues recovering the file please reach out to support!",
+                "Ok",
+                "Cancel",
+                true,
+            );
+            if !confirmed {
+                return;
+            }
+            // Deferred inside the update for the same reason the direct arm
+            // defers: `open_window` paints synchronously.
+            cx.update(|_window, cx| {
+                cx.defer(move |cx| crate::app_windows::open_editor(path, cx))
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
@@ -905,10 +1329,10 @@ impl SettingsWindow {
                             }),
                     )
                     .child(page.label())
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.page = page;
-                        this.menu = None;
-                        cx.notify();
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // Navigating *is* a remount in the Solid router, so the
+                        // new page's query runs -- `set_page` carries that.
+                        this.set_page(page, window, cx);
                     }))
             }))
     }
@@ -1014,6 +1438,7 @@ impl SettingsWindow {
                     .gap(px(28.))
                     .children(match self.page {
                         Page::General => self.render_general(window, cx),
+                        Page::Recordings => self.render_recordings(cx),
                         page => self.render_placeholder(page),
                     }),
             )
@@ -1057,6 +1482,531 @@ impl SettingsWindow {
             )
             .into_any_element(),
         ]
+    }
+
+    // -- The Recordings page -----------------------------------------------
+
+    /// `settings/recordings.tsx`.
+    ///
+    /// The header is a `<Section>` with an Import button; below it a filter bar
+    /// (three tab pills and the search field) and the bordered list, which is
+    /// replaced wholesale by "No recordings found" when the library is empty.
+    fn render_recordings(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        // `variant="gray" size="sm" class="h-[36px] px-3 gap-1.5"`. Disabled:
+        // `importVideoFromPicker` remuxes the picked file through
+        // `commands.importVideoToProject`, which is Tauri-side work this app
+        // does not have (see the README's deviation).
+        let import = self
+            .button(
+                "recordings-import",
+                ui::ButtonVariant::Gray,
+                Some("icons/import.svg"),
+                "Import",
+                true,
+                cx,
+                |_, _, _| {},
+            )
+            .height(px(36.))
+            .into_any_element();
+
+        // `when={recordings.data && recordings.data.length > 0}`: an empty
+        // library and a scan still in flight take the same branch, because the
+        // route has no loading state of its own.
+        let empty_library = self
+            .recordings
+            .items
+            .as_ref()
+            .is_none_or(|items| items.is_empty());
+
+        let children = if empty_library {
+            vec![self.recordings_message("No recordings found").into_any_element()]
+        } else {
+            vec![
+                self.render_recordings_filters(cx).into_any_element(),
+                self.render_recordings_list(cx).into_any_element(),
+            ]
+        };
+
+        vec![
+            self.section(
+                "Recordings",
+                Some("Manage your recordings and perform actions."),
+                Some(import),
+                children,
+            )
+            .into_any_element(),
+        ]
+    }
+
+    /// Both empty states: `text-center text-(--text-tertiary) absolute flex
+    /// items-center justify-center w-full h-full`. Absolute over the page in
+    /// the TSX; here it is a flow child that fills the space the list would
+    /// have taken, which is what that absolute box resolves to.
+    fn recordings_message(&self, message: impl Into<SharedString>) -> gpui::Div {
+        div()
+            .flex()
+            .flex_1()
+            .min_h(px(200.))
+            .w_full()
+            .items_center()
+            .justify_center()
+            .text_color(self.theme.settings_muted())
+            .child(message.into())
+    }
+
+    /// The filter bar: `flex flex-col gap-3 pb-4 w-full border-b border-gray-2`.
+    fn render_recordings_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let active = self.recordings.tab;
+
+        let tabs = div()
+            // `flex flex-wrap gap-3 items-center`
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(12.))
+            .children(RecordingsTab::ALL.iter().copied().map(|tab| {
+                let selected = tab == active;
+                div()
+                    .id(SharedString::from(tab.id()))
+                    // `flex gap-1.5 items-center p-2 px-3 border rounded-full`
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .py(px(8.))
+                    .px(px(12.))
+                    .rounded_full()
+                    .border_1()
+                    // `border-gray-5` on both states, remapped to the settings
+                    // border by the material.
+                    .border_color(theme.settings_border())
+                    .map(|this| {
+                        if selected {
+                            // `bg-gray-5 cursor-default`
+                            this.bg(theme.settings_fill()).cursor_default()
+                        } else {
+                            // `bg-transparent hover:bg-gray-3`
+                            this.cursor_pointer()
+                                .hover(|style| style.bg(theme.settings_fill()))
+                        }
+                    })
+                    // `size-3`, and `invert dark:invert-0` -- a dark glyph on
+                    // the light theme and a light one on the dark, which is
+                    // what the page's own text colour already is.
+                    .children(tab.icon().map(|icon| {
+                        svg()
+                            .path(icon)
+                            .size(px(12.))
+                            .flex_shrink_0()
+                            .text_color(theme.settings_text())
+                    }))
+                    // `text-xs text-gray-12`
+                    .child(div().text_size(px(12.)).child(tab.label()))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.recordings.tab = tab;
+                        // `createEffect(() => { activeTab(); ...
+                        //  setVisibleCount(PAGE_SIZE) })`
+                        this.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                        cx.notify();
+                    }))
+            }));
+
+        // `relative w-full max-w-[260px] h-[36px] flex items-center` with the
+        // magnifier absolutely placed at `left-2` and the input padded past it.
+        // `ui::TextInput::search` draws the same glyph as a flow child at the
+        // same offset, so the overlay is not reproduced -- there is nothing for
+        // it to overlay.
+        let search = div().flex().flex_row().items_center().w(px(260.)).child(
+            ui::TextInput::search(&theme, "recordings-search", &self.recordings.search_input)
+                .height(px(36.))
+                // `<Input>` is `rounded-lg bg-gray-2`, and the settings
+                // material paints `.bg-gray-2` as the card surface.
+                .radius(px(8.))
+                .bg(theme.settings_card_bg())
+                .border(theme.settings_border())
+                .text_color(theme.settings_text())
+                .placeholder_color(theme.settings_muted()),
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(12.))
+            .pb(px(16.))
+            .border_b_1()
+            .border_color(theme.settings_border())
+            .child(tabs)
+            .child(search)
+    }
+
+    /// The list: `flex relative flex-col flex-1 rounded-xl border bg-gray-2
+    /// border-gray-3`, with the "Load more" footer under it.
+    fn render_recordings_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let rows = self.recordings.filtered();
+        let total = rows.len();
+        let has_search = !self.recordings.trimmed_search().is_empty();
+        let visible = visible_recordings_len(total, has_search, self.recordings.visible_count);
+        let more = has_more_recordings(total, has_search, self.recordings.visible_count);
+
+        // Built up front rather than in a `.children(map(..))`: the closure
+        // would have to hold `cx` across every row, which it cannot.
+        let mut items = Vec::with_capacity(visible);
+        for (index, row) in rows.iter().take(visible).enumerate() {
+            // `not-last:border-b` counts the *rendered* rows, so the border
+            // stops at the last visible one rather than the last matching one.
+            items.push(
+                self.render_recording_row(index, row, index + 1 == visible, cx)
+                    .into_any_element(),
+            );
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .relative()
+            // `rounded-xl`, which the settings material takes to 10px.
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme.settings_border())
+            .bg(theme.settings_card_bg())
+            .overflow_hidden()
+            .when(total == 0, |this| {
+                this.child(self.recordings_message(recordings_empty_message(
+                    self.recordings.tab,
+                    self.recordings.trimmed_search(),
+                )))
+            })
+            .child(div().flex().flex_col().w_full().children(items))
+            .when(more, |this| {
+                this.child(
+                    // `flex justify-center p-3 border-t border-gray-3`
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .p(px(12.))
+                        .border_t_1()
+                        .border_color(theme.settings_border())
+                        .child(self.button(
+                            "recordings-load-more",
+                            ui::ButtonVariant::Gray,
+                            None,
+                            "Load more",
+                            false,
+                            cx,
+                            |this, _window, cx| {
+                                let total = this.recordings.filtered().len();
+                                this.recordings.visible_count =
+                                    load_more_count(this.recordings.visible_count, total);
+                                cx.notify();
+                            },
+                        )),
+                )
+            })
+    }
+
+    /// One `<RecordingItem>`: `flex flex-row justify-between p-3 items-center
+    /// w-full`, bordered from every row but the last.
+    fn render_recording_row(
+        &self,
+        index: usize,
+        row: &RecordingRow,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let item = &row.item;
+        // `studioCompleteCheck()`: the only rows whose body is a button.
+        let opens_editor = item.opens_editor();
+        let path = item.path.clone();
+
+        let thumbnail = match row.thumbnail.clone() {
+            // `object-cover rounded-sm size-12`
+            Some(image) => {
+                use gpui::StyledImage as _;
+                img(image)
+                    .size(px(48.))
+                    .flex_shrink_0()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .rounded(px(4.))
+                    .into_any_element()
+            }
+            // `<img onError>`'s fallback: `mr-4 rounded-sm bg-gray-10 size-11`.
+            // `bg-gray-10` is not one of the steps the settings material
+            // remaps, so it keeps its Radix value.
+            None => div()
+                .size(px(44.))
+                .mr(px(16.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                .bg(theme.gray_10)
+                .into_any_element(),
+        };
+
+        let left = div()
+            // `flex gap-5 items-center`
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(20.))
+            .flex_1()
+            .min_w_0()
+            .child(thumbnail)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .min_w_0()
+                    .child(
+                        // A bare `<span>`: no text class, so the 16px document
+                        // default. Truncated rather than allowed to push the
+                        // buttons off a window that cannot be widened past its
+                        // own content.
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_size(px(16.))
+                            .child(item.pretty_name.clone()),
+                    )
+                    .child(self.render_recording_badges(item)),
+            );
+
+        div()
+            .id(("recording-row", index))
+            .flex()
+            .flex_row()
+            .justify_between()
+            .items_center()
+            .w_full()
+            .p(px(12.))
+            .when(!last, |this| {
+                this.border_b_1().border_color(theme.settings_border())
+            })
+            .map(|this| {
+                if opens_editor {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(theme.settings_fill()))
+                } else {
+                    this.cursor_default()
+                }
+            })
+            .child(left)
+            .child(self.render_recording_actions(index, item, cx))
+            .when(opens_editor, |this| {
+                this.on_click(cx.listener(move |_this, _, _window, cx| {
+                    let path = path.clone();
+                    tracing::info!(path = %path.display(), "opening a recording in the editor");
+                    // Deferred: opening a window paints it synchronously, and
+                    // doing that inside a click handler would double-lease the
+                    // app.
+                    cx.defer(move |cx| crate::app_windows::open_editor(path, cx));
+                }))
+            })
+    }
+
+    /// The badge row: `flex space-x-1`, each pill `px-2 py-0.5 gap-1.5
+    /// font-medium text-[11px] text-gray-12 rounded-full w-fit`.
+    fn render_recording_badges(&self, item: &RecordingItem) -> impl IntoElement {
+        let theme = self.theme;
+
+        let pill = |bg: Hsla| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .flex_none()
+                .gap(px(6.))
+                .px(px(8.))
+                .py(px(2.))
+                .rounded_full()
+                .bg(bg)
+                .text_size(px(11.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.settings_text())
+        };
+        // `size-2.5` on every badge glyph.
+        let glyph = |icon: &'static str| {
+            svg()
+                .path(icon)
+                .size(px(10.))
+                .flex_shrink_0()
+                .text_color(theme.settings_text())
+        };
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .child(
+                // `bg-blue-100` for instant, `bg-gray-4` for studio.
+                pill(match item.mode {
+                    RecordingMode::Instant => Hsla::from(theme.blue_100),
+                    RecordingMode::Studio => theme.settings_fill(),
+                })
+                .child(glyph(item.mode.icon()))
+                .child(item.mode.label()),
+            )
+            .when(item.clip_count > 1, |this| {
+                this.child(pill(theme.settings_fill()).child(format!("{} clips", item.clip_count)))
+            })
+            .when(item.status.is_in_progress(), |this| {
+                this.child(
+                    pill(Hsla::from(theme.blue_500))
+                        .child(glyph("icons/record-fill.svg"))
+                        .child("Recording in progress"),
+                )
+            })
+            .when_some(item.status.error().map(str::to_string), |this, error| {
+                this.child(
+                    // The badge is wrapped in a `<CapTooltip>` whose content is
+                    // the error string.
+                    pill(Hsla::from(theme.red_9))
+                        .id("recording-failed")
+                        .child(glyph("icons/warning-bold.svg"))
+                        .child("Recording failed")
+                        .tooltip(move |_window, cx| {
+                            ui::Tooltip::new(&theme, error.clone())
+                                .style(ui::TooltipStyle::Light)
+                                .view(cx)
+                        }),
+                )
+            })
+    }
+
+    /// The row's right-hand button group: `flex gap-2 items-center`.
+    ///
+    /// Studio rows get Open link (when shared) and Edit; instant rows get
+    /// Reupload and Open link; both get Open recording bundle and Delete.
+    fn render_recording_actions(
+        &self,
+        index: usize,
+        item: &RecordingItem,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mode = item.mode;
+        let path = item.path.clone();
+        let sharing = item.sharing.clone();
+        let failed = item.status.error().is_some();
+        let in_progress = item.status.is_in_progress();
+
+        let mut actions = div().flex().flex_row().items_center().gap(px(8.));
+
+        if mode == RecordingMode::Studio {
+            if let Some(link) = sharing.clone() {
+                actions = actions.child(self.row_button(
+                    ("recording-link", index),
+                    "icons/link.svg",
+                    "Open link",
+                    false,
+                    cx,
+                    move |_this, _window, cx| cx.open_url(&link),
+                ));
+            }
+            let editor_path = path.clone();
+            actions = actions.child(self.row_button(
+                ("recording-edit", index),
+                "icons/edit.svg",
+                "Edit",
+                // `disabled={status === "InProgress"}`
+                in_progress,
+                cx,
+                move |this, window, cx| {
+                    this.open_editor_confirmed(editor_path.clone(), failed, window, cx)
+                },
+            ));
+        }
+
+        if mode == RecordingMode::Instant {
+            // `uploadExportedVideo(path, "Reupload", ..)`: there is no upload
+            // infrastructure here, so the button is drawn disabled (README).
+            actions = actions.child(self.row_button(
+                ("recording-reupload", index),
+                "icons/rotate-ccw.svg",
+                "Reupload",
+                true,
+                cx,
+                |_, _, _| {},
+            ));
+            if let Some(link) = sharing {
+                actions = actions.child(self.row_button(
+                    ("recording-instant-link", index),
+                    "icons/link.svg",
+                    "Open link",
+                    false,
+                    cx,
+                    move |_this, _window, cx| cx.open_url(&link),
+                ));
+            }
+        }
+
+        let folder_path = path.clone();
+        actions = actions.child(self.row_button(
+            ("recording-folder", index),
+            "icons/folder.svg",
+            "Open recording bundle",
+            false,
+            cx,
+            move |_this, _window, _cx| library::open_recording_folder(&folder_path, mode),
+        ));
+        actions.child(self.row_button(
+            ("recording-delete", index),
+            "icons/trash.svg",
+            "Delete",
+            false,
+            cx,
+            move |this, window, cx| this.delete_recording(path.clone(), window, cx),
+        ))
+    }
+
+    /// `TooltipIconButton`: `p-2.5 opacity-70 hover:opacity-100 rounded-full
+    /// hover:bg-gray-3 dark:hover:bg-gray-5 disabled:pointer-events-none
+    /// disabled:opacity-45`, around a `size-4` glyph -- 36px of hit area.
+    ///
+    /// `onClick` calls `e.stopPropagation()` before the handler, because the
+    /// row around it is itself a button. gpui's equivalent is to stop the
+    /// *mouse-down* propagating: a click listener only fires for an element
+    /// that saw the press, so blocking the press at this element leaves the
+    /// row's click unarmed while this button's own still fires (its
+    /// click-tracking listener is registered after the custom one and therefore
+    /// runs first in the bubble phase).
+    fn row_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        icon: &'static str,
+        tooltip: &'static str,
+        disabled: bool,
+        cx: &mut Context<Self>,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+
+        div()
+            .id(id.into())
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(36.))
+            .flex_shrink_0()
+            .rounded_full()
+            .opacity(if disabled { 0.45 } else { 0.7 })
+            .child(svg().path(icon).size(px(16.)).text_color(theme.settings_text()))
+            .when(!disabled, |this| {
+                this.cursor_pointer()
+                    .hover(|style| style.opacity(1.).bg(theme.settings_fill()))
+                    .tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, tooltip)
+                            .style(ui::TooltipStyle::Light)
+                            .view(cx)
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
+            })
     }
 
     // -- The General page --------------------------------------------------
@@ -2374,7 +3324,7 @@ impl SettingsWindow {
         button.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
 
-    /// The two inputs -- [`ui::TextInput::settings`], `<Input>`'s
+    /// The General page's two inputs -- [`ui::TextInput::settings`], `<Input>`'s
     /// `h-8 rounded-lg bg-gray-2 px-2 text-xs` re-filled from the settings
     /// material.
     ///
@@ -2387,6 +3337,10 @@ impl SettingsWindow {
         let (id, input) = match field {
             Field::ProjectName => ("project-name-input", &self.project_name_input),
             Field::ServerUrl => ("server-url-input", &self.server_url_input),
+            // Drawn by the Recordings page itself, as a search field.
+            Field::RecordingsSearch => {
+                ("recordings-search", &self.recordings.search_input)
+            }
         };
         let _ = cx;
         div().child(ui::TextInput::settings(&self.theme, id, input))
@@ -2407,8 +3361,25 @@ impl SettingsWindow {
                 match field {
                     Field::ProjectName => self.project_name = value,
                     Field::ServerUrl => self.server_url = value,
+                    Field::RecordingsSearch => {
+                        self.recordings.search = value;
+                        // `createEffect(() => { activeTab(); trimmedSearch();
+                        //  setVisibleCount(PAGE_SIZE) })`.
+                        self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                    }
                 }
                 cx.notify();
+            }
+            // `onKeyDown`: Escape clears the field, and *only* when there is
+            // something in it -- `if (event.key === "Escape" && search())`.
+            // With the field empty the key is not even preventDefault'd.
+            ui::TextInputEvent::Cancelled if field == Field::RecordingsSearch => {
+                if !self.recordings.search.is_empty() {
+                    self.recordings.search.clear();
+                    self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                    input.update(cx, |input, cx| input.set_text("", cx));
+                    cx.notify();
+                }
             }
             ui::TextInputEvent::Cancelled => {
                 // Revert to what is stored, the way leaving the field without
@@ -2420,10 +3391,14 @@ impl SettingsWindow {
                         .clone()
                         .unwrap_or_else(|| DEFAULT_PROJECT_NAME_TEMPLATE.to_string()),
                     Field::ServerUrl => self.settings.server_url.clone(),
+                    // Taken by the guarded arm above; nothing is "stored" for
+                    // the search field.
+                    Field::RecordingsSearch => return,
                 };
                 match field {
                     Field::ProjectName => self.project_name = stored.clone(),
                     Field::ServerUrl => self.server_url = stored.clone(),
+                    Field::RecordingsSearch => return,
                 }
                 input.update(cx, |input, cx| input.set_text(stored, cx));
                 cx.notify();
@@ -2618,6 +3593,122 @@ mod tests {
             },
             &default
         ));
+    }
+
+    // -- The Recordings page ------------------------------------------------
+
+    fn recording(name: &str, mode: RecordingMode) -> RecordingItem {
+        RecordingItem {
+            path: std::path::PathBuf::from(format!("/tmp/{name}.cap")),
+            mode,
+            status: crate::library::RecordingStatus::Complete,
+            clip_count: 1,
+            pretty_name: name.to_string(),
+            sharing: None,
+            sort_time_millis: 0.,
+            thumbnail: None,
+        }
+    }
+
+    /// `filteredRecordings()`: the tab first, then a case-insensitive substring
+    /// of the *trimmed* query against `prettyName`.
+    #[test]
+    fn tabs_and_search_filter_the_list() {
+        let items = [
+            recording("Team standup", RecordingMode::Studio),
+            recording("Bug repro", RecordingMode::Instant),
+            recording("STANDUP notes", RecordingMode::Instant),
+        ];
+        let matching = |tab, query: &str| {
+            items
+                .iter()
+                .filter(|item| matches_recording_filters(item, tab, &query.trim().to_lowercase()))
+                .map(|item| item.pretty_name.as_str())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            matching(RecordingsTab::All, ""),
+            ["Team standup", "Bug repro", "STANDUP notes"]
+        );
+        assert_eq!(matching(RecordingsTab::Studio, ""), ["Team standup"]);
+        assert_eq!(
+            matching(RecordingsTab::Instant, ""),
+            ["Bug repro", "STANDUP notes"]
+        );
+        // Case-insensitive, and whitespace-only is no filter at all.
+        assert_eq!(
+            matching(RecordingsTab::All, "standup"),
+            ["Team standup", "STANDUP notes"]
+        );
+        assert_eq!(matching(RecordingsTab::All, "  "), [
+            "Team standup",
+            "Bug repro",
+            "STANDUP notes"
+        ]);
+        // The two filters compose.
+        assert_eq!(matching(RecordingsTab::Instant, " STAND "), ["STANDUP notes"]);
+        assert!(matching(RecordingsTab::Studio, "repro").is_empty());
+    }
+
+    /// `visibleRecordings()` / `hasMoreRecordings()` / the Load more step.
+    #[test]
+    fn pagination_pages_by_twenty_and_a_search_shows_everything() {
+        assert_eq!(RECORDINGS_PAGE_SIZE, 20);
+
+        // No search: capped at the visible count, with more to load.
+        assert_eq!(visible_recordings_len(53, false, 20), 20);
+        assert!(has_more_recordings(53, false, 20));
+        assert_eq!(load_more_count(20, 53), 40);
+        assert_eq!(visible_recordings_len(53, false, 40), 40);
+        // The last page is short, and the button goes away with it.
+        assert_eq!(load_more_count(40, 53), 53);
+        assert_eq!(visible_recordings_len(53, false, 53), 53);
+        assert!(!has_more_recordings(53, false, 53));
+        // Fewer matches than a page.
+        assert_eq!(visible_recordings_len(7, false, 20), 7);
+        assert!(!has_more_recordings(7, false, 20));
+
+        // An active search is never paginated.
+        assert_eq!(visible_recordings_len(53, true, 20), 53);
+        assert!(!has_more_recordings(53, true, 20));
+    }
+
+    /// `emptyMessage()`.
+    #[test]
+    fn the_empty_message_names_the_tab_and_the_search() {
+        assert_eq!(
+            recordings_empty_message(RecordingsTab::All, ""),
+            "No recordings"
+        );
+        assert_eq!(
+            recordings_empty_message(RecordingsTab::Studio, ""),
+            "No studio recordings"
+        );
+        assert_eq!(
+            recordings_empty_message(RecordingsTab::Instant, ""),
+            "No instant recordings"
+        );
+        assert_eq!(
+            recordings_empty_message(RecordingsTab::Instant, "demo"),
+            "No matching instant recordings"
+        );
+        assert_eq!(
+            recordings_empty_message(RecordingsTab::All, "demo"),
+            "No matching recordings"
+        );
+    }
+
+    /// The tab strip, and the ids `emptyMessage()` interpolates.
+    #[test]
+    fn the_three_tabs_are_all_instant_studio() {
+        let ids: Vec<&str> = RecordingsTab::ALL.iter().map(|tab| tab.id()).collect();
+        assert_eq!(ids, ["all", "instant", "studio"]);
+        let labels: Vec<&str> = RecordingsTab::ALL.iter().map(|tab| tab.label()).collect();
+        assert_eq!(labels, ["Show all", "Instant", "Studio"]);
+        assert_eq!(RecordingsTab::All.icon(), None, "Show all has no glyph");
+        assert_eq!(RecordingsTab::Studio.icon(), Some("icons/film-cut.svg"));
+        assert_eq!(RecordingsTab::Instant.icon(), Some("icons/instant.svg"));
     }
 
     #[test]
