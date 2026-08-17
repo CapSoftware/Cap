@@ -192,6 +192,114 @@ insertion re-enters gpui's window callbacks, so it cannot run inside an update
 — and the result lands in a `platform::WindowMaterial` global that `render`
 polls through `sync_appearance`.
 
+## The component library
+
+`src/ui/` is one component set for the whole app. Before it, every window was
+hand-rolling its own buttons, toggles, selects, sliders, menus and cards — the
+settings window had a `toggle()`, the teleprompter had a `tool_button()` and a
+`render_range()`, the main window had a search field, the editor had a tab rail
+— and the editor's own build-out would have added a seventh copy of each. The
+Tauri app does not work that way either: `packages/ui-solid/src/Button.tsx`,
+`components/Toggle.tsx` and `routes/editor/ui.tsx` are imported by the editor,
+the settings pages, the teleprompter, the main window and the screenshot editor
+alike.
+
+| module | what it is | what it consolidated |
+|---|---|---|
+| `ui/button.rs` | `Button` (8 variants × 4 sizes) and `IconButton` | the settings window's `button()`; the main window's header `icon_button`; the teleprompter's `ToolButton`; the editor's transport play button. `IconButton` is also the `TooltipIconButton` the Solid app copy-pastes into three route files |
+| `ui/toggle.rs` | `Toggle`, sizes `sm`/`md`/`lg` | the settings window's `toggle()` and the teleprompter popover's inline switch |
+| `ui/slider.rs` | `Slider` + the pure value maths | the settings zoom slider, both teleprompter range pills, the editor's (inert) timeline zoom slider |
+| `ui/segmented.rs` | `SegmentedControl`, the superset of the four Tauri idioms | the settings window's `segmented`/`segmented_raw`; `::pills` and `::icons` are the export page's and the text-align grid's, built ahead of their units |
+| `ui/menu.rs` | `MenuState` (the keyboard contract) + `Menu` | the settings window's `Menu.popup()` stand-in |
+| `ui/select.rs` | `Select` — the closed trigger a `Menu` opens | the settings `SelectSettingItem` button and the editor's preview-quality trigger |
+| `ui/text_field.rs` | `TextField` + `text_edit_for` | the main window's search field and the settings window's two inputs |
+| `ui/surface.rs` | `Card`, `Popover`, `SettingRow`, `Section` | the settings `card`/`rows`/`setting_row`/`Section`, the teleprompter's footer pill and settings popover, and the overlays' liquid-glass surface |
+| `ui/collapsible.rs` | `CollapsibleState` + `Collapsible`, with real height measurement | the settings window's "Available placeholders" reveal |
+| `ui/tab_rail.rs` | `TabRail` | the editor's six-tab config-sidebar rail |
+| `ui/progress.rs` | `CircularProgress`, determinate + indeterminate | replaces all three of the Solid app's rings ahead of the export unit |
+| `ui/kbd.rs` | `KbdChip` + `kbd_symbol` | the three divergent keycap looks, and the ⌘⌃⇧⌥-vs-`Ctrl`/`Shift`/`Alt` mapping each re-implements |
+| `ui/tooltip.rs` | `Tooltip` over gpui's own `.tooltip()` | `Tooltip.tsx` and `ComingSoonTooltip`, for `EditorButton`'s `kbd`/`tooltipText`/`comingSoon` arms |
+
+### How a component is themed
+
+`theme.css` re-skins controls per window through attribute selectors —
+`[data-macos-native-material="settings"] .cap-toggle { background:
+var(--macos-settings-control-fill) }` and a few dozen siblings. There is no
+general mechanism here to match it, because the remaps are not general: three
+surfaces exist in the shipping CSS and each re-points a specific, enumerable
+list of properties. So every component carries **named constructors, one per
+surface**, and the quoted rule lives in the constructor:
+
+| constructor | window | token set |
+|---|---|---|
+| `::body(theme, ..)` | main window | Radix, with `Theme::body_*`'s panel-material remaps |
+| `::settings(theme, ..)` | settings | `--macos-settings-*` (`Theme::settings_*`) |
+| `::glass(theme, ..)` | teleprompter | bare glass: `gray-12` at 5/7/8/10 % |
+| `::plain(theme, ..)` | editor, mode select | Radix, no material |
+
+A call site needing a colour no surface provides sets it explicitly — every
+builder exposes the individual colours — so consolidation never costs fidelity.
+Handlers are `impl Fn(&ClickEvent, &mut Window, &mut App)`, which is exactly
+what `cx.listener(..)` produces for any window type, so components are
+window-agnostic without a generic parameter; the components that dispatch by
+index (`SegmentedControl`, `Menu`, `TabRail`) take `&usize` as their event for
+the same reason.
+
+### Behaviour contracts
+
+What Kobalte contributed, reproduced by hand:
+
+- **Menu.** Click-away *and* Escape dismiss, Arrow Down / Arrow Up walk the
+  rows and wrap at both ends, Home / End jump, Enter (or Space) commits the
+  highlighted row, and the value in force carries a check mark. The keyboard
+  highlight is not *painted* until an arrow key is used: a menu opened by
+  pointer shows the check mark and follows the mouse, exactly as a real
+  `NSMenu` does — but Enter straight after opening still commits the current
+  value, because the highlight is seeded either way. `MenuState` is a plain
+  struct, so all of that is unit-tested without a window.
+- **Slider.** The track's rect comes back from a zero-sized `canvas` in
+  prepaint (every slider here lives in a resizable pane, so its width is
+  unknown at build time), and a full-bleed transparent `drag_layer` stands in
+  for DOM pointer capture so a drag that leaves the 48px pill keeps tracking.
+  `snap_to_step` reproduces *both* formulas it replaced — the settings
+  window's `(v * 10).round() / 10` and the teleprompter's `stepped` — across
+  their whole range, which is what
+  `slider_snapping_matches_the_formulas_it_replaced` asserts over 10 001
+  sample points per range. It has to work for it: `0.1` is not representable
+  in binary, so `(2.75 - 1.0) / 0.1f32` is `17.4999997` and the naive
+  quantisation snaps an exact half-step *down*. The quotient is pre-quantised
+  to six decimal places in `f64` first.
+- **Collapsible.** Kobalte sets `--kb-collapsible-content-height` from the
+  content's *measured* natural height and animates the `height` property
+  itself, so the surrounding page reflows with it. Here the content is
+  measured by a `canvas` inside its natural-size stack, the container's height
+  is animated over 200ms ease-out by a ticker task (gpui only renders on
+  invalidation), and an interrupted transition restarts from wherever the
+  panel currently is rather than snapping. The first expand of a
+  never-rendered panel is instant, because there is no measurement to animate
+  towards yet. The keyframe's `filter: blur(5px) → blur(0)` cross-fade is not
+  reproduced — same missing hook as the teleprompter's vignette.
+- **TextField.** `text_edit_for` classifies a keystroke into
+  Insert/Backspace/Escape/Ignored and the window keeps the string, because
+  Escape means "clear the filter, then close the panel" in the main window and
+  "revert to the stored value" in settings, and neither belongs in a
+  component. Command and control chords never insert; Backspace and Escape are
+  recognised whatever is held, because they are edits rather than characters.
+
+Two things the Solid components do that this rev cannot: the **sliding
+indicator** (`SwitchTab`, the tab rail and `FrameButton` all animate a
+transform to the selected trigger's measured rect — there is no transform in
+this gpui rev, so the selected item paints its own fill, which is what these
+windows already did), and the **forced-open tooltip** the Solid `Slider` uses
+to pin a value readout to the thumb mid-drag (`getAnchorRect`); gpui's tooltip
+is hover-driven and pointer-anchored only.
+
+`TabRail` is deliberately *not* shared with the settings sidebar. The usage
+matrix lists `KTabs` in the editor and the screenshot editor only; the settings
+sidebar is a vertical nav *list* (`.cap-settings-nav`, rendered with a `<For>`
+over `settingsItems`), not a tab strip. Merging them would mean inventing a
+component neither app has.
+
 ## Deviations from the Tauri app
 
 Things that are deliberately different, and why.
@@ -208,7 +316,7 @@ Things that are deliberately different, and why.
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
 | **The mode select window is harness-only** | `Mode.tsx`'s info button is `commands.showWindow("ModeSelect")` *unless* its host passes `onInfoClick` — and shipping `new-main` passes one, so the dot opens the in-body `ModeInfoPanel` in both apps. Nothing else in the shipping frontend calls `showWindow("ModeSelect")` either, so the standalone window is dead code there; here it is built for parity and reachable via `CAP_GPUI_AUTO_MODE_SELECT`. The device and target pickers are body panels in both apps. |
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
-| **Search is minimal** | gpui ships no text input. Ours tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. |
+| **Search is minimal** | gpui ships no text input. `ui::TextField` tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. The same field serves the settings window's two inputs. |
 | **Plan badge is always "Personal"** | Which of Pro/Commercial applies comes from the license query. There is no auth or license plumbing yet, and claiming a plan would be worse than showing none. |
 | **Only studio Recents cards open** | `openRecentMedia` routes a studio card to the Editor window (recovering first if needed), an instant card to its share link, and a screenshot to the Screenshot Editor. The studio arm is real now; the other two still reveal the `.cap` bundle in Finder — the action the Recordings settings page calls "Open recording bundle". The recovery step is not reproduced either, so an `InProgress`/`NeedsRemux` bundle reaches the editor's error state instead of being remuxed first. No hover affordance was invented: the real card has none either, it is click-only with no context menu. |
 | **No carousel mask, snap or hover lift** | `RecentCarousel`'s edge fade is a scroll-position-driven `mask-image` and the cards are `snap-x snap-proximity`; the card's `hover:-translate-y-0.5` and the thumbnail's `group-hover:scale-[1.025]` are transforms. This gpui rev has neither a mask hook (same gap as the teleprompter vignette) nor a transform. The scroller, the gap, the `pr-8` gutter, the border/shadow hover and the trailing skeletons are all real — the skeletons just do not pulse (`animate-pulse` has no keyframe hook either). |
@@ -499,12 +607,12 @@ Settings-specific deviations:
 |---|---|
 | **Eleven placeholder pages** | Shortcuts, CLI, Recordings, Screenshots, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; the bodies are not. |
 | **No auth, so the free-plan variant** | There is no auth store here (same gap as the main window's plan badge), so the profile row shows the signed-out "Click to sign in" state and does nothing when clicked, and the Cap Pro section renders as it does for a free user: Instant Mode quality pinned to 720p, the other tiers inert. In the Tauri app clicking a locked tier raises an upgrade toast. `instantModeMaxResolution` is therefore displayed but never written. |
-| **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. Ours draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks and the same click-away dismiss. |
-| **Text fields are the search field's cousin** | gpui ships no text input, so the project-name template and the server URL use the same hand-rolled field as the main window's search: focus tracking, `key_char` for the typed character, a static caret, Escape to revert. No selection, no cursor movement, no blink. |
+| **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. `ui::Menu` draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks, the same click-away dismiss, and the `KSelect` keyboard contract on top: arrows, Home/End, Enter, Escape. It does not flip or shift to stay inside the window, so a menu opened near the right edge is clipped by it — as it was before the consolidation. |
+| **Text fields are the search field's cousin** | gpui ships no text input, so the project-name template and the server URL are literally the main window's search field: `ui::TextField::settings` and `ui::TextField::search` differ only in their fills. Focus tracking, `key_char` for the typed character, a static caret, Escape to revert. No selection, no cursor movement, no blink. |
 | **The project-name preview is literal-only** | `commands.formatProjectName` understands `{moment:<format>}` and custom `{date:...}`/`{time:...}` formats through a moment-to-chrono translation. The preview here substitutes the six literal placeholders the card documents and leaves anything else alone — which is also what an unknown placeholder does there. |
 | **Theme tiles keep a fixed height** | `aspect-[5/3]` has no gpui equivalent, so the three previews are 93px tall, the height they have at the window's default 782 width. Widen the window and they stay 93. |
 | **`AccentColor` is macOS blue** | `--macos-settings-accent: AccentColor` resolves to the user's system accent; gpui exposes no query for it, so the checked toggles and the selected sidebar icon use `#007aff`. A user on a non-blue accent sees blue here and their own colour in the shipping app. |
-| **No toggle bevel** | `.cap-toggle` carries `box-shadow: inset 0 1px 2px rgba(0,0,0,0.16)`; there is no inset-shadow hook in this gpui rev, so the track is flat. |
+| **No toggle bevel** | `.cap-toggle` carries `box-shadow: inset 0 1px 2px rgba(0,0,0,0.16)`; there is no inset-shadow hook in this gpui rev, so `ui::Toggle`'s track is flat on every surface. |
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
 | **The theme setting is stored, not applied** | Selecting Light or Dark writes `theme`, which the Tauri app uses to force an appearance. This app follows the system appearance only (`sync_appearance`), so the tile is persisted parity, not behaviour. The same is true of `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel: they persist, and the machinery that would obey them is not built yet. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
@@ -577,7 +685,7 @@ Teleprompter-specific deviations:
 
 | | |
 |---|---|
-| **The editor is append-only** | gpui ships no text input. Typing appends, Return inserts a newline, Backspace deletes the last character, and the caret is a `\|` glyph drawn at the end while the window has focus. No selection, no arrow-key navigation, no click-to-position, no paste — a longer script has to arrive through the store (or `CAP_GPUI_AUTO_TELEPROMPTER`). This is the same gap as the main window's search field, one dimension bigger. |
+| **The editor is append-only** | gpui ships no text input. Typing appends, Return inserts a newline, Backspace deletes the last character, and the caret is a `\|` glyph drawn at the end while the window has focus. No selection, no arrow-key navigation, no click-to-position, no paste — a longer script has to arrive through the store (or `CAP_GPUI_AUTO_TELEPROMPTER`). This is the same gap `ui::TextField` has, one dimension bigger — the script editor is multi-line, so it does not use it. |
 | **Mirror is persisted but inert** | `scale-x-[-1]` needs a flip transform, and this gpui rev has none — the same finding that leaves the camera bubble's mirror button disabled. The toggle stores `mirror` so the setting survives for the shipping app; nothing on screen changes. |
 | **The vignette is a wash, not a mask** | The script area's `mask-image` fades the *glyphs'* alpha to 0.4 at the top and bottom. With no mask hook, two `gray-1` gradient layers over the same 34% / 66% stops stand in. Over vibrancy that is nearly the same picture; over Liquid Glass it tints the backdrop instead of the text. |
 | **No backdrop blur** | The settings popover is `bg-gray-1/80` *plus* `backdrop-blur-2xl`, and the footer pills add their own `backdrop-blur-xl`. The washes are here, the blur is not — the same missing hook as the header's `backdrop-filter` and the recording overlay's `backdrop-blur-xs`. |
@@ -872,7 +980,7 @@ Editor-specific deviations:
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
-| **The config sidebar is a rail plus a placeholder** | The six-tab bar is real, at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
+| **The config sidebar is a rail plus a placeholder** | The six-tab bar is real (`ui::TabRail`), at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
 | **The timeline is two locked tracks, drawn, and a live playhead** | Clip and Zoom — the only two `trackDefinitions` marks `locked: true` — with their real gutter chips at the `--track-clip` / `--track-zoom` colours, the 32px ruler with its tick ladder, the clip segments carrying name and duration, and the playhead tracking playback and seeks. No segment drag, trim, split, zoom, minimap, edge fade or track manager; no optional tracks. The timeline height is the default 260 and its drag handle is inert. |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
@@ -951,6 +1059,20 @@ end to end rather than through their hooks: `swift click.swift <window-number>
 points, and `osascript -e 'tell application "System Events" to key code 49'`
 sends Space. Without that permission both are silently dropped, which is why
 the `CAP_GPUI_AUTO_*` hooks exist at all.
+
+The component library's behaviour contracts were checked the same way, against
+the settings window: a click on a select opens its menu, `key code 125` walks
+the highlight (wrapping at the end), `key code 36` commits — the trigger's
+label changes and the store gains the new value — `key code 53` dismisses, and
+a click on the page dismisses too. The zoom slider was dragged with
+`click.swift <win> 570 468 680 468`, which moved the readout 2.2x → 3.9x and
+wrote `defaultZoomAmount: 3.9`; the value is exactly what the track geometry
+predicts, which is what makes the drag maths checkable rather than plausible.
+**One thing keyboard-driven verification cannot reach: the main window.** It is
+a level-100 window that does not become key from a synthetic click, so keys
+posted at it are dropped — with or without Accessibility, and identically on
+the pre-consolidation binary. Its search field has to be checked through the
+panel it filters.
 
 `CAP_GPUI_AUTO_RECENT=1` clicks the first Recents card once the library scan
 has landed (expanding the window first, since the scan only runs while

@@ -21,6 +21,7 @@ use crate::{
     recording,
     session::{Phase, RecordingSession},
     theme::{Appearance, Theme},
+    ui,
 };
 use gpui::Entity;
 
@@ -1034,16 +1035,10 @@ impl MainWindow {
         let theme = self.theme;
         let expanded = self.expanded;
 
+        // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
+        // going to `text-gray-12` on hover.
         let icon_button = |id: &'static str, path: &'static str, size: f32| {
-            div()
-                .id(SharedString::from(id))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(20.))
-                .flex_shrink_0()
-                .child(svg().path(path).size(px(size)).text_color(theme.gray_11))
-                .hover(|style| style.text_color(theme.gray_12))
+            ui::IconButton::header(&theme, id, path).icon_size(px(size))
         };
 
         div()
@@ -1354,7 +1349,6 @@ impl MainWindow {
     /// it does not blink, and there is no selection or cursor movement. That is
     /// enough for a filter field and nothing more.
     fn render_search_field(&self, panel: Panel, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = self.theme;
         let placeholder = match panel {
             Panel::Target(TargetType::Display) => "Search displays",
             Panel::Target(TargetType::Window) => "Search windows",
@@ -1365,80 +1359,40 @@ impl MainWindow {
         let empty = self.search.is_empty();
 
         div()
-            .track_focus(&self.search_focus)
             .on_key_down(
                 cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                    let keystroke = &event.keystroke;
-
-                    match keystroke.key.as_str() {
-                        // First Escape clears the filter, a second one leaves.
-                        "escape" => {
-                            if this.search.is_empty() {
-                                this.close_panel(cx);
-                            } else {
-                                this.search.clear();
-                                cx.notify();
-                            }
-                            return;
-                        }
-                        "backspace" => {
-                            this.search.pop();
+                    // Escape is a panel action here, not a text edit: the first
+                    // one clears the filter, a second one leaves.
+                    if let ui::TextEdit::Escape = ui::text_edit_for(&event.keystroke) {
+                        if this.search.is_empty() {
+                            this.close_panel(cx);
+                        } else {
+                            this.search.clear();
                             cx.notify();
-                            return;
                         }
-                        _ => {}
-                    }
-
-                    // Command/control chords are shortcuts, not text.
-                    if keystroke.modifiers.platform || keystroke.modifiers.control {
                         return;
                     }
-
-                    if let Some(text) = keystroke.key_char.as_ref()
-                        && !text.is_empty()
-                        && !text.chars().any(char::is_control)
-                    {
-                        this.search.push_str(text);
-                        cx.notify();
+                    match ui::text_edit_for(&event.keystroke) {
+                        ui::TextEdit::Insert(text) => this.search.push_str(&text),
+                        ui::TextEdit::Backspace => {
+                            this.search.pop();
+                        }
+                        _ => return,
                     }
+                    cx.notify();
                 }),
             )
-            .relative()
             .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(4.))
             .flex_1()
             .min_w_0()
-            .h(px(36.))
-            .px(px(8.))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(2))
-            .text_size(px(12.))
             .child(
-                svg()
-                    .path("icons/search.svg")
-                    .size(px(12.))
-                    .flex_shrink_0()
-                    .text_color(theme.gray_10),
+                ui::TextField::search(&self.theme, self.search.clone())
+                    .placeholder(placeholder)
+                    .focus(&self.search_focus)
+                    // The caret follows the filter, not the focus: the panel
+                    // has one field and an empty one reads as the placeholder.
+                    .caret(!empty),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(if empty { theme.gray_10 } else { theme.gray_12 })
-                    .child(if empty {
-                        placeholder.to_string()
-                    } else {
-                        self.search.clone()
-                    }),
-            )
-            .when(!empty, |this| {
-                this.child(div().w(px(1.)).h(px(14.)).flex_shrink_0().bg(theme.gray_12))
-            })
     }
 
     /// Case-insensitive substring match, the same test the Tauri panels filter

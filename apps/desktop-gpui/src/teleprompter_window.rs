@@ -23,16 +23,16 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, Window, canvas, div, linear_color_stop, linear_gradient, point, prelude::FluentBuilder,
-    px, svg,
+    Bounds, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
+    div, linear_color_stop, linear_gradient, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
     platform,
     store::{self, TeleprompterState},
     theme::{Appearance, Theme},
+    ui,
 };
 
 /// `getTeleprompterWindowOptions`: `width: 560, height: 320`, `minWidth: 420`,
@@ -453,13 +453,15 @@ impl TeleprompterWindow {
     }
 }
 
-/// A range's value snapped to its step.
+/// A range's value snapped to its step -- [`ui::snap_to_step`] over
+/// [`ui::value_from_fraction`], which reproduces this window's own formula
+/// exactly (`ui::slider::tests::slider_snapping_matches_the_formulas_it_replaced`).
 fn stepped(fraction: f32, minimum: f32, maximum: f32, step: f32) -> f32 {
-    let raw = minimum + fraction * (maximum - minimum);
-    clamp(
-        minimum + ((raw - minimum) / step).round() * step,
+    ui::snap_to_step(
+        ui::value_from_fraction(fraction, minimum, maximum),
         minimum,
         maximum,
+        step,
     )
 }
 
@@ -850,57 +852,27 @@ impl TeleprompterWindow {
             )
     }
 
-    /// The shared footer pill: `flex h-8 items-center gap-1.5 rounded-full
-    /// border border-gray-12/6 bg-gray-12/5 px-2`.
+    /// The shared footer pill -- [`ui::Card::glass_pill`].
     fn pill(&self) -> gpui::Div {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.))
-            .h(px(32.))
-            .rounded_full()
-            .border_1()
-            .border_color(Theme::with_alpha(theme.gray_12, 0.06))
-            .bg(Theme::with_alpha(theme.gray_12, 0.05))
-            .px(px(8.))
+        ui::Card::glass_pill(&self.theme)
     }
 
-    /// `ToolButton`: `flex size-7 items-center justify-center rounded-full
-    /// text-gray-9 hover:bg-gray-12/7 hover:text-gray-12`, plus the
-    /// `bg-gray-12/8 text-gray-12` active style.
+    /// `ToolButton` -- [`ui::IconButton::glass`].
     fn tool_button(
         &self,
         id: &'static str,
         icon: &'static str,
         active: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(SharedString::from(id))
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(28.))
-            .flex_shrink_0()
-            .rounded_full()
-            .when(active, |this| {
-                this.bg(Theme::with_alpha(theme.gray_12, 0.08))
-            })
-            .child(svg().path(icon).size(px(14.)).text_color(if active {
-                Hsla::from(theme.gray_12)
-            } else {
-                Hsla::from(theme.gray_9)
-            }))
-            .hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.07)))
+    ) -> ui::IconButton {
+        ui::IconButton::glass(&self.theme, id, icon)
+            .active(active)
             .on_click(on_click)
     }
 
     /// `<input type="range">`: a `h-1 w-12` `bg-gray-12/10` track with a
-    /// `size-3` thumb. Same pointer maths as the settings window's zoom slider
-    /// -- the rect is captured in prepaint because the window is resizable.
+    /// `size-3` thumb -- [`ui::Slider`], whose canvas-prepaint track capture
+    /// and drag layer this window and the settings zoom slider now share.
     fn render_range(
         &self,
         id: &'static str,
@@ -909,53 +881,21 @@ impl TeleprompterWindow {
         thumb: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = self.theme;
-        let fraction = fraction.clamp(0., 1.);
         let track = match slider {
             Slider::Speed => self.speed_track.clone(),
             Slider::Opacity => self.opacity_track.clone(),
         };
 
-        div()
-            .id(SharedString::from(id))
-            .flex()
-            .items_center()
-            .w(px(48.))
-            .h(px(16.))
-            .flex_shrink_0()
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(4.))
-                    .rounded_full()
-                    .bg(Theme::with_alpha(theme.gray_12, 0.10))
-                    .child(
-                        canvas(
-                            move |bounds, _window, _cx| track.set(Some(bounds)),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(-4.))
-                            .left(gpui::relative(fraction))
-                            .ml(px(-6.))
-                            .size(px(12.))
-                            .rounded_full()
-                            .bg(thumb),
-                    ),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+        ui::Slider::new(id, fraction, track)
+            .row_width(px(48.))
+            .track(px(4.), Theme::with_alpha(self.theme.gray_12, 0.10))
+            .thumb(px(12.), thumb, None)
+            .on_drag_start(cx.listener(
+                move |this, event: &gpui::MouseDownEvent, window, cx| {
                     this.dragging = Some(slider);
                     this.set_slider_from(event.position, window, cx);
-                }),
-            )
+                },
+            ))
     }
 
     /// While a range is held the whole window takes the mouse, so a drag that
@@ -963,25 +903,17 @@ impl TeleprompterWindow {
     fn render_slider_drag_layer(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         self.dragging?;
         Some(
-            div()
-                .id("slider-drag")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .on_mouse_move(
-                    cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
-                        this.set_slider_from(event.position, window, cx);
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _window, cx| {
-                        this.dragging = None;
-                        cx.notify();
-                    }),
-                )
-                .into_any_element(),
+            ui::Slider::drag_layer(
+                "slider-drag",
+                cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                    this.set_slider_from(event.position, window, cx);
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    this.dragging = None;
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
         )
     }
 
@@ -994,17 +926,9 @@ impl TeleprompterWindow {
         let theme = self.theme;
 
         Some(
-            div()
-                .absolute()
+            ui::Popover::glass(&theme, px(192.))
                 .bottom(px(48.))
                 .right(px(8.))
-                .w(px(192.))
-                .p(px(8.))
-                .rounded(px(16.))
-                .border_1()
-                .border_color(Theme::with_alpha(theme.gray_12, 0.08))
-                .bg(Theme::with_alpha(theme.gray_1, 0.8))
-                .shadow_lg()
                 .child(self.render_setting_toggle(
                     "cue-markers",
                     "icons/chevron-right.svg",
@@ -1071,24 +995,8 @@ impl TeleprompterWindow {
                     )
                     .child(label),
             )
-            .child(
-                // `<Toggle size="sm">`: `w-9 h-5 p-0.5` with a `size-4` thumb.
-                div()
-                    .w(px(36.))
-                    .h(px(20.))
-                    .p(px(2.))
-                    .flex()
-                    .flex_row()
-                    .flex_shrink_0()
-                    .rounded_full()
-                    .when(checked, |this| this.justify_end())
-                    .bg(if checked {
-                        gpui::rgb(Theme::SETTINGS_ACCENT).into()
-                    } else {
-                        Theme::with_alpha(theme.gray_12, 0.10)
-                    })
-                    .child(div().size(px(16.)).rounded_full().bg(gpui::white())),
-            )
+            // `<Toggle size="sm">` on bare glass.
+            .child(ui::Toggle::glass(&theme, SharedString::from(format!("{id}-toggle")), checked))
             .on_click(on_click)
     }
 }

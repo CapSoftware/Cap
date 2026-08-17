@@ -52,7 +52,10 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use crate::theme::{Appearance, Theme};
+use crate::{
+    theme::{Appearance, Theme},
+    ui,
+};
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -736,6 +739,10 @@ pub struct EditorWindow {
     /// Wall clock and counters at the moment playback started, so a run can be
     /// reported as a rate.
     play_mark: Option<(Instant, StatsSnapshot)>,
+    /// The transport's zoom slider track rect. The slider is inert until E3
+    /// builds the timeline transform, but the track is captured now so the
+    /// pointer maths has somewhere to read from the day it is not.
+    zoom_slider_track: ui::SliderTrack,
 }
 
 impl EditorWindow {
@@ -770,6 +777,7 @@ impl EditorWindow {
             scrub: None,
             stats: None,
             play_mark: None,
+            zoom_slider_track: ui::SliderTrack::default(),
         }
     }
 
@@ -1431,35 +1439,13 @@ impl EditorWindow {
                             .text_color(Hsla::from(theme.gray_11))
                             .child("Preview quality"),
                     )
+                    // `KSelect.Trigger` -- [`ui::Select::plain`]. Inert this
+                    // unit (preview quality is pinned to `half`), so it draws
+                    // in its disabled state.
                     .child(
-                        // `KSelect.Trigger`: `flex items-center gap-2 h-9 px-3
-                        // rounded-lg border border-gray-3 bg-gray-2
-                        // dark:bg-gray-3 text-sm text-gray-12`.
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .h(px(36.))
-                            .px(px(12.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(Hsla::from(theme.gray_3))
-                            .bg(if theme.is_dark() {
-                                Hsla::from(theme.gray_3)
-                            } else {
-                                Hsla::from(theme.gray_2)
-                            })
-                            .opacity(0.5)
-                            .text_size(px(14.))
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child(div().flex_1().child("Half"))
-                            .child(
-                                svg()
-                                    .path("icons/chevron-down.svg")
-                                    .size(px(16.))
-                                    .text_color(Hsla::from(theme.gray_11)),
-                            ),
+                        ui::Select::plain(&theme, "preview-quality", "Half")
+                            .stretch_label()
+                            .disabled(true),
                     ),
             )
     }
@@ -1663,28 +1649,15 @@ impl EditorWindow {
                             )
                             .on_click(cx.listener(|this, _, _window, cx| this.jump_to_start(cx))),
                     )
-                    // `rounded-full border border-gray-300 bg-gray-3 size-9`.
+                    // `rounded-full border border-gray-300 bg-gray-3 size-9`
+                    // with `hover:bg-gray-4` -- [`ui::IconButton`].
                     .child(
-                        div()
-                            .id("transport-play")
-                            .flex()
-                            .items_center()
-                            .justify_center()
+                        ui::IconButton::new("transport-play", icon)
                             .size(px(36.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(Hsla::from(theme.gray_5))
-                            .bg(Hsla::from(theme.gray_3))
-                            // `hover:bg-gray-4`.
-                            .when(live, |this| {
-                                this.cursor_pointer().hover(|this| this.bg(Hsla::from(theme.gray_4)))
-                            })
-                            .child(
-                                svg()
-                                    .path(icon)
-                                    .size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_12)),
-                            )
+                            .icon_size(px(12.))
+                            .color(Hsla::from(theme.gray_12))
+                            .filled(Hsla::from(theme.gray_3), Some(Hsla::from(theme.gray_5)))
+                            .hover_bg(Hsla::from(theme.gray_4))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_play(window, cx);
                             })),
@@ -1741,20 +1714,14 @@ impl EditorWindow {
                             .size(px(20.))
                             .text_color(Hsla::from(theme.gray_12)),
                     )
-                    // `Slider class="w-24"`: the 32px row with its 4.8px track.
+                    // `Slider class="w-24"`: the 32px row with its 4.8px track
+                    // -- [`ui::Slider`], thumbless because the timeline
+                    // transform it drives is E3's.
                     .child(
-                        div()
-                            .w(px(96.))
-                            .h(px(32.))
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(px(5.))
-                                    .rounded_full()
-                                    .bg(Hsla::from(theme.gray_4)),
-                            ),
+                        ui::Slider::new("timeline-zoom", 0., self.zoom_slider_track.clone())
+                            .row_width(px(96.))
+                            .row_height(px(32.))
+                            .track(px(5.), Hsla::from(theme.gray_4)),
                     ),
             )
     }
@@ -1784,57 +1751,18 @@ impl EditorWindow {
             ("icons/message-bubble.svg", false),
         ];
 
-        let mut rail = div()
-            .relative()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(SIDEBAR_TAB_BAR_HEIGHT))
-            .flex_none()
-            .overflow_hidden()
-            .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .bg(self.panel_bg());
-
-        for (index, (icon, disabled)) in tabs.into_iter().enumerate() {
-            let selected = index == 0;
-            rail = rail.child(
-                // Trigger: `flex relative z-10 flex-1 justify-center
-                // items-center px-4 py-2`.
-                div()
-                    .relative()
-                    .flex()
-                    .flex_1()
-                    .justify_center()
-                    .items_center()
-                    .px(px(16.))
-                    .py(px(8.))
-                    .when(disabled, |this| this.opacity(0.5))
-                    .child(
-                        // The icon box and, under it, the selection pill: both
-                        // `size-9`, the pill `rounded-lg bg-gray-3`.
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(36.))
-                            .rounded(px(8.))
-                            .when(selected, |this| this.bg(Hsla::from(theme.gray_3)))
-                            .child(
-                                svg()
-                                    .path(icon)
-                                    // The rail is `text-lg`, and the icons
-                                    // carry no size class -- 1em of 18px.
-                                    .size(px(18.))
-                                    .text_color(if selected {
-                                        Hsla::from(theme.gray_12)
-                                    } else {
-                                        Hsla::from(theme.gray_11)
-                                    }),
-                            ),
-                    ),
-            );
-        }
+        let rail = ui::TabRail::editor(
+            &theme,
+            "sidebar-tabs",
+            self.panel_bg(),
+            tabs.into_iter()
+                .enumerate()
+                .map(|(index, (icon, disabled))| {
+                    ui::TabRailItem::new(icon, index == 0, disabled)
+                })
+                .collect(),
+        )
+        .height(px(SIDEBAR_TAB_BAR_HEIGHT));
 
         div()
             // The column: `ml-2 flex min-h-0 w-104 min-w-104 flex-none

@@ -21,6 +21,7 @@ mod store;
 mod target_overlay;
 mod teleprompter_window;
 mod theme;
+mod ui;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 

@@ -17,12 +17,13 @@ use std::{cell::Cell, rc::Rc};
 use gpui::{
     Bounds, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
     ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    canvas, div, img, prelude::FluentBuilder, px, rgb, svg,
+    div, img, prelude::FluentBuilder, px, rgb, svg,
 };
 use serde_json::Value;
 
 use crate::{
     devices::WindowOption,
+    ui,
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, PostStudioBehaviour,
@@ -206,9 +207,10 @@ enum MenuKind {
 
 struct OpenMenu {
     kind: MenuKind,
-    /// Where the click landed: `Menu.popup()` with no position argument opens
-    /// at the pointer, so this is the faithful anchor.
-    origin: Point<Pixels>,
+    /// Anchor, row count and keyboard highlight. `Menu.popup()` with no
+    /// position argument opens at the pointer, so the origin is the faithful
+    /// anchor; the highlight is what makes arrows and Enter work.
+    state: ui::MenuState,
 }
 
 /// `MAX_FPS_OPTIONS` in general.tsx.
@@ -296,8 +298,13 @@ pub struct SettingsWindow {
     server_url: String,
     project_name_focus: FocusHandle,
     server_url_focus: FocusHandle,
-    /// `Collapsible` under the project-name input.
-    placeholders_open: bool,
+    /// `Collapsible` under the project-name input, with the content's measured
+    /// height so the reveal animates a real layout property.
+    placeholders: ui::CollapsibleState,
+    /// Keeps the collapsible repainting while its height animates. Dropping it
+    /// cancels, so a re-toggle mid-flight replaces the ticker rather than
+    /// racing it -- the main window's resize rule.
+    placeholders_task: Option<gpui::Task<()>>,
     /// The zoom slider's track rect, captured during prepaint -- the row is
     /// inside a resizable pane, so it cannot be computed.
     slider_track: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -335,7 +342,8 @@ impl SettingsWindow {
             menu: None,
             project_name_focus: cx.focus_handle(),
             server_url_focus: cx.focus_handle(),
-            placeholders_open: false,
+            placeholders: ui::CollapsibleState::new(false),
+            placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
             slider_dragging: false,
             windows: Vec::new(),
@@ -422,26 +430,83 @@ impl SettingsWindow {
         self.write("excludedWindows", json, cx);
     }
 
-    // -- Menus -------------------------------------------------------------
-
-    fn open_menu(&mut self, kind: MenuKind, origin: Point<Pixels>, cx: &mut Context<Self>) {
-        self.menu = Some(OpenMenu { kind, origin });
+    /// The `Collapsible` under the project-name input.
+    ///
+    /// The height animates over the content's *measured* height, which is what
+    /// Kobalte's `--kb-collapsible-content-height` is, so a ticker has to keep
+    /// the window repainting for the 200ms the keyframe runs -- gpui only
+    /// renders on invalidation. Assigning over the previous task drops it,
+    /// cancelling a toggle still in flight.
+    fn toggle_placeholders(&mut self, cx: &mut Context<Self>) {
+        self.placeholders.toggle();
+        self.placeholders_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let more = this
+                    .update(cx, |this, cx| {
+                        cx.notify();
+                        this.placeholders.is_animating()
+                    })
+                    .unwrap_or(false);
+                if !more {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(8))
+                    .await;
+            }
+        }));
         cx.notify();
     }
 
-    /// (label, checked) for each row of an open menu.
-    fn menu_items(&self, kind: MenuKind) -> Vec<(SharedString, bool)> {
+    // -- Menus -------------------------------------------------------------
+
+    fn open_menu(&mut self, kind: MenuKind, origin: Point<Pixels>, cx: &mut Context<Self>) {
+        let items = self.menu_items(kind);
+        self.menu = Some(OpenMenu {
+            kind,
+            state: ui::MenuState::new(origin, &items),
+        });
+        cx.notify();
+    }
+
+    /// Arrows / Home / End / Enter / Escape on an open menu -- the Kobalte
+    /// `Select` contract. Returns whether the key was consumed.
+    fn menu_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let Some(menu) = self.menu.as_mut() else {
+            return false;
+        };
+        let kind = menu.kind;
+        match menu.state.on_key(key) {
+            ui::MenuKey::Moved => {
+                cx.notify();
+                true
+            }
+            ui::MenuKey::Commit(index) => {
+                self.choose(kind, index, cx);
+                true
+            }
+            ui::MenuKey::Dismiss => {
+                self.menu = None;
+                cx.notify();
+                true
+            }
+            ui::MenuKey::Ignored => false,
+        }
+    }
+
+    /// One row per option, check-marked when it is the value in force.
+    fn menu_items(&self, kind: MenuKind) -> Vec<ui::MenuItem> {
         match kind {
             MenuKind::Countdown => {
                 let current = self.settings.recording_countdown.unwrap_or(0);
                 COUNTDOWN_OPTIONS
                     .iter()
-                    .map(|(value, label)| ((*label).into(), *value == current))
+                    .map(|(value, label)| ui::MenuItem::new(*label, *value == current))
                     .collect()
             }
             MenuKind::MaxFps => MAX_FPS_OPTIONS
                 .iter()
-                .map(|(value, label)| ((*label).into(), *value == self.settings.max_fps))
+                .map(|(value, label)| ui::MenuItem::new(*label, *value == self.settings.max_fps))
                 .collect(),
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
@@ -451,7 +516,7 @@ impl SettingsWindow {
             MenuKind::AddWindow => self
                 .available_windows()
                 .into_iter()
-                .map(|window| (window_option_label(&window).into(), false))
+                .map(|window| ui::MenuItem::new(window_option_label(&window), false))
                 .collect(),
         }
     }
@@ -539,10 +604,10 @@ impl SettingsWindow {
     }
 }
 
-fn enum_items<T: SettingsEnum>(current: T) -> Vec<(SharedString, bool)> {
+fn enum_items<T: SettingsEnum>(current: T) -> Vec<ui::MenuItem> {
     T::ALL
         .iter()
-        .map(|value| (value.label().into(), *value == current))
+        .map(|value| ui::MenuItem::new(value.label(), *value == current))
         .collect()
 }
 
@@ -604,8 +669,14 @@ impl Render for SettingsWindow {
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
-            .on_key_down(cx.listener(|_, event: &gpui::KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
                 let keystroke = &event.keystroke;
+                // An open menu takes arrows, Home/End, Enter and Escape first
+                // -- the Kobalte `Select` contract. Everything else, and every
+                // key at all when no menu is open, falls through.
+                if this.menu_key(&keystroke.key, cx) {
+                    return;
+                }
                 if keystroke.modifiers.platform && keystroke.key == "w" {
                     cx.defer(crate::app_windows::close_settings);
                 }
@@ -848,15 +919,15 @@ impl SettingsWindow {
                 // the settings material paints as the accent button.
                 self.button(
                     "settings-sign-in",
-                    ButtonVariant::Dark,
+                    ui::ButtonVariant::Dark,
                     None,
                     "Sign In",
                     false,
                     cx,
                     |_, _, _| {},
                 )
-                .w_full()
-                .h(px(34.)),
+                .full_width()
+                .height(px(34.)),
             )
     }
 
@@ -1099,7 +1170,7 @@ impl SettingsWindow {
                     "instant-resolution",
                     INSTANT_RESOLUTION_TIERS
                         .iter()
-                        .map(|(value, label, _)| (SharedString::from(*label), *value == effective))
+                        .map(|(value, label, _)| ui::SegmentOption::new(*label, *value == effective))
                         .collect(),
                     cx,
                     |_, _, _| {},
@@ -1465,7 +1536,7 @@ impl SettingsWindow {
         if is_custom {
             actions = actions.child(self.button(
                 "recordings-reset",
-                ButtonVariant::Gray,
+                ui::ButtonVariant::Gray,
                 None,
                 "Reset to Default",
                 false,
@@ -1478,7 +1549,7 @@ impl SettingsWindow {
         }
         actions = actions.child(self.button(
             "recordings-pick",
-            ButtonVariant::Dark,
+            ui::ButtonVariant::Dark,
             None,
             "Choose Folder",
             false,
@@ -1572,7 +1643,7 @@ impl SettingsWindow {
             .gap(px(8.))
             .child(self.button(
                 "project-name-reset",
-                ButtonVariant::Gray,
+                ui::ButtonVariant::Gray,
                 None,
                 "Reset",
                 reset_disabled,
@@ -1585,7 +1656,7 @@ impl SettingsWindow {
             ))
             .child(self.button(
                 "project-name-save",
-                ButtonVariant::Dark,
+                ui::ButtonVariant::Dark,
                 None,
                 "Save",
                 save_disabled,
@@ -1669,12 +1740,18 @@ impl SettingsWindow {
                         )
                         .child("Available placeholders")
                         .on_click(cx.listener(|this, _, _window, cx| {
-                            this.placeholders_open = !this.placeholders_open;
-                            cx.notify();
+                            this.toggle_placeholders(cx);
                         })),
                 )
-                .when(self.placeholders_open, |this| {
-                    this.child(
+                // Mounted while open *and* while animating shut, so the reveal
+                // has something to collapse; unmounted once settled closed, or
+                // the parent's `gap-3` would leave a 12px hole under the
+                // trigger.
+                .when(
+                    self.placeholders.is_open() || self.placeholders.is_animating(),
+                    |this| {
+                        let (height, _) = self.placeholders.height_for(std::time::Instant::now());
+                        this.child(ui::Collapsible::new(height, self.placeholders.measure_cell()).content(
                         div()
                             .flex()
                             .flex_col()
@@ -1719,8 +1796,9 @@ impl SettingsWindow {
                                         )
                                 },
                             )),
-                    )
-                });
+                        ))
+                    },
+                );
 
         self.section(
             "Default project name",
@@ -1742,7 +1820,7 @@ impl SettingsWindow {
             .gap(px(8.))
             .child(self.button(
                 "exclusions-reset",
-                ButtonVariant::Gray,
+                ui::ButtonVariant::Gray,
                 None,
                 "Reset",
                 false,
@@ -1754,7 +1832,7 @@ impl SettingsWindow {
             .child(
                 self.button(
                     "exclusions-add",
-                    ButtonVariant::Dark,
+                    ui::ButtonVariant::Dark,
                     Some("icons/plus.svg"),
                     "Add",
                     self.windows.is_empty(),
@@ -1894,7 +1972,7 @@ impl SettingsWindow {
                     )
                     .child(self.button(
                         "exclusions-restore",
-                        ButtonVariant::Gray,
+                        ui::ButtonVariant::Gray,
                         None,
                         "Restore",
                         false,
@@ -2018,7 +2096,7 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(self.button(
                         "server-url-reset",
-                        ButtonVariant::Gray,
+                        ui::ButtonVariant::Gray,
                         None,
                         "Reset to Default",
                         stored == DEFAULT_SERVER_URL && draft == DEFAULT_SERVER_URL,
@@ -2034,7 +2112,7 @@ impl SettingsWindow {
                     ))
                     .child(self.button(
                         "server-url-update",
-                        ButtonVariant::Dark,
+                        ui::ButtonVariant::Dark,
                         None,
                         "Update",
                         stored == draft,
@@ -2128,77 +2206,28 @@ impl SettingsWindow {
         description: Option<&'static str>,
         right: Option<gpui::AnyElement>,
         children: Vec<gpui::AnyElement>,
-    ) -> Section {
-        Section {
-            theme: self.theme,
-            title,
-            description,
-            right,
-            children,
-            pro: false,
-        }
+    ) -> ui::Section {
+        ui::Section::settings(&self.theme, title, description, right, children)
     }
 
-    /// `<SectionCard>`: `rounded-xl border border-gray-3 bg-gray-2`, whose
-    /// radius the settings material takes down to 10px and whose border it
-    /// makes transparent.
+    /// `<SectionCard>` -- [`ui::Card::settings`].
     fn card(&self, padded: bool) -> gpui::Div {
-        div()
-            .rounded(px(10.))
-            .overflow_hidden()
-            .bg(self.theme.settings_card_bg())
-            .when(padded, |this| this.px(px(16.)).py(px(16.)))
+        ui::Card::settings(&self.theme, padded)
     }
 
     /// `<SectionRows>`: the same card with `divide-y divide-gray-3`.
     fn rows(&self, children: Vec<gpui::AnyElement>) -> gpui::Div {
-        let border = self.theme.settings_border();
-        let last = children.len().saturating_sub(1);
-        self.card(false)
-            .flex()
-            .flex_col()
-            .children(children.into_iter().enumerate().map(|(index, child)| {
-                div()
-                    .when(index != last, |this| this.border_b_1().border_color(border))
-                    .child(child)
-            }))
+        ui::Card::settings_rows(&self.theme, children)
     }
 
-    /// `<SettingItem>` / `.cap-setting-row { min-height: 46px; padding: 12px }`
-    /// over `flex flex-row gap-4 justify-between items-center`.
+    /// `<SettingItem>` -- [`ui::SettingRow`].
     fn setting_row(
         &self,
         label: &'static str,
         description: Option<&'static str>,
         control: gpui::AnyElement,
     ) -> gpui::AnyElement {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(16.))
-            .min_h(px(46.))
-            .p(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(2.))
-                    .child(div().text_size(px(13.)).child(label))
-                    .children(description.map(|description| {
-                        div()
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(theme.settings_muted())
-                            .child(description)
-                    })),
-            )
-            .child(div().flex().items_center().flex_shrink_0().child(control))
-            .into_any_element()
+        ui::SettingRow::settings(&self.theme, label, description, control).into_any_element()
     }
 
     /// The grey explanation box under the two segmented controls:
@@ -2214,76 +2243,32 @@ impl SettingsWindow {
             .bg(self.theme.settings_fill())
     }
 
-    /// `<Toggle size="sm">`: `w-9 h-5 p-0.5` with a `size-4` thumb, on
-    /// `--macos-settings-accent` when checked and
-    /// `--macos-settings-control-fill` when not. The `inset 0 1px 2px` shadow
-    /// the settings CSS puts on the track has no gpui equivalent.
+    /// `<Toggle size="sm">` on the settings material -- [`ui::Toggle::settings`].
     fn toggle(
         &self,
         id: &'static str,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(SharedString::from(id))
-            .w(px(36.))
-            .h(px(20.))
-            .p(px(2.))
-            .rounded_full()
-            .flex()
-            .flex_row()
-            .when(checked, |this| this.justify_end())
-            .bg(if checked {
-                rgb(Theme::SETTINGS_ACCENT).into()
-            } else {
-                theme
-                    .material
-                    .map(|material| Hsla::from(material.control_fill))
-                    .unwrap_or_else(|| Hsla::from(theme.gray_6))
-            })
-            .child(div().size(px(16.)).rounded_full().bg(gpui::white()))
+    ) -> ui::Toggle {
+        ui::Toggle::settings(&self.theme, id, checked)
             .on_click(cx.listener(move |this, _, _window, cx| on_change(this, cx)))
     }
 
-    /// `SelectSettingItem`'s button: `flex flex-row gap-1.5 text-xs items-center
-    /// px-2.5 py-1.5 rounded-lg border bg-gray-3 text-gray-12 border-gray-4`,
-    /// radius 8 under the settings material.
+    /// `SelectSettingItem`'s button -- [`ui::Select::settings`], opening the
+    /// in-window stand-in for `Menu.popup()`.
     fn select(
         &self,
         id: &'static str,
         label: impl Into<SharedString>,
         kind: MenuKind,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(SharedString::from(id))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.))
-            .px(px(10.))
-            .py(px(6.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .bg(theme.settings_fill())
-            .text_size(px(12.))
-            .child(label.into())
-            .child(
-                svg()
-                    .path("icons/chevron-down.svg")
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .text_color(theme.settings_muted()),
-            )
-            .on_click(
-                cx.listener(move |this, event: &gpui::ClickEvent, _window, cx| {
-                    this.open_menu(kind, event.position(), cx);
-                }),
-            )
+    ) -> ui::Select {
+        ui::Select::settings(&self.theme, id, label).on_click(cx.listener(
+            move |this, event: &gpui::ClickEvent, _window, cx| {
+                this.open_menu(kind, event.position(), cx);
+            },
+        ))
     }
 
     /// `SegmentedControl` over a [`SettingsEnum`].
@@ -2293,138 +2278,58 @@ impl SettingsWindow {
         current: T,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, T, &mut Context<Self>) + Clone + 'static,
-    ) -> gpui::Div {
+    ) -> ui::SegmentedControl {
         self.segmented_raw(
             id,
             T::ALL
                 .iter()
-                .map(|value| (SharedString::from(value.label()), *value == current))
+                .map(|value| ui::SegmentOption::new(value.label(), *value == current))
                 .collect(),
             cx,
             move |this, index, cx| {
-                if let Some(value) = T::ALL.get(index) {
-                    on_change(this, *value, cx);
+                if let Some(value) = ui::option_at(T::ALL, index) {
+                    on_change(this, value, cx);
                 }
             },
         )
     }
 
-    /// `<div class="inline-flex p-0.5 rounded-lg border border-gray-3
-    /// bg-gray-3">` with `px-3 py-1 text-xs font-medium rounded-md` items; the
-    /// selected one is `bg-gray-1 text-gray-12 shadow-sm`, which the settings
-    /// material leaves alone (`bg-gray-1` is not in its remap list).
+    /// [`ui::SegmentedControl::settings`].
     fn segmented_raw(
         &self,
         id: &'static str,
-        options: Vec<(SharedString, bool)>,
+        options: Vec<ui::SegmentOption>,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, usize, &mut Context<Self>) + Clone + 'static,
-    ) -> gpui::Div {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_row()
-            .p(px(2.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .bg(theme.settings_fill())
-            .children(
-                options
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (label, selected))| {
-                        let on_change = on_change.clone();
-                        div()
-                            .id(SharedString::from(format!("{id}-{index}")))
-                            .px(px(12.))
-                            .py(px(4.))
-                            .rounded(px(6.))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .when(selected, |this| {
-                                this.bg(Hsla::from(theme.gray_1))
-                                    .text_color(theme.settings_text())
-                            })
-                            .when(!selected, |this| this.text_color(theme.settings_muted()))
-                            .child(label)
-                            .on_click(
-                                cx.listener(move |this, _, _window, cx| on_change(this, index, cx)),
-                            )
-                    }),
-            )
+    ) -> ui::SegmentedControl {
+        ui::SegmentedControl::settings(&self.theme, id, options).on_select(cx.listener(
+            move |this, index: &usize, _window, cx| on_change(this, *index, cx),
+        ))
     }
 
-    /// `<Button size="sm">` under the settings material: radius 8, `h-7 px-3
-    /// text-xs`, gray/white/outline on `--macos-settings-control-fill` with a
-    /// `--macos-settings-border` hairline, primary/blue/dark on the accent.
+    /// `<Button size="sm">` under the settings material -- [`ui::Button::settings`].
     fn button(
         &self,
         id: &'static str,
-        variant: ButtonVariant,
+        variant: ui::ButtonVariant,
         icon: Option<&'static str>,
         label: &'static str,
         disabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        let control_fill = theme
-            .material
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(|| Hsla::from(theme.gray_5));
-
-        div()
-            .id(SharedString::from(id))
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(28.))
-            .px(px(12.))
-            .rounded(px(8.))
-            .text_size(px(12.))
-            .flex_shrink_0()
-            .map(|this| match (variant, disabled) {
-                // `button[data-variant]:disabled { color:
-                //  var(--macos-settings-muted); background:
-                //  var(--macos-settings-fill) }`
-                (_, true) => this
-                    .bg(theme.settings_fill())
-                    .text_color(theme.settings_muted()),
-                (ButtonVariant::Gray, false) => this
-                    .bg(control_fill)
-                    .text_color(theme.settings_text())
-                    .border_1()
-                    .border_color(theme.settings_border()),
-                (ButtonVariant::Dark, false) => this
-                    .bg(rgb(Theme::SETTINGS_ACCENT))
-                    .text_color(gpui::white()),
-            })
-            .flex_row()
-            .gap(px(6.))
-            .children(icon.map(|icon| {
-                svg()
-                    .path(icon)
-                    .size(px(14.))
-                    .flex_shrink_0()
-                    .text_color(if disabled {
-                        theme.settings_muted()
-                    } else if variant == ButtonVariant::Dark {
-                        gpui::white()
-                    } else {
-                        theme.settings_text()
-                    })
-            }))
-            .child(label)
-            .when(!disabled, |this| {
-                this.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-            })
+    ) -> ui::Button {
+        let mut button = ui::Button::settings(&self.theme, id, variant, ui::ButtonSize::Sm)
+            .label(label)
+            .disabled_settings(&self.theme, disabled);
+        if let Some(icon) = icon {
+            button = button.icon(icon);
+        }
+        button.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
 
-    /// The hand-rolled text input, same shape as the main window's search
-    /// field: focus tracking, `key_char` for the typed character, a static
-    /// caret. `<Input>` in the editor's `ui.tsx` is `h-8 rounded-lg bg-gray-2
-    /// px-2 text-xs`.
+    /// The two inputs -- [`ui::TextField::settings`]. gpui ships no text
+    /// input, so the field is the drawing and the window keeps the string:
+    /// `Escape` reverts to what is stored, which only this window knows.
     fn text_field(
         &self,
         field: Field,
@@ -2433,33 +2338,24 @@ impl SettingsWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let theme = self.theme;
-        let value = value.to_string();
-        let empty = value.is_empty();
         // The caret is drawn only while the field has focus -- there are two
         // of them on the page and a pair of blinkless bars would read as two
         // active inputs.
         let focused = focus.is_focused(window);
 
         div()
-            .track_focus(focus)
             .on_key_down(
                 cx.listener(move |this, event: &gpui::KeyDownEvent, _window, cx| {
-                    let keystroke = &event.keystroke;
-                    // Cmd-anything is a shortcut (Cmd-W closes the window from
-                    // the root handler), never text.
-                    if keystroke.modifiers.platform || keystroke.modifiers.control {
-                        return;
-                    }
                     let draft = match field {
                         Field::ProjectName => &mut this.project_name,
                         Field::ServerUrl => &mut this.server_url,
                     };
-                    match keystroke.key.as_str() {
-                        "backspace" => {
+                    match ui::text_edit_for(&event.keystroke) {
+                        ui::TextEdit::Insert(text) => draft.push_str(&text),
+                        ui::TextEdit::Backspace => {
                             draft.pop();
                         }
-                        "escape" => {
+                        ui::TextEdit::Escape => {
                             // Revert to what is stored, the way leaving the
                             // field without saving does.
                             *draft = match field {
@@ -2471,48 +2367,16 @@ impl SettingsWindow {
                                 Field::ServerUrl => this.settings.server_url.clone(),
                             };
                         }
-                        _ => {
-                            if let Some(text) = keystroke.key_char.as_ref()
-                                && !text.is_empty()
-                                && !text.chars().any(char::is_control)
-                            {
-                                draft.push_str(text);
-                            } else {
-                                return;
-                            }
-                        }
+                        ui::TextEdit::Ignored => return,
                     }
                     cx.notify();
                 }),
             )
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(2.))
-            .h(px(32.))
-            .px(px(8.))
-            .rounded(px(8.))
-            .bg(theme.settings_fill())
-            .border_1()
-            .border_color(theme.settings_border())
-            .text_size(px(12.))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .when(empty, |this| this.text_color(theme.settings_muted()))
-                    .child(value),
+                ui::TextField::settings(&self.theme, value.to_string())
+                    .focus(focus)
+                    .caret(focused),
             )
-            .when(focused, |this| {
-                this.child(
-                    div()
-                        .w(px(1.))
-                        .h(px(14.))
-                        .flex_shrink_0()
-                        .bg(theme.settings_text()),
-                )
-            })
     }
 
     /// `<Slider minValue={1} maxValue={4.5} step={0.1}>`: a `h-[0.3rem]`
@@ -2520,68 +2384,27 @@ impl SettingsWindow {
     fn render_zoom_slider(&self, value: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let fraction = ((value - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)).clamp(0., 1.);
-        let track = self.slider_track.clone();
 
-        div()
-            .id("zoom-slider")
-            .flex_1()
-            .min_w_0()
-            .h(px(16.))
+        ui::Slider::new("zoom-slider", fraction, self.slider_track.clone())
             .flex()
-            .flex_row()
-            .items_center()
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(5.))
-                    .rounded_full()
-                    .bg(theme.settings_fill())
-                    .child(
-                        // Captures the track's rect for the drag maths: the
-                        // row sits in a resizable pane, so its width is not
-                        // known here.
-                        canvas(
-                            move |bounds, _window, _cx| track.set(Some(bounds)),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .top_0()
-                            .h_full()
-                            .w(gpui::relative(fraction))
-                            .rounded_full()
-                            .bg(Hsla::from(theme.blue_9)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(-6.))
-                            .left(gpui::relative(fraction))
-                            .ml(px(-8.))
-                            .size(px(16.))
-                            .rounded_full()
-                            .bg(if theme.is_dark() {
-                                Hsla::from(theme.gray_12)
-                            } else {
-                                Hsla::from(theme.gray_1)
-                            })
-                            .border_1()
-                            .border_color(theme.settings_border()),
-                    ),
+            .track(px(5.), theme.settings_fill())
+            .fill(Hsla::from(theme.blue_9))
+            .thumb(
+                px(16.),
+                if theme.is_dark() {
+                    Hsla::from(theme.gray_12)
+                } else {
+                    Hsla::from(theme.gray_1)
+                },
+                Some(theme.settings_border()),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                    this.slider_dragging = true;
-                    this.set_zoom_from(event.position, cx);
-                }),
-            )
+            // Transcribed, not corrected: the thumb sits half a pixel high of
+            // centre over the 5px track.
+            .thumb_top(px(-6.))
+            .on_drag_start(cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                this.slider_dragging = true;
+                this.set_zoom_from(event.position, cx);
+            }))
     }
 
     /// While the button is held the whole window takes the mouse, so a drag
@@ -2592,46 +2415,33 @@ impl SettingsWindow {
             return None;
         }
         Some(
-            div()
-                .id("zoom-slider-drag")
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .on_mouse_move(
-                    cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
-                        this.set_zoom_from(event.position, cx);
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _window, cx| {
-                        this.slider_dragging = false;
-                        // `onChangeEnd` -- the store write happens once, at the
-                        // end of the drag.
-                        let value = this.settings.default_zoom_amount.unwrap_or(1.5);
-                        this.write(
-                            "defaultZoomAmount",
-                            Value::from(f64::from((value * 10.).round() / 10.)),
-                            cx,
-                        );
-                    }),
-                )
-                .into_any_element(),
+            ui::Slider::drag_layer(
+                "zoom-slider-drag",
+                cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                    this.set_zoom_from(event.position, cx);
+                }),
+                cx.listener(|this, _, _window, cx| {
+                    this.slider_dragging = false;
+                    // `onChangeEnd` -- the store write happens once, at the
+                    // end of the drag.
+                    let value = this.settings.default_zoom_amount.unwrap_or(1.5);
+                    this.write(
+                        "defaultZoomAmount",
+                        Value::from(f64::from(ui::snap_to_step(value, ZOOM_MIN, ZOOM_MAX, 0.1))),
+                        cx,
+                    );
+                }),
+            )
+            .into_any_element(),
         )
     }
 
     fn set_zoom_from(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let Some(track) = self.slider_track.get() else {
+        // `step={0.1}`
+        let Some(value) = ui::slider_value_at(&self.slider_track, position, ZOOM_MIN, ZOOM_MAX, 0.1)
+        else {
             return;
         };
-        let width = f32::from(track.size.width);
-        if width <= 0. {
-            return;
-        }
-        let fraction = ((f32::from(position.x) - f32::from(track.origin.x)) / width).clamp(0., 1.);
-        // `step={0.1}`
-        let value = ((ZOOM_MIN + fraction * (ZOOM_MAX - ZOOM_MIN)) * 10.).round() / 10.;
         if self.settings.default_zoom_amount != Some(value) {
             self.settings.default_zoom_amount = Some(value);
             cx.notify();
@@ -2644,183 +2454,24 @@ impl SettingsWindow {
         let menu = self.menu.as_ref()?;
         let kind = menu.kind;
         let items = self.menu_items(kind);
-        Some(self.render_menu_at(kind, items, menu.origin, cx))
-    }
 
-    fn render_menu_at(
-        &self,
-        kind: MenuKind,
-        items: Vec<(SharedString, bool)>,
-        origin: Point<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let theme = self.theme;
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(
-                // Click-away dismiss, the way a native menu closes.
-                div()
-                    .id("menu-backdrop")
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.menu = None;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("menu")
-                    .absolute()
-                    .left(origin.x)
-                    .top(origin.y)
-                    .flex()
-                    .flex_col()
-                    .min_w(px(180.))
-                    .max_h(px(320.))
-                    .overflow_y_scroll()
-                    .p(px(4.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(theme.settings_border())
-                    .bg(theme.settings_card_bg())
-                    .text_size(px(12.))
-                    .children(
-                        items
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (label, checked))| {
-                                div()
-                                    .id(SharedString::from(format!("menu-item-{index}")))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .h(px(24.))
-                                    .px(px(6.))
-                                    .rounded(px(4.))
-                                    .hover(|style| style.bg(theme.settings_hover()))
-                                    .child(div().w(px(12.)).flex_shrink_0().children(checked.then(
-                                        || {
-                                            svg()
-                                                .path("icons/check.svg")
-                                                .size(px(12.))
-                                                .text_color(theme.settings_text())
-                                        },
-                                    )))
-                                    .child(div().flex_1().min_w_0().truncate().child(label))
-                                    .on_click(cx.listener(move |this, _, _window, cx| {
-                                        this.choose(kind, index, cx);
-                                    }))
-                            }),
-                    ),
-            )
-            .into_any_element()
+        Some(
+            ui::Menu::settings(&self.theme, "settings-menu", items, &menu.state)
+                .on_select(cx.listener(move |this, index: &usize, _window, cx| {
+                    this.choose(kind, *index, cx);
+                }))
+                .on_dismiss(cx.listener(|this, _, _window, cx| {
+                    this.menu = None;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
     }
 }
 
 /// `minValue={1} maxValue={4.5}` on the zoom slider.
 const ZOOM_MIN: f32 = 1.;
 const ZOOM_MAX: f32 = 4.5;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ButtonVariant {
-    /// `variant="gray"`.
-    Gray,
-    /// `variant="dark"` and `variant="primary"`, which the settings material
-    /// paints identically (the accent).
-    Dark,
-}
-
-/// The `<Section>` element, split out so `pro()` can be chained the way the
-/// TSX passes `pro`.
-struct Section {
-    theme: Theme,
-    title: &'static str,
-    description: Option<&'static str>,
-    right: Option<gpui::AnyElement>,
-    children: Vec<gpui::AnyElement>,
-    pro: bool,
-}
-
-impl Section {
-    fn pro(mut self) -> Self {
-        self.pro = true;
-        self
-    }
-}
-
-impl IntoElement for Section {
-    type Element = gpui::Div;
-
-    fn into_element(self) -> Self::Element {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            // `space-y-2.5`
-            .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_end()
-                    .gap(px(12.))
-                    .px(px(4.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.))
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .text_size(px(14.))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(self.title),
-                                    )
-                                    .when(self.pro, |this| {
-                                        // `text-[10px] font-medium uppercase
-                                        //  tracking-wide px-1.5 py-0.5
-                                        //  rounded-md bg-blue-9 text-white`
-                                        this.child(
-                                            div()
-                                                .px(px(6.))
-                                                .py(px(2.))
-                                                .rounded(px(6.))
-                                                .bg(Hsla::from(theme.blue_9))
-                                                .text_size(px(10.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(gpui::white())
-                                                .child("PRO"),
-                                        )
-                                    }),
-                            )
-                            .children(self.description.map(|description| {
-                                div()
-                                    .text_size(px(12.))
-                                    .line_height(px(18.))
-                                    .text_color(theme.settings_muted())
-                                    .child(description)
-                            })),
-                    )
-                    .children(self.right),
-            )
-            .children(self.children)
-    }
-}
 
 /// `new URL(v).origin` -- the Tauri handler normalises the typed URL to its
 /// origin before storing it, and throws (leaving the setting alone) when it
