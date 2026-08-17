@@ -265,6 +265,58 @@ impl RenderOnce for Slider {
     }
 }
 
+/// One live slider drag, and the undo bracket around it.
+///
+/// The Solid `Slider` takes `history.pause()` on the **first** `onChange` of a
+/// drag and calls the closure it returns on `onChangeEnd`
+/// (`routes/editor/ui.tsx:81, 96-104`), so a drag's sixty intermediate values
+/// collapse into one undo entry. That is a correctness contract, not styling:
+/// without it every sidebar drag spams the history stack.
+///
+/// gpui has no `onChangeEnd` -- a drag ends on the window-wide drag layer, not
+/// on the slider -- so the bracket lives here instead, keyed by whatever the
+/// window uses to tell its sliders apart. The pause and resume arrive as
+/// callbacks, so this module stays free of editor types.
+#[derive(Debug, Default)]
+pub struct SliderDrag<K> {
+    active: Option<K>,
+}
+
+impl<K: Copy + PartialEq> SliderDrag<K> {
+    pub fn new() -> Self {
+        Self { active: None }
+    }
+
+    /// Which slider is being dragged, if any. The window reads this to decide
+    /// whether to paint the drag layer and where a move applies.
+    pub fn active(&self) -> Option<K> {
+        self.active
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// A press on `key`. `pause` runs exactly once per drag: a second press
+    /// without an intervening release (a chorded pointer, a re-entrant event)
+    /// must not push a second pause onto the history, or the resume would
+    /// leave it paused forever.
+    pub fn begin(&mut self, key: K, pause: impl FnOnce()) {
+        if self.active.is_none() {
+            pause();
+        }
+        self.active = Some(key);
+    }
+
+    /// The release. `resume` runs only if a drag was actually in flight, so a
+    /// stray mouse-up cannot unbalance the pause count.
+    pub fn end(&mut self, resume: impl FnOnce()) {
+        if self.active.take().is_some() {
+            resume();
+        }
+    }
+}
+
 /// A convenience for the "pointer landed here, what value is that" step every
 /// call site repeats: read the track, map x to a fraction, snap to the step.
 pub fn value_at(
@@ -363,6 +415,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The undo bracket: one pause per drag, one resume, and nothing at all
+    /// from an unmatched release.
+    #[test]
+    fn a_slider_drag_pauses_history_once_and_resumes_once() {
+        use std::cell::Cell;
+
+        let pauses = Cell::new(0);
+        let resumes = Cell::new(0);
+        let mut drag: SliderDrag<u8> = SliderDrag::new();
+
+        drag.end(|| resumes.set(resumes.get() + 1));
+        assert_eq!((pauses.get(), resumes.get()), (0, 0));
+
+        drag.begin(1, || pauses.set(pauses.get() + 1));
+        drag.begin(1, || pauses.set(pauses.get() + 1));
+        assert_eq!(drag.active(), Some(1));
+        assert_eq!((pauses.get(), resumes.get()), (1, 0));
+
+        drag.end(|| resumes.set(resumes.get() + 1));
+        assert_eq!(drag.active(), None);
+        assert_eq!((pauses.get(), resumes.get()), (1, 1));
+
+        drag.begin(2, || pauses.set(pauses.get() + 1));
+        drag.end(|| resumes.set(resumes.get() + 1));
+        assert_eq!((pauses.get(), resumes.get()), (2, 2));
     }
 
     #[test]

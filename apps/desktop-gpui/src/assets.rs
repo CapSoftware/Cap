@@ -58,6 +58,21 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "folder.svg",
     "gauge.svg",
     "gear.svg",
+    // The config sidebar's field glyphs. Four are Cap's own
+    // (`packages/ui-solid/icons/{padding,corners,shadow,bg-blur}.svg`); the
+    // rest of the background section's are Lucide, drawn here from the same
+    // 24x24 originals `~icons/lucide/*` resolves to -- laptop (MacBook notch),
+    // wind (motion blur), image-off (the "None" source tile). `shuffle` is the
+    // gradient editor's own inline randomise glyph (`GradientEditor.tsx:237-253`),
+    // which is Lucide `shuffle` with its paths spelled out in the TSX.
+    "padding.svg",
+    "corners.svg",
+    "shadow.svg",
+    "bg-blur.svg",
+    "laptop.svg",
+    "wind.svg",
+    "image-off.svg",
+    "shuffle.svg",
     "gift.svg",
     "history.svg",
     "hotkeys.svg",
@@ -137,11 +152,31 @@ const IMAGES: &[(&str, &[u8])] = assets!("images":
     "dark.jpg",
 );
 
+/// The background-source tiles' fallback art, copied from
+/// `apps/desktop/src/assets/illustrations/`. Full-colour, so `img()` not
+/// `svg()`, and webp because that is what the app ships -- 4 KB for the pair,
+/// against 25 MB if the wallpapers themselves were embedded (see the README).
+///
+/// **Two of `BACKGROUND_ICONS`' four are dead in the shipping app.**
+/// `renderBackgroundSourceIcon` returns a live swatch for `color` and a live
+/// gradient for `gradient` before it ever reaches the map
+/// (`ConfigSidebar.tsx:2076-2089`), so `colorBg` and `gradientBg` are imported
+/// and never drawn; only `imageBg` (desktop and wallpaper) and
+/// `transparentBg` (image) are.
+const ILLUSTRATIONS: &[(&str, &[u8])] = assets!("illustrations":
+    "image.webp",
+    "transparent.webp",
+);
+
 pub struct Assets;
 
 impl Assets {
     fn all() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
-        FONTS.iter().chain(ICONS.iter()).chain(IMAGES.iter())
+        FONTS
+            .iter()
+            .chain(ICONS.iter())
+            .chain(IMAGES.iter())
+            .chain(ILLUSTRATIONS.iter())
     }
 }
 
@@ -198,6 +233,9 @@ mod tests {
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
+        // The config sidebar's field glyphs and the background section's
+        // source tiles, same split.
+        include_str!("editor_sidebar.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws
@@ -286,6 +324,42 @@ mod tests {
         );
     }
 
+    /// And for the background-source tiles' art, which resolves through the
+    /// same `AssetSource` and fails just as silently.
+    #[test]
+    fn every_referenced_illustration_is_embedded_and_vice_versa() {
+        let source = ICON_SOURCES.concat();
+        let source = source.as_str();
+
+        let referenced: Vec<&str> = source
+            .match_indices("\"illustrations/")
+            .filter_map(|(start, _)| source[start + 1..].split('"').next())
+            .collect();
+        assert!(
+            !referenced.is_empty(),
+            "found no illustration references to check"
+        );
+
+        let missing: Vec<&str> = referenced
+            .into_iter()
+            .filter(|path| Assets.load(path).unwrap().is_none())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "illustrations referenced but not embedded: {missing:?}"
+        );
+
+        let unused: Vec<&str> = ILLUSTRATIONS
+            .iter()
+            .map(|(path, _)| *path)
+            .filter(|path| !source.contains(path))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "illustrations embedded but never drawn: {unused:?}"
+        );
+    }
+
     #[test]
     fn fonts_and_icons_resolve() {
         assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
@@ -295,5 +369,10 @@ mod tests {
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
         assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
+        assert!(Assets.load("illustrations/image.webp").unwrap().is_some());
+        assert_eq!(
+            Assets.list("illustrations").unwrap().len(),
+            ILLUSTRATIONS.len()
+        );
     }
 }

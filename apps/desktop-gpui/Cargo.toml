@@ -68,7 +68,10 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # different types. `jpeg`/`png` are the two codecs the pre-baked bundle
 # thumbnails use; gpui's own pin already enables both, so this only spells out
 # what the build already resolves to.
-image = { version = "0.25.1", default-features = false, features = ["jpeg", "png"] }
+# `webp` is the config sidebar's four background-source illustrations, which
+# the app ships as webp; features are additive, so enabling it here does not
+# move gpui's own pin.
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 smallvec = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt"] }

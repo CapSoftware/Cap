@@ -42,7 +42,11 @@
 
 mod button;
 mod collapsible;
+mod editor_button;
+mod field;
 mod kbd;
+mod number_field;
+mod radio_cards;
 mod menu;
 mod progress;
 mod segmented;
@@ -65,7 +69,17 @@ pub use button::{Button, ButtonSize, ButtonVariant, ClickHandler, IconButton};
 #[allow(unused_imports)]
 pub use collapsible::{Collapsible, CollapsibleState};
 #[allow(unused_imports)]
+pub use editor_button::{EditorButton, EditorButtonVariant};
+#[allow(unused_imports)]
+pub use field::{Field, Subfield};
+#[allow(unused_imports)]
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
+#[allow(unused_imports)]
+pub use number_field::{
+    NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
+};
+#[allow(unused_imports)]
+pub use radio_cards::{RadioCard, RadioCards};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
 #[allow(unused_imports)]
@@ -76,7 +90,7 @@ pub use segmented::{SegmentOption, SegmentedControl, option_at};
 pub use select::Select;
 #[allow(unused_imports)]
 pub use slider::{
-    Slider, SliderTrack, fraction_from_x, snap_to_step, value_at as slider_value_at,
+    Slider, SliderDrag, SliderTrack, fraction_from_x, snap_to_step, value_at as slider_value_at,
     value_from_fraction,
 };
 #[allow(unused_imports)]

@@ -65,6 +65,7 @@ mod mac {
     use gpui::Window;
     use objc2::rc::Id;
     use objc2::runtime::{AnyObject, Sel};
+    use objc2::{ClassType, DeclaredClass};
     use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -551,6 +552,253 @@ mod mac {
         ns_window(window).map(|w| unsafe { w.windowNumber() })
     }
 
+    // -- The colour panel ----------------------------------------------------
+    //
+    // Cap has never shipped a hue/saturation surface: every colour control in
+    // the editor -- the background colour, both gradient stops, the border
+    // colour, the caption and keyboard text colours -- is a swatch that
+    // `.click()`s a hidden `<input type="color">` (`color-utils.tsx:50-64`),
+    // and what that opens on macOS is `NSColorPanel`. So the panel *is* the
+    // shipping behaviour, not a substitute for it.
+    //
+    // The panel reports every change through a target/action pair, and that
+    // action fires from AppKit's run loop with no gpui borrow available: it
+    // may not touch a window, an entity or the App. It therefore does exactly
+    // one thing -- push the colour down a channel -- and the window drains
+    // that channel from its own task, which is the same seam
+    // `on_state_change` uses for playhead positions off the playback thread.
+
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// The live sender, read by the action. `thread_local` rather than a
+        /// static: AppKit only ever calls the action on the main thread, and
+        /// this way it needs no lock.
+        static COLOR_PANEL_TX: RefCell<Option<flume::Sender<[u8; 3]>>> =
+            const { RefCell::new(None) };
+        /// The target object, retained for as long as the panel may call it.
+        static COLOR_PANEL_TARGET: RefCell<Option<Id<ColorPanelTarget>>> =
+            const { RefCell::new(None) };
+    }
+
+    objc2::declare_class!(
+        /// The `changeColor:` receiver. No ivars: the sender lives in the
+        /// thread-local above, which keeps the class declaration to the
+        /// minimum that can go wrong.
+        struct ColorPanelTarget;
+
+        unsafe impl ClassType for ColorPanelTarget {
+            type Super = objc2::runtime::NSObject;
+            type Mutability = objc2::mutability::InteriorMutable;
+            const NAME: &'static str = "CapGpuiColorPanelTarget";
+        }
+
+        impl DeclaredClass for ColorPanelTarget {}
+
+        unsafe impl ColorPanelTarget {
+            #[method(changeColor:)]
+            fn change_color(&self, _sender: *mut AnyObject) {
+                let Some(color) = color_panel_color() else {
+                    return;
+                };
+                COLOR_PANEL_TX.with(|tx| {
+                    if let Some(sender) = tx.borrow().as_ref() {
+                        // Bounded by nothing, drained latest-wins: a colour
+                        // dragged around the wheel produces hundreds of these
+                        // and only the newest matters.
+                        let _ = sender.send(color);
+                    }
+                });
+            }
+        }
+    );
+
+    /// The shared panel's current colour, converted to sRGB 0-255.
+    ///
+    /// `colorUsingColorSpace:` is not optional: the panel hands back colours in
+    /// whatever space its current picker uses (a grey-scale slider gives a
+    /// two-component `NSColor`), and asking such a colour for `redComponent`
+    /// raises.
+    pub fn color_panel_color() -> Option<[u8; 3]> {
+        use objc2::{class, msg_send};
+
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
+            if panel.is_null() {
+                return None;
+            }
+            let color: *mut AnyObject = msg_send![panel, color];
+            if color.is_null() {
+                return None;
+            }
+            let space: *mut AnyObject = msg_send![class!(NSColorSpace), sRGBColorSpace];
+            let color: *mut AnyObject = msg_send![color, colorUsingColorSpace: space];
+            if color.is_null() {
+                return None;
+            }
+            let red: f64 = msg_send![color, redComponent];
+            let green: f64 = msg_send![color, greenComponent];
+            let blue: f64 = msg_send![color, blueComponent];
+            Some([
+                (red.clamp(0., 1.) * 255.).round() as u8,
+                (green.clamp(0., 1.) * 255.).round() as u8,
+                (blue.clamp(0., 1.) * 255.).round() as u8,
+            ])
+        }
+    }
+
+    /// Open the shared colour panel seeded with `initial`, and hand back the
+    /// channel its changes arrive on.
+    ///
+    /// Must not run inside a gpui update: `orderFront:` fires AppKit's window
+    /// callbacks synchronously, which re-borrows the App -- the same rule
+    /// `install_window_material` and `place_overlay_panel` carry.
+    pub fn open_color_panel(initial: [u8; 3]) -> Option<flume::Receiver<[u8; 3]>> {
+        use objc2::{class, msg_send, msg_send_id, sel};
+
+        let (tx, rx) = flume::unbounded();
+
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
+            if panel.is_null() {
+                return None;
+            }
+
+            let color: *mut AnyObject = msg_send![
+                class!(NSColor),
+                colorWithSRGBRed: f64::from(initial[0]) / 255.,
+                green: f64::from(initial[1]) / 255.,
+                blue: f64::from(initial[2]) / 255.,
+                alpha: 1.0f64,
+            ];
+            if !color.is_null() {
+                let _: () = msg_send![panel, setColor: color];
+            }
+            // `<input type="color">` has no alpha channel, and neither does
+            // `BackgroundSource::Color`'s `value` -- the sidebar's swatches are
+            // opaque RGB triples (`normalizeOpaqueHexColor`).
+            let _: () = msg_send![panel, setShowsAlpha: false];
+
+            let target: Id<ColorPanelTarget> = msg_send_id![ColorPanelTarget::alloc(), init];
+            let _: () = msg_send![panel, setTarget: &*target];
+            let _: () = msg_send![panel, setAction: sel!(changeColor:)];
+            let _: () = msg_send![panel, setContinuous: true];
+            let _: () = msg_send![panel, orderFront: std::ptr::null_mut::<AnyObject>()];
+
+            COLOR_PANEL_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
+        }
+
+        COLOR_PANEL_TX.with(|slot| *slot.borrow_mut() = Some(tx));
+        Some(rx)
+    }
+
+    /// Whether the panel is still up. The window polls this to know when the
+    /// user is done, which is what closes the undo bracket -- the panel has no
+    /// "commit" action of its own.
+    pub fn color_panel_is_open() -> bool {
+        use objc2::{class, msg_send};
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
+            if panel.is_null() {
+                return false;
+            }
+            msg_send![panel, isVisible]
+        }
+    }
+
+    /// Drop the target and the sender, and close the panel if it is still up.
+    pub fn close_color_panel(order_out: bool) {
+        use objc2::{class, msg_send};
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
+            if !panel.is_null() {
+                let _: () = msg_send![panel, setTarget: std::ptr::null_mut::<AnyObject>()];
+                if order_out {
+                    let _: () = msg_send![panel, orderOut: std::ptr::null_mut::<AnyObject>()];
+                }
+            }
+        }
+        COLOR_PANEL_TX.with(|slot| *slot.borrow_mut() = None);
+        COLOR_PANEL_TARGET.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    // -- The open panel ------------------------------------------------------
+
+    /// `<input type="file" accept="image/...">`, which on macOS is an
+    /// `NSOpenPanel` (`ConfigSidebar.tsx:2508-2542`).
+    ///
+    /// `runModal` spins AppKit's own modal run loop, so like every other call
+    /// here it must be made with no gpui borrow held -- from a spawned task,
+    /// never from inside an update.
+    pub fn open_image_panel(extensions: &[&str]) -> Option<std::path::PathBuf> {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSArray, NSString};
+
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSOpenPanel), openPanel];
+            if panel.is_null() {
+                return None;
+            }
+            let _: () = msg_send![panel, setCanChooseFiles: true];
+            let _: () = msg_send![panel, setCanChooseDirectories: false];
+            let _: () = msg_send![panel, setAllowsMultipleSelection: false];
+
+            let types: Vec<Id<NSString>> = extensions
+                .iter()
+                .map(|extension| NSString::from_str(extension))
+                .collect();
+            let types = NSArray::from_vec(types);
+            let _: () = msg_send![panel, setAllowedFileTypes: &*types];
+
+            // `NSModalResponseOK`.
+            let response: isize = msg_send![panel, runModal];
+            if response != 1 {
+                return None;
+            }
+            let url: *mut AnyObject = msg_send![panel, URL];
+            if url.is_null() {
+                return None;
+            }
+            let path: *mut NSString = msg_send![url, path];
+            if path.is_null() {
+                return None;
+            }
+            Some(std::path::PathBuf::from((*path).to_string()))
+        }
+    }
+
+    /// `current_desktop_background_source_path` (`src-tauri/recording.rs:271-305`):
+    /// the file behind the main screen's desktop picture.
+    pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe {
+            // Raw messages rather than `objc2_app_kit::NSScreen`: the typed
+            // binding needs the `NSScreen` feature, and the rule here is that
+            // objc2-app-kit's version stays pinned to gpui's so no second
+            // objc2 universe gets built.
+            let screen: *mut AnyObject = msg_send![class!(NSScreen), mainScreen];
+            if screen.is_null() {
+                return None;
+            }
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if workspace.is_null() {
+                return None;
+            }
+            let url: *mut AnyObject = msg_send![workspace, desktopImageURLForScreen: screen];
+            if url.is_null() {
+                return None;
+            }
+            let path: *mut NSString = msg_send![url, path];
+            if path.is_null() {
+                return None;
+            }
+            let path = (*path).to_string();
+            (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+        }
+    }
+
     /// One-line diagnostic of everything AppKit weighs into occlusion
     /// visibility -- how the macOS 26 display-link failure was diagnosed; keep
     /// it for the next platform mystery.
@@ -614,6 +862,22 @@ mod stub {
     pub fn close_native(_native: &NativeWindow) {}
     pub fn show_window_without_focus(_window: &Window) {}
     pub fn window_number(_window: &Window) -> Option<isize> {
+        None
+    }
+    pub fn color_panel_color() -> Option<[u8; 3]> {
+        None
+    }
+    pub fn open_color_panel(_initial: [u8; 3]) -> Option<flume::Receiver<[u8; 3]>> {
+        None
+    }
+    pub fn color_panel_is_open() -> bool {
+        false
+    }
+    pub fn close_color_panel(_order_out: bool) {}
+    pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
+        None
+    }
+    pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         None
     }
 }

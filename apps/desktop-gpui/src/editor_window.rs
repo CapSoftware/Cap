@@ -135,9 +135,9 @@ const HEADER_HEIGHT: f32 = 56.;
 /// `w-104 min-w-104` on the sidebar column (`Editor.tsx:728`). Tailwind v4
 /// arbitrary spacing: 104 x 0.25rem = 26rem = 416px. The column also carries
 /// `ml-2`, i.e. an 8px gutter.
-const SIDEBAR_WIDTH: f32 = 416.;
+pub(crate) const SIDEBAR_WIDTH: f32 = 416.;
 /// `h-16` on the sidebar's tab bar (`ConfigSidebar.tsx:595`).
-const SIDEBAR_TAB_BAR_HEIGHT: f32 = 64.;
+pub(crate) const SIDEBAR_TAB_BAR_HEIGHT: f32 = 64.;
 
 /// `padding = 4` inside `PreviewCanvas` (`Player.tsx:566`).
 const PLAYER_CANVAS_PADDING: f32 = 4.;
@@ -799,14 +799,14 @@ struct Drag {
 }
 
 pub struct EditorWindow {
-    theme: Theme,
-    project_path: PathBuf,
+    pub(crate) theme: Theme,
+    pub(crate) project_path: PathBuf,
     state: LoadState,
     latest_frame: Option<Arc<RenderImage>>,
     frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
-    instance: Option<Arc<EditorInstance>>,
+    pub(crate) instance: Option<Arc<EditorInstance>>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -848,11 +848,11 @@ pub struct EditorWindow {
     /// instance's own config once it exists -- `EditorInstance::new`
     /// synthesises a timeline for a raw bundle, so the pre-flight's is not the
     /// one being rendered.
-    project: ProjectConfiguration,
+    pub(crate) project: ProjectConfiguration,
     /// `projectHistory` (`ED/context.ts:1724`).
-    history: ProjectHistory,
+    pub(crate) history: ProjectHistory,
     /// `editorState.timeline.selection`.
-    selection: Option<Selection>,
+    pub(crate) selection: Option<Selection>,
     /// `editorState.timeline.interactMode === "split"`.
     split_mode: bool,
     /// `editorState.timeline.splitPreview` -- `(time, snapped)`.
@@ -875,6 +875,12 @@ pub struct EditorWindow {
     /// The debounced `project-config.json` write, and the task driving it.
     pending_save: Rc<RefCell<PendingProjectSave>>,
     save_task: Option<gpui::Task<()>>,
+
+    // -- Config sidebar (E5a) -------------------------------------------------
+    /// The sidebar's own state: the tab, the background source panel, the
+    /// collapsibles, the live slider drag and the colour panel. Everything it
+    /// *writes* lives in `project` like every other edit.
+    pub(crate) sidebar: crate::editor_sidebar::SidebarState,
 }
 
 impl EditorWindow {
@@ -927,6 +933,7 @@ impl EditorWindow {
             multiple_clips: false,
             pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
+            sidebar: crate::editor_sidebar::SidebarState::new(&ProjectConfiguration::default()),
         }
     }
 
@@ -972,6 +979,11 @@ impl EditorWindow {
         self.project = config;
         self.history = ProjectHistory::new(self.project.clone());
         self.rebuild_timeline();
+        // The sidebar's own signals are seeded from the config the instance
+        // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
+        // initial value reads `background.padding`/`rounding` (`CS:1799-1802`).
+        self.sidebar = crate::editor_sidebar::SidebarState::new(&self.project);
+        self.sidebar_loaded(window, cx);
         cx.notify();
         window.refresh();
     }
@@ -1084,7 +1096,7 @@ impl EditorWindow {
         );
     }
 
-    fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.history.record(&self.project);
         self.rebuild_timeline();
         self.publish_project();
@@ -1151,6 +1163,7 @@ impl EditorWindow {
     ) {
         self.project = config;
         self.rebuild_timeline();
+        self.sync_background_source_tab();
         self.publish_project();
         self.schedule_save(window, cx);
         // A segment the undo removed must not stay selected.
@@ -1727,7 +1740,7 @@ impl EditorWindow {
     }
 
     /// `setEditorState("timeline", "selection", ...)`.
-    fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+    pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         if self.selection != selection {
             self.selection = selection;
             cx.notify();
@@ -2443,7 +2456,7 @@ impl EditorWindow {
         }
     }
 
-    fn summary(&self) -> Option<&ProjectSummary> {
+    pub(crate) fn summary(&self) -> Option<&ProjectSummary> {
         match &self.state {
             LoadState::Ready(summary) => Some(summary),
             _ => None,
@@ -2453,7 +2466,7 @@ impl EditorWindow {
     /// `bg-gray-1 dark:bg-gray-2` -- the card/sidebar/panel surface. The
     /// editor takes the plain Radix values, not the material remaps: it is not
     /// a chrome route, so none of the `--macos-settings-*` overrides apply.
-    fn panel_bg(&self) -> Hsla {
+    pub(crate) fn panel_bg(&self) -> Hsla {
         if self.theme.is_dark() {
             self.theme.gray_2.into()
         } else {
@@ -2479,6 +2492,9 @@ impl EditorWindow {
     /// Every one of these is inert this unit -- see the README's deviation
     /// table -- so they all render in the disabled state rather than pretending
     /// to be live.
+    /// The header's and player toolbar's unbuilt affordances, drawn at their
+    /// real metrics in `EditorButton`'s disabled state -- the shared component
+    /// the config sidebar's Reset and Import actions use live.
     fn editor_button(
         &self,
         icon: &'static str,
@@ -2486,40 +2502,12 @@ impl EditorWindow {
         right_icon: Option<&'static str>,
         width: Option<f32>,
     ) -> impl IntoElement {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(6.))
-            .gap(px(6.))
-            .h(px(32.))
-            .rounded(px(8.))
-            .flex_shrink_0()
-            .when_some(width, |this, width| this.w(px(width)))
-            // `disabled:opacity-50 disabled:text-gray-11`.
-            .opacity(0.5)
-            .text_color(Hsla::from(theme.gray_11))
-            .text_size(px(14.))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
-            )
-            .when_some(label, |this, label| {
-                this.child(div().flex_1().truncate().child(label))
-            })
-            .when_some(right_icon, |this, icon| {
-                this.child(
-                    svg()
-                        .path(icon)
-                        .size(px(12.))
-                        .flex_shrink_0()
-                        .text_color(Hsla::from(theme.gray_11)),
-                )
-            })
+        ui::EditorButton::plain(&self.theme, icon)
+            .disabled(true)
+            .when_some(label, |this, label| this.label(label))
+            .left_icon(icon)
+            .when_some(right_icon, |this, icon| this.right_icon(icon))
+            .when_some(width, |this, width| this.width(px(width)))
     }
 
     /// The header's undo and redo buttons (`Header.tsx:145-168`).
@@ -2542,28 +2530,9 @@ impl EditorWindow {
             self.history.can_redo()
         };
         let enabled = can || self.selection.is_some();
-        div()
-            .id(id)
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(6.))
-            .gap(px(6.))
-            .h(px(32.))
-            .rounded(px(8.))
-            .flex_shrink_0()
-            .when(!enabled, |this| this.opacity(0.5))
-            .when(enabled, |this| {
-                this.cursor_pointer()
-                    .hover(|this| this.bg(Hsla::from(theme.gray_3)))
-            })
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(if enabled { theme.gray_12 } else { theme.gray_11 })),
-            )
+        ui::EditorButton::plain(&theme, id)
+            .left_icon(icon)
+            .disabled(!enabled)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !(this.history.can_undo() || this.history.can_redo() || this.selection.is_some())
                 {
@@ -3211,102 +3180,6 @@ impl EditorWindow {
     /// icon rail. The rail is transcribed; the bodies are not (that is a later
     /// unit), so the scroll region shows the same "not built yet" card the
     /// settings window's placeholder pages use.
-    fn render_sidebar(&self) -> impl IntoElement {
-        let theme = self.theme;
-        let summary = self.summary();
-        // The two data-driven disabled states (`CS:602-604`, `CS:610`).
-        let tabs: [(&'static str, bool); 6] = [
-            ("icons/image.svg", false),
-            (
-                "icons/camera.svg",
-                !summary.is_some_and(|summary| summary.has_camera),
-            ),
-            ("icons/audio-on.svg", false),
-            (
-                "icons/cursor.svg",
-                !summary.is_some_and(|summary| summary.has_cursor_data),
-            ),
-            ("icons/keyboard.svg", false),
-            ("icons/message-bubble.svg", false),
-        ];
-
-        let rail = ui::TabRail::editor(
-            &theme,
-            "sidebar-tabs",
-            self.panel_bg(),
-            tabs.into_iter()
-                .enumerate()
-                .map(|(index, (icon, disabled))| {
-                    ui::TabRailItem::new(icon, index == 0, disabled)
-                })
-                .collect(),
-        )
-        .height(px(SIDEBAR_TAB_BAR_HEIGHT));
-
-        div()
-            // The column: `ml-2 flex min-h-0 w-104 min-w-104 flex-none
-            // overflow-hidden` (`Editor.tsx:728`).
-            .ml(px(8.))
-            .w(px(SIDEBAR_WIDTH))
-            .flex_none()
-            .flex()
-            .min_h_0()
-            .overflow_hidden()
-            .child(
-                // The card: `flex flex-col min-h-0 shrink-0 flex-1 max-w-104
-                // overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2
-                // border border-gray-3`.
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .rounded(px(12.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .child(rail)
-                    .child(
-                        // The scroll region: `text-[0.875rem] flex-1 min-h-0`,
-                        // with the tab panels' own `flex flex-col flex-1
-                        // gap-6 p-4`.
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_h_0()
-                            .gap(px(24.))
-                            .p(px(16.))
-                            .text_size(px(14.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .p(px(16.))
-                                    .rounded(px(12.))
-                                    .bg(Hsla::from(theme.gray_3))
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(Hsla::from(theme.gray_12))
-                                            .child("Background"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child(
-                                                "The sidebar's controls are not part of this \
-                                                 unit yet. The tab rail above is the real one.",
-                                            ),
-                                    ),
-                            ),
-                    ),
-            )
-    }
-
     // -- Timeline ------------------------------------------------------------
 
     /// The timeline strip at its default 260px, 1:1 and read-only.
@@ -3817,7 +3690,7 @@ impl Render for EditorWindow {
                                                     })),
                                             ),
                                     )
-                                    .child(self.render_sidebar()),
+                                    .child(self.render_sidebar(cx)),
                             )
                             .child(self.render_timeline(viewport_width, cx)),
                     ),
@@ -3835,6 +3708,21 @@ impl Render for EditorWindow {
                     cx.listener(|this, _: &MouseUpEvent, _window, cx| {
                         this.zoom_slider_drag = false;
                         cx.notify();
+                    }),
+                )
+            }))
+            // The config sidebar's sliders take the same layer, for the same
+            // reason -- and its release is what closes the undo bracket, so a
+            // drag that ends outside the 32px row still records exactly one
+            // history entry.
+            .children(self.sidebar_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "sidebar-slider-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.sidebar_drag_move(event, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.sidebar_mouse_up(cx);
                     }),
                 )
             }))

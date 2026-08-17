@@ -327,6 +327,18 @@ pub struct Theme {
     /// `--red-300`, the recording bar's stop button. Same value in both themes.
     pub red_300: Rgba,
 
+    /// The **legacy** gray scale (`--gray-50 … --gray-500`, `theme.css:36-45`
+    /// and `:97-107`), which coexists with Radix's 1-12 and is *not*
+    /// numerically aligned with it -- legacy `gray-500` is the darkest text
+    /// colour, Radix `gray-1` the lightest surface. Only the three steps the
+    /// config sidebar actually uses are carried: the background section's
+    /// dashed dividers are `border-gray-300`, and every selected swatch in it
+    /// (wallpaper, colour preset, gradient preset) is `ring-2 ring-gray-500
+    /// ring-offset-2 ring-offset-gray-200`.
+    pub gray_200_legacy: Rgba,
+    pub gray_300_legacy: Rgba,
+    pub gray_500_legacy: Rgba,
+
     /// `--text-primary`, the root text colour. Slightly translucent by design.
     pub text_primary: Rgba,
 }
@@ -377,6 +389,11 @@ impl Theme {
             blue_500: rgb(0x3666c5),
             red_300: rgb(0xff4766),
 
+            // `theme.css:38-44`.
+            gray_200_legacy: rgb(0xe4e6ed),
+            gray_300_legacy: rgb(0xc7ccda),
+            gray_500_legacy: rgb(0x161b26),
+
             text_primary: rgba(0x12161ff2),
         }
     }
@@ -419,6 +436,11 @@ impl Theme {
 
             blue_500: rgb(0x0a84ff),
             red_300: rgb(0xff4766),
+
+            // `theme.css:101-107`.
+            gray_200_legacy: rgb(0x282828),
+            gray_300_legacy: rgb(0x323232),
+            gray_500_legacy: rgb(0xffffff),
 
             text_primary: rgba(0xfffffff2),
         }

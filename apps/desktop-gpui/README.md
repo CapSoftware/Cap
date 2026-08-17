@@ -99,7 +99,10 @@ Everything below is real, not mocked.
   button and on Space, a live playhead and `M:SS / M:SS` clock at 60 fps, real
   audio, click and drag-scrub seeking on the timeline, and the source's
   end-of-media stop. Measured at 59.9 fps sustained with zero dropped frames.
-  The controls the later units own render in place, disabled. See below.
+  The timeline edits the project — trim, move, split, delete, undo — and the
+  config sidebar's rail, scroll body, selection routing and **whole Background
+  tab** are real, writing `project-config.json` through the same debounced
+  path. The controls the later units own render in place, disabled. See below.
 - **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
   Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
   at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
@@ -216,6 +219,10 @@ alike.
 | `ui/surface.rs` | `Card`, `Popover`, `SettingRow`, `Section` | the settings `card`/`rows`/`setting_row`/`Section`, the teleprompter's footer pill and settings popover, and the overlays' liquid-glass surface |
 | `ui/collapsible.rs` | `CollapsibleState` + `Collapsible`, with real height measurement | the settings window's "Available placeholders" reveal |
 | `ui/tab_rail.rs` | `TabRail` | the editor's six-tab config-sidebar rail |
+| `ui/field.rs` | `Field`, `Subfield` | `editor/ui.tsx`'s two labelled setting containers -- every section header in the config sidebar, and the settings pages import them too |
+| `ui/editor_button.rs` | `EditorButton` | `ui.tsx`'s `EditorButton`: the header's undo/redo/delete, the background section's Reset and Import actions, and every selection panel's Done/Delete pair |
+| `ui/radio_cards.rs` | `RadioCards` | the "radio as a full-width bordered card" idiom the cursor settings build twice and the screenshot editor a third time |
+| `ui/number_field.rs` | `NumberFieldState` (the value/rawValue state machine) + `NumberField` | Kobalte's `NumberField` as the Camera3D durations and the clip sync-offset use it |
 | `ui/progress.rs` | `CircularProgress`, determinate + indeterminate | replaces all three of the Solid app's rings ahead of the export unit |
 | `ui/kbd.rs` | `KbdChip` + `kbd_symbol` | the three divergent keycap looks, and the ⌘⌃⇧⌥-vs-`Ctrl`/`Shift`/`Alt` mapping each re-implements |
 | `ui/tooltip.rs` | `Tooltip` over gpui's own `.tooltip()` | `Tooltip.tsx` and `ComingSoonTooltip`, for `EditorButton`'s `kbd`/`tooltipText`/`comingSoon` arms |
@@ -342,6 +349,12 @@ and silently drops the callback. Grab the `NSWindow` inside the update, then
 do the AppKit calls from a spawned task (`platform::place_overlay_panel`,
 `platform::install_window_material`).
 
+**`svg()` does not inherit `text_color`.** Every other text-ish property
+cascades from the parent `div`, so a glyph inside a coloured container looks
+like it should just work — and it draws nothing at all instead, silently, the
+same failure mode as an unregistered asset path. Set the colour on the `svg()`
+element itself, always.
+
 **Titled windows cannot cover the menu bar.** Every gpui window — `PopUp`
 panels included — carries `NSTitledWindowMask`, so AppKit's
 `constrainFrameRect:toScreen:` pushes a display-covering window 33pt down.
@@ -367,7 +380,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | **E1–E4 done — window, shell, playback, timeline, editing.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. The config sidebar's controls are the unit still pending |
+| Editor | 1275×800 | **E1–E4 done — window, shell, playback, timeline, editing.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar**: the live six-tab rail, the scroll body, selection routing, and the Background tab at 1:1. The other five tabs and the eight segment panels are placeholder cards |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -1003,7 +1016,7 @@ Editor-specific deviations:
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
-| **The config sidebar is a rail plus a placeholder** | The six-tab bar is real (`ui::TabRail`), at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
+| **Five of the sidebar's six tabs are placeholders** | Background is built in full (see [The config sidebar](#the-config-sidebar)); Camera, Audio, Cursor, Keyboard and Captions render the same "not part of this unit" card the settings window's unbuilt pages do, as do the eight per-segment panels the selection routes to. |
 | **The timeline's height is fixed** | The strip sits at the default 260px with the `MIN_TIMELINE_HEIGHT` floor expressed but its 16px drag handle inert, so the player/timeline split cannot be resized. Everything else in the strip — including editing — is real; see [Timeline editing](#timeline-editing). |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
@@ -1422,6 +1435,212 @@ its baseline values, every drag and delete having been undone.
 | **Escape clears only the selection** | The source also clears `audioPicker` and `camera3dSetup`, neither of which exists yet. |
 | **No `hidden_text_segments` bookkeeping** | `#[serde(skip_serializing)]` on the field means it never round-trips through a write in either app; nothing here maintains it. |
 
+
+## The config sidebar
+
+`editor_sidebar.rs` is the panel on the right: the shell — the live six-tab
+rail, the scroll body, and the routing that swaps a selected segment's panel in
+over the top of it — plus **the whole Background tab at 1:1**
+(`ConfigSidebar.tsx:2185-2976`). The other five tabs and the eight segment
+panels are the next unit, and render the same honest card the settings window's
+unbuilt pages do.
+
+Every control writes a real `ProjectConfiguration` key path through the **same
+path a timeline edit takes**: `project_changed` — the undo stack, then
+`project_config` + a `preview_tx` push so the picture follows the change, then
+the 250ms debounced `ProjectConfiguration::write`. Nothing in the module writes
+to disk itself, and nothing in it renders a frame itself.
+
+### The shell
+
+- **Six tabs, not seven.** `hotkeys` is commented out at `CS:620` and its dead
+  `KTabs.Content` still exists at `:1053-1061`; it is not a tab here either.
+  Camera is disabled when every segment has `camera === null`, Cursor when the
+  recording has no cursor data — the two data-driven states, from the same
+  facts. A tab click clears any selection first, then switches and **puts the
+  scroll body back to the top** (`:632-650`).
+- **Selection routing is real, the panels are not.** `sidebarSelection()`
+  (`:577-580`) is the timeline selection *excluding clip*: selecting a clip is
+  a timeline-only affordance and must not swap the sidebar away from its tab.
+  When a non-clip selection exists, `KTabs`'s value is forced to `undefined`
+  (`:586-592`) — so the rail shows **no** selected tab and hides its indicator
+  — the scroll body takes `hidden` (`:685-691`) and the selection panel is
+  drawn in its place (`:1077-1093`). All of that is reproduced; what the panel
+  *contains* is E5b. Verified in both directions with real clicks: a click on a
+  caption segment swapped the sidebar and cleared the rail's pill, Escape
+  brought the Background tab and the pill back.
+- **The scroll body** is `overflow-y-scroll text-[0.875rem] flex-1 min-h-0`
+  with the tab panel's own `flex flex-col gap-6 p-4` inside it.
+
+### The Background tab, control by control
+
+Every row is a real key path. Ranges, steps and side effects are the call
+site's.
+
+| Field | Control | Range / step | Key path | Source |
+|---|---|---|---|---|
+| Background Image | 6 source tiles, 2 rows of 3, each with a live `size-3.5` preview of what it would select | — | `background.source` | `CS:2186-2280`, icons `:2054-2114` |
+| ↳ Desktop | empty card + "Import desktop background"; filled = `h-48` preview + Re-import | — | `background.source = wallpaper{path}` | `:2283-2344` |
+| ↳ Wallpaper | six theme sub-tabs over a 7-column grid of the 53 bundled wallpapers | — | `background.source = wallpaper{path}` | `:2345-2464` |
+| ↳ Image | click card → `NSOpenPanel`; filled = preview + clear button | jpg/jpeg/png/gif/webp/bmp | `background.source = image{path}`, copied to app data as `bg-<ts>-<name>` | `:2465-2543` |
+| ↳ Color | swatch → colour panel, hex readout, 17 preset swatches (the last a checkerboard) | — | `background.source = color{value, alpha}` | `:2544-2628` |
+| ↳ Gradient | `h-28` live preview + grain, From/To swatches, Angle, Noise, Grain Scale, Randomize, 18 presets | angle 0–360/1, noise 0–100/1, grain 1–100/1 | `background.source.{from,to,angle,noise_intensity,noise_scale}` | `GradientEditor.tsx:93-287` |
+| Background Blur | slider | 0–100 step 0.1 `%` | `background.blur` | `:2635-2643` |
+| Padding | slider (+ the "custom screen position" Reset row when one is set) | 0–40 step 0.1 `%` | `background.padding`, `background.displayPosition` | `:2647-2667` |
+| Rounded Corners | slider + Corner Style select | 0–100 step 0.1 `%`; Squircle / Rounded | `background.rounding`, `background.roundingType` | `:2669-2685` |
+| Motion Blur | slider | 0–1 step 0.01, shown as `%` | writes **both** `cursor.motionBlur` and `screenMotionBlur` in one change | `:2688-2701` |
+| Border | header toggle + collapsible: Width, Color, Opacity | 1–20 step 0.1 `px`; 0–100 step 0.1 `%` | `background.border.{enabled,width,color,opacity}` | `:2708-2811` |
+| MacBook notch | header toggle + collapsible: description, Width, Height, Position | 0–0.4, 0–0.15, 0–`notchXMax()`, all step 0.001 | `background.notch.{enabled,width,height,x}` | `:2812-2896` |
+| Shadow | slider + "Advanced shadow settings" collapsible (Size, Opacity, Blur) | 0–100 step 0.1 | `background.shadow`, `background.advancedShadow.{size,opacity,blur}` | `:2897-2960`, `ShadowSettings.tsx` |
+
+Five side effects are transcribed with the controls, because without them the
+panel is subtly wrong:
+
+- **"None" is not a source.** It is `padding === 0 && rounding === 0`
+  (`:1776-1777`), and it is *sticky*: nudging padding out of zero must not swap
+  the panel back to the underlying source, because that reflow would move the
+  very slider being dragged (`:1804-1811`).
+- **Leaving "None" seeds presentation.** A tab switch out of None writes
+  `padding = 10` **and** `rounding = 7.5`; a real→real switch only ensures
+  padding, so an intentionally square background keeps its rounding
+  (`ensureBackgroundPresentation`, `:1891-1898`).
+- **Raising padding or rounding out of "None" writes a white colour source**
+  rather than resurrecting the hidden one (`setBackgroundDimension`,
+  `:1900-1915`) — a clean white canvas, with the tab staying on None.
+- **Raising the shadow above zero seeds `advancedShadow`** at `{50, 18, 50}`
+  (`:2900-2911`) — the *UI's* numbers, not `ShadowConfiguration::default()`'s
+  `{14.4, 68.1, 3.8}`. Border's fallback is the same story: black at 50 %, not
+  the Rust default's white at 80 %. Both disagreements are the shipping app's
+  and are reproduced rather than reconciled.
+- **The notch resizes about its centre.** Dragging Width moves `x` so the
+  cutout grows both ways (`:2873-2882`), and every untouched field stays
+  `null` — `null` means "use the recording's own measurements", so writing the
+  displayed value would silently pin it.
+
+### The wallpapers are loaded, not embedded
+
+53 JPEGs, 25 MB. They are **not** embedded, and could not usefully be:
+selecting one writes an *absolute filesystem path* into
+`background.source.path`, which `cap-rendering` then opens
+(`layers/background.rs`) — so the file has to exist on disk for the picture to
+render at all, in this app and in the shipping one. Embedding them would add
+25 MB to the binary *and* still need them written back out somewhere.
+
+`wallpaper_dir()` therefore resolves the same files
+`resolveResource("assets/backgrounds/<id>.jpg")` does, preferring an installed
+`/Applications/Cap.app` — whose paths are byte-identical to what the shipping
+app writes — and falling back to the repository the dev build runs from
+(`CAP_GPUI_WALLPAPERS_DIR` overrides both). Picking the fifth macOS tile on
+this machine wrote
+`/Applications/Cap.app/Contents/Resources/assets/backgrounds/macOS/tahoe-dark.jpg`,
+which is exactly the string the Tauri app would have written. The thumbnails
+are decoded to 128px on the background executor and land through `notify`, the
+Recents pattern: the grid paints its placeholders first and each tile replaces
+its own.
+
+What *is* embedded is 4 KB of illustration: the two `~/assets/illustrations`
+webp files the source tiles fall back to. Only two, because **two of
+`BACKGROUND_ICONS`' four are dead in the shipping app** —
+`renderBackgroundSourceIcon` returns a live swatch for `color` and a live
+gradient for `gradient` before it ever reaches the map (`:2076-2089`), so
+`colorBg` and `gradientBg` are imported and never drawn.
+
+### The colour panel
+
+Cap has never shipped a hue/saturation surface. Every colour control in the
+editor is a swatch that `.click()`s a hidden `<input type="color">`
+(`color-utils.tsx:50-64`), and what that opens on macOS is `NSColorPanel`. So
+the panel **is** the shipping behaviour, and `platform::open_color_panel` opens
+the same one:
+
+- it is opened from a **spawned task**, never inside the click's update —
+  `orderFront:` re-enters gpui's own window callbacks, the standing AppKit
+  rule here;
+- the panel reports every change through a target/action pair that fires from
+  AppKit's run loop with no gpui borrow available, so the action
+  (`CapGpuiColorPanelTarget`, one `declare_class!` with no ivars) does exactly
+  one thing: **push the colour down a `flume` channel**. The drain loop runs on
+  the foreground executor, coalesces latest-wins — a colour dragged around the
+  wheel produces hundreds and only the newest is worth rendering — and is the
+  only thing that touches the model. It is the same seam `on_state_change` uses
+  for playhead positions off the playback thread;
+- **history coalesces exactly like a drag.** The first change takes
+  `history.pause()`; the loop polls `[panel isVisible]` on the same 16ms tick
+  and resumes when the panel closes, because the panel has no commit action of
+  its own. Verified: three separate colours picked in one session, then **one**
+  Cmd-Z restored the colour the swatch held before it opened.
+- The panel is seeded with the current colour (`setColor:`) and `showsAlpha` is
+  off, because neither `BackgroundSource::Color`'s value nor the gradient stops
+  carry alpha.
+
+### The grain
+
+`GradientEditor` overlays its preview with an SVG `feTurbulence`
+(`type="fractalNoise" numOctaves="4"`), desaturated, at `mix-blend-mode:
+overlay` and an opacity of `intensity/100 × 0.25` (`:105-128`). gpui has no
+filter primitives and no blend modes, so the equivalent fractal **value** noise
+is generated into an image at the same `baseFrequency` (`0.3 + ((100 - scale) /
+100) × 1.2`, both formulas transcribed and unit-tested) and painted at the same
+opacity over the same box, cached by grain-scale step so a drag does not
+regenerate 42k pixels a frame. Precisely what differs: Perlin-style gradient
+noise becomes value noise — a different grain *character* at the same frequency
+— and `overlay` becomes source-over, so the grain lightens and darkens less
+selectively. **The rendered frame is unaffected either way**: `cap-rendering`
+applies `noise_intensity` / `noise_scale` itself
+(`layers/background.rs:251-299`), so the player shows the real thing and only
+the sidebar's 112px preview is an approximation.
+
+### Sidebar deviations
+
+| | |
+|---|---|
+| **The hex field is a readout** | `RgbInput`'s text field free-types and commits at 6 or 8 digits or on blur (`color-utils.tsx:65-98`). gpui ships no text input — the app-wide gap — and a colour field with no selection or caret movement would be a worse control than the OS panel it sits beside, *and* it would have to suppress the editor's own Space / S / C shortcuts while focused. The swatch opens the panel; the field prints what the panel wrote. `normalize_hex` and `hex_digit_count` are transcribed and tested next to it, because the two halves are one contract. |
+| **The colour panel coalesces harder than the source does** | `RgbInput.onChange` takes no history pause at all (`color-utils.tsx:57-63`), so in the Tauri app every wheel movement is its own undo entry. Here a panel session is one entry, which is the [slider's](#the-config-sidebar) contract applied to the same kind of gesture. The bracket closes on the panel closing, on another swatch opening it, and on **any unrelated edit** — the panel is a system window that stays up while the user does other things, and a padding drag made with it open must not be swallowed into the colour's entry. |
+| **No brand-colour dropdown** | `BrandColorsDropdown` renders only when the signed-in organisation has brand colours configured (`BrandColorsDropdown.tsx:16`). There is no auth here (the same gap as the plan badge), so it never renders — which is also exactly what a user without them sees. |
+| **Colour correction is deferred** | The Background tab ends with `<ColorCorrectionSection target="screen">` (`:2962`), which is **one component shared with the Camera tab** and previews each of its presets with a live CSS filter on a demo tile. There is no per-element filter hook in this gpui rev, so the preset grid is not reproducible as it stands; the section renders its placeholder card and belongs with the Camera tab's unit. |
+| **Dashed borders are painted, or solid** | The two dashed *dividers* are painted 4-on-4-off by a canvas. The two dashed *cards* (the empty desktop and image drop targets) take a solid hairline of the same colour: gpui has no dashed border style, and four painted edges per card is not worth the elements. |
+| **The wallpaper grid's overflow has no fade** | The theme sub-tab row scrolls exactly as the source's does, but its edge fade is a `mask-image` (`:2351-2363`) — the same missing hook as the timeline's edge fade, which is painted there because it sits on an opaque background and this one does not. |
+| **The wallpaper "show more" collapsible is dead in both apps** | `filteredWallpapers().slice(0, 21)` is followed by a `<Collapsible>` holding the *whole* list — with **no trigger** (`:2438-2461`). No theme has more than 18 wallpapers, so the slice never truncates and the collapsible can never be opened. The grid here simply draws the theme's wallpapers. |
+| **The corner-style select toggles rather than opening a menu** | It has exactly two options and `ui::Menu` draws at the pointer without flipping to stay inside the window (the settings window's standing deviation). A real menu arrives with the tabs that have selects with more than two rows. |
+| **The value tooltip is hover-only** | The Solid `Slider` forces its tooltip open mid-drag and anchors it to the thumb (`ui.tsx:119-128`); gpui's tooltip is hover-driven and pointer-anchored. Hovering a slider still shows the same formatted value, which is what the source does when it is *not* dragging. |
+| **No drag-and-drop onto the image card** | The card says "Click to select or drag and drop image" in both apps; the drop half needs a file-drop hook this rev does not wire. Clicking opens the real `NSOpenPanel`. |
+| **The tab indicator does not slide** | Same as every other tab strip here: no transform in this gpui rev, so the selected item paints its own `size-9 bg-gray-3` box. |
+
+### Verified end to end
+
+Real `CGEvent` clicks and drags against the running app, each prediction made
+from the track geometry *before* the run and checked against
+`project-config.json` on disk after the 250ms debounce:
+
+| probe | predicted | actual |
+|---|---|---|
+| Background Blur dragged 0 % → 50 % of its track | `blur = 50.0` | `50.0` |
+| One Cmd-Z after that drag | `blur = 0.0` — a drag is one entry | `0.0` |
+| Fifth macOS wallpaper tile | `.../assets/backgrounds/macOS/tahoe-dark.jpg` | same, from `/Applications/Cap.app` |
+| Notch Width dragged to 74.87 % of 0–0.4 | `width = 0.299`, `x = 0.350169` (centre held) | `0.2990000247955322`, `0.35016929977154604` |
+| Padding dragged off zero while on "None" | `padding = 9.9`, source becomes white, rounding stays 0, tab stays "None" | all four |
+| Colour panel: click green in the wheel | a green-dominant RGB, live | `[113, 250, 0]` |
+| Three colours picked, panel closed, one Cmd-Z | back to `[71, 133, 255]` | `[71, 133, 255]` |
+| Image card → `NSOpenPanel` → a jpg | copied to app data as `bg-<ts>-<name>`, config points at the copy | `bg-1786946652938-1.jpg` |
+| Import desktop background | `<bundle>/assets/current-desktop-background-<ts>.jpg`, selected | same |
+| Caption segment clicked / Escape | sidebar swaps to the segment panel and back | both |
+
+The picture follows every one of them: white → gradient → wallpaper → image →
+desktop picture all re-rendered the player immediately, because each edit pokes
+`preview_tx` at the current frame.
+
+**Playback is unchanged.** Same fixture and binary as the timeline-editing
+unit, with the whole sidebar live:
+
+```
+playback fps=59.8 frames=967 dropped=0 (rendered=968 rendered_fps=59.8 paints=1405 convert_avg=436us over 16.18s)
+```
+
+E4 measured 59.9 with zero drops on the same fixture, so the sidebar costs
+nothing measurable — it only paints, and only when something changes. A
+record cycle (`CAP_GPUI_AUTO_RECORD=studio:5`) still starts, writes its
+thumbnail and finalizes with zero errors, and no run anywhere in this unit
+logged an error, a warning, a panic or a `RefCell already borrowed`.
 
 ## Verifying changes
 

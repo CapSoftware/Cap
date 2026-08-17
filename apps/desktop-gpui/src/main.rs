@@ -9,6 +9,7 @@ mod camera_window;
 mod controls_window;
 mod devices;
 mod editor_edits;
+mod editor_sidebar;
 mod editor_timeline;
 mod editor_window;
 mod feeds;
