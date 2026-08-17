@@ -179,6 +179,10 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "edit.svg",
     "record-fill.svg",
     "warning-bold.svg",
+    // The main window's hand-drawn traffic lights: the x and expand glyphs
+    // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
+    "traffic-close.svg",
+    "traffic-zoom.svg",
 );
 
 /// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The

@@ -979,9 +979,8 @@ impl Render for MainWindow {
 }
 
 impl MainWindow {
-    fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let focused = window.is_window_active();
 
         div()
             .flex()
@@ -994,7 +993,7 @@ impl MainWindow {
             // `divide-y divide-gray-5` between header and body.
             .border_b_1()
             .border_color(theme.header_border())
-            .child(self.render_traffic_lights(focused, cx))
+            .child(self.render_traffic_lights(cx))
             .child(self.render_header_actions(cx))
     }
 
@@ -1002,18 +1001,44 @@ impl MainWindow {
     /// (`gap-2.5`), 12px from the left edge (`ml-3`). Minimize is not drawn --
     /// the main window passes `showMinimize={false}` -- and zoom is bound to
     /// expand/collapse rather than a real window zoom.
-    fn render_traffic_lights(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let light = |color: u32, id: &'static str| {
+    ///
+    /// Always colored, never the TSX's `#DCDCDC` inactive gray: that branch
+    /// runs off `onFocusChanged`, and the shipping main window is a
+    /// non-activating NSPanel whose webview never receives the event --
+    /// measured on the real app, the lights stay colored while the app is
+    /// inactive, so the gray state is dead code in practice. Hovering
+    /// anywhere over the pair reveals both glyphs (`hovered` lives on the
+    /// group container), and each button darkens itself on hover/press
+    /// (`hover:brightness-95 active:brightness-90`).
+    fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // base, brightness(0.95), brightness(0.90) -- precomputed per light.
+        let light = |base: u32,
+                     hover: u32,
+                     press: u32,
+                     icon: &'static str,
+                     icon_px: f32,
+                     id: &'static str| {
             div()
                 .id(id)
                 .size(px(14.))
                 .rounded_full()
-                .bg(if focused {
-                    rgb(color)
-                } else {
-                    rgb(Theme::TRAFFIC_INACTIVE)
-                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgb(base))
+                .hover(move |style| style.bg(rgb(hover)))
+                .active(move |style| style.bg(rgb(press)))
                 .cursor_default()
+                .child(
+                    // `rgba(0, 0, 0, 0.5)` glyphs, close at 10px and zoom at
+                    // 8px -- the inline SVG sizes in the TSX.
+                    svg()
+                        .path(icon)
+                        .size(px(icon_px))
+                        .text_color(gpui::rgba(0x0000_0080))
+                        .invisible()
+                        .group_hover("traffic-lights", |style| style.visible()),
+                )
         };
 
         div()
@@ -1024,19 +1049,32 @@ impl MainWindow {
             .h_full()
             .ml(px(12.))
             .flex_shrink_0()
+            .group("traffic-lights")
             .child(
-                light(Theme::TRAFFIC_CLOSE, "traffic-close").on_click(cx.listener(
-                    |_, _, _window, cx| {
-                        cx.quit();
-                    },
-                )),
+                light(
+                    Theme::TRAFFIC_CLOSE,
+                    0xf25a53,
+                    0xe6564e,
+                    "icons/traffic-close.svg",
+                    10.,
+                    "traffic-close",
+                )
+                .on_click(cx.listener(|_, _, _window, cx| {
+                    cx.quit();
+                })),
             )
             .child(
-                light(Theme::TRAFFIC_ZOOM, "traffic-zoom").on_click(cx.listener(
-                    |this, _, window, cx| {
-                        this.toggle_expanded(window, cx);
-                    },
-                )),
+                light(
+                    Theme::TRAFFIC_ZOOM,
+                    0x26be3d,
+                    0x24b43a,
+                    "icons/traffic-zoom.svg",
+                    8.,
+                    "traffic-zoom",
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_expanded(window, cx);
+                })),
             )
     }
 

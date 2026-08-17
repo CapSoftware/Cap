@@ -821,10 +821,12 @@ impl Theme {
     pub const SETTINGS_ACCENT: u32 = 0x007aff;
 
     /// Traffic light fills. Minimize is never drawn in the main window
-    /// (`showMinimize={false}`), so only close and zoom are needed.
+    /// (`showMinimize={false}`), so only close and zoom are needed. The TSX
+    /// also has a `#DCDCDC` unfocused state, but it hangs off an
+    /// `onFocusChanged` the non-activating main panel never delivers -- the
+    /// shipping lights stay colored, so no inactive color exists here.
     pub const TRAFFIC_CLOSE: u32 = 0xff5f57;
     pub const TRAFFIC_ZOOM: u32 = 0x28c840;
-    pub const TRAFFIC_INACTIVE: u32 = 0xdcdcdc;
 }
 
 #[cfg(test)]
