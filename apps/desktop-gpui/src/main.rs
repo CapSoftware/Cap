@@ -82,8 +82,15 @@ fn main() {
         .init();
 
     let app = gpui_platform::application().with_assets(Assets);
+    // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
+    // registered on the builder -- gpui exposes it nowhere else -- with the
+    // handler guarding against firing before the window registry exists.
+    app.on_reopen(crate::app_windows::handle_dock_reopen);
     app.run(|cx: &mut App| {
         gpui_tokio::init(cx);
+        // The dock icon: an unbundled dev binary shows the generic terminal
+        // document without it. The bytes are the shipping app's icon.png.
+        platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
 
         if let Err(error) = Assets.load_fonts(cx) {
             tracing::error!("failed to load embedded fonts: {error:#}");

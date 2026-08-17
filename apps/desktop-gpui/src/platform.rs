@@ -583,6 +583,35 @@ mod mac {
     /// returned, the window stayed). Its close-button simulation is the only
     /// part the contract loses, so the two real steps are spelled out
     /// directly. Same retained-handle discipline as [`hide_native`].
+    /// The dock icon. An unbundled dev binary carries no Info.plist icon, so
+    /// the shipping app's `icon.png` is set at runtime with
+    /// `setApplicationIconImage:` -- the same image a bundled .app would get
+    /// from its icns, minus the bundle. (Zed ships the icon in the bundle;
+    /// the runtime setter is the unbundled equivalent, and harmless once a
+    /// bundle exists.)
+    pub fn set_dock_icon(png: &[u8]) {
+        use objc2::{class, msg_send};
+        unsafe {
+            let data: *mut AnyObject = msg_send![
+                class!(NSData),
+                dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
+                length: png.len(),
+            ];
+            if data.is_null() {
+                return;
+            }
+            let alloc: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let raw: *mut AnyObject = msg_send![alloc, initWithData: data];
+            let Some(image) = Id::from_raw(raw) else {
+                return;
+            };
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![app, setApplicationIconImage: &*image];
+            }
+        }
+    }
+
     /// Debug: the AppKit-side state of a window, for chasing order-front
     /// no-shows.
     pub fn debug_window_state(native: &NativeWindow) -> String {
@@ -1285,6 +1314,7 @@ mod stub {
     pub fn debug_window_state(_native: &NativeWindow) -> String {
         String::new()
     }
+    pub fn set_dock_icon(_png: &[u8]) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {
         // A channel whose sender is dropped immediately: the drain task's
         // `recv` errors once and the task exits.

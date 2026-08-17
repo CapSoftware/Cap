@@ -218,6 +218,41 @@ pub fn request_close_main(cx: &mut App) {
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.release_inputs(cx));
 }
 
+/// `RunEvent::Reopen` (`lib.rs:6089-6133`) -- the dock icon clicked while the
+/// app runs: focus an editor or the settings window when one is open,
+/// otherwise show the main window. (The onboarding arm has no counterpart
+/// here, and mode-select is deliberately absent from the focus list over
+/// there too.) Registered on the `Application` builder in `main`, with a
+/// global guard: the callback can in principle fire before `init` has run.
+pub fn handle_dock_reopen(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    let windows = cx.global::<AppWindows>();
+    let focus: Option<gpui::AnyWindowHandle> = windows
+        .editors
+        .first()
+        .map(|(_, handle)| (*handle).into())
+        .or_else(|| windows.settings.map(Into::into));
+    tracing::info!(focus_existing = focus.is_some(), "dock reopen");
+    match focus {
+        Some(handle) => {
+            let native = handle
+                .update(cx, |_, window, _| platform::native_window(window))
+                .ok()
+                .flatten();
+            cx.spawn(async move |_| {
+                if let Some(native) = &native {
+                    platform::show_native(native);
+                }
+            })
+            .detach();
+        }
+        None => show_main_window(cx),
+    }
+    cx.activate(true);
+}
+
 /// Open the settings window on a page, and hide the main window.
 ///
 /// The header gear in `new-main/index.tsx` is
