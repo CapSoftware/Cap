@@ -7,7 +7,10 @@
 //! "Starting" state from t=0), and the observer closes the bar and reshows the
 //! main window whenever the session comes back to rest.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
@@ -1244,8 +1247,15 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // latest-wins (`editor.rs:242-312`), so a full queue means the UI is
         // behind and the newest frame is the one that matters.
         let (frame_tx, frame_rx) = flume::bounded(2);
+        let stats = Arc::new(editor_window::PumpStats::default());
+        // The playhead seam. `on_state_change` is called from the
+        // `cap-playback` OS thread and from tokio workers, so it may only
+        // store and poke; the drain below is what touches the entity.
+        let (playhead, playhead_rx) = editor_window::PlayheadSignal::new();
         let instance_path = path.clone();
         let task = cx.update(|cx| {
+            let frame_stats = stats.clone();
+            let playhead = playhead.clone();
             gpui_tokio::Tokio::spawn(cx, async move {
                 // `EditorInstance::new`, not `new_with_audio_output`: the real
                 // constructor, exactly as the Tauri app calls it
@@ -1259,8 +1269,8 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                 // already has.
                 cap_editor::EditorInstance::new(
                     instance_path,
-                    |_state| {},
-                    editor_window::make_frame_callback(frame_tx),
+                    editor_window::make_state_callback(playhead),
+                    editor_window::make_frame_callback(frame_tx, frame_stats),
                     None,
                 )
                 .await
@@ -1300,23 +1310,50 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
 
         // The pump: convert on the background executor (un-padding plus the
         // BGRA swap is a few megabytes per frame), deliver on the main one.
+        cx.spawn({
+            let stats = stats.clone();
+            async move |cx| {
+                while let Ok((frame, layout)) = frame_rx.recv_async().await {
+                    let stats = stats.clone();
+                    let number = frame.frame_number;
+                    let image = cx
+                        .background_executor()
+                        .spawn(async move { editor_window::frame_image_timed(&frame, &stats) })
+                        .await;
+                    let Some(image) = image else {
+                        tracing::warn!("a rendered frame could not be converted for display");
+                        continue;
+                    };
+                    if handle
+                        .update(cx, |view, window, cx| {
+                            view.frame_arrived(
+                                editor_window::EditorFrame {
+                                    image,
+                                    layout,
+                                    number,
+                                },
+                                window,
+                                cx,
+                            )
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        })
+        .detach();
+
+        // The playhead drain. The signal is latest-wins, so this reads the
+        // atomic rather than a queue: at 60Hz a backlog would only ever
+        // describe the past.
         cx.spawn(async move |cx| {
-            while let Ok((frame, layout)) = frame_rx.recv_async().await {
-                let image = cx
-                    .background_executor()
-                    .spawn(async move { editor_window::frame_image(&frame) })
-                    .await;
-                let Some(image) = image else {
-                    tracing::warn!("a rendered frame could not be converted for display");
-                    continue;
-                };
+            while playhead_rx.recv_async().await.is_ok() {
+                let frame = playhead.position();
                 if handle
                     .update(cx, |view, window, cx| {
-                        view.frame_arrived(
-                            editor_window::EditorFrame { image, layout },
-                            window,
-                            cx,
-                        )
+                        view.playhead_changed(frame, window, cx)
                     })
                     .is_err()
                 {
@@ -1326,12 +1363,173 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         })
         .detach();
 
+        // The transport driver: one task, applying the window's desired
+        // transport state to the instance. Everything it calls locks
+        // `instance.state`, so none of it may run on the UI thread.
+        let (transport, driver) = editor_window::transport();
+        let driver_instance = instance.clone();
+        cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                editor_window::run_transport(driver_instance, driver).await;
+            })
+            .detach();
+        });
+
+        // `totalDuration()` (`context.ts:1374-1380`). Read off the instance
+        // rather than the pre-flight, because `EditorInstance::new`
+        // synthesises a timeline for a raw bundle -- and `timeline.duration()`
+        // is exactly what the playback engine stops at
+        // (`playback.rs:560-570`).
+        let total = instance
+            .project_config
+            .1
+            .borrow()
+            .timeline
+            .as_ref()
+            .map_or(0.0, |timeline| timeline.duration());
+
+        if handle
+            .update(cx, |view, window, cx| {
+                view.set_transport(transport, stats, total, window, cx)
+            })
+            .is_err()
+        {
+            return;
+        }
+
         // The initial kick, exactly as `lib.rs:6617-6618` does it after
         // creating an instance. Without this the canvas stays black: `seek_to`
         // and `set_playhead_position` render nothing.
         editor_window::request_frame(&instance, 0);
+
+        drive_auto_playback(path, handle, cx).await;
     })
     .detach();
+}
+
+/// `CAP_GPUI_AUTO_PLAYBACK=<seconds>` presses play once the project is up and
+/// pauses N seconds later; `CAP_GPUI_AUTO_PLAYBACK_TORTURE=<cycles>` runs
+/// play/pause/seek cycles instead. Both exist for the same reason as every
+/// other `CAP_GPUI_AUTO_*` hook: unprivileged synthetic clicks are dropped, so
+/// a verification run needs a way to press the button.
+async fn drive_auto_playback(
+    project_path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut gpui::AsyncApp,
+) {
+    let play_secs = std::env::var("CAP_GPUI_AUTO_PLAYBACK")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok());
+    let torture = std::env::var("CAP_GPUI_AUTO_PLAYBACK_TORTURE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    // `CAP_GPUI_AUTO_SEEK=0.6`: a paused seek to 60% along the timeline, the
+    // way a click on the ruler there does it.
+    let seek = std::env::var("CAP_GPUI_AUTO_SEEK")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok());
+    if play_secs.is_none() && torture.is_none() && seek.is_none() {
+        return;
+    }
+
+    let sleep = |cx: &gpui::AsyncApp, millis: u64| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(millis))
+    };
+    // Let the first frame land and the decoders warm before the stopwatch
+    // starts, the way a human would.
+    sleep(cx, 1500).await;
+
+    if let Some(cycles) = torture {
+        tracing::info!(cycles, "auto playback torture: start");
+        for cycle in 0..cycles {
+            if handle
+                .update(cx, |view, window, cx| view.toggle_play(window, cx))
+                .is_err()
+            {
+                return;
+            }
+            sleep(cx, 320).await;
+            if handle
+                .update(cx, |view, window, cx| view.toggle_play(window, cx))
+                .is_err()
+            {
+                return;
+            }
+            sleep(cx, 80).await;
+            // A deterministic walk over the timeline rather than a random one,
+            // so a failure is reproducible.
+            let fraction = (cycle % 7) as f64 / 7.0;
+            if handle
+                .update(cx, |view, window, cx| {
+                    view.seek_fraction(fraction, window, cx)
+                })
+                .is_err()
+            {
+                return;
+            }
+            sleep(cx, 120).await;
+            tracing::info!(cycle = cycle + 1, "auto playback torture: cycle done");
+        }
+        tracing::info!(cycles, "auto playback torture: complete");
+    }
+
+    if let Some(fraction) = seek {
+        handle
+            .update(cx, |view, window, cx| {
+                view.seek_fraction(fraction, window, cx)
+            })
+            .ok();
+        tracing::info!(fraction, "auto seek");
+    }
+
+    // `CAP_GPUI_AUTO_EDITOR_CLOSE=<secs>`: close the editor that many seconds
+    // into playback, through `performClose:` -- the traffic light's own path,
+    // so the window's `on_window_should_close` handler and `editor_closed`
+    // both run. Proof that a playing editor tears down cleanly.
+    // Once only: the reopened editor runs the same code with the same
+    // environment, and a second close would be an infinite loop rather than a
+    // test.
+    static CLOSE_SCENARIO_DONE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    let close_after = std::env::var("CAP_GPUI_AUTO_EDITOR_CLOSE")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|_| {
+            !CLOSE_SCENARIO_DONE.swap(true, std::sync::atomic::Ordering::SeqCst)
+        });
+
+    if let Some(secs) = play_secs {
+        if handle
+            .update(cx, |view, window, cx| view.toggle_play(window, cx))
+            .is_err()
+        {
+            return;
+        }
+        tracing::info!(secs, "auto playback: playing");
+        if let Some(close_after) = close_after {
+            sleep(cx, (close_after * 1000.0) as u64).await;
+            let native = handle
+                .update(cx, |_, window, _| platform::native_window(window))
+                .ok()
+                .flatten();
+            tracing::info!(close_after, "auto playback: closing the editor mid-playback");
+            if let Some(native) = &native {
+                platform::close_native(native);
+            }
+            // ...and open it again, to prove the teardown left nothing
+            // behind. The second window takes the ordinary path: its own
+            // instance, its own pump, its own transport.
+            sleep(cx, 2000).await;
+            tracing::info!("auto playback: reopening the editor");
+            cx.update(|cx| open_editor(project_path, cx));
+            return;
+        }
+        sleep(cx, (secs * 1000.0) as u64).await;
+        handle
+            .update(cx, |view, _window, cx| view.stop_for_measurement(cx))
+            .ok();
+    }
 }
 
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm

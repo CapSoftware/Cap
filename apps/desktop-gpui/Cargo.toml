@@ -138,6 +138,16 @@ incremental = false
 [profile.dev.package."*"]
 opt-level = 2
 
+# ...and the app crate too, since the editor landed. `frame_image` un-pads and
+# BGRA-swaps a 1080x702 frame per displayed frame, which is 3MB of per-pixel
+# work on this side of the seam: at opt-level 0 it measures **30.1ms** and the
+# preview is convert-bound at 33fps with 45% of the renderer's frames dropped;
+# at opt-level 2 it is **0.92ms**, and playback holds 59.9fps with zero drops.
+# A dev build that cannot show the editor at its real speed is a dev build that
+# will get the wrong answer out of every later editor unit. Costs ~7s a build.
+[profile.dev.package.cap-desktop-gpui]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 strip = "symbols"

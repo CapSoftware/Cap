@@ -1,12 +1,14 @@
-//! The editor window -- `routes/editor/` shell, project load, and a real
-//! rendered frame.
+//! The editor window -- `routes/editor/` shell, project load, real rendered
+//! frames, and playback.
 //!
-//! Unit E1's scope is deliberately narrow: the 1275x800 window, the three
-//! regions at their exact dimensions, and frame 0 of a real project on screen.
-//! Playback (E2), timeline interaction (E3) and the config sidebar's controls
-//! come later, so every affordance those units own renders **in place and
-//! disabled** rather than being left out -- the layout is the deliverable, and
-//! a header missing half its buttons would not be one.
+//! E1 built the 1275x800 window, the three regions at their exact dimensions
+//! and frame 0 of a real project on screen; E2 made the transport real:
+//! play/pause on the button and on Space, a live playhead and clock driven by
+//! `on_state_change`, click and drag-scrub seeking on the timeline, and the
+//! source's end-of-media stop. Timeline editing (E3) and the config sidebar's
+//! controls still come later, so every affordance those units own renders **in
+//! place and disabled** rather than being left out -- the layout is the
+//! deliverable, and a header missing half its buttons would not be one.
 //!
 //! Three seams matter here, all proved by `tests/editor_frame0.rs` first:
 //!
@@ -24,16 +26,30 @@
 //!   under `catch_unwind` on a background thread before `EditorInstance::new`
 //!   ever sees the path, so a corrupt `.cap` becomes an in-window error state
 //!   instead of taking the process down.
+//!
+//! E2 adds a fourth: **`on_state_change` and `frame_cb` are both called from
+//! foreign threads** -- the `cap-playback` OS thread and tokio workers -- so
+//! neither may touch a gpui `Context`. Both go through channels drained on the
+//! main thread ([`PlayheadSignal`], the frame pump), and every transport call
+//! that locks `instance.state` runs on the tokio runtime ([`run_transport`]).
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
-use cap_editor::{EditorFrameOutput, EditorInstance};
+use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
 use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY};
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
 use gpui::{
-    Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, Render, RenderImage, SharedString, Styled, Window, div, point, prelude::FluentBuilder,
-    px, svg,
+    Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage,
+    SharedString, StatefulInteractiveElement as _, Styled, Window, div, point,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::theme::{Appearance, Theme};
@@ -123,6 +139,11 @@ const TRACK_GUTTER: f32 = 112.;
 const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
 const TIMELINE_HEADER_HEIGHT: f32 = 32.;
 const PLAYHEAD_TOP_OFFSET: f32 = 24.;
+/// `START_SNAP_PX` -- the snap-to-zero zone at the timeline's origin.
+const START_SNAP_PX: f64 = 10.;
+/// `px-2` on the timeline slot (`Editor.tsx:781`), i.e. the container's own
+/// left edge in window coordinates.
+const TIMELINE_SLOT_PADDING: f32 = 8.;
 /// `pt-8` on the timeline container (`TL/index.tsx:1149`).
 const TIMELINE_TOP_PADDING: f32 = 32.;
 /// `visibleTrackCount() > 2 ? "3rem" : "3.25rem"` (`TL/index.tsx:268-270`).
@@ -361,6 +382,305 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
 pub struct EditorFrame {
     pub image: Arc<RenderImage>,
     pub layout: FrameLayout,
+    /// `RenderedFrame.frame_number` -- which frame this picture actually is.
+    /// Logged at debug so a seek can be checked against what it asked for.
+    pub number: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Instrumentation
+// ---------------------------------------------------------------------------
+
+/// Counters along the frame pump, so a playback run can be *measured* rather
+/// than eyeballed. Every stage between the renderer and the screen gets one,
+/// because "playback is slow" has four different answers and they need
+/// separating:
+///
+/// * `rendered` -- `frame_cb` invocations, i.e. frames the editor's renderer
+///   actually produced. Compare with the engine's own `Playback stats`
+///   `total_rendered` to see what the renderer's latest-wins drain discarded.
+/// * `dropped` -- frames the pump's bounded channel refused because the UI was
+///   behind.
+/// * `presented` -- frames that reached [`EditorWindow::frame_arrived`]. This
+///   is the frame rate: distinct pictures per second.
+/// * `painted` -- *paints* of the preview canvas, not frames. The window also
+///   repaints for the clock and the playhead, so this runs ahead of
+///   `presented` (~1.65x during playback) and must never be reported as fps.
+///   It is here to show the invalidation cost, and because a `painted` that
+///   fell *below* `presented` would mean gpui was coalescing frames away.
+/// * `convert_nanos` / `convert_samples` -- the cost of [`frame_image`], which
+///   is the CPU-vs-zero-copy decision's evidence.
+#[derive(Default, Debug)]
+pub struct PumpStats {
+    pub rendered: AtomicU64,
+    pub dropped: AtomicU64,
+    pub presented: AtomicU64,
+    pub painted: AtomicU64,
+    pub convert_nanos: AtomicU64,
+    pub convert_samples: AtomicU64,
+}
+
+/// A read of every counter at one instant. Deltas between two of these are
+/// what a run reports; the counters themselves are cumulative for the window's
+/// whole life.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatsSnapshot {
+    pub rendered: u64,
+    pub dropped: u64,
+    pub presented: u64,
+    pub painted: u64,
+    pub convert_nanos: u64,
+    pub convert_samples: u64,
+}
+
+impl PumpStats {
+    pub fn snapshot(&self) -> StatsSnapshot {
+        StatsSnapshot {
+            rendered: self.rendered.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            presented: self.presented.load(Ordering::Relaxed),
+            painted: self.painted.load(Ordering::Relaxed),
+            convert_nanos: self.convert_nanos.load(Ordering::Relaxed),
+            convert_samples: self.convert_samples.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl StatsSnapshot {
+    pub fn since(self, before: StatsSnapshot) -> StatsSnapshot {
+        StatsSnapshot {
+            rendered: self.rendered.saturating_sub(before.rendered),
+            dropped: self.dropped.saturating_sub(before.dropped),
+            presented: self.presented.saturating_sub(before.presented),
+            painted: self.painted.saturating_sub(before.painted),
+            convert_nanos: self.convert_nanos.saturating_sub(before.convert_nanos),
+            convert_samples: self.convert_samples.saturating_sub(before.convert_samples),
+        }
+    }
+
+    /// Average `frame_image` cost, in microseconds.
+    pub fn convert_micros(self) -> f64 {
+        if self.convert_samples == 0 {
+            return 0.0;
+        }
+        self.convert_nanos as f64 / self.convert_samples as f64 / 1000.0
+    }
+
+    /// The one line the perf gate asks for, plus the stage breakdown that says
+    /// *where* a shortfall happened.
+    ///
+    /// `fps` is **delivered** frames per second -- distinct pictures that
+    /// reached the window. `paints` is deliberately separate and is *not* a
+    /// frame rate: the window also repaints for the playhead and the clock, so
+    /// it runs ahead of the frame count and would flatter the number.
+    pub fn report(self, seconds: f64) -> String {
+        let seconds = seconds.max(0.001);
+        format!(
+            "playback fps={:.1} frames={} dropped={} (rendered={} rendered_fps={:.1} paints={} \
+             convert_avg={:.0}us over {:.2}s)",
+            self.presented as f64 / seconds,
+            self.presented,
+            self.dropped,
+            self.rendered,
+            self.rendered as f64 / seconds,
+            self.painted,
+            self.convert_micros(),
+            seconds,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The playhead signal
+// ---------------------------------------------------------------------------
+
+/// `on_state_change` is a `Fn + Send + Sync` the instance calls from whichever
+/// thread moved the playhead -- the `cap-playback` OS thread during playback,
+/// a tokio worker on a seek. It may never touch a gpui `Context`, so it does
+/// the only two things that are safe from a foreign thread: store the position
+/// and poke a bounded channel.
+///
+/// The channel holds one token, not one message per event: playhead updates
+/// are latest-wins, and at 60 Hz a queue would only ever describe the past.
+/// The drain reads the atomic, so no update is ever *lost* -- only coalesced.
+pub struct PlayheadSignal {
+    position: AtomicU32,
+    wake: flume::Sender<()>,
+}
+
+impl PlayheadSignal {
+    pub fn new() -> (Arc<Self>, flume::Receiver<()>) {
+        let (wake, rx) = flume::bounded(1);
+        (
+            Arc::new(Self {
+                position: AtomicU32::new(0),
+                wake,
+            }),
+            rx,
+        )
+    }
+
+    pub fn position(&self) -> u32 {
+        self.position.load(Ordering::Relaxed)
+    }
+}
+
+/// The `on_state_change` E1 left as `|_state| {}`.
+pub fn make_state_callback(
+    signal: Arc<PlayheadSignal>,
+) -> impl Fn(&EditorState) + Send + Sync + 'static {
+    move |state: &EditorState| {
+        signal
+            .position
+            .store(state.playhead_position, Ordering::Relaxed);
+        let _ = signal.wake.try_send(());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transport
+// ---------------------------------------------------------------------------
+
+/// The transport as a *desired state* rather than a command stream.
+///
+/// Every UI action writes this and pokes the driver; the driver applies the
+/// difference between it and what the engine is actually doing. That is what
+/// makes scrubbing during playback survivable: each seek is a
+/// stop/seek/restart round trip (`Timeline/index.tsx:829-853`), and the source
+/// coalesces them to one in-flight seek with the newest position applied
+/// afterwards (`beginRulerScrub`'s `seekInFlight`/`seekQueued`,
+/// `Timeline/index.tsx:890-909`). Latest-wins state gives that for free and
+/// cannot queue up a backlog of stale positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Desired {
+    pub playing: bool,
+    /// The frame the *last* seek asked for, with a generation so that seeking
+    /// to the frame you are already on still re-applies.
+    pub seek: Option<u32>,
+    pub seek_gen: u64,
+}
+
+/// The UI half. Cheap to clone, safe to call from the main thread: writing it
+/// takes an uncontended `Mutex` and a `try_send` on a one-slot channel.
+#[derive(Clone)]
+pub struct TransportHandle {
+    desired: Arc<Mutex<Desired>>,
+    wake: flume::Sender<()>,
+}
+
+/// The driver half, handed to [`run_transport`] on the tokio runtime.
+pub struct TransportDriver {
+    desired: Arc<Mutex<Desired>>,
+    wake: flume::Receiver<()>,
+}
+
+pub fn transport() -> (TransportHandle, TransportDriver) {
+    let desired = Arc::new(Mutex::new(Desired::default()));
+    let (tx, rx) = flume::bounded(1);
+    (
+        TransportHandle {
+            desired: desired.clone(),
+            wake: tx,
+        },
+        TransportDriver { desired, wake: rx },
+    )
+}
+
+impl TransportHandle {
+    fn modify(&self, change: impl FnOnce(&mut Desired)) {
+        {
+            let mut desired = self
+                .desired
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            change(&mut desired);
+        }
+        // A full channel means the driver has not read the previous poke yet,
+        // and it will read the *latest* state when it does -- so dropping this
+        // one loses nothing.
+        let _ = self.wake.try_send(());
+    }
+
+    /// `seekTo(frame)` then `startPlayback(FPS, previewResolutionBase())` --
+    /// the shape every play in `handlePlayPauseClick` takes
+    /// (`Player.tsx:212-233`).
+    pub fn play_from(&self, frame: u32) {
+        self.modify(|desired| {
+            desired.playing = true;
+            desired.seek = Some(frame);
+            desired.seek_gen += 1;
+        });
+    }
+
+    /// `stopPlayback()`: `state.playback_task.take().map(|h| h.stop())`.
+    pub fn pause(&self) {
+        self.modify(|desired| desired.playing = false);
+    }
+
+    /// A paused seek: move `playhead_position` *and* push `preview_tx`, which
+    /// is the only thing that produces a picture.
+    pub fn seek(&self, frame: u32) {
+        self.modify(|desired| {
+            desired.seek = Some(frame);
+            desired.seek_gen += 1;
+        });
+    }
+}
+
+/// Apply the desired transport state to the instance, forever.
+///
+/// Runs on the tokio runtime because every call here locks
+/// `instance.state` -- `start_playback` also decodes the project's music
+/// tracks before it can begin. None of it may happen on the UI thread.
+pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDriver) {
+    let fps = EDITOR_PREVIEW_FPS;
+    let resolution_base = default_preview_resolution();
+    let mut applied_playing = false;
+    let mut applied_gen = 0u64;
+
+    while driver.wake.recv_async().await.is_ok() {
+        let want = *driver
+            .desired
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let seeking = want.seek_gen != applied_gen;
+
+        // `stopPlayback` first, always: the source stops before it seeks
+        // (`seekPlayheadTo`, `Timeline/index.tsx:829-845`) and before it
+        // restarts at the end (`handlePlayPauseClick`'s at-end arm).
+        if applied_playing && (!want.playing || seeking) {
+            let handle = {
+                let mut state = instance.state.lock().await;
+                state.playback_task.take()
+            };
+            if let Some(handle) = handle {
+                handle.stop();
+            }
+            applied_playing = false;
+        }
+
+        if seeking {
+            applied_gen = want.seek_gen;
+            if let Some(frame) = want.seek {
+                // `seek_to` (`lib.rs:4230`) -- moves the playhead the next
+                // `start_playback` will begin from, and renders nothing.
+                instance
+                    .modify_and_emit_state(|state| state.playhead_position = frame)
+                    .await;
+                if !want.playing {
+                    // The repaint half, which `seek_to` does not do: the
+                    // frontend emits `RenderFrameEvent` and Rust forwards it
+                    // into `preview_tx` (`lib.rs:3009-3014, 6603-6614`).
+                    request_frame(&instance, frame);
+                }
+            }
+        }
+
+        if want.playing && !applied_playing {
+            instance.start_playback(fps, resolution_base).await;
+            applied_playing = true;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +696,20 @@ enum LoadState {
     Failed(String),
 }
 
+/// A press or drag on the timeline.
+///
+/// The two are separate because the source's are: the ruler's own hit surface
+/// scrubs continuously from the mousedown onwards (`beginRulerScrub`,
+/// `Timeline/index.tsx:873-957`), while a press anywhere else in the timeline
+/// seeks **once, on release, to the press position** -- `handleUpdatePlayhead`
+/// is registered on mouseup but closes over the mousedown event
+/// (`Timeline/index.tsx:1155-1169`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Scrub {
+    Ruler,
+    Press { time: f64 },
+}
+
 pub struct EditorWindow {
     theme: Theme,
     project_path: PathBuf,
@@ -386,6 +720,22 @@ pub struct EditorWindow {
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     instance: Option<Arc<EditorInstance>>,
     focus: FocusHandle,
+
+    // -- Transport ----------------------------------------------------------
+    /// `editorState.playing`.
+    playing: bool,
+    /// `editorState.playbackTime`, in seconds.
+    playhead: f64,
+    /// `totalDuration()`. Taken from the instance's own timeline once it
+    /// exists, because that is the number the playback engine stops at
+    /// (`playback.rs:560-570`, `TimelineConfiguration::duration`).
+    total: f64,
+    transport: Option<TransportHandle>,
+    scrub: Option<Scrub>,
+    stats: Option<Arc<PumpStats>>,
+    /// Wall clock and counters at the moment playback started, so a run can be
+    /// reported as a rate.
+    play_mark: Option<(Instant, StatsSnapshot)>,
 }
 
 impl EditorWindow {
@@ -413,6 +763,13 @@ impl EditorWindow {
             frame_layout: None,
             instance: None,
             focus: cx.focus_handle(),
+            playing: false,
+            playhead: 0.0,
+            total: 0.0,
+            transport: None,
+            scrub: None,
+            stats: None,
+            play_mark: None,
         }
     }
 
@@ -441,6 +798,291 @@ impl EditorWindow {
         self.instance.take()
     }
 
+    /// Hand the window its transport, the pump's counters, and the duration
+    /// the engine will actually stop at.
+    pub fn set_transport(
+        &mut self,
+        transport: TransportHandle,
+        stats: Arc<PumpStats>,
+        total: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.transport = Some(transport);
+        self.stats = Some(stats);
+        if total > 0.0 {
+            self.total = total;
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    // -- Transport -----------------------------------------------------------
+
+    /// `isAtEnd()` (`Player.tsx:156-159`): `total > 0 && total - playbackTime
+    /// <= 0.1`.
+    fn is_at_end(&self) -> bool {
+        is_at_end(self.total, self.playhead)
+    }
+
+    fn total_duration(&self) -> f64 {
+        if self.total > 0.0 {
+            self.total
+        } else {
+            self.summary().map_or(0.0, |summary| summary.duration)
+        }
+    }
+
+    /// A playhead position off `on_state_change`, drained on the main thread.
+    ///
+    /// This is the whole live-playhead path: the engine emits
+    /// `PlaybackEvent::Frame(n)`, `EditorInstance` turns it into
+    /// `modify_and_emit_state(|s| s.playhead_position = n)`
+    /// (`editor_instance.rs:476-482`), and the frontend's equivalent of this
+    /// is `setEditorState("playbackTime", payload.playhead_position / FPS)`
+    /// (`Editor.tsx:482-486`).
+    pub fn playhead_changed(&mut self, frame: u32, window: &mut Window, cx: &mut Context<Self>) {
+        let next = frame as f64 / EDITOR_PREVIEW_FPS as f64;
+        if (next - self.playhead).abs() < f64::EPSILON {
+            return;
+        }
+        self.playhead = next;
+
+        // `createEffect(() => { if (isAtEnd() && editorState.playing) {
+        // commands.stopPlayback(); setEditorState("playing", false); } })`
+        // (`Player.tsx:205-210`). The playhead is *not* rewound -- it stays at
+        // the end, which is what makes the button show Play again and the next
+        // press restart from 0.
+        if self.playing && self.is_at_end() {
+            self.stop_playback(cx);
+        }
+
+        cx.notify();
+        window.refresh();
+    }
+
+    /// The pause half of `handlePlayPauseClick`, also used by the end-of-media
+    /// effect and by prev/next.
+    fn stop_playback(&mut self, cx: &mut Context<Self>) {
+        if let Some(transport) = &self.transport {
+            transport.pause();
+        }
+        if self.playing {
+            self.playing = false;
+            self.report_playback();
+        }
+        cx.notify();
+    }
+
+    fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        let Some(transport) = &self.transport else {
+            return;
+        };
+        // `Math.floor(editorState.playbackTime * FPS)`.
+        let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
+        transport.play_from(frame);
+        self.playhead = from.max(0.0);
+        self.playing = true;
+        self.play_mark = self
+            .stats
+            .as_ref()
+            .map(|stats| (Instant::now(), stats.snapshot()));
+        cx.notify();
+    }
+
+    /// The perf gate's line, emitted every time playback stops.
+    fn report_playback(&mut self) {
+        let (Some((started, before)), Some(stats)) = (self.play_mark.take(), self.stats.as_ref())
+        else {
+            return;
+        };
+        let elapsed = started.elapsed().as_secs_f64();
+        let delta = stats.snapshot().since(before);
+        tracing::info!("{}", delta.report(elapsed));
+    }
+
+    /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
+    /// restart from 0; playing, stop; otherwise seek to the playhead and go.
+    pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.transport.is_none() {
+            return;
+        }
+        if self.is_at_end() {
+            self.stop_playback(cx);
+            self.start_playback(0.0, cx);
+        } else if self.playing {
+            self.stop_playback(cx);
+        } else {
+            let from = self.playhead;
+            self.start_playback(from, cx);
+        }
+    }
+
+    /// `seekPlayheadTo` (`Timeline/index.tsx:829-853`). Seeking while playing
+    /// is a stop/seek/restart round trip in the source too -- expressed here
+    /// as one desired-state write, which the driver applies in that order.
+    pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
+        let Some(transport) = &self.transport else {
+            return;
+        };
+        let time = time.clamp(0.0, self.total_duration());
+        // `Math.round(newTime * FPS)` -- "round to nearest frame to prevent
+        // off-by-one drift".
+        let frame = (time * EDITOR_PREVIEW_FPS as f64).round() as u32;
+        if self.playing {
+            transport.play_from(frame);
+        } else {
+            transport.seek(frame);
+        }
+        self.playhead = time;
+        cx.notify();
+    }
+
+    /// The prev button (`Player.tsx:370-381`): stop, playhead to 0, and the
+    /// timeline transform back to the start. **Not** a frame step -- neither
+    /// transport button is one in the Tauri editor.
+    pub fn jump_to_start(&mut self, cx: &mut Context<Self>) {
+        self.stop_playback(cx);
+        self.seek_to_time(0.0, cx);
+    }
+
+    /// The next button (`Player.tsx:395-405`): stop, playhead to the end.
+    pub fn jump_to_end(&mut self, cx: &mut Context<Self>) {
+        self.stop_playback(cx);
+        let total = self.total_duration();
+        self.seek_to_time(total, cx);
+    }
+
+    /// Harness only (`CAP_GPUI_AUTO_SEEK`, `CAP_GPUI_AUTO_PLAYBACK_TORTURE`):
+    /// seek to a fraction along the timeline.
+    ///
+    /// It goes the long way round -- fraction to a window x, then through the
+    /// same [`Self::time_at`] mapping a real click takes -- so the geometry is
+    /// exercised too. Only gpui's event delivery is skipped, for the same
+    /// reason as every other `CAP_GPUI_AUTO_*` hook: unprivileged synthetic
+    /// clicks are dropped.
+    pub fn seek_fraction(&mut self, fraction: f64, window: &mut Window, cx: &mut Context<Self>) {
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let x = timeline_content_left()
+            + timeline_content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
+        let time = self.time_at(x, viewport_width);
+        self.seek_to_time(time, cx);
+    }
+
+    /// Harness only (`CAP_GPUI_AUTO_PLAYBACK`): stop and emit the run's
+    /// numbers. Identical to pressing pause -- the report is emitted on every
+    /// stop, this just guarantees one happens.
+    pub fn stop_for_measurement(&mut self, cx: &mut Context<Self>) {
+        self.stop_playback(cx);
+    }
+
+    /// The editor's key bindings live in `useEditorShortcuts`
+    /// (`Player.tsx:236-286`): `Space` play/pause, `S` split, `Mod+=` /
+    /// `Mod+-` zoom -- the last three belong to E3. `e.repeat` is ignored
+    /// there (`useEditorShortcuts.ts:42`) and here.
+    fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.is_held {
+            return;
+        }
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.platform
+            || keystroke.modifiers.control
+            || keystroke.modifiers.alt
+            || keystroke.modifiers.shift
+        {
+            return;
+        }
+        if keystroke.key.as_str() == "space" {
+            cx.stop_propagation();
+            self.toggle_play(window, cx);
+        }
+    }
+
+    // -- Timeline seeking ----------------------------------------------------
+
+    /// `transform.zoom` -- visible seconds. Fixed at `zoomOutLimit()` until
+    /// E3 builds the zoom controls.
+    fn timeline_zoom(&self) -> f64 {
+        self.total_duration().max(0.001).min(600.0)
+    }
+
+    fn time_at(&self, x: f32, viewport_width: f32) -> f64 {
+        timeline_time_from_x(
+            x,
+            viewport_width,
+            self.timeline_zoom(),
+            0.0,
+            self.total_duration(),
+        )
+    }
+
+    fn timeline_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        ruler: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button != MouseButton::Left || self.transport.is_none() {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let time = self.time_at(f32::from(event.position.x), viewport_width);
+        if ruler {
+            // `applyScrub()` runs immediately on mousedown.
+            self.scrub = Some(Scrub::Ruler);
+            self.seek_to_time(time, cx);
+        } else {
+            self.scrub = Some(Scrub::Press { time });
+        }
+        cx.notify();
+    }
+
+    fn timeline_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.scrub != Some(Scrub::Ruler) {
+            return;
+        }
+        // The source clamps the pointer to the content edges while scrubbing
+        // (`beginRulerScrub`'s `contentEdges`), so a drag past either end
+        // parks the playhead there instead of doing nothing.
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let left = timeline_content_left();
+        let right = left + timeline_content_width(viewport_width);
+        let x = f32::from(event.position.x).clamp(left, right);
+        let time = self.time_at(x, viewport_width);
+        // No throttle: `preview_tx` is a `watch`, so a push that a newer one
+        // supersedes is simply overwritten, and the preview renderer cancels
+        // in-flight work when it sees a newer instruction
+        // (`editor_instance.rs:563-575`).
+        self.seek_to_time(time, cx);
+    }
+
+    /// The **timeline's own** mouseup, the one the source registers on
+    /// `e.currentTarget` (`TL/index.tsx:1157-1162`): a press that is released
+    /// over the timeline seeks to where it landed.
+    fn timeline_mouse_up(&mut self, cx: &mut Context<Self>) {
+        if let Some(Scrub::Press { time }) = self.scrub.take() {
+            self.seek_to_time(time, cx);
+        }
+        cx.notify();
+    }
+
+    /// The **window's** mouseup, which the source uses only to dispose the
+    /// press listener (`createEventListener(window, "mouseup", () =>
+    /// dispose())`) and to end a ruler scrub. It runs after the timeline's own
+    /// handler -- gpui bubbles child to parent -- so a press released *outside*
+    /// the timeline is dropped rather than seeking.
+    fn window_mouse_up(&mut self, cx: &mut Context<Self>) {
+        if self.scrub.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// A frame off the pump. `refresh` as well as `notify`: this window may be
     /// inactive when the first frame lands, and an inactive window repaints
     /// only when explicitly asked (the unit-2 finding).
@@ -453,11 +1095,15 @@ impl EditorWindow {
                 "editor frame size"
             );
         }
+        tracing::debug!(number = frame.number, "editor frame");
         self.frame_layout = Some(frame.layout);
         // Freed explicitly: nothing else evicts per-frame images from the
         // sprite atlas, and a 3MB 1080x702 frame per scrub would fill it.
         if let Some(previous) = self.latest_frame.replace(frame.image) {
             let _ = window.drop_image(previous);
+        }
+        if let Some(stats) = &self.stats {
+            stats.presented.fetch_add(1, Ordering::Relaxed);
         }
         cx.notify();
         window.refresh();
@@ -727,7 +1373,7 @@ impl EditorWindow {
     // -- Player --------------------------------------------------------------
 
     /// `PlayerContent` (`Player.tsx:288-483`): toolbar, canvas, transport.
-    fn render_player(&self) -> impl IntoElement {
+    fn render_player(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -735,7 +1381,7 @@ impl EditorWindow {
             .min_h_0()
             .child(self.render_player_toolbar())
             .child(self.render_preview_canvas())
-            .child(self.render_transport())
+            .child(self.render_transport(cx))
     }
 
     /// `flex items-center justify-between gap-3 p-3` (`Player.tsx:290`).
@@ -834,6 +1480,7 @@ impl EditorWindow {
             // `latestFrame()?.width ?? 1920` / `?? 1080` (`Player.tsx:567-568`).
             .unwrap_or((1920., 1080.));
 
+        let painted = self.stats.clone();
         let body = match (&self.state, image) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
             (_, Some(image)) => {
@@ -868,6 +1515,13 @@ impl EditorWindow {
                             0,
                             false,
                         );
+                        // Paints, not frames -- the clock and the playhead
+                        // invalidate too. It is the other end of the pump:
+                        // fewer paints than delivered frames would mean gpui
+                        // was coalescing pictures away before they were drawn.
+                        if let Some(stats) = &painted {
+                            stats.painted.fetch_add(1, Ordering::Relaxed);
+                        }
                     },
                 )
                 .absolute()
@@ -952,11 +1606,19 @@ impl EditorWindow {
 
     /// The transport row (`Player.tsx:357-481`): `relative flex overflow-hidden
     /// z-10 flex-row gap-3 justify-between items-center p-5`.
-    fn render_transport(&self) -> impl IntoElement {
+    fn render_transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let (current, total) = match self.summary() {
-            Some(summary) => (0.0, summary.duration),
-            None => (0.0, 0.0),
+        let total = self.total_duration();
+        // `Math.max(editorState.previewTime ?? editorState.playbackTime, 0)`
+        // (`Player.tsx:359-365`); the hover preview time is E3's.
+        let current = self.playhead.max(0.0);
+        let live = self.transport.is_some();
+        // `{!editorState.playing || isAtEnd() ? <IconCapPlay/> :
+        // <IconCapPause/>}` (`Player.tsx:388-392`).
+        let icon = if !self.playing || self.is_at_end() {
+            "icons/play.svg"
+        } else {
+            "icons/pause.svg"
         };
 
         div()
@@ -985,16 +1647,26 @@ impl EditorWindow {
                     .items_center()
                     .justify_center()
                     .gap(px(32.))
-                    .opacity(0.5)
+                    .when(!live, |this| this.opacity(0.5))
                     .child(
-                        svg()
-                            .path("icons/prev.svg")
-                            .size(px(12.))
-                            .text_color(Hsla::from(theme.gray_12)),
+                        div()
+                            .id("transport-prev")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(live, |this| this.cursor_pointer())
+                            .child(
+                                svg()
+                                    .path("icons/prev.svg")
+                                    .size(px(12.))
+                                    .text_color(Hsla::from(theme.gray_12)),
+                            )
+                            .on_click(cx.listener(|this, _, _window, cx| this.jump_to_start(cx))),
                     )
                     // `rounded-full border border-gray-300 bg-gray-3 size-9`.
                     .child(
                         div()
+                            .id("transport-play")
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1003,18 +1675,34 @@ impl EditorWindow {
                             .border_1()
                             .border_color(Hsla::from(theme.gray_5))
                             .bg(Hsla::from(theme.gray_3))
+                            // `hover:bg-gray-4`.
+                            .when(live, |this| {
+                                this.cursor_pointer().hover(|this| this.bg(Hsla::from(theme.gray_4)))
+                            })
                             .child(
                                 svg()
-                                    .path("icons/play.svg")
+                                    .path(icon)
                                     .size(px(12.))
                                     .text_color(Hsla::from(theme.gray_12)),
-                            ),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_play(window, cx);
+                            })),
                     )
                     .child(
-                        svg()
-                            .path("icons/next.svg")
-                            .size(px(12.))
-                            .text_color(Hsla::from(theme.gray_12)),
+                        div()
+                            .id("transport-next")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(live, |this| this.cursor_pointer())
+                            .child(
+                                svg()
+                                    .path("icons/next.svg")
+                                    .size(px(12.))
+                                    .text_color(Hsla::from(theme.gray_12)),
+                            )
+                            .on_click(cx.listener(|this, _, _window, cx| this.jump_to_end(cx))),
                     ),
             )
             // `flex flex-row flex-1 gap-4 justify-end items-center`.
@@ -1214,17 +1902,24 @@ impl EditorWindow {
 
     // -- Timeline ------------------------------------------------------------
 
-    /// The timeline strip at its default 260px. E1 draws the two **locked**
-    /// tracks -- Clip and Zoom, the only ones `trackDefinitions` marks
-    /// `locked: true` (`TL/index.tsx:89-144`) -- with their real gutter chips,
-    /// the ruler above them and the playhead at 0. No interactions: scrub,
-    /// drag, trim, split and zoom are E3.
-    fn render_timeline(&self, viewport_width: f32) -> impl IntoElement {
-        let summary = self.summary();
+    /// The timeline strip at its default 260px: the two **locked** tracks --
+    /// Clip and Zoom, the only ones `trackDefinitions` marks `locked: true`
+    /// (`TL/index.tsx:89-144`) -- with their real gutter chips, the ruler above
+    /// them, and a playhead that follows playback and seeks.
+    ///
+    /// Seeking is live (the ruler's scrub surface and the container's
+    /// press-to-seek); segment drag, trim, split, zoom, the minimap and the
+    /// hover playhead are E3's.
+    fn render_timeline(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         // `transform.zoom` is visible seconds and starts at `zoomOutLimit()` =
         // `min(totalDuration, 600)` (`ED/context.ts:1387, 1455`), position 0.
-        let duration = summary.map_or(0.0, |summary| summary.duration).max(0.001);
-        let zoom = duration.min(600.0);
+        let zoom = self.timeline_zoom();
+        // `transform: translateX(min((playbackTime - position) / secsPerPixel,
+        // timelineWidth))` (`TL/index.tsx:1287-1290`).
+        let content_width = timeline_content_width(viewport_width);
+        let secs_per_pixel = zoom / content_width as f64;
+        let playhead_x = ((self.playhead / secs_per_pixel) as f32).clamp(0., content_width);
+        let live = self.transport.is_some();
 
         div()
             .flex_none()
@@ -1252,16 +1947,63 @@ impl EditorWindow {
                         .pt(px(TIMELINE_TOP_PADDING))
                         .pl(px(TIMELINE_PADDING))
                         .pr(px(TIMELINE_PADDING))
+                        // The container's own `onMouseDown` -- a press
+                        // anywhere in the timeline seeks to that point when it
+                        // is released (`TL/index.tsx:1155-1169`). The ruler's
+                        // dedicated surface below sits on top of it and takes
+                        // precedence, exactly as its `z-40` does.
+                        .when(live, |this| {
+                            this.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    this.timeline_mouse_down(event, false, window, cx);
+                                }),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                                    this.timeline_mouse_up(cx)
+                                }),
+                            )
+                        })
                         .child(self.render_timeline_ruler(zoom, viewport_width))
                         .child(self.render_clip_track(zoom, viewport_width))
                         .child(self.render_zoom_track())
+                        // `absolute inset-y-0 right-0 z-40` at
+                        // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's
+                        // scrub surface, which reaches into the snap-to-zero
+                        // zone so hitting 0:00 is not a battle
+                        // (`TL/index.tsx:1236-1244`).
+                        .when(live, |this| {
+                            this.child(
+                                div()
+                                    .absolute()
+                                    // The strip is the container's first row,
+                                    // below its `pt-8`, and the surface is
+                                    // `inset-y-0` within it.
+                                    .top(px(TIMELINE_TOP_PADDING))
+                                    .h(px(TIMELINE_HEADER_HEIGHT))
+                                    .left(px(TIMELINE_PADDING + TRACK_GUTTER - START_SNAP_PX as f32))
+                                    .right(px(TIMELINE_PADDING))
+                                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, event: &MouseDownEvent, window, cx| {
+                                                cx.stop_propagation();
+                                                this.timeline_mouse_down(event, true, window, cx);
+                                            },
+                                        ),
+                                    ),
+                            )
+                        })
                         // The playhead: `absolute bottom-0 rounded-full z-20
                         // w-px`, `left: 128px` (16 + 112), `top: 24px`
                         // (`TL/index.tsx:1279-1295`).
                         .child(
                             div()
                                 .absolute()
-                                .left(px(TIMELINE_PADDING + TRACK_GUTTER))
+                                .left(px(TIMELINE_PADDING + TRACK_GUTTER + playhead_x))
                                 .top(px(PLAYHEAD_TOP_OFFSET))
                                 .bottom_0()
                                 .w(px(1.))
@@ -1523,7 +2265,33 @@ impl EditorWindow {
 /// the 112px icon gutter. This is `timelineBounds.width`, which every
 /// `secsPerPixel` in the timeline divides by.
 fn timeline_content_width(viewport_width: f32) -> f32 {
-    (viewport_width - 16. - TIMELINE_PADDING * 2. - TRACK_GUTTER).max(1.)
+    (viewport_width - TIMELINE_SLOT_PADDING * 2. - TIMELINE_PADDING * 2. - TRACK_GUTTER).max(1.)
+}
+
+/// The window x of the track content column's left edge --
+/// `rect.left + TIMELINE_PADDING + TRACK_GUTTER` in
+/// `getTimelineContentMetrics` (`TL/index.tsx:803-816`), where `rect` is the
+/// timeline container, itself inset by the slot's `px-2`.
+fn timeline_content_left() -> f32 {
+    TIMELINE_SLOT_PADDING + TIMELINE_PADDING + TRACK_GUTTER
+}
+
+/// `timelineTimeFromClientX` (`TL/index.tsx:818-827`), verbatim including the
+/// snap-to-zero zone and the clamp to `[0, totalDuration]`.
+fn timeline_time_from_x(x: f32, viewport_width: f32, zoom: f64, position: f64, total: f64) -> f64 {
+    let secs_per_pixel = zoom / timeline_content_width(viewport_width) as f64;
+    let raw = secs_per_pixel * (x - timeline_content_left()) as f64 + position;
+    let snapped = if raw / secs_per_pixel <= START_SNAP_PX {
+        0.0
+    } else {
+        raw
+    };
+    snapped.clamp(0.0, total.max(0.0))
+}
+
+/// `isAtEnd()` (`Player.tsx:156-159`).
+fn is_at_end(total: f64, playhead: f64) -> bool {
+    total > 0.0 && total - playhead <= 0.1
 }
 
 /// `markingResolution` (`TL/context.ts:11-12, 50-55`): the first of
@@ -1564,13 +2332,14 @@ fn format_clip_time(seconds: f64) -> String {
 }
 
 impl Render for EditorWindow {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
         // assuming the default width.
         let viewport_width: f32 = window.viewport_size().width.into();
+        let scrubbing = self.scrub.is_some();
 
         div()
             .size_full()
@@ -1580,6 +2349,22 @@ impl Render for EditorWindow {
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key))
+            // A drag continues while the pointer is anywhere in the window,
+            // which is what `createEventListenerMap(window, {mousemove,
+            // mouseup})` gives the source (`TL/index.tsx:938-955`); a gpui
+            // element only sees moves over its own hitbox, so the handlers go
+            // on the root while a scrub is live -- the camera bubble's resize
+            // pattern.
+            .when(scrubbing, |this| {
+                this.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.timeline_mouse_move(event, window, cx);
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| this.window_mouse_up(cx)),
+                )
+            })
             .child(self.render_header())
             // `flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0
             // leading-5` (`Editor.tsx:676`).
@@ -1627,7 +2412,7 @@ impl Render for EditorWindow {
                                             .border_color(Hsla::from(theme.gray_3))
                                             .bg(self.panel_bg())
                                             .overflow_hidden()
-                                            .child(self.render_player())
+                                            .child(self.render_player(cx))
                                             // The 16px horizontal resize
                                             // handle with its three grip bars
                                             // (`Editor.tsx:700-725`). Inert:
@@ -1667,7 +2452,7 @@ impl Render for EditorWindow {
                                     )
                                     .child(self.render_sidebar()),
                             )
-                            .child(self.render_timeline(viewport_width)),
+                            .child(self.render_timeline(viewport_width, cx)),
                     ),
             )
     }
@@ -1695,15 +2480,31 @@ pub fn request_frame(instance: &EditorInstance, frame_number: u32) {
 /// channel that drops on a full queue is the right backpressure here.
 pub fn make_frame_callback(
     tx: flume::Sender<(RenderedFrame, FrameLayout)>,
+    stats: Arc<PumpStats>,
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
         // The editor renderer always emits `Rgba` -- `editor.rs:371-373`
         // hardcodes `PlaybackRenderOutputFormat::Rgba`. NV12 is the export
         // path's.
         if let EditorFrameOutput::Rgba(frame) = output {
-            let _ = tx.try_send((frame, layout));
+            stats.rendered.fetch_add(1, Ordering::Relaxed);
+            if tx.try_send((frame, layout)).is_err() {
+                stats.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     })
+}
+
+/// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
+/// a number rather than a hunch.
+pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc<RenderImage>> {
+    let started = Instant::now();
+    let image = frame_image(frame);
+    stats
+        .convert_nanos
+        .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    stats.convert_samples.fetch_add(1, Ordering::Relaxed);
+    image
 }
 
 #[cfg(test)]
@@ -1797,6 +2598,144 @@ mod tests {
         let error = preflight(&dir).unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(error.contains("recording meta"), "{error}");
+    }
+
+    // -- Playback ------------------------------------------------------------
+
+    /// `isAtEnd()` is `total > 0 && total - playbackTime <= 0.1`
+    /// (`Player.tsx:156-159`) -- the 0.1s slack is what stops the button from
+    /// showing Pause over a playhead that has nowhere left to go, and it is
+    /// what auto-stops playback before the engine's own end.
+    #[test]
+    fn end_of_media_uses_the_sources_tenth_of_a_second() {
+        assert!(!is_at_end(0.0, 0.0), "an empty project is never at the end");
+        assert!(!is_at_end(10.0, 9.89));
+        assert!(is_at_end(10.0, 9.9));
+        assert!(is_at_end(10.0, 10.0));
+        // Overshoot -- the engine can report a frame past the timeline end.
+        assert!(is_at_end(10.0, 10.4));
+    }
+
+    /// `timelineTimeFromClientX` (`TL/index.tsx:818-827`). The editor's
+    /// default width with the fit zoom: 1275 - 16 - 32 - 112 = 1115px of
+    /// content starting at x = 136.
+    #[test]
+    fn timeline_click_maps_x_to_time() {
+        let width = EDITOR_WIDTH;
+        let total = 60.0;
+        let zoom = total; // `zoomOutLimit()` at this duration
+        let content = timeline_content_width(width);
+        assert_eq!(content, 1115.);
+        assert_eq!(timeline_content_left(), 136.);
+
+        // The content origin is 0:00...
+        assert!(timeline_time_from_x(136., width, zoom, 0.0, total).abs() < 1e-9);
+        // ...its right edge is the whole duration...
+        let end = timeline_time_from_x(136. + content, width, zoom, 0.0, total);
+        assert!((end - total).abs() < 1e-6, "{end}");
+        // ...and the middle is half of it.
+        let middle = timeline_time_from_x(136. + content / 2., width, zoom, 0.0, total);
+        assert!((middle - total / 2.).abs() < 1e-6, "{middle}");
+    }
+
+    #[test]
+    fn timeline_click_snaps_to_zero_and_clamps() {
+        let width = EDITOR_WIDTH;
+        let total = 60.0;
+        // Within START_SNAP_PX of the origin: exactly 0, not 0.4s.
+        let snapped = timeline_time_from_x(136. + 9., width, total, 0.0, total);
+        assert_eq!(snapped, 0.0);
+        // Just outside it: a real time.
+        let outside = timeline_time_from_x(136. + 11., width, total, 0.0, total);
+        assert!(outside > 0.0, "{outside}");
+        // Left of the timeline and past its end both clamp.
+        assert_eq!(timeline_time_from_x(0., width, total, 0.0, total), 0.0);
+        assert_eq!(
+            timeline_time_from_x(9_000., width, total, 0.0, total),
+            total
+        );
+    }
+
+    /// Panning is E3's, but the maths already carries `transform.position`, so
+    /// pin its meaning: seconds at the left edge.
+    #[test]
+    fn timeline_click_respects_the_transform_position() {
+        let width = EDITOR_WIDTH;
+        let time = timeline_time_from_x(136. + timeline_content_width(width) / 2., width, 10.0, 20.0, 600.0);
+        assert!((time - 25.0).abs() < 1e-6, "{time}");
+    }
+
+    /// The perf gate's line. `frames` is what reached the window, `dropped`
+    /// what the pump refused, and the rate is measured on *painted* frames.
+    #[test]
+    fn stats_report_is_a_rate_over_the_run() {
+        let before = StatsSnapshot::default();
+        let after = StatsSnapshot {
+            rendered: 620,
+            dropped: 20,
+            presented: 600,
+            painted: 600,
+            convert_nanos: 600 * 1_500_000,
+            convert_samples: 600,
+        };
+        let delta = after.since(before);
+        assert_eq!(delta.convert_micros(), 1500.0);
+        let report = delta.report(10.0);
+        assert!(
+            report.starts_with("playback fps=60.0 frames=600 dropped=20"),
+            "{report}"
+        );
+        // The rate is delivered frames, never paints -- the window repaints
+        // for the clock and the playhead too.
+        let noisy_paints = StatsSnapshot {
+            painted: 5_000,
+            ..after
+        }
+        .since(before);
+        assert!(
+            noisy_paints.report(10.0).starts_with("playback fps=60.0 "),
+            "paints must not inflate the frame rate"
+        );
+    }
+
+    /// Playhead seconds come from the engine's frame number over the app's
+    /// FPS -- `payload.playhead_position / FPS` (`Editor.tsx:485`).
+    #[test]
+    fn playhead_seconds_are_frames_over_fps() {
+        assert_eq!(90.0 / EDITOR_PREVIEW_FPS as f64, 1.5);
+        // And a seek rounds to the nearest frame, as `seekPlayheadTo` does.
+        assert_eq!((1.5051 * EDITOR_PREVIEW_FPS as f64).round() as u32, 90);
+    }
+
+    /// The desired-state transport: a play is always a seek plus a start, a
+    /// seek always bumps the generation (so seeking to the frame you are on
+    /// still re-renders), and a pause moves nothing else.
+    #[test]
+    fn transport_desired_state_tracks_the_sources_call_order() {
+        let (handle, driver) = transport();
+        let read = || {
+            *driver
+                .desired
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        };
+        assert_eq!(read(), Desired::default());
+
+        handle.play_from(120);
+        let after_play = read();
+        assert!(after_play.playing);
+        assert_eq!(after_play.seek, Some(120));
+        assert_eq!(after_play.seek_gen, 1);
+
+        handle.pause();
+        let after_pause = read();
+        assert!(!after_pause.playing);
+        assert_eq!(after_pause.seek, Some(120), "pause does not move the playhead");
+        assert_eq!(after_pause.seek_gen, 1);
+
+        handle.seek(120);
+        assert_eq!(read().seek_gen, 2, "a repeat seek still re-applies");
+        assert!(!read().playing);
     }
 
     /// The row-padding + BGRA conversion, on a frame shaped like a real one:

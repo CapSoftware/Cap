@@ -23,8 +23,11 @@ cargo run
 (the binary), not `cap_desktop_gpui` (the package).
 
 The first build takes a few minutes and about 8 GB of `target/`: gpui pulls its
-own revisions of the wgpu and font stacks. Incremental builds after that are
-under a second.
+own revisions of the wgpu and font stacks. Rebuilds after that are seconds —
+the dependencies build at `opt-level = 2` and so, since the editor landed, does
+the app crate: the editor's per-frame pixel conversion is 30ms unoptimised and
+0.92ms optimised, which is the difference between a 33fps preview and a 60fps
+one (see the editor's measurements below).
 
 ### Why it is a separate workspace
 
@@ -90,11 +93,13 @@ Everything below is real, not mocked.
   lists capped at 9 and merged). The thumbnails are the pre-baked files inside
   each `.cap` — `screenshots/display.jpg` for a recording, the bundle's PNG for
   a screenshot — decoded on the background executor. See below.
-- **The editor window, staged.** The real 1275×800 window with a project
-  loaded through `EditorInstance` and frame 0 rendered into the player. The
-  shell is complete — header, letterboxed player, timeline strip, config
-  sidebar — and the controls the later units own render in place, disabled.
-  See below.
+- **The editor window, playing.** The real 1275×800 window with a project
+  loaded through `EditorInstance`, the shell complete — header, letterboxed
+  player, timeline strip, config sidebar — and **playback**: play/pause on the
+  button and on Space, a live playhead and `M:SS / M:SS` clock at 60 fps, real
+  audio, click and drag-scrub seeking on the timeline, and the source's
+  end-of-media stop. Measured at 59.9 fps sustained with zero dropped frames.
+  The controls the later units own render in place, disabled. See below.
 - **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
   Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
   at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
@@ -254,7 +259,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | **E1 done — window, shell, static frame.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project loaded through `EditorInstance` with frame 0 on screen. Playback (E2), timeline interaction (E3) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
+| Editor | 1275×800 | **E1+E2 done — window, shell, playback.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop. Timeline interaction (E3) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -682,9 +687,15 @@ deliverable, and a header missing half its buttons would not be one.
   on gpui's background executor and `EditorInstance::new` on the `gpui_tokio`
   runtime, because the instance's decoders, renderer and preview renderer are
   all tokio-spawned. `EditorInstance::new` is the one the Tauri app calls
-  (`lib.rs:6592`) — not `new_with_audio_output`, which is the test's; the real
-  `AudioOutput::new` only spawns its control thread, so opening a project grabs
-  no cpal device. `shared_device` stays `None`.
+  (`lib.rs:6592`) — not `new_with_audio_output`, which is the test's.
+  `shared_device` stays `None`. Opening a project **does** take the audio
+  device, despite `AudioOutput::new` only spawning a control thread:
+  `EditorInstance::new` calls `audio_output.prewarm()`
+  (`editor_instance.rs:305`), which sends `EnsureStream` and logs `Audio output
+  stream ready device=Some("MacBook Pro Speakers")` before the first frame is
+  ever asked for. (E1's note that the device opens lazily on the first play was
+  wrong; the *stream* is opened at construction, the *source* is installed on
+  play.)
 - **Frame path.** `frame_cb` → bounded flume channel → un-pad the 256-byte
   stride → **RGBA → BGRA** (the render target is `Rgba8Unorm`; gpui's atlas
   wants BGRA, the same swap `library::decode_thumbnail` does) → `RenderImage`,
@@ -719,16 +730,150 @@ deliverable, and a header missing half its buttons would not be one.
   bundles exactly this way, so parity means accepting the write; only the
   *tests* work on copies.
 
+### Playback, the playhead and seeking
+
+The transport is real: play/pause, a live playhead, click and drag-scrub on the
+timeline, and the audio track through the editor's own `AudioOutput`.
+
+- **Two seams, two channels, both latest-wins.** `frame_cb` already had one
+  (E1's bounded flume queue). `on_state_change` — which E1 left as
+  `|_state| {}` — now gets the other. It is `Fn + Send + Sync` and is called
+  from the `cap-playback` OS thread (`playback.rs:1370-1374`) and from tokio
+  workers, so it may not touch a gpui `Context`: it stores
+  `state.playhead_position` in an `AtomicU32` and pokes a one-slot channel.
+  The drain runs on the main thread and reads the atomic, so a burst coalesces
+  to the newest position rather than queueing sixty stale ones a second. That
+  atomic **is** the live playhead: `setEditorState("playbackTime",
+  payload.playhead_position / FPS)` (`Editor.tsx:482-486`), 60 fps of it.
+- **The transport is desired state, not commands.** Play, pause and seek write
+  `{ playing, seek, seek_gen }` and poke a driver task on the tokio runtime,
+  which applies the difference (stop → seek → start, in the source's order).
+  Everything it calls locks `instance.state` and `start_playback` decodes the
+  project's music tracks first, so none of it can run on the UI thread. The
+  shape is not an invention: seeking *during* playback is a stop/seek/restart
+  round trip (`seekPlayheadTo`, `Timeline/index.tsx:829-853`), and
+  `beginRulerScrub` coalesces a drag's seeks to one in flight with the newest
+  position applied afterwards (`seekInFlight`/`seekQueued`,
+  `Timeline/index.tsx:890-909`). Latest-wins state gives exactly that and
+  cannot accumulate a backlog of positions the user has already dragged past.
+- **Play is `seekTo(floor(playbackTime * FPS))` then `startPlayback(60,
+  1248×702)`** — `handlePlayPauseClick` (`Player.tsx:212-233`), including its
+  at-the-end arm: pressing play at the end stops, rewinds to 0, and plays from
+  there. Pause is `state.playback_task.take().map(|h| h.stop())`.
+- **End of media is the frontend's rule, not the engine's.** The engine stops
+  itself at `playback_time >= duration` (`playback.rs:963`), but the UI stops
+  it 0.1s earlier: `isAtEnd()` is `total > 0 && total - playbackTime <= 0.1`
+  and a `createEffect` calls `stopPlayback` the moment it goes true while
+  playing (`Player.tsx:156-159, 205-210`). The playhead is **not** rewound — it
+  parks at the end, which is what makes the button flip back to Play
+  (`!playing || isAtEnd()`, `Player.tsx:388-392`) and the next press restart
+  from 0. Verified: seeking to 95 % and pressing play stopped after 0.80s at
+  frame 948 of 954, not after the 12s the harness asked for.
+- **`totalDuration()` comes off the instance, not the pre-flight.**
+  `EditorInstance::new` synthesises a timeline for a raw bundle and writes it
+  back, and `timeline.duration()` is precisely what the playback engine stops
+  at (`playback.rs:560-570`, `get_duration` at `rendering/src/lib.rs:1883`), so
+  the number the 0.1s rule is measured against is read from
+  `instance.project_config` once the instance exists.
+- **Seeking.** `timelineTimeFromClientX` verbatim (`TL/index.tsx:818-827`),
+  snap-to-zero zone (`START_SNAP_PX = 10`) and `[0, totalDuration]` clamp
+  included; the paused repaint is the `preview_tx` push, because `seek_to`
+  renders nothing. The two press behaviours are the source's two, and they are
+  genuinely different: the ruler's own `z-40` hit surface scrubs continuously
+  from mousedown (`beginRulerScrub`), while a press anywhere else in the
+  timeline seeks **once, on release, to the press position** —
+  `handleUpdatePlayhead` is registered on mouseup but closes over the mousedown
+  event (`TL/index.tsx:1155-1169`). A press released *outside* the timeline
+  seeks nothing, because the source's mouseup listener is on the container and
+  the window-level one only disposes it. All three were checked with real
+  `CGEvent` clicks: a ruler click at 25 % rendered frame 238 of 954, a click on
+  the clip track at 75 % rendered 715, a drag from 10 % to 60 % walked
+  95→135→174→…→572, and a press released over the player rendered nothing.
+- **Prev and next are not frame steps.** The Tauri prev button is
+  `stopPlayback` + `playbackTime = 0` + `transform.setPosition(0)` and next is
+  `stopPlayback` + `playbackTime = totalDuration()` (`Player.tsx:370-405`) —
+  jump to start and jump to end. Transcribed as they are.
+- **Space is the only key binding here.** `useEditorShortcuts`
+  (`Player.tsx:236-286`) binds `Space` (play/pause), `S` (split) and `Mod+=` /
+  `Mod+-` (zoom); the last three are E3's. Undo/redo (`context.ts:1930-1950`)
+  and Backspace/Delete (`TL/index.tsx:963`) belong to units that do not exist.
+  `e.repeat` is ignored there and `is_held` here. Verified with a real
+  `key code 49`: play, then pause 3.12s later at 59.9 fps.
+- **Audio is the real `AudioOutput`.** Play logs `Applying audio output latency
+  hint: 27.3 ms`, `Starting progressive audio pre-render duration_secs=15.9095
+  sample_rate=48000 channels=2`, and `Progressive audio pre-render complete
+  total_samples=1537312 memory_mb=5 elapsed_ms=5` — the recording's real mic
+  track, resampled and handed to `MacBook Pro Speakers`. Closing the window
+  mid-playback logs `Audio output thread finished` 5ms later.
+
+#### The measured numbers
+
+`CAP_GPUI_AUTO_PLAYBACK=16` on a 15.9s studio recording (display + mic),
+1248×702 preview base, 1080×702 frames, dev build:
+
+```
+playback fps=59.9 frames=949 dropped=0 (rendered=949 rendered_fps=59.9 paints=1570 convert_avg=933us over 15.84s)
+```
+
+The engine's own `Playback stats` for the same run held
+`effective_fps="60.0"–"60.4"` with `total_skipped=0` throughout, so nothing was
+lost at any stage: the engine skipped nothing, `rendered` (frame_cb calls)
+equals `frames` (frames that reached the window), and `dropped` is zero. There
+is no shortfall to locate. `paints` is deliberately *not* the frame rate — the
+window repaints for the clock and the playhead as well, so it runs ~1.65x ahead
+of the frame count; it is listed so that a `paints` *below* `frames` would show
+gpui coalescing pictures away before they were drawn.
+
+The per-frame CPU conversion — un-pad the 256-byte-aligned rows, swap R/B,
+build the `RenderImage` — costs **0.93ms** for a 1080×702 frame, i.e. 5.6 % of
+a 60fps frame budget. **On this evidence the zero-copy upstream change
+(`RenderSession::current_texture`, a shared `wgpu::Device`) is not worth doing
+for playback yet.** It would buy back under a millisecond per frame on the
+background executor, and the pump is not the bottleneck at any size the editor
+currently renders. Revisit if the preview base moves to `full` (1920×1080 is
+2.4× the pixels) or if a second live surface (camera) joins the same pump.
+
+**The one real trap this measurement found is the dev profile.** With the app
+crate at `opt-level = 0` the same conversion measures **30.1ms**, the pump
+becomes convert-bound at 33 fps and the bounded channel drops **45 %** of the
+renderer's frames (`playback fps=33.0 frames=523 dropped=423 …
+convert_avg=30149us`). Nothing about the architecture changes — it is a
+3MB-per-frame per-pixel loop compiled without optimisation. `Cargo.toml` now
+carries `[profile.dev.package.cap-desktop-gpui] opt-level = 2` so a dev build
+shows the editor at its real speed; it costs about seven seconds a build.
+
+Reliability, same binary:
+
+- **45 play/pause/seek cycles** (`CAP_GPUI_AUTO_PLAYBACK_TORTURE=45`): 45/45
+  completed, 45 stop reports, zero errors, zero warnings, zero "RefCell already
+  borrowed". Each 320ms burst delivered 14–20 frames at 41.8–59.8 fps (the low
+  end is the burst that includes the engine's own start-up inside its 320ms),
+  and **one** frame was dropped across all 45 cycles put together. RSS
+  climbs to ~1.39 GB while cycling (the engine's `FRAME_CACHE_SIZE = 90` /
+  `PREFETCH_BUFFER_SIZE = 90` of decoded frames) and settles at **1.106 GB**,
+  flat to the kilobyte over the following 15s and no higher at cycle 45 than at
+  cycle 11 — a plateau, not a leak. A paused editor with no playback sits at
+  345 MB.
+- **Closing mid-playback** (`CAP_GPUI_AUTO_EDITOR_CLOSE=3`, which sends
+  `performClose:` — the traffic light's own path): `sample` shows one
+  `cap-playback` thread while playing, **none** 1.2s after the close, and a new
+  one after reopening. The app stays alive, the main window comes back, and the
+  reopened editor plays again at 59.9 fps with zero drops.
+
 Editor-specific deviations:
 
 | | |
 |---|---|
 | **The header's buttons are inert** | Delete recording, Open recording bundle, Presets, Organization, Undo, Redo, Clips, Captions and Export all render at their real metrics in the `disabled:opacity-50` state. Each needs a unit that does not exist: project deletion, the preset store, auth, an undo stack, the clips/transcript layout modes, export. |
 | **The name is displayed, not edited** | `NameEditor` is an `<input>` overlaying a measuring `<span>` that commits through `commands.setPrettyName`. gpui ships no text input (the same gap as the main window's search field and the teleprompter's script), so the name and its `.cap` suffix render read-only. |
-| **The player toolbar and transport are inert** | Aspect ratio, Crop, Frame, Preview quality, prev/play/next, split, zoom in/out and the zoom slider are drawn at their real sizes and do nothing. Play is E2; the zoom controls drive the timeline transform, which is E3. |
+| **The player toolbar is inert; the transport is not** | Prev / play-pause / next are live. Aspect ratio, Crop, Frame, Preview quality, split, zoom in/out and the zoom slider are still drawn at their real sizes and do nothing — the zoom controls drive the timeline transform, which is E3. |
+| **No hover playhead and no preview time** | The Tauri timeline tracks `previewTime`: a grey playhead follows the pointer while paused, and the transport clock shows `previewTime ?? playbackTime` (`TL/index.tsx:1170-1188, 1255-1277`, `Player.tsx:359-365`). Hover state belongs with the rest of E3's timeline interaction, so the clock here is always the playhead's own time. |
+| **The timeline transform is fixed** | Seeking maths carries `transform.position` and `transform.zoom` and is unit-tested with a panned viewport, but nothing moves them yet: zoom is pinned at `zoomOutLimit()` and position at 0 until E3 builds the wheel/pinch/minimap paths. Edge-panning during a scrub past the content edge (`stepEdgePan`) is therefore not reproduced either — the pointer is clamped to the content instead. |
+| **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
+| **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
 | **The config sidebar is a rail plus a placeholder** | The six-tab bar is real, at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
-| **The timeline is two locked tracks, drawn** | Clip and Zoom — the only two `trackDefinitions` marks `locked: true` — with their real gutter chips at the `--track-clip` / `--track-zoom` colours, the 32px ruler with its tick ladder, the clip segments carrying name and duration, and the playhead at 0. No scrub, drag, trim, split, zoom, minimap, edge fade or track manager; no optional tracks. The timeline height is the default 260 and its drag handle is inert. |
+| **The timeline is two locked tracks, drawn, and a live playhead** | Clip and Zoom — the only two `trackDefinitions` marks `locked: true` — with their real gutter chips at the `--track-clip` / `--track-zoom` colours, the 32px ruler with its tick ladder, the clip segments carrying name and duration, and the playhead tracking playback and seeks. No segment drag, trim, split, zoom, minimap, edge fade or track manager; no optional tracks. The timeline height is the default 260 and its drag handle is inert. |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
 | **No prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. |
@@ -778,6 +923,34 @@ painted and there is a scrollable height to move through.
 as a studio Recents card does. `=1` picks the newest studio recording the
 library scan finds — the same list Recents reads, so it is the card that would
 be first in the carousel.
+
+The editor's playback hooks all wait 1.5s after the project loads, so the
+decoders are warm and the stopwatch measures playback rather than startup:
+
+- `CAP_GPUI_AUTO_PLAYBACK=<seconds>` presses play, waits, and pauses — which
+  logs the run's `playback fps=… frames=… dropped=…` line. (Every stop logs
+  one; this just guarantees a stop happens.)
+- `CAP_GPUI_AUTO_SEEK=<fraction>` seeks to a fraction along the timeline
+  *through the click path*: the fraction becomes a window x and goes through
+  the same `timeline_time_from_x` a real click does, so only gpui's event
+  delivery is skipped. Applied before the play hook, which is how the
+  end-of-media stop is checked (`CAP_GPUI_AUTO_SEEK=0.95` +
+  `CAP_GPUI_AUTO_PLAYBACK=12` stops after 0.8s, not 12).
+- `CAP_GPUI_AUTO_PLAYBACK_TORTURE=<cycles>` runs play → 320ms → pause → seek
+  cycles, logging `torture: cycle done` each time and `torture: complete` at
+  the end.
+- `CAP_GPUI_AUTO_EDITOR_CLOSE=<seconds>` closes the editor that many seconds
+  into playback via `performClose:` — the traffic light's own path, so
+  `on_window_should_close` and `editor_closed` both run — then reopens it 2s
+  later. Once per process, or the reopened window would close itself forever.
+
+Real mouse and keyboard events *do* reach the app when the terminal has
+Accessibility permission, which is how the seek and Space paths were checked
+end to end rather than through their hooks: `swift click.swift <window-number>
+<x> <y> [drag-to-x] [drag-to-y]` posts `CGEvent`s in window-relative logical
+points, and `osascript -e 'tell application "System Events" to key code 49'`
+sends Space. Without that permission both are silently dropped, which is why
+the `CAP_GPUI_AUTO_*` hooks exist at all.
 
 `CAP_GPUI_AUTO_RECENT=1` clicks the first Recents card once the library scan
 has landed (expanding the window first, since the scan only runs while

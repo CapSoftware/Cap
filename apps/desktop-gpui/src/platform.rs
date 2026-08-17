@@ -527,6 +527,16 @@ mod mac {
         native.0.makeKeyAndOrderFront(None);
     }
 
+    /// `performClose:` -- exactly what clicking the red traffic light sends,
+    /// so it goes through `windowShouldClose:` and gpui's
+    /// `on_window_should_close` rather than tearing the window out from under
+    /// it. Harness only (`CAP_GPUI_AUTO_EDITOR_CLOSE`), for the same reason as
+    /// the rest: unprivileged synthetic clicks are dropped. Same retained
+    /// handle discipline as [`hide_native`].
+    pub fn close_native(native: &NativeWindow) {
+        unsafe { native.0.performClose(None) };
+    }
+
     /// Show without stealing key status -- `orderFrontRegardless`, what the
     /// Tauri app calls on the recording controls panel.
     pub fn show_window_without_focus(window: &Window) {
@@ -601,6 +611,7 @@ mod stub {
     pub fn apply_panel_behavior(_window: &Window, _behavior: PanelBehavior) {}
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
+    pub fn close_native(_native: &NativeWindow) {}
     pub fn show_window_without_focus(_window: &Window) {}
     pub fn window_number(_window: &Window) -> Option<isize> {
         None
