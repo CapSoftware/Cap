@@ -215,7 +215,7 @@ alike.
 | `ui/segmented.rs` | `SegmentedControl`, the superset of the four Tauri idioms | the settings window's `segmented`/`segmented_raw`; `::pills` and `::icons` are the export page's and the text-align grid's, built ahead of their units |
 | `ui/menu.rs` | `MenuState` (the keyboard contract) + `Menu` | the settings window's `Menu.popup()` stand-in |
 | `ui/select.rs` | `Select` — the closed trigger a `Menu` opens | the settings `SelectSettingItem` button and the editor's preview-quality trigger |
-| `ui/text_field.rs` | `TextField` + `text_edit_for` | the main window's search field and the settings window's two inputs |
+| `ui/text_input.rs` | `TextInputState` (the whole editing model, over gpui's `EntityInputHandler`) + `TextInput` | the main window's search field, the settings window's two inputs, the teleprompter's script editor, the editor's project name and the sidebar's hex fields — every one of which was its own append-only stand-in. See [Text input](#text-input) |
 | `ui/surface.rs` | `Card`, `Popover`, `SettingRow`, `Section` | the settings `card`/`rows`/`setting_row`/`Section`, the teleprompter's footer pill and settings popover, and the overlays' liquid-glass surface |
 | `ui/collapsible.rs` | `CollapsibleState` + `Collapsible`, with real height measurement | the settings window's "Available placeholders" reveal |
 | `ui/tab_rail.rs` | `TabRail` | the editor's six-tab config-sidebar rail |
@@ -286,12 +286,13 @@ What Kobalte contributed, reproduced by hand:
   never-rendered panel is instant, because there is no measurement to animate
   towards yet. The keyframe's `filter: blur(5px) → blur(0)` cross-fade is not
   reproduced — same missing hook as the teleprompter's vignette.
-- **TextField.** `text_edit_for` classifies a keystroke into
-  Insert/Backspace/Escape/Ignored and the window keeps the string, because
-  Escape means "clear the filter, then close the panel" in the main window and
-  "revert to the stored value" in settings, and neither belongs in a
-  component. Command and control chords never insert; Backspace and Escape are
-  recognised whatever is held, because they are edits rather than characters.
+- **TextInput.** A real field, on gpui's own IME protocol — see
+  [Text input](#text-input) for the whole contract. The one thing that stayed
+  where it was is *meaning*: the component emits `Changed` / `Confirmed` /
+  `Cancelled` / `Blurred` and the window decides, because Escape means "clear
+  the filter, then close the panel" in the main window, "revert to the stored
+  value" in settings and "commit, like a blur" in the editor's rename, and none
+  of those belongs in a component.
 
 Two things the Solid components do that this rev cannot: the **sliding
 indicator** (`SwitchTab`, the tab rail and `FrameButton` all animate a
@@ -306,6 +307,145 @@ matrix lists `KTabs` in the editor and the screenshot editor only; the settings
 sidebar is a vertical nav *list* (`.cap-settings-nav`, rendered with a `<For>`
 over `settingsItems`), not a tab strip. Merging them would mean inventing a
 component neither app has.
+
+### Text input
+
+Every field in this app used to be the same append-only stand-in: focus
+tracking, `key_char` for the typed character, a caret painted at the end of the
+string, and Backspace popping the last one. That was the single blocker in
+front of the editor's text and caption panels, the project rename and the
+sidebar's hex fields — and it made the fields the app already had worse than the
+`<input>`s they were transcribed from. `ui/text_input.rs` replaces all six.
+
+**gpui does ship the seam a text editor needs — it just is not a widget.**
+`EntityInputHandler` (`gpui/src/input.rs:10-96`) is the trait the platform's IME
+talks to, and `ElementInputHandler` adapts an `Entity<V>` implementing it into
+the handler `Window::handle_input` installs during paint. On macOS that is
+`NSTextInputClient`: marked text, dead keys, dictation and the character palette
+all arrive through `replace_and_mark_text_in_range` / `replace_text_in_range`
+rather than through `key_char`. gpui's own `examples/input.rs` is the reference
+implementation, and this component is the same three pieces —
+`EntityInputHandler` + a custom `Element` + `window.handle_input` — with
+wrapping, word and line motion, undo, and the app's per-surface theming added.
+
+#### The dispatch order, which decides the whole design
+
+A key press on macOS goes (`gpui_macos/src/window.rs:2143-2250`):
+
+1. **gpui's own dispatch first.** Key *bindings* are matched against the focused
+   node's context stack; a matching action is dispatched and consumes the
+   event — `window.rs:5280-5296` returns before `finish_dispatch_key_event`, so
+   no `on_key_down` listener anywhere on the path ever sees it.
+2. **Only an unhandled event reaches AppKit's input context**, which composes it
+   and calls back into `replace_text_in_range` — the text actually being typed.
+
+Two consequences, and both are load-bearing:
+
+- **Every chord is a bound action in the `TextInput` key context.** Backspace,
+  forward-delete, the arrows (plain, ⌥-word, ⌘-line, ⇧-select), `cmd-a`,
+  `cmd-c/x/v`, `cmd-z`, `cmd-shift-z`, Return and Escape are all
+  `ui::bind_text_input_keys`' bindings, scoped to `TextInput`. Because a matched
+  binding consumes the keystroke, a focused field **structurally** prevents the
+  editor's Backspace-deletes-the-selection and Cmd-Z-undoes-the-project handlers
+  from firing. That is key-context discipline as a mechanism, not a check.
+- **A bare printable key can never be bound**, because a binding would consume
+  it at step 1 and the IME at step 2 would never run — the field would type
+  nothing. So `s`, `c` and `space` still reach an ancestor's `on_key_down`, and
+  the ancestor has to ask whether a field has focus. Which is exactly what the
+  Tauri app does: `useEditorShortcuts`' scope gate is `document.activeElement`
+  being an `input`/`textarea`/contenteditable (`Player.tsx:236-245`), and the
+  timeline's own listener repeats it (`Timeline/index.tsx:960-966`).
+  `ui::text_input_has_focus` is that gate, transcribed, and it is the first
+  statement of `EditorWindow::on_key`.
+
+#### What the field does
+
+One state machine (`TextInputState`, an `Entity` so `ElementInputHandler` can
+hold it), one element, two shapes. `multi_line` switches exactly three things:
+Return inserts a newline instead of emitting `Confirmed`, the text wraps to the
+element's width, and the element measures its own height.
+
+| | |
+|---|---|
+| **Insert** | at the caret, replacing the selection. Through the IME, so dead keys compose (⌥e then e → é, with the `´` underlined while it is marked) and dictation and the character palette work. |
+| **Delete** | Backspace and forward-Delete, by *grapheme* — a flag emoji or a combining accent goes in one press. ⌥ takes the word, ⌘ takes to the line start / end. A selection is deleted whole. |
+| **Caret** | arrows; ⌥ by word; ⌘ to line start / end (and Home/End); ⌘↑/↓ to the ends; ↑/↓ across **visual** rows in a wrapping field, keeping a goal x so a short row does not shorten the run. |
+| **Pointer** | click to position (through the layout's own `closest_index_for_position`, with the row picked from the click's y first), double-click a word, triple-click the paragraph, drag to extend at the granularity the press established. The drag keeps tracking outside the field's bounds — `window.on_mouse_event` from paint, the reason `ui::Slider` needs its drag layer. |
+| **Selection** | ⇧ with any motion or click extends and flips across the anchor, ⌘A selects all, the wash paints one quad per visual row it crosses, and typing or deleting replaces it. |
+| **Clipboard** | ⌘C / ⌘X / ⌘V through `cx.read_from_clipboard` / `write_to_clipboard`, plain text. A pasted newline becomes a space in a single-line field, the way an `<input>` flattens one. |
+| **Undo** | field-scoped ⌘Z / ⇧⌘Z, snapshot-based. A run of typed characters coalesces into one step and a run of deletes into another, breaking the group on anything else — which is what a webview `<input>` gives you for free. A paste, a cut and a whole IME composition are each one step. |
+| **Placeholder, disabled, focus ring** | per surface: `::search`, `::settings`, `::plain`, `::bare`, the same named-constructor rule the rest of `ui/` follows. |
+
+The caret is **static**, not blinking — the app's established look, and it costs
+nothing. A blink would need a 500ms ticker that `refresh()`es as well as
+`notify()`s (gpui only paints on invalidation), and the seam for one is the
+`caret_on` flag.
+
+#### The two bits of caret maths that are ours
+
+Everything about *shaping* is gpui's: `shape_text` returns one `WrappedLine` per
+hard line, and each knows `position_for_index` and
+`closest_index_for_position`. What the component adds is the flat **row table**
+that turns those per-paragraph layouts into one list of visual rows.
+
+- **Row starts.** `position_for_index` maps an index onto the row it *ends* —
+  its loop returns as soon as `index <= line_end_ix`, so a wrap boundary
+  resolves onto the row *before* it. Row `k`'s start is therefore the greatest
+  character boundary whose y is still below `k * line_height`, which is what
+  `row_starts`' binary search looks for. It takes `y_of` as a closure so it is
+  testable without a window.
+- **A caret on a wrap boundary belongs to the row it opens**, not the one it
+  ends — that is where it has to be after moving right onto it. `row_for_offset`
+  picks the later row and takes the x inside it as zero.
+- **Centred rows.** The teleprompter is `text-center`, so the caret and the
+  selection have to be shifted by the same amount the aligner shifts the glyphs.
+  `aligned_origin_x` (`gpui/src/text_system/line.rs`) centres on
+  `end_of_line_x - row_start_x`, which is exactly `position_for_index(row_end).x`
+  — so the row table stores that as the row's width and the offset is
+  reproducible rather than approximated.
+
+Single-line fields scroll horizontally to keep the caret visible, and reset to
+the start when they lose focus, the way an `<input>` does. `fit_content` sizes
+the element to its text instead of to its parent: that is `NameEditor`'s hidden
+measuring `<span>` (`Header.tsx:284-290`), which the field does not need because
+it paints its own glyphs.
+
+#### What was verified, and how
+
+With real `CGEvent`s (flags set explicitly on every event — a nil-source event
+otherwise latches whatever the real keyboard last reported):
+
+- **Settings, full round trip.** Click mid-word to position the caret, type,
+  ⌘A and retype, double-click a word (selection painted), ⌘C, ⌘→ to the line
+  end, ⌘V — then ⌘Z twice and ⇧⌘Z once, which stepped back through the paste,
+  then the space, and forward again. Save wrote
+  `defaultProjectNameTemplate = "Cap Studio Session Cap"` into the shared store
+  copy through `store::set_store_setting`.
+- **Dead keys.** ⌥e painted a marked, underlined `´`; the following `e`
+  committed `é`. Both arrived through the input handler, not through `key_char`.
+- **Teleprompter.** A click into the middle of the word "brown" on the first
+  wrapped row put the caret there, `ZZ` inserted at that point, and the
+  debounced write landed `"The quick bZZrown fox …"` in the store's
+  `teleprompter.script`.
+- **Editor rename.** ⌘A, `Sales cast demo`, Return → `recording-meta.json`'s
+  `pretty_name` changed, and the new name was on the header after closing and
+  reopening the window.
+- **Key context.** With a project open and the name field focused, typing
+  `Sales cast demo` — which contains `s`, `c` and two spaces — produced **zero**
+  new log lines: no `interactMode` toggle (the scissors stayed unpressed), no
+  split (the clip track stayed at two clips), no playback (the transport stayed
+  at `0:00 / 0:18` on Play).
+- **Hex.** `4785` left the swatch white; the `FF` that completed it turned the
+  swatch blue and wrote `value: [71, 133, 255]`. `zzz` + Return snapped back to
+  `#4785FF`. Two ⌘Z with the field blurred walked the project history back
+  through the colour to `#FFFFFF`.
+
+Regressions: **none**. `cargo test` is 183 unit tests + the frame-0 integration
+test, green. `CAP_GPUI_AUTO_PLAYBACK=16` measured
+`playback fps=59.8 frames=968 dropped=0 (convert_avg=446us over 16.19s)` — the
+same 59.8–59.9 the timeline unit measured — with zero errors, zero warnings and
+zero `RefCell already borrowed`. A `CAP_GPUI_AUTO_RECORD=studio:5` cycle
+completed with the same three zeroes and wrote its thumbnail.
 
 ## Deviations from the Tauri app
 
@@ -323,7 +463,7 @@ Things that are deliberately different, and why.
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
 | **The mode select window is harness-only** | `Mode.tsx`'s info button is `commands.showWindow("ModeSelect")` *unless* its host passes `onInfoClick` — and shipping `new-main` passes one, so the dot opens the in-body `ModeInfoPanel` in both apps. Nothing else in the shipping frontend calls `showWindow("ModeSelect")` either, so the standalone window is dead code there; here it is built for parity and reachable via `CAP_GPUI_AUTO_MODE_SELECT`. The device and target pickers are body panels in both apps. |
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
-| **Search is minimal** | gpui ships no text input. `ui::TextField` tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. The same field serves the settings window's two inputs. |
+| **Search has no highlighted match** | The field itself is real (`ui::TextInput::search`, see [Text input](#text-input)); what is not reproduced is the Tauri panels' highlighting of the matched run inside each row. The filter test is the same case-insensitive `includes`. Escape still clears before it closes — that pair is the window's, not the field's. Opening the camera or microphone panel now focuses the field, which the display and window panels already did (`open_panel`); before the field was real there was nothing to focus into. |
 | **Plan badge is always "Personal"** | Which of Pro/Commercial applies comes from the license query. There is no auth or license plumbing yet, and claiming a plan would be worse than showing none. |
 | **Only studio Recents cards open** | `openRecentMedia` routes a studio card to the Editor window (recovering first if needed), an instant card to its share link, and a screenshot to the Screenshot Editor. The studio arm is real now; the other two still reveal the `.cap` bundle in Finder — the action the Recordings settings page calls "Open recording bundle". The recovery step is not reproduced either, so an `InProgress`/`NeedsRemux` bundle reaches the editor's error state instead of being remuxed first. No hover affordance was invented: the real card has none either, it is click-only with no context menu. |
 | **No carousel mask, snap or hover lift** | `RecentCarousel`'s edge fade is a scroll-position-driven `mask-image` and the cards are `snap-x snap-proximity`; the card's `hover:-translate-y-0.5` and the thumbnail's `group-hover:scale-[1.025]` are transforms. This gpui rev has neither a mask hook (same gap as the teleprompter vignette) nor a transform. The scroller, the gap, the `pr-8` gutter, the border/shadow hover and the trailing skeletons are all real — the skeletons just do not pulse (`animate-pulse` has no keyframe hook either). |
@@ -379,7 +519,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Settings | 782×775 (min 780×560) | **Done — General** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 22), resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store. The other eleven pages are placeholder bodies |
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
-| Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
+| Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
 | Editor | 1275×800 | **E1–E4 done — window, shell, playback, timeline, editing.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar**: the live six-tab rail, the scroll body, selection routing, and the Background tab at 1:1. The other five tabs and the eight segment panels are placeholder cards |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
@@ -621,7 +761,7 @@ Settings-specific deviations:
 | **Eleven placeholder pages** | Shortcuts, CLI, Recordings, Screenshots, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; the bodies are not. |
 | **No auth, so the free-plan variant** | There is no auth store here (same gap as the main window's plan badge), so the profile row shows the signed-out "Click to sign in" state and does nothing when clicked, and the Cap Pro section renders as it does for a free user: Instant Mode quality pinned to 720p, the other tiers inert. In the Tauri app clicking a locked tier raises an upgrade toast. `instantModeMaxResolution` is therefore displayed but never written. |
 | **Selects are in-window menus** | `SelectSettingItem` and the excluded-windows Add button pop a real `NSMenu` via `Menu.popup()`. `ui::Menu` draws a menu-shaped panel at the pointer (which is where `popup()` with no argument puts it), with the same check marks, the same click-away dismiss, and the `KSelect` keyboard contract on top: arrows, Home/End, Enter, Escape. It does not flip or shift to stay inside the window, so a menu opened near the right edge is clipped by it — as it was before the consolidation. |
-| **Text fields are the search field's cousin** | gpui ships no text input, so the project-name template and the server URL are literally the main window's search field: `ui::TextField::settings` and `ui::TextField::search` differ only in their fills. Focus tracking, `key_char` for the typed character, a static caret, Escape to revert. No selection, no cursor movement, no blink. |
+| **Text fields commit on the button, not on Return** | The project-name template and the server URL are `ui::TextInput::settings` — the same field as the search, differing only in its fills. Both are drafts committed by Save / Update, which is the Tauri card's own shape: neither `<input>` there binds `onKeyDown`, so Return does nothing in either app. Escape reverts to what is stored. The recordings folder is *not* a text field in either app — `pickRecordingsFolder` opens an `NSOpenPanel` and the path is a readout. |
 | **The project-name preview is literal-only** | `commands.formatProjectName` understands `{moment:<format>}` and custom `{date:...}`/`{time:...}` formats through a moment-to-chrono translation. The preview here substitutes the six literal placeholders the card documents and leaves anything else alone — which is also what an unknown placeholder does there. |
 | **Theme tiles keep a fixed height** | `aspect-[5/3]` has no gpui equivalent, so the three previews are 93px tall, the height they have at the window's default 782 width. Widen the window and they stay 93. |
 | **`AccentColor` is macOS blue** | `--macos-settings-accent: AccentColor` resolves to the user's system accent; gpui exposes no query for it, so the checked toggles and the selected sidebar icon use `#007aff`. A user on a non-blue accent sees blue here and their own colour in the shipping app. |
@@ -698,7 +838,7 @@ Teleprompter-specific deviations:
 
 | | |
 |---|---|
-| **The editor is append-only** | gpui ships no text input. Typing appends, Return inserts a newline, Backspace deletes the last character, and the caret is a `\|` glyph drawn at the end while the window has focus. No selection, no arrow-key navigation, no click-to-position, no paste — a longer script has to arrive through the store (or `CAP_GPUI_AUTO_TELEPROMPTER`). This is the same gap `ui::TextField` has, one dimension bigger — the script editor is multi-line, so it does not use it. |
+| **The script editor keeps its own selection wash** | It is `ui::TextInput` in its multi-line shape now (see [Text input](#text-input)) — wrapping, click-to-position, arrow and word motion, selection, the clipboard, undo. The one deliberate difference from the rest of the app is the selection colour: bare glass takes `gray-12` at 25 % rather than the macOS-blue accent the settings fields use, because there is no accent token on this surface. `state.script` stays the mirror the word count, the auto-scroll maths and the debounced store write read. |
 | **Mirror is persisted but inert** | `scale-x-[-1]` needs a flip transform, and this gpui rev has none — the same finding that leaves the camera bubble's mirror button disabled. The toggle stores `mirror` so the setting survives for the shipping app; nothing on screen changes. |
 | **The vignette is a wash, not a mask** | The script area's `mask-image` fades the *glyphs'* alpha to 0.4 at the top and bottom. With no mask hook, two `gray-1` gradient layers over the same 34% / 66% stops stand in. Over vibrancy that is nearly the same picture; over Liquid Glass it tints the backdrop instead of the text. |
 | **No backdrop blur** | The settings popover is `bg-gray-1/80` *plus* `backdrop-blur-2xl`, and the footer pills add their own `backdrop-blur-xl`. The washes are here, the blur is not — the same missing hook as the header's `backdrop-filter` and the recording overlay's `backdrop-blur-xs`. |
@@ -1011,7 +1151,7 @@ Editor-specific deviations:
 | | |
 |---|---|
 | **Most header buttons are inert; undo and redo are not** | Undo and Redo are live (see [Timeline editing](#timeline-editing)). Delete recording, Open recording bundle, Presets, Organization, Clips, Captions and Export still render at their real metrics in the `disabled:opacity-50` state; each needs a unit that does not exist — project deletion, the preset store, auth, the clips/transcript layout modes, export. |
-| **The name is displayed, not edited** | `NameEditor` is an `<input>` overlaying a measuring `<span>` that commits through `commands.setPrettyName`. gpui ships no text input (the same gap as the main window's search field and the teleprompter's script), so the name and its `.cap` suffix render read-only. |
+| **The name commits on blur, and Escape commits too** | `NameEditor` is real (see [Text input](#text-input)). Its commit is transcribed exactly from `Header.tsx:276-330`: Return *and* Escape both call `blur()`, and it is `onBlur` that writes — so **Escape commits rather than reverts here**, unlike every other field in the app, because that is what the shipping editor does. The 5–100 character guard is the source's, and a rejected name snaps back. The value is `recording-meta.json`'s `pretty_name`, written through `RecordingMeta::save_for_project` — `set_pretty_name`, `apps/desktop/src-tauri/src/lib.rs:3175-3179` — so it is **not** in the project undo history, which is `createStoreHistory` over the *project* store alone (`ED/context.ts:1920-1930`) in both apps. The measuring `<span>` is not needed: the field paints its own glyphs and sizes to them (`fit_content`), capped by the wrapper's `max-w-[200px]`. |
 | **The player toolbar is inert; the transport, the zoom controls and the scissors are not** | Prev / play-pause / next are live, and so are the zoom-out / zoom-in glyphs, the zoom slider and the split toggle (the scissors, which takes its `data-pressed:bg-red-300` state). Aspect ratio, Crop, Frame and Preview quality are still drawn at their real sizes and do nothing. |
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
@@ -1594,7 +1734,7 @@ the sidebar's 112px preview is an approximation.
 
 | | |
 |---|---|
-| **The hex field is a readout** | `RgbInput`'s text field free-types and commits at 6 or 8 digits or on blur (`color-utils.tsx:65-98`). gpui ships no text input — the app-wide gap — and a colour field with no selection or caret movement would be a worse control than the OS panel it sits beside, *and* it would have to suppress the editor's own Space / S / C shortcuts while focused. The swatch opens the panel; the field prints what the panel wrote. `normalize_hex` and `hex_digit_count` are transcribed and tested next to it, because the two halves are one contract. |
+| **The hex field commits, and skips a no-op** | Real entry now (`color-utils.tsx:27-96` transcribed): typing commits live the moment the text holds a complete 6- or 8-digit colour, Return and blur commit whatever is in the box, and anything that does not parse snaps back to the value in force. Each commit goes through `set_color`, so it takes a **project history entry** and the debounced `project-config.json` write like any other sidebar edit. One deliberate difference: `props.onChange(props.value)` on an invalid blur re-fires with the value already in force, and a history step for a no-op would cost the user an extra Cmd-Z, so a commit that changes nothing is skipped. The `createWritableMemo` half — re-deriving the text whenever the colour moves under the field, but never while it has focus — runs from `render` (`sync_hex_inputs`), because the focus test needs a `&Window` and the sidebar's render chain is threaded with `&self` alone. |
 | **The colour panel coalesces harder than the source does** | `RgbInput.onChange` takes no history pause at all (`color-utils.tsx:57-63`), so in the Tauri app every wheel movement is its own undo entry. Here a panel session is one entry, which is the [slider's](#the-config-sidebar) contract applied to the same kind of gesture. The bracket closes on the panel closing, on another swatch opening it, and on **any unrelated edit** — the panel is a system window that stays up while the user does other things, and a padding drag made with it open must not be swallowed into the colour's entry. |
 | **No brand-colour dropdown** | `BrandColorsDropdown` renders only when the signed-in organisation has brand colours configured (`BrandColorsDropdown.tsx:16`). There is no auth here (the same gap as the plan badge), so it never renders — which is also exactly what a user without them sees. |
 | **Colour correction is deferred** | The Background tab ends with `<ColorCorrectionSection target="screen">` (`:2962`), which is **one component shared with the Camera tab** and previews each of its presets with a live CSS filter on a demo tile. There is no per-element filter hook in this gpui rev, so the preset grid is not reproducible as it stands; the section renders its placeholder card and belongs with the Camera tab's unit. |

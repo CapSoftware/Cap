@@ -8,7 +8,7 @@
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
+    AppContext as _, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
     rgb, svg,
 };
@@ -206,9 +206,14 @@ pub struct MainWindow {
     /// Holds the in-flight expand/collapse animation. Dropping it cancels,
     /// which is how a second toggle mid-animation takes over cleanly.
     resize_task: Option<gpui::Task<()>>,
-    /// Live filter text for the device and target panels.
+    /// Live filter text for the device and target panels -- a mirror of
+    /// `search_input`'s value, kept as a plain `String` because every list in
+    /// the panel filters against it from a `&self` method.
     search: String,
-    search_focus: gpui::FocusHandle,
+    /// The real field. `ui::TextInputState` owns the caret, the selection and
+    /// the clipboard; this window owns what Escape means.
+    search_input: Entity<ui::TextInputState>,
+    _search_events: gpui::Subscription,
     /// True until the background enumeration has reported back, so the panel can
     /// say "Loading..." rather than "No cameras found".
     enumerating: bool,
@@ -264,6 +269,12 @@ impl MainWindow {
         // blank window on this machine, and more on a machine with more
         // capture devices.
 
+        // The filter field. Constructing it here (rather than lazily, per
+        // panel) is what lets one focus handle survive a panel change, and the
+        // blur listener inside `TextInputState` needs a `&mut Window` anyway.
+        let search_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let search_events = cx.subscribe(&search_input, Self::on_search_event);
+
         Self {
             theme,
             expanded: false,
@@ -278,7 +289,8 @@ impl MainWindow {
             panel: None,
             resize_task: None,
             search: String::new(),
-            search_focus: cx.focus_handle(),
+            search_input,
+            _search_events: search_events,
             enumerating: true,
             session,
             recents: None,
@@ -1329,25 +1341,27 @@ impl MainWindow {
     fn close_panel(&mut self, cx: &mut Context<Self>) {
         self.panel = None;
         self.search.clear();
+        self.search_input.update(cx, |input, cx| input.set_text("", cx));
         cx.notify();
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
         self.panel = Some(panel);
         self.search.clear();
+        self.search_input.update(cx, |input, cx| input.set_text("", cx));
         if matches!(panel, Panel::Device(_) | Panel::Target(_)) {
-            window.focus(&self.search_focus, cx);
+            let focus = self.search_input.read(cx).focus_handle();
+            window.focus(&focus, cx);
         }
         cx.notify();
     }
 
-    /// A single-line text input, hand-rolled: gpui ships no stock one.
+    /// The panel filter -- `ui::TextInput::search`.
     ///
-    /// Focus is tracked so the panel keeps receiving keys, `key_char` supplies
-    /// the typed character (which is what handles dead keys and option-layouts,
-    /// rather than reading `key` directly), and the caret is a plain 1px div --
-    /// it does not blink, and there is no selection or cursor movement. That is
-    /// enough for a filter field and nothing more.
+    /// A real field now: caret movement, selection, click-to-position,
+    /// double-click-a-word, the clipboard and undo all come from
+    /// `TextInputState`. What stays here is the only part the component cannot
+    /// know, which is that Escape clears the filter before it closes the panel.
     fn render_search_field(&self, panel: Panel, cx: &mut Context<Self>) -> gpui::Div {
         let placeholder = match panel {
             Panel::Target(TargetType::Display) => "Search displays",
@@ -1356,43 +1370,14 @@ impl MainWindow {
             Panel::Device(DeviceMenu::Microphone) => "Search microphones",
             _ => "Search",
         };
-        let empty = self.search.is_empty();
+        self.search_input
+            .update(cx, |input, _| input.set_placeholder(placeholder));
 
-        div()
-            .on_key_down(
-                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                    // Escape is a panel action here, not a text edit: the first
-                    // one clears the filter, a second one leaves.
-                    if let ui::TextEdit::Escape = ui::text_edit_for(&event.keystroke) {
-                        if this.search.is_empty() {
-                            this.close_panel(cx);
-                        } else {
-                            this.search.clear();
-                            cx.notify();
-                        }
-                        return;
-                    }
-                    match ui::text_edit_for(&event.keystroke) {
-                        ui::TextEdit::Insert(text) => this.search.push_str(&text),
-                        ui::TextEdit::Backspace => {
-                            this.search.pop();
-                        }
-                        _ => return,
-                    }
-                    cx.notify();
-                }),
-            )
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .child(
-                ui::TextField::search(&self.theme, self.search.clone())
-                    .placeholder(placeholder)
-                    .focus(&self.search_focus)
-                    // The caret follows the filter, not the focus: the panel
-                    // has one field and an empty one reads as the placeholder.
-                    .caret(!empty),
-            )
+        div().flex().flex_1().min_w_0().child(ui::TextInput::search(
+            &self.theme,
+            "panel-search",
+            &self.search_input,
+        ))
     }
 
     /// Case-insensitive substring match, the same test the Tauri panels filter
@@ -1404,6 +1389,37 @@ impl MainWindow {
         haystack
             .to_lowercase()
             .contains(&self.search.to_lowercase())
+    }
+
+    /// The filter field's own events. Escape is the panel's, not the field's:
+    /// the first one clears the filter, a second one leaves -- which is why
+    /// `TextInputState` emits `Cancelled` instead of deciding.
+    fn on_search_event(
+        &mut self,
+        input: Entity<ui::TextInputState>,
+        event: &ui::TextInputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ui::TextInputEvent::Changed => {
+                self.search = input.read(cx).text().to_string();
+                cx.notify();
+            }
+            ui::TextInputEvent::Cancelled => {
+                if self.search.is_empty() {
+                    self.close_panel(cx);
+                } else {
+                    self.clear_search(cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.search.clear();
+        self.search_input.update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
     }
 
     fn render_device_list(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
@@ -2342,9 +2358,12 @@ impl MainWindow {
                             PillState::Off
                         },
                     )
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.panel = Some(Panel::Device(DeviceMenu::Camera));
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        // Through `open_panel`, so the filter field takes focus
+                        // the way it already does for the display and window
+                        // panels -- before the field was real there was nothing
+                        // to focus into.
+                        this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
                     })),
                 ),
             )
@@ -2364,9 +2383,12 @@ impl MainWindow {
                             PillState::Off
                         },
                     )
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.panel = Some(Panel::Device(DeviceMenu::Microphone));
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        // Through `open_panel`, so the filter field takes focus
+                        // the way it already does for the display and window
+                        // panels -- before the field was real there was nothing
+                        // to focus into.
+                        this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx);
                     })),
                 ),
             )

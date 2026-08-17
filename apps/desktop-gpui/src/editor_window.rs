@@ -53,7 +53,8 @@ use cap_project::{
 };
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
 use gpui::{
-    Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
+    AppContext as _, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage,
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, point,
     prelude::FluentBuilder, px, svg,
@@ -876,6 +877,19 @@ pub struct EditorWindow {
     pending_save: Rc<RefCell<PendingProjectSave>>,
     save_task: Option<gpui::Task<()>>,
 
+    // -- Text fields (E5.5) ---------------------------------------------------
+    /// `NameEditor` (`Header.tsx:276-330`). The value lives in
+    /// `recording-meta.json`, not in `project-config.json`, so it is committed
+    /// through `RecordingMeta::save_for_project` rather than through the
+    /// project's own debounced write -- and, exactly as in the Tauri app, it is
+    /// therefore not part of the project undo history.
+    pub(crate) name_input: Entity<ui::TextInputState>,
+    /// One hex field per `RgbInput` the sidebar can show. Built up front
+    /// because `TextInputState` needs a `&mut Window` and the sidebar renders
+    /// from `&self`.
+    pub(crate) hex_inputs: Vec<(crate::editor_sidebar::ColorTarget, Entity<ui::TextInputState>)>,
+    _text_events: Vec<gpui::Subscription>,
+
     // -- Config sidebar (E5a) -------------------------------------------------
     /// The sidebar's own state: the tab, the background source panel, the
     /// collapsibles, the live slider drag and the colour panel. Everything it
@@ -895,6 +909,35 @@ impl EditorWindow {
             cx.defer(move |cx| crate::app_windows::editor_closed(&path, cx));
             true
         });
+
+        let name_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let hex_targets = [
+            crate::editor_sidebar::ColorTarget::BackgroundColor,
+            crate::editor_sidebar::ColorTarget::GradientFrom,
+            crate::editor_sidebar::ColorTarget::GradientTo,
+            crate::editor_sidebar::ColorTarget::BorderColor,
+        ];
+        let hex_inputs: Vec<_> = hex_targets
+            .iter()
+            .map(|target| (*target, cx.new(|cx| ui::TextInputState::single_line(window, cx))))
+            .collect();
+        let mut text_events = vec![cx.subscribe_in(
+            &name_input,
+            window,
+            |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
+                this.on_name_event(event, window, cx)
+            },
+        )];
+        for (target, input) in &hex_inputs {
+            let target = *target;
+            text_events.push(cx.subscribe_in(
+                input,
+                window,
+                move |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
+                    this.on_hex_event(target, event, window, cx)
+                },
+            ));
+        }
 
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
@@ -933,6 +976,9 @@ impl EditorWindow {
             multiple_clips: false,
             pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
+            name_input,
+            hex_inputs,
+            _text_events: text_events,
             sidebar: crate::editor_sidebar::SidebarState::new(&ProjectConfiguration::default()),
         }
     }
@@ -960,6 +1006,8 @@ impl EditorWindow {
         // the on-mount 80px fit then narrows it on the first render that knows
         // the timeline's width.
         self.view.transform = Transform::initial(summary.duration);
+        self.name_input
+            .update(cx, |input, cx| input.set_text(summary.pretty_name.clone(), cx));
         self.state = LoadState::Ready(Box::new(summary));
         cx.notify();
         window.refresh();
@@ -1397,6 +1445,22 @@ impl EditorWindow {
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_held {
+            return;
+        }
+        // `useEditorShortcuts`' scope gate (`Player.tsx:236-245`) and the
+        // timeline listener's own guard (`TL/index.tsx:960-966`): a focused
+        // `input`/`textarea` suppresses every editor shortcut.
+        //
+        // Only the *bare* keys below need it. Backspace, Cmd-Z, Cmd-Y, Cmd-A
+        // and Cmd-=/- are all bound as actions in the `TextInput` key context,
+        // and a matched binding consumes the keystroke before any
+        // `on_key_down` listener on the dispatch path runs
+        // (`gpui/src/window.rs:5280-5296`), so they never reach here at all.
+        // `s`, `c`, `space`, `delete` and `escape` cannot be bound that way:
+        // a binding is matched *before* AppKit hands the event to the input
+        // context (`gpui_macos/src/window.rs:2217-2250`), so binding a
+        // printable key would mean it could never be typed. Hence the gate.
+        if ui::text_input_has_focus(window, cx) {
             return;
         }
         let keystroke = &event.keystroke;
@@ -2456,6 +2520,187 @@ impl EditorWindow {
         }
     }
 
+    /// `NameEditor`'s commit (`Header.tsx:303-318`), verbatim.
+    ///
+    /// Return and Escape both call `blur()` there, and it is `onBlur` that
+    /// does the work -- so **Escape commits rather than reverts** in the
+    /// shipping app, and it does here too. The guard is the same: a trimmed
+    /// name shorter than 5 or longer than 100 characters is rejected and the
+    /// field snaps back to the stored one.
+    fn on_name_event(
+        &mut self,
+        event: &ui::TextInputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // `onKeyDown`: Enter and Escape both blur, which is what commits.
+            ui::TextInputEvent::Confirmed | ui::TextInputEvent::Cancelled => {
+                let focus = self.focus.clone();
+                window.focus(&focus, cx);
+            }
+            ui::TextInputEvent::Blurred => self.commit_pretty_name(cx),
+            ui::TextInputEvent::Changed => {}
+        }
+    }
+
+    fn commit_pretty_name(&mut self, cx: &mut Context<Self>) {
+        let Some(stored) = self.summary().map(|summary| summary.pretty_name.clone()) else {
+            return;
+        };
+        let draft = self.name_input.read(cx).text().trim().to_string();
+        let count = draft.chars().count();
+        if count < 5 || count > 100 || draft == stored {
+            if draft != stored {
+                self.name_input
+                    .update(cx, |input, cx| input.set_text(stored, cx));
+                cx.notify();
+            }
+            return;
+        }
+
+        // `set_pretty_name` (`apps/desktop/src-tauri/src/lib.rs:3175-3179`):
+        // load the meta, replace one field, save it back. It is
+        // `recording-meta.json`, not `project-config.json`, so it goes nowhere
+        // near the debounced project write or the undo history -- the Tauri
+        // history is `createStoreHistory` over the *project* store alone
+        // (`ED/context.ts:1920-1930`), so a rename is not undoable there either.
+        let path = self.project_path.clone();
+        match RecordingMeta::load_for_project(&path) {
+            Ok(mut meta) => {
+                meta.pretty_name = draft.clone();
+                match meta.save_for_project() {
+                    Ok(()) => {
+                        if let LoadState::Ready(summary) = &mut self.state {
+                            summary.pretty_name = draft.clone();
+                        }
+                        tracing::info!(name = %draft, "renamed project");
+                    }
+                    Err(error) => {
+                        tracing::error!(?error, "failed to save recording-meta.json");
+                        self.name_input
+                            .update(cx, |input, cx| input.set_text(stored, cx));
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(?error, "failed to load recording-meta.json");
+                self.name_input
+                    .update(cx, |input, cx| input.set_text(stored, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn hex_input(
+        &self,
+        target: crate::editor_sidebar::ColorTarget,
+    ) -> Option<&Entity<ui::TextInputState>> {
+        self.hex_inputs
+            .iter()
+            .find(|(candidate, _)| *candidate == target)
+            .map(|(_, input)| input)
+    }
+
+    /// `createWritableMemo(() => rgbToHex(props.value))`: each hex field
+    /// re-derives from the colour whenever the colour moves under it -- the
+    /// `NSColorPanel`, a preset swatch, an undo -- but never while it has
+    /// focus, or it would fight what is being typed.
+    ///
+    /// It runs from `render` rather than from `render_rgb_input` because the
+    /// focus test needs a `&Window` and the sidebar's render chain is threaded
+    /// with `&self` alone.
+    pub(crate) fn sync_hex_inputs(&mut self, window: &Window, cx: &mut Context<Self>) {
+        for (target, input) in self.hex_inputs.clone() {
+            let Some(value) = self.color_for(target) else {
+                continue;
+            };
+            if input.read(cx).focus_handle().is_focused(window) {
+                continue;
+            }
+            let hex = crate::editor_sidebar::rgb_to_hex(value);
+            if input.read(cx).text() != hex {
+                input.update(cx, |input, cx| input.set_text(hex, cx));
+            }
+        }
+    }
+
+    /// `RgbInput`'s three handlers (`color-utils.tsx:27-96`).
+    ///
+    /// * `onInput` commits live, but only once the text holds a complete
+    ///   6- or 8-digit colour -- which is what stops `#4` from being read as
+    ///   `#440044` halfway through a paste.
+    /// * `onKeyDown` Enter and `onBlur` both commit, and both revert the text
+    ///   to the value in force when the field was entered if it does not parse.
+    fn on_hex_event(
+        &mut self,
+        target: crate::editor_sidebar::ColorTarget,
+        event: &ui::TextInputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ui::TextInputEvent::Changed => {
+                let Some(input) = self.hex_input(target) else {
+                    return;
+                };
+                let text = input.read(cx).text().to_string();
+                let digits = crate::editor_sidebar::hex_digit_count(&text);
+                if digits != 6 && digits != 8 {
+                    return;
+                }
+                let Some(rgba) = crate::editor_sidebar::hex_to_rgb(text.trim()) else {
+                    return;
+                };
+                let rgb = hex_to_color(rgba);
+                if self.color_for(target) != Some(rgb) {
+                    self.set_color(target, rgb, window, cx);
+                }
+            }
+            ui::TextInputEvent::Confirmed | ui::TextInputEvent::Cancelled => {
+                self.commit_hex(target, window, cx);
+                let focus = self.focus.clone();
+                window.focus(&focus, cx);
+            }
+            ui::TextInputEvent::Blurred => self.commit_hex(target, window, cx),
+        }
+    }
+
+    fn commit_hex(
+        &mut self,
+        target: crate::editor_sidebar::ColorTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.hex_input(target).cloned() else {
+            return;
+        };
+        let text = input.read(cx).text().trim().to_string();
+        match crate::editor_sidebar::hex_to_rgb(&text) {
+            Some(rgba) => {
+                let rgb = hex_to_color(rgba);
+                // `props.onChange(props.value)` on an invalid blur re-fires with
+                // the value already in force; pushing a history step for a
+                // no-op would cost the user an extra Cmd-Z for nothing.
+                if self.color_for(target) != Some(rgb) {
+                    self.set_color(target, rgb, window, cx);
+                }
+                input.update(cx, |input, cx| {
+                    input.set_text(crate::editor_sidebar::rgb_to_hex(rgb), cx)
+                });
+            }
+            // `if (!commitValue(..)) { setText(prevHex); props.onChange(props.value) }`
+            None => {
+                let current = self
+                    .color_for(target)
+                    .map(crate::editor_sidebar::rgb_to_hex)
+                    .unwrap_or_default();
+                input.update(cx, |input, cx| input.set_text(current, cx));
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn summary(&self) -> Option<&ProjectSummary> {
         match &self.state {
             LoadState::Ready(summary) => Some(summary),
@@ -2553,12 +2798,9 @@ impl EditorWindow {
 
     /// `Header.tsx:89-235` -- `h-14`, three groups, the middle one bracketed by
     /// `border-x border-black-transparent-10`.
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let name = self
-            .summary()
-            .map(|summary| summary.pretty_name.clone())
-            .unwrap_or_default();
+        let name_focused = self.name_input.read(cx).focus_handle().is_focused(window);
 
         div()
             .relative()
@@ -2584,9 +2826,10 @@ impl EditorWindow {
                     .child(self.editor_button("icons/trash.svg", None, None, None))
                     .child(self.editor_button("icons/folder.svg", None, None, None))
                     // `NameEditor` + the literal `.cap` suffix
-                    // (`Header.tsx:123-126`). Read-only here: gpui ships no
-                    // text input, the same gap the main window's search field
-                    // and the teleprompter's script editor have.
+                    // (`Header.tsx:123-126`), editable. The Solid version is an
+                    // `<input>` overlaying a measuring `<span>`; here the field
+                    // paints its own text, so the span is not needed and the
+                    // `max-w-[200px]` sits on the field itself.
                     .child(
                         div()
                             .flex()
@@ -2594,12 +2837,30 @@ impl EditorWindow {
                             .items_center()
                             .min_w_0()
                             .child(
+                                // `px-px m-0 bg-transparent border-b
+                                //  border-transparent focus:border-gray-7`
                                 div()
                                     .max_w(px(200.))
-                                    .truncate()
-                                    .text_size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_12))
-                                    .child(name),
+                                    .border_b_1()
+                                    .border_color(if name_focused {
+                                        Hsla::from(theme.gray_7)
+                                    } else {
+                                        gpui::transparent_black()
+                                    })
+                                    .child(
+                                        ui::TextInput::bare(
+                                            &theme,
+                                            "editor-name",
+                                            &self.name_input,
+                                        )
+                                        // The measuring span's job: the field
+                                        // is as wide as its value, capped by
+                                        // the wrapper's `max-w-[200px]`.
+                                        .fit_content()
+                                        .padding_x(px(1.))
+                                        .text_size(px(14.))
+                                        .text_color(Hsla::from(theme.gray_12)),
+                                    ),
                             )
                             .child(
                                 div()
@@ -3555,6 +3816,7 @@ fn is_at_end(total: f64, playhead: f64) -> bool {
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window);
+        self.sync_hex_inputs(window, cx);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -3605,7 +3867,7 @@ impl Render for EditorWindow {
                     }),
                 )
             })
-            .child(self.render_header(cx))
+            .child(self.render_header(window, cx))
             // `flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0
             // leading-5` (`Editor.tsx:676`).
             .child(
@@ -3978,4 +4240,10 @@ mod tests {
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
     }
+}
+
+/// `hexToRgb` hands back RGBA bytes; `cap_project::Color` is `[u16; 3]` and
+/// the alpha lives on the background source, not on the swatch.
+fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
+    [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16]
 }

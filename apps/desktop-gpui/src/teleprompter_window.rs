@@ -23,7 +23,8 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
+    AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement,
     Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
     div, linear_color_stop, linear_gradient, point, prelude::FluentBuilder, px, svg,
 };
@@ -171,6 +172,14 @@ pub struct TeleprompterWindow {
     position: f32,
     scroll: ScrollHandle,
     focus: FocusHandle,
+    /// The script editor. `ui::TextInputState` in its multi-line shape: the
+    /// text wraps to the window, the element measures its own height so the
+    /// scroller and the auto-scroll maths keep working unchanged, and Return
+    /// inserts a newline instead of committing. `state.script` stays the
+    /// mirror because the word count, the playback maths and the debounced
+    /// store write all read it from `&self`.
+    script_input: Entity<ui::TextInputState>,
+    _script_events: gpui::Subscription,
     /// Track rects, captured in prepaint: the window is resizable, so neither
     /// pill's width is known here.
     speed_track: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -201,6 +210,32 @@ impl TeleprompterWindow {
             true
         });
 
+        let script_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::multi_line(window, cx);
+            input.set_text(state.script.clone(), cx);
+            input.set_placeholder("Paste or type your script\u{2026}");
+            input
+        });
+        let script_events = cx.subscribe_in(
+            &script_input,
+            window,
+            |this: &mut Self, input, event: &ui::TextInputEvent, window, cx| match event {
+                ui::TextInputEvent::Changed => {
+                    let script = input.read(cx).text().to_string();
+                    this.edit_script(move |value| *value = script, window, cx);
+                }
+                // Escape closes the popover and nothing else, whether or not
+                // the script has focus.
+                ui::TextInputEvent::Cancelled => {
+                    if this.settings_open {
+                        this.settings_open = false;
+                        cx.notify();
+                    }
+                }
+                _ => {}
+            },
+        );
+
         Self {
             theme: Theme::new(Appearance::from_window(window.appearance())),
             state,
@@ -209,6 +244,8 @@ impl TeleprompterWindow {
             position: 0.,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
+            script_input,
+            _script_events: script_events,
             speed_track: Rc::new(Cell::new(None)),
             opacity_track: Rc::new(Cell::new(None)),
             dragging: None,
@@ -219,7 +256,9 @@ impl TeleprompterWindow {
     }
 
     pub fn focus_root(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
+        // `onMount` focuses the script editor itself, not the shell.
+        let focus = self.script_input.read(cx).focus_handle();
+        window.focus(&focus, cx);
     }
 
     /// `clamp(state().windowOpacityPercent, 45, 100) / 100`, for the initial
@@ -282,8 +321,11 @@ impl TeleprompterWindow {
     /// Type into the script the way a keystroke does (harness path -- the real
     /// one is `on_key`, and unprivileged synthetic key events are dropped).
     pub fn type_script(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let text = text.to_string();
-        self.edit_script(move |script| script.push_str(&text), window, cx);
+        let mut next = self.state.script.clone();
+        next.push_str(text);
+        self.script_input
+            .update(cx, |input, cx| input.set_text(next.clone(), cx));
+        self.edit_script(move |script| *script = next, window, cx);
     }
 
     /// `changeFontSize(delta)`, clamped 22-52.
@@ -498,42 +540,14 @@ impl Render for TeleprompterWindow {
 }
 
 impl TeleprompterWindow {
-    /// Escape closes the popover and nothing else; everything else is text.
-    /// gpui ships no text input, so this is the same hand-rolled editor the
-    /// main window's search field is, with newlines added (README deviation:
-    /// no selection, no cursor movement, no click-to-position).
-    fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let keystroke = &event.keystroke;
-        if keystroke.key.as_str() == "escape" {
-            if self.settings_open {
-                self.settings_open = false;
-                cx.notify();
-            }
-            return;
-        }
-        // Cmd/Ctrl-anything is a shortcut, never text.
-        if keystroke.modifiers.platform || keystroke.modifiers.control {
-            return;
-        }
-
-        match keystroke.key.as_str() {
-            "backspace" => self.edit_script(
-                |script| {
-                    script.pop();
-                },
-                window,
-                cx,
-            ),
-            "enter" | "return" => self.edit_script(|script| script.push('\n'), window, cx),
-            _ => {
-                let Some(text) = keystroke.key_char.clone() else {
-                    return;
-                };
-                if text.is_empty() || text.chars().any(char::is_control) {
-                    return;
-                }
-                self.edit_script(move |script| script.push_str(&text), window, cx);
-            }
+    /// Escape closes the popover. Everything else is the script field's --
+    /// see `script_input`. This handler only runs when the field does *not*
+    /// have focus, because Escape is bound as an action in the `TextInput` key
+    /// context and a matched binding consumes the keystroke.
+    fn on_key(&mut self, event: &gpui::KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key.as_str() == "escape" && self.settings_open {
+            self.settings_open = false;
+            cx.notify();
         }
     }
 
@@ -575,7 +589,7 @@ impl TeleprompterWindow {
 
     /// `cap-window-body relative min-h-0 flex-1 overflow-hidden`: the script
     /// scroller, the vignette over it, and the cue markers over that.
-    fn render_body(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_body(&self, window: &Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let state = &self.state;
 
@@ -586,20 +600,6 @@ impl TeleprompterWindow {
         let spacer = ((viewport - HEADER_HEIGHT - FOOTER_HEIGHT) / 2.
             - state.font_size * state.line_height * 0.5)
             .max(0.);
-
-        let empty = state.script.is_empty();
-        let text: SharedString = if empty {
-            "Paste or type your script…".into()
-        } else {
-            let mut text = state.script.clone();
-            // gpui has no caret primitive inside wrapped text; the editor only
-            // ever appends, so the caret is a glyph at the end while focused
-            // (README deviation).
-            if self.focus.is_focused(window) {
-                text.push('|');
-            }
-            text.into()
-        };
 
         div()
             .relative()
@@ -617,26 +617,26 @@ impl TeleprompterWindow {
                         // `block w-full px-8 text-center font-medium
                         //  tracking-[-0.025em] text-gray-12`, at the state's
                         // font size and line height. (`tracking` has no hook in
-                        // this gpui rev.)
-                        div()
-                            .w_full()
-                            .px(px(32.))
-                            .text_center()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_size(px(state.font_size))
-                            .line_height(px(state.font_size * state.line_height))
-                            .when(empty, |this| {
+                        // this gpui rev.) The wrapping field paints into this
+                        // box and measures its own height from the row count,
+                        // so the scroller and the auto-scroll maths see exactly
+                        // the content height they did before.
+                        div().w_full().px(px(32.)).child(
+                            ui::TextInput::bare(&theme, "script", &self.script_input)
+                                .align(gpui::TextAlign::Center)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_size(px(state.font_size))
+                                .line_height(px(state.font_size * state.line_height))
+                                .text_color(Hsla::from(theme.gray_12))
                                 // `placeholder:text-gray-8/70`
-                                this.text_color(Theme::with_alpha(theme.gray_8, 0.7))
-                            })
-                            .child(text),
+                                .placeholder_color(Theme::with_alpha(theme.gray_8, 0.7))
+                                // Bare glass: `gray-12` at 25 %, the same wash
+                                // the other teleprompter controls use rather
+                                // than the settings accent.
+                                .selection_color(Theme::with_alpha(theme.gray_12, 0.25)),
+                        ),
                     )
-                    .child(div().h(px(spacer)).flex_shrink_0())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // `onClick={() => editorElement?.focus()}`
-                        let focus = this.focus.clone();
-                        window.focus(&focus, cx);
-                    })),
+                    .child(div().h(px(spacer)).flex_shrink_0()),
             )
             // The `mask-image` vignette, as two gradient layers: gpui has no
             // mask hook, so instead of fading the glyphs' alpha to 0.4 this

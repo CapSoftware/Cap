@@ -86,6 +86,14 @@ fn main() {
 
         // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
         // and the window is fixed at that size there too.
+        // The text-input key map. Every editing chord in the app -- Backspace,
+        // the arrows, Cmd-A/C/X/V/Z -- is an action scoped to the `TextInput`
+        // key context, which is what stops a focused field's Backspace from
+        // reaching the editor's delete-the-selection handler: a matched
+        // binding consumes the keystroke before any `on_key_down` listener on
+        // the path runs (`gpui/src/window.rs:5280-5296`).
+        ui::bind_text_input_keys(cx);
+
         let session = RecordingSession::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::target_overlay::TargetSelect::init(cx);

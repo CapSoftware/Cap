@@ -15,7 +15,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
+    AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton,
     ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window,
     div, img, prelude::FluentBuilder, px, rgb, svg,
 };
@@ -296,8 +297,12 @@ pub struct SettingsWindow {
     /// shipping page too, so the store only sees them on the button.
     project_name: String,
     server_url: String,
-    project_name_focus: FocusHandle,
-    server_url_focus: FocusHandle,
+    /// The real fields. `ui::TextInputState` owns the caret, the selection,
+    /// the clipboard and the field-scoped undo; the drafts above stay because
+    /// Save/Update are the commit, not Return.
+    project_name_input: Entity<ui::TextInputState>,
+    server_url_input: Entity<ui::TextInputState>,
+    _field_events: [gpui::Subscription; 2],
     /// `Collapsible` under the project-name input, with the content's measured
     /// height so the reveal animates a real layout property.
     placeholders: ui::CollapsibleState,
@@ -330,6 +335,33 @@ impl SettingsWindow {
             true
         });
 
+        // Both fields are built up front so their focus handles outlive a page
+        // change, and because `TextInputState`'s blur listener needs a window.
+        let project_name_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_text(
+                settings
+                    .default_project_name_template
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_PROJECT_NAME_TEMPLATE.to_string()),
+                cx,
+            );
+            input
+        });
+        let server_url_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_text(settings.server_url.clone(), cx);
+            input
+        });
+        let field_events = [
+            cx.subscribe(&project_name_input, |this, input, event, cx| {
+                this.on_field_event(Field::ProjectName, input, event, cx)
+            }),
+            cx.subscribe(&server_url_input, |this, input, event, cx| {
+                this.on_field_event(Field::ServerUrl, input, event, cx)
+            }),
+        ];
+
         Self {
             theme,
             page,
@@ -340,8 +372,9 @@ impl SettingsWindow {
             server_url: settings.server_url.clone(),
             settings,
             menu: None,
-            project_name_focus: cx.focus_handle(),
-            server_url_focus: cx.focus_handle(),
+            project_name_input,
+            server_url_input,
+            _field_events: field_events,
             placeholders: ui::CollapsibleState::new(false),
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
@@ -460,7 +493,20 @@ impl SettingsWindow {
 
     // -- Menus -------------------------------------------------------------
 
-    fn open_menu(&mut self, kind: MenuKind, origin: Point<Pixels>, cx: &mut Context<Self>) {
+    fn open_menu(
+        &mut self,
+        kind: MenuKind,
+        origin: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The menu's arrows / Home / End / Enter / Escape are handled by the
+        // root's `on_key_down`, and a focused text field would consume all of
+        // them first -- its bindings sit deeper in the dispatch path. Opening
+        // a menu therefore takes focus back, which is also what clicking a
+        // `<button>` does to a focused `<input>` in the webview.
+        let focus = self.focus.clone();
+        window.focus(&focus, cx);
         let items = self.menu_items(kind);
         self.menu = Some(OpenMenu {
             kind,
@@ -1624,7 +1670,7 @@ impl SettingsWindow {
     }
 
     /// `DefaultProjectNameCard` -- `defaultProjectNameTemplate`.
-    fn render_project_name(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_project_name(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let stored = self
             .settings
@@ -1651,6 +1697,10 @@ impl SettingsWindow {
                 |this, _window, cx| {
                     this.settings.default_project_name_template = None;
                     this.project_name = DEFAULT_PROJECT_NAME_TEMPLATE.to_string();
+                    let input = this.project_name_input.clone();
+                    input.update(cx, |input, cx| {
+                        input.set_text(DEFAULT_PROJECT_NAME_TEMPLATE, cx)
+                    });
                     this.write("defaultProjectNameTemplate", Value::Null, cx);
                 },
             ))
@@ -1691,13 +1741,7 @@ impl SettingsWindow {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
-                .child(self.text_field(
-                    Field::ProjectName,
-                    &self.project_name,
-                    &self.project_name_focus,
-                    window,
-                    cx,
-                ))
+                .child(self.text_field(Field::ProjectName, cx))
                 .child(
                     // The live preview box. The Tauri card renders
                     // `commands.formatProjectName(...)`; ours formats the six
@@ -1840,9 +1884,9 @@ impl SettingsWindow {
                     |_, _, _| {},
                 )
                 .on_click(cx.listener(
-                    |this, event: &gpui::ClickEvent, _window, cx| {
+                    |this, event: &gpui::ClickEvent, window, cx| {
                         if !this.windows.is_empty() {
-                            this.open_menu(MenuKind::AddWindow, event.position(), cx);
+                            this.open_menu(MenuKind::AddWindow, event.position(), window, cx);
                         }
                     },
                 )),
@@ -2066,7 +2110,7 @@ impl SettingsWindow {
     }
 
     /// `ServerURLSetting` -- `serverUrl`.
-    fn render_self_host(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_self_host(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let stored = self.settings.server_url.clone();
         let draft = self.server_url.clone();
 
@@ -2080,13 +2124,7 @@ impl SettingsWindow {
                     .flex_col()
                     .gap(px(6.))
                     .child(div().text_size(px(13.)).child("Cap Server URL"))
-                    .child(self.text_field(
-                        Field::ServerUrl,
-                        &self.server_url,
-                        &self.server_url_focus,
-                        window,
-                        cx,
-                    )),
+                    .child(self.text_field(Field::ServerUrl, cx)),
             )
             .child(
                 div()
@@ -2104,6 +2142,10 @@ impl SettingsWindow {
                         |this, window, cx| {
                             if this.settings.server_url == DEFAULT_SERVER_URL {
                                 this.server_url = DEFAULT_SERVER_URL.to_string();
+                                let input = this.server_url_input.clone();
+                                input.update(cx, |input, cx| {
+                                    input.set_text(DEFAULT_SERVER_URL, cx)
+                                });
                                 cx.notify();
                                 return;
                             }
@@ -2155,6 +2197,8 @@ impl SettingsWindow {
             this.update(cx, |this, cx| {
                 this.settings.server_url = origin.clone();
                 this.server_url = origin.clone();
+                let input = this.server_url_input.clone();
+                input.update(cx, |input, cx| input.set_text(origin.clone(), cx));
                 this.write("serverUrl", Value::String(origin), cx);
             })
             .ok();
@@ -2265,8 +2309,8 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> ui::Select {
         ui::Select::settings(&self.theme, id, label).on_click(cx.listener(
-            move |this, event: &gpui::ClickEvent, _window, cx| {
-                this.open_menu(kind, event.position(), cx);
+            move |this, event: &gpui::ClickEvent, window, cx| {
+                this.open_menu(kind, event.position(), window, cx);
             },
         ))
     }
@@ -2327,56 +2371,62 @@ impl SettingsWindow {
         button.on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
     }
 
-    /// The two inputs -- [`ui::TextField::settings`]. gpui ships no text
-    /// input, so the field is the drawing and the window keeps the string:
-    /// `Escape` reverts to what is stored, which only this window knows.
-    fn text_field(
-        &self,
-        field: Field,
-        value: &str,
-        focus: &FocusHandle,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        // The caret is drawn only while the field has focus -- there are two
-        // of them on the page and a pair of blinkless bars would read as two
-        // active inputs.
-        let focused = focus.is_focused(window);
+    /// The two inputs -- [`ui::TextInput::settings`], `<Input>`'s
+    /// `h-8 rounded-lg bg-gray-2 px-2 text-xs` re-filled from the settings
+    /// material.
+    ///
+    /// The drafts stay on this window because the *commit* is the Save /
+    /// Update button, exactly as it is in the Tauri card -- neither `<input>`
+    /// there binds `onKeyDown`, so Return does nothing in either app. What the
+    /// window still owns is what Escape means, which is "revert to what is
+    /// stored".
+    fn text_field(&self, field: Field, cx: &mut Context<Self>) -> gpui::Div {
+        let (id, input) = match field {
+            Field::ProjectName => ("project-name-input", &self.project_name_input),
+            Field::ServerUrl => ("server-url-input", &self.server_url_input),
+        };
+        let _ = cx;
+        div().child(ui::TextInput::settings(&self.theme, id, input))
+    }
 
-        div()
-            .on_key_down(
-                cx.listener(move |this, event: &gpui::KeyDownEvent, _window, cx| {
-                    let draft = match field {
-                        Field::ProjectName => &mut this.project_name,
-                        Field::ServerUrl => &mut this.server_url,
-                    };
-                    match ui::text_edit_for(&event.keystroke) {
-                        ui::TextEdit::Insert(text) => draft.push_str(&text),
-                        ui::TextEdit::Backspace => {
-                            draft.pop();
-                        }
-                        ui::TextEdit::Escape => {
-                            // Revert to what is stored, the way leaving the
-                            // field without saving does.
-                            *draft = match field {
-                                Field::ProjectName => this
-                                    .settings
-                                    .default_project_name_template
-                                    .clone()
-                                    .unwrap_or_else(|| DEFAULT_PROJECT_NAME_TEMPLATE.to_string()),
-                                Field::ServerUrl => this.settings.server_url.clone(),
-                            };
-                        }
-                        ui::TextEdit::Ignored => return,
-                    }
-                    cx.notify();
-                }),
-            )
-            .child(
-                ui::TextField::settings(&self.theme, value.to_string())
-                    .focus(focus)
-                    .caret(focused),
-            )
+    /// Both fields' events. The draft mirrors the field so the Save/Update
+    /// buttons' enablement keeps reading a plain `String`.
+    fn on_field_event(
+        &mut self,
+        field: Field,
+        input: Entity<ui::TextInputState>,
+        event: &ui::TextInputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ui::TextInputEvent::Changed => {
+                let value = input.read(cx).text().to_string();
+                match field {
+                    Field::ProjectName => self.project_name = value,
+                    Field::ServerUrl => self.server_url = value,
+                }
+                cx.notify();
+            }
+            ui::TextInputEvent::Cancelled => {
+                // Revert to what is stored, the way leaving the field without
+                // saving does.
+                let stored = match field {
+                    Field::ProjectName => self
+                        .settings
+                        .default_project_name_template
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_PROJECT_NAME_TEMPLATE.to_string()),
+                    Field::ServerUrl => self.settings.server_url.clone(),
+                };
+                match field {
+                    Field::ProjectName => self.project_name = stored.clone(),
+                    Field::ServerUrl => self.server_url = stored.clone(),
+                }
+                input.update(cx, |input, cx| input.set_text(stored, cx));
+                cx.notify();
+            }
+            _ => {}
+        }
     }
 
     /// `<Slider minValue={1} maxValue={4.5} step={0.1}>`: a `h-[0.3rem]`

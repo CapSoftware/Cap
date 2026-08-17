@@ -73,6 +73,11 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # move gpui's own pin.
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 smallvec = "1"
+# Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived
+# character, not a `char`, so a flag emoji or a combining accent goes in one
+# press. gpui's own input example uses the same crate and it is already in this
+# lockfile through gpui, so this makes an existing build unit direct.
+unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt"] }
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.

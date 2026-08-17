@@ -54,7 +54,7 @@ mod select;
 mod slider;
 mod surface;
 mod tab_rail;
-mod text_field;
+mod text_input;
 mod toggle;
 mod tooltip;
 
@@ -98,7 +98,10 @@ pub use surface::{Card, Popover, SettingRow, Section};
 #[allow(unused_imports)]
 pub use tab_rail::{TabRail, TabRailItem};
 #[allow(unused_imports)]
-pub use text_field::{TextEdit, TextField, text_edit_for};
+pub use text_input::{
+    TextInput, TextInputEvent, TextInputState, bind_keys as bind_text_input_keys,
+    text_input_has_focus,
+};
 #[allow(unused_imports)]
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]

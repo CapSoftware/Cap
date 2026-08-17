@@ -370,11 +370,9 @@ pub fn normalize_hex(value: &str) -> Option<String> {
 /// half-typed field holds, which is what decides whether the field commits
 /// live rather than waiting for Enter or blur.
 ///
-/// Unused here because the hex field is read-only in this rev -- see the
-/// README's deviation -- but it is half of one contract with
-/// [`normalize_hex`], and splitting them across units would leave the rule
-/// half-transcribed.
-#[allow(dead_code)]
+/// This is the `onInput` gate: `EditorWindow::on_hex_event` commits only at 6
+/// or 8 digits, which is what stops `#4` from being read as a colour halfway
+/// through typing `#4785FF`.
 pub fn hex_digit_count(value: &str) -> usize {
     let trimmed = value.trim();
     let raw = trimmed.strip_prefix('#').unwrap_or(trimmed);
@@ -1209,7 +1207,7 @@ impl EditorWindow {
         self.note_sidebar_edit("color-panel");
     }
 
-    fn color_for(&self, target: ColorTarget) -> Option<Color> {
+    pub(crate) fn color_for(&self, target: ColorTarget) -> Option<Color> {
         match target {
             ColorTarget::BackgroundColor => match &self.project.background.source {
                 BackgroundSource::Color { value, .. } => Some(*value),
@@ -1233,7 +1231,7 @@ impl EditorWindow {
         }
     }
 
-    fn set_color(
+    pub(crate) fn set_color(
         &mut self,
         target: ColorTarget,
         color: Color,
@@ -2615,11 +2613,10 @@ impl EditorWindow {
     /// a computed darker inset ring, which opens the OS colour panel, beside a
     /// hex field.
     ///
-    /// The hex *field* is read-only here: it prints the value the swatch holds
-    /// and the panel is what edits it. gpui's text field has no selection or
-    /// caret movement (the app-wide deviation), and a colour typed into a
-    /// half-working field would be a worse control than the panel it sits next
-    /// to.
+    /// The hex field is real entry now: typing a complete 6- or 8-digit colour
+    /// commits it live, Enter and blur commit whatever is in the box, and a
+    /// value that does not parse snaps back -- `RgbInput`'s own three handlers
+    /// (`color-utils.tsx:27-96`), see `EditorWindow::on_hex_event`.
     fn render_rgb_input(
         &self,
         id: &'static str,
@@ -2629,6 +2626,10 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let open = self.sidebar.color_target == Some(target);
+        // The field's text is re-derived from the value by
+        // `EditorWindow::sync_hex_inputs`, which runs once a frame from
+        // `render` where the focus is knowable -- see it for why.
+        let input = self.hex_input(target).cloned();
 
         div()
             .flex()
@@ -2651,19 +2652,19 @@ impl EditorWindow {
                         this.open_color_panel(target, window, cx);
                     })),
             )
-            .child(
+            .children(input.map(|input| {
                 // `w-[4.60rem] p-1.5 text-[13px] border rounded-lg bg-gray-1`.
-                div()
-                    .w(px(73.6))
-                    .p(px(6.))
-                    .rounded(px(8.))
+                ui::TextInput::plain(&theme, id, &input)
+                    .width(px(73.6))
+                    .padding_x(px(6.))
+                    .padding_y(px(6.))
+                    .height(px(30.))
+                    .radius(px(8.))
                     .bg(Hsla::from(theme.gray_1))
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_12))
+                    .border(Hsla::from(theme.gray_12))
                     .text_size(px(13.))
                     .text_color(Hsla::from(theme.gray_12))
-                    .child(rgb_to_hex(value)),
-            )
+            }))
     }
 
     // -- Gradient pane -----------------------------------------------------
