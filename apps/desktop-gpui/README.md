@@ -90,6 +90,11 @@ Everything below is real, not mocked.
   lists capped at 9 and merged). The thumbnails are the pre-baked files inside
   each `.cap` — `screenshots/display.jpg` for a recording, the bundle's PNG for
   a screenshot — decoded on the background executor. See below.
+- **The editor window, staged.** The real 1275×800 window with a project
+  loaded through `EditorInstance` and frame 0 rendered into the player. The
+  shell is complete — header, letterboxed player, timeline strip, config
+  sidebar — and the controls the later units own render in place, disabled.
+  See below.
 - **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
   Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
   at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
@@ -200,7 +205,7 @@ Things that are deliberately different, and why.
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
 | **Search is minimal** | gpui ships no text input. Ours tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. |
 | **Plan badge is always "Personal"** | Which of Pro/Commercial applies comes from the license query. There is no auth or license plumbing yet, and claiming a plan would be worse than showing none. |
-| **Recents cards reveal, they do not open** | `openRecentMedia` routes a studio card to the Editor window (recovering first if needed), an instant card to its share link, and a screenshot to the Screenshot Editor. None of those exist here, so the whole card reveals its `.cap` bundle in Finder instead — the action the Recordings settings page calls "Open recording bundle". No hover affordance was invented for it: the real card has none either, it is click-only with no context menu. |
+| **Only studio Recents cards open** | `openRecentMedia` routes a studio card to the Editor window (recovering first if needed), an instant card to its share link, and a screenshot to the Screenshot Editor. The studio arm is real now; the other two still reveal the `.cap` bundle in Finder — the action the Recordings settings page calls "Open recording bundle". The recovery step is not reproduced either, so an `InProgress`/`NeedsRemux` bundle reaches the editor's error state instead of being remuxed first. No hover affordance was invented: the real card has none either, it is click-only with no context menu. |
 | **No carousel mask, snap or hover lift** | `RecentCarousel`'s edge fade is a scroll-position-driven `mask-image` and the cards are `snap-x snap-proximity`; the card's `hover:-translate-y-0.5` and the thumbnail's `group-hover:scale-[1.025]` are transforms. This gpui rev has neither a mask hook (same gap as the teleprompter vignette) nor a transform. The scroller, the gap, the `pr-8` gutter, the border/shadow hover and the trailing skeletons are all real — the skeletons just do not pulse (`animate-pulse` has no keyframe hook either). |
 | **Thumbnails are downsampled to the card** | `create_screenshot(.., None)` writes `display.jpg` at the display's *native* resolution — 3024×1964 here. The browser scales that per `<img>`; a gpui sprite atlas would hold nine of them whole, so each is resized to 392×224 (the card at 2×) during the same background decode. `ObjectFit::Cover` then crops as `object-cover` does. |
 | **Blur bridges on studio only** | `project_config_from_recording` is the studio arm of `handle_recording_finish`; the instant arm never writes a project config, so neither does this. |
@@ -249,7 +254,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | **Dependencies reconciled** — `cap-editor`/`cap-rendering`/`cap-export` link and render a real frame headlessly (see below). No window yet; by far the largest |
+| Editor | 1275×800 | **E1 done — window, shell, static frame.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project loaded through `EditorInstance` with frame 0 on screen. Playback (E2), timeline interaction (E3) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -642,6 +647,92 @@ at 1080×702. `shared_device` is `None` — gpui on macOS exposes no wgpu device
 share, so cap-rendering owns its own, which is the same two-GPU-context shape
 the Tauri app already has.
 
+## The editor window
+
+`editor_window.rs` is the window that test grew into. E1's scope is the shell
+and a correct static picture: **playback, timeline interaction and the config
+sidebar's controls are E2/E3 and later**, and every affordance they own is
+drawn in place and disabled rather than left out — the layout *is* the
+deliverable, and a header missing half its buttons would not be one.
+
+- **Opaque, no material, native traffic lights at (20, 32).** `/editor` is
+  *not* a `(window-chrome)` route — it is a sibling of the `(window-chrome)`
+  directory, so `applyMacOSWindowMaterial` never runs for it — and
+  `is_transparent()` (`windows.rs:1069-1082`) does not list Editor. So no glass,
+  no vibrancy, no rounded shell: an ordinary opaque window painting
+  `bg-gray-2 dark:bg-gray-1`, with `traffic_lights_position` =
+  `Some(Some(LogicalPosition::new(20.0, 32.0)))` expressed as
+  `TitlebarOptions { appears_transparent: true, traffic_light_position }`, the
+  same shape the settings window uses at (22, 22). The header's left group
+  reserves the `h-full w-16` spacer the TSX puts there for them.
+- **One window per `.cap` path.** `AppWindows::editors` is a
+  `Vec<(PathBuf, WindowHandle<EditorWindow>)>`, the gpui spelling of
+  `EditorWindowIds` (`windows.rs:3656-3659`); opening a project that already
+  has a window focuses that one (`ShowCapWindow::Editor`'s path lookup at
+  `windows.rs:1164-1181`). Paths are canonicalised first, so one bundle reached
+  by two spellings is still one window.
+- **The main window hides, and comes back when the last editor closes.** Both
+  halves are the shipping app's: `hide_recording_windows(app, false)` runs
+  before the editor is built (`windows.rs:1930`) and hides Main among others,
+  and `openRecording` hides it again explicitly from the frontend
+  (`new-main/index.tsx:2925`); the `CapWindowId::Editor` arm of `Destroyed`
+  calls `restore_main_windows_if_no_editors` (`lib.rs:5788`), so a second
+  editor still open keeps it away.
+- **Load path.** Everything expensive is off the UI thread: the pre-flight runs
+  on gpui's background executor and `EditorInstance::new` on the `gpui_tokio`
+  runtime, because the instance's decoders, renderer and preview renderer are
+  all tokio-spawned. `EditorInstance::new` is the one the Tauri app calls
+  (`lib.rs:6592`) — not `new_with_audio_output`, which is the test's; the real
+  `AudioOutput::new` only spawns its control thread, so opening a project grabs
+  no cpal device. `shared_device` stays `None`.
+- **Frame path.** `frame_cb` → bounded flume channel → un-pad the 256-byte
+  stride → **RGBA → BGRA** (the render target is `Rgba8Unorm`; gpui's atlas
+  wants BGRA, the same swap `library::decode_thumbnail` does) → `RenderImage`,
+  converted on the background executor and delivered on the main one. The
+  previous frame is dropped from the sprite atlas on every replacement, the
+  camera bubble's rule. The picture comes from
+  `preview_tx.send_modify(|v| *v = Some((0, 60, 1248×702)))` — the initial kick
+  `lib.rs:6617-6618` does; `seek_to`/`set_playhead_position` render nothing.
+  A display recording lands at **1080×702** with
+  `FrameLayout.display == [0, 0, 1080, 702]`, which is what the E0 test pins.
+- **Letterboxing.** `PreviewCanvas`'s maths verbatim (`Player.tsx:566-601`):
+  4px padding off both axes, then fit by aspect, defaulting to 1920×1080 before
+  a frame arrives. gpui has no `createElementBounds`, so the container's own
+  painted bounds come back through a `canvas` element and the frame is painted
+  into that rect with `window.paint_image`. The bars around it are the *player
+  card*, not black: `background-color: #000000` is on the `<canvas>` itself, so
+  black is painted only under the fitted rect.
+- **A bad `.cap` is a screen, not a crash.**
+  `ProjectRecordingsMeta::new` `.expect("Failed to read display video")`s on a
+  display track that will not open (`project_recordings.rs:127-131`), and that
+  call is made deep inside `EditorInstance::new`. `preflight` runs the same
+  *synchronous* construction first, on a background thread, inside
+  `catch_unwind`, along with every check `EditorInstance::new` would have
+  returned as an `Err` (missing path, unparseable meta, non-studio, zero
+  segments). Both arms were verified with deliberately corrupted copies in a
+  temp dir: the multi-segment arm returns `Err`, the single-segment arm
+  genuinely panics at `project_recordings.rs:129`, and both land on the
+  in-window error state with the process still alive.
+- **The bundle is opened read-write, deliberately.** `EditorInstance::new`
+  writes `project-config.json` back when it has to synthesise a timeline or
+  clip offsets (`editor_instance.rs:227, 263`). The Tauri app opens real
+  bundles exactly this way, so parity means accepting the write; only the
+  *tests* work on copies.
+
+Editor-specific deviations:
+
+| | |
+|---|---|
+| **The header's buttons are inert** | Delete recording, Open recording bundle, Presets, Organization, Undo, Redo, Clips, Captions and Export all render at their real metrics in the `disabled:opacity-50` state. Each needs a unit that does not exist: project deletion, the preset store, auth, an undo stack, the clips/transcript layout modes, export. |
+| **The name is displayed, not edited** | `NameEditor` is an `<input>` overlaying a measuring `<span>` that commits through `commands.setPrettyName`. gpui ships no text input (the same gap as the main window's search field and the teleprompter's script), so the name and its `.cap` suffix render read-only. |
+| **The player toolbar and transport are inert** | Aspect ratio, Crop, Frame, Preview quality, prev/play/next, split, zoom in/out and the zoom slider are drawn at their real sizes and do nothing. Play is E2; the zoom controls drive the timeline transform, which is E3. |
+| **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
+| **The config sidebar is a rail plus a placeholder** | The six-tab bar is real, at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
+| **The timeline is two locked tracks, drawn** | Clip and Zoom — the only two `trackDefinitions` marks `locked: true` — with their real gutter chips at the `--track-clip` / `--track-zoom` colours, the 32px ruler with its tick ladder, the clip segments carrying name and duration, and the playhead at 0. No scrub, drag, trim, split, zoom, minimap, edge fade or track manager; no optional tracks. The timeline height is the default 260 and its drag handle is inert. |
+| **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
+| **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
+| **No prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. |
+
 ## Verifying changes
 
 `screencapture` cannot see windows without Screen Recording permission, but
@@ -682,6 +773,18 @@ same `edit_script` a keystroke takes, debounced write included — how the
 persistence round trip is checked without synthetic key events. Add
 `CAP_GPUI_AUTO_PLAY=1` to press play 1.2s after opening, once the window has
 painted and there is a scrollable height to move through.
+
+`CAP_GPUI_AUTO_EDITOR=<path-to-.cap>` opens the editor on that bundle, exactly
+as a studio Recents card does. `=1` picks the newest studio recording the
+library scan finds — the same list Recents reads, so it is the card that would
+be first in the carousel.
+
+`CAP_GPUI_AUTO_RECENT=1` clicks the first Recents card once the library scan
+has landed (expanding the window first, since the scan only runs while
+expanded), through `main_window::activate_recent` — the card's own handler.
+`=twice` clicks it again 2.5s later, which is how the one-window-per-project
+rule is checked: the second activation logs `editor already open for this
+project; focusing it` instead of opening a second window.
 
 `CAP_GPUI_TAURI_STORE=<path>` points every settings read and write at another
 file. Use it for anything that toggles a setting: the default is the store the

@@ -7,6 +7,8 @@
 //! "Starting" state from t=0), and the observer closes the bar and reshows the
 //! main window whenever the session comes back to rest.
 
+use std::path::{Path, PathBuf};
+
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
     App, AppContext as _, Bounds, Entity, Global, WindowBounds, WindowHandle, WindowKind,
@@ -17,6 +19,7 @@ use scap_targets::DisplayId;
 use crate::{
     camera_window::{self, CameraWindow},
     controls_window::ControlsWindow,
+    editor_window::{self, EditorWindow},
     main_window::{MainWindow, Mode, TargetType},
     mode_select_window::{self, ModeSelectWindow},
     platform,
@@ -44,6 +47,11 @@ pub struct AppWindows {
     /// One target-select overlay per display, keyed by display so a mode
     /// switch can keep the ones it still wants.
     pub overlays: Vec<(DisplayId, WindowHandle<OverlayWindow>)>,
+    /// One editor per `.cap` path, reused on re-open -- the gpui spelling of
+    /// `EditorWindowIds { ids: Arc<Mutex<Vec<(PathBuf, u32)>>> }`
+    /// (`windows.rs:3656-3659`). The Tauri app keys its label off an
+    /// incrementing id; the path is the identity in both.
+    pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
 }
 
 impl Global for AppWindows {}
@@ -59,6 +67,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         mode_select: None,
         teleprompter: None,
         overlays: Vec::new(),
+        editors: Vec::new(),
     });
 
     let mut last_phase = Phase::Idle;
@@ -1063,6 +1072,299 @@ pub fn deliver_camera_frame(frame: cap_recording::NativeCameraFrame, cx: &mut Ap
     handle
         .update(cx, |view, window, cx| view.frame_arrived(frame, window, cx))
         .is_ok()
+}
+
+// -- Editor -----------------------------------------------------------------
+
+/// The canonical form of a `.cap` path, so the same bundle reached by two
+/// spellings is one window. `EditorWindowIds` compares `PathBuf`s directly;
+/// canonicalising is strictly the safer version of the same rule.
+fn editor_key(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Open (or focus) the editor for a `.cap` bundle.
+///
+/// `ShowCapWindow::Editor` looks the path up in `EditorWindowIds` and reuses
+/// the window it finds (`windows.rs:1164-1181`), so opening the same project
+/// twice focuses the first one. It also calls `hide_recording_windows(app,
+/// false)` first (`windows.rs:1930`), which hides Main among others, and
+/// `openRecording` in the frontend hides the main window again explicitly
+/// (`new-main/index.tsx:2925`) -- so the main window going away is both halves
+/// of the shipping behaviour, not an invention here.
+///
+/// Must be reached through `cx.defer` from anything inside an entity update:
+/// opening a window paints it synchronously and would double-lease the caller.
+pub fn open_editor(project_path: PathBuf, cx: &mut App) {
+    let key = editor_key(&project_path);
+
+    if let Some(handle) = cx
+        .global::<AppWindows>()
+        .editors
+        .iter()
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| *handle)
+    {
+        tracing::info!(
+            path = %key.display(),
+            "editor already open for this project; focusing it"
+        );
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        hide_main_window(cx);
+        return;
+    }
+
+    // `cursor_monitor.center_position(1275.0, 800.0)` in the Tauri arm; gpui
+    // centres on the active display, which is the same one in every
+    // single-pointer case.
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(editor_window::EDITOR_WIDTH),
+            px(editor_window::EDITOR_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // Native traffic lights, inset to (20, 32):
+            // `CapWindowId::Editor::traffic_lights_position` is
+            // `Some(Some(LogicalPosition::new(20.0, 32.0)))`, and the header's
+            // left group reserves an `h-full w-16` spacer for them.
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Editor".into()),
+                appears_transparent: true,
+                traffic_light_position: editor_window::TRAFFIC_LIGHTS,
+            }),
+            // An ordinary window that activates the dock icon
+            // (`activates_dock()` lists Editor); no level or Spaces treatment.
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            // `.maximizable(true)` with `min_inner_size == inner_size`.
+            is_resizable: true,
+            is_minimizable: true,
+            window_min_size: Some(size(
+                px(editor_window::EDITOR_WIDTH),
+                px(editor_window::EDITOR_HEIGHT),
+            )),
+            // Opaque, and no native material: `is_transparent()`
+            // (`windows.rs:1069-1082`) does not list Editor, and
+            // `applyMacOSWindowMaterial` runs only in the `(window-chrome)`
+            // layout -- `/editor` is a sibling route, not one of its children.
+            ..Default::default()
+        },
+        {
+            let key = key.clone();
+            move |window, cx| cx.new(|cx| EditorWindow::new(key, window, cx))
+        },
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("editor window failed to open: {error:#}");
+            return;
+        }
+    };
+
+    cx.global_mut::<AppWindows>()
+        .editors
+        .push((key.clone(), handle));
+
+    handle
+        .update(cx, |view, window, cx| {
+            platform::kick_display_link(window);
+            view.focus_root(window, cx);
+            tracing::info!(
+                number = platform::window_number(window),
+                path = %key.display(),
+                "editor window opened"
+            );
+        })
+        .ok();
+
+    hide_main_window(cx);
+    load_editor_project(key, handle, cx);
+}
+
+/// Build the `EditorInstance` and get frame 0 on screen.
+///
+/// Everything expensive is off the UI thread: the pre-flight validation runs
+/// on gpui's background executor, and the instance -- decoders, renderer,
+/// preview renderer, all of which are tokio-spawned -- is constructed on the
+/// `gpui_tokio` runtime. `EditorInstance::new` on the main thread would block
+/// it for however long the first segment takes to open.
+fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let preflight_path = path.clone();
+        let summary = cx
+            .background_executor()
+            .spawn(async move { editor_window::preflight(&preflight_path) })
+            .await;
+
+        let summary = match summary {
+            Ok(summary) => summary,
+            Err(message) => {
+                handle
+                    .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                    .ok();
+                return;
+            }
+        };
+        tracing::info!(
+            path = %path.display(),
+            clips = summary.clips.len(),
+            duration = format!("{:.3}", summary.duration),
+            camera = summary.has_camera,
+            cursor = summary.has_cursor_data,
+            "editor project validated"
+        );
+        if handle
+            .update(cx, |view, window, cx| {
+                view.set_summary(summary, window, cx)
+            })
+            .is_err()
+        {
+            return;
+        }
+
+        // The frame seam. Bounded and try_send-only: the renderer is already
+        // latest-wins (`editor.rs:242-312`), so a full queue means the UI is
+        // behind and the newest frame is the one that matters.
+        let (frame_tx, frame_rx) = flume::bounded(2);
+        let instance_path = path.clone();
+        let task = cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                // `EditorInstance::new`, not `new_with_audio_output`: the real
+                // constructor, exactly as the Tauri app calls it
+                // (`lib.rs:6592`). `AudioOutput::new` only spawns its control
+                // thread -- the device is opened lazily on the first play --
+                // so no cpal stream is grabbed by merely opening a project.
+                //
+                // `shared_device: None`: gpui on macOS is Metal-direct and
+                // exposes no wgpu device to share, so cap-rendering owns its
+                // own. Two GPU contexts in-process is the shape the Tauri app
+                // already has.
+                cap_editor::EditorInstance::new(
+                    instance_path,
+                    |_state| {},
+                    editor_window::make_frame_callback(frame_tx),
+                    None,
+                )
+                .await
+            })
+        });
+
+        let instance = match task.await {
+            Ok(Ok(instance)) => instance,
+            Ok(Err(error)) => {
+                handle
+                    .update(cx, |view, window, cx| view.set_error(error, window, cx))
+                    .ok();
+                return;
+            }
+            Err(join_error) => {
+                handle
+                    .update(cx, |view, window, cx| {
+                        view.set_error(
+                            format!("Opening this recording failed: {join_error}"),
+                            window,
+                            cx,
+                        )
+                    })
+                    .ok();
+                return;
+            }
+        };
+
+        tracing::info!(path = %path.display(), "editor instance ready");
+        if handle
+            .update(cx, |view, _window, _cx| view.set_instance(instance.clone()))
+            .is_err()
+        {
+            instance.dispose().await;
+            return;
+        }
+
+        // The pump: convert on the background executor (un-padding plus the
+        // BGRA swap is a few megabytes per frame), deliver on the main one.
+        cx.spawn(async move |cx| {
+            while let Ok((frame, layout)) = frame_rx.recv_async().await {
+                let image = cx
+                    .background_executor()
+                    .spawn(async move { editor_window::frame_image(&frame) })
+                    .await;
+                let Some(image) = image else {
+                    tracing::warn!("a rendered frame could not be converted for display");
+                    continue;
+                };
+                if handle
+                    .update(cx, |view, window, cx| {
+                        view.frame_arrived(
+                            editor_window::EditorFrame { image, layout },
+                            window,
+                            cx,
+                        )
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+
+        // The initial kick, exactly as `lib.rs:6617-6618` does it after
+        // creating an instance. Without this the canvas stays black: `seek_to`
+        // and `set_playhead_position` render nothing.
+        editor_window::request_frame(&instance, 0);
+    })
+    .detach();
+}
+
+/// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
+/// drops it from `EditorWindowIds`, disposes the instance, and calls
+/// `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`) -- so the main
+/// window comes back only once the last editor has closed.
+pub fn editor_closed(project_path: &Path, cx: &mut App) {
+    let key = editor_key(project_path);
+    let handle = {
+        let editors = &mut cx.global_mut::<AppWindows>().editors;
+        let index = editors.iter().position(|(path, _)| path == &key);
+        index.map(|index| editors.remove(index).1)
+    };
+
+    if let Some(handle) = handle {
+        let instance = handle
+            .update(cx, |view, _window, _cx| view.take_instance())
+            .ok()
+            .flatten();
+        if let Some(instance) = instance {
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+        }
+    }
+
+    let editors_left = cx.global::<AppWindows>().editors.len();
+    tracing::info!(
+        path = %key.display(),
+        editors_left,
+        "editor window closed"
+    );
+    if editors_left == 0 && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        show_main_window(cx);
+    }
 }
 
 /// Repaint the bar between its own 250ms ticks -- the mic meter updates at

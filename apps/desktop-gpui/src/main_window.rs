@@ -523,6 +523,60 @@ impl MainWindow {
         }
     }
 
+    /// `CAP_GPUI_AUTO_RECENT=1`: click the first Recents card, once the
+    /// library scan that only runs while expanded has landed. `=twice` clicks
+    /// it a second time a moment later, which is what proves the editor
+    /// registry reuses a window rather than opening a second one.
+    ///
+    /// Same reason as every other `CAP_GPUI_AUTO_*` hook: unprivileged
+    /// synthetic clicks are dropped, and this goes through
+    /// [`activate_recent`], the card's own handler.
+    pub fn auto_open_recent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(mode) = std::env::var("CAP_GPUI_AUTO_RECENT") else {
+            return;
+        };
+        if mode.is_empty() {
+            return;
+        }
+        if !self.expanded {
+            self.toggle_expanded(window, cx);
+        }
+        let twice = mode == "twice";
+
+        cx.spawn(async move |this, cx| {
+            // The scan and each thumbnail decode run on the background
+            // executor; poll rather than guess how long that takes.
+            for _ in 0..40 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let picked = this
+                    .update(cx, |this: &mut MainWindow, cx| {
+                        let entry = this.recents.as_ref()?.first()?;
+                        let item = entry.item.clone();
+                        activate_recent(&item.bundle, item.kind == MediaKind::Studio, cx);
+                        Some(item)
+                    })
+                    .ok()
+                    .flatten();
+                let Some(item) = picked else { continue };
+
+                if twice {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(2500))
+                        .await;
+                    cx.update(|cx| {
+                        tracing::info!("second Recents activation for the same project");
+                        activate_recent(&item.bundle, item.kind == MediaKind::Studio, cx);
+                    });
+                }
+                return;
+            }
+            tracing::warn!("CAP_GPUI_AUTO_RECENT: the library scan produced nothing");
+        })
+        .detach();
+    }
+
     /// Bring the target-select overlays in line with the armed target.
     ///
     /// Deferred, because opening a window inside an entity update paints it
@@ -2497,15 +2551,18 @@ impl MainWindow {
     /// shadow-sm ... hover:-translate-y-0.5 hover:border-gray-7
     /// hover:shadow-md`.
     ///
-    /// The whole card is the button. Clicking it reveals the bundle in Finder
-    /// rather than opening the editor -- see the README's deviation; there is
-    /// no editor window here to open. `hover:-translate-y-0.5` and the
-    /// thumbnail's `group-hover:scale-[1.025]` are transforms, which this gpui
-    /// rev has none of.
+    /// The whole card is the button. A studio recording opens the editor, as
+    /// `openRecentMedia` -> `openRecording` does; an instant recording or a
+    /// screenshot still reveals its bundle in Finder (see the README's
+    /// deviation -- neither the share link nor the screenshot editor exists
+    /// here). `hover:-translate-y-0.5` and the thumbnail's
+    /// `group-hover:scale-[1.025]` are transforms, which this gpui rev has
+    /// none of.
     fn render_recent_card(&self, index: usize, entry: &RecentEntry) -> impl IntoElement {
         let theme = self.theme;
         let item = &entry.item;
         let bundle = item.bundle.clone();
+        let opens_editor = item.kind == MediaKind::Studio;
 
         div()
             .id(("recent-card", index))
@@ -2656,27 +2713,7 @@ impl MainWindow {
                         },
                     ),
             )
-            .on_click(move |_, _window, _cx| {
-                // Deviation: `openRecentMedia` opens the Editor (studio), the
-                // share link (instant) or the Screenshot Editor. None of those
-                // windows exist here yet, so the card reveals its bundle --
-                // which is also what the Recordings settings page's "Open
-                // recording bundle" action does, and what this app already did
-                // when a recording finished.
-                #[cfg(target_os = "macos")]
-                {
-                    tracing::info!(path = %bundle.display(), "revealing recent capture");
-                    if let Err(error) = std::process::Command::new("open")
-                        .arg("-R")
-                        .arg(&bundle)
-                        .spawn()
-                    {
-                        tracing::warn!("revealing the bundle failed: {error}");
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                let _ = &bundle;
-            })
+            .on_click(move |_, _window, cx| activate_recent(&bundle, opens_editor, cx))
     }
 
     /// `ExpandedControlLabel`: `mb-1 px-1`, `text-xs font-semibold text-gray-12`.
@@ -2755,6 +2792,46 @@ impl MainWindow {
                 .border_color(theme.gray_8)
         })
     }
+}
+
+/// What a click on a Recents card does -- `openRecentMedia`.
+///
+/// A studio recording routes to the editor, as `openRecording`'s studio arm
+/// does (`commands.showWindow({ Editor: { project_path } })` followed by
+/// hiding the main window, the second half of which `open_editor` owns). The
+/// recovery step it runs first for an `InProgress`/`NeedsRemux` bundle is not
+/// reproduced -- `recoverRecording` is its own unit -- so such a bundle
+/// reaches the editor's error state instead.
+///
+/// Everything else still reveals its bundle in Finder: `openRecentMedia`
+/// sends an instant recording to its share link and a screenshot to the
+/// Screenshot Editor, and neither exists here (see the README's deviation).
+///
+/// Shared between the card's click handler and `CAP_GPUI_AUTO_RECENT`, so the
+/// harness drives exactly the path a click takes.
+pub fn activate_recent(bundle: &std::path::Path, opens_editor: bool, cx: &mut gpui::App) {
+    if opens_editor {
+        tracing::info!(path = %bundle.display(), "opening recent capture in the editor");
+        // Deferred: opening a window paints it synchronously, and doing that
+        // inside a click handler would double-lease the app.
+        let bundle = bundle.to_path_buf();
+        cx.defer(move |cx| app_windows::open_editor(bundle, cx));
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        tracing::info!(path = %bundle.display(), "revealing recent capture");
+        if let Err(error) = std::process::Command::new("open")
+            .arg("-R")
+            .arg(bundle)
+            .spawn()
+        {
+            tracing::warn!("revealing the bundle failed: {error}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = bundle;
 }
 
 /// `black/N` -- Tailwind's slash-alpha over the two absolute colours, which

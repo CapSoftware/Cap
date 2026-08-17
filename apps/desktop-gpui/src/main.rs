@@ -8,6 +8,7 @@ mod assets;
 mod camera_window;
 mod controls_window;
 mod devices;
+mod editor_window;
 mod feeds;
 mod library;
 mod main_window;
@@ -43,6 +44,21 @@ fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
         _ => return None,
     };
     Some((mode, secs.parse().ok()?))
+}
+
+/// `CAP_GPUI_AUTO_EDITOR`: a `.cap` path, or `1` for the newest studio
+/// recording the library scan finds. The library is the same one Recents
+/// reads, so `=1` opens exactly the card that would be first in the carousel
+/// (skipping instant recordings and screenshots, which the editor rejects).
+fn resolve_auto_editor(target: &str) -> Option<std::path::PathBuf> {
+    if target != "1" {
+        let path = std::path::PathBuf::from(target);
+        return path.is_dir().then_some(path);
+    }
+    library::recent_media()
+        .into_iter()
+        .find(|item| item.kind == library::MediaKind::Studio)
+        .map(|item| item.bundle)
 }
 
 fn main() {
@@ -132,6 +148,7 @@ fn main() {
                 );
                 view.start_enumeration(window, cx);
                 view.auto_expand(window, cx);
+                view.auto_open_recent(window, cx);
                 // The AppKit work below must not run inside this update:
                 // inserting a subview and mutating the content view's layer
                 // synchronously re-enters gpui's own window callbacks, which
@@ -217,6 +234,23 @@ fn main() {
                     cx.update(app_windows::play_teleprompter);
                 })
                 .detach();
+            }
+        }
+
+        // `CAP_GPUI_AUTO_EDITOR=<path-to-.cap>`: open the editor on that
+        // bundle the way a Recents card does. `=1` picks the newest studio
+        // recording in the library. Same reason as the other `CAP_GPUI_AUTO_*`
+        // hooks -- unprivileged synthetic clicks are dropped, so the
+        // screenshot harness needs a way in.
+        if let Ok(target) = std::env::var("CAP_GPUI_AUTO_EDITOR")
+            && !target.is_empty()
+        {
+            match resolve_auto_editor(&target) {
+                Some(path) => app_windows::open_editor(path, cx),
+                None => tracing::error!(
+                    target,
+                    "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"
+                ),
             }
         }
 
