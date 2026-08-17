@@ -249,7 +249,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | Not started — by far the largest |
+| Editor | 1275×800 | **Dependencies reconciled** — `cap-editor`/`cap-rendering`/`cap-export` link and render a real frame headlessly (see below). No window yet; by far the largest |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -574,6 +574,73 @@ Teleprompter-specific deviations:
 | **No letter-spacing** | The script is `tracking-[-0.025em]` in the TSX; this gpui rev exposes no letter-spacing, so it renders at the font's own tracking. |
 | **Cmd-W does not close it** | `(window-chrome).tsx` binds Cmd-W for the chrome windows only, and `/teleprompter` is not one of them — so, faithfully, neither is this. The traffic lights close it. |
 | **Content protection is not refreshed on open** | `openTeleprompter` calls `refreshWindowContentProtection()` when it re-shows an existing window; that call is a no-op unless a recording is running, and here the recording start/stop transitions are the only thing that drives it. |
+
+## The editor stack
+
+The editor's crates are linked but no editor window exists yet. This is the
+dependency reconciliation the editor units were blocked on, and the answer to
+"do gpui's graphics stack and cap-rendering's fight?" is **no, and they never
+could have**:
+
+- **wgpu.** `cap-rendering` wants wgpu 25 and gpui's tree carries wgpu 29, but
+  the 29 is reached only through `gpui_wgpu` ← `gpui_linux` / `gpui_web`. On
+  macOS gpui renders through `gpui_macos`, which is Metal-direct and links no
+  wgpu at all, so exactly one wgpu compiles here — 25.0.2, on the vendored
+  `wgpu-hal` the `[patch.crates-io]` above already mirrored from the root
+  workspace. `cargo tree -d` shows no duplicate `wgpu` or `naga` for the host
+  target. (Both majors will be in the *lockfile*; that is resolution, not
+  compilation.) Nothing about gpui's pin had to move.
+- **`image`.** gpui asks for `0.25.1` and the cap crates for `0.25.2`; both are
+  `^0.25`, so cargo unifies them to a single 0.25.x — 0.25.10 today, which is
+  what gpui's own `Frame` has been built against here since the camera preview
+  landed. The pin in `Cargo.toml` is a floor, not an exact version.
+- **`workspace-hack`.** Every cap crate depends on it and it declares
+  `tauri-utils`, so `tauri-utils` is in this lockfile. It was already, via
+  `cap-recording`; the editor crates add no new path to it, and the `tauri`
+  crate itself is still absent. It is a feature-unifier with no code.
+- **`cap-editor` is genuinely tauri-free.** The websocket, the `WSFrame`
+  repacking and the `CommandArg` extraction all live in
+  `apps/desktop/src-tauri/src/editor_window.rs`, not in the crate. `axum` and
+  `specta` are declared in `crates/editor/Cargo.toml` and referenced nowhere in
+  `crates/editor/src/` — dead deps worth dropping upstream one day.
+
+`tests/editor_frame0.rs` is the proof, and it is the shape the editor window's
+frame path will take:
+
+```sh
+cargo test --test editor_frame0 -- --nocapture
+```
+
+It picks the newest studio `.cap` on the Desktop with a baked
+`screenshots/display.jpg` (or `CAP_GPUI_E0_PROJECT=<path>`), **copies it**,
+builds a real `EditorInstance` over the copy with the headless audio sink
+(`AudioOutput::new_headless`, so no cpal device is opened), pushes one
+instruction onto `preview_tx`, and writes the frame the callback hands back as
+a PNG into `CARGO_TARGET_TMPDIR` (or `CAP_GPUI_E0_OUT_DIR`). With no `.cap`
+available it skips rather than fails.
+
+Three things it exists to pin down:
+
+- **`seek_to` renders nothing.** It and `set_playhead_position` have identical
+  bodies and only move `state.playhead_position`. The picture comes from
+  `preview_tx.send_modify(|v| *v = Some((frame, fps, resolution_base)))`,
+  through the preview renderer, out of the `frame_cb`. Drive the wrong one and
+  the canvas stays black with no error anywhere.
+- **The copy is not paranoia.** `EditorInstance::new` *writes*
+  `project-config.json` back when it has to synthesise a timeline or clip
+  offsets, so opening a bundle is not a read-only act.
+- **`RenderedFrame` is row-padded** to wgpu's 256-byte copy alignment —
+  1080×702 arrives as 4352 bytes per row, not 4320, and `data.len()` is
+  `padded_bytes_per_row * height`. Walk `data.chunks(padded_bytes_per_row)` and
+  keep `width * 4` of each, or the image comes out sheared.
+
+The render size is not chosen by the test: it asserts
+`ProjectUniforms::get_output_size(options, config, resolution_base)` at the
+editor's real preview defaults (60 fps, 1920×1080 at 65 % → a 1248×702
+resolution base, width aligned to 4 and height to 2). A display recording lands
+at 1080×702. `shared_device` is `None` — gpui on macOS exposes no wgpu device to
+share, so cap-rendering owns its own, which is the same two-GPU-context shape
+the Tauri app already has.
 
 ## Verifying changes
 

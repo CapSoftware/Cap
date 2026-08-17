@@ -43,6 +43,20 @@ cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 cap-recording = { path = "../../crates/recording" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+# The editor stack. `cap-rendering` is not a new subtree -- cap-recording
+# already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
+# by this workspace since the recording unit; naming it here only makes the
+# dependency direct so the editor can talk to `RenderedFrame`/`FrameLayout`.
+# `cap-editor` is the seam the Tauri editor window uses too: `EditorInstance`
+# owns the decoders, the renderer actor, the preview/scrub renderer and
+# playback, and hands frames back through a plain `FnMut` callback. It carries
+# no tauri types -- the websocket lives in the Tauri binary, not in the crate.
+cap-rendering = { path = "../../crates/rendering" }
+cap-editor = { path = "../../crates/editor" }
+# In-process export. Only the `ExporterBase` + settings surface is used; the
+# export *page* can also drive the `cap-exporter` subprocess protocol, so this
+# is the cheaper of the two options rather than the only one.
+cap-export = { path = "../../crates/export" }
 # The first-frame JPEG a finished recording's Recents card is drawn from
 # (`create_screenshot` in the Tauri binary). Same package/git/rev the root
 # workspace pins, and cap-recording already builds it, so this is an import,
@@ -69,6 +83,13 @@ serde = { version = "1", features = ["derive"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
+# decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
+# runtime would deadlock the moment the test thread blocks on a frame. Kept in
+# dev-dependencies so the shipped binary's tokio features are unchanged.
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
