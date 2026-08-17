@@ -1385,27 +1385,32 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         //
         // The whole track model comes from the same read: the config the
         // instance actually loaded is the one being rendered, holds, clip
-        // offsets and all.
-        let (total, model) = {
-            let config = instance.project_config.1.borrow();
+        // offsets and all. E4 hands the window the config itself rather than
+        // the derived model, because it is what every edit mutates and what
+        // the debounced save writes back.
+        let (total, config) = {
+            let config = instance.project_config.1.borrow().clone();
             let total = config
                 .timeline
                 .as_ref()
                 .map_or(0.0, |timeline| timeline.duration());
+            (total, config)
+        };
+        {
             let has_camera = instance
                 .recordings
                 .segments
                 .iter()
                 .any(|segment| segment.camera.is_some());
             let multiple_clips = instance.recordings.segments.len() > 1;
-            (
-                total,
-                editor_timeline::TimelineModel::build(&config, has_camera, multiple_clips),
-            )
-        };
-        log_timeline_model(&model);
+            log_timeline_model(&editor_timeline::TimelineModel::build(
+                &config,
+                has_camera,
+                multiple_clips,
+            ));
+        }
         if handle
-            .update(cx, |view, window, cx| view.set_timeline(model, window, cx))
+            .update(cx, |view, window, cx| view.set_project(config, window, cx))
             .is_err()
         {
             return;
@@ -1659,6 +1664,12 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
     };
 
     if let Some(handle) = handle {
+        // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
+        // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
+        // debounce still gets its last edit written.
+        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
+            pending.borrow_mut().flush();
+        }
         let instance = handle
             .update(cx, |view, _window, _cx| view.take_instance())
             .ok()

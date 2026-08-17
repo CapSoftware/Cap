@@ -9,7 +9,10 @@
 //! **hover ghost playhead** that follows `previewTime`.
 //!
 //! Everything that *mutates* the project -- drag, trim, split, selection,
-//! create-by-drag, delete -- is E4. Nothing here writes a config.
+//! create-by-drag, delete -- lives in [`crate::editor_edits`] and the window's
+//! pointer handlers. This file draws; it never writes a config. What E4 added
+//! here is only what the picture needs: the selected border, the handles'
+//! hover reveal and the split-mode cursor, all through [`SegmentUi`].
 //!
 //! Three things about this file are worth knowing before reading it:
 //!
@@ -39,7 +42,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use crate::theme::Theme;
+use crate::{editor_edits::Selection, theme::Theme};
 
 // ---------------------------------------------------------------------------
 // Layout constants (`TL/index.tsx:62-68`)
@@ -90,9 +93,15 @@ const SEGMENT_LABEL_GLYPH_PX: f64 = 16.;
 const SEGMENT_LABEL_COMPACT_TIGHT_PX: f64 = 24.;
 
 /// `MIN_NEW_SEGMENT_PIXEL_WIDTH` / `MIN_NEW_SEGMENT_SECS_WIDTH`
-/// (`TL/ZoomTrack.tsx:36-37`), the zoom track's hover-ghost size.
-const MIN_NEW_SEGMENT_PIXEL_WIDTH: f64 = 80.;
-const MIN_NEW_SEGMENT_SECS_WIDTH: f64 = 1.;
+/// (`TL/ZoomTrack.tsx:36-37`), the zoom track's hover-ghost size -- and, since
+/// the ghost is where a click puts a segment, the created segment's size too.
+pub const MIN_NEW_SEGMENT_PIXEL_WIDTH: f64 = 80.;
+pub const MIN_NEW_SEGMENT_SECS_WIDTH: f64 = 1.;
+
+/// `newSegmentMinDuration()` (`TL/ZoomTrack.tsx:96-100`).
+pub fn new_segment_min_duration(secs_per_pixel: f64) -> f64 {
+    (MIN_NEW_SEGMENT_PIXEL_WIDTH * secs_per_pixel).max(MIN_NEW_SEGMENT_SECS_WIDTH)
+}
 
 /// The minimap's floor and its 12px strip (`TL/Minimap.tsx:9`, `TL/index.tsx:1209-1216`).
 const MINIMAP_MIN_CHIP_WIDTH: f32 = 20.;
@@ -804,7 +813,14 @@ impl TimelineModel {
     }
 
     fn segments_for(&self, row: TrackRow) -> &[Segment] {
-        match row.kind {
+        self.segments(row.kind)
+    }
+
+    /// The drawn segments of one track, in **config index order** -- which is
+    /// what the selection and every mutator in [`crate::editor_edits`] address
+    /// them by. Multi-lane tracks keep every lane in one list; the row filters.
+    pub fn segments(&self, kind: TrackKind) -> &[Segment] {
+        match kind {
             TrackKind::Clip => &self.clips,
             TrackKind::Caption => &self.caption,
             TrackKind::Keyboard => &self.keyboard,
@@ -1242,6 +1258,37 @@ impl Default for TimelineView {
     }
 }
 
+/// What E4's interaction layer contributes to the picture: which segments are
+/// selected, which one the pointer is over, and whether the scissors toggle is
+/// down. Borrowed rather than folded into [`TimelineView`] because a selection
+/// is a `Vec` and the view is `Copy` on the playback path.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SegmentUi<'a> {
+    /// `editorState.timeline.selection`.
+    pub selection: Option<&'a Selection>,
+    /// `editorState.timeline.interactMode === "split"`, which swaps the cursor
+    /// and turns a segment press into a cut.
+    pub split_mode: bool,
+    /// The segment under the pointer, as `(track, lane, index)`. This is the
+    /// `group-hover` the handles' `opacity-100` hangs off
+    /// (`TL/Track.tsx:250`).
+    pub hovered: Option<(TrackKind, u32, usize)>,
+    /// `trackState.draggingSegment` (`TL/ZoomTrack.tsx:785`) plus
+    /// `creatingSegmentViaDrag` (`:106`): either one hides the create ghost.
+    pub dragging: bool,
+}
+
+impl SegmentUi<'_> {
+    fn is_selected(&self, kind: TrackKind, index: usize) -> bool {
+        self.selection
+            .is_some_and(|selection| selection.contains(kind, index))
+    }
+
+    fn is_hovered(&self, kind: TrackKind, lane: u32, index: usize) -> bool {
+        self.hovered == Some((kind, lane, index))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -1492,6 +1539,7 @@ pub fn render_row(
     row: TrackRow,
     view: TimelineView,
     viewport_width: f32,
+    ui: SegmentUi<'_>,
 ) -> AnyElement {
     let height = model.track_height();
     div()
@@ -1514,12 +1562,21 @@ pub fn render_row(
                 .relative()
                 .overflow_hidden()
                 .min_w_0()
-                .child(render_track_content(theme, model, row, view, viewport_width, height)),
+                .child(render_track_content(
+                    theme,
+                    model,
+                    row,
+                    view,
+                    viewport_width,
+                    height,
+                    ui,
+                )),
         )
         .into_any_element()
 }
 
 /// The content column of one row: its segments, or the track's own empty state.
+#[allow(clippy::too_many_arguments)]
 fn render_track_content(
     theme: &Theme,
     model: &TimelineModel,
@@ -1527,12 +1584,10 @@ fn render_track_content(
     view: TimelineView,
     viewport_width: f32,
     height: f32,
+    ui: SegmentUi<'_>,
 ) -> AnyElement {
     let width = content_width(viewport_width);
     let secs_per_pixel = view.transform.secs_per_pixel(width);
-    // Borrowed and filtered lazily rather than collected: this runs once per
-    // row per paint, and the timeline repaints for the playhead.
-    let lane = |segment: &&Segment| segment.lane == row.lane;
     let segments = model.segments_for(row);
 
     let mut content = div().relative().size_full();
@@ -1543,7 +1598,13 @@ fn render_track_content(
         content = content.child(empty);
     }
 
-    for segment in segments.iter().filter(lane) {
+    // Enumerated before the lane filter so the index stays the **config**
+    // index -- what the selection and every mutator address segments by.
+    for (index, segment) in segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| segment.lane == row.lane)
+    {
         // `SEGMENT_RENDER_PADDING` culling (`TL/context.ts:14, 57-68`): a
         // segment outside the viewport plus two seconds is never built.
         if !view.transform.segment_visible(segment.start, segment.end) {
@@ -1557,15 +1618,18 @@ fn render_track_content(
             view,
             secs_per_pixel,
             height,
+            ui.is_selected(row.kind, index),
+            ui.is_hovered(row.kind, row.lane, index),
+            ui.split_mode,
         ));
     }
 
     // The zoom track's create-by-click ghost (`TL/ZoomTrack.tsx:104-166,
     // 788-802`): while the pointer is over the row and not over an existing
     // segment, a `pointer-events-none z-0` box shows where a new segment would
-    // land. Inert this unit -- clicking it is E4 -- but it is the affordance
-    // itself, so it is drawn.
+    // land. Pressing it is what creates the segment.
     if row.kind == TrackKind::Zoom
+        && !ui.dragging
         && view.hovered_track == Some(TrackKind::Zoom)
         && let Some(preview) = view.preview_time
         && let Some(ghost) = new_zoom_segment(model, preview, secs_per_pixel)
@@ -1579,9 +1643,12 @@ fn render_track_content(
 /// `newSegmentDetails` (`TL/ZoomTrack.tsx:104-166`): where a new zoom segment
 /// would go if the pointer were clicked here, or `None` when the pointer is
 /// inside an existing segment or the surrounding gap is too small.
-fn new_zoom_segment(model: &TimelineModel, preview: f64, secs_per_pixel: f64) -> Option<(f64, f64)> {
-    let min_duration =
-        (MIN_NEW_SEGMENT_PIXEL_WIDTH * secs_per_pixel).max(MIN_NEW_SEGMENT_SECS_WIDTH);
+pub fn new_zoom_segment(
+    model: &TimelineModel,
+    preview: f64,
+    secs_per_pixel: f64,
+) -> Option<(f64, f64)> {
+    let min_duration = new_segment_min_duration(secs_per_pixel);
 
     let next = model
         .zoom
@@ -1742,6 +1809,7 @@ fn render_empty_track(theme: &Theme, kind: TrackKind) -> Option<AnyElement> {
 /// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned outer box with its
 /// selection border, the `cap-track-fill` inner box, the label at whatever tier
 /// its visible width allows, and the two trim handles.
+#[allow(clippy::too_many_arguments)]
 fn render_segment(
     theme: &Theme,
     model: &TimelineModel,
@@ -1750,6 +1818,9 @@ fn render_segment(
     view: TimelineView,
     secs_per_pixel: f64,
     height: f32,
+    selected: bool,
+    hovered: bool,
+    split_mode: bool,
 ) -> AnyElement {
     let color = kind.color();
     let x = ((segment.start - view.transform.position) / secs_per_pixel) as f32;
@@ -1818,8 +1889,9 @@ fn render_segment(
     ));
 
     // The audio track's fade envelopes (`FadeControl`,
-    // `TL/AudioTrack.tsx:118-201`). The handles they carry are E4's; the shade
-    // and the curve are the segment's own state and are drawn now.
+    // `TL/AudioTrack.tsx:118-201`). The fade *handles* -- dragging the envelope
+    // itself -- are their own interaction and are not built; the shade and the
+    // curve are the segment's own state and are drawn.
     if let SegmentDetail::Audio {
         fade_in, fade_out, ..
     } = &segment.detail
@@ -1835,14 +1907,18 @@ fn render_segment(
     }
 
     // `SegmentHandle` (`TL/Track.tsx:236-258`): a 20px hit target with a 3px
-    // visible bar, half-overhanging each edge. The hit target is E4's; the bar
-    // is drawn now, at the source's resting opacity -- which for the clip track
-    // is zero until hover (`TL/ClipTrack.tsx:1137, 1286`).
+    // visible bar, half-overhanging each edge. `compact() ? "opacity-55" :
+    // "opacity-35 group-hover:opacity-100"`, and the clip track's own handles
+    // add `opacity-0 group-hover:opacity-100` (`TL/ClipTrack.tsx:1137, 1286`).
+    // A *compact* handle carries no `group-hover` class, so it stays at 0.55
+    // with the pointer on it.
     let compact = (width as f64) < 40.;
-    let handle_opacity = if kind == TrackKind::Clip {
-        0.
-    } else if compact {
+    let handle_opacity = if compact {
         0.55
+    } else if hovered {
+        1.
+    } else if kind == TrackKind::Clip {
+        0.
     } else {
         0.35
     };
@@ -1855,10 +1931,21 @@ fn render_segment(
         .w(px(width))
         .rounded(px(12.))
         .border_1()
-        // Unselected is `border-transparent` on every track; the selected
-        // colours are E4's, and they are enumerated on `selected_border_color`.
-        .border_color(gpui::transparent_black())
+        // `isSelected() ? <segColor> : "border-transparent"`, one line per
+        // track; the nine colours are enumerated on `selected_border_color`,
+        // two of which are dead classes in the shipping app and paint nothing.
+        .border_color(if selected {
+            selected_border_color(theme, kind)
+        } else {
+            gpui::transparent_black()
+        })
         .when_some(dim, |this, opacity| this.opacity(opacity))
+        // `interactMode === "split" && "timeline-scissors-cursor"`
+        // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
+        // this rev has the standard set only, so a crosshair stands in.
+        .when(split_mode, |this| {
+            this.cursor(gpui::CursorStyle::Crosshair)
+        })
         .child(fill)
         .child(render_handle(true, handle_opacity))
         .child(render_handle(false, handle_opacity))
@@ -1870,6 +1957,8 @@ fn render_handle(start: bool, opacity: f32) -> impl IntoElement {
         .absolute()
         .top_0()
         .bottom_0()
+        // `cursor-col-resize`.
+        .cursor(gpui::CursorStyle::ResizeLeftRight)
         // `w-5` with `-translate-x-1/2` / `translate-x-1/2`: the 20px box
         // straddles the edge, 10px each side.
         .w(px(20.))
@@ -2755,17 +2844,15 @@ pub fn render_playhead(color: Hsla, x: f32, knob_color: Hsla) -> AnyElement {
 }
 
 /// The per-track selected border (`TL/index.tsx` per-track `segColor` blocks,
-/// enumerated in the digest's 4.3). E4 paints these; they are here so the
-/// enumeration lives with the colours it belongs to.
+/// enumerated in the digest's 4.3).
 ///
-/// **A finding for E4:** `border-green-7` (captions) and `border-sky-7`
-/// (keyboard) are dead classes in the shipping app. `theme.css` imports Radix
+/// **`border-green-7` (captions) and `border-sky-7` (keyboard) are dead
+/// classes in the shipping app.** `theme.css` imports Radix
 /// red/gray/blue/indigo/yellow/jade only, and `packages/ui-solid/src/main.css`
 /// maps `--color-emerald-*` to jade and `--color-blue-*` to blue but declares
 /// no `--color-green-*` or `--color-sky-*`, so Tailwind v4 generates no rule
 /// for either. Selecting a caption or keyboard segment changes nothing on
 /// screen today.
-#[allow(dead_code)] // E4's; enumerated here so it lives with the colours.
 pub fn selected_border_color(theme: &Theme, kind: TrackKind) -> Hsla {
     match kind {
         // `border-gray-12`.
@@ -3281,7 +3368,7 @@ mod tests {
     // -- The zoom track's new-segment ghost ---------------------------------
 
     /// `newSegmentDetails` (`TL/ZoomTrack.tsx:104-166`), which is both the
-    /// hover affordance and — in E4 — where a click would place a segment.
+    /// hover affordance and where a click places a segment.
     #[test]
     fn the_zoom_ghost_finds_the_gap_under_the_pointer() {
         let zoom = |start: f64, end: f64| Segment {

@@ -367,7 +367,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | **E1–E3 done — window, shell, playback, timeline.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; and the timeline at 1:1 read-only — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan. Timeline *editing* (E4) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
+| Editor | 1275×800 | **E1–E4 done — window, shell, playback, timeline, editing.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. The config sidebar's controls are the unit still pending |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -997,14 +997,14 @@ Editor-specific deviations:
 
 | | |
 |---|---|
-| **The header's buttons are inert** | Delete recording, Open recording bundle, Presets, Organization, Undo, Redo, Clips, Captions and Export all render at their real metrics in the `disabled:opacity-50` state. Each needs a unit that does not exist: project deletion, the preset store, auth, an undo stack, the clips/transcript layout modes, export. |
+| **Most header buttons are inert; undo and redo are not** | Undo and Redo are live (see [Timeline editing](#timeline-editing)). Delete recording, Open recording bundle, Presets, Organization, Clips, Captions and Export still render at their real metrics in the `disabled:opacity-50` state; each needs a unit that does not exist — project deletion, the preset store, auth, the clips/transcript layout modes, export. |
 | **The name is displayed, not edited** | `NameEditor` is an `<input>` overlaying a measuring `<span>` that commits through `commands.setPrettyName`. gpui ships no text input (the same gap as the main window's search field and the teleprompter's script), so the name and its `.cap` suffix render read-only. |
-| **The player toolbar is inert; the transport and the zoom controls are not** | Prev / play-pause / next are live, and so are the zoom-out / zoom-in glyphs and the zoom slider. Aspect ratio, Crop, Frame, Preview quality and the split toggle are still drawn at their real sizes and do nothing. |
+| **The player toolbar is inert; the transport, the zoom controls and the scissors are not** | Prev / play-pause / next are live, and so are the zoom-out / zoom-in glyphs, the zoom slider and the split toggle (the scissors, which takes its `data-pressed:bg-red-300` state). Aspect ratio, Crop, Frame and Preview quality are still drawn at their real sizes and do nothing. |
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
 | **The config sidebar is a rail plus a placeholder** | The six-tab bar is real (`ui::TabRail`), at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
-| **The timeline is read-only** | Every track type, the ruler, the minimap, the edge fade, the hover ghost, zoom and pan are all real; nothing that would *write* the project is. See [The timeline](#the-timeline) for what that covers and what E4 owns. The timeline height is the default 260 and its drag handle is inert. |
+| **The timeline's height is fixed** | The strip sits at the default 260px with the `MIN_TIMELINE_HEIGHT` floor expressed but its 16px drag handle inert, so the player/timeline split cannot be resized. Everything else in the strip — including editing — is real; see [Timeline editing](#timeline-editing). |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
 | **No prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. |
@@ -1167,21 +1167,260 @@ drops to the baseline.
 | **The edge fade is painted, not masked** | The source dissolves the timeline's own edges with a `mask-image` whose stops ramp over `FADE_RAMP_PX = 50` of scroll (`TL/index.tsx:1097-1139`). gpui has no mask-image, so the same two strengths drive two 32px gradients painted in the editor's root background colour. Identical over an opaque background, which is the only one there is. |
 | **The hold band has no hatch** | A paused window inside a clip is `bg-black/45` plus a `repeating-linear-gradient` 45° hatch (`TL/ClipTrack.tsx:970-980`). gpui has no repeating gradient; the wash, the border, the pause glyph and the "Paused" label at ≥64px are all there, the hatch is not. |
 | **Three-stop gradients are two elements** | `gpui::linear_gradient` takes exactly two stops, so the in-clip tick markings' `from-transparent … via-white-transparent-40 … to-transparent` is drawn as two stacked halves, and the playhead's `to-120%` is folded into the end stop's alpha (at the bottom edge it still carries 1/6 of it). |
-| **The minimap is read-only** | The bar, its clip-boundary ticks and the viewport chip at `MIN_CHIP_WIDTH = 20` are drawn and track the transform. Its drag, its two 8px edge handles and its click-to-centre are E4's. |
-| **"Add track" is opaque, and inert** | The trigger renders at its real metrics rather than the 50% wash the header's other unbuilt affordances carry, because the ruler's leftmost label sits underneath it (`z-30` over the markings, `TL/index.tsx:1227-1236`) and a translucent button lets the label bleed through. Its popover — nine rows with descriptions, toggles and lane counts — is E4's. |
-| **Trim handles are drawn, not hit** | `SegmentHandle` is a 20px hit target (`w-5`, half-overhanging each edge) around a 3px bar (`TL/Track.tsx:236-258`). The bar is drawn at the source's resting opacity — `compact() ? 0.55 : 0.35`, and the clip track forces 0 until hover — and the hit target belongs to E4. |
-| **No hover state on segments** | `group-hover:opacity-100` on the handles and the delete-lane overlay on the gutter chips need per-segment hover tracking, which is E4's; `hoveredTrack` (the row-level one the zoom and 3D ghosts read) *is* tracked. |
+| **The minimap is read-only** | The bar, its clip-boundary ticks and the viewport chip at `MIN_CHIP_WIDTH = 20` are drawn and track the transform. Its drag, its two 8px edge handles and its click-to-centre are not reproduced. |
+| **"Add track" is opaque, and inert** | The trigger renders at its real metrics rather than the 50% wash the header's other unbuilt affordances carry, because the ruler's leftmost label sits underneath it (`z-30` over the markings, `TL/index.tsx:1227-1236`) and a translucent button lets the label bleed through. Its popover — nine rows with descriptions, toggles and lane counts — is not built. |
 | **The zoom slider's row has no `px-1`/`mx-1` inset** | Kobalte's track is inset 8px inside its row (`ui.tsx:93, 107`); `ui::Slider` maps the pointer over the full row. The shared component's geometry is self-consistent and the settings window is measured against it, so this is left alone rather than changed under three other callers. |
-| **Custom cursors are the standard ones** | `.timeline-scissors-cursor` and `.timeline-fade-cursor` are inline SVG data-URIs (`TL/styles.css:1-21`). Both belong to interactions this unit does not have. |
+| **Custom cursors are the standard ones** | `.timeline-scissors-cursor` and `.timeline-fade-cursor` are inline SVG data-URIs (`TL/styles.css:1-21`). Split mode uses `CursorStyle::Crosshair`, a trim handle `ResizeLeftRight`; the fade cursor's interaction is not built. |
 
-**A finding for E4:** `border-green-7` (a selected caption) and `border-sky-7`
-(a selected keyboard segment) are **dead classes in the shipping app**.
-`theme.css` imports Radix red/gray/blue/indigo/yellow/jade only, and
-`packages/ui-solid/src/main.css` maps `--color-emerald-*` onto jade and
-`--color-blue-*` onto blue but declares no `--color-green-*` or `--color-sky-*`,
-so Tailwind v4 generates no rule for either. Selecting a caption or keyboard
-segment changes nothing on screen today. `selected_border_color` enumerates all
-nine and draws those two transparent rather than inventing a colour.
+**`border-green-7` (a selected caption) and `border-sky-7` (a selected keyboard
+segment) are dead classes in the shipping app.** `theme.css` imports Radix
+red/gray/blue/indigo/yellow/jade only, and `packages/ui-solid/src/main.css` maps
+`--color-emerald-*` onto jade and `--color-blue-*` onto blue but declares no
+`--color-green-*` or `--color-sky-*`, so Tailwind v4 generates no rule for
+either. **Selecting a caption or keyboard segment changes nothing on screen
+today, in either app** — `selected_border_color` enumerates all nine and draws
+those two transparent rather than inventing a colour. It is reproduced rather
+than fixed; the fix belongs upstream, in the Tailwind theme.
+
+## Timeline editing
+
+E3 drew the strip; this is the half that writes the project. `editor_edits.rs`
+is the model — selection, history, hit testing, the clamps and the mutators, all
+pure and unit-tested — and `editor_window.rs` owns the pointer, the keyboard and
+the persistence.
+
+The shape of the source matters here, because it is not one implementation but
+nine. `createMouseDownDrag` appears **once per track file**
+(`TL/ZoomTrack.tsx:401-513`, `TL/MaskTrack.tsx:212-303` and six near-identical
+siblings) with the same 2px promotion, the same shift/meta selection rules and
+the same `projectHistory.pause()` bracket. It is written once here, against a
+`TrackSegmentOps` trait the eight non-clip segment types implement. The clip
+track is genuinely different and is special-cased throughout.
+
+### What a press does
+
+The whole interaction is decided by geometry: one `on_mouse_down` per track row,
+one pure `hit_test` over the row's own segments in the coordinate space they
+were drawn in.
+
+| hit | seek mode | split mode |
+|---|---|---|
+| a **handle** (10px each side of an edge, `TL/Track.tsx:236-258`) | trim that edge | split the segment there — the source's handles `return` early and the press falls through to `SegmentRoot`'s own `onMouseDown` |
+| a **body** | move it (clip: select only, see below) | split it |
+| **bare track** | falls through to the timeline container's press-to-seek, which also clears the selection (`TL/index.tsx:1155-1169`) | same |
+| bare **zoom** track | creates a segment (`TL/ZoomTrack.tsx:188-295`) | same |
+
+Painted order decides ties exactly as the DOM's does — segments are siblings in
+array order, so a later one is above an earlier one and a handle (`z-10`) is
+above its own fill. **Two adjacent clips therefore stack two handles on the same
+20 pixels and the later clip's start handle wins**, which means a clip's end
+handle is unreachable until a gap opens next to it. That is the shipping app's
+behaviour too, and `a_shared_edge_belongs_to_the_later_segments_handle` pins it.
+
+### Selection
+
+`editorState.timeline.selection` is `{ type, indices[] }` — **multi-select is
+real, and it is per track**: a selection lives on exactly one track and a click
+on another track replaces it wholesale.
+
+- **plain click** selects that one segment,
+- **⌘/Ctrl-click** toggles it in and out of the list, and emptying the list
+  clears the selection entirely,
+- **⇧-click** extends from `indices.at(-1)` — the *last* clicked index, not the
+  lowest — to the clicked one, inclusive, and only when the current selection is
+  already on that track,
+- **⌘A** expands to every segment on the selected track (`TL/index.tsx:1019-1045`),
+- **Escape**, and a click on bare timeline, clear it.
+
+Every selecting click also moves the playhead: `finish()` calls
+`props.handleUpdatePlayhead(e)` (`TL/ZoomTrack.tsx:478`, `selectClip`'s
+`:599`). The per-track selected border is the nine `segColor` blocks, two of
+which are the dead classes above.
+
+The selection is exposed as `EditorWindow::selection()` for the config-sidebar
+unit, which is what routes its context-sensitive panels off it.
+
+### Trim, move and the drag contract
+
+A press arms a drag; the **second** pointer position more than 2px from the
+press promotes it, and `initialMouseX` is captured *then* rather than at the
+press — so the first two pixels are a genuine dead zone and a 100px drag applies
+about 92px of movement. A release that never promoted is a selection instead.
+The clip's own handles are the exception: they bind `update` straight to
+`mousemove`, measure from the press, and never select.
+
+The floors are `max(secondsFloor, secsPerPixel * pixelFloor)`, per track:
+
+| track | seconds | pixels | source |
+|---|---|---|---|
+| clip | 1 | 100 | `TL/ClipTrack.tsx:55, 1141-1152` |
+| zoom | 1 | 40 | `TL/ZoomTrack.tsx:35, 606-609` |
+| scene | 1 | 80 | `TL/SceneTrack.tsx:33, 454-457` |
+| 3D | 1 | 40 | `TL/ThreeDTrack.tsx:38, 568-571` |
+| text | 1 | 80 | `TL/TextTrack.tsx:25-26, 49` |
+| mask | 1 | 80 | `TL/MaskTrack.tsx:24-25, 47` |
+| audio | 0.5 | 60 | `TL/AudioTrack.tsx:24, 230` + `ED/audio.ts:24` |
+| caption | 0.5 | 40 | `TL/CaptionsTrack.tsx:20-21, 41` |
+| keyboard | 0.3 | 30 | `TL/KeyboardTrack.tsx:20-21, 39` |
+
+The clip's floor is the only compound one: `max(1, secsPerPixel × 100 ×
+timescale, max(transition[i], transition[i+1]) × 2 × timescale)` — the pixel and
+transition terms live in the *recording* domain, which is why they scale with
+the clip's own timescale. A clip edge is additionally clamped by the display
+track's real duration and by how much of the recording is not already on the
+timeline (`availableTimelineDuration`), and a clip whose neighbour came from the
+same recording clip may not be trimmed back over it.
+
+Everything else clamps to its lane neighbours: `minValue = prevEnd`, `maxValue =
+max(minValue, min(end - minDuration, nextStart - minDuration))` on the start
+handle and `[start + minDuration, max(that, nextStart)]` on the end
+(`TL/MaskTrack.tsx:404-419, 499-508`). The single-lane tracks express the same
+rule as array-index neighbours or as a backwards search; they agree while the
+array is sorted by start, which every mutation here keeps it.
+
+**Trimming re-renders the frame.** Every edit pushes the config into
+`instance.project_config` *and* pokes `preview_tx` at the current frame, so the
+picture follows the drag — which is what `updateProjectConfigInMemory(config,
+frameNumber, fps, base)` does in the source (`Editor.tsx:536-541`). A trim also
+writes the edge it is moving into `previewTime` (`useSetPreviewTime`,
+`TL/Track.tsx:260-266`), so the transport clock reads out the value being
+dragged.
+
+**No magnetic snapping exists on drags or trims, in either app.** The only
+snapping in the timeline is split-snapping (below) and the 10px snap-to-zero on
+the playhead, which E2 already ported.
+
+### Split
+
+Two keys, not one. **`S` toggles the mode** (`Player.tsx:246-254`,
+`interactMode: "seek" | "split"`) and the scissors button is the same toggle,
+taking its `data-pressed:bg-red-300 data-pressed:text-gray-1` state. **`C`
+performs the cut** at `previewTime ?? playbackTime` (`TL/index.tsx:1007-1013`),
+which is why it works while playing. In split mode a press on a segment cuts it
+where the pointer is.
+
+Split-snapping is the clip track's alone (`TL/split-snapping.ts`): within
+`SPLIT_SNAP_PX = 7` pixels the cut jumps to the playhead or to any segment
+boundary on the eight non-clip tracks, rejecting candidates within
+`SPLIT_EDGE_EPSILON = 0.05` of the hovered clip's own edges (a cut that close
+would leave a sliver), with ties going to the earlier time. **Alt disables it
+entirely.** A snapped preview draws in `blue-9` with a marker at the top; an
+unsnapped one in `gray-10/70`, and the playhead dims to 50 % behind both.
+
+The cut itself is `splitClipSegment` (`ED/context.ts:512-580`): the click
+position is in *held output* time, so the holds before it are subtracted to get
+back to the gapless recording-flow domain, the local time is scaled by the
+clip's timescale, and a cut inside twice either adjacent transition's duration
+is refused. The other tracks' splits are a plain splice with their own floors
+(1s, 0.5s for audio and captions, 0.3s for keyboard); audio additionally moves
+`trimStart` with the cut and hard-cuts the new seam's fades.
+
+### Delete
+
+`Backspace` — **with any modifier held** — or bare `Delete`
+(`TL/index.tsx:963`), on the selected segments. Each track's action normalises
+its index list (dedupe, in-bounds, descending) before splicing; the three
+multi-lane tracks renumber their lanes afterwards
+(`normalizeTrackSegments`). Two guards are worth naming:
+
+- **the last clip cannot be deleted** (`ED/context.ts:581-585`), and because
+  the binding walks the selection in reverse calling `deleteClipSegment` one at
+  a time, "select all clips + delete" leaves exactly one behind rather than
+  zero;
+- deleting a clip drops the transitions on both sides of it and shifts the rest
+  down (`transitionsAfterClipDelete`).
+
+### Creating a zoom segment
+
+A press on bare zoom track creates one where the ghost E3 already draws is:
+`newSegmentDetails()` (`TL/ZoomTrack.tsx:104-166`) with
+`minDuration = max(80px × secsPerPixel, 1s)`, backing up against the next
+segment when the pointer is within a second of it, and refusing when the gap is
+too small or the pointer is inside a segment. Released without moving, it
+becomes that box; dragged, the end follows the pointer from the segment's own
+start (`amount = defaultZoomAmount ?? 1.5`, `mode: "auto"`). Either way the new
+segment ends up selected.
+
+### Undo and redo
+
+`createStoreHistory` (`ED/context.ts:1913-1961`) over
+`@solid-primitives/history`'s `createUndoHistory`, transcribed:
+
+- an entry is a **whole snapshot** of the project (`structuredClone(unwrap(state))`),
+  not a diff — so here it is a `ProjectConfiguration`;
+- the stack holds **100** entries (`options.limit ?? 100`); `canUndo` is
+  `list.length - count > 1` and `canRedo` is `count > 0`, so the loaded config
+  is a floor you cannot undo past;
+- a fresh change **truncates the redo tail**;
+- **a drag is one entry.** `projectHistory.pause()` brackets every drag
+  (`ZoomTrack.tsx:417/422`, `ClipTrack.tsx:1214`), so its sixty intermediate
+  states are suppressed and the state it ended on is recorded once on resume;
+- `Mod+Z`, `Shift+Mod+Z` and `Mod+Y` are bound on `window`, and the header's two
+  buttons **clear the timeline selection first and only then walk the history** —
+  which is also why their disabled predicate is `!canUndo() && !selection`: a
+  button with nothing to undo stays live while something is selected, and
+  pressing it just deselects.
+
+### The write path
+
+Every edit fans out three ways from one change, the same three the source's do:
+
+1. **the undo stack** — suppressed while a drag holds the pause;
+2. **the renderer** — `project_config.0.send(config)` plus a `preview_tx` push
+   at the current frame, so the picture reflects the edit immediately (skipped
+   while playing, exactly as `emitRenderFrame`'s `if (!editorState.playing)`
+   gate does);
+3. **the disk** — a **250ms debounce** (`PROJECT_SAVE_DEBOUNCE_MS`,
+   `ED/context.ts:185`) then `ProjectConfiguration::write`, which is precisely
+   what `commands.setProjectConfig` calls (`lib.rs:3346-3360`). Closing the
+   window force-flushes the pending write, the way `onCleanup`'s
+   `flushProjectConfig()` does.
+
+**Unknown keys in `project-config.json` are not preserved — deliberately.** The
+Tauri editor serialises its whole typed store back over the file on every save,
+so the shipping app drops them too; writing through `ProjectConfiguration::write`
+is the parity-preserving choice, not a shortcut. (This is the opposite of the
+tauri-plugin-store rule for `store`, where `set_store_setting` does a raw-JSON
+merge — because *there* the shipping app writes one key at a time.) A verified
+round trip on a real bundle: opening an already-written config, performing one
+drag and closing changed exactly `timeline.zoomSegments[0].start` and `.end` and
+nothing else.
+
+### Measured
+
+`CAP_GPUI_AUTO_PLAYBACK=16` on the ten-row all-tracks fixture, with the whole
+interaction layer live:
+
+```
+playback fps=59.9 frames=968 dropped=0 (rendered=968 rendered_fps=59.9 paints=1914 convert_avg=642us over 16.17s)
+```
+
+E3's read-only eleven-row number was 59.6 fps with zero drops, so **hit testing,
+selection and the per-segment hover cost nothing measurable**: the row handlers
+only run on real pointer events, and the added per-paint work is one
+`Option<&Selection>` comparison per segment.
+
+**22 torture cycles with edits fired at them throughout**
+(`CAP_GPUI_AUTO_PLAYBACK_TORTURE=22` plus 72 scripted select/drag/delete/undo
+actions from outside, overlapping the playback): 22/22 cycles, 22 stop reports,
+**zero errors, zero warnings, zero panics, zero `RefCell already borrowed`, and
+zero dropped frames** across every cycle (53.6–59.7 fps per 340ms burst — the
+same spread E3 measured without edits). The project's timeline ended back at
+its baseline values, every drag and delete having been undone.
+
+### Timeline-editing deviations
+
+| | |
+|---|---|
+| **Clips cannot be reordered, and their body drag does nothing** | The clip body's 4px drag is a **crossfade-duration** drag, not a move (`TL/ClipTrack.tsx:849-945`) — it grows the incoming transition and selects it. Transitions have no drawn affordance in this rev (E3 renders their effect on the boxes but not the handle or the marker), so the press only ever selects. Reordering exists in the shipping app but **not on the timeline**: it is the Clips layout mode's list (`ClipsSidebar.tsx:650`, behind the header's Clips button), which is its own unit. |
+| **The 3D track's split is not reproduced** | `splitCamera3DSegment` rebuilds both halves' nine pose tracks around the pose the segment held at the cut (`ED/context.ts:640-676`), which needs the keyframe evaluator. Splitting a 3D segment is refused rather than done wrongly; every other track's split is real. |
+| **Only the zoom track creates by click** | The mask, text and audio tracks also add a segment when their empty lane is clicked (`TL/MaskTrack.tsx:120-184` and siblings), each with its own gap-finding placement and default segment. Those are creation flows for objects the sidebar has to configure, so they wait for the sidebar unit; the zoom track's is here because its ghost was already drawn. |
+| **A no-op drag records no undo entry** | The source pushes a history entry on *every* `resume`, because the tracked memo re-runs when `pauseCount` changes — so a click that selected and never moved leaves a duplicate snapshot behind, and the first undo after one appears to do nothing. Here the resume only records when something actually changed during the bracket. |
+| **No context menus** | Right-clicking a segment opens a real `Menu.popup()` with "Select all" and "Delete" (`TL/ZoomTrack.tsx:544-595`), and the zoom track's own dev-only "Generate zoom segments from clicks". None is reproduced. |
+| **No double-click fill** | Double-clicking a zoom or scene handle expands the segment as far as it can go in that direction (`fillStart`/`fillEnd`, `TL/ZoomTrack.tsx:353-399`). gpui delivers `click_count`, but the behaviour is not wired. |
+| **`normalizeClipTransitions` is a no-op** | `onHandleReleased` re-clamps every transition against its clips after a trim; here `effective_transition` already clamps on every read, so the stored value is left alone. The viewport half of `onHandleReleased` — pulling the transform back when a trim shortens the project out from under it — *is* reproduced. |
+| **Escape clears only the selection** | The source also clears `audioPicker` and `camera3dSetup`, neither of which exists yet. |
+| **No `hidden_text_segments` bookkeeping** | `#[serde(skip_serializing)]` on the field means it never round-trips through a write in either app; nothing here maintains it. |
 
 
 ## Verifying changes
@@ -1237,7 +1476,19 @@ other seven track types into the copy's `project-config.json` by hand — a
 two-clip recording with camera, mic and system audio gives clip numbering, both
 waveforms and the scene row for free. Never edit a bundle on the Desktop:
 `EditorInstance::new` writes `project-config.json` back when it has to
-synthesise anything, so opening one is not a read-only act.
+synthesise anything, and since E4 the editor writes it on every edit, so opening
+one is emphatically not a read-only act.
+
+Two traps when writing a fixture by hand. **A partial `captions` or `keyboard`
+block fails the whole parse**: their `*Settings` structs carry
+`#[serde(default)]` but the outer `CaptionsData` still requires `segments`, and
+`RecordingMeta::project_config()` falls back to the *default* config on a parse
+error without saying so — the giveaway is the load line reporting `clip=N` with
+every other track at 0 and a duration that is the recording's rather than the
+timeline's. And **ten rows do not fit**: the strip is 260px, so about four rows
+are visible and the rest need the scroll body. A fixture with only the clip and
+zoom tracks (the scene row comes free on a camera recording) puts three rows on
+screen at fixed y coordinates, which is what the editing probes drive.
 
 Each load logs one line naming every row and its segment count, which is how a
 fixture is checked to have deserialised rather than silently falling back to the
@@ -1276,6 +1527,40 @@ landing — nothing in the app changes, and the same probe works on a later
 attempt. Any click-driven check should be run in a retry loop that greps the log
 for the effect and repeats if it sees nothing, rather than being believed the
 first time it comes back empty.
+
+**Synthetic events built from a `nil` source inherit the current global modifier
+state, and posting one with flags latches them.** This cost an hour: after a
+single `keymod.swift 6 cmdshift`, every later plain click arrived at the app as
+⇧⌘-click (so a second click on the same segment *deselected* it, and Backspace
+arrived as ⌘-Backspace and was ignored). The fix is to set `event.flags`
+**explicitly on every posted event, including the empty set** — which is what
+the harness's `clickx.swift` / `keyx.swift` / `movex.swift` do. Any probe that
+mixes modifier chords with plain input needs them.
+
+**Hover needs the window to be key.** AppKit only delivers `mouseMoved` to the
+key window, so `previewTime` and `hoveredTrack` stay stale until something makes
+the editor key — a click anywhere in it does. Drag events (`leftMouseDragged`)
+arrive either way, so a drag probe works without it but a hover-dependent one
+(the zoom track's create ghost) does not. Warp the cursor *and* post a real
+`mouseMoved`: gpui only sees a move when the position actually changes.
+
+**Editing probes read the log, not the screen.** Every committed edit logs one
+`timeline edit` line at `info` with the affected track's boxes to four decimals,
+and every press logs a `timeline press` line at `debug` with the hit, the
+content-column x, `secs_per_pixel` and the resolved time — so a scripted drag's
+predicted seconds can be checked against what the app actually resolved rather
+than against a screenshot:
+
+```
+timeline press track=Zoom lane=0 hit=Body { index: 1 } x="684.00" secs_per_pixel="0.012500" press_time="8.5500" …
+timeline edit reason="move" track=Some(Zoom) bounds="2.0000..5.0000 9.4458..10.4458 12.0000..15.0000" … undo=true redo=false
+```
+
+At `secs_per_pixel = 0.0125` a window x maps to `136 + 80 × t`, which is what
+makes a fixture with round segment times worth building. Mind the **dead zone**
+when predicting a drag: a promoted drag measures from the first pointer position
+past the 2px threshold, so a 12-step synthetic drag applies 11/12 of its pixel
+distance. The clip's own handles have no threshold and apply all of it.
 
 The editor's playback hooks all wait 1.5s after the project loads, so the
 decoders are warm and the stopwatch measures playback rather than startup:

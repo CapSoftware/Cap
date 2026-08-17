@@ -5,10 +5,12 @@
 //! and frame 0 of a real project on screen; E2 made the transport real:
 //! play/pause on the button and on Space, a live playhead and clock driven by
 //! `on_state_change`, click and drag-scrub seeking on the timeline, and the
-//! source's end-of-media stop. Timeline editing (E3) and the config sidebar's
-//! controls still come later, so every affordance those units own renders **in
-//! place and disabled** rather than being left out -- the layout is the
-//! deliverable, and a header missing half its buttons would not be one.
+//! source's end-of-media stop. E3 drew the whole timeline strip and E4 made it
+//! **write**: selection, trim, move, split, create, delete, undo/redo and the
+//! debounced save, all of whose maths lives in [`crate::editor_edits`]. The
+//! config sidebar's controls still come later, so every affordance that unit
+//! owns renders **in place and disabled** rather than being left out -- the
+//! layout is the deliverable, and a sidebar missing its rail would not be one.
 //!
 //! Three seams matter here, all proved by `tests/editor_frame0.rs` first:
 //!
@@ -34,16 +36,21 @@
 //! that locks `instance.state` runs on the tokio runtime ([`run_transport`]).
 
 use std::{
+    cell::RefCell,
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
-use cap_project::{RecordingMeta, RecordingMetaInner, StudioRecordingMeta, XY};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
+    TimelineConfiguration, XY,
+};
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
 use gpui::{
     Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
@@ -53,6 +60,9 @@ use gpui::{
 };
 
 use crate::{
+    editor_edits::{
+        self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection,
+    },
     theme::{Appearance, Theme},
     ui,
 };
@@ -198,6 +208,15 @@ pub struct ProjectSummary {
     /// The cursor tab is disabled on `!meta().hasRecordedCursorData`
     /// (`ConfigSidebar.tsx:610`).
     pub has_cursor_data: bool,
+    /// `editorInstance.recordings.segments[i].display.duration` -- the ceiling
+    /// a clip's end handle trims out to (`TL/ClipTrack.tsx:1160-1162`).
+    pub clip_display_durations: Vec<f64>,
+    /// `editorInstance.recordingDuration` (`lib.rs:3114` =
+    /// `recordings.duration()`), the other half of that clamp.
+    pub recording_duration: f64,
+    /// Whether the bundle has more than one recording clip, which decides
+    /// `"Clip"` vs `"Clip N"`. Kept so the model can be rebuilt after an edit.
+    pub multiple_clips: bool,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -302,6 +321,13 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         duration: duration.max(0.0),
         has_camera,
         has_cursor_data: has_recorded_cursor_data(&meta, studio.as_ref()),
+        clip_display_durations: recordings
+            .segments
+            .iter()
+            .map(|segment| segment.display.duration)
+            .collect(),
+        recording_duration: recordings.duration(),
+        multiple_clips: multiple_recording_segments,
     })
 }
 
@@ -682,6 +708,96 @@ enum Scrub {
     Press { time: f64 },
 }
 
+/// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
+const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// The debounced `project-config.json` write.
+///
+/// The Tauri editor's `scheduleProjectConfigSave` restarts a 250ms timer on
+/// every store change and `flushProjectConfig` serialises the whole config
+/// through `commands.setProjectConfig` (`ED/context.ts:1186-1252`), which is
+/// `config.write(&project_path)` on the Rust side (`lib.rs:3346-3360`). The
+/// pending value lives behind an `Rc<RefCell<..>>` so the close path -- which
+/// only ever gets an `&mut App` -- can force it out, the same shape the
+/// teleprompter's `onCloseRequested` save uses.
+#[derive(Default)]
+pub struct PendingProjectSave {
+    path: Option<PathBuf>,
+    config: Option<ProjectConfiguration>,
+}
+
+impl PendingProjectSave {
+    pub fn flush(&mut self) {
+        let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
+            return;
+        };
+        match config.write(&path) {
+            Ok(()) => tracing::debug!(path = %path.display(), "project config written"),
+            Err(error) => {
+                tracing::error!(path = %path.display(), "failed to persist project config: {error}")
+            }
+        }
+    }
+}
+
+/// Which edge -- or the whole box -- a live drag is moving.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DragKind {
+    /// `SegmentContent`'s drag: the whole segment slides between its
+    /// neighbours (`TL/MaskTrack.tsx:445-479`).
+    Move { start: f64, end: f64, bounds: DragBounds },
+    /// `SegmentHandle position="start"`.
+    TrimStart { start: f64, bounds: DragBounds },
+    /// `SegmentHandle position="end"`.
+    TrimEnd { end: f64, bounds: DragBounds },
+    /// The clip track's own handles, which move a *recording*-domain edge
+    /// scaled by the clip's timescale (`TL/ClipTrack.tsx:1134-1230`).
+    ClipTrimStart { start: f64 },
+    ClipTrimEnd { end: f64 },
+    /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
+    /// segment either on the first move (dragged to length) or on release
+    /// (the default one-`minDuration` box).
+    CreateZoom {
+        base_start: f64,
+        base_end: f64,
+        max: f64,
+        min_duration: f64,
+        created: Option<usize>,
+    },
+}
+
+/// One live pointer drag on a segment.
+///
+/// `createMouseDownDrag` (`TL/ZoomTrack.tsx:401-513` and its seven siblings) is
+/// the shape: a press arms the drag, the *second* pointer position more than
+/// 2px away promotes it to a move, and a release that never promoted is a
+/// selection instead. `initialMouseX` is captured at promotion, not at the
+/// press, so the first two pixels are a genuine dead zone.
+#[derive(Clone, Copy, Debug)]
+struct Drag {
+    track: TrackKind,
+    index: usize,
+    kind: DragKind,
+    down_x: f32,
+    /// `initialMouseX` -- `None` until the drag promotes.
+    origin_x: Option<f32>,
+    moved: bool,
+    /// The promotion threshold in pixels. 2 on every track that goes through
+    /// `createMouseDownDrag` (`ZoomTrack.tsx:485`); 0 on the clip's handles,
+    /// which bind `update` straight to `mousemove` and measure from the press.
+    threshold: f32,
+    /// Whether a release without movement selects. The clip's handles do not
+    /// (their press never reaches `selectClip`).
+    selects_on_click: bool,
+    shift: bool,
+    multi: bool,
+    /// The time the press landed on, for the `handleUpdatePlayhead` a
+    /// selection carries with it (`TL/ZoomTrack.tsx:478`).
+    press_time: f64,
+    /// Whether this drag took `projectHistory.pause()` and owes a resume.
+    paused: bool,
+}
+
 pub struct EditorWindow {
     theme: Theme,
     project_path: PathBuf,
@@ -725,6 +841,40 @@ pub struct EditorWindow {
     /// root-handler pattern -- a slider drag that leaves its 96px row keeps
     /// tracking.
     zoom_slider_drag: bool,
+
+    // -- Editing (E4) --------------------------------------------------------
+    /// The live project. Every edit mutates this, the watch channel carries it
+    /// to the renderer, and the debounced save writes it. Seeded from the
+    /// instance's own config once it exists -- `EditorInstance::new`
+    /// synthesises a timeline for a raw bundle, so the pre-flight's is not the
+    /// one being rendered.
+    project: ProjectConfiguration,
+    /// `projectHistory` (`ED/context.ts:1724`).
+    history: ProjectHistory,
+    /// `editorState.timeline.selection`.
+    selection: Option<Selection>,
+    /// `editorState.timeline.interactMode === "split"`.
+    split_mode: bool,
+    /// `editorState.timeline.splitPreview` -- `(time, snapped)`.
+    split_preview: Option<(f64, bool)>,
+    /// The segment under the pointer: `(track, lane, index)`. This is the
+    /// `group-hover` the trim handles' reveal hangs off.
+    hovered_segment: Option<(TrackKind, u32, usize)>,
+    /// The live segment drag, if any.
+    drag: Option<Drag>,
+    /// `editorInstance.recordings.segments[i].display.duration`, which the clip
+    /// trim clamps read (`TL/ClipTrack.tsx:1160-1162`).
+    clip_display_durations: Vec<f64>,
+    /// `editorInstance.recordingDuration` = `recordings.duration()`.
+    recording_duration: f64,
+    /// `meta().hasCamera` and "more than one recording clip", the two facts
+    /// outside the config that [`TimelineModel::build`] needs. Kept so the
+    /// model can be rebuilt after every edit.
+    has_camera: bool,
+    multiple_clips: bool,
+    /// The debounced `project-config.json` write, and the task driving it.
+    pending_save: Rc<RefCell<PendingProjectSave>>,
+    save_task: Option<gpui::Task<()>>,
 }
 
 impl EditorWindow {
@@ -764,7 +914,27 @@ impl EditorWindow {
             fitted: false,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
+            project: ProjectConfiguration::default(),
+            history: ProjectHistory::new(ProjectConfiguration::default()),
+            selection: None,
+            split_mode: false,
+            split_preview: None,
+            hovered_segment: None,
+            drag: None,
+            clip_display_durations: Vec::new(),
+            recording_duration: 0.0,
+            has_camera: false,
+            multiple_clips: false,
+            pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
+            save_task: None,
         }
+    }
+
+    /// Hand the close path the pending write, so a `.cap` closed inside the
+    /// 250ms debounce still lands on disk -- `onCleanup(() => { ...
+    /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
+    pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
+        self.pending_save.clone()
     }
 
     pub fn focus_root(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -773,6 +943,11 @@ impl EditorWindow {
 
     pub fn set_summary(&mut self, summary: ProjectSummary, window: &mut Window, cx: &mut Context<Self>) {
         self.timeline = summary.timeline.clone();
+        self.clip_display_durations = summary.clip_display_durations.clone();
+        self.recording_duration = summary.recording_duration;
+        self.has_camera = summary.has_camera;
+        self.multiple_clips = summary.multiple_clips;
+        self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
         // the on-mount 80px fit then narrows it on the first render that knows
@@ -783,19 +958,39 @@ impl EditorWindow {
         window.refresh();
     }
 
-    /// The timeline `EditorInstance::new` actually loaded, which may differ
-    /// from the pre-flight's: the constructor synthesises a timeline and clip
+    /// The project `EditorInstance::new` actually loaded, which may differ from
+    /// the pre-flight's: the constructor synthesises a timeline and clip
     /// offsets for a raw bundle and writes them back
-    /// (`editor_instance.rs:227, 263`).
-    pub fn set_timeline(&mut self, model: TimelineModel, window: &mut Window, cx: &mut Context<Self>) {
-        // The waveforms arrive separately and later; keep whatever has landed.
-        let mic = std::mem::take(&mut self.timeline.mic_waveforms);
-        let system = std::mem::take(&mut self.timeline.system_waveforms);
-        self.timeline = model;
-        self.timeline.mic_waveforms = mic;
-        self.timeline.system_waveforms = system;
+    /// (`editor_instance.rs:227, 263`). This is the config every edit mutates
+    /// from here on, and the first entry on the undo stack.
+    pub fn set_project(
+        &mut self,
+        config: ProjectConfiguration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.project = config;
+        self.history = ProjectHistory::new(self.project.clone());
+        self.rebuild_timeline();
         cx.notify();
         window.refresh();
+    }
+
+    /// Re-derive the drawn model from the live config. Runs after every edit;
+    /// the waveforms arrive separately and later, so whatever has landed is
+    /// carried across.
+    fn rebuild_timeline(&mut self) {
+        let mic = std::mem::take(&mut self.timeline.mic_waveforms);
+        let system = std::mem::take(&mut self.timeline.system_waveforms);
+        self.timeline = TimelineModel::build(&self.project, self.has_camera, self.multiple_clips);
+        self.timeline.mic_waveforms = mic;
+        self.timeline.system_waveforms = system;
+        // `totalDuration()` is derived from the store, so a trim, split or
+        // delete moves it -- and it is what the transport clamps and the
+        // engine stops at.
+        if self.timeline.total_duration > 0.0 {
+            self.total = self.timeline.total_duration;
+        }
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -815,11 +1010,185 @@ impl EditorWindow {
         window.refresh();
     }
 
+    // -- Editing: the write path ---------------------------------------------
+
+    /// Every mutation goes through here.
+    ///
+    /// The Tauri editor's writes fan out three ways from one store change, and
+    /// so do these:
+    ///
+    /// * **the undo stack** -- the tracked memo snapshots the store
+    ///   (`ED/context.ts:1921-1929`), suppressed while a drag holds the pause;
+    /// * **the renderer** -- `updateProjectConfigInMemory(config, frame, fps,
+    ///   base)` (`Editor.tsx:536-541`) pushes the config into
+    ///   `editor_instance.project_config` *and* re-renders the current frame
+    ///   through `preview_tx`, which is what makes an edit visible
+    ///   immediately;
+    /// * **the disk** -- `scheduleProjectConfigSave`'s 250ms debounce
+    ///   (`ED/context.ts:1235-1244`), so a drag writes once rather than sixty
+    ///   times.
+    fn edit(
+        &mut self,
+        change: impl FnOnce(&mut TimelineConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return false;
+        };
+        if !change(timeline) {
+            return false;
+        }
+        self.project_changed(window, cx);
+        true
+    }
+
+    /// One line per *committed* edit, at `info`, for the same reason
+    /// `note_transform` exists: a drag's arithmetic is only checkable end to
+    /// end if the numbers come out of the running app. Intermediate drag
+    /// frames log at `debug`; the line below is the settled one.
+    fn note_edit(&self, reason: &'static str, track: Option<TrackKind>) {
+        let timeline = self.project.timeline.as_ref();
+        // The affected track's boxes, four decimals, so a scripted drag's
+        // predicted seconds can be checked against what actually landed.
+        let bounds = track.map(|track| {
+            if track == TrackKind::Clip {
+                timeline.map_or_else(String::new, |timeline| {
+                    timeline
+                        .segments
+                        .iter()
+                        .map(|segment| format!("{:.4}..{:.4}", segment.start, segment.end))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+            } else {
+                self.timeline
+                    .segments(track)
+                    .iter()
+                    .map(|segment| format!("{:.4}..{:.4}", segment.start, segment.end))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+        });
+        tracing::info!(
+            reason,
+            track = ?track,
+            bounds,
+            clips = timeline.map_or(0, |timeline| timeline.segments.len()),
+            zoom = timeline.map_or(0, |timeline| timeline.zoom_segments.len()),
+            total = format!("{:.4}", self.timeline.total_duration),
+            selection = ?self.selection.as_ref().map(|selection| (selection.track, selection.indices.clone())),
+            undo = self.history.can_undo(),
+            redo = self.history.can_redo(),
+            "timeline edit"
+        );
+    }
+
+    fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history.record(&self.project);
+        self.rebuild_timeline();
+        self.publish_project();
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
+    /// The renderer half. `frameNumberToRender` is `previewTime ??
+    /// playbackTime` (`Editor.tsx:515-519`), floored into a frame number, and
+    /// the re-render is skipped while playing exactly as `emitRenderFrame`'s
+    /// `if (!editorState.playing)` gate does (`:493`).
+    fn publish_project(&self) {
+        let Some(instance) = &self.instance else {
+            return;
+        };
+        instance.project_config.0.send(self.project.clone()).ok();
+        if !self.playing {
+            let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
+            request_frame(instance, (time * EDITOR_PREVIEW_FPS as f64).floor() as u32);
+        }
+    }
+
+    /// The disk half: restart the 250ms timer, then write on the background
+    /// executor. A later edit drops this task, which is `clearTimeout` plus a
+    /// fresh `setTimeout`.
+    fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_save.borrow_mut().config = Some(self.project.clone());
+        let pending = self.pending_save.clone();
+        self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
+            cx.background_executor().timer(PROJECT_SAVE_DEBOUNCE).await;
+            pending.borrow_mut().flush();
+        }));
+    }
+
+    // -- Editing: undo and redo ----------------------------------------------
+
+    /// `projectHistory.undo()` -- reconcile the previous snapshot back over the
+    /// store. The playhead is not moved and the selection is not restored;
+    /// neither is in the snapshot (`editorState` is a separate store).
+    fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.history.undo().cloned() else {
+            return;
+        };
+        self.apply_history(config, window, cx);
+        self.note_edit("undo", None);
+    }
+
+    fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.history.redo().cloned() else {
+            return;
+        };
+        self.apply_history(config, window, cx);
+        self.note_edit("redo", None);
+    }
+
+    /// The `ignoreNext` half of `move()`: applying a history entry must not
+    /// push a new one, so this deliberately skips `history.record`.
+    fn apply_history(
+        &mut self,
+        config: ProjectConfiguration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.project = config;
+        self.rebuild_timeline();
+        self.publish_project();
+        self.schedule_save(window, cx);
+        // A segment the undo removed must not stay selected.
+        if let Some(selection) = &self.selection
+            && let Some(timeline) = self.project.timeline.as_ref()
+        {
+            let count = edits::segment_count(timeline, selection.track);
+            if selection.indices.iter().any(|index| *index >= count) {
+                self.selection = None;
+            }
+        }
+        cx.notify();
+        window.refresh();
+    }
+
     pub fn set_error(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
         tracing::error!(path = %self.project_path.display(), "editor project failed to open: {message}");
         self.state = LoadState::Failed(message);
         cx.notify();
         window.refresh();
+    }
+
+    // The two seams the config-sidebar unit reads. Unused here by design: this
+    // unit owns the selection, the next one routes on it.
+    #[allow(dead_code)]
+    /// The timeline selection, for the config sidebar's context-sensitive
+    /// panels. `editorState.timeline.selection` is what `ConfigSidebar` reads
+    /// to decide whether it is showing the project's settings or a selected
+    /// segment's, and the sidebar unit reads it from here.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    #[allow(dead_code)]
+    /// The live project config, for the units that render from it (the config
+    /// sidebar's controls) or serialise it (export).
+    pub fn project(&self) -> &ProjectConfiguration {
+        &self.project
     }
 
     pub fn set_instance(&mut self, instance: Arc<EditorInstance>) {
@@ -1019,6 +1388,48 @@ impl EditorWindow {
         }
         let keystroke = &event.keystroke;
         let modifier = keystroke.modifiers.platform || keystroke.modifiers.control;
+
+        // `if (e.code === "Backspace" || (e.code === "Delete" &&
+        // hasNoModifiers))` (`TL/index.tsx:963`) -- note the asymmetry:
+        // **Backspace deletes whatever is held**, forward-delete only bare. It
+        // is checked before the modifier gates below for that reason.
+        if keystroke.key.as_str() == "backspace" {
+            cx.stop_propagation();
+            self.delete_selection(window, cx);
+            return;
+        }
+
+        // Undo / redo, registered on `window` by `createStoreHistory`
+        // (`ED/context.ts:1931-1948`): `Mod+Z`, `Shift+Mod+Z` and `Mod+Y`.
+        if modifier && !keystroke.modifiers.alt {
+            match keystroke.key.as_str() {
+                "z" => {
+                    cx.stop_propagation();
+                    if keystroke.modifiers.shift {
+                        self.redo(window, cx);
+                    } else {
+                        self.undo(window, cx);
+                    }
+                    window.refresh();
+                    return;
+                }
+                "y" => {
+                    cx.stop_propagation();
+                    self.redo(window, cx);
+                    window.refresh();
+                    return;
+                }
+                // `Cmd/Ctrl+A` expands the selection to the whole track.
+                "a" if !keystroke.modifiers.shift => {
+                    cx.stop_propagation();
+                    self.select_all_on_track(cx);
+                    window.refresh();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if modifier && !keystroke.modifiers.alt {
             // The combo normaliser maps both `=` and `+` onto `=`
             // (`useEditorShortcuts.ts:12-30`); gpui reports the unshifted key,
@@ -1045,9 +1456,40 @@ impl EditorWindow {
         {
             return;
         }
-        if keystroke.key.as_str() == "space" {
-            cx.stop_propagation();
-            self.toggle_play(window, cx);
+        match keystroke.key.as_str() {
+            "space" => {
+                cx.stop_propagation();
+                self.toggle_play(window, cx);
+            }
+            // `e.code === "Backspace" || (e.code === "Delete" &&
+            // hasNoModifiers)` (`TL/index.tsx:963`). gpui reports the main
+            // delete key as `backspace` and forward-delete as `delete`, which
+            // is the same split `e.code` makes.
+            "delete" => {
+                cx.stop_propagation();
+                self.delete_selection(window, cx);
+            }
+            // `S` toggles the scissors (`Player.tsx:246-254`) and `C` performs
+            // the cut (`TL/index.tsx:1007-1013`) -- two different keys, and
+            // two different listeners in the source.
+            "s" => {
+                cx.stop_propagation();
+                self.toggle_split_mode(cx);
+                window.refresh();
+            }
+            "c" => {
+                cx.stop_propagation();
+                self.split_at_playhead(window, cx);
+            }
+            "escape" => {
+                cx.stop_propagation();
+                if self.selection.is_some() {
+                    self.set_selection(None, cx);
+                    self.note_edit("deselect", None);
+                }
+                window.refresh();
+            }
+            _ => {}
         }
     }
 
@@ -1237,6 +1679,16 @@ impl EditorWindow {
     fn timeline_mouse_up(&mut self, cx: &mut Context<Self>) {
         if let Some(Scrub::Press { time }) = self.scrub.take() {
             self.seek_to_time(time, cx);
+            // The other half of that listener: a press on bare timeline also
+            // clears the selection (`TL/index.tsx:1157-1163`). It is gated on
+            // the zoom drag state being idle there, which it always is by the
+            // time this runs -- a press *on* a segment stops propagating and
+            // never arms this.
+            let had = self.selection.is_some();
+            self.set_selection(None, cx);
+            if had {
+                self.note_edit("deselect", None);
+            }
         }
         cx.notify();
     }
@@ -1250,6 +1702,712 @@ impl EditorWindow {
         if self.scrub.take().is_some() {
             cx.notify();
         }
+    }
+
+    // -- Editing: the pointer ------------------------------------------------
+
+    /// `secsPerPixel()` (`TL/context.ts:91-92`), over the clip track's own box.
+    fn secs_per_pixel(&self, viewport_width: f32) -> f64 {
+        self.view
+            .transform
+            .secs_per_pixel(timeline::content_width(viewport_width))
+    }
+
+    /// A window x as pixels into the track content column, the space every
+    /// segment box is laid out in.
+    fn content_x(&self, window_x: f32) -> f64 {
+        (window_x - timeline::content_left()) as f64
+    }
+
+    /// `useSetPreviewTime` (`TL/Track.tsx:260-266`): every trim writes the edge
+    /// it is moving into `previewTime`, so the transport clock reads out the
+    /// value being dragged.
+    fn set_preview_time(&mut self, time: f64) {
+        self.view.preview_time = Some(time.clamp(0.0, self.total_duration()));
+    }
+
+    /// `setEditorState("timeline", "selection", ...)`.
+    fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
+        if self.selection != selection {
+            self.selection = selection;
+            cx.notify();
+        }
+    }
+
+    /// A press on a track row. Whatever it lands on decides everything:
+    /// a handle trims, a body moves (or splits, in split mode), and bare track
+    /// falls through to the timeline container's own press-to-seek -- except on
+    /// the zoom track, which creates a segment there.
+    fn track_mouse_down(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button != MouseButton::Left || self.transport.is_none() {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let x = self.content_x(f32::from(event.position.x));
+        let position = self.view.transform.position;
+        let total = self.total_duration();
+        let hit = edits::hit_test(self.timeline.segments(kind), lane, x, position, secs_per_pixel);
+        let press_time = self.time_at(f32::from(event.position.x), viewport_width);
+        // The whole geometry of the press, so a scripted click's predicted
+        // seconds can be checked against what the app actually resolved.
+        tracing::debug!(
+            track = ?kind,
+            lane,
+            hit = ?hit,
+            x = format!("{x:.2}"),
+            secs_per_pixel = format!("{secs_per_pixel:.6}"),
+            press_time = format!("{press_time:.4}"),
+            split = self.split_mode,
+            shift = event.modifiers.shift,
+            platform = event.modifiers.platform,
+            control = event.modifiers.control,
+            alt = event.modifiers.alt,
+            selection = ?self.selection,
+            "timeline press"
+        );
+
+        let index = match hit {
+            Hit::Empty => {
+                // `TL/ZoomTrack.tsx:188-295`. The press deliberately does *not*
+                // stop propagating: the container arms its own press behind it,
+                // which is why a click-create ends with the playhead moved.
+                if kind == TrackKind::Zoom {
+                    self.begin_zoom_create(secs_per_pixel, f32::from(event.position.x), cx);
+                }
+                return;
+            }
+            Hit::Body { index } | Hit::Handle { index, .. } => index,
+        };
+
+        // Everything below is inside a segment, and the source stops the press
+        // there (`e.stopPropagation()` at the top of every `SegmentRoot`'s
+        // `onMouseDown`, and inside `createMouseDownDrag`).
+        cx.stop_propagation();
+
+        if self.split_mode {
+            self.split_at_pointer(kind, index, x, secs_per_pixel, event.modifiers.alt, window, cx);
+            return;
+        }
+
+        let modifiers = (event.modifiers.shift, event.modifiers.platform || event.modifiers.control);
+        let segments = self.timeline.segments(kind);
+        if index >= segments.len() {
+            return;
+        }
+        let (start, end) = (segments[index].start, segments[index].end);
+
+        // The clip's own recording-domain edges, which its handles move.
+        let source_edges = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.segments.get(index))
+            .map(|segment| (segment.start, segment.end));
+
+        let kind_of_drag = match (kind, hit) {
+            // The clip's handles: recording-domain, no promotion threshold, no
+            // selection on release.
+            (TrackKind::Clip, Hit::Handle { start: true, .. }) => {
+                source_edges.map(|(start, _)| DragKind::ClipTrimStart { start })
+            }
+            (TrackKind::Clip, Hit::Handle { start: false, .. }) => {
+                source_edges.map(|(_, end)| DragKind::ClipTrimEnd { end })
+            }
+            // The clip's *body* drag is a crossfade-duration drag, not a move
+            // (`TL/ClipTrack.tsx:849-945`); transitions have no drawn
+            // affordance here, so a body press only ever selects.
+            (TrackKind::Clip, Hit::Body { .. }) => None,
+            (_, Hit::Handle { start: true, .. }) => {
+                let min = edits::min_segment_duration(kind, secs_per_pixel);
+                Some(DragKind::TrimStart {
+                    start,
+                    bounds: edits::trim_start_bounds(segments, lane, index, min, total),
+                })
+            }
+            (_, Hit::Handle { start: false, .. }) => {
+                let min = edits::min_segment_duration(kind, secs_per_pixel);
+                Some(DragKind::TrimEnd {
+                    end,
+                    bounds: edits::trim_end_bounds(segments, lane, index, min, total),
+                })
+            }
+            (_, Hit::Body { .. }) => Some(DragKind::Move {
+                start,
+                end,
+                bounds: edits::move_bounds(segments, lane, index, total),
+            }),
+            (_, Hit::Empty) => None,
+        };
+
+        let clip_handle = matches!(
+            kind_of_drag,
+            Some(DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. })
+        );
+        let Some(drag_kind) = kind_of_drag else {
+            // A clip body press: select on release, nothing else.
+            self.drag = Some(Drag {
+                track: kind,
+                index,
+                kind: DragKind::Move {
+                    start,
+                    end,
+                    bounds: DragBounds { min: 0., max: 0. },
+                },
+                down_x: f32::from(event.position.x),
+                origin_x: None,
+                moved: false,
+                // 4px, the clip body's own promotion (`TL/ClipTrack.tsx:875`).
+                // Nothing happens past it here -- the transition drag is not
+                // reproduced -- but the threshold still decides whether the
+                // release selects.
+                threshold: 4.,
+                selects_on_click: true,
+                shift: modifiers.0,
+                multi: modifiers.1,
+                press_time,
+                paused: false,
+            });
+            cx.notify();
+            return;
+        };
+
+        // `projectHistory.pause()` for the whole drag: sixty intermediate
+        // states become one undo entry.
+        self.history.pause();
+        tracing::debug!(track = ?kind, lane, index, kind = ?drag_kind, "timeline drag armed");
+        self.drag = Some(Drag {
+            track: kind,
+            index,
+            kind: drag_kind,
+            down_x: f32::from(event.position.x),
+            // The clip's handles measure from the press; every other drag
+            // measures from wherever the 2px promotion happened.
+            origin_x: clip_handle.then_some(f32::from(event.position.x)),
+            moved: false,
+            threshold: if clip_handle { 0. } else { 2. },
+            selects_on_click: !clip_handle,
+            shift: modifiers.0,
+            multi: modifiers.1,
+            press_time,
+            paused: true,
+        });
+        cx.notify();
+    }
+
+    /// `newSegmentDetails()` plus `createSegment` (`TL/ZoomTrack.tsx:104-295`).
+    /// The ghost the track already draws is where the segment lands; the press
+    /// arms a drag that stretches its end until the button comes up.
+    fn begin_zoom_create(&mut self, secs_per_pixel: f64, down_x: f32, cx: &mut Context<Self>) {
+        let ghost = (self.view.hovered_track == Some(TrackKind::Zoom))
+            .then_some(self.view.preview_time)
+            .flatten()
+            .and_then(|preview| {
+                timeline::new_zoom_segment(&self.timeline, preview, secs_per_pixel)
+                    .map(|ghost| (preview, ghost))
+            });
+        tracing::debug!(
+            hovered = ?self.view.hovered_track,
+            preview = ?self.view.preview_time,
+            ghost = ?ghost,
+            "zoom create"
+        );
+        let Some((preview, (start, end))) = ghost else {
+            return;
+        };
+        // `max`: the next segment's start, or the timeline's end.
+        let max = self
+            .timeline
+            .zoom
+            .iter()
+            .find(|segment| preview <= segment.start)
+            .map_or(self.total_duration(), |segment| segment.start);
+        let min_duration = timeline::new_segment_min_duration(secs_per_pixel);
+
+        self.history.pause();
+        self.drag = Some(Drag {
+            track: TrackKind::Zoom,
+            index: 0,
+            kind: DragKind::CreateZoom {
+                base_start: start,
+                base_end: end,
+                max,
+                min_duration,
+                created: None,
+            },
+            down_x,
+            origin_x: Some(down_x),
+            moved: false,
+            threshold: 0.,
+            selects_on_click: false,
+            shift: false,
+            multi: false,
+            press_time: preview,
+            paused: true,
+        });
+        cx.notify();
+    }
+
+    /// A pointer move with a segment drag live. Runs off the root's handler, so
+    /// a drag that leaves its own row keeps tracking -- which is what
+    /// `createEventListenerMap(window, ...)` gives the source.
+    fn drag_mouse_move(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
+        // The promotion: `Math.abs(event.clientX - downEvent.clientX) > 2`,
+        // capturing `initialMouseX` the first time it holds.
+        if (x - drag.down_x).abs() > drag.threshold && !drag.moved {
+            drag.moved = true;
+            if drag.origin_x.is_none() {
+                drag.origin_x = Some(x);
+            }
+        }
+        // `origin_x` *is* the promotion marker on every drag with a threshold:
+        // it is only filled in once the pointer has passed it.
+        let Some(origin_x) = drag.origin_x else {
+            return;
+        };
+        let drag = *drag;
+
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let delta = (x - origin_x) as f64 * secs_per_pixel;
+
+        match drag.kind {
+            DragKind::Move { start, end, bounds } => {
+                let shift = bounds.clamp(delta);
+                let (track, index) = (drag.track, drag.index);
+                self.edit(
+                    |timeline| edits::move_segment(timeline, track, index, start + shift, end + shift),
+                    window,
+                    cx,
+                );
+            }
+            DragKind::TrimStart { start, bounds } => {
+                let next = bounds.clamp(start + delta);
+                let (track, index) = (drag.track, drag.index);
+                if self.edit(
+                    |timeline| edits::set_segment_start(timeline, track, index, next),
+                    window,
+                    cx,
+                ) {
+                    self.set_preview_time(next);
+                }
+            }
+            DragKind::TrimEnd { end, bounds } => {
+                let next = bounds.clamp(end + delta);
+                let (track, index) = (drag.track, drag.index);
+                if self.edit(
+                    |timeline| edits::set_segment_end(timeline, track, index, next),
+                    window,
+                    cx,
+                ) {
+                    self.set_preview_time(next);
+                }
+            }
+            DragKind::ClipTrimStart { start } => {
+                self.clip_trim(drag.index, start, delta, true, secs_per_pixel, window, cx);
+            }
+            DragKind::ClipTrimEnd { end } => {
+                self.clip_trim(drag.index, end, delta, false, secs_per_pixel, window, cx);
+            }
+            DragKind::CreateZoom {
+                base_start,
+                base_end,
+                max,
+                min_duration,
+                created,
+            } => {
+                // `deltaTime = deltaX * secsPerPixel - (base.end - base.start)`
+                // over `initialEndTime = base.end`, i.e. the end tracks the
+                // pointer measured from the segment's own start.
+                let delta_time = delta - (base_end - base_start);
+                let new_end = base_end + delta_time;
+                let min_end = base_start + min_duration;
+                let clamped = new_end.max(min_end).min(max.max(min_end));
+                match created {
+                    None => {
+                        let index = self.create_zoom_segment(base_start, clamped, window, cx);
+                        if let Some(drag) = self.drag.as_mut()
+                            && let DragKind::CreateZoom { created, .. } = &mut drag.kind
+                        {
+                            *created = Some(index);
+                        }
+                    }
+                    Some(index) => {
+                        // `if (deltaTime < 0) return;` -- dragging back left
+                        // never shrinks the segment below its created size.
+                        if delta_time < 0. {
+                            return;
+                        }
+                        self.edit(
+                            |timeline| edits::set_segment_end(timeline, TrackKind::Zoom, index, clamped),
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The clip handles' shared update (`TL/ClipTrack.tsx:1186-1213,
+    /// 1319-1348`). `delta` is already in output seconds; the recording domain
+    /// is `delta * timescale`.
+    #[allow(clippy::too_many_arguments)]
+    fn clip_trim(
+        &mut self,
+        index: usize,
+        anchor: f64,
+        delta: f64,
+        start_edge: bool,
+        secs_per_pixel: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let Some(segment) = timeline.segments.get(index) else {
+            return;
+        };
+        let timescale = segment.timescale;
+        let requested = anchor + delta * timescale;
+        let displays = self.clip_display_durations.clone();
+        let recording = self.recording_duration;
+
+        let clamped = if start_edge {
+            edits::clip_trim_start(timeline, index, requested, secs_per_pixel, &displays, recording)
+        } else {
+            edits::clip_trim_end(timeline, index, requested, secs_per_pixel, &displays, recording)
+        };
+        let Some(clamped) = clamped else { return };
+
+        let applied = self.edit(
+            |timeline| {
+                let Some(segment) = timeline.segments.get_mut(index) else {
+                    return false;
+                };
+                let edge = if start_edge {
+                    &mut segment.start
+                } else {
+                    &mut segment.end
+                };
+                if *edge == clamped {
+                    return false;
+                }
+                *edge = clamped;
+                true
+            },
+            window,
+            cx,
+        );
+        if !applied {
+            return;
+        }
+        // `setPreviewTime(prevDuration())` on the start handle and
+        // `prevDuration() + (clampedEnd - seg.start) / timescale` on the end.
+        let box_start = self
+            .timeline
+            .clips
+            .get(index)
+            .map_or(0., |clip| clip.start);
+        if start_edge {
+            self.set_preview_time(box_start);
+        } else {
+            let source_start = self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.segments.get(index))
+                .map_or(0., |segment| segment.start);
+            self.set_preview_time(box_start + (clamped - source_start) / timescale);
+        }
+    }
+
+    /// `createSegment`'s insert, plus the selection it leaves behind.
+    fn create_zoom_segment(
+        &mut self,
+        start: f64,
+        end: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let mut index = 0;
+        self.edit(
+            |timeline| {
+                index = edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT);
+                true
+            },
+            window,
+            cx,
+        );
+        self.set_selection(Some(Selection::single(TrackKind::Zoom, index)), cx);
+        index
+    }
+
+    /// `finish(e)`: resume the history, and -- if the drag never promoted --
+    /// select instead, which also moves the playhead
+    /// (`props.handleUpdatePlayhead(e)`).
+    fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+
+        if let DragKind::CreateZoom {
+            base_start,
+            base_end,
+            created,
+            ..
+        } = drag.kind
+        {
+            // "If no movement, create a default 1-second segment"
+            // (`TL/ZoomTrack.tsx:284-287`) -- `initialEndTime` is the ghost's
+            // own end, which is where the drawn `+` box already was.
+            if created.is_none() {
+                self.create_zoom_segment(base_start, base_end, window, cx);
+            }
+        } else if !drag.moved && drag.selects_on_click {
+            let selection = edits::click_selection(
+                self.selection.as_ref(),
+                drag.track,
+                drag.index,
+                drag.shift,
+                drag.multi,
+            );
+            self.set_selection(selection, cx);
+            self.seek_to_time(drag.press_time, cx);
+        }
+
+        if drag.paused {
+            let config = self.project.clone();
+            self.history.resume(&config);
+        }
+
+        if matches!(
+            drag.kind,
+            DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. }
+        ) {
+            self.on_handle_released(cx);
+        }
+
+        self.note_edit(
+            match (drag.moved, drag.kind) {
+                (_, DragKind::CreateZoom { .. }) => "create",
+                (true, DragKind::Move { .. }) => "move",
+                (true, _) => "trim",
+                (false, _) => "select",
+            },
+            Some(drag.track),
+        );
+        cx.notify();
+        window.refresh();
+    }
+
+    /// `onHandleReleased` (`TL/ClipTrack.tsx:549-559`): a trim that shortened
+    /// the project below the viewport pulls the viewport back over it.
+    /// `normalizeClipTransitions` is the other half and is a no-op here --
+    /// `effective_transition` already clamps a transition against the clips it
+    /// joins on every read.
+    fn on_handle_released(&mut self, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        let transform = self.view.transform;
+        if transform.position + transform.zoom > total + 4. {
+            let origin = self.view.preview_time.unwrap_or(self.playhead);
+            self.view.transform.update_zoom(total, origin, total);
+            self.note_transform("trim", Some(origin));
+            cx.notify();
+        }
+    }
+
+    /// The pointer over a track row: which segment it is on (the `group-hover`
+    /// that reveals the trim handles) and, in split mode, where the cut would
+    /// land (`splitPreview`, `TL/ClipTrack.tsx:827-838`).
+    fn track_hover(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        window_x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.drag.is_some() {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let x = self.content_x(window_x);
+        let position = self.view.transform.position;
+        let hit = edits::hit_test(self.timeline.segments(kind), lane, x, position, secs_per_pixel);
+
+        let hovered = match hit {
+            Hit::Body { index } | Hit::Handle { index, .. } => Some((kind, lane, index)),
+            Hit::Empty => None,
+        };
+        let mut changed = false;
+        if self.hovered_segment != hovered {
+            self.hovered_segment = hovered;
+            changed = true;
+        }
+
+        let preview = match (self.split_mode, kind, hit) {
+            (true, TrackKind::Clip, Hit::Body { index } | Hit::Handle { index, .. }) => {
+                self.split_preview_at(index, x, secs_per_pixel, false)
+            }
+            _ => None,
+        };
+        if self.split_preview != preview {
+            self.split_preview = preview;
+            changed = true;
+        }
+        if changed {
+            cx.notify();
+            window.refresh();
+        }
+    }
+
+    /// `splitTimeAt(e)` (`TL/ClipTrack.tsx:666-682`): the pointer's output
+    /// time, snapped to the nearest boundary unless Alt is held.
+    fn split_preview_at(
+        &self,
+        index: usize,
+        x: f64,
+        secs_per_pixel: f64,
+        alt: bool,
+    ) -> Option<(f64, bool)> {
+        let clip = self.timeline.clips.get(index)?;
+        let timeline = self.project.timeline.as_ref()?;
+        let raw = self.view.transform.position + x * secs_per_pixel;
+        Some(edits::split_time_at(
+            raw,
+            clip.start,
+            clip.end,
+            SPLIT_SNAP_PX * secs_per_pixel,
+            timeline,
+            self.playhead,
+            alt,
+        ))
+    }
+
+    /// A press in split mode. On a clip it is `splitClipSegment(time, i)` with
+    /// the snapped output time; on every other track it is that track's own
+    /// `split*Segment(i, localTime)` with a plain fraction of the box
+    /// (`TL/ZoomTrack.tsx:531-543`, `TL/MaskTrack.tsx:391-399`).
+    #[allow(clippy::too_many_arguments)]
+    fn split_at_pointer(
+        &mut self,
+        kind: TrackKind,
+        index: usize,
+        x: f64,
+        secs_per_pixel: f64,
+        alt: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if kind == TrackKind::Clip {
+            let Some((time, _)) = self.split_preview_at(index, x, secs_per_pixel, alt) else {
+                return;
+            };
+            if self.edit(
+                |timeline| edits::split_clip_segment(timeline, time, Some(index)),
+                window,
+                cx,
+            ) {
+                // `if (didSplit) setEditorState("timeline", "selection", null)`.
+                self.set_selection(None, cx);
+                self.note_edit("split", Some(TrackKind::Clip));
+            }
+            return;
+        }
+        let Some(segment) = self.timeline.segments(kind).get(index) else {
+            return;
+        };
+        let left = (segment.start - self.view.transform.position) / secs_per_pixel;
+        let width = (segment.end - segment.start) / secs_per_pixel;
+        if width <= 0. {
+            return;
+        }
+        let local = ((x - left) / width) * (segment.end - segment.start);
+        if self.edit(
+            |timeline| edits::split_segment(timeline, kind, index, local),
+            window,
+            cx,
+        ) {
+            self.note_edit("split", Some(kind));
+        }
+    }
+
+    // -- Editing: the keyboard -----------------------------------------------
+
+    /// The `Backspace` / `Delete` binding (`TL/index.tsx:963-1006`).
+    ///
+    /// Every track deletes its selected indices; the clip track alone walks
+    /// them in reverse and refuses to empty itself, and the scene track's
+    /// action takes one index at a time for the same reason.
+    fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection.clone() else {
+            return;
+        };
+        let deleted = self.edit(
+            |timeline| edits::delete_segments(timeline, selection.track, &selection.indices),
+            window,
+            cx,
+        );
+        if deleted {
+            self.set_selection(None, cx);
+            self.note_edit("delete", Some(selection.track));
+        }
+    }
+
+    /// The `C` binding (`TL/index.tsx:1007-1013`): cut the clip under
+    /// `previewTime ?? playbackTime`. Works while playing, which is why it
+    /// falls back to the playhead.
+    fn split_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let time = self.view.preview_time.unwrap_or(self.playhead);
+        if self.edit(
+            |timeline| edits::split_clip_segment(timeline, time, None),
+            window,
+            cx,
+        ) {
+            self.set_selection(None, cx);
+            self.note_edit("split", Some(TrackKind::Clip));
+        }
+    }
+
+    /// `Cmd/Ctrl+A` (`TL/index.tsx:1019-1045`).
+    fn select_all_on_track(&mut self, cx: &mut Context<Self>) {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let Some(selection) = self.selection.as_ref() else {
+            return;
+        };
+        let count = edits::segment_count(timeline, selection.track);
+        let next = edits::select_all_on_track(Some(selection), count);
+        if next.is_some() {
+            self.set_selection(next, cx);
+            self.note_edit("select-all", self.selection.as_ref().map(|s| s.track));
+        }
+    }
+
+    /// The scissors toggle -- `S` and the transport button
+    /// (`Player.tsx:246-254, 409-427`).
+    fn toggle_split_mode(&mut self, cx: &mut Context<Self>) {
+        self.split_mode = !self.split_mode;
+        if !self.split_mode {
+            // `createEffect(() => { if (!split()) setSplitPreview(null) })`
+            // (`TL/ClipTrack.tsx:566-568`).
+            self.split_preview = None;
+        }
+        cx.notify();
     }
 
     /// A frame off the pump. `refresh` as well as `notify`: this window may be
@@ -1364,9 +2522,69 @@ impl EditorWindow {
             })
     }
 
+    /// The header's undo and redo buttons (`Header.tsx:145-168`).
+    ///
+    /// Two quirks, both transcribed: the click **clears the timeline selection
+    /// first** and only then walks the history, and the disabled predicate is
+    /// `!canUndo() && !selection` -- so a button with nothing to undo is still
+    /// enabled while something is selected, and pressing it just deselects.
+    fn history_button(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        undo: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let can = if undo {
+            self.history.can_undo()
+        } else {
+            self.history.can_redo()
+        };
+        let enabled = can || self.selection.is_some();
+        div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .px(px(6.))
+            .gap(px(6.))
+            .h(px(32.))
+            .rounded(px(8.))
+            .flex_shrink_0()
+            .when(!enabled, |this| this.opacity(0.5))
+            .when(enabled, |this| {
+                this.cursor_pointer()
+                    .hover(|this| this.bg(Hsla::from(theme.gray_3)))
+            })
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(20.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(if enabled { theme.gray_12 } else { theme.gray_11 })),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !(this.history.can_undo() || this.history.can_redo() || this.selection.is_some())
+                {
+                    return;
+                }
+                let had_selection = this.selection.is_some();
+                if had_selection {
+                    this.set_selection(None, cx);
+                }
+                if undo {
+                    this.undo(window, cx);
+                } else {
+                    this.redo(window, cx);
+                }
+                window.refresh();
+            }))
+    }
+
     /// `Header.tsx:89-235` -- `h-14`, three groups, the middle one bracketed by
     /// `border-x border-black-transparent-10`.
-    fn render_header(&self) -> impl IntoElement {
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let name = self
             .summary()
@@ -1463,8 +2681,8 @@ impl EditorWindow {
                     .pl(px(8.))
                     .pr(px(8.))
                     .h_full()
-                    .child(self.editor_button("icons/undo.svg", None, None, None))
-                    .child(self.editor_button("icons/redo.svg", None, None, None))
+                    .child(self.history_button("editor-undo", "icons/undo.svg", true, cx))
+                    .child(self.history_button("editor-redo", "icons/redo.svg", false, cx))
                     .child(div().flex_1().h_full())
                     // `Button` (gray), `flex gap-1.5 justify-center h-[40px]`.
                     .child(self.header_pill("icons/clapperboard.svg", "Clips"))
@@ -1903,15 +3121,37 @@ impl EditorWindow {
                     .gap(px(16.))
                     .justify_end()
                     .items_center()
-                    // The split toggle is E4's, so it keeps the 50 % wash the
-                    // other unbuilt affordances carry; the three zoom controls
-                    // beside it are live.
+                    // The split toggle (`Player.tsx:409-427`): an
+                    // `EditorButton variant="danger"` whose pressed state is
+                    // `data-pressed:bg-red-300 data-pressed:text-gray-1`.
                     .child(
-                        svg()
-                            .path("icons/scissors.svg")
-                            .size(px(20.))
-                            .opacity(0.5)
-                            .text_color(Hsla::from(theme.gray_12)),
+                        div()
+                            .id("transport-split")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .px(px(6.))
+                            .h(px(32.))
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .when(self.split_mode, |this| this.bg(Hsla::from(theme.red_300)))
+                            .when(!self.split_mode, |this| {
+                                this.hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                            })
+                            .child(
+                                svg()
+                                    .path("icons/scissors.svg")
+                                    .size(px(20.))
+                                    .text_color(if self.split_mode {
+                                        Hsla::from(theme.gray_1)
+                                    } else {
+                                        Hsla::from(theme.gray_12)
+                                    }),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_split_mode(cx);
+                                window.refresh();
+                            })),
                     )
                     // `w-px h-8 rounded-full bg-gray-4`.
                     .child(
@@ -2077,9 +3317,10 @@ impl EditorWindow {
     /// the hover ghost, the playhead, and then the scroll body carrying one row
     /// per visible track behind the edge fade.
     ///
-    /// Everything that would *change* the project -- drag, trim, split,
-    /// selection, create-by-drag, the track manager's popover, the minimap's
-    /// own drag -- is E4. Seeking, zooming, panning and hovering are live.
+    /// Editing is live: the rows carry the press and hover handlers, and the
+    /// root carries the window-wide move/up pair while a drag or a scrub is
+    /// running. What is still absent is the track manager's popover and the
+    /// minimap's own drag.
     fn render_timeline(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let content_width = timeline::content_width(viewport_width);
@@ -2185,12 +3426,28 @@ impl EditorWindow {
                                 Hsla::from(theme.gray_10),
                             )
                         }))
-                        // The playhead (`:1279-1295`).
-                        .child(timeline::render_playhead(
-                            timeline::playhead_color(),
-                            playhead_x,
-                            timeline::playhead_color(),
-                        )),
+                        // The playhead (`:1279-1295`). It dims to 50 % in
+                        // split mode, where the cut line is the thing to
+                        // watch (`TL/index.tsx:1281`).
+                        .child(
+                            div()
+                                .when(self.split_mode, |this| this.opacity(0.5))
+                                .child(timeline::render_playhead(
+                                    timeline::playhead_color(),
+                                    playhead_x,
+                                    timeline::playhead_color(),
+                                )),
+                        )
+                        // The split preview (`TL/index.tsx:1296-1316`): a 1px
+                        // column at the cut, blue with a rotated 8px diamond
+                        // when it snapped to a boundary and grey otherwise.
+                        .children(self.split_mode.then_some(()).and_then(|()| {
+                            let (time, snapped) = self.split_preview?;
+                            let x = ((time - self.view.transform.position)
+                                / self.view.transform.secs_per_pixel(content_width))
+                                as f32;
+                            Some(render_split_preview(&theme, x, snapped))
+                        })),
                 ),
             )
     }
@@ -2286,6 +3543,12 @@ impl EditorWindow {
     /// gap-2 min-h-full`.
     fn render_timeline_body(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let ui = timeline::SegmentUi {
+            selection: self.selection.as_ref(),
+            split_mode: self.split_mode,
+            hovered: self.hovered_segment,
+            dragging: self.drag.is_some(),
+        };
         let mut rows = div()
             .flex()
             .flex_col()
@@ -2295,6 +3558,7 @@ impl EditorWindow {
 
         for row in &self.timeline.rows {
             let kind = row.kind;
+            let lane = row.lane;
             rows = rows.child(
                 div()
                     .id(gpui::ElementId::NamedInteger(
@@ -2307,13 +3571,37 @@ impl EditorWindow {
                     // whether to draw their new-segment ghost.
                     .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                         this.set_hovered_track(hovered.then_some(kind), window, cx);
+                        if !*hovered && this.hovered_segment.map(|(kind, lane, _)| (kind, lane))
+                            == Some((kind, lane))
+                        {
+                            this.hovered_segment = None;
+                            this.split_preview = None;
+                            cx.notify();
+                            window.refresh();
+                        }
                     }))
+                    // The per-segment hover the trim handles' reveal reads,
+                    // and split mode's cut preview.
+                    .on_mouse_move(cx.listener(
+                        move |this, event: &MouseMoveEvent, window, cx| {
+                            this.track_hover(kind, lane, f32::from(event.position.x), window, cx);
+                        },
+                    ))
+                    // The press: a handle, a body or bare track, resolved by
+                    // the same geometry the row was drawn from.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.track_mouse_down(kind, lane, event, window, cx);
+                        }),
+                    )
                     .child(timeline::render_row(
                         &theme,
                         &self.timeline,
                         *row,
                         self.view,
                         viewport_width,
+                        ui,
                     )),
             );
         }
@@ -2355,6 +3643,37 @@ impl EditorWindow {
     }
 }
 
+/// The split-mode cut line (`TL/index.tsx:1296-1316`): `absolute bottom-0 z-20
+/// w-px` from `PLAYHEAD_TOP_OFFSET`, `bg-blue-9` when it snapped to a boundary
+/// and `bg-gray-10/70` when it did not, with a 8px `rotate-45` diamond on the
+/// snapped one. gpui has no rotation, so the marker is a small square -- the
+/// same missing transform hook the carousel's hover lift ran into.
+fn render_split_preview(theme: &Theme, x: f32, snapped: bool) -> impl IntoElement {
+    let color = if snapped {
+        Hsla::from(theme.blue_9)
+    } else {
+        with_alpha(theme.gray_10, 0.7)
+    };
+    div()
+        .absolute()
+        .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
+        .top(px(timeline::PLAYHEAD_TOP_OFFSET))
+        .bottom_0()
+        .w(px(1.))
+        .bg(color)
+        .when(snapped, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top(px(-4.))
+                    .left(px(-3.5))
+                    .size(px(8.))
+                    .rounded(px(1.))
+                    .bg(color),
+            )
+        })
+}
+
 /// `isAtEnd()` (`Player.tsx:156-159`).
 fn is_at_end(total: f64, playhead: f64) -> bool {
     total > 0.0 && total - playhead <= 0.1
@@ -2368,7 +3687,7 @@ impl Render for EditorWindow {
         // this window is resizable, so read them off the viewport rather than
         // assuming the default width.
         let viewport_width: f32 = window.viewport_size().width.into();
-        let scrubbing = self.scrub.is_some();
+        let scrubbing = self.scrub.is_some() || self.drag.is_some();
 
         // `onMount`'s `checkBounds` (`TL/index.tsx:689-703`): once the
         // timeline has a width, zoom in until a segment would be at least
@@ -2401,13 +3720,19 @@ impl Render for EditorWindow {
             .when(scrubbing, |this| {
                 this.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                     this.timeline_mouse_move(event, window, cx);
+                    this.drag_mouse_move(f32::from(event.position.x), window, cx);
                 }))
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _window, cx| this.window_mouse_up(cx)),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                        this.window_mouse_up(cx);
+                        // After the container's own mouseup, which is the
+                        // order the DOM's bubbling gives the source.
+                        this.drag_mouse_up(window, cx);
+                    }),
                 )
             })
-            .child(self.render_header())
+            .child(self.render_header(cx))
             // `flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0
             // leading-5` (`Editor.tsx:676`).
             .child(
