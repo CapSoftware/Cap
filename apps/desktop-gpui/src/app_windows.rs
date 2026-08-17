@@ -22,6 +22,7 @@ use scap_targets::DisplayId;
 use crate::{
     camera_window::{self, CameraWindow},
     controls_window::ControlsWindow,
+    editor_timeline,
     editor_window::{self, EditorWindow},
     main_window::{MainWindow, Mode, TargetType},
     mode_select_window::{self, ModeSelectWindow},
@@ -1228,12 +1229,13 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         };
         tracing::info!(
             path = %path.display(),
-            clips = summary.clips.len(),
+            clips = summary.timeline.clips.len(),
             duration = format!("{:.3}", summary.duration),
             camera = summary.has_camera,
             cursor = summary.has_cursor_data,
             "editor project validated"
         );
+        log_timeline_model(&summary.timeline);
         if handle
             .update(cx, |view, window, cx| {
                 view.set_summary(summary, window, cx)
@@ -1380,13 +1382,35 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // synthesises a timeline for a raw bundle -- and `timeline.duration()`
         // is exactly what the playback engine stops at
         // (`playback.rs:560-570`).
-        let total = instance
-            .project_config
-            .1
-            .borrow()
-            .timeline
-            .as_ref()
-            .map_or(0.0, |timeline| timeline.duration());
+        //
+        // The whole track model comes from the same read: the config the
+        // instance actually loaded is the one being rendered, holds, clip
+        // offsets and all.
+        let (total, model) = {
+            let config = instance.project_config.1.borrow();
+            let total = config
+                .timeline
+                .as_ref()
+                .map_or(0.0, |timeline| timeline.duration());
+            let has_camera = instance
+                .recordings
+                .segments
+                .iter()
+                .any(|segment| segment.camera.is_some());
+            let multiple_clips = instance.recordings.segments.len() > 1;
+            (
+                total,
+                editor_timeline::TimelineModel::build(&config, has_camera, multiple_clips),
+            )
+        };
+        log_timeline_model(&model);
+        if handle
+            .update(cx, |view, window, cx| view.set_timeline(model, window, cx))
+            .is_err()
+        {
+            return;
+        }
+        load_editor_waveforms(instance.clone(), handle, cx);
 
         if handle
             .update(cx, |view, window, cx| {
@@ -1403,6 +1427,96 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         editor_window::request_frame(&instance, 0);
 
         drive_auto_playback(path, handle, cx).await;
+    })
+    .detach();
+}
+
+/// One line per timeline load naming every row and its segment count. The
+/// track set is derived from the project's own content, so this is how a
+/// fixture is checked to have actually deserialised rather than falling back
+/// to the default config.
+fn log_timeline_model(model: &editor_timeline::TimelineModel) {
+    tracing::info!(
+        rows = model.rows.len(),
+        track_height = model.track_height(),
+        total = format!("{:.3}", model.total_duration),
+        clip = model.clips.len(),
+        zoom = model.zoom.len(),
+        scene = model.scene.len(),
+        three_d = model.three_d.len(),
+        text = model.text.len(),
+        mask = model.mask.len(),
+        audio = model.audio.len(),
+        caption = model.caption.len(),
+        keyboard = model.keyboard.len(),
+        "editor timeline model"
+    );
+}
+
+/// The clip track's waveforms (`get_mic_waveforms` / `get_system_audio_waveforms`,
+/// `apps/desktop/src-tauri/src/lib.rs:4392-4434`).
+///
+/// Deliberately fire-and-forget, exactly as the frontend's own
+/// `commands.getMicWaveforms().then(setMicWaveforms)` is
+/// (`ED/context.ts:1526-1539`): the decode runs in the background after the
+/// editor opens and may resolve well after the first frame, so nothing waits on
+/// it and a failed track simply renders as an empty waveform. `AudioLoader::get`
+/// awaits a tokio watch channel, so it runs on the tokio runtime; the peak
+/// extraction itself is a per-sample loop over a whole track, which goes to the
+/// background executor rather than the UI thread.
+fn load_editor_waveforms(
+    instance: Arc<cap_editor::EditorInstance>,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut gpui::AsyncApp,
+) {
+    cx.spawn(async move |cx| {
+        let task = cx.update(|cx| {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                let mut mic = Vec::with_capacity(instance.segment_medias.len());
+                let mut system = Vec::with_capacity(instance.segment_medias.len());
+                for segment in instance.segment_medias.iter() {
+                    for (loader, out) in [
+                        (&segment.audio, &mut mic),
+                        (&segment.system_audio, &mut system),
+                    ] {
+                        match loader.get().await {
+                            Ok(Some(audio)) => {
+                                out.push((audio.samples().to_vec(), audio.channels()))
+                            }
+                            // A failed track is an empty waveform; playback and
+                            // export surface the actual error.
+                            _ => out.push((Vec::new(), 1)),
+                        }
+                    }
+                }
+                (mic, system)
+            })
+        });
+        let Ok((mic, system)) = task.await else {
+            return;
+        };
+        let peaks = cx
+            .background_executor()
+            .spawn(async move {
+                let extract = |tracks: Vec<(Vec<f32>, u16)>| {
+                    tracks
+                        .into_iter()
+                        .map(|(samples, channels)| {
+                            Arc::new(editor_timeline::waveform_peaks(&samples, channels))
+                        })
+                        .collect::<Vec<_>>()
+                };
+                (extract(mic), extract(system))
+            })
+            .await;
+        let _ = handle.update(cx, |view, window, cx| {
+            tracing::info!(
+                mic = peaks.0.iter().filter(|peaks| !peaks.is_empty()).count(),
+                system = peaks.1.iter().filter(|peaks| !peaks.is_empty()).count(),
+                "editor waveforms ready"
+            );
+            view.set_waveforms(peaks.0, peaks.1, window, cx)
+        });
     })
     .detach();
 }

@@ -133,53 +133,16 @@ const SIDEBAR_TAB_BAR_HEIGHT: f32 = 64.;
 const PLAYER_CANVAS_PADDING: f32 = 4.;
 
 // ---------------------------------------------------------------------------
-// Timeline metrics (`routes/editor/Timeline/index.tsx:62-68`)
+// Timeline metrics -- all of them now live in [`crate::editor_timeline`],
+// which owns the strip itself (`routes/editor/Timeline/index.tsx:62-68`).
 // ---------------------------------------------------------------------------
 
-const TIMELINE_PADDING: f32 = 16.;
-const TRACK_GUTTER_GAP: f32 = 8.;
-const TRACK_GUTTER: f32 = 112.;
-const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
-const TIMELINE_HEADER_HEIGHT: f32 = 32.;
-const PLAYHEAD_TOP_OFFSET: f32 = 24.;
-/// `START_SNAP_PX` -- the snap-to-zero zone at the timeline's origin.
-const START_SNAP_PX: f64 = 10.;
-/// `px-2` on the timeline slot (`Editor.tsx:781`), i.e. the container's own
-/// left edge in window coordinates.
-const TIMELINE_SLOT_PADDING: f32 = 8.;
-/// `pt-8` on the timeline container (`TL/index.tsx:1149`).
-const TIMELINE_TOP_PADDING: f32 = 32.;
-/// `visibleTrackCount() > 2 ? "3rem" : "3.25rem"` (`TL/index.tsx:268-270`).
-/// E1 draws the two locked tracks (clip + zoom), so 52.
-const TRACK_HEIGHT: f32 = 52.;
-
-/// `theme.css:24-34` -- the timeline's colours are CSS custom properties with
-/// one definition each, not per-appearance values, so these are literal in
-/// both themes exactly as they are there.
-fn track_clip_color() -> Hsla {
-    gpui::rgb(0x3f8ae0).into()
-}
-fn track_zoom_color() -> Hsla {
-    gpui::rgb(0x4a4f5c).into()
-}
-
-/// `.cap-track-fill { border: 1px solid color-mix(in srgb, var(--seg-color)
-/// 58%, black) }` (`TL/styles.css:23-26`).
-fn track_fill_border(color: Hsla) -> Hsla {
-    let rgba = gpui::Rgba::from(color);
-    gpui::Rgba {
-        r: rgba.r * 0.58,
-        g: rgba.g * 0.58,
-        b: rgba.b * 0.58,
-        a: rgba.a,
-    }
-    .into()
-}
-
-/// The playhead's `from-[rgb(226,64,64)]` (`TL/index.tsx:1281`).
-fn playhead_color() -> Hsla {
-    gpui::rgb(0xe24040).into()
-}
+use crate::editor_timeline::{
+    self as timeline, MINIMAP_HEIGHT, MINIMAP_TOP, SCROLL_BODY_PADDING_RIGHT, START_SNAP_PX,
+    TIMELINE_HEADER_HEIGHT, TIMELINE_PADDING, TIMELINE_SLOT_PADDING, TIMELINE_TOP_PADDING,
+    TRACK_GUTTER, TRACK_ICON_WIDTH, TRACK_ROW_GAP, TimelineModel, TimelineView, TrackKind,
+    Transform,
+};
 
 // ---------------------------------------------------------------------------
 // Letterboxing
@@ -223,9 +186,10 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
 pub struct ProjectSummary {
     /// `meta().prettyName` -- the header's editable name.
     pub pretty_name: String,
-    /// `timeline.segments`, as `(start, end)` seconds plus the recording clip
-    /// index the label is built from.
-    pub clips: Vec<(f64, f64, u32)>,
+    /// Every track the timeline draws, derived from the bundle's own
+    /// `project-config.json`. Replaced once the instance exists, because
+    /// `EditorInstance::new` synthesises a timeline for a raw bundle.
+    pub timeline: TimelineModel,
     /// `timeline.duration()`, the transport's total.
     pub duration: f64,
     /// The camera tab is disabled when every segment has `camera === null`
@@ -234,9 +198,6 @@ pub struct ProjectSummary {
     /// The cursor tab is disabled on `!meta().hasRecordedCursorData`
     /// (`ConfigSidebar.tsx:610`).
     pub has_cursor_data: bool,
-    /// `hasMultipleRecordingSegments()` -- decides `"Clip"` vs `"Clip N"`
-    /// (`TL/ClipTrack.tsx:620-622`).
-    pub multiple_recording_segments: bool,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -297,42 +258,50 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     // back to the default) and overlays `captions.json` -- the same read
     // `EditorInstance::new` starts from, so the timeline shown here is the one
     // that will be rendered.
-    let config = meta.project_config();
-    let clips = config.timeline.as_ref().map_or_else(Vec::new, |timeline| {
-        timeline
-            .segments
-            .iter()
-            .map(|segment| (segment.start, segment.end, segment.recording_clip))
-            .collect()
-    });
+    let mut config = meta.project_config();
     // With no persisted timeline `EditorInstance::new` synthesises one from
-    // the per-segment display durations; fall back to those so the strip is
-    // not empty on a raw un-edited bundle.
-    let clips = if clips.is_empty() {
-        let mut offset = 0.0;
-        recordings
-            .segments
-            .iter()
-            .enumerate()
-            .map(|(index, segment)| {
-                let start = offset;
-                offset += segment.duration();
-                (start, offset, index as u32)
-            })
-            .collect()
-    } else {
-        clips
-    };
-    let duration = clips.last().map_or(0.0, |(_, end, _)| *end)
-        - clips.first().map_or(0.0, |(start, _, _)| *start);
+    // the per-segment display durations (`editor_instance.rs:210-230`) and
+    // writes it back. Synthesise the same shape here so the strip is not empty
+    // for the second or two before the instance exists -- the timeline the
+    // instance hands over then replaces it wholesale.
+    if config.timeline.is_none() {
+        config.timeline = Some(cap_project::TimelineConfiguration {
+            segments: recordings
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(index, segment)| cap_project::TimelineSegment {
+                    recording_clip: index as u32,
+                    timescale: 1.0,
+                    start: 0.0,
+                    end: segment.duration(),
+                    name: None,
+                    speed_audio_mode: None,
+                })
+                .collect(),
+            // `TimelineConfiguration` has no `Default`, so the eight other
+            // track vectors are spelled out empty.
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+        });
+    }
+
+    let timeline = TimelineModel::build(&config, has_camera, multiple_recording_segments);
+    let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
         pretty_name: meta.pretty_name.clone(),
-        clips,
+        timeline,
         duration: duration.max(0.0),
         has_camera,
         has_cursor_data: has_recorded_cursor_data(&meta, studio.as_ref()),
-        multiple_recording_segments,
     })
 }
 
@@ -739,10 +708,23 @@ pub struct EditorWindow {
     /// Wall clock and counters at the moment playback started, so a run can be
     /// reported as a rate.
     play_mark: Option<(Instant, StatsSnapshot)>,
-    /// The transport's zoom slider track rect. The slider is inert until E3
-    /// builds the timeline transform, but the track is captured now so the
-    /// pointer maths has somewhere to read from the day it is not.
+
+    // -- Timeline -----------------------------------------------------------
+    /// Every track the strip draws.
+    timeline: TimelineModel,
+    /// The viewport, the hover ghost and the hovered track.
+    view: TimelineView,
+    /// `onMount`'s `checkBounds` runs once, when the timeline first has a
+    /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
+    /// first render that knows both the width and the duration does it.
+    fitted: bool,
+    /// The transport's zoom slider track rect, written by the slider's own
+    /// prepaint canvas and read by the pointer maths.
     zoom_slider_track: ui::SliderTrack,
+    /// A live drag on the zoom slider. Window-wide, the camera bubble's
+    /// root-handler pattern -- a slider drag that leaves its 96px row keeps
+    /// tracking.
+    zoom_slider_drag: bool,
 }
 
 impl EditorWindow {
@@ -777,7 +759,11 @@ impl EditorWindow {
             scrub: None,
             stats: None,
             play_mark: None,
+            timeline: TimelineModel::default(),
+            view: TimelineView::default(),
+            fitted: false,
             zoom_slider_track: ui::SliderTrack::default(),
+            zoom_slider_drag: false,
         }
     }
 
@@ -786,7 +772,45 @@ impl EditorWindow {
     }
 
     pub fn set_summary(&mut self, summary: ProjectSummary, window: &mut Window, cx: &mut Context<Self>) {
+        self.timeline = summary.timeline.clone();
+        // `zoom: zoomOutLimit()` is the store's *initial* value
+        // (`ED/context.ts:1455`), so it is set the moment a duration exists --
+        // the on-mount 80px fit then narrows it on the first render that knows
+        // the timeline's width.
+        self.view.transform = Transform::initial(summary.duration);
         self.state = LoadState::Ready(Box::new(summary));
+        cx.notify();
+        window.refresh();
+    }
+
+    /// The timeline `EditorInstance::new` actually loaded, which may differ
+    /// from the pre-flight's: the constructor synthesises a timeline and clip
+    /// offsets for a raw bundle and writes them back
+    /// (`editor_instance.rs:227, 263`).
+    pub fn set_timeline(&mut self, model: TimelineModel, window: &mut Window, cx: &mut Context<Self>) {
+        // The waveforms arrive separately and later; keep whatever has landed.
+        let mic = std::mem::take(&mut self.timeline.mic_waveforms);
+        let system = std::mem::take(&mut self.timeline.system_waveforms);
+        self.timeline = model;
+        self.timeline.mic_waveforms = mic;
+        self.timeline.system_waveforms = system;
+        cx.notify();
+        window.refresh();
+    }
+
+    /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
+    /// (`ED/context.ts:1526-1539`). Plain state, not a resource: the decode
+    /// runs in the background after the editor opens, so the waveform simply
+    /// appears once it lands and the editor never falls back to a skeleton.
+    pub fn set_waveforms(
+        &mut self,
+        mic: Vec<std::sync::Arc<Vec<f32>>>,
+        system: Vec<std::sync::Arc<Vec<f32>>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.timeline.mic_waveforms = mic;
+        self.timeline.system_waveforms = system;
         cx.notify();
         window.refresh();
     }
@@ -971,8 +995,8 @@ impl EditorWindow {
     /// clicks are dropped.
     pub fn seek_fraction(&mut self, fraction: f64, window: &mut Window, cx: &mut Context<Self>) {
         let viewport_width: f32 = window.viewport_size().width.into();
-        let x = timeline_content_left()
-            + timeline_content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
+        let x = timeline::content_left()
+            + timeline::content_width(viewport_width) * fraction.clamp(0.0, 1.0) as f32;
         let time = self.time_at(x, viewport_width);
         self.seek_to_time(time, cx);
     }
@@ -985,14 +1009,35 @@ impl EditorWindow {
     }
 
     /// The editor's key bindings live in `useEditorShortcuts`
-    /// (`Player.tsx:236-286`): `Space` play/pause, `S` split, `Mod+=` /
-    /// `Mod+-` zoom -- the last three belong to E3. `e.repeat` is ignored
-    /// there (`useEditorShortcuts.ts:42`) and here.
+    /// (`Player.tsx:236-286`): `Space` play/pause, `S` split (E4's) and
+    /// `Mod+=` / `Mod+-` zoom. `Mod` is Cmd-or-Ctrl
+    /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
+    /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_held {
             return;
         }
         let keystroke = &event.keystroke;
+        let modifier = keystroke.modifiers.platform || keystroke.modifiers.control;
+        if modifier && !keystroke.modifiers.alt {
+            // The combo normaliser maps both `=` and `+` onto `=`
+            // (`useEditorShortcuts.ts:12-30`); gpui reports the unshifted key,
+            // so `shift-=` arrives as `=` too.
+            let step = match keystroke.key.as_str() {
+                "=" | "+" => Some(1. / 1.1),
+                "-" | "_" => Some(1.1),
+                _ => None,
+            };
+            if let Some(step) = step {
+                cx.stop_propagation();
+                // The origin is `editorState.playbackTime` -- the playhead, not
+                // the pointer and not `previewTime` (`Player.tsx:256-271`).
+                let origin = self.playhead;
+                self.zoom_by(step, origin, cx);
+                window.refresh();
+            }
+            return;
+        }
         if keystroke.modifiers.platform
             || keystroke.modifiers.control
             || keystroke.modifiers.alt
@@ -1006,22 +1051,138 @@ impl EditorWindow {
         }
     }
 
-    // -- Timeline seeking ----------------------------------------------------
+    // -- The timeline transform ----------------------------------------------
 
-    /// `transform.zoom` -- visible seconds. Fixed at `zoomOutLimit()` until
-    /// E3 builds the zoom controls.
-    fn timeline_zoom(&self) -> f64 {
-        self.total_duration().max(0.001).min(600.0)
+    /// `transform.updateZoom(zoom * factor, origin)`.
+    fn zoom_by(&mut self, factor: f64, origin: f64, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        let zoom = self.view.transform.zoom;
+        self.view.transform.update_zoom(zoom * factor, origin, total);
+        self.note_transform("zoom", Some(origin));
+        cx.notify();
     }
 
+    /// One line per transform change. The zoom anchor and the pan clamp are
+    /// only checkable end to end if the numbers come out of the running app,
+    /// so they do -- at `info`, because the frame pump's own logging is at
+    /// `debug` and would drown it.
+    fn note_transform(&self, reason: &'static str, origin: Option<f64>) {
+        tracing::info!(
+            reason,
+            zoom = format!("{:.4}", self.view.transform.zoom),
+            position = format!("{:.4}", self.view.transform.position),
+            origin = origin.map(|origin| format!("{origin:.4}")),
+            "timeline transform"
+        );
+    }
+
+    /// The wheel (`TL/index.tsx:1189-1207`), rAF-coalescing aside.
+    ///
+    /// gpui's scroll delta is the amount the *content* moves, which is the
+    /// opposite sign to the DOM's `deltaX`/`deltaY` (`div.rs:3123-3124` adds it
+    /// straight onto a scroll offset that is negative when scrolled down), so
+    /// it is negated back into the source's convention before any of the
+    /// source's arithmetic touches it.
+    fn timeline_wheel(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pixels = event.delta.pixel_delta(window.line_height());
+        let delta_x = -f32::from(pixels.x) as f64;
+        let delta_y = -f32::from(pixels.y) as f64;
+        let total = self.total_duration();
+
+        if event.modifiers.control {
+            let origin = self.view.preview_time.unwrap_or(self.playhead);
+            let delta = timeline::wheel_zoom_delta(delta_y, self.view.transform.zoom);
+            let zoom = self.view.transform.zoom;
+            self.view.transform.update_zoom(zoom + delta, origin, total);
+        } else {
+            // Horizontal wins when it dominates; otherwise macOS reads the
+            // shift key, which is what turns a vertical trackpad swipe into a
+            // pan (`TL/index.tsx:1197-1203`).
+            let delta = if delta_x.abs() > delta_y.abs() * 0.5 {
+                delta_x
+            } else if event.modifiers.shift {
+                delta_x
+            } else {
+                delta_y
+            };
+            let viewport_width: f32 = window.viewport_size().width.into();
+            let secs_per_pixel = self
+                .view
+                .transform
+                .secs_per_pixel(timeline::content_width(viewport_width));
+            let position = self.view.transform.position + secs_per_pixel * delta;
+            self.view.transform.set_position(position, total);
+        }
+        self.note_transform("wheel", None);
+        cx.notify();
+        window.refresh();
+    }
+
+    /// Pinch-to-zoom. In the webview a trackpad pinch arrives as `ctrl+wheel`
+    /// and goes down the `e.ctrlKey` branch above; gpui delivers a native
+    /// [`gpui::PinchEvent`] instead, so this is the one place the transcription
+    /// cannot be literal. The mapping is Chromium's own synthesis --
+    /// `deltaY = -delta * 100` -- fed into the same
+    /// `deltaY * sqrt(zoom) / 30`, so the feel and the anchor match.
+    fn timeline_pinch(
+        &mut self,
+        event: &gpui::PinchEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let total = self.total_duration();
+        let origin = self.view.preview_time.unwrap_or(self.playhead);
+        let delta_y = -(event.delta as f64) * 100.;
+        let delta = timeline::wheel_zoom_delta(delta_y, self.view.transform.zoom);
+        let zoom = self.view.transform.zoom;
+        self.view.transform.update_zoom(zoom + delta, origin, total);
+        self.note_transform("pinch", Some(origin));
+        cx.notify();
+        window.refresh();
+    }
+
+    /// `onMouseMove` on the timeline container (`TL/index.tsx:1170-1188`):
+    /// while paused, the pointer's time becomes `previewTime`; outside the
+    /// content column, and at all times while playing, it is cleared.
+    fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+        // `if (editorState.playing) return;` -- the handler bails *before* it
+        // writes, so a preview time set while paused survives a play rather
+        // than being cleared. The ghost is hidden by the render's own
+        // `!editorState.playing` gate instead (`TL/index.tsx:1246-1253`).
+        if self.playing {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let next = timeline::preview_time_from_x(x, viewport_width, self.view.transform);
+        if next != self.view.preview_time {
+            self.view.preview_time = next;
+            cx.notify();
+            window.refresh();
+        }
+    }
+
+    fn set_hovered_track(
+        &mut self,
+        track: Option<TrackKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view.hovered_track != track {
+            self.view.hovered_track = track;
+            cx.notify();
+            window.refresh();
+        }
+    }
+
+    // -- Timeline seeking ----------------------------------------------------
+
     fn time_at(&self, x: f32, viewport_width: f32) -> f64 {
-        timeline_time_from_x(
-            x,
-            viewport_width,
-            self.timeline_zoom(),
-            0.0,
-            self.total_duration(),
-        )
+        timeline::time_from_x(x, viewport_width, self.view.transform, self.total_duration())
     }
 
     fn timeline_mouse_down(
@@ -1059,8 +1220,8 @@ impl EditorWindow {
         // (`beginRulerScrub`'s `contentEdges`), so a drag past either end
         // parks the playhead there instead of doing nothing.
         let viewport_width: f32 = window.viewport_size().width.into();
-        let left = timeline_content_left();
-        let right = left + timeline_content_width(viewport_width);
+        let left = timeline::content_left();
+        let right = left + timeline::content_width(viewport_width);
         let x = f32::from(event.position.x).clamp(left, right);
         let time = self.time_at(x, viewport_width);
         // No throttle: `preview_tx` is a `watch`, so a push that a newer one
@@ -1590,14 +1751,65 @@ impl EditorWindow {
             )
     }
 
+    /// One of the transport's two zoom glyphs. `factor` is the multiplier the
+    /// source applies to `transform.zoom`, anchored on `playbackTime`.
+    fn zoom_button(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        factor: f64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|this| this.opacity(0.7))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(20.))
+                    .text_color(Hsla::from(theme.gray_12)),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let origin = this.playhead;
+                this.zoom_by(factor, origin, cx);
+                window.refresh();
+            }))
+    }
+
+    /// The zoom slider's pointer maths, shared by the press and the drag.
+    fn apply_zoom_slider(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(fraction) =
+            ui::slider_value_at(&self.zoom_slider_track, position, 0., 1., 0.001)
+        else {
+            return;
+        };
+        let total = self.total_duration();
+        let origin = self.playhead;
+        self.view.transform.apply_slider(fraction, origin, total);
+        self.note_transform("slider", Some(origin));
+        cx.notify();
+        window.refresh();
+    }
+
     /// The transport row (`Player.tsx:357-481`): `relative flex overflow-hidden
     /// z-10 flex-row gap-3 justify-between items-center p-5`.
     fn render_transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let total = self.total_duration();
         // `Math.max(editorState.previewTime ?? editorState.playbackTime, 0)`
-        // (`Player.tsx:359-365`); the hover preview time is E3's.
-        let current = self.playhead.max(0.0);
+        // (`Player.tsx:359-365`) -- the clock reads the *hover* time when there
+        // is one, which is what makes it a readout for the ghost playhead.
+        let current = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
         let live = self.transport.is_some();
         // `{!editorState.playing || isAtEnd() ? <IconCapPlay/> :
         // <IconCapPause/>}` (`Player.tsx:388-392`).
@@ -1622,7 +1834,11 @@ impl EditorWindow {
                     .flex_1()
                     .text_size(px(14.))
                     .text_color(Hsla::from(theme.gray_11))
-                    .child(format!("{} / {}", format_time(current), format_time(total))),
+                    .child(format!(
+                        "{} / {}",
+                        timeline::format_time(current),
+                        timeline::format_time(total)
+                    )),
             )
             // `flex flex-row items-center justify-center text-gray-11 gap-8
             // text-[0.875rem]`.
@@ -1687,11 +1903,14 @@ impl EditorWindow {
                     .gap(px(16.))
                     .justify_end()
                     .items_center()
-                    .opacity(0.5)
+                    // The split toggle is E4's, so it keeps the 50 % wash the
+                    // other unbuilt affordances carry; the three zoom controls
+                    // beside it are live.
                     .child(
                         svg()
                             .path("icons/scissors.svg")
                             .size(px(20.))
+                            .opacity(0.5)
                             .text_color(Hsla::from(theme.gray_12)),
                     )
                     // `w-px h-8 rounded-full bg-gray-4`.
@@ -1702,26 +1921,46 @@ impl EditorWindow {
                             .rounded_full()
                             .bg(Hsla::from(theme.gray_4)),
                     )
+                    // `IconCapZoomOut` -> `updateZoom(zoom * 1.1,
+                    // playbackTime)`; `IconCapZoomIn` -> `zoom / 1.1`
+                    // (`Player.tsx:432-449`). `will-change-[opacity]
+                    // transition-opacity hover:opacity-70`.
+                    .child(self.zoom_button("transport-zoom-out", "icons/zoom-out.svg", 1.1, cx))
+                    .child(self.zoom_button("transport-zoom-in", "icons/zoom-in.svg", 1. / 1.1, cx))
+                    // `Slider class="w-24" minValue={0} maxValue={1}
+                    // step={0.001}`: the 32px row with its 5px track. Fully
+                    // left is fully zoomed *out* -- the value is
+                    // `1 - zoom / zoomOutLimit()` (`Player.tsx:444-465`).
                     .child(
-                        svg()
-                            .path("icons/zoom-out.svg")
-                            .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_12)),
-                    )
-                    .child(
-                        svg()
-                            .path("icons/zoom-in.svg")
-                            .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_12)),
-                    )
-                    // `Slider class="w-24"`: the 32px row with its 4.8px track
-                    // -- [`ui::Slider`], thumbless because the timeline
-                    // transform it drives is E3's.
-                    .child(
-                        ui::Slider::new("timeline-zoom", 0., self.zoom_slider_track.clone())
-                            .row_width(px(96.))
-                            .row_height(px(32.))
-                            .track(px(5.), Hsla::from(theme.gray_4)),
+                        ui::Slider::new(
+                            "timeline-zoom",
+                            self.view.transform.slider_fraction(total),
+                            self.zoom_slider_track.clone(),
+                        )
+                        .row_width(px(96.))
+                        // `class="relative px-1 h-8"` with the track at
+                        // `h-[0.3rem]` = 4.8px (`ui.tsx:93, 107`).
+                        .row_height(px(32.))
+                        .track(px(4.8), Hsla::from(theme.gray_4))
+                        // `KSlider.Fill class="bg-blue-9"` and
+                        // `KSlider.Thumb class="bg-gray-1 dark:bg-gray-12
+                        // border border-gray-6 size-4 -top-[6.3px]"`
+                        // (`ui.tsx:118, 147`).
+                        .fill(Hsla::from(theme.blue_9))
+                        .thumb(
+                            px(16.),
+                            if theme.is_dark() {
+                                Hsla::from(theme.gray_12)
+                            } else {
+                                Hsla::from(theme.gray_1)
+                            },
+                            Some(Hsla::from(theme.gray_6)),
+                        )
+                        .thumb_top(px(-6.3))
+                        .on_drag_start(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.zoom_slider_drag = true;
+                            this.apply_zoom_slider(event.position, window, cx);
+                        })),
                     ),
             )
     }
@@ -1830,35 +2069,40 @@ impl EditorWindow {
 
     // -- Timeline ------------------------------------------------------------
 
-    /// The timeline strip at its default 260px: the two **locked** tracks --
-    /// Clip and Zoom, the only ones `trackDefinitions` marks `locked: true`
-    /// (`TL/index.tsx:89-144`) -- with their real gutter chips, the ruler above
-    /// them, and a playhead that follows playback and seeks.
+    /// The timeline strip at its default 260px, 1:1 and read-only.
     ///
-    /// Seeking is live (the ruler's scrub surface and the container's
-    /// press-to-seek); segment drag, trim, split, zoom, the minimap and the
-    /// hover playhead are E3's.
+    /// Source order top to bottom (`TL/index.tsx:1141-1500`): the minimap
+    /// floating at `top: 2px`, the 32px ruler strip with the "Add track"
+    /// trigger in its bottom-left and the scrub surface over the rest of it,
+    /// the hover ghost, the playhead, and then the scroll body carrying one row
+    /// per visible track behind the edge fade.
+    ///
+    /// Everything that would *change* the project -- drag, trim, split,
+    /// selection, create-by-drag, the track manager's popover, the minimap's
+    /// own drag -- is E4. Seeking, zooming, panning and hovering are live.
     fn render_timeline(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        // `transform.zoom` is visible seconds and starts at `zoomOutLimit()` =
-        // `min(totalDuration, 600)` (`ED/context.ts:1387, 1455`), position 0.
-        let zoom = self.timeline_zoom();
-        // `transform: translateX(min((playbackTime - position) / secsPerPixel,
-        // timelineWidth))` (`TL/index.tsx:1287-1290`).
-        let content_width = timeline_content_width(viewport_width);
-        let secs_per_pixel = zoom / content_width as f64;
-        let playhead_x = ((self.playhead / secs_per_pixel) as f32).clamp(0., content_width);
+        let theme = self.theme;
+        let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
+
+        let playhead_x = timeline::playhead_offset(self.view, content_width);
+        let ghost_x = timeline::ghost_offset(self.view, content_width);
+
+        let minimap_width =
+            (viewport_width - TIMELINE_SLOT_PADDING * 2. - TIMELINE_PADDING - TRACK_GUTTER
+                - TIMELINE_PADDING)
+                .max(1.);
 
         div()
             .flex_none()
             .min_h_0()
-            .px(px(8.))
+            .px(px(TIMELINE_SLOT_PADDING))
             .overflow_hidden()
             .relative()
             // The persisted height, clamped to `[MIN_TIMELINE_HEIGHT,
             // layoutHeight - MIN_PLAYER_HEIGHT]` (`Editor.tsx:421-435`).
-            // Nothing writes it yet -- the drag handle is inert this unit --
-            // so it sits at the default with the floor still expressed.
+            // Nothing writes it yet -- the drag handle is inert -- so it sits
+            // at the default with the floor still expressed.
             .h(px(DEFAULT_TIMELINE_HEIGHT))
             .min_h(px(MIN_TIMELINE_HEIGHT))
             .child(
@@ -1866,10 +2110,11 @@ impl EditorWindow {
                     // `pt-8 relative overflow-hidden flex flex-col gap-2
                     // h-full`, `padding-left/right: 16px`.
                     div()
+                        .id("timeline-container")
                         .relative()
                         .flex()
                         .flex_col()
-                        .gap(px(8.))
+                        .gap(px(TRACK_ROW_GAP))
                         .h_full()
                         .overflow_hidden()
                         .pt(px(TIMELINE_TOP_PADDING))
@@ -1894,369 +2139,225 @@ impl EditorWindow {
                                 }),
                             )
                         })
-                        .child(self.render_timeline_ruler(zoom, viewport_width))
-                        .child(self.render_clip_track(zoom, viewport_width))
-                        .child(self.render_zoom_track())
-                        // `absolute inset-y-0 right-0 z-40` at
-                        // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's
-                        // scrub surface, which reaches into the snap-to-zero
-                        // zone so hitting 0:00 is not a battle
-                        // (`TL/index.tsx:1236-1244`).
-                        .when(live, |this| {
-                            this.child(
-                                div()
-                                    .absolute()
-                                    // The strip is the container's first row,
-                                    // below its `pt-8`, and the surface is
-                                    // `inset-y-0` within it.
-                                    .top(px(TIMELINE_TOP_PADDING))
-                                    .h(px(TIMELINE_HEADER_HEIGHT))
-                                    .left(px(TIMELINE_PADDING + TRACK_GUTTER - START_SNAP_PX as f32))
-                                    .right(px(TIMELINE_PADDING))
-                                    .cursor(gpui::CursorStyle::ResizeLeftRight)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            move |this, event: &MouseDownEvent, window, cx| {
-                                                cx.stop_propagation();
-                                                this.timeline_mouse_down(event, true, window, cx);
-                                            },
-                                        ),
-                                    ),
-                            )
-                        })
-                        // The playhead: `absolute bottom-0 rounded-full z-20
-                        // w-px`, `left: 128px` (16 + 112), `top: 24px`
-                        // (`TL/index.tsx:1279-1295`).
+                        // `onMouseMove` -> `previewTime` (`:1170-1184`).
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                            this.timeline_hover(f32::from(event.position.x), window, cx);
+                        }))
+                        // `onWheel` (`:1189-1207`) and the pinch the webview
+                        // would have delivered as `ctrl+wheel`.
+                        .on_scroll_wheel(cx.listener(
+                            |this, event: &gpui::ScrollWheelEvent, window, cx| {
+                                this.timeline_wheel(event, window, cx);
+                            },
+                        ))
+                        .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
+                            this.timeline_pinch(event, window, cx);
+                        }))
+                        // The minimap: `absolute z-30` at `top: 2px`,
+                        // `left: 128px`, `right: 16px`, `height: 12px`
+                        // (`TL/index.tsx:1209-1219`). Read-only -- its drag,
+                        // its two 8px resize handles and its click-to-centre
+                        // are E4's.
                         .child(
                             div()
                                 .absolute()
-                                .left(px(TIMELINE_PADDING + TRACK_GUTTER + playhead_x))
-                                .top(px(PLAYHEAD_TOP_OFFSET))
-                                .bottom_0()
-                                .w(px(1.))
-                                .rounded_full()
-                                .bg(playhead_color())
-                                .child(
-                                    // The knob: `size-3 rounded-full -mt-2`.
-                                    div()
-                                        .absolute()
-                                        .top(px(-8.))
-                                        .left(px(-5.5))
-                                        .size(px(12.))
-                                        .rounded_full()
-                                        .bg(playhead_color()),
-                                ),
-                        ),
+                                .top(px(MINIMAP_TOP))
+                                .left(px(TIMELINE_PADDING + TRACK_GUTTER))
+                                .right(px(TIMELINE_PADDING))
+                                .h(px(MINIMAP_HEIGHT))
+                                .child(timeline::render_minimap(
+                                    &theme,
+                                    &self.timeline,
+                                    self.view,
+                                    minimap_width,
+                                )),
+                        )
+                        .child(self.render_timeline_header(viewport_width, live, cx))
+                        .child(self.render_timeline_body(viewport_width, cx))
+                        // The hover ghost (`TL/index.tsx:1246-1278`):
+                        // `from-gray-400` with a `bg-gray-10` knob. Drawn only
+                        // while paused and while the pointer is over the
+                        // content column.
+                        .children(ghost_x.map(|x| {
+                            timeline::render_playhead(
+                                Hsla::from(theme.gray_9),
+                                x,
+                                Hsla::from(theme.gray_10),
+                            )
+                        }))
+                        // The playhead (`:1279-1295`).
+                        .child(timeline::render_playhead(
+                            timeline::playhead_color(),
+                            playhead_x,
+                            timeline::playhead_color(),
+                        )),
                 ),
             )
     }
 
-    /// `TimelineMarkings` (`TL/index.tsx:1554-1600`): a 32px header strip whose
-    /// body is `relative flex-1 h-4 text-xs text-gray-9` with `margin-left:
-    /// 112px`, dotted every `markingResolution()` seconds and labelled on the
-    /// whole ones.
-    fn render_timeline_ruler(&self, zoom: f64, viewport_width: f32) -> impl IntoElement {
-        let theme = self.theme;
-        let resolution = marking_resolution(zoom);
-        // The strip's own width is not known until layout, so the tick count
-        // uses the source formula: `ceil(2 + (zoom + 5) / resolution)`.
-        let count = (2.0 + (zoom + 5.0) / resolution).ceil().max(0.) as usize;
-        // `secsPerPixel = zoom / timelineBounds.width`.
-        let content_width = timeline_content_width(viewport_width);
-        let secs_per_pixel = zoom / content_width as f64;
-
-        let mut body = div()
-            .relative()
-            .flex_1()
-            .h(px(16.))
-            .ml(px(TRACK_GUTTER))
-            .text_size(px(12.))
-            .text_color(Hsla::from(theme.gray_9));
-
-        for index in 0..count.min(256) {
-            let second = index as f64 * resolution;
-            let x = second / secs_per_pixel - 1.;
-            if x > content_width as f64 {
-                break;
-            }
-            body = body.child(
-                div()
-                    .absolute()
-                    .left(px(x as f32))
-                    .bottom(px(4.))
-                    .size(px(4.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.gray_9))
-                    .when(second.fract() == 0., |this| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .top(px(-18.))
-                                .when(second != 0., |this| this.left(px(-12.)))
-                                .w(px(28.))
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_9))
-                                .child(format_time(second)),
-                        )
-                    }),
-            );
-        }
-
+    /// The 32px header strip (`TL/index.tsx:1220-1245`): the ruler, the "Add
+    /// track" trigger over the gutter, and the scrub surface over everything
+    /// right of `TRACK_GUTTER - START_SNAP_PX`.
+    fn render_timeline_header(
+        &self,
+        viewport_width: f32,
+        live: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         div()
             .relative()
             .h(px(TIMELINE_HEADER_HEIGHT))
             .flex_none()
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_end()
-                    .child(body),
-            )
-            // The `TrackManager` "Add track" trigger sits at the gutter's
-            // width in the header's bottom-left (`TL/index.tsx:1226-1233`).
+            .child(timeline::render_ruler(&self.theme, self.view, viewport_width))
+            // `TrackManager`'s trigger (`TL/TrackManager.tsx:174-188`):
+            // `h-8 w-full rounded-lg` with the app's blue gradient, at `z-30`
+            // over the ruler. Its popover -- nine rows with descriptions,
+            // toggles and lane counts -- is E4's, so the trigger is inert; it
+            // is drawn **opaque** rather than at the 50 % wash the header's
+            // other unbuilt affordances carry, because the ruler's leftmost
+            // label sits underneath it (`TL/index.tsx:1227-1236` puts the
+            // trigger above the markings for exactly that reason) and a
+            // translucent button would let it bleed through.
             .child(
                 div()
                     .absolute()
                     .bottom_0()
                     .left_0()
                     .w(px(TRACK_ICON_WIDTH))
-                    .h(px(TIMELINE_HEADER_HEIGHT / 2.))
+                    .h(px(32.))
                     .flex()
+                    .flex_row()
                     .items_center()
                     .justify_center()
-                    .opacity(0.5)
+                    .gap(px(4.))
+                    .px(px(8.))
+                    .rounded(px(8.))
+                    .bg(gpui::linear_gradient(
+                        180.,
+                        gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
+                        gpui::linear_color_stop(gpui::rgb(0x2563eb), 1.),
+                    ))
                     .text_size(px(11.))
-                    .text_color(Hsla::from(theme.gray_10))
-                    .child("Add track"),
-            )
-    }
-
-    /// The row shell every track shares: `flex items-stretch gap-2`, a 104px
-    /// gutter cell and a `flex-1 relative overflow-hidden min-w-0` content
-    /// cell (`TL/index.tsx:1516-1547`).
-    fn track_row(
-        &self,
-        color: Hsla,
-        icon: &'static str,
-        label: &'static str,
-        content: impl IntoElement,
-    ) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_row()
-            .items_stretch()
-            .gap(px(TRACK_GUTTER_GAP))
-            .h(px(TRACK_HEIGHT))
-            .flex_none()
-            .child(
-                div()
-                    .w(px(TRACK_ICON_WIDTH))
-                    .flex_none()
-                    .relative()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(gpui::white())
                     .child(
-                        // The chip: `cap-track-fill` + `relative z-10 w-full
-                        // h-13 flex flex-col items-center justify-center
-                        // gap-0.5 rounded-xl ... text-white`. `h-13` is 52 and
-                        // deliberately does *not* follow `--track-height` --
-                        // the source's own gotcha, kept.
-                        div()
-                            .w_full()
-                            .h(px(52.))
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(2.))
-                            .rounded(px(12.))
-                            .bg(color)
-                            .border_1()
-                            .border_color(track_fill_border(color))
-                            .text_color(gpui::white())
-                            .child(
-                                svg()
-                                    .path(icon)
-                                    .size(px(16.))
-                                    .text_color(gpui::white()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(label),
-                            ),
+                        svg()
+                            .path("icons/plus.svg")
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(gpui::white()),
+                    )
+                    .child("Add track")
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(10.))
+                            .flex_none()
+                            .text_color(gpui::white()),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .relative()
-                    .overflow_hidden()
-                    .min_w_0()
-                    .child(content),
-            )
-    }
-
-    fn render_clip_track(&self, zoom: f64, viewport_width: f32) -> impl IntoElement {
-        let color = track_clip_color();
-        let summary = self.summary();
-        let content_width = timeline_content_width(viewport_width);
-        let secs_per_pixel = zoom / content_width as f64;
-
-        let mut content = div().relative().size_full();
-        if let Some(summary) = summary {
-            for (start, end, recording_clip) in &summary.clips {
-                let x = start / secs_per_pixel;
-                let width = (end - start) / secs_per_pixel;
-                let name = if summary.multiple_recording_segments {
-                    format!("Clip {recording_clip}")
-                } else {
-                    "Clip".to_string()
-                };
-                content = content.child(
-                    // `SegmentRoot`: `absolute overflow-visible border
-                    // rounded-xl inset-y-0`, inner fill `cap-track-fill`.
+            // `absolute inset-y-0 right-0 z-40` at
+            // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's scrub
+            // surface, which reaches into the snap-to-zero zone so hitting
+            // 0:00 is not a battle (`TL/index.tsx:1237-1244`).
+            .when(live, |this| {
+                this.child(
                     div()
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(px(x as f32))
-                        .w(px(width as f32))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(gpui::transparent_black())
-                        .child(
-                            div()
-                                .relative()
-                                .size_full()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(4.))
-                                .rounded(px(12.))
-                                .overflow_hidden()
-                                .bg(color)
-                                .border_1()
-                                .border_color(track_fill_border(color))
-                                // `SegmentLabel`'s full tier: the clip name
-                                // over the duration.
-                                .when(width > 100., |this| {
-                                    this.child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(gpui::hsla(0., 0., 1., 0.7))
-                                            .child(SharedString::from(name.clone())),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(14.))
-                                            .text_color(gpui::white())
-                                            .child(format_clip_time(end - start)),
-                                    )
-                                })
-                                .when(width <= 100. && width > 48., |this| {
-                                    this.child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(gpui::white())
-                                            .child(format_clip_time(end - start)),
-                                    )
-                                }),
+                        .left(px(TRACK_GUTTER - START_SNAP_PX as f32))
+                        .right_0()
+                        .cursor(gpui::CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.timeline_mouse_down(event, true, window, cx);
+                            }),
                         ),
-                );
-            }
+                )
+            })
+    }
+
+    /// The scroll body (`TL/index.tsx:1317-1499`): `relative flex-1 min-h-0`
+    /// carrying the edge-fade mask, with `absolute inset-0 overflow-y-auto
+    /// overflow-x-hidden pr-1` inside it and the rows in a `flex flex-col
+    /// gap-2 min-h-full`.
+    fn render_timeline_body(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .gap(px(TRACK_ROW_GAP))
+            .min_h_full()
+            .w_full();
+
+        for row in &self.timeline.rows {
+            let kind = row.kind;
+            rows = rows.child(
+                div()
+                    .id(gpui::ElementId::NamedInteger(
+                        "timeline-row".into(),
+                        (kind as usize as u64) << 16 | row.lane as u64,
+                    ))
+                    // Every track sets `hoveredTrack` on enter and clears it
+                    // on leave (`TL/ZoomTrack.tsx:170-171` and its eight
+                    // siblings); the zoom and 3D tracks read it to decide
+                    // whether to draw their new-segment ghost.
+                    .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                        this.set_hovered_track(hovered.then_some(kind), window, cx);
+                    }))
+                    .child(timeline::render_row(
+                        &theme,
+                        &self.timeline,
+                        *row,
+                        self.view,
+                        viewport_width,
+                    )),
+            );
         }
 
-        // `IconLucideClapperboard` in the gutter; the app's own clapperboard
-        // glyph stands in for the Lucide one (the Recents pill already uses it
-        // for `IconCapClapperboard`).
-        self.track_row(color, "icons/clapperboard.svg", "Clip", content)
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .id("timeline-scroll")
+                    .absolute()
+                    .inset_0()
+                    .overflow_y_scroll()
+                    .pr(px(SCROLL_BODY_PADDING_RIGHT))
+                    // `if (!e.ctrlKey && |deltaY| > |deltaX|) e.stopPropagation()`
+                    // (`TL/index.tsx:1327-1331`): a vertical wheel inside the
+                    // body scrolls the track list instead of panning the
+                    // timeline. gpui dispatches innermost-first, so stopping
+                    // here is what keeps it off the container's pan handler.
+                    .on_scroll_wheel(cx.listener(
+                        |_this, event: &gpui::ScrollWheelEvent, window, cx| {
+                            let pixels = event.delta.pixel_delta(window.line_height());
+                            if !event.modifiers.control
+                                && f32::from(pixels.y).abs() > f32::from(pixels.x).abs()
+                            {
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .child(rows),
+            )
+            // The `mask-image` edge fade (`TL/index.tsx:1097-1139`) as two
+            // painted gradients; see `edge_fade_strengths` for why.
+            .child(timeline::render_edge_fade(
+                self.root_bg(),
+                timeline::edge_fade_strengths(&self.timeline, self.view, viewport_width),
+            ))
     }
-
-    fn render_zoom_track(&self) -> impl IntoElement {
-        // A raw recording has no zoom segments, and creating them is E3's job,
-        // so the row is the empty lane its own track renders.
-        self.track_row(
-            track_zoom_color(),
-            "icons/search.svg",
-            "Zoom",
-            div().size_full(),
-        )
-    }
-}
-
-/// The width of a track's content column: the window, less the timeline
-/// slot's `px-2`, less the container's own 16px padding on each side, less
-/// the 112px icon gutter. This is `timelineBounds.width`, which every
-/// `secsPerPixel` in the timeline divides by.
-fn timeline_content_width(viewport_width: f32) -> f32 {
-    (viewport_width - TIMELINE_SLOT_PADDING * 2. - TIMELINE_PADDING * 2. - TRACK_GUTTER).max(1.)
-}
-
-/// The window x of the track content column's left edge --
-/// `rect.left + TIMELINE_PADDING + TRACK_GUTTER` in
-/// `getTimelineContentMetrics` (`TL/index.tsx:803-816`), where `rect` is the
-/// timeline container, itself inset by the slot's `px-2`.
-fn timeline_content_left() -> f32 {
-    TIMELINE_SLOT_PADDING + TIMELINE_PADDING + TRACK_GUTTER
-}
-
-/// `timelineTimeFromClientX` (`TL/index.tsx:818-827`), verbatim including the
-/// snap-to-zero zone and the clamp to `[0, totalDuration]`.
-fn timeline_time_from_x(x: f32, viewport_width: f32, zoom: f64, position: f64, total: f64) -> f64 {
-    let secs_per_pixel = zoom / timeline_content_width(viewport_width) as f64;
-    let raw = secs_per_pixel * (x - timeline_content_left()) as f64 + position;
-    let snapped = if raw / secs_per_pixel <= START_SNAP_PX {
-        0.0
-    } else {
-        raw
-    };
-    snapped.clamp(0.0, total.max(0.0))
 }
 
 /// `isAtEnd()` (`Player.tsx:156-159`).
 fn is_at_end(total: f64, playhead: f64) -> bool {
     total > 0.0 && total - playhead <= 0.1
-}
-
-/// `markingResolution` (`TL/context.ts:11-12, 50-55`): the first of
-/// `[0.5, 1, 2.5, 5, 10, 30]` whose `zoom / r <= MAX_TIMELINE_MARKINGS (20)`,
-/// else 30.
-fn marking_resolution(zoom: f64) -> f64 {
-    const MAX_TIMELINE_MARKINGS: f64 = 20.;
-    for candidate in [0.5, 1.0, 2.5, 5.0, 10.0, 30.0] {
-        if zoom / candidate <= MAX_TIMELINE_MARKINGS {
-            return candidate;
-        }
-    }
-    30.0
-}
-
-/// `formatTime` (`routes/editor/utils.ts:1-13`) -- the transport's `M:SS`.
-fn format_time(seconds: f64) -> String {
-    let seconds = seconds.max(0.0);
-    let minutes = (seconds / 60.0).floor() as u64;
-    let secs = (seconds % 60.0).floor() as u64;
-    format!("{minutes}:{secs:02}")
-}
-
-/// The *other* `formatTime`, the timeline's (`TL/ClipTrack.tsx:128-140`):
-/// `Nh Nm Ns` / `Nm Ns` / `Ns`.
-fn format_clip_time(seconds: f64) -> String {
-    let seconds = seconds.max(0.0);
-    let hours = (seconds / 3600.0).floor() as u64;
-    let minutes = ((seconds % 3600.0) / 60.0).floor() as u64;
-    let secs = (seconds % 60.0).floor() as u64;
-    if hours > 0 {
-        format!("{hours}h {minutes}m {secs}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {secs}s")
-    } else {
-        format!("{secs}s")
-    }
 }
 
 impl Render for EditorWindow {
@@ -2268,6 +2369,19 @@ impl Render for EditorWindow {
         // assuming the default width.
         let viewport_width: f32 = window.viewport_size().width.into();
         let scrubbing = self.scrub.is_some();
+
+        // `onMount`'s `checkBounds` (`TL/index.tsx:689-703`): once the
+        // timeline has a width, zoom in until a segment would be at least
+        // 80px. The source retries every 10ms until the bounds exist; here the
+        // first render that knows both the width and a duration is that
+        // moment, and `fitted` makes it once-only exactly as the mount hook is.
+        if !self.fitted && self.total_duration() > 0.0 {
+            self.fitted = true;
+            let total = self.total_duration();
+            self.view
+                .transform
+                .fit_on_mount(timeline::content_width(viewport_width), total);
+        }
 
         div()
             .size_full()
@@ -2383,6 +2497,22 @@ impl Render for EditorWindow {
                             .child(self.render_timeline(viewport_width, cx)),
                     ),
             )
+            // The zoom slider's window-wide drag layer, painted last so it is
+            // over everything -- the same shape the settings window's sliders
+            // use, because gpui has no pointer capture and a 96px row would
+            // otherwise lose the drag the moment the pointer left it.
+            .children(self.zoom_slider_drag.then(|| {
+                ui::Slider::drag_layer(
+                    "timeline-zoom-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.apply_zoom_slider(event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.zoom_slider_drag = false;
+                        cx.notify();
+                    }),
+                )
+            }))
     }
 }
 
@@ -2481,32 +2611,6 @@ mod tests {
         assert!((width / height - 992. / 492.).abs() < 0.001);
     }
 
-    #[test]
-    fn marking_resolution_walks_the_ladder() {
-        // `MAX_TIMELINE_MARKINGS = 20`.
-        assert_eq!(marking_resolution(5.0), 0.5);
-        assert_eq!(marking_resolution(15.0), 1.0);
-        assert_eq!(marking_resolution(40.0), 2.5);
-        assert_eq!(marking_resolution(90.0), 5.0);
-        assert_eq!(marking_resolution(150.0), 10.0);
-        assert_eq!(marking_resolution(5000.0), 30.0);
-    }
-
-    #[test]
-    fn transport_time_is_m_ss() {
-        assert_eq!(format_time(0.0), "0:00");
-        assert_eq!(format_time(9.4), "0:09");
-        assert_eq!(format_time(61.0), "1:01");
-        assert_eq!(format_time(3661.0), "61:01");
-    }
-
-    #[test]
-    fn clip_time_is_the_timelines_own_format() {
-        assert_eq!(format_clip_time(9.4), "9s");
-        assert_eq!(format_clip_time(61.0), "1m 1s");
-        assert_eq!(format_clip_time(3661.0), "1h 1m 1s");
-    }
-
     /// Every failure `EditorInstance::new` would return, plus the one it would
     /// panic on, has to come back as a message.
     #[test]
@@ -2542,55 +2646,6 @@ mod tests {
         assert!(is_at_end(10.0, 10.0));
         // Overshoot -- the engine can report a frame past the timeline end.
         assert!(is_at_end(10.0, 10.4));
-    }
-
-    /// `timelineTimeFromClientX` (`TL/index.tsx:818-827`). The editor's
-    /// default width with the fit zoom: 1275 - 16 - 32 - 112 = 1115px of
-    /// content starting at x = 136.
-    #[test]
-    fn timeline_click_maps_x_to_time() {
-        let width = EDITOR_WIDTH;
-        let total = 60.0;
-        let zoom = total; // `zoomOutLimit()` at this duration
-        let content = timeline_content_width(width);
-        assert_eq!(content, 1115.);
-        assert_eq!(timeline_content_left(), 136.);
-
-        // The content origin is 0:00...
-        assert!(timeline_time_from_x(136., width, zoom, 0.0, total).abs() < 1e-9);
-        // ...its right edge is the whole duration...
-        let end = timeline_time_from_x(136. + content, width, zoom, 0.0, total);
-        assert!((end - total).abs() < 1e-6, "{end}");
-        // ...and the middle is half of it.
-        let middle = timeline_time_from_x(136. + content / 2., width, zoom, 0.0, total);
-        assert!((middle - total / 2.).abs() < 1e-6, "{middle}");
-    }
-
-    #[test]
-    fn timeline_click_snaps_to_zero_and_clamps() {
-        let width = EDITOR_WIDTH;
-        let total = 60.0;
-        // Within START_SNAP_PX of the origin: exactly 0, not 0.4s.
-        let snapped = timeline_time_from_x(136. + 9., width, total, 0.0, total);
-        assert_eq!(snapped, 0.0);
-        // Just outside it: a real time.
-        let outside = timeline_time_from_x(136. + 11., width, total, 0.0, total);
-        assert!(outside > 0.0, "{outside}");
-        // Left of the timeline and past its end both clamp.
-        assert_eq!(timeline_time_from_x(0., width, total, 0.0, total), 0.0);
-        assert_eq!(
-            timeline_time_from_x(9_000., width, total, 0.0, total),
-            total
-        );
-    }
-
-    /// Panning is E3's, but the maths already carries `transform.position`, so
-    /// pin its meaning: seconds at the left edge.
-    #[test]
-    fn timeline_click_respects_the_transform_position() {
-        let width = EDITOR_WIDTH;
-        let time = timeline_time_from_x(136. + timeline_content_width(width) / 2., width, 10.0, 20.0, 600.0);
-        assert!((time - 25.0).abs() < 1e-6, "{time}");
     }
 
     /// The perf gate's line. `frames` is what reached the window, `dropped`

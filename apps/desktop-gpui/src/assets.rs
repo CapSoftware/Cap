@@ -79,6 +79,20 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "more-vertical.svg",
     "move-left.svg",
     "next.svg",
+    // The timeline's track glyphs. `trackIcons` (`TL/index.tsx:70-80`) and
+    // `getSceneIcon` (`TL/SceneTrack.tsx:80-96`) are Lucide, and the app has
+    // no Cap equivalent for most of them, so these nine are the Lucide 24x24
+    // originals: type, box-select (an alias of square-dashed since Lucide
+    // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
+    "box-select.svg",
+    "clock.svg",
+    "columns-2.svg",
+    "monitor-outline.svg",
+    "music.svg",
+    "panel-right.svg",
+    "rotate-3d.svg",
+    "type.svg",
+    "video.svg",
     "pause.svg",
     "pause-circle.svg",
     "person-standing.svg",
@@ -181,6 +195,9 @@ mod tests {
         include_str!("mode_select_window.rs"),
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
+        // The timeline's nine track glyphs and its scene-mode icons are named
+        // in the strip's own module, not in the window that hosts it.
+        include_str!("editor_timeline.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

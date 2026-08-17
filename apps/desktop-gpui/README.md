@@ -367,7 +367,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 14), auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is append-only and Mirror is inert — see below |
-| Editor | 1275×800 | **E1+E2 done — window, shell, playback.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop. Timeline interaction (E3) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
+| Editor | 1275×800 | **E1–E3 done — window, shell, playback, timeline.** The real 1275×800 window with the traffic lights at (20, 32), the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; and the timeline at 1:1 read-only — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan. Timeline *editing* (E4) and the sidebar's controls are pending — every affordance they own renders in place and disabled |
 | Screenshot editor | 1240×800 (min 800×600) | Not started |
 
 ## Recording
@@ -901,12 +901,15 @@ timeline, and the audio track through the editor's own `AudioOutput`.
   `stopPlayback` + `playbackTime = 0` + `transform.setPosition(0)` and next is
   `stopPlayback` + `playbackTime = totalDuration()` (`Player.tsx:370-405`) —
   jump to start and jump to end. Transcribed as they are.
-- **Space is the only key binding here.** `useEditorShortcuts`
+- **Space, `Mod+=` and `Mod+-`.** `useEditorShortcuts`
   (`Player.tsx:236-286`) binds `Space` (play/pause), `S` (split) and `Mod+=` /
-  `Mod+-` (zoom); the last three are E3's. Undo/redo (`context.ts:1930-1950`)
+  `Mod+-` (zoom); `S` is E4's. Undo/redo (`context.ts:1930-1950`)
   and Backspace/Delete (`TL/index.tsx:963`) belong to units that do not exist.
-  `e.repeat` is ignored there and `is_held` here. Verified with a real
-  `key code 49`: play, then pause 3.12s later at 59.9 fps.
+  `Mod` is Cmd-or-Ctrl (`useEditorShortcuts.ts:10`), and the combo normaliser
+  folds `+` onto `=` (`:12-30`). `e.repeat` is ignored there and `is_held`
+  here. Verified with a real `key code 49`: play, then pause 3.12s later at
+  59.9 fps; and with `key code 24`/`27` under `maskCommand` — see the timeline
+  section's anchor proof.
 - **Audio is the real `AudioOutput`.** Play logs `Applying audio output latency
   hint: 27.3 ms`, `Starting progressive audio pre-render duration_secs=15.9095
   sample_rate=48000 channels=2`, and `Progressive audio pre-render complete
@@ -931,6 +934,25 @@ is no shortfall to locate. `paints` is deliberately *not* the frame rate — the
 window repaints for the clock and the playhead as well, so it runs ~1.65x ahead
 of the frame count; it is listed so that a `paints` *below* `frames` would show
 gpui coalescing pictures away before they were drawn.
+
+**Re-measured with the full timeline drawing.** Same binary, same media, one
+variable — how many rows the strip has. A 30.5s two-clip studio recording with
+camera, mic and system audio, at 1248×562:
+
+```
+3 rows  (clip + zoom + scene):  playback fps=59.9 frames=969 dropped=0 (paints=1636 convert_avg=773us over 16.17s)
+11 rows (every track type)   :  playback fps=59.6 frames=964 dropped=0 (paints=1900 convert_avg=603us over 16.17s)
+```
+
+The whole timeline — eleven rows, two waveform paths per clip, every segment
+re-laid-out on every playhead tick — costs **0.3 fps and 264 extra paints**, and
+drops nothing. That is the answer to "does the timeline hurt playback": no, and
+the pump is still where the time goes. The two things that make it cheap are
+that segment labels are `SharedString` and the peak tables are `Arc`-shared, so
+a paint clones refcounts rather than allocating a `String` per segment and a
+`Vec<f32>` per clip sixty times a second; and that segments outside
+`[position - 2, position + zoom + 2]` are never built at all
+(`SEGMENT_RENDER_PADDING`, `TL/context.ts:14`).
 
 The per-frame CPU conversion — un-pad the 256-byte-aligned rows, swap R/B,
 build the `RenderImage` — costs **0.93ms** for a 1080×702 frame, i.e. 5.6 % of
@@ -962,6 +984,9 @@ Reliability, same binary:
   flat to the kilobyte over the following 15s and no higher at cycle 45 than at
   cycle 11 — a plateau, not a leak. A paused editor with no playback sits at
   345 MB.
+  Re-run over the eleven-row timeline: **45/45 cycles, 45 stop reports, zero
+  errors, zero warnings, zero "RefCell already borrowed", and zero frames
+  dropped across all 45 put together** (fps 53.7–59.6 per 320ms burst).
 - **Closing mid-playback** (`CAP_GPUI_AUTO_EDITOR_CLOSE=3`, which sends
   `performClose:` — the traffic light's own path): `sample` shows one
   `cap-playback` thread while playing, **none** 1.2s after the close, and a new
@@ -974,17 +999,190 @@ Editor-specific deviations:
 |---|---|
 | **The header's buttons are inert** | Delete recording, Open recording bundle, Presets, Organization, Undo, Redo, Clips, Captions and Export all render at their real metrics in the `disabled:opacity-50` state. Each needs a unit that does not exist: project deletion, the preset store, auth, an undo stack, the clips/transcript layout modes, export. |
 | **The name is displayed, not edited** | `NameEditor` is an `<input>` overlaying a measuring `<span>` that commits through `commands.setPrettyName`. gpui ships no text input (the same gap as the main window's search field and the teleprompter's script), so the name and its `.cap` suffix render read-only. |
-| **The player toolbar is inert; the transport is not** | Prev / play-pause / next are live. Aspect ratio, Crop, Frame, Preview quality, split, zoom in/out and the zoom slider are still drawn at their real sizes and do nothing — the zoom controls drive the timeline transform, which is E3. |
-| **No hover playhead and no preview time** | The Tauri timeline tracks `previewTime`: a grey playhead follows the pointer while paused, and the transport clock shows `previewTime ?? playbackTime` (`TL/index.tsx:1170-1188, 1255-1277`, `Player.tsx:359-365`). Hover state belongs with the rest of E3's timeline interaction, so the clock here is always the playhead's own time. |
-| **The timeline transform is fixed** | Seeking maths carries `transform.position` and `transform.zoom` and is unit-tested with a panned viewport, but nothing moves them yet: zoom is pinned at `zoomOutLimit()` and position at 0 until E3 builds the wheel/pinch/minimap paths. Edge-panning during a scrub past the content edge (`stepEdgePan`) is therefore not reproduced either — the pointer is clamped to the content instead. |
+| **The player toolbar is inert; the transport and the zoom controls are not** | Prev / play-pause / next are live, and so are the zoom-out / zoom-in glyphs and the zoom slider. Aspect ratio, Crop, Frame, Preview quality and the split toggle are still drawn at their real sizes and do nothing. |
 | **Playing state is set optimistically** | `handlePlayPauseClick` flips `editorState.playing` *after* awaiting the command; here the button and the icon change immediately and the driver applies the change a moment later. Same end state, no visible round trip. |
 | **Prev also seeks the engine** | The Tauri prev/next buttons only set `playbackTime`, leaving `state.playhead_position` stale until the next play's `seekTo`; here both go through the same seek path, which additionally emits the state change. Invisible either way — every play seeks first — and it keeps one code path for "the playhead moved". |
 | **Preview quality is pinned to `half`** | The render runs at `default_editor_preview_resolution()` = 1248×702, the app's default. The Tauri select re-renders at `full`/`half`/`quarter` and the frame is *not* re-requested on window resize either — the letterbox just re-fits the frame it has, because the render size is resolution-base-driven, not player-area-driven. |
 | **The config sidebar is a rail plus a placeholder** | The six-tab bar is real (`ui::TabRail`), at its 64px height with the `size-9` icon boxes, the selection pill and the two data-driven disabled states (camera when no segment has one, cursor when nothing was recorded). The panel bodies are a single "not part of this unit" card, as the settings window's eleven placeholder pages are. |
-| **The timeline is two locked tracks, drawn, and a live playhead** | Clip and Zoom — the only two `trackDefinitions` marks `locked: true` — with their real gutter chips at the `--track-clip` / `--track-zoom` colours, the 32px ruler with its tick ladder, the clip segments carrying name and duration, and the playhead tracking playback and seeks. No segment drag, trim, split, zoom, minimap, edge fade or track manager; no optional tracks. The timeline height is the default 260 and its drag handle is inert. |
+| **The timeline is read-only** | Every track type, the ruler, the minimap, the edge fade, the hover ghost, zoom and pan are all real; nothing that would *write* the project is. See [The timeline](#the-timeline) for what that covers and what E4 owns. The timeline height is the default 260 and its drag handle is inert. |
 | **No layout modes and no dialogs** | Export replaces the whole editor, transcript splits it and clips swaps the sidebar; none of the three is built, so `fullscreenMode`, the split ratio and the modal set are absent. |
 | **The editor does not park the other windows** | `ShowCapWindow::Editor` also hides the camera bubble and the target overlays and calls `release_camera_preview_if_idle`. Only the main-window half is reproduced, the same shape as the settings window's deviation. |
 | **No prewarm** | `PendingEditorInstances::start_prewarm` runs *before* the Tauri window is built so decoders warm up in parallel with the webview. There is no webview to race here, so the instance is built once, after the window exists. |
+
+## The timeline
+
+`editor_timeline.rs` is the whole strip at 1:1, **read-only**: a real view state
+(`transform.zoom` / `transform.position`), a ruler at its real resolution
+ladder, all nine track types drawn from the project's own
+`TimelineConfiguration`, the minimap, the edge fade and the hover ghost
+playhead. Everything that would *mutate* the project — drag, trim, split,
+selection, create-by-drag, delete, the track manager's popover — is E4, and
+this unit writes no config at all.
+
+### The transform
+
+`transform.zoom` is **visible seconds** and `transform.position` is the second
+at the left edge (`ED/context.ts:1453-1487`). Both clamps are transcribed
+exactly:
+
+- **zoom** = `Math.max(Math.min(newZoom, zoomOutLimit()), MAX_ZOOM_IN)`
+  (`context.ts:1390`), where `MAX_ZOOM_IN = 3` (`:184`) and
+  `zoomOutLimit() = min(totalDuration, 600)` (`:1387`). The order matters: on a
+  project shorter than three seconds the *floor* wins and the viewport shows
+  more than exists.
+- **position** = `[0, max(zoomOutLimit, totalDuration) + 4 - zoom]`
+  (`:1476-1486`) — the `max(…)` is what lets a project longer than the 600s
+  zoom-out limit still pan to its end, and the `+ 4` is four seconds of slack
+  past it.
+- **`updateZoom(newZoom, origin)`** keeps `origin` at the same fractional x
+  across the change (`:1389-1403`), and `originPercentage` is capped at 1 but
+  **not** floored at 0 — an origin left of the viewport really does push the
+  position the other way.
+- Initial zoom is `zoomOutLimit()` (`:1455`), then `onMount`'s `checkBounds`
+  narrows it so a segment is at least 80px wide: `desiredZoom =
+  timelineBounds.width / 80` (`TL/index.tsx:689-703`). There is no mount hook
+  here, so the first render that knows both the width and a duration does it,
+  once.
+
+Every anchor is the source's, and none of them is the pointer:
+
+| gesture | zoom | origin | source |
+|---|---|---|---|
+| `Mod+=` | `zoom / 1.1` | `playbackTime` | `Player.tsx:256-263` |
+| `Mod+-` | `zoom * 1.1` | `playbackTime` | `Player.tsx:264-271` |
+| zoom-in glyph | `zoom / 1.1` | `playbackTime` | `Player.tsx:441-449` |
+| zoom-out glyph | `zoom * 1.1` | `playbackTime` | `Player.tsx:430-440` |
+| slider | `(1 - v) * zoomOutLimit()` | `playbackTime` | `Player.tsx:450-465` |
+| `ctrl` + wheel | `zoom + deltaY * sqrt(zoom) / 30` | `previewTime ?? playbackTime` | `TL/index.tsx:1190-1193` |
+
+The slider's own value is `min(max(1 - zoom / zoomOutLimit(), 0), 1)`, so fully
+left is fully zoomed **out**; the top of its travel asks for zoom 0 and the
+clamp lifts it to `MAX_ZOOM_IN`, which is why the readout never reaches 1.
+
+**Wheel and pinch.** Without `ctrl` the wheel pans: horizontal wins when
+`|deltaX| > |deltaY| * 0.5`, otherwise macOS reads the shift key
+(`shiftKey ? deltaX : deltaY`), and the delta is scaled by `secsPerPixel`
+(`TL/index.tsx:1195-1205`). A vertical wheel *inside the scroll body* is stopped
+before it reaches the pan handler and scrolls the track list instead
+(`:1327-1331`). **gpui's scroll delta is the opposite sign to the DOM's** — it
+is the amount the content moves, added straight onto a scroll offset that is
+negative when scrolled down (`div.rs:3123-3124`) — so it is negated back into
+the source's convention before any of the source's arithmetic touches it. The
+source's rAF coalescing is dropped: gpui already delivers one event per frame.
+
+Pinch is the one thing that cannot be transcribed literally. In the webview a
+trackpad pinch arrives as `ctrl+wheel` and goes down the `e.ctrlKey` branch;
+gpui delivers a native `PinchEvent` instead, so `on_pinch` maps it through
+Chromium's own synthesis (`deltaY = -delta * 100`) into the same
+`deltaY * sqrt(zoom) / 30`.
+
+### `timelineBounds` is four pixels narrower than the ruler
+
+`<ClipTrack ref={setTimelineRef}>` (`TL/index.tsx:1336`) measures the clip row
+*inside* the scroll body, and that body carries `pr-1` (`:1326`). Every
+`secsPerPixel` in the timeline divides by that width, so at the editor's default
+1275px the track content column is **1111px** — not the 1115px the header strip
+the ruler draws into gets. E2's helper omitted the four pixels; `content_width`
+carries them now and `ruler_width` is the separate number. Ticks therefore line
+up with the tracks and the ruler simply has four pixels of slack at its right
+edge, which is what the source does too.
+
+### Two time domains
+
+Clip segments live in gapless *recording-flow* time; every other track lives in
+*output* time. A fullscreen, enabled text segment pauses the recording clock, so
+the clip track converts on render (`TL/ClipTrack.tsx:636-666`) and its box
+stretches across the inserted pause. The hold windows come from Rust's own
+`TimelineConfiguration::hold_windows` (`configuration.rs:1643`) rather than
+being re-derived; only `effective_to_output` is transcribed, because Rust's copy
+is private. `clip_timeline_offsets` is `ED/clip-transitions.ts:91-106` over
+Rust's public `effective_transition`, so a crossfade pulls the next clip
+backwards by its duration in both the boxes and the total.
+
+### The tracks
+
+Nine rows in the source's mount order (`TL/index.tsx:1334-1496`), their
+visibility derived from the project's own content (`ED/context.ts:1405-1420`):
+
+| row | shown when | verified |
+|---|---|---|
+| Video (clip) | always (`locked`) | ✅ visually, incl. waveform, in-clip tick markings, hold bands |
+| Captions | `captions.settings.enabled`, else any caption segment | ✅ visually, incl. the empty "No captions" state |
+| Keyboard | `keyboard.settings.enabled` | ✅ visually, incl. the empty state |
+| Text (N lanes) | one row per used lane | ✅ visually, both lanes, colour swatch + weight/slant |
+| Mask (N lanes) | one row per used lane | ✅ visually, both lanes, Sensitive and Highlight |
+| Audio (N lanes) | one row per used lane | ✅ visually, incl. fade envelopes and the "Add audio" empty state |
+| Zoom | always (`locked`) | ✅ visually, incl. the hover ghost |
+| 3D | any `camera3dSegments` | ✅ visually, Motion and Still |
+| Scene | `meta().hasCamera && !project.camera.hide` | ✅ visually, Camera Only / Split Screen / Hide Camera |
+
+Everything above was exercised on one fixture — a real two-clip studio recording
+with camera, mic and system audio, its `project-config.json` populated with all
+nine track types on a **copy** in the scratchpad. What is code-complete but
+never seen on screen: the `Floating` and `Default` scene glyphs, the clip label's
+speed chip at a `timescale != 1`, and the text track's fullscreen glyph tier
+(the fullscreen fixture's segments were all wider than the glyph threshold).
+
+Colours are the nine `--track-*` custom properties, which have **one definition
+each** rather than per-appearance values (`apps/desktop/src/styles/theme.css:24-34`),
+so they are literal in both themes; `--track-audio` is `var(--jade-9)`, which
+Radix keeps at `#29a383` in light and dark alike. The fill rule is
+`background: var(--seg-color); border: 1px solid color-mix(in srgb,
+var(--seg-color) 58%, black)` (`TL/styles.css:23-26`).
+
+Label tiers are `SEGMENT_LABEL_FULL_PX = 100` / `SEGMENT_LABEL_COMPACT_PX = 48`
+with a glyph tier at 16 (`TL/Track.tsx:140-141, 214`), and captions, keyboard
+and audio override the compact tier to 24. The label anchors to the **visible**
+slice of the segment, not its centre (`useSegmentVisibleBox`,
+`TL/Track.tsx:147-181`): a segment wider than the viewport has its true centre
+off screen.
+
+### The waveform is ported, not skipped
+
+The clip track's mic and system-audio waveforms are real. The data path needed
+no new infrastructure: `EditorInstance::segment_medias[i].audio` is an
+`AudioLoader` whose `get()` resolves when the background decode finishes, which
+is exactly what `get_mic_waveforms` (`lib.rs:4395-4412`) awaits. The peak
+extraction — one absolute-dBFS value per ~100ms chunk, silence pinned to -60
+rather than -inf — lives in the Tauri *app* (`src-tauri/src/audio.rs:42-73`)
+rather than in a crate, so it is transcribed into `waveform_peaks` and unit
+tested. It runs on the background executor once per project, fire-and-forget,
+exactly as `commands.getMicWaveforms().then(setMicWaveforms)` does
+(`ED/context.ts:1526-1539`) — the editor never waits on it, and the waveform
+simply appears.
+
+The curve itself is `createWaveformPath` (`TL/ClipTrack.tsx:69-127`) verbatim,
+cubic-bezier control points included, through `gpui::PathBuilder` and
+`window.paint_path`. The source builds it in a 0..1 unit box and lets the 2D
+context scale it; gpui has no path transform on `paint_path`, so the same maths
+is applied per point. Mic is `rgba(255,255,255,0.4)`, system audio
+`rgba(255,150,0,0.5)`, and a track muted at or below -30 dB draws nothing at all
+(`gainToScale`, `:57-62`). Inside a hold the mixer renders silence, so the curve
+drops to the baseline.
+
+### What is not the source
+
+| | |
+|---|---|
+| **The edge fade is painted, not masked** | The source dissolves the timeline's own edges with a `mask-image` whose stops ramp over `FADE_RAMP_PX = 50` of scroll (`TL/index.tsx:1097-1139`). gpui has no mask-image, so the same two strengths drive two 32px gradients painted in the editor's root background colour. Identical over an opaque background, which is the only one there is. |
+| **The hold band has no hatch** | A paused window inside a clip is `bg-black/45` plus a `repeating-linear-gradient` 45° hatch (`TL/ClipTrack.tsx:970-980`). gpui has no repeating gradient; the wash, the border, the pause glyph and the "Paused" label at ≥64px are all there, the hatch is not. |
+| **Three-stop gradients are two elements** | `gpui::linear_gradient` takes exactly two stops, so the in-clip tick markings' `from-transparent … via-white-transparent-40 … to-transparent` is drawn as two stacked halves, and the playhead's `to-120%` is folded into the end stop's alpha (at the bottom edge it still carries 1/6 of it). |
+| **The minimap is read-only** | The bar, its clip-boundary ticks and the viewport chip at `MIN_CHIP_WIDTH = 20` are drawn and track the transform. Its drag, its two 8px edge handles and its click-to-centre are E4's. |
+| **"Add track" is opaque, and inert** | The trigger renders at its real metrics rather than the 50% wash the header's other unbuilt affordances carry, because the ruler's leftmost label sits underneath it (`z-30` over the markings, `TL/index.tsx:1227-1236`) and a translucent button lets the label bleed through. Its popover — nine rows with descriptions, toggles and lane counts — is E4's. |
+| **Trim handles are drawn, not hit** | `SegmentHandle` is a 20px hit target (`w-5`, half-overhanging each edge) around a 3px bar (`TL/Track.tsx:236-258`). The bar is drawn at the source's resting opacity — `compact() ? 0.55 : 0.35`, and the clip track forces 0 until hover — and the hit target belongs to E4. |
+| **No hover state on segments** | `group-hover:opacity-100` on the handles and the delete-lane overlay on the gutter chips need per-segment hover tracking, which is E4's; `hoveredTrack` (the row-level one the zoom and 3D ghosts read) *is* tracked. |
+| **The zoom slider's row has no `px-1`/`mx-1` inset** | Kobalte's track is inset 8px inside its row (`ui.tsx:93, 107`); `ui::Slider` maps the pointer over the full row. The shared component's geometry is self-consistent and the settings window is measured against it, so this is left alone rather than changed under three other callers. |
+| **Custom cursors are the standard ones** | `.timeline-scissors-cursor` and `.timeline-fade-cursor` are inline SVG data-URIs (`TL/styles.css:1-21`). Both belong to interactions this unit does not have. |
+
+**A finding for E4:** `border-green-7` (a selected caption) and `border-sky-7`
+(a selected keyboard segment) are **dead classes in the shipping app**.
+`theme.css` imports Radix red/gray/blue/indigo/yellow/jade only, and
+`packages/ui-solid/src/main.css` maps `--color-emerald-*` onto jade and
+`--color-blue-*` onto blue but declares no `--color-green-*` or `--color-sky-*`,
+so Tailwind v4 generates no rule for either. Selecting a caption or keyboard
+segment changes nothing on screen today. `selected_border_color` enumerates all
+nine and draws those two transparent rather than inventing a colour.
+
 
 ## Verifying changes
 
@@ -1031,6 +1229,53 @@ painted and there is a scrollable height to move through.
 as a studio Recents card does. `=1` picks the newest studio recording the
 library scan finds — the same list Recents reads, so it is the card that would
 be first in the carousel.
+
+**The timeline needs a project that actually has the tracks on it**, and no
+recording produces one: a raw `.cap` has clips and maybe zoom segments and
+nothing else. Copy a real studio bundle into a scratch directory and write the
+other seven track types into the copy's `project-config.json` by hand — a
+two-clip recording with camera, mic and system audio gives clip numbering, both
+waveforms and the scene row for free. Never edit a bundle on the Desktop:
+`EditorInstance::new` writes `project-config.json` back when it has to
+synthesise anything, so opening one is not a read-only act.
+
+Each load logs one line naming every row and its segment count, which is how a
+fixture is checked to have deserialised rather than silently falling back to the
+default config (`RecordingMeta::project_config()` does not report a parse
+failure):
+
+```
+editor timeline model rows=11 track_height=48.0 total="29.877" clip=2 zoom=2 scene=3 three_d=2 text=3 mask=2 audio=2 caption=3 keyboard=3
+```
+
+Every transform change logs one too, at `info`, because the zoom anchor and the
+pan clamp are only checkable if the numbers come out of the running app:
+
+```
+timeline transform reason="zoom" zoom="12.6364" position="0.5045" origin="5.5500"
+```
+
+That line is the proof. Seek to 40% of a 13.9s viewport (`playbackTime` 5.55),
+press `Cmd+=`: zoom becomes `13.9 / 1.1 = 12.6364` and the position moves to
+`5.55 - 12.6364 × (5.55 / 13.9) = 0.5045`, so the playhead stays under the same
+pixel. `Cmd+-` puts both back exactly. The wheel is the same story —
+`ctrl` + three lines up over the ruler took 13.9 to **23.5935**, which is
+`13.9 + 78 × sqrt(13.9) / 30` to four decimals, anchored on `playbackTime`
+because the pointer had not published a `previewTime` — and a horizontal wheel
+over the tracks panned 1.3s per event, which is `78px × secsPerPixel`. A
+vertical wheel over the **ruler** pans; the same wheel over the **track body**
+scrolls the rows and does not pan, which is the source's
+`e.stopPropagation()` (`TL/index.tsx:1327-1331`) surviving the port. The zoom
+slider was dragged from x=731 to x=800 over its 727..823 track: `(731-727)/96`
+snaps to 0.042 → `(1-0.042) × 29.877 = 28.6222`, and `(800-727)/96` snaps to
+0.76 → `7.1705`. Both are what the log says, to four decimals.
+
+**Mouse events are flakier than key events here.** Synthetic `CGEvent` clicks go
+through long stretches of being dropped entirely while `key code` events keep
+landing — nothing in the app changes, and the same probe works on a later
+attempt. Any click-driven check should be run in a retry loop that greps the log
+for the effect and repeats if it sees nothing, rather than being believed the
+first time it comes back empty.
 
 The editor's playback hooks all wait 1.5s after the project loads, so the
 decoders are warm and the stopwatch measures playback rather than startup:
