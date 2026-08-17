@@ -40,6 +40,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "captions.svg",
     "circle.svg",
     "check.svg",
+    "clapperboard.svg",
     "chevron-down.svg",
     "chevron-left.svg",
     "chevron-right.svg",
@@ -151,6 +152,10 @@ mod tests {
     /// scan the same list.
     const ICON_SOURCES: &[&str] = &[
         include_str!("main_window.rs"),
+        // Not a window: the Recents card's per-kind pill and fallback glyphs
+        // are named on `MediaKind`, next to the `Recents.tsx` lines they come
+        // from, so the table has to scan here too.
+        include_str!("library.rs"),
         include_str!("controls_window.rs"),
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),

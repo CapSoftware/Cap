@@ -176,16 +176,13 @@ impl RecordingSession {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(Ok(project_dir)) => {
+                        // The completion affordance is Recents now: the main
+                        // window comes back with this recording at the head of
+                        // the carousel, thumbnail and all. Stop used to reveal
+                        // the bundle in Finder as a stand-in; the Tauri app
+                        // never does that, so it goes with the placeholder it
+                        // was standing in for.
                         tracing::info!(dir = %project_dir.display(), "recording finished");
-                        // v1 completion affordance until the editor window and
-                        // Recents thumbnails exist: reveal the project.
-                        #[cfg(target_os = "macos")]
-                        {
-                            let _ = std::process::Command::new("open")
-                                .arg("-R")
-                                .arg(&project_dir)
-                                .spawn();
-                        }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");

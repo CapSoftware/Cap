@@ -83,6 +83,13 @@ Everything below is real, not mocked.
   pill does. Opening it hides the main window and gets it back on close.
   Nothing in the shipping frontend reaches this window (see the deviation),
   so here it opens via `CAP_GPUI_AUTO_MODE_SELECT`.
+- **Recents, with real thumbnails.** The expanded window's carousel is the
+  real filesystem library: `list_recordings` + `list_screenshots` transcribed
+  into `library.rs` (every known recordings folder, `recording-meta.json`
+  parsed by `cap-project`'s own loader, sorted by the bundle's ctime, both
+  lists capped at 9 and merged). The thumbnails are the pre-baked files inside
+  each `.cap` — `screenshots/display.jpg` for a recording, the bundle's PNG for
+  a screenshot — decoded on the background executor. See below.
 - **The teleprompter.** 560×320, resizable to 420×220, native level 101 on all
   Spaces, on the `"teleprompter"` material at radius 22 with the traffic lights
   at (14, 14). A typed script, word-count-driven auto-scroll, WPM / opacity /
@@ -193,7 +200,10 @@ Things that are deliberately different, and why.
 | **No target thumbnails** | Display and window cards render the icon fallback the real card falls back to before its thumbnail arrives. Live previews need the capture pipeline. |
 | **Search is minimal** | gpui ships no text input. Ours tracks focus, takes `key_char` so dead keys and option-layouts work, and draws a static 1px caret. No selection, no cursor movement, no blink. Escape clears, then closes. |
 | **Plan badge is always "Personal"** | Which of Pro/Commercial applies comes from the license query. There is no auth or license plumbing yet, and claiming a plan would be worse than showing none. |
-| **Recents is header + empty state** | Thumbnails need the recordings library. |
+| **Recents cards reveal, they do not open** | `openRecentMedia` routes a studio card to the Editor window (recovering first if needed), an instant card to its share link, and a screenshot to the Screenshot Editor. None of those exist here, so the whole card reveals its `.cap` bundle in Finder instead — the action the Recordings settings page calls "Open recording bundle". No hover affordance was invented for it: the real card has none either, it is click-only with no context menu. |
+| **No carousel mask, snap or hover lift** | `RecentCarousel`'s edge fade is a scroll-position-driven `mask-image` and the cards are `snap-x snap-proximity`; the card's `hover:-translate-y-0.5` and the thumbnail's `group-hover:scale-[1.025]` are transforms. This gpui rev has neither a mask hook (same gap as the teleprompter vignette) nor a transform. The scroller, the gap, the `pr-8` gutter, the border/shadow hover and the trailing skeletons are all real — the skeletons just do not pulse (`animate-pulse` has no keyframe hook either). |
+| **Thumbnails are downsampled to the card** | `create_screenshot(.., None)` writes `display.jpg` at the display's *native* resolution — 3024×1964 here. The browser scales that per `<img>`; a gpui sprite atlas would hold nine of them whole, so each is resized to 392×224 (the card at 2×) during the same background decode. `ObjectFit::Cover` then crops as `object-cover` does. |
+| **Blur bridges on studio only** | `project_config_from_recording` is the studio arm of `handle_recording_finish`; the instant arm never writes a project config, so neither does this. |
 | **Window filter is duplicated** | The level-0 listability rule is copied from `cap_recording::sources::screen_capture` rather than imported — that crate drags in ffmpeg and the whole encode stack, which this app has no other reason to build. |
 
 ### gpui traps worth knowing
@@ -227,7 +237,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 
 | Window | Size | Status |
 |---|---|---|
-| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, level-100 panel behavior, native Liquid Glass / vibrancy material |
+| Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, Recents with real thumbnails, level-100 panel behavior, native Liquid Glass / vibrancy material |
 | Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar, corner resize, drag, persisted chrome state, capture-excluded in studio / included in instant |
 | Recording controls | 320×150 | **Done** — live timer, pause/resume, restart, delete, live mic level, instant-mode mute, drag; capture-excluded, non-activating |
 | Target select overlay | per display | **Done** — all four variants (display / window / area / camera-only), one transparent non-activating panel per display at the Tauri-verbatim level 7, cursor-following highlight, click-to-pin windows with app icons, draw/move/resize area selection with min-size validation, the real Start Recording flow (overlays close, bar opens, overlays excluded from capture), Escape/close dismiss |
@@ -264,6 +274,34 @@ expects. A microphone that enumerates but fails to open (Bluetooth profile
 switches, Continuity devices) degrades to a no-mic recording instead of
 failing the start.
 
+Stopping does the two things `handle_recording_finish` does after the remux,
+in its order — and nothing else, because the completion affordance is now
+Recents rather than a Finder reveal:
+
+- **`screenshots/display.jpg`.** `create_screenshot`
+  (`apps/desktop/src-tauri/src/lib.rs:2582-2655`) is ported into `library.rs`:
+  decode packets until the first video frame comes out, scale to RGB24 at the
+  source's own size, save as JPEG. `cap-recording` does not write this file, so
+  without it a project recorded here would show the icon fallback forever — in
+  the shipping app too. The source path is read back off disk after the remux,
+  because the remux is what decides where the display track lives (before it,
+  the meta points at the fragmented `.../segment-0/display` *directory*).
+  Instant projects take their frame from the already-muxed
+  `content/output.mp4` rather than rebuilding a temporary from the DASH
+  segments, which is the same first frame with one fewer file.
+- **The camera blur bridge.** `project_config_from_recording` copies the live
+  preview's blur toggle into the new project
+  (`apps/desktop/src-tauri/src/recording.rs:3889-3891`,
+  `config.camera.background_blur = BackgroundBlurConfig { mode: ... }`); blur is
+  never baked into the recorded camera track by either app, so this field is the
+  only thing that makes a project *open* blurred. `cap-recording` writes
+  `project-config.json` itself and its builder takes no config, so the value is
+  merged in afterwards: a read-modify-write on the raw JSON that replaces
+  exactly `camera.backgroundBlur.mode` (`"off"`/`"light"`/`"heavy"`, the
+  `BackgroundBlurMode` spelling) and leaves the other fifteen top-level
+  sections alone. `store::set_store_setting`'s discipline on the other shared
+  file, refusal included: a config that does not parse is never replaced.
+
 Recording-specific deviations:
 
 | | |
@@ -295,6 +333,53 @@ drawn (synthetic drags are dropped without Accessibility). The area variant
 was verified end to end: a seeded 800×500 crop recorded a 1600×1000 (2×)
 display track.
 
+## Recents and the recordings library
+
+The expanded window's carousel reads the same library the shipping app does,
+by doing the same work rather than by asking it. `library.rs` is
+`list_recordings` and `list_screenshots` transcribed
+(`apps/desktop/src-tauri/src/lib.rs:3974-4092`) plus the `recentMedia` query's
+merge (`new-main/index.tsx:2217-2263`):
+
+- **Directories.** `known_recordings_dirs` — the active recordings folder,
+  then the default `<app data>/recordings`, then every path in the store's
+  `previousRecordingsPaths`, deduplicated by canonical path and skipping ones
+  that do not exist. Recordings left behind in a folder the user has since
+  switched away from stay visible, which is the whole point of that list.
+  Screenshots come from `<app data>/screenshots`, which the custom-folder
+  setting never moves.
+- **Metadata.** `cap-project`'s own `RecordingMeta::load_for_project`, so the
+  studio/instant split and the clip count come off the same enum the Tauri
+  command reads them off. A directory whose `recording-meta.json` is missing
+  or unparseable is skipped, exactly as `get_recording_meta`'s `Ok(..)` guard
+  skips it.
+- **Order.** `sort_time_millis` is not stored data: it is the bundle
+  directory's `created()` (falling back to `modified()`), recomputed on every
+  scan — and for a screenshot, the PNG's rather than the directory's. Both
+  quirks are kept so the two apps order an identical library identically. Each
+  list is capped at 9 *before* the merge and the merged list capped again,
+  which is what stops ten screenshots from crowding out a recording newer than
+  nine of them.
+- **Thumbnails.** No video is decoded at render time: the files are already
+  there. A recording draws `screenshots/display.jpg`, a screenshot draws its
+  own PNG, and a bundle with neither draws the icon fallback the real card
+  falls back to — which is what every recording made before this unit does.
+- **Scheduling.** The scan and every decode run on the background executor and
+  land through `cx.notify()` + `window.refresh()`, never on the render path: a
+  library with several hundred bundles is several hundred `read_dir`s and JSON
+  parses, and the thumbnails are multi-megapixel JPEGs. The list arrives first
+  so the cards can paint with their fallbacks, then each thumbnail replaces its
+  own card's as it decodes — the shape `target_overlay::fetch_icon` uses. A
+  refresh that a newer one supersedes is cancelled by dropping its task.
+- **When it refreshes.** On expanding (the query's `enabled: isExpanded()`),
+  and on every path that brings the main window back — which is what makes a
+  recording that just finished appear at the head of the carousel without a
+  restart.
+
+`CAP_GPUI_RECORDINGS_DIR` scopes the scan as well as the writes: when it is
+set, it is the *only* directory listed. A verification run that redirects the
+library would otherwise still be reading the user's real one.
+
 ## Camera preview and app-scoped feeds
 
 Selecting a camera spins up an app-scoped `CameraFeed` actor and opens the
@@ -315,10 +400,19 @@ into a gpui `RenderImage`, and the previous frame's image is explicitly
 dropped from the sprite atlas each frame. Cover-fit and the circular clip both
 hold on the image path. Camera-window deviations: no mirroring (no flip
 transform exists in this gpui rev — the toolbar button is present but
-disabled), background blur cycles and persists but does not process frames
-(the `cap-camera-effects` pipeline is its own unit), the window position is
-not persisted per-monitor, and chrome state persists to `gpui-state.json`
-next to the Tauri store rather than `localStorage`.
+disabled), background blur does not process *preview* frames yet (the
+`cap-camera-effects` segmentation pipeline needs a `wgpu::Device` this app
+does not have — it is its own unit), the window position is not persisted
+per-monitor, and chrome state persists to `gpui-state.json` next to the Tauri
+store rather than `localStorage`.
+
+The blur toggle is no longer preview-only state, though: its value is copied
+into every studio recording's `project-config.json` at finalize time, the way
+`project_config_from_recording` copies the Tauri preview's (see Recording
+above). Blur was always non-destructive in both apps — the recorded camera
+track is raw and the editor re-runs the pipeline over it from that field — so
+a project recorded here with the bubble set to Light opens Light in the
+shipping editor, whether or not the bubble itself ever painted the blur.
 
 ### The macOS 26 display-link fix
 

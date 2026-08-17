@@ -83,7 +83,15 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
 fn show_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
-        .update(cx, |_, window, _| platform::native_window(window))
+        .update(cx, |view, window, cx| {
+            // Every path back to the main window is a path a new capture may
+            // have arrived on -- a finished recording most of all. The Tauri
+            // app gets this from `invalidateRecentMedia` plus the query's
+            // focus gate; here the reshow *is* the trigger, so a recording
+            // made a moment ago is in the list without a restart.
+            view.refresh_recents(window, cx);
+            platform::native_window(window)
+        })
         .ok()
         .flatten();
     cx.spawn(async move |_| {

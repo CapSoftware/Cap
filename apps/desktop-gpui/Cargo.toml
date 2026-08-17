@@ -43,6 +43,19 @@ cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 cap-recording = { path = "../../crates/recording" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+# The first-frame JPEG a finished recording's Recents card is drawn from
+# (`create_screenshot` in the Tauri binary). Same package/git/rev the root
+# workspace pins, and cap-recording already builds it, so this is an import,
+# not an extra dependency tree.
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
+# Camera preview frames and Recents thumbnails both become gpui `RenderImage`s,
+# and the frame container type must match gpui's image crate version exactly
+# (`image = "0.25.1"` in the zed fork's workspace) or `Frame` would be two
+# different types. `jpeg`/`png` are the two codecs the pre-baked bundle
+# thumbnails use; gpui's own pin already enables both, so this only spells out
+# what the build already resolves to.
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png"] }
+smallvec = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt"] }
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
@@ -68,11 +81,6 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSRespon
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = "0.2.2"
 raw-window-handle = "0.6"
-# Camera preview frames become gpui `RenderImage`s; the frame container type
-# must match gpui's image crate version exactly (`image = "0.25.1"` in the zed
-# fork's workspace) or `Frame` would be two different types.
-image = { version = "0.25.1", default-features = false }
-smallvec = "1"
 # ScreenCaptureKit shareable content, acquired the same way recording.rs in
 # src-tauri does. Same fork/rev/features as the root workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [

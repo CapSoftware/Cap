@@ -9,6 +9,7 @@ mod camera_window;
 mod controls_window;
 mod devices;
 mod feeds;
+mod library;
 mod main_window;
 mod mode_select_window;
 mod platform;

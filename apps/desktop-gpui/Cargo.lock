@@ -1289,6 +1289,7 @@ dependencies = [
  "chrono",
  "cidre",
  "cpal",
+ "ffmpeg-next",
  "flume 0.11.1",
  "gpui",
  "gpui_platform",

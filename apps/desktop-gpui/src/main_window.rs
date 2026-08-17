@@ -17,6 +17,7 @@ use crate::{
     MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
+    library::{self, MediaKind, RecentItem},
     recording,
     session::{Phase, RecordingSession},
     theme::{Appearance, Theme},
@@ -32,6 +33,10 @@ const RESIZE_DURATION_SECS: f32 = 0.18;
 
 /// `h-9` on `.cap-window-header`.
 const HEADER_HEIGHT: f32 = 36.;
+
+/// `h-28 w-[196px]` on `RecentCard`.
+const RECENT_CARD_WIDTH: f32 = 196.;
+const RECENT_CARD_HEIGHT: f32 = 112.;
 /// `h-[42px]` in deviceRowStyles.ts.
 const DEVICE_ROW_HEIGHT: f32 = 42.;
 
@@ -209,6 +214,22 @@ pub struct MainWindow {
     /// The app-wide recording session; the lifecycle itself lives there so the
     /// controls bar window can drive the same recording.
     session: Entity<RecordingSession>,
+    /// The Recents scan, or `None` while the first one is in flight -- which
+    /// is the query's `isLoading`, and draws the same three skeleton cards.
+    recents: Option<Vec<RecentEntry>>,
+    /// Holds the in-flight scan-and-decode pass. Assigning over it drops the
+    /// previous one, which cancels a refresh a newer one has superseded (the
+    /// same idiom as `resize_task`).
+    recents_task: Option<gpui::Task<()>>,
+}
+
+/// One `RecentMediaItem` on screen: the scanned entry, plus its thumbnail once
+/// the background pass has decoded one. Missing or undecodable thumbnails stay
+/// `None` and the card draws the icon fallback, which is exactly what the
+/// TSX's `onError` -> `setImageAvailable(false)` does.
+struct RecentEntry {
+    item: RecentItem,
+    thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
 impl MainWindow {
@@ -259,6 +280,8 @@ impl MainWindow {
             search_focus: cx.focus_handle(),
             enumerating: true,
             session,
+            recents: None,
+            recents_task: None,
         }
     }
 
@@ -315,6 +338,108 @@ impl MainWindow {
         .detach();
     }
 
+    /// Re-run the Recents scan and re-decode its thumbnails.
+    ///
+    /// `shouldLoadRecents()` (index.tsx:2210-2215) gates the query on the
+    /// window being expanded, focused, idle, and free of a target mode or an
+    /// open menu. Expanded is the check that carries the weight here: the
+    /// section is not rendered at all when it is false, so a scan then would
+    /// be filesystem work nobody could see. The rest of the gate is the
+    /// Tauri app avoiding a fetch it would immediately re-run; here the
+    /// refresh points are explicit (expanding, and the main window coming
+    /// back) rather than reactive.
+    ///
+    /// The scan and every decode run on the background executor -- a library
+    /// with several hundred bundles is several hundred `read_dir` + JSON
+    /// parses, and the thumbnails are native-resolution JPEGs. The list lands
+    /// first so the cards can paint with their icon fallbacks, then each
+    /// thumbnail replaces its own card's as it arrives, the way
+    /// `target_overlay::fetch_icon` fills in an app icon.
+    pub fn refresh_recents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.expanded {
+            return;
+        }
+
+        self.recents_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let items = cx
+                .background_executor()
+                .spawn(async { library::recent_media() })
+                .await;
+            tracing::info!(count = items.len(), "scanned the recordings library");
+
+            let thumbnails: Vec<(usize, std::path::PathBuf)> = items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    item.thumbnail.clone().map(|path| (index, path))
+                })
+                .collect();
+
+            if this
+                .update_in(cx, |this, window, cx| this.set_recents(items, window, cx))
+                .is_err()
+            {
+                return;
+            }
+
+            for (index, path) in thumbnails {
+                let image = cx
+                    .background_executor()
+                    .spawn(async move { library::decode_thumbnail(&path) })
+                    .await;
+                let Some(image) = image else { continue };
+
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        let Some(entry) =
+                            this.recents.as_mut().and_then(|items| items.get_mut(index))
+                        else {
+                            return;
+                        };
+                        if let Some(old) = entry.thumbnail.replace(image) {
+                            let _ = window.drop_image(old);
+                        }
+                        cx.notify();
+                        // The main window is not necessarily the active one
+                        // when a recording finishes into it, and an inactive
+                        // window only repaints when asked (the unit-2 finding).
+                        window.refresh();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }));
+    }
+
+    /// Install a fresh scan result, releasing the previous thumbnails from the
+    /// sprite atlas -- the same explicit drop the camera preview does with
+    /// every frame it replaces.
+    fn set_recents(
+        &mut self,
+        items: Vec<RecentItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for entry in self.recents.take().into_iter().flatten() {
+            if let Some(image) = entry.thumbnail {
+                let _ = window.drop_image(image);
+            }
+        }
+        self.recents = Some(
+            items
+                .into_iter()
+                .map(|item| RecentEntry {
+                    item,
+                    thumbnail: None,
+                })
+                .collect(),
+        );
+        cx.notify();
+        window.refresh();
+    }
+
     fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let from = self.window_size();
         self.expanded = !self.expanded;
@@ -356,6 +481,10 @@ impl MainWindow {
                     .await;
             }
         }));
+
+        // `enabled: shouldLoadRecents()` -- expanding is what turns the query
+        // on, and collapsing leaves the last result in place for the next one.
+        self.refresh_recents(window, cx);
 
         cx.notify();
     }
@@ -2262,13 +2391,13 @@ impl MainWindow {
 
     /// `Recents.tsx`, expanded only.
     ///
-    /// Thumbnails need the recordings library, so only the header and the empty
-    /// state are here -- which is what the real section shows on a machine with
-    /// no captures yet anyway.
+    /// Three states, the same three the section has: the loading skeletons
+    /// while the first scan is in flight, the dashed empty box when the
+    /// library is empty, and the card carousel otherwise.
     fn render_recents(&self) -> impl IntoElement {
         let theme = self.theme;
 
-        div()
+        let section = div()
             // `<div class="pt-2">` around the section in index.tsx.
             .pt(px(8.))
             .w_full()
@@ -2282,9 +2411,28 @@ impl MainWindow {
                         .text_color(theme.gray_12)
                         .child("Recents"),
                 ),
-            )
-            .child(
-                // `h-28 ... rounded-xl border border-dashed border-gray-5 bg-gray-2`.
+            );
+
+        match self.recents.as_deref() {
+            // `<Show when={isLoading}>`: three skeleton cards. Theirs pulse
+            // (`animate-pulse`); this gpui rev has no keyframe hook, so these
+            // are the same three slabs, static.
+            None => section.child(
+                self.recent_carousel()
+                    .children((0..3usize).map(|index| {
+                        div()
+                            .id(("recent-skeleton", index))
+                            .flex_shrink_0()
+                            .w(px(RECENT_CARD_WIDTH))
+                            .h(px(RECENT_CARD_HEIGHT))
+                            .rounded(px(12.))
+                            .bg(theme.body_fill(3))
+                    }))
+                    .into_any_element(),
+            ),
+            // `flex h-28 flex-col items-center justify-center gap-2 rounded-xl
+            //  border border-dashed border-gray-5 bg-gray-2 text-center`.
+            Some([]) => section.child(
                 div()
                     .flex()
                     .flex_col()
@@ -2292,7 +2440,7 @@ impl MainWindow {
                     .justify_center()
                     .gap(px(8.))
                     .w_full()
-                    .h(px(112.))
+                    .h(px(RECENT_CARD_HEIGHT))
                     .rounded(px(12.))
                     .border_dashed()
                     .border_1()
@@ -2309,8 +2457,226 @@ impl MainWindow {
                             .text_size(px(12.))
                             .text_color(theme.gray_10)
                             .child("Your latest captures will appear here."),
+                    )
+                    .into_any_element(),
+            ),
+            Some(entries) => section.child(
+                self.recent_carousel()
+                    .children(
+                        entries
+                            .iter()
+                            .enumerate()
+                            .map(|(index, entry)| self.render_recent_card(index, entry)),
+                    )
+                    .into_any_element(),
+            ),
+        }
+    }
+
+    /// `RecentCarousel`: `flex snap-x snap-proximity gap-2 overflow-x-auto
+    /// overscroll-x-contain scroll-smooth pb-1 pr-8`.
+    ///
+    /// Snap points and the scroll-position-driven edge-fade mask have no hook
+    /// in this gpui rev (the same `mask-image` gap as the teleprompter's
+    /// vignette); the scroller, the gap and the trailing gutter are real.
+    fn recent_carousel(&self) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("recents-carousel")
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(px(8.))
+            .pb(px(4.))
+            .pr(px(32.))
+            .w_full()
+            .overflow_x_scroll()
+    }
+
+    /// `RecentCard`: `group relative h-28 w-[196px] shrink-0 snap-start
+    /// overflow-hidden rounded-xl border border-gray-5 bg-gray-3 text-left
+    /// shadow-sm ... hover:-translate-y-0.5 hover:border-gray-7
+    /// hover:shadow-md`.
+    ///
+    /// The whole card is the button. Clicking it reveals the bundle in Finder
+    /// rather than opening the editor -- see the README's deviation; there is
+    /// no editor window here to open. `hover:-translate-y-0.5` and the
+    /// thumbnail's `group-hover:scale-[1.025]` are transforms, which this gpui
+    /// rev has none of.
+    fn render_recent_card(&self, index: usize, entry: &RecentEntry) -> impl IntoElement {
+        let theme = self.theme;
+        let item = &entry.item;
+        let bundle = item.bundle.clone();
+
+        div()
+            .id(("recent-card", index))
+            .relative()
+            .flex_shrink_0()
+            .w(px(RECENT_CARD_WIDTH))
+            .h(px(RECENT_CARD_HEIGHT))
+            .overflow_hidden()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(theme.body_border(5))
+            .bg(theme.body_fill(3))
+            .shadow_sm()
+            .cursor_pointer()
+            // `hover:border-gray-7` is not one of the steps theme.css remaps,
+            // so it keeps its Radix value under the material.
+            .hover(|style| style.border_color(theme.body_border(7)).shadow_md())
+            .child(match entry.thumbnail.clone() {
+                Some(image) => {
+                    use gpui::StyledImage as _;
+                    // `h-full w-full object-cover`, and the image carries the
+                    // card's radius itself: cover crops through the atlas
+                    // tile's UVs on this fork, so the rounding lands on the
+                    // real corners rather than being clipped off with the
+                    // overflow -- the same shape the camera bubble's circular
+                    // preview relies on. A flow child rather than an absolute
+                    // one, matching both the TSX and the camera window.
+                    gpui::img(image)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .rounded(px(12.))
+                        .into_any_element()
+                }
+                // `flex h-full w-full items-center justify-center
+                //  bg-linear-to-br from-gray-3 to-gray-5 text-gray-9`, with the
+                //  `size-7` glyph for the media kind.
+                None => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::linear_gradient(
+                        135.,
+                        gpui::linear_color_stop(theme.body_fill(3), 0.),
+                        gpui::linear_color_stop(theme.body_fill(5), 1.),
+                    ))
+                    .child(
+                        svg()
+                            .path(item.kind.fallback_icon())
+                            .size(px(28.))
+                            .text_color(theme.gray_9),
+                    )
+                    .into_any_element(),
+            })
+            // `absolute inset-0 bg-linear-to-t from-black/80 via-black/10
+            //  to-black/5`. gpui's `linear_gradient` takes two stops, so the
+            //  three-stop ramp is two stacked halves that meet at `via`'s 50%
+            //  -- which is the same piecewise-linear curve CSS draws.
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(RECENT_CARD_HEIGHT / 2.))
+                    .bg(gpui::linear_gradient(
+                        0.,
+                        gpui::linear_color_stop(black_alpha(0.10), 0.),
+                        gpui::linear_color_stop(black_alpha(0.05), 1.),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(RECENT_CARD_HEIGHT / 2.))
+                    .bg(gpui::linear_gradient(
+                        0.,
+                        gpui::linear_color_stop(black_alpha(0.80), 0.),
+                        gpui::linear_color_stop(black_alpha(0.10), 1.),
+                    )),
+            )
+            // `absolute left-2 top-2 flex items-center gap-1 rounded-full
+            //  border border-white/15 bg-black/45 px-2 py-0.5 text-[9px]
+            //  font-medium text-white/90 backdrop-blur-sm` -- no backdrop blur
+            //  hook, same as everywhere else in this app.
+            .child(
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .top(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(white_alpha(0.15))
+                    .bg(black_alpha(0.45))
+                    .px(px(8.))
+                    .py(px(2.))
+                    .text_size(px(9.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(white_alpha(0.90))
+                    .child(
+                        svg()
+                            .path(item.kind.pill_icon())
+                            // `size-2.5`.
+                            .size(px(10.))
+                            .flex_shrink_0()
+                            .text_color(white_alpha(0.90)),
+                    )
+                    .child(item.kind.label()),
+            )
+            // `absolute inset-x-0 bottom-0 px-2.5 pb-2 pt-5`.
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .px(px(10.))
+                    .pb(px(8.))
+                    .pt(px(20.))
+                    .child(
+                        // `truncate text-[11px] font-medium text-white`.
+                        div()
+                            .w_full()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(gpui::white())
+                            .truncate()
+                            .child(item.pretty_name.clone()),
+                    )
+                    .when(
+                        // `props.item.kind === "recording" && clip_count > 1`.
+                        item.kind != MediaKind::Screenshot && item.clip_count > 1,
+                        |this| {
+                            this.child(
+                                // `mt-0.5 text-[9px] text-white/65`.
+                                div()
+                                    .mt(px(2.))
+                                    .text_size(px(9.))
+                                    .text_color(white_alpha(0.65))
+                                    .child(format!("{} clips", item.clip_count)),
+                            )
+                        },
                     ),
             )
+            .on_click(move |_, _window, _cx| {
+                // Deviation: `openRecentMedia` opens the Editor (studio), the
+                // share link (instant) or the Screenshot Editor. None of those
+                // windows exist here yet, so the card reveals its bundle --
+                // which is also what the Recordings settings page's "Open
+                // recording bundle" action does, and what this app already did
+                // when a recording finished.
+                #[cfg(target_os = "macos")]
+                {
+                    tracing::info!(path = %bundle.display(), "revealing recent capture");
+                    if let Err(error) = std::process::Command::new("open")
+                        .arg("-R")
+                        .arg(&bundle)
+                        .spawn()
+                    {
+                        tracing::warn!("revealing the bundle failed: {error}");
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = &bundle;
+            })
     }
 
     /// `ExpandedControlLabel`: `mb-1 px-1`, `text-xs font-semibold text-gray-12`.
@@ -2389,6 +2755,21 @@ impl MainWindow {
                 .border_color(theme.gray_8)
         })
     }
+}
+
+/// `black/N` -- Tailwind's slash-alpha over the two absolute colours, which
+/// come from neither the Radix palette nor the material tokens.
+fn black_alpha(alpha: f32) -> Hsla {
+    let mut color = gpui::black();
+    color.a = alpha;
+    color
+}
+
+/// `white/N`; see [`black_alpha`].
+fn white_alpha(alpha: f32) -> Hsla {
+    let mut color = gpui::white();
+    color.a = alpha;
+    color
 }
 
 /// `CAP_GPUI_AUTO_OVERLAY=display|window|area|camera`, the harness's stand-in

@@ -142,6 +142,22 @@ impl ActiveRecording {
                 .await
                 .context("studio finalize task")?
                 .context("studio finalize")?;
+
+                // Everything `handle_recording_finish` does after the remux,
+                // in its order: the first-frame JPEG the library's card is
+                // drawn from, then the camera preview's blur toggle copied
+                // into the project's configuration. Neither is fatal to a
+                // recording that is already on disk, so both only warn.
+                let project_path = completed.project_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Some(display_path) = studio_display_path(&project_path) {
+                        write_bundle_thumbnail(&project_path, &display_path);
+                    }
+                    apply_camera_blur_to_project_config(&project_path, current_camera_blur());
+                })
+                .await
+                .context("studio post-finalize task")?;
+
                 Ok(completed.project_path)
             }
             Handle::Instant(handle) => {
@@ -151,11 +167,12 @@ impl ActiveRecording {
                 let display_dir = project_path.join("content/display");
                 let audio_dir = project_path.join("content/audio");
                 let output_path = project_path.join("content/output.mp4");
+                let muxed = output_path.clone();
                 tokio::task::spawn_blocking(move || {
                     cap_recording::recovery::RecoveryManager::finalize_instant_output(
                         &display_dir,
                         &audio_dir,
-                        &output_path,
+                        &muxed,
                     )
                 })
                 .await
@@ -163,10 +180,178 @@ impl ActiveRecording {
                 .context("instant finalize")?;
 
                 persist_instant_meta(&completed)?;
+
+                // The Tauri app builds the instant thumbnail by concatenating
+                // `content/display`'s init segment with the first media
+                // segment (`create_screenshot_source_from_segments`); by this
+                // point `finalize_instant_output` has already muxed the whole
+                // thing into `content/output.mp4`, which is the same first
+                // frame without the temporary file. The blur bridge is *not*
+                // applied here: `project_config_from_recording` is the studio
+                // arm of `handle_recording_finish` only.
+                let project_path = completed.project_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    write_bundle_thumbnail(&project_path, &output_path);
+                })
+                .await
+                .context("instant thumbnail task")?;
+
                 Ok(completed.project_path)
             }
         }
     }
+}
+
+/// The first segment's display track, which is what
+/// `handle_recording_finish` hands `create_screenshot`
+/// (`apps/desktop/src-tauri/src/recording.rs:3415-3429`).
+///
+/// Read back off disk rather than from the handle's `CompletedRecording`,
+/// because the remux is what decides where that track lives: until
+/// `remux_if_needed` runs, the meta points at the fragmented
+/// `.../segment-0/display` *directory*, and afterwards at the muxed
+/// `display.mp4` beside it. The Tauri app has the same ordering, and uses its
+/// `updated_studio_meta` for the same reason.
+fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
+    use cap_project::{RecordingMeta, StudioRecordingMeta};
+
+    let meta = RecordingMeta::load_for_project(project_path).ok()?;
+    let path = match meta.studio_meta()? {
+        StudioRecordingMeta::SingleSegment { segment } => segment.display.path.to_path(project_path),
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .first()
+            .map(|segment| segment.display.path.to_path(project_path))?,
+    };
+    path.is_file().then_some(path)
+}
+
+/// Write `<bundle>/screenshots/display.jpg` -- the file both apps' Recents
+/// cards draw. `cap-recording` does not produce it, so without this a project
+/// recorded here would show the icon fallback forever, including in the
+/// shipping app.
+fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::path::Path) {
+    let output = crate::library::bundle_thumbnail_path(project_dir);
+    match crate::library::create_screenshot(source_video, &output, None) {
+        Ok(()) => tracing::info!(path = %output.display(), "wrote recording thumbnail"),
+        Err(error) => tracing::warn!(
+            source = %source_video.display(),
+            "could not write the recording thumbnail: {error}"
+        ),
+    }
+}
+
+/// The camera preview bubble's current blur mode.
+///
+/// `handle_recording_finish` reads the *live* preview state
+/// (`camera_preview_manager.get_state()`), not a value captured at start, so a
+/// toggle made mid-recording is the one that lands in the project. The bubble
+/// here persists every cycle to `gpui-state.json`, so reading it back is the
+/// same "whatever the toggle says now" semantics.
+fn current_camera_blur() -> crate::store::BlurMode {
+    crate::store::load()
+        .camera_window
+        .map(|state| state.background_blur)
+        .unwrap_or_default()
+}
+
+/// `BackgroundBlurMode`'s JSON spelling
+/// (`crates/project/src/configuration.rs:423-430`, `rename_all = "camelCase"`
+/// over `Off | Light | Heavy`).
+fn blur_mode_json(blur: crate::store::BlurMode) -> &'static str {
+    match blur {
+        crate::store::BlurMode::Off => "off",
+        crate::store::BlurMode::Light => "light",
+        crate::store::BlurMode::Heavy => "heavy",
+    }
+}
+
+/// Copy the camera preview's blur toggle into the finished project's
+/// configuration -- the bridge at
+/// `apps/desktop/src-tauri/src/recording.rs:3889-3891`:
+///
+/// ```text
+/// config.camera.background_blur = cap_project::BackgroundBlurConfig {
+///     mode: camera_preview_state.background_blur,
+/// };
+/// ```
+///
+/// Blur is never baked into the recorded camera track by either app; the
+/// editor re-runs the same segmentation pipeline over the raw file, driven by
+/// this field. Copying it is what makes a project recorded with the bubble
+/// blurred *open* blurred.
+///
+/// `cap-recording` writes `project-config.json` itself at the end of a studio
+/// recording (`studio_recording.rs:1189-1207`) and its builder takes no config,
+/// so the value is merged in afterwards -- a read-modify-write on the raw JSON
+/// that replaces exactly `camera.backgroundBlur.mode` and leaves every other
+/// key of a file this app models none of (`timeline`, `clips`, `background`,
+/// the four `*Version` counters) untouched. This is `store::set_store_setting`'s
+/// discipline applied to the other shared file, including its refusal: a config
+/// that does not parse, or whose `camera` is not an object, is left alone
+/// rather than replaced.
+pub fn apply_camera_blur_to_project_config(
+    project_dir: &std::path::Path,
+    blur: crate::store::BlurMode,
+) -> bool {
+    use serde_json::{Map, Value};
+
+    let path = project_dir.join("project-config.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), "no project config to bridge blur into: {error}");
+            return false;
+        }
+    };
+    let Ok(Value::Object(mut config)) = serde_json::from_slice::<Value>(&bytes) else {
+        tracing::error!(
+            path = %path.display(),
+            "the project config did not parse as an object; refusing to write to it"
+        );
+        return false;
+    };
+
+    let camera = config
+        .entry("camera")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(camera) = camera.as_object_mut() else {
+        tracing::error!(path = %path.display(), "project config `camera` is not an object");
+        return false;
+    };
+    let background_blur = camera
+        .entry("backgroundBlur")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(background_blur) = background_blur.as_object_mut() else {
+        tracing::error!(
+            path = %path.display(),
+            "project config `camera.backgroundBlur` is not an object"
+        );
+        return false;
+    };
+    background_blur.insert(
+        "mode".to_string(),
+        Value::String(blur_mode_json(blur).to_string()),
+    );
+
+    // Same shape `ProjectConfiguration::write` produces (serde_json pretty),
+    // via a temp file so a crash mid-write cannot leave a project whose config
+    // neither app can parse.
+    let Ok(serialized) = serde_json::to_vec_pretty(&Value::Object(config)) else {
+        return false;
+    };
+    let temp = path.with_extension("gpui-tmp");
+    if let Err(error) = std::fs::write(&temp, serialized) {
+        tracing::warn!("writing the project config: {error}");
+        return false;
+    }
+    if let Err(error) = std::fs::rename(&temp, &path) {
+        tracing::warn!("replacing the project config: {error}");
+        let _ = std::fs::remove_file(&temp);
+        return false;
+    }
+    tracing::info!(mode = blur_mode_json(blur), "bridged camera blur into the project config");
+    true
 }
 
 /// `persist_instant_recording_meta` from the CLI, verbatim in behavior: without
@@ -477,4 +662,145 @@ fn create_project_dir(target: &ScreenCaptureTarget) -> anyhow::Result<PathBuf> {
         .map_err(|e| anyhow!("unique filename: {e}"))?;
 
     Ok(base.join(filename))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::BlurMode;
+    use serde_json::Value;
+
+    fn temp_project(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cap-gpui-config-{tag}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The bridge writes exactly `camera.backgroundBlur.mode` and nothing else
+    /// -- the whole reason it is a raw-JSON merge and not a typed round trip.
+    /// `ProjectConfiguration` here models a dozen sections this app has no
+    /// types for, and serializing our idea of the file back over it would drop
+    /// the user's timeline.
+    #[test]
+    fn bridging_blur_preserves_every_other_key() {
+        let dir = temp_project("preserve");
+        let original = serde_json::json!({
+            "aspectRatio": null,
+            "background": { "source": { "type": "wallpaper", "path": "sequoia/1" } },
+            "camera": {
+                "hide": false,
+                "size": 30.0,
+                "shape": "square",
+                "backgroundBlur": { "mode": "off" }
+            },
+            "timeline": { "segments": [{ "recordingClip": 0, "start": 0.0, "end": 3.0 }] },
+            "aFieldFromANewerBuild": 42
+        });
+        std::fs::write(
+            dir.join("project-config.json"),
+            serde_json::to_vec_pretty(&original).unwrap(),
+        )
+        .unwrap();
+
+        assert!(apply_camera_blur_to_project_config(&dir, BlurMode::Light));
+
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("project-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["camera"]["backgroundBlur"]["mode"], "light");
+        assert_eq!(written["camera"]["size"], 30.0);
+        assert_eq!(written["camera"]["shape"], "square");
+        assert_eq!(written["background"], original["background"]);
+        assert_eq!(written["timeline"], original["timeline"]);
+        assert_eq!(written["aFieldFromANewerBuild"], 42);
+        assert_eq!(
+            written.as_object().unwrap().len(),
+            original.as_object().unwrap().len(),
+            "no keys added or dropped"
+        );
+
+        // Heavy overwrites Light in place, and Off is written just as
+        // explicitly -- `project_config_from_recording` always assigns the
+        // field, it does not skip the default.
+        assert!(apply_camera_blur_to_project_config(&dir, BlurMode::Heavy));
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("project-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["camera"]["backgroundBlur"]["mode"], "heavy");
+
+        assert!(apply_camera_blur_to_project_config(&dir, BlurMode::Off));
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("project-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["camera"]["backgroundBlur"]["mode"], "off");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A config written by a build that predates `backgroundBlur` (or one that
+    /// never had a camera section at all) gets the key created rather than
+    /// being skipped.
+    #[test]
+    fn bridging_blur_creates_the_missing_section() {
+        let dir = temp_project("create");
+        std::fs::write(dir.join("project-config.json"), br#"{"aspectRatio":null}"#).unwrap();
+
+        assert!(apply_camera_blur_to_project_config(&dir, BlurMode::Heavy));
+
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("project-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(written["camera"]["backgroundBlur"]["mode"], "heavy");
+        assert!(written.get("aspectRatio").is_some());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The store rule, on the other shared file: a config that does not parse
+    /// is never replaced. Overwriting it would delete the user's edit.
+    #[test]
+    fn a_corrupt_project_config_is_never_overwritten() {
+        let dir = temp_project("corrupt");
+        let path = dir.join("project-config.json");
+        std::fs::write(&path, b"{ this is not json").unwrap();
+
+        assert!(!apply_camera_blur_to_project_config(&dir, BlurMode::Light));
+        assert_eq!(std::fs::read(&path).unwrap(), b"{ this is not json");
+
+        // And a project with no config at all is a no-op, not a fresh file:
+        // the config is cap-recording's to write.
+        let empty = temp_project("empty");
+        assert!(!apply_camera_blur_to_project_config(&empty, BlurMode::Light));
+        assert!(!empty.join("project-config.json").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&empty).ok();
+    }
+
+    /// The spelling has to match `BackgroundBlurMode`'s serde exactly or the
+    /// editor's `#[serde(default)]` would quietly swallow the value.
+    #[test]
+    fn blur_modes_use_the_project_crates_spelling() {
+        for (mode, json) in [
+            (BlurMode::Off, "off"),
+            (BlurMode::Light, "light"),
+            (BlurMode::Heavy, "heavy"),
+        ] {
+            assert_eq!(blur_mode_json(mode), json);
+            let parsed: cap_project::BackgroundBlurMode =
+                serde_json::from_value(Value::String(json.to_string()))
+                    .expect("the project crate parses what we write");
+            assert_eq!(
+                serde_json::to_value(parsed).unwrap(),
+                Value::String(json.to_string())
+            );
+        }
+    }
 }
