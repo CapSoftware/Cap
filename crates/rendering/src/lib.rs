@@ -4843,6 +4843,7 @@ pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
+    #[cfg(target_os = "macos")]
     nv12_surface_output: bool,
     #[cfg(target_os = "macos")]
     bgra_surface_converter: Option<RgbaToBgraSurfaceConverter>,
@@ -4858,6 +4859,7 @@ impl<'a> FrameRenderer<'a> {
             constants,
             session: None,
             nv12_converter: None,
+            #[cfg(target_os = "macos")]
             nv12_surface_output: false,
             #[cfg(target_os = "macos")]
             bgra_surface_converter: None,
@@ -4875,6 +4877,19 @@ impl<'a> FrameRenderer<'a> {
         if !self.constants.is_software_adapter {
             self.nv12_surface_output = true;
         }
+    }
+
+    fn new_nv12_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
+        #[cfg(target_os = "macos")]
+        {
+            let mut converter = frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
+            if self.nv12_surface_output {
+                converter.enable_surface_output();
+            }
+            converter
+        }
+        #[cfg(not(target_os = "macos"))]
+        frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
     }
 
     pub fn reset_session(&mut self) {
@@ -5288,6 +5303,9 @@ impl<'a> FrameRenderer<'a> {
                     .await;
             }
 
+            if self.nv12_converter.is_none() {
+                self.nv12_converter = Some(self.new_nv12_converter());
+            }
             let session = self.session.get_or_insert_with(|| {
                 RenderSession::new(
                     &self.constants.device,
@@ -5318,15 +5336,6 @@ impl<'a> FrameRenderer<'a> {
                 compositor,
             )
             .await?;
-            if self.nv12_converter.is_none() {
-                let mut converter =
-                    frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
-                #[cfg(target_os = "macos")]
-                if self.nv12_surface_output {
-                    converter.enable_surface_output();
-                }
-                self.nv12_converter = Some(converter);
-            }
             let nv12_converter = self
                 .nv12_converter
                 .as_mut()
@@ -5572,6 +5581,9 @@ impl<'a> FrameRenderer<'a> {
                     .await;
             }
 
+            if self.nv12_converter.is_none() {
+                self.nv12_converter = Some(self.new_nv12_converter());
+            }
             let session = self.session.get_or_insert_with(|| {
                 RenderSession::new(
                     &self.constants.device,
@@ -5586,15 +5598,6 @@ impl<'a> FrameRenderer<'a> {
                 uniforms.output_size.1,
             );
 
-            if self.nv12_converter.is_none() {
-                let mut converter =
-                    frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
-                #[cfg(target_os = "macos")]
-                if self.nv12_surface_output {
-                    converter.enable_surface_output();
-                }
-                self.nv12_converter = Some(converter);
-            }
             let nv12_converter = self
                 .nv12_converter
                 .as_mut()
