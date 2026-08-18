@@ -217,7 +217,9 @@ fn studio_display_path(project_path: &std::path::Path) -> Option<PathBuf> {
 
     let meta = RecordingMeta::load_for_project(project_path).ok()?;
     let path = match meta.studio_meta()? {
-        StudioRecordingMeta::SingleSegment { segment } => segment.display.path.to_path(project_path),
+        StudioRecordingMeta::SingleSegment { segment } => {
+            segment.display.path.to_path(project_path)
+        }
         StudioRecordingMeta::MultipleSegments { inner } => inner
             .segments
             .first()
@@ -350,15 +352,16 @@ pub fn apply_camera_blur_to_project_config(
         let _ = std::fs::remove_file(&temp);
         return false;
     }
-    tracing::info!(mode = blur_mode_json(blur), "bridged camera blur into the project config");
+    tracing::info!(
+        mode = blur_mode_json(blur),
+        "bridged camera blur into the project config"
+    );
     true
 }
 
 /// `persist_instant_recording_meta` from the CLI, verbatim in behavior: without
 /// this pair of files the recording plays but no Cap surface lists it.
-fn persist_instant_meta(
-    completed: &instant_recording::CompletedRecording,
-) -> anyhow::Result<()> {
+fn persist_instant_meta(completed: &instant_recording::CompletedRecording) -> anyhow::Result<()> {
     use cap_project::{
         InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     };
@@ -402,7 +405,8 @@ pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         // CoreAudio still tearing down a previous session). One retry without
         // the mic keeps the screen recording alive; the real fix is app-scoped
         // feeds with reconnect, which arrive with the camera preview window.
-        Err(error) if config.microphone.is_some() && format!("{error:#}").contains("microphone") =>
+        Err(error)
+            if config.microphone.is_some() && format!("{error:#}").contains("microphone") =>
         {
             tracing::warn!("start failed on the microphone path, retrying without: {error:#}");
             start_attempt(StartConfig {
@@ -472,17 +476,13 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         }
         None => {
             if matches!(config.target, ScreenCaptureTarget::CameraOnly) {
-                return Err(anyhow!(
-                    "Camera-only recording requires a selected camera."
-                ));
+                return Err(anyhow!("Camera-only recording requires a selected camera."));
             }
             (None, None)
         }
     };
 
-    let mic_mute = mic_lock
-        .as_ref()
-        .map(|lock| lock.recording_muted_handle());
+    let mic_mute = mic_lock.as_ref().map(|lock| lock.recording_muted_handle());
 
     // ScreenCaptureKit content, exactly as `read_recording_shareable_content`
     // does it: the current-process fallback covers the sandboxed case where the
@@ -777,7 +777,10 @@ mod tests {
         // And a project with no config at all is a no-op, not a fresh file:
         // the config is cap-recording's to write.
         let empty = temp_project("empty");
-        assert!(!apply_camera_blur_to_project_config(&empty, BlurMode::Light));
+        assert!(!apply_camera_blur_to_project_config(
+            &empty,
+            BlurMode::Light
+        ));
         assert!(!empty.join("project-config.json").exists());
 
         std::fs::remove_dir_all(&dir).ok();

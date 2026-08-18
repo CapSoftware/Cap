@@ -59,7 +59,11 @@ pub struct SelectionHeader {
 }
 
 impl SelectionHeader {
-    pub fn plain(theme: &Theme, id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+    pub fn plain(
+        theme: &Theme,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
@@ -72,7 +76,10 @@ impl SelectionHeader {
         }
     }
 
-    pub fn on_done(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_done(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_done = Some(Box::new(handler));
         self
     }

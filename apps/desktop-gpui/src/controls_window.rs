@@ -10,8 +10,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Context, Entity, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled, Window, div,
+    Context, Entity, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled, Window, div,
     prelude::FluentBuilder as _, px, svg,
 };
 
@@ -93,16 +93,11 @@ impl ControlsWindow {
                 this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
                     .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
             })
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(20.))
-                    .text_color(if disabled {
-                        Theme::with_alpha(theme.gray_11, 0.5)
-                    } else {
-                        theme.gray_11.into()
-                    }),
-            )
+            .child(svg().path(icon).size(px(20.)).text_color(if disabled {
+                Theme::with_alpha(theme.gray_11, 0.5)
+            } else {
+                theme.gray_11.into()
+            }))
     }
 
     fn render_stop(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -274,15 +269,15 @@ impl ControlsWindow {
                                     }))
                                 }),
                             )
-                            .child(self.action_button("restart", "icons/restart.svg", busy).when(
-                                !busy,
-                                |this| {
-                                    this.on_click(cx.listener(|this, _, _, cx| {
-                                        this.session
-                                            .update(cx, |session, cx| session.restart(cx));
-                                    }))
-                                },
-                            ))
+                            .child(
+                                self.action_button("restart", "icons/restart.svg", busy)
+                                    .when(!busy, |this| {
+                                        this.on_click(cx.listener(|this, _, _, cx| {
+                                            this.session
+                                                .update(cx, |session, cx| session.restart(cx));
+                                        }))
+                                    }),
+                            )
                             .child(self.action_button("delete", "icons/trash.svg", busy).when(
                                 !busy,
                                 |this| {
@@ -333,6 +328,8 @@ impl Render for ControlsWindow {
             .px(px(12.))
             .pb(px(12.))
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .child(self.render_bar(cx))
     }
 }

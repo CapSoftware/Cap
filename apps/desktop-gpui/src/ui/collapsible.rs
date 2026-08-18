@@ -116,10 +116,7 @@ impl CollapsibleState {
         let target = if self.open.get() { target } else { 0. };
 
         let Some((started, from)) = self.transition.get() else {
-            return (
-                if self.open.get() { None } else { Some(px(0.)) },
-                false,
-            );
+            return (if self.open.get() { None } else { Some(px(0.)) }, false);
         };
 
         let elapsed = now.duration_since(started).as_secs_f32();
@@ -138,7 +135,11 @@ impl CollapsibleState {
     fn current_height(&self) -> f32 {
         match (self.transition.get(), self.measured.get()) {
             (Some((started, from)), Some(measured)) => {
-                let target = if self.open.get() { f32::from(measured) } else { 0. };
+                let target = if self.open.get() {
+                    f32::from(measured)
+                } else {
+                    0.
+                };
                 let t = (started.elapsed().as_secs_f32() / COLLAPSIBLE_DURATION_SECS).clamp(0., 1.);
                 let eased = 1. - (1. - t).powi(3);
                 from + (target - from) * eased

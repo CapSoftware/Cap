@@ -654,24 +654,26 @@ impl RenderOnce for IconButton {
                 this.when_some(active_bg, |this, bg| this.bg(bg))
             })
             .when(disabled, |this| this.opacity(0.45))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(icon_size)
-                    .text_color(if active { active_color } else { idle }),
+            .child(svg().path(icon).size(icon_size).text_color(if active {
+                active_color
+            } else {
+                idle
+            }))
+            .when(
+                !disabled && (hover_bg.is_some() || hover_color.is_some()),
+                |this| {
+                    this.hover(move |style| {
+                        let style = match hover_bg {
+                            Some(bg) => style.bg(bg),
+                            None => style,
+                        };
+                        match hover_color {
+                            Some(color) => style.text_color(color),
+                            None => style,
+                        }
+                    })
+                },
             )
-            .when(!disabled && (hover_bg.is_some() || hover_color.is_some()), |this| {
-                this.hover(move |style| {
-                    let style = match hover_bg {
-                        Some(bg) => style.bg(bg),
-                        None => style,
-                    };
-                    match hover_color {
-                        Some(color) => style.text_color(color),
-                        None => style,
-                    }
-                })
-            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

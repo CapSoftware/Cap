@@ -373,10 +373,16 @@ mod tests {
         // The settings zoom slider: 1..4.5 step 0.1. 2.75 is an exact half
         // step and must round *up*, which is the whole reason for the f64
         // pre-quantisation.
-        assert_eq!(snap_to_step(value_from_fraction(0., 1., 4.5), 1., 4.5, 0.1), 1.);
+        assert_eq!(
+            snap_to_step(value_from_fraction(0., 1., 4.5), 1., 4.5, 0.1),
+            1.
+        );
         let mid = snap_to_step(value_from_fraction(0.5, 1., 4.5), 1., 4.5, 0.1);
         assert!((mid - 2.8).abs() < 1e-4, "{mid}");
-        assert_eq!(snap_to_step(value_from_fraction(1., 1., 4.5), 1., 4.5, 0.1), 4.5);
+        assert_eq!(
+            snap_to_step(value_from_fraction(1., 1., 4.5), 1., 4.5, 0.1),
+            4.5
+        );
     }
 
     #[test]
@@ -406,8 +412,8 @@ mod tests {
             // `teleprompter_window::stepped`, for both of its ranges.
             for (minimum, maximum, step) in [(60., 350., 5.), (45., 100., 5.)] {
                 let raw = value_from_fraction(fraction, minimum, maximum);
-                let before = (minimum + ((raw - minimum) / step).round() * step)
-                    .clamp(minimum, maximum);
+                let before =
+                    (minimum + ((raw - minimum) / step).round() * step).clamp(minimum, maximum);
                 let after = snap_to_step(raw, minimum, maximum, step);
                 assert_eq!(
                     before as u32, after as u32,

@@ -42,10 +42,7 @@ pub fn pad_position(position: Point<Pixels>, bounds: Bounds<Pixels>) -> Option<(
     }
     let x = (f32::from(position.x) - f32::from(bounds.origin.x)) / width;
     let y = (f32::from(position.y) - f32::from(bounds.origin.y)) / height;
-    Some((
-        f64::from(x).clamp(0., 1.),
-        f64::from(y).clamp(0., 1.),
-    ))
+    Some((f64::from(x).clamp(0., 1.), f64::from(y).clamp(0., 1.)))
 }
 
 type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
@@ -137,12 +134,9 @@ impl RenderOnce for PositionPad {
             // fixed column but the pad still has to know its origin, and the
             // slider's zero-sized canvas is the established way to get it.
             .child(
-                canvas(
-                    move |bounds, _, _| cell.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
+                canvas(move |bounds, _, _| cell.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
             )
             // `absolute inset-y-0 left-1/2 w-px`
             .child(

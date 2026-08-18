@@ -397,10 +397,18 @@ impl AreaHandle {
 
 enum AreaDrag {
     /// Drawing a fresh selection from an anchor point.
-    Draw { anchor: (f32, f32) },
+    Draw {
+        anchor: (f32, f32),
+    },
     /// Dragging the whole selection.
-    Move { grab: (f32, f32), start: AreaRect },
-    Resize { handle: AreaHandle, start: AreaRect },
+    Move {
+        grab: (f32, f32),
+        start: AreaRect,
+    },
+    Resize {
+        handle: AreaHandle,
+        start: AreaRect,
+    },
 }
 
 /// One display's overlay.
@@ -472,17 +480,21 @@ impl OverlayWindow {
             TargetType::Display => Some(ScreenCaptureTarget::Display {
                 id: self.display_id.clone(),
             }),
-            TargetType::Window => select.active_window().map(|window| {
-                ScreenCaptureTarget::Window {
-                    id: window.id.clone(),
-                }
-            }),
-            TargetType::Area => self.crop.filter(|crop| crop.is_valid()).map(|crop| {
-                ScreenCaptureTarget::Area {
-                    screen: self.display_id.clone(),
-                    bounds: crop.to_bounds(),
-                }
-            }),
+            TargetType::Window => {
+                select
+                    .active_window()
+                    .map(|window| ScreenCaptureTarget::Window {
+                        id: window.id.clone(),
+                    })
+            }
+            TargetType::Area => {
+                self.crop
+                    .filter(|crop| crop.is_valid())
+                    .map(|crop| ScreenCaptureTarget::Area {
+                        screen: self.display_id.clone(),
+                        bounds: crop.to_bounds(),
+                    })
+            }
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
         }
     }
@@ -491,7 +503,9 @@ impl OverlayWindow {
     /// the main window's start path (which opens the bar, hides the main
     /// window and starts the engine).
     pub fn start_recording(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.target(cx) else { return };
+        let Some(target) = self.target(cx) else {
+            return;
+        };
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
         if self.select.read(cx).recording_mode == Mode::Screenshot {
             // Screenshots do not go through the recording actors at all, and
@@ -530,30 +544,32 @@ impl Render for OverlayWindow {
             .id("overlay-root")
             .track_focus(&self.focus)
             .key_context("TargetSelectOverlay")
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                // The Tauri app registers Escape as a *global* shortcut while
-                // the overlays are up; here it is a plain key handler on the
-                // overlay that has focus (see the README deviation).
-                tracing::debug!(key = %event.keystroke.key, "overlay key");
-                if event.keystroke.key.as_str() == "escape" {
-                    this.dismiss(cx);
-                }
-            }))
+            .on_key_down(
+                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    // The Tauri app registers Escape as a *global* shortcut while
+                    // the overlays are up; here it is a plain key handler on the
+                    // overlay that has focus (see the README deviation).
+                    tracing::debug!(key = %event.keystroke.key, "overlay key");
+                    if event.keystroke.key.as_str() == "escape" {
+                        this.dismiss(cx);
+                    }
+                }),
+            )
             .size_full()
             .relative()
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
 
         match mode {
             Some(TargetType::Display) => root
                 .child(self.render_display_variant(cx))
                 .into_any_element(),
-            Some(TargetType::Window) => {
-                root.child(self.render_window_variant(cx)).into_any_element()
-            }
-            Some(TargetType::Area) => root
-                .child(self.render_area_variant(cx))
+            Some(TargetType::Window) => root
+                .child(self.render_window_variant(cx))
                 .into_any_element(),
+            Some(TargetType::Area) => root.child(self.render_area_variant(cx)).into_any_element(),
             Some(TargetType::CameraOnly) => root
                 .child(self.render_camera_variant(cx))
                 .into_any_element(),
@@ -610,12 +626,18 @@ impl OverlayWindow {
                         div()
                             .mb(px(8.))
                             .text_size(px(30.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // `text-3xl font-semibold`
+                            // (`target-select-overlay.tsx:426`). `font-semibold`
+                            // renders 700: no 600 face is loaded over there
+                            // (`ui-solid/vite.js:31-33` ships 400/500/700 only).
+                            .font_weight(FontWeight::BOLD)
                             .child(SharedString::from(self.display_name.clone())),
                     )
-                    .children(resolution.map(|resolution| {
-                        div().mb(px(8.)).text_size(px(12.)).child(resolution)
-                    }))
+                    .children(
+                        resolution.map(|resolution| {
+                            div().mb(px(8.)).text_size(px(12.)).child(resolution)
+                        }),
+                    )
                     .child(self.render_controls_cluster(self.target(cx), false, cx)),
             )
     }
@@ -650,8 +672,7 @@ impl OverlayWindow {
             // Clicking anywhere locks the highlight onto whatever is under the
             // cursor, exactly as the TSX's two click handlers add up to.
             .on_click(cx.listener(|this, _, _window, cx| {
-                this.select
-                    .update(cx, |select, cx| select.pin_hovered(cx));
+                this.select.update(cx, |select, cx| select.pin_hovered(cx));
             }))
             .child(
                 div()
@@ -672,14 +693,19 @@ impl OverlayWindow {
                             .justify_center()
                             .items_center()
                             // `<div class="w-24 h-24">` around the icon.
-                            .children(icon.map(|icon| {
-                                img(icon).size(px(96.)).mb(px(12.)).rounded(px(8.))
-                            }))
+                            .children(
+                                icon.map(|icon| {
+                                    img(icon).size(px(96.)).mb(px(12.)).rounded(px(8.))
+                                }),
+                            )
                             .child(
                                 div()
                                     .mb(px(8.))
                                     .text_size(px(30.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    // `text-3xl font-semibold`
+                                    // (`target-select-overlay.tsx:681`):
+                                    // renders 700, no 600 face loaded.
+                                    .font_weight(FontWeight::BOLD)
                                     .child(SharedString::from(active.app_name.clone())),
                             )
                             .child(
@@ -717,7 +743,10 @@ impl OverlayWindow {
                         div()
                             .mb(px(8.))
                             .text_size(px(30.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // `text-3xl font-semibold`
+                            // (`target-select-overlay.tsx:392`): renders 700,
+                            // no 600 face loaded.
+                            .font_weight(FontWeight::BOLD)
                             .child("Camera Only"),
                     )
                     .child(
@@ -834,10 +863,7 @@ impl OverlayWindow {
             .cursor(gpui::CursorStyle::OpenHand);
 
         for handle in AreaHandle::ALL {
-            let mut zone = div()
-                .id(handle.id())
-                .absolute()
-                .cursor(handle.cursor());
+            let mut zone = div().id(handle.id()).absolute().cursor(handle.cursor());
             let reach = px(AREA_HANDLE_GRAB * 2.);
 
             zone = if handle.is_corner() {
@@ -949,6 +975,12 @@ impl OverlayWindow {
                             .min_w(px(112.))
                             .px(px(8.))
                             .text_size(px(16.))
+                            // `text-base font-normal`
+                            // (`target-select-overlay.tsx:1330`): an explicit
+                            // `font-normal` that opts *out* of the `body`
+                            // Medium default, so it must be stated here now
+                            // that the window root carries Medium.
+                            .font_weight(FontWeight::NORMAL)
                             .child(label),
                     ),
             )
@@ -989,8 +1021,10 @@ impl OverlayWindow {
                 crop.y + MARGIN_TOP_INSIDE
             }
         };
-        let x = (crop.x + crop.width / 2. - CLUSTER_WIDTH / 2.)
-            .clamp(SIDE_MARGIN, (screen_width - CLUSTER_WIDTH - SIDE_MARGIN).max(SIDE_MARGIN));
+        let x = (crop.x + crop.width / 2. - CLUSTER_WIDTH / 2.).clamp(
+            SIDE_MARGIN,
+            (screen_width - CLUSTER_WIDTH - SIDE_MARGIN).max(SIDE_MARGIN),
+        );
 
         div()
             .absolute()
@@ -1021,15 +1055,11 @@ impl OverlayWindow {
                             "Minimum size is {} x {}",
                             AREA_MIN_SIZE as u32, AREA_MIN_SIZE as u32
                         ))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .child(format!(
-                                    "{} x {} is too small",
-                                    crop.width.round(),
-                                    crop.height.round()
-                                )),
-                        ),
+                        .child(div().text_size(px(11.)).child(format!(
+                            "{} x {} is too small",
+                            crop.width.round(),
+                            crop.height.round()
+                        ))),
                 )
             })
     }
@@ -1242,6 +1272,15 @@ impl OverlayWindow {
                                 div()
                                     .mt(px(-2.))
                                     .text_size(px(11.))
+                                    // `text-[11px] ... text-white/90
+                                    //  font-light` (`t-s-overlay.tsx:2200`).
+                                    // `font-light` is 300 and no 300 face is
+                                    // loaded (`ui-solid/vite.js:31-33` ships
+                                    // 400/500/700), so CSS font-matching
+                                    // resolves it to 400 -- Regular, not Light
+                                    // -- and it must opt out of the `body`
+                                    // Medium default explicitly.
+                                    .font_weight(FontWeight::NORMAL)
                                     .text_color(gpui::hsla(0., 0., 1., 0.9))
                                     .child(mode_label),
                             ),
@@ -1308,7 +1347,8 @@ impl OverlayWindow {
         if let Some(handle) = handle {
             return Some(AreaZone::Handle(handle));
         }
-        (x > crop.x && x < crop.right() && y > crop.y && y < crop.bottom()).then_some(AreaZone::Inside)
+        (x > crop.x && x < crop.right() && y > crop.y && y < crop.bottom())
+            .then_some(AreaZone::Inside)
     }
 
     fn area_mouse_down(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {

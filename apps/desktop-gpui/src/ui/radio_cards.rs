@@ -163,10 +163,7 @@ impl RenderOnce for RadioCards {
                                             .child(item.label),
                                     )
                                     .children(item.description.map(|text| {
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(description)
-                                            .child(text)
+                                        div().text_size(px(12.)).text_color(description).child(text)
                                     })),
                             ),
                     )

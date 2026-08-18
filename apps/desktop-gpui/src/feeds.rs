@@ -179,11 +179,12 @@ impl Feeds {
         match label {
             Some(label) => {
                 gpui_tokio::Tokio::spawn(cx, async move {
-                    match actor.ask(microphone::SetInput {
-                        label: label.clone(),
-                        settings: None,
-                    })
-                    .await
+                    match actor
+                        .ask(microphone::SetInput {
+                            label: label.clone(),
+                            settings: None,
+                        })
+                        .await
                     {
                         Ok(ready) => {
                             if let Err(error) = ready.await {
@@ -314,7 +315,8 @@ impl Feeds {
                 let now = Instant::now();
                 let db = db_fs(&samples);
                 window_entries.push((now, db));
-                window_entries.retain(|(at, _)| now.duration_since(*at) <= Duration::from_millis(200));
+                window_entries
+                    .retain(|(at, _)| now.duration_since(*at) <= Duration::from_millis(200));
                 if now.duration_since(last_push) < Duration::from_millis(50) {
                     continue;
                 }

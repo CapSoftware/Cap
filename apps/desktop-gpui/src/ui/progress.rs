@@ -146,9 +146,8 @@ impl RenderOnce for CircularProgress {
 mod tests {
     #[test]
     fn quadrant_shares_split_the_fraction_evenly() {
-        let share = |fraction: f32, quadrant: usize| {
-            ((fraction * 4.) - quadrant as f32).clamp(0., 1.)
-        };
+        let share =
+            |fraction: f32, quadrant: usize| ((fraction * 4.) - quadrant as f32).clamp(0., 1.);
         // Half way round: the first two quadrants are full, the last two empty.
         assert_eq!(share(0.5, 0), 1.);
         assert_eq!(share(0.5, 1), 1.);

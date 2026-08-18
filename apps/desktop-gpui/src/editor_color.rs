@@ -429,10 +429,22 @@ impl GradeSlider {
 /// #fb923c 62%, #1e293b 100%)` (`colorCorrection.ts:53-54`).
 const SCENE_ANGLE: f32 = 160.;
 const SCENE_STOPS: [(f32, [f32; 3]); 4] = [
-    (0.00, [0x60 as f32 / 255., 0xa5 as f32 / 255., 0xfa as f32 / 255.]),
-    (0.35, [0xe2 as f32 / 255., 0xe8 as f32 / 255., 0xf0 as f32 / 255.]),
-    (0.62, [0xfb as f32 / 255., 0x92 as f32 / 255., 0x3c as f32 / 255.]),
-    (1.00, [0x1e as f32 / 255., 0x29 as f32 / 255., 0x3b as f32 / 255.]),
+    (
+        0.00,
+        [0x60 as f32 / 255., 0xa5 as f32 / 255., 0xfa as f32 / 255.],
+    ),
+    (
+        0.35,
+        [0xe2 as f32 / 255., 0xe8 as f32 / 255., 0xf0 as f32 / 255.],
+    ),
+    (
+        0.62,
+        [0xfb as f32 / 255., 0x92 as f32 / 255., 0x3c as f32 / 255.],
+    ),
+    (
+        1.00,
+        [0x1e as f32 / 255., 0x29 as f32 / 255., 0x3b as f32 / 255.],
+    ),
 ];
 
 /// The tile: `aspect-video` inside a `grid-cols-3 gap-2` in the sidebar's
@@ -502,12 +514,14 @@ pub fn apply_filter(color: [f32; 3], filter: Filter) -> [f32; 3] {
                 amount
             };
             [
-                (0.213 + 0.787 * amount) * r + (0.715 - 0.715 * amount) * g
+                (0.213 + 0.787 * amount) * r
+                    + (0.715 - 0.715 * amount) * g
                     + (0.072 - 0.072 * amount) * b,
                 (0.213 - 0.213 * amount) * r
                     + (0.715 + 0.285 * amount) * g
                     + (0.072 - 0.072 * amount) * b,
-                (0.213 - 0.213 * amount) * r + (0.715 - 0.715 * amount) * g
+                (0.213 - 0.213 * amount) * r
+                    + (0.715 - 0.715 * amount) * g
                     + (0.072 + 0.928 * amount) * b,
             ]
         }
@@ -598,10 +612,7 @@ pub fn preset_preview(preset: &ColorPreset, width: u32, height: u32) -> Arc<Rend
 
     for (x, y, pixel) in rgba.enumerate_pixels_mut() {
         let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
-        let scene = gradient_color(
-            gradient_position(xf, yf, wf, hf, SCENE_ANGLE),
-            &SCENE_STOPS,
-        );
+        let scene = gradient_color(gradient_position(xf, yf, wf, hf, SCENE_ANGLE), &SCENE_STOPS);
         let mut color = apply_filters(scene, preset.filter);
 
         if let Some(overlay) = preset.overlay {
@@ -621,13 +632,9 @@ pub fn preset_preview(preset: &ColorPreset, width: u32, height: u32) -> Arc<Rend
         if grain_opacity > 0. {
             // The tile repeats every 64 device pixels in CSS; the preview is
             // generated at 2x, so the tile is 128 pixels wide here.
-            let level = crate::editor_sidebar::fractal_noise_octaves(
-                xf * 0.9 / 2.,
-                yf * 0.9 / 2.,
-                11,
-                2,
-            )
-            .clamp(0., 1.);
+            let level =
+                crate::editor_sidebar::fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2)
+                    .clamp(0., 1.);
             let grain = [level, level, level, grain_opacity];
             color = composite_overlay(color, grain);
         }
@@ -746,13 +753,11 @@ impl EditorWindow {
         let open = self.sidebar.grade_open(target);
 
         // `grid grid-cols-3 gap-2`
-        let tiles = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(px(8.))
-            .children(COLOR_CORRECTION_PRESETS.iter().enumerate().map(
-                |(index, preset)| {
+        let tiles = div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+            COLOR_CORRECTION_PRESETS
+                .iter()
+                .enumerate()
+                .map(|(index, preset)| {
                     let selected = active == preset.id;
                     div()
                         .id(SharedString::from(format!(
@@ -796,9 +801,7 @@ impl EditorWindow {
                                 .rounded(px(6.))
                                 .overflow_hidden()
                                 .children(self.preset_image(index).map(|image| {
-                                    img(image)
-                                        .size_full()
-                                        .object_fit(gpui::ObjectFit::Fill)
+                                    img(image).size_full().object_fit(gpui::ObjectFit::Fill)
                                 })),
                         )
                         .child(
@@ -818,8 +821,8 @@ impl EditorWindow {
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.apply_color_preset(target, index, window, cx);
                         }))
-                },
-            ));
+                }),
+        );
 
         let mut section = div()
             .flex()
@@ -968,7 +971,10 @@ mod tests {
     #[test]
     fn contrast_and_brightness_pivot_where_css_says() {
         // contrast pivots on 0.5 and leaves it alone.
-        assert_eq!(apply_filter([0.5, 0.5, 0.5], Filter::Contrast(1.35))[0], 0.5);
+        assert_eq!(
+            apply_filter([0.5, 0.5, 0.5], Filter::Contrast(1.35))[0],
+            0.5
+        );
         let lifted = apply_filter([0.6, 0.6, 0.6], Filter::Contrast(1.5))[0];
         assert!((lifted - 0.65).abs() < 1e-6, "{lifted}");
         // brightness is a plain multiply, and results clamp.

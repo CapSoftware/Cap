@@ -198,10 +198,7 @@ impl Menu {
         self
     }
 
-    pub fn on_select(
-        mut self,
-        handler: impl Fn(&usize, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_select(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
     }
@@ -288,17 +285,9 @@ impl RenderOnce for Menu {
                             // one rule in Kobalte, driven by either input.
                             .when(highlighted == Some(index), |this| this.bg(hover))
                             .hover(move |style| style.bg(hover))
-                            .child(
-                                div()
-                                    .w(px(12.))
-                                    .flex_shrink_0()
-                                    .children(item.checked.then(|| {
-                                        svg()
-                                            .path("icons/check.svg")
-                                            .size(px(12.))
-                                            .text_color(text)
-                                    })),
-                            )
+                            .child(div().w(px(12.)).flex_shrink_0().children(item.checked.then(
+                                || svg().path("icons/check.svg").size(px(12.)).text_color(text),
+                            )))
                             .child(div().flex_1().min_w_0().truncate().child(item.label))
                             .when_some(handler, |this, handler| {
                                 this.on_click(move |_, window, cx| handler(&index, window, cx))
@@ -360,7 +349,11 @@ mod tests {
         menu.on_key("down");
         assert_eq!(menu.highlighted, Some(0), "past the end wraps to the top");
         menu.on_key("up");
-        assert_eq!(menu.highlighted, Some(3), "before the start wraps to the end");
+        assert_eq!(
+            menu.highlighted,
+            Some(3),
+            "before the start wraps to the end"
+        );
     }
 
     #[test]

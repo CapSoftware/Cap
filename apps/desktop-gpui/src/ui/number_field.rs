@@ -153,7 +153,10 @@ pub fn parse_number(text: &str) -> Option<f64> {
     if trimmed.is_empty() {
         return None;
     }
-    trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
+    trimmed
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
 }
 
 /// `value.toString()`: an integral value prints without a decimal point, which

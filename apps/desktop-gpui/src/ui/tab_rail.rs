@@ -13,9 +13,8 @@
 //! editor window has always done.
 
 use gpui::{
-    App, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    App, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::theme::Theme;
@@ -88,10 +87,7 @@ impl TabRail {
         self
     }
 
-    pub fn on_select(
-        mut self,
-        handler: impl Fn(&usize, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_select(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
     }
@@ -158,9 +154,12 @@ impl RenderOnce for TabRail {
                             .size(box_size)
                             .rounded(px(8.))
                             .when(selected, |this| this.bg(indicator))
-                            .child(svg().path(item.icon).size(icon_size).text_color(
-                                if selected { selected_icon } else { idle_icon },
-                            )),
+                            .child(
+                                svg()
+                                    .path(item.icon)
+                                    .size(icon_size)
+                                    .text_color(if selected { selected_icon } else { idle_icon }),
+                            ),
                     )
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
