@@ -1550,6 +1550,25 @@ pub fn start_pose(segment: &Camera3DSegment) -> Camera3DProperties {
     pose
 }
 
+pub fn evaluate_pose(segment: &Camera3DSegment, local_time: f64) -> Camera3DProperties {
+    let start = start_pose(segment);
+    let end = end_pose(segment);
+    let duration = (segment.end - segment.start).max(0.0001);
+    let t = (local_time / duration).clamp(0., 1.);
+    let lerp = |a: f64, b: f64| a + (b - a) * t;
+    Camera3DProperties {
+        tilt_x: lerp(start.tilt_x, end.tilt_x),
+        tilt_y: lerp(start.tilt_y, end.tilt_y),
+        roll: lerp(start.roll, end.roll),
+        rotate_x: lerp(start.rotate_x, end.rotate_x),
+        rotate_y: lerp(start.rotate_y, end.rotate_y),
+        fov: lerp(start.fov, end.fov),
+        zoom: lerp(start.zoom, end.zoom),
+        pan_x: lerp(start.pan_x, end.pan_x),
+        pan_y: lerp(start.pan_y, end.pan_y),
+    }
+}
+
 pub fn end_pose(segment: &Camera3DSegment) -> Camera3DProperties {
     let mut pose = segment.properties;
     for property in Camera3DProperty::ALL {
@@ -4501,6 +4520,7 @@ impl EditorWindow {
                             // see the README's deviation.
                             .child(
                                 div()
+                                    .id(SharedString::from(format!("audio-replace-{index}")))
                                     .flex()
                                     .flex_row()
                                     .gap(px(12.))
@@ -4511,6 +4531,11 @@ impl EditorWindow {
                                     .border_1()
                                     .border_color(Hsla::from(theme.gray_3))
                                     .bg(Hsla::from(theme.gray_2))
+                                    .cursor_pointer()
+                                    .tab_index(0)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.open_audio_replace(index, cx);
+                                    }))
                                     .child(
                                         div()
                                             .size(px(40.))
