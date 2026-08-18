@@ -8,18 +8,19 @@
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    AppContext as _, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
-    rgb, svg,
+    AppContext as _, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Window, div, img,
+    prelude::FluentBuilder, px, rgb, svg,
 };
 
 use crate::{
     MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
-    library::{self, MediaKind, RecentItem},
+    library::{self, MediaKind, RecentItem, RecordingItem, ScreenshotItem},
     recording,
     session::{Phase, RecordingSession},
+    settings_window::Page,
     theme::{Appearance, Theme},
     ui,
 };
@@ -216,6 +217,86 @@ pub enum Panel {
     Target(TargetType),
     /// What the three recording modes do.
     ModeInfo,
+    /// The header recordings / screenshots library.
+    Library(LibraryKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryKind {
+    Recordings,
+    Screenshots,
+}
+
+impl LibraryKind {
+    fn settings_page(self) -> Page {
+        match self {
+            Self::Recordings => Page::Recordings,
+            Self::Screenshots => Page::Screenshots,
+        }
+    }
+
+    fn search_placeholder(self) -> &'static str {
+        match self {
+            Self::Recordings => "Search recordings",
+            Self::Screenshots => "Search screenshots",
+        }
+    }
+
+    fn import_label(self) -> &'static str {
+        match self {
+            Self::Recordings => "Import",
+            Self::Screenshots => "Import image",
+        }
+    }
+
+    fn empty_title(self) -> &'static str {
+        match self {
+            Self::Recordings => "No recordings yet",
+            Self::Screenshots => "No screenshots yet",
+        }
+    }
+
+    fn empty_description(self) -> &'static str {
+        match self {
+            Self::Recordings => {
+                "Your screen recordings will appear here. Start recording to get started!"
+            }
+            Self::Screenshots => {
+                "Your screenshots will appear here. Take a screenshot to get started!"
+            }
+        }
+    }
+
+    fn empty_icon(self) -> &'static str {
+        match self {
+            Self::Recordings => "icons/square-play.svg",
+            Self::Screenshots => "icons/image.svg",
+        }
+    }
+
+    fn view_all_label(self) -> &'static str {
+        match self {
+            Self::Recordings => "View All Recordings",
+            Self::Screenshots => "View All Screenshots",
+        }
+    }
+
+    fn no_match(self) -> &'static str {
+        match self {
+            Self::Recordings => "No matching recordings",
+            Self::Screenshots => "No matching screenshots",
+        }
+    }
+}
+
+enum LibraryItems {
+    Recordings(Vec<LibraryRow<RecordingItem>>),
+    Screenshots(Vec<LibraryRow<ScreenshotItem>>),
+}
+
+struct LibraryRow<T> {
+    item: T,
+    thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
 pub struct MainWindow {
@@ -255,6 +336,10 @@ pub struct MainWindow {
     /// previous one, which cancels a refresh a newer one has superseded (the
     /// same idiom as `resize_task`).
     recents_task: Option<gpui::Task<()>>,
+    /// Header recordings / screenshots panel. Scanned only while that panel
+    /// is open so a large library is not walked on every home paint.
+    library: Option<LibraryItems>,
+    library_task: Option<gpui::Task<()>>,
 }
 
 /// One `RecentMediaItem` on screen: the scanned entry, plus its thumbnail once
@@ -327,6 +412,8 @@ impl MainWindow {
             session,
             recents: None,
             recents_task: None,
+            library: None,
+            library_task: None,
         }
     }
 
@@ -397,9 +484,10 @@ impl MainWindow {
     /// The scan and every decode run on the background executor -- a library
     /// with several hundred bundles is several hundred `read_dir` + JSON
     /// parses, and the thumbnails are native-resolution JPEGs. The list lands
-    /// first so the cards can paint with their icon fallbacks, then each
-    /// thumbnail replaces its own card's as it arrives, the way
-    /// `target_overlay::fetch_icon` fills in an app icon.
+    /// first so the cards can paint with their icon fallbacks, then the
+    /// decodes fan out through `library::spawn_decode_pool` and land in
+    /// batches: one entity update per drain of the result channel rather than
+    /// one await-notify-repaint round trip per card.
     pub fn refresh_recents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.expanded {
             return;
@@ -415,9 +503,7 @@ impl MainWindow {
             let thumbnails: Vec<(usize, std::path::PathBuf)> = items
                 .iter()
                 .enumerate()
-                .filter_map(|(index, item)| {
-                    item.thumbnail.clone().map(|path| (index, path))
-                })
+                .filter_map(|(index, item)| item.thumbnail.clone().map(|path| (index, path)))
                 .collect();
 
             if this
@@ -427,22 +513,25 @@ impl MainWindow {
                 return;
             }
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn(async move { library::decode_thumbnail(&path) })
-                    .await;
-                let Some(image) = image else { continue };
-
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(entry) =
-                            this.recents.as_mut().and_then(|items| items.get_mut(index))
-                        else {
-                            return;
-                        };
-                        if let Some(old) = entry.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
+                        for (index, image) in batch {
+                            let Some(entry) =
+                                this.recents.as_mut().and_then(|items| items.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            if let Some(old) = entry.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
                         }
                         cx.notify();
                         // The main window is not necessarily the active one
@@ -461,12 +550,7 @@ impl MainWindow {
     /// Install a fresh scan result, releasing the previous thumbnails from the
     /// sprite atlas -- the same explicit drop the camera preview does with
     /// every frame it replaces.
-    fn set_recents(
-        &mut self,
-        items: Vec<RecentItem>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_recents(&mut self, items: Vec<RecentItem>, window: &mut Window, cx: &mut Context<Self>) {
         for entry in self.recents.take().into_iter().flatten() {
             if let Some(image) = entry.thumbnail {
                 let _ = window.drop_image(image);
@@ -599,7 +683,7 @@ impl MainWindow {
                     .update(cx, |this: &mut MainWindow, cx| {
                         let entry = this.recents.as_ref()?.first()?;
                         let item = entry.item.clone();
-                        activate_recent(&item.bundle, item.kind == MediaKind::Studio, cx);
+                        activate_recent(&item, cx);
                         Some(item)
                     })
                     .ok()
@@ -612,7 +696,7 @@ impl MainWindow {
                         .await;
                     cx.update(|cx| {
                         tracing::info!("second Recents activation for the same project");
-                        activate_recent(&item.bundle, item.kind == MediaKind::Studio, cx);
+                        activate_recent(&item, cx);
                     });
                 }
                 return;
@@ -650,7 +734,10 @@ impl MainWindow {
                 _ => None,
             },
             pinned_window: match mode {
-                TargetType::Window => self.selected_window.as_ref().map(|window| window.id.clone()),
+                TargetType::Window => self
+                    .selected_window
+                    .as_ref()
+                    .map(|window| window.id.clone()),
                 _ => None,
             },
         };
@@ -719,12 +806,13 @@ impl MainWindow {
                     .unwrap_or_else(|| scap_targets::Display::primary().id());
                 Some(ScreenCaptureTarget::Display { id })
             }
-            TargetType::Window => self
-                .selected_window
-                .as_ref()
-                .map(|window| ScreenCaptureTarget::Window {
-                    id: window.id.clone(),
-                }),
+            TargetType::Window => {
+                self.selected_window
+                    .as_ref()
+                    .map(|window| ScreenCaptureTarget::Window {
+                        id: window.id.clone(),
+                    })
+            }
             TargetType::Area => None,
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
         }
@@ -768,6 +856,9 @@ impl MainWindow {
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
 
+        let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1");
+        let required_window = auto_window_title();
+
         cx.spawn_in(window, async move |this, cx| {
             // Give enumeration and the first paint a moment; the recorder
             // itself does not depend on it, but the screenshots should show
@@ -775,52 +866,85 @@ impl MainWindow {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(2))
                 .await;
-            // Exercise the microphone path too: record with the system default
-            // input. "First in the list" is wrong on a machine with a
-            // Continuity iPhone mic -- it enumerates but dies on stream start,
-            // which kills the whole recording.
-            let default_mic = cx
-                .background_executor()
-                .spawn(async {
-                    cap_recording::feeds::microphone::MicrophoneFeed::default_device()
-                        .map(|(name, _, _)| name)
-                })
-                .await;
-            if this
-                .update_in(cx, |this, _window, cx| {
-                    this.microphone = default_mic
-                        .and_then(|name| {
-                            this.devices
-                                .microphones
-                                .iter()
-                                .find(|mic| mic.name == name)
-                                .cloned()
-                        })
-                        .or_else(|| this.devices.microphones.first().cloned());
-                    if let Some(mic) = &this.microphone {
-                        tracing::info!(mic = %mic.name, "auto-record microphone");
-                        // Through the app-scoped feed, so the automated run
-                        // exercises the same lock path a clicked selection uses.
-                        let name = mic.name.clone();
-                        Feeds::global(cx)
-                            .update(cx, |feeds, cx| feeds.set_microphone(Some(name), cx));
-                    }
-                })
-                .is_err()
-            {
-                return;
+            if !skip_mic {
+                // Exercise the microphone path too: record with the system default
+                // input. "First in the list" is wrong on a machine with a
+                // Continuity iPhone mic -- it enumerates but dies on stream start,
+                // which kills the whole recording.
+                let default_mic = cx
+                    .background_executor()
+                    .spawn(async {
+                        cap_recording::feeds::microphone::MicrophoneFeed::default_device()
+                            .map(|(name, _, _)| name)
+                    })
+                    .await;
+                if this
+                    .update_in(cx, |this, _window, cx| {
+                        this.microphone = default_mic
+                            .and_then(|name| {
+                                this.devices
+                                    .microphones
+                                    .iter()
+                                    .find(|mic| mic.name == name)
+                                    .cloned()
+                            })
+                            .or_else(|| this.devices.microphones.first().cloned());
+                        if let Some(mic) = &this.microphone {
+                            tracing::info!(mic = %mic.name, "auto-record microphone");
+                            // Through the app-scoped feed, so the automated run
+                            // exercises the same lock path a clicked selection uses.
+                            let name = mic.name.clone();
+                            Feeds::global(cx)
+                                .update(cx, |feeds, cx| feeds.set_microphone(Some(name), cx));
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                // Give the app-scoped feed a moment to connect its input; locking
+                // an input-less feed would fall back to a per-recording one and
+                // dodge the path this harness exists to exercise.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1500))
+                    .await;
             }
-            // Give the app-scoped feed a moment to connect its input; locking
-            // an input-less feed would fall back to a per-recording one and
-            // dodge the path this harness exists to exercise.
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1500))
-                .await;
+
+            if overlay == Some(TargetType::Window)
+                && let Some(wanted) = required_window.clone()
+            {
+                let mut found = false;
+                for _ in 0..20 {
+                    found = this
+                        .update_in(cx, |this, _window, cx| {
+                            this.arm_overlay(TargetType::Window, cx);
+                            this.selected_window
+                                .as_ref()
+                                .is_some_and(|window| window_matches(window, &wanted))
+                        })
+                        .unwrap_or(false);
+                    if found {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(250))
+                        .await;
+                }
+                if !found {
+                    tracing::error!(
+                        title = %wanted,
+                        "CAP_GPUI_AUTO_WINDOW: no matching window"
+                    );
+                    return;
+                }
+            }
 
             let started = match overlay {
-                None => this
-                    .update_in(cx, |this, window, cx| this.start_recording(window, cx))
-                    .is_ok(),
+                None => {
+                    tracing::info!("auto-record start requested");
+                    this.update_in(cx, |this, window, cx| this.start_recording(window, cx))
+                        .is_ok()
+                }
                 Some(kind) => {
                     // The overlay route: arm the mode (which opens the
                     // overlays), let them come up, seed what a drag or a hover
@@ -842,6 +966,7 @@ impl MainWindow {
                             .timer(std::time::Duration::from_millis(300))
                             .await;
                     }
+                    tracing::info!("auto-record start requested");
                     cx.update(|_, cx| app_windows::start_from_overlay(None, cx))
                         .unwrap_or(false)
                 }
@@ -852,8 +977,7 @@ impl MainWindow {
             }
 
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
-            let toggle = |this: &gpui::WeakEntity<Self>,
-                          cx: &mut gpui::AsyncWindowContext| {
+            let toggle = |this: &gpui::WeakEntity<Self>, cx: &mut gpui::AsyncWindowContext| {
                 this.update_in(cx, |this, _, cx| {
                     this.session
                         .update(cx, |session, cx| session.toggle_pause(cx));
@@ -871,6 +995,7 @@ impl MainWindow {
                     .timer(std::time::Duration::from_secs(record_secs))
                     .await;
             }
+            tracing::info!("auto-record stop requested");
             this.update_in(cx, |this, _, cx| {
                 this.session.update(cx, |session, cx| session.stop(cx));
             })
@@ -887,7 +1012,15 @@ impl MainWindow {
     /// which is the same "set the target mode, open the overlays" pair.
     pub fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
         if kind == TargetType::Window {
-            self.selected_window = self.devices.windows.first().cloned();
+            self.selected_window = match auto_window_title() {
+                Some(title) => self
+                    .devices
+                    .windows
+                    .iter()
+                    .find(|window| window_matches(window, &title))
+                    .cloned(),
+                None => self.devices.windows.first().cloned(),
+            };
             if let Some(window) = &self.selected_window {
                 tracing::info!(app = %window.app, title = %window.label, "auto window target");
             }
@@ -1014,6 +1147,11 @@ impl Render for MainWindow {
                 this.border_1().border_color(color)
             })
             .font_family("Geist")
+            // `body { font-family: "Geist Sans"; font-weight: 500 }`
+            // (`ui-solid/src/main.css:189-192`). The shipping app renders
+            // *everything* Medium unless a `font-*` class says otherwise, so
+            // Medium -- not Regular -- is the inherited default at every root.
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)
             .child(self.render_header(window, cx))
             .child(self.render_body(cx))
@@ -1156,7 +1294,13 @@ impl MainWindow {
             .gap(px(4.))
             .mx(px(8.))
             .min_w_0()
-            .child(icon_button("help", "icons/circle-help.svg", 16.))
+            .child(
+                icon_button("help", "icons/circle-help.svg", 16.).on_click(cx.listener(
+                    |_, _, _window, cx| {
+                        cx.defer(app_windows::open_onboarding);
+                    },
+                )),
+            )
             // The drag handle, and *only* this. The Tauri header puts
             // `data-tauri-drag-region` on the header and this spacer but not on
             // the buttons; putting the handler on the header root instead makes
@@ -1209,8 +1353,22 @@ impl MainWindow {
                             });
                         }),
                     ))
-                    .child(icon_button("screenshots", "icons/image.svg", 16.))
-                    .child(icon_button("recordings", "icons/play-circle.svg", 16.))
+                    .child(icon_button("screenshots", "icons/image.svg", 16.).on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.open_panel(Panel::Library(LibraryKind::Screenshots), window, cx);
+                        }),
+                    ))
+                    .child(
+                        icon_button("recordings", "icons/play-circle.svg", 16.).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_panel(
+                                    Panel::Library(LibraryKind::Recordings),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                    )
                     .child(
                         icon_button("teleprompter", "icons/scan-text.svg", 16.).on_click(
                             cx.listener(|_, _, _window, cx| {
@@ -1221,7 +1379,15 @@ impl MainWindow {
                             }),
                         ),
                     )
-                    .child(icon_button("changelog", "icons/bell.svg", 16.)),
+                    .child(
+                        icon_button("changelog", "icons/bell.svg", 16.).on_click(cx.listener(
+                            |_, _, _window, cx| {
+                                cx.defer(|cx: &mut gpui::App| {
+                                    app_windows::open_settings(Page::Changelog, cx)
+                                });
+                            },
+                        )),
+                    ),
             )
     }
 
@@ -1326,11 +1492,10 @@ impl MainWindow {
                     // `disabled:opacity-60` while pending.
                     .when(stopping || starting, |this| this.opacity(0.6))
                     .when(!stopping && !starting, |this| {
-                        this.hover(|style| style.bg(theme.red_10)).on_click(cx.listener(
-                            |this, _, _window, cx| {
+                        this.hover(|style| style.bg(theme.red_10))
+                            .on_click(cx.listener(|this, _, _window, cx| {
                                 this.session.update(cx, |session, cx| session.stop(cx));
-                            },
-                        ))
+                            }))
                     })
                     .child(
                         svg()
@@ -1363,6 +1528,7 @@ impl MainWindow {
                 .text_color(theme.gray_11)
                 .child("Recording Modes")
                 .into_any_element(),
+            Panel::Library(kind) => self.render_library_header(kind, cx).into_any_element(),
             Panel::Device(_) | Panel::Target(_) => {
                 self.render_search_field(panel, cx).into_any_element()
             }
@@ -1430,6 +1596,9 @@ impl MainWindow {
                             self.render_target_grid(target, cx).into_any_element()
                         }
                         Panel::ModeInfo => self.render_mode_info(cx).into_any_element(),
+                        Panel::Library(kind) => {
+                            self.render_library_grid(kind, cx).into_any_element()
+                        }
                     }),
             )
     }
@@ -1437,17 +1606,28 @@ impl MainWindow {
     fn close_panel(&mut self, cx: &mut Context<Self>) {
         self.panel = None;
         self.search.clear();
-        self.search_input.update(cx, |input, cx| input.set_text("", cx));
+        self.search_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.library_task = None;
         cx.notify();
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
         self.panel = Some(panel);
         self.search.clear();
-        self.search_input.update(cx, |input, cx| input.set_text("", cx));
-        if matches!(panel, Panel::Device(_) | Panel::Target(_)) {
+        self.search_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        if matches!(
+            panel,
+            Panel::Device(_) | Panel::Target(_) | Panel::Library(_)
+        ) {
             let focus = self.search_input.read(cx).focus_handle();
             window.focus(&focus, cx);
+        }
+        if let Panel::Library(kind) = panel {
+            self.refresh_library(kind, window, cx);
+        } else {
+            self.library_task = None;
         }
         cx.notify();
     }
@@ -1464,6 +1644,7 @@ impl MainWindow {
             Panel::Target(TargetType::Window) => "Search windows",
             Panel::Device(DeviceMenu::Camera) => "Search cameras",
             Panel::Device(DeviceMenu::Microphone) => "Search microphones",
+            Panel::Library(kind) => kind.search_placeholder(),
             _ => "Search",
         };
         self.search_input
@@ -1474,6 +1655,811 @@ impl MainWindow {
             "panel-search",
             &self.search_input,
         ))
+    }
+
+    fn render_library_header(&self, kind: LibraryKind, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(8.))
+            .items_center()
+            .child(self.render_search_field(Panel::Library(kind), cx))
+            .child(
+                ui::Button::plain(
+                    &theme,
+                    "library-import",
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Sm,
+                )
+                .label(kind.import_label())
+                .icon("icons/import.svg")
+                .height(px(36.))
+                .on_click(cx.listener(move |_, _, _window, cx| {
+                    // `importVideoFromPicker` / `importImageFromPicker`
+                    // (`utils/importMedia.ts:58-86`). Deferred out of the
+                    // listener because the picker task must start with a
+                    // clean App borrow, like every other panel opener.
+                    cx.defer(move |cx| match kind {
+                        LibraryKind::Recordings => crate::import::pick_and_import_video(cx),
+                        LibraryKind::Screenshots => crate::import::pick_and_import_image(cx),
+                    });
+                })),
+            )
+    }
+
+    /// Re-scan whichever library panel is open -- the import pipeline's
+    /// refresh seam: a finished import has to land in the panel the user is
+    /// probably watching it from.
+    pub fn refresh_open_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Panel::Library(kind)) = self.panel {
+            self.refresh_library(kind, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_library(&mut self, kind: LibraryKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.library_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let (recordings, screenshots) = cx
+                .background_executor()
+                .spawn(async move {
+                    match kind {
+                        LibraryKind::Recordings => {
+                            let mut items = library::list_recordings();
+                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            (Some(items), None)
+                        }
+                        LibraryKind::Screenshots => {
+                            let mut items = library::list_screenshots();
+                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            (None, Some(items))
+                        }
+                    }
+                })
+                .await;
+
+            let thumbnails = match this.update_in(cx, |this, window, cx| {
+                this.set_library(kind, recordings, screenshots, window, cx)
+            }) {
+                Ok(thumbnails) => thumbnails,
+                Err(_) => return,
+            };
+
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        for (index, path, image) in batch {
+                            this.set_library_thumbnail(kind, index, path, image, window, cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }));
+    }
+
+    fn set_library(
+        &mut self,
+        kind: LibraryKind,
+        recordings: Option<Vec<RecordingItem>>,
+        screenshots: Option<Vec<ScreenshotItem>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(usize, std::path::PathBuf)> {
+        self.drop_library_images(window);
+        let mut pending = Vec::new();
+        self.library = Some(match kind {
+            LibraryKind::Recordings => LibraryItems::Recordings(
+                recordings
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        if let Some(path) = item.thumbnail.clone() {
+                            pending.push((index, path));
+                        }
+                        LibraryRow {
+                            item,
+                            thumbnail: None,
+                        }
+                    })
+                    .collect(),
+            ),
+            LibraryKind::Screenshots => LibraryItems::Screenshots(
+                screenshots
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        if let Some(path) = item.thumbnail.clone() {
+                            pending.push((index, path));
+                        }
+                        LibraryRow {
+                            item,
+                            thumbnail: None,
+                        }
+                    })
+                    .collect(),
+            ),
+        });
+        cx.notify();
+        window.refresh();
+        pending
+    }
+
+    fn set_library_thumbnail(
+        &mut self,
+        kind: LibraryKind,
+        index: usize,
+        path: std::path::PathBuf,
+        image: std::sync::Arc<gpui::RenderImage>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let replaced = match (&mut self.library, kind) {
+            (Some(LibraryItems::Recordings(rows)), LibraryKind::Recordings) => rows
+                .get_mut(index)
+                .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))
+                .and_then(|row| row.thumbnail.replace(image)),
+            (Some(LibraryItems::Screenshots(rows)), LibraryKind::Screenshots) => rows
+                .get_mut(index)
+                .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))
+                .and_then(|row| row.thumbnail.replace(image)),
+            _ => None,
+        };
+        if let Some(old) = replaced {
+            let _ = window.drop_image(old);
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    fn drop_library_images(&mut self, window: &mut Window) {
+        match self.library.take() {
+            Some(LibraryItems::Recordings(rows)) => {
+                for row in rows {
+                    if let Some(image) = row.thumbnail {
+                        let _ = window.drop_image(image);
+                    }
+                }
+            }
+            Some(LibraryItems::Screenshots(rows)) => {
+                for row in rows {
+                    if let Some(image) = row.thumbnail {
+                        let _ = window.drop_image(image);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn render_library_grid(&self, kind: LibraryKind, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let grid = div().flex().flex_col().gap(px(8.)).w_full();
+
+        if self.library.is_none() {
+            let mut skeletons = Vec::new();
+            for _ in 0..4 {
+                skeletons.push(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(128.))
+                        .rounded(px(8.))
+                        .bg(theme.body_fill(3))
+                        .into_any_element(),
+                );
+            }
+            return grid.children(skeletons.chunks_mut(2).map(|pair| {
+                let mut row = div().flex().flex_row().gap(px(8.)).w_full();
+                for card in pair.iter_mut() {
+                    row = row.child(std::mem::replace(card, div().into_any_element()));
+                }
+                if pair.len() == 1 {
+                    row = row.child(div().flex_1());
+                }
+                row
+            }));
+        }
+
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+        // Running imports lead the grid they will land in, the way an
+        // in-progress recording leads the Tauri recordings list.
+        for (index, entry) in crate::import::imports_snapshot(cx).iter().enumerate() {
+            let wanted = match kind {
+                LibraryKind::Recordings => entry.kind == crate::import::ImportKind::Video,
+                LibraryKind::Screenshots => entry.kind == crate::import::ImportKind::Image,
+            };
+            if wanted {
+                cards.push(self.render_import_card(index, entry).into_any_element());
+            }
+        }
+        match (kind, &self.library) {
+            (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => {
+                for (index, row) in rows.iter().enumerate() {
+                    if !self.matches_search(&row.item.pretty_name) {
+                        continue;
+                    }
+                    cards.push(
+                        self.render_recording_card(index, row, cx)
+                            .into_any_element(),
+                    );
+                }
+            }
+            (LibraryKind::Screenshots, Some(LibraryItems::Screenshots(rows))) => {
+                for (index, row) in rows.iter().enumerate() {
+                    if !self.matches_search(&row.item.pretty_name) {
+                        continue;
+                    }
+                    cards.push(
+                        self.render_screenshot_card(index, row, cx)
+                            .into_any_element(),
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        if cards.is_empty() {
+            return grid.child(self.render_library_empty(kind, cx));
+        }
+
+        let view_all = kind.view_all_label();
+        let page = kind.settings_page();
+        cards.push(
+            div()
+                .id("library-view-all")
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .h(px(76.))
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme.body_border(5))
+                .bg(theme.body_fill(3))
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.gray_12)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.body_hover_fill(4)))
+                .child(view_all)
+                .on_click(cx.listener(move |_, _, _window, cx| {
+                    cx.defer(move |cx| app_windows::open_settings(page, cx));
+                }))
+                .into_any_element(),
+        );
+
+        grid.children(cards.chunks_mut(2).map(|pair| {
+            let mut row = div().flex().flex_row().gap(px(8.)).w_full().items_stretch();
+            for card in pair.iter_mut() {
+                row = row.child(std::mem::replace(card, div().into_any_element()));
+            }
+            if pair.len() == 1 {
+                row = row.child(div().flex_1());
+            }
+            row
+        }))
+    }
+
+    fn render_library_empty(&self, kind: LibraryKind, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let searching = !self.search.is_empty();
+        let page = kind.settings_page();
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .py(px(32.))
+            .child(
+                svg()
+                    .path(kind.empty_icon())
+                    .size(px(20.))
+                    .text_color(theme.gray_10),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.gray_12)
+                    .child(if searching {
+                        kind.no_match()
+                    } else {
+                        kind.empty_title()
+                    }),
+            )
+            .when(!searching, |this| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.gray_11)
+                        .text_center()
+                        .child(kind.empty_description()),
+                )
+                .child(
+                    ui::Button::plain(
+                        &theme,
+                        "library-view-all-empty",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .label(kind.view_all_label())
+                    .on_click(cx.listener(move |_, _, _window, cx| {
+                        cx.defer(move |cx| app_windows::open_settings(page, cx));
+                    })),
+                )
+            })
+    }
+
+    /// The importing card: `ImportProgress.tsx`'s ring drawn in the library
+    /// card's shell, with the clips-badge pill relabelled "Importing" -- the
+    /// same look the library's in-progress recordings wear.
+    fn render_import_card(
+        &self,
+        index: usize,
+        entry: &crate::import::ImportProgress,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let converting = entry.stage == crate::import::ImportStage::Converting;
+        let ring = {
+            let ring =
+                ui::CircularProgress::new(px(36.), px(3.), theme.gray(4), theme.blue_9.into());
+            if converting {
+                ring.progress(entry.progress as f32)
+                    .label(theme.gray_12.into(), px(9.))
+            } else {
+                ring.indeterminate()
+            }
+        };
+
+        div()
+            .id(("library-importing", index))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .bg(theme.body_fill(3))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(px(76.))
+                    .overflow_hidden()
+                    .bg(theme.body_fill(4))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(ring)
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(4.))
+                            .top(px(4.))
+                            .rounded_full()
+                            .bg(black_alpha(0.55))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(gpui::white())
+                            .child("Importing"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_w_0()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .pb(px(10.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.gray_12)
+                            .child(entry.pretty_name.clone()),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(theme.gray_11)
+                            .child(entry.message.clone()),
+                    ),
+            )
+    }
+
+    fn render_recording_card(
+        &self,
+        index: usize,
+        row: &LibraryRow<RecordingItem>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let item = &row.item;
+        let path = item.path.clone();
+        let studio = item.mode == library::RecordingMode::Studio;
+        let sharing = item.sharing.clone();
+        let mode = item.mode;
+        let subtitle = item.mode.label().to_string();
+        let actions = self.render_recording_card_actions(index, item, cx);
+
+        self.library_card(
+            ("library-recording", index),
+            row.thumbnail.clone(),
+            "icons/square-play.svg",
+            item.pretty_name.clone(),
+            Some(subtitle),
+            item.clip_count,
+            cx.listener(move |_, _, _window, cx| {
+                if studio {
+                    let path = path.clone();
+                    cx.defer(move |cx| app_windows::open_editor(path, cx));
+                } else if let Some(url) = &sharing {
+                    cx.open_url(url);
+                } else {
+                    library::open_recording_folder(&path, mode);
+                }
+            }),
+            actions,
+            theme,
+        )
+    }
+
+    fn render_recording_card_actions(
+        &self,
+        index: usize,
+        item: &RecordingItem,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let path = item.path.clone();
+        let mode = item.mode;
+        let sharing = item.sharing.clone();
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px(px(8.))
+            .pb(px(6.))
+            .gap(px(4.));
+        if mode == library::RecordingMode::Studio {
+            let editor = path.clone();
+            row = row.child(self.library_action(
+                ("lib-rec-edit", index),
+                "icons/edit.svg",
+                cx.listener(move |_, _, _window, cx| {
+                    let editor = editor.clone();
+                    cx.defer(move |cx| app_windows::open_editor(editor, cx));
+                }),
+            ));
+        }
+        if let Some(url) = sharing {
+            row = row.child(self.library_action(
+                ("lib-rec-link", index),
+                "icons/link.svg",
+                move |_, _, cx| cx.open_url(&url),
+            ));
+        }
+        let folder = path.clone();
+        row = row.child(self.library_action(
+            ("lib-rec-folder", index),
+            "icons/folder.svg",
+            move |_, _, _| library::open_recording_folder(&folder, mode),
+        ));
+        row.child(self.library_action(
+            ("lib-rec-delete", index),
+            "icons/trash.svg",
+            cx.listener(move |this, _, window, cx| {
+                this.delete_library_recording(path.clone(), window, cx);
+            }),
+        ))
+    }
+
+    fn render_screenshot_card(
+        &self,
+        index: usize,
+        row: &LibraryRow<ScreenshotItem>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let item = &row.item;
+        let png = item.path.clone();
+        let actions = self.render_screenshot_card_actions(index, item, cx);
+        self.library_card(
+            ("library-screenshot", index),
+            row.thumbnail.clone(),
+            "icons/image.svg",
+            item.pretty_name.clone(),
+            None,
+            0,
+            move |_, _, _| library::open_path(&png),
+            actions,
+            theme,
+        )
+    }
+
+    fn render_screenshot_card_actions(
+        &self,
+        index: usize,
+        item: &ScreenshotItem,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let png = item.path.clone();
+        let name = item.pretty_name.clone();
+        let bundle = item.bundle.clone();
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px(px(8.))
+            .pb(px(6.))
+            .gap(px(4.))
+            .child(
+                self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
+                    let png = png.clone();
+                    move |_, _, _| {
+                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png) {
+                            tracing::warn!("copying screenshot failed: {error}");
+                        }
+                    }
+                }),
+            )
+            .child(self.library_action(
+                ("lib-ss-save", index),
+                "icons/download.svg",
+                cx.listener(move |this, _, window, cx| {
+                    this.save_screenshot(png.clone(), name.clone(), window, cx);
+                }),
+            ))
+            .child(
+                self.library_action(("lib-ss-open", index), "icons/folder.svg", {
+                    let bundle = bundle.clone();
+                    move |_, _, _| library::reveal_in_folder(&bundle)
+                }),
+            )
+            .child(self.library_action(
+                ("lib-ss-delete", index),
+                "icons/trash.svg",
+                cx.listener(move |this, _, window, cx| {
+                    this.delete_library_screenshot(bundle.clone(), window, cx);
+                }),
+            ))
+    }
+
+    fn library_action(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        icon: &'static str,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(4.))
+            .rounded(px(4.))
+            .text_color(theme.gray_11)
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.body_hover_fill(5)).text_color(theme.gray_12))
+            .child(svg().path(icon).size(px(14.)).text_color(theme.gray_11))
+            .on_click(on_click)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn library_card(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
+        fallback: &'static str,
+        label: String,
+        subtitle: Option<String>,
+        clip_count: u32,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+        actions: impl IntoElement,
+        theme: Theme,
+    ) -> impl IntoElement {
+        let thumb = match thumbnail {
+            Some(image) => {
+                use gpui::StyledImage as _;
+                img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .into_any_element()
+            }
+            None => div()
+                .flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .bg(theme.body_fill(4))
+                .child(svg().path(fallback).size(px(24.)).text_color(theme.gray_9))
+                .into_any_element(),
+        };
+
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .bg(theme.body_fill(3))
+            .hover(|style| style.bg(theme.body_hover_fill(4)))
+            .child(
+                div()
+                    .id("library-card-open")
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .h(px(76.))
+                            .overflow_hidden()
+                            .bg(theme.body_fill(4))
+                            .child(thumb)
+                            .when(clip_count > 1, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(4.))
+                                        .top(px(4.))
+                                        .rounded_full()
+                                        .bg(black_alpha(0.55))
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(gpui::white())
+                                        .child(format!("{clip_count} clips")),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .min_w_0()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .text_size(px(11.))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.gray_12)
+                                    .child(label),
+                            )
+                            .children(subtitle.map(|subtitle| {
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .text_color(theme.gray_11)
+                                    .child(subtitle)
+                            })),
+                    )
+                    .on_click(on_click),
+            )
+            .child(actions)
+    }
+
+    fn delete_library_recording(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            if !crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this recording?",
+                "Yes",
+                "No",
+                false,
+            ) {
+                return;
+            }
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { library::delete_recording_directory(&path) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                return;
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.refresh_library(LibraryKind::Recordings, window, cx);
+                this.refresh_recents(window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn delete_library_screenshot(
+        &mut self,
+        bundle: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            if !crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this screenshot?",
+                "Yes",
+                "No",
+                false,
+            ) {
+                return;
+            }
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let bundle = bundle.clone();
+                    async move { library::delete_screenshot(&bundle) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
+                return;
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.refresh_library(LibraryKind::Screenshots, window, cx);
+                this.refresh_recents(window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_screenshot(
+        &mut self,
+        src: std::path::PathBuf,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |_this, _cx| {
+            let dest = crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+            let Some(dest) = dest else {
+                return;
+            };
+            if let Err(error) = library::copy_file_to_path(&src, &dest) {
+                tracing::error!("saving screenshot failed: {error}");
+            }
+        })
+        .detach();
     }
 
     /// Case-insensitive substring match, the same test the Tauri panels filter
@@ -1514,7 +2500,8 @@ impl MainWindow {
 
     fn clear_search(&mut self, cx: &mut Context<Self>) {
         self.search.clear();
-        self.search_input.update(cx, |input, cx| input.set_text("", cx));
+        self.search_input
+            .update(cx, |input, cx| input.set_text("", cx));
         cx.notify();
     }
 
@@ -1908,7 +2895,11 @@ impl MainWindow {
                             .child(
                                 div()
                                     .text_size(px(14.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    // `text-sm font-semibold`
+                                    // (`ModeInfoPanel.tsx:106`). `font-semibold`
+                                    // renders 700: no 600 face is loaded over
+                                    // there (`ui-solid/vite.js:31-33`).
+                                    .font_weight(FontWeight::BOLD)
                                     .text_color(if selected {
                                         theme.blue_11
                                     } else {
@@ -2227,7 +3218,9 @@ impl MainWindow {
                     div().px(px(4.)).pb(px(2.)).child(
                         div()
                             .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // `font-semibold` (`new-main/index.tsx:3024`)
+                            // renders 700: no 600 face is loaded over there.
+                            .font_weight(FontWeight::BOLD)
                             .text_color(self.theme.gray_12)
                             .child("Capture"),
                     ),
@@ -2400,6 +3393,8 @@ impl MainWindow {
                         .child(
                             div()
                                 .text_size(px(12.))
+                                // `text-xs` / `leading-4` (`TargetTypeButton.tsx:47`).
+                                .line_height(px(16.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(label_color)
                                 .child(target.label()),
@@ -2407,6 +3402,8 @@ impl MainWindow {
                         .child(
                             div()
                                 .text_size(px(10.))
+                                // `text-[10px] leading-3`.
+                                .line_height(px(12.))
                                 .text_color(description_color)
                                 .child(target.description()),
                         ),
@@ -2423,6 +3420,11 @@ impl MainWindow {
                 .child(
                     div()
                         .text_size(px(12.))
+                        // `text-xs` is 12/16. gpui's default line box is ~19.5
+                        // at 12px, which makes each compact tile 3.5px too
+                        // tall and clips the last device row (system audio)
+                        // by 1–2px against the 395px window.
+                        .line_height(px(16.))
                         .text_color(label_color)
                         .child(target.label()),
                 )
@@ -2533,7 +3535,9 @@ impl MainWindow {
                 div().flex().items_center().mb(px(8.)).px(px(2.)).child(
                     div()
                         .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
+                        // `font-semibold` (`new-main/Recents.tsx:203`) renders
+                        // 700: no 600 face is loaded over there.
+                        .font_weight(FontWeight::BOLD)
                         .text_color(theme.gray_12)
                         .child("Recents"),
                 ),
@@ -2633,8 +3637,7 @@ impl MainWindow {
     fn render_recent_card(&self, index: usize, entry: &RecentEntry) -> impl IntoElement {
         let theme = self.theme;
         let item = &entry.item;
-        let bundle = item.bundle.clone();
-        let opens_editor = item.kind == MediaKind::Studio;
+        let item_for_click = item.clone();
 
         div()
             .id(("recent-card", index))
@@ -2785,7 +3788,7 @@ impl MainWindow {
                         },
                     ),
             )
-            .on_click(move |_, _window, cx| activate_recent(&bundle, opens_editor, cx))
+            .on_click(move |_, _window, cx| activate_recent(&item_for_click, cx))
     }
 
     /// `ExpandedControlLabel`: `mb-1 px-1`, `text-xs font-semibold text-gray-12`.
@@ -2802,7 +3805,9 @@ impl MainWindow {
                     div().mb(px(4.)).px(px(4.)).child(
                         div()
                             .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            // `font-semibold` (`new-main/index.tsx:2945`)
+                            // renders 700: no 600 face is loaded over there.
+                            .font_weight(FontWeight::BOLD)
                             .text_color(theme.gray_12)
                             .child(title),
                     ),
@@ -2857,53 +3862,42 @@ impl MainWindow {
             )
             .child(pill.render(theme))
             // `hover:border-gray-8` is not one of the classes theme.css remaps, so
-        // the border keeps its Radix step under the material.
-        .hover(|style| {
-            style
-                .bg(theme.body_hover_fill(4))
-                .border_color(theme.gray_8)
-        })
+            // the border keeps its Radix step under the material.
+            .hover(|style| {
+                style
+                    .bg(theme.body_hover_fill(4))
+                    .border_color(theme.gray_8)
+            })
     }
 }
 
 /// What a click on a Recents card does -- `openRecentMedia`.
 ///
-/// A studio recording routes to the editor, as `openRecording`'s studio arm
-/// does (`commands.showWindow({ Editor: { project_path } })` followed by
-/// hiding the main window, the second half of which `open_editor` owns). The
-/// recovery step it runs first for an `InProgress`/`NeedsRemux` bundle is not
-/// reproduced -- `recoverRecording` is its own unit -- so such a bundle
-/// reaches the editor's error state instead.
-///
-/// Everything else still reveals its bundle in Finder: `openRecentMedia`
-/// sends an instant recording to its share link and a screenshot to the
-/// Screenshot Editor, and neither exists here (see the README's deviation).
-///
-/// Shared between the card's click handler and `CAP_GPUI_AUTO_RECENT`, so the
-/// harness drives exactly the path a click takes.
-pub fn activate_recent(bundle: &std::path::Path, opens_editor: bool, cx: &mut gpui::App) {
-    if opens_editor {
-        tracing::info!(path = %bundle.display(), "opening recent capture in the editor");
-        // Deferred: opening a window paints it synchronously, and doing that
-        // inside a click handler would double-lease the app.
-        let bundle = bundle.to_path_buf();
-        cx.defer(move |cx| app_windows::open_editor(bundle, cx));
-        return;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        tracing::info!(path = %bundle.display(), "revealing recent capture");
-        if let Err(error) = std::process::Command::new("open")
-            .arg("-R")
-            .arg(bundle)
-            .spawn()
-        {
-            tracing::warn!("revealing the bundle failed: {error}");
+/// Studio recordings open the editor. Instant recordings open the share
+/// link when one exists, otherwise the bundle is revealed. Screenshots
+/// open the PNG (the screenshot editor is not in this app yet).
+pub fn activate_recent(item: &RecentItem, cx: &mut gpui::App) {
+    match item.kind {
+        MediaKind::Studio => {
+            tracing::info!(path = %item.bundle.display(), "opening recent capture in the editor");
+            let bundle = item.bundle.clone();
+            cx.defer(move |cx| app_windows::open_editor(bundle, cx));
+        }
+        MediaKind::Instant => {
+            if let Some(url) = &item.sharing {
+                cx.open_url(url);
+            } else {
+                library::reveal_in_folder(&item.bundle);
+            }
+        }
+        MediaKind::Screenshot => {
+            if let Some(path) = &item.thumbnail {
+                library::open_path(path);
+            } else {
+                library::open_path(&item.bundle);
+            }
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = bundle;
 }
 
 /// `black/N` -- Tailwind's slash-alpha over the two absolute colours, which
@@ -2931,6 +3925,17 @@ pub fn auto_overlay_kind() -> Option<TargetType> {
         "camera" => Some(TargetType::CameraOnly),
         _ => None,
     }
+}
+
+fn auto_window_title() -> Option<String> {
+    std::env::var("CAP_GPUI_AUTO_WINDOW")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn window_matches(window: &crate::devices::WindowOption, title: &str) -> bool {
+    window.label == title || window.label.contains(title)
 }
 
 /// `CAP_GPUI_AUTO_AREA=x,y,width,height`, the harness's stand-in for drawing a
