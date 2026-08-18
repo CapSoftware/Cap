@@ -13,6 +13,10 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
+#[cfg(target_os = "macos")]
+use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
     format
@@ -53,6 +57,8 @@ pub enum H264EncoderError {
     InvalidOutputDimensions { width: u32, height: u32 },
     #[error("Hardware encoder self-test failed: {0}")]
     SelfTest(String),
+    #[error("VideoToolbox hardware input unavailable: {0}")]
+    VideoToolboxHwInput(String),
 }
 
 fn is_hardware_h264(codec_name: &str) -> bool {
@@ -291,6 +297,140 @@ impl H264EncoderBuilder {
             input_width,
             input_height,
             converted_frame_pool,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+        })
+    }
+
+    /// Builds an `h264_videotoolbox` encoder that consumes IOSurface-backed
+    /// NV12 CVPixelBuffers directly (`AV_PIX_FMT_VIDEOTOOLBOX`), skipping the
+    /// per-frame CPU plane copy a software-input encoder requires. Frames are
+    /// queued through [`H264Encoder::wrap_videotoolbox_pixel_buffer`].
+    ///
+    /// Fails (so the caller can fall back to the software-input path) when
+    /// the input is not NV12, scaling is requested, the target frame rate
+    /// exceeds VideoToolbox's estimated capability, or the hardware contexts
+    /// cannot be created.
+    #[cfg(target_os = "macos")]
+    pub fn build_videotoolbox_hw_input(
+        self,
+        output: &mut format::context::Output,
+    ) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+
+        if input_config.pixel_format != ffmpeg::format::Pixel::NV12 {
+            return Err(H264EncoderError::VideoToolboxHwInput(format!(
+                "input pixel format {:?} is not NV12",
+                input_config.pixel_format
+            )));
+        }
+        if let Some((width, height)) = self.output_size
+            && (width != input_config.width || height != input_config.height)
+        {
+            return Err(H264EncoderError::VideoToolboxHwInput(format!(
+                "scaling {}x{} -> {}x{} requires the software input path",
+                input_config.width, input_config.height, width, height
+            )));
+        }
+        let output_width = input_config.width;
+        let output_height = input_config.height;
+        if !output_width.is_multiple_of(2) || !output_height.is_multiple_of(2) {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
+        if force_software_encoder() || requires_software_encoder(&input_config, self.preset, false)
+        {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "software encoder required for this resolution/frame rate".to_string(),
+            ));
+        }
+        if self.crf.is_some() {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "CRF encoding uses libx264".to_string(),
+            ));
+        }
+
+        let codec =
+            encoder::find_by_name("h264_videotoolbox").ok_or(H264EncoderError::CodecNotFound)?;
+        let encoder_options = get_codec_and_options(
+            &input_config,
+            self.preset,
+            Some(&["h264_videotoolbox"]),
+            self.is_export,
+            None,
+        )
+        .into_iter()
+        .next()
+        .map(|(_, options)| options)
+        .ok_or(H264EncoderError::CodecNotFound)?;
+
+        let hw_frames = VideoToolboxHwFrames::new(output_width, output_height)
+            .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))?;
+
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+
+        let encoder = {
+            let mut encoder_ctx = context::Context::new_with_codec(codec);
+            encoder_ctx.set_threading(Config::count(thread_count));
+            let mut encoder = encoder_ctx.encoder().video()?;
+
+            encoder.set_width(output_width);
+            encoder.set_height(output_height);
+            encoder.set_format(ffmpeg::format::Pixel::VIDEOTOOLBOX);
+            encoder.set_time_base(input_config.time_base);
+            encoder.set_frame_rate(Some(input_config.frame_rate));
+            encoder.set_colorspace(color::Space::BT709);
+            encoder.set_color_range(color::Range::MPEG);
+            unsafe {
+                (*encoder.as_mut_ptr()).color_primaries =
+                    ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+                (*encoder.as_mut_ptr()).color_trc =
+                    ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+            }
+
+            let bitrate = get_bitrate(
+                output_width,
+                output_height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                self.bpp,
+            );
+            encoder.set_bit_rate(bitrate);
+            encoder.set_max_bit_rate(bitrate * 3 / 2);
+
+            unsafe { hw_frames.attach_to_encoder(encoder.as_mut_ptr()) };
+
+            encoder.open_as_with(codec, encoder_options)?
+        };
+
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
+        output_stream.set_time_base((1, H264Encoder::TIME_BASE));
+        output_stream.set_rate(input_config.frame_rate);
+        output_stream.set_parameters(&encoder);
+
+        info!(
+            width = output_width,
+            height = output_height,
+            fps = input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+            "Selected hardware H264 encoder with zero-copy VideoToolbox input"
+        );
+
+        Ok(H264Encoder {
+            base: EncoderBase::new(stream_index),
+            encoder,
+            converter: None,
+            output_format: ffmpeg::format::Pixel::VIDEOTOOLBOX,
+            output_width,
+            output_height,
+            input_format: input_config.pixel_format,
+            input_width: input_config.width,
+            input_height: input_config.height,
+            converted_frame_pool: None,
+            videotoolbox_hw: Some(Arc::new(hw_frames)),
         })
     }
 
@@ -668,6 +808,8 @@ pub struct H264Encoder {
     input_width: u32,
     input_height: u32,
     converted_frame_pool: Option<frame::Video>,
+    #[cfg(target_os = "macos")]
+    videotoolbox_hw: Option<Arc<VideoToolboxHwFrames>>,
 }
 
 pub struct ConversionRequirements {
@@ -693,6 +835,32 @@ impl H264Encoder {
 
     pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
         H264EncoderBuilder::new(input_config)
+    }
+
+    /// Whether this encoder was built with
+    /// [`H264EncoderBuilder::build_videotoolbox_hw_input`] and expects
+    /// wrapped CVPixelBuffer frames instead of software frames.
+    #[cfg(target_os = "macos")]
+    pub fn is_videotoolbox_hw_input(&self) -> bool {
+        self.videotoolbox_hw.is_some()
+    }
+
+    /// Wraps an IOSurface-backed NV12 `CVPixelBufferRef` as a frame this
+    /// encoder can queue directly. Only available on encoders built with
+    /// [`H264EncoderBuilder::build_videotoolbox_hw_input`].
+    #[cfg(target_os = "macos")]
+    pub fn wrap_videotoolbox_pixel_buffer(
+        &self,
+        pixel_buffer: *mut std::ffi::c_void,
+    ) -> Result<frame::Video, H264EncoderError> {
+        let hw_frames = self.videotoolbox_hw.as_ref().ok_or_else(|| {
+            H264EncoderError::VideoToolboxHwInput(
+                "encoder was not built for VideoToolbox hardware input".to_string(),
+            )
+        })?;
+        hw_frames
+            .wrap_pixel_buffer(pixel_buffer)
+            .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 
     pub fn conversion_requirements(&self) -> ConversionRequirements {

@@ -176,6 +176,11 @@ pub struct SegmentedVideoEncoderConfig {
     pub preset: H264Preset,
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
+    /// On macOS, try to open the encoder for zero-copy VideoToolbox input
+    /// (IOSurface-backed NV12 CVPixelBuffers queued via
+    /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
+    /// to the software-frame path. Ignored on other platforms.
+    pub prefer_videotoolbox_hw_input: bool,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -185,6 +190,7 @@ impl Default for SegmentedVideoEncoderConfig {
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
+            prefer_videotoolbox_hw_input: false,
         }
     }
 }
@@ -238,7 +244,28 @@ impl SegmentedVideoEncoder {
             builder = builder.with_output_size(width, height)?;
         }
 
-        let encoder = builder.build(&mut output)?;
+        #[cfg(target_os = "macos")]
+        let hw_attempt = if config.prefer_videotoolbox_hw_input {
+            match builder.clone().build_videotoolbox_hw_input(&mut output) {
+                Ok(encoder) => Some(encoder),
+                Err(error) => {
+                    tracing::info!(
+                        %error,
+                        "VideoToolbox zero-copy input unavailable, using software frame path"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "macos"))]
+        let hw_attempt: Option<H264Encoder> = None;
+
+        let encoder = match hw_attempt {
+            Some(encoder) => encoder,
+            None => builder.build(&mut output)?,
+        };
 
         output.write_header()?;
 
@@ -321,6 +348,28 @@ impl SegmentedVideoEncoder {
                 media_type: SegmentMediaType::Video,
             });
         }
+    }
+
+    /// Whether frames should be queued as CVPixelBuffers via
+    /// [`Self::queue_hw_pixel_buffer`] instead of software frames.
+    #[cfg(target_os = "macos")]
+    pub fn is_videotoolbox_hw_input(&self) -> bool {
+        self.encoder.is_videotoolbox_hw_input()
+    }
+
+    /// Queues an IOSurface-backed NV12 `CVPixelBufferRef` without copying its
+    /// planes. Only valid when [`Self::is_videotoolbox_hw_input`] is true.
+    #[cfg(target_os = "macos")]
+    pub fn queue_hw_pixel_buffer(
+        &mut self,
+        pixel_buffer: *mut std::ffi::c_void,
+        timestamp: Duration,
+    ) -> Result<(), QueueFrameError> {
+        let frame = self
+            .encoder
+            .wrap_videotoolbox_pixel_buffer(pixel_buffer)
+            .map_err(InitError::Encoder)?;
+        self.queue_frame(frame, timestamp)
     }
 
     pub fn queue_frame(

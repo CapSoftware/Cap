@@ -333,6 +333,7 @@ impl WindowsFragmentedM4SMuxer {
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
+            prefer_videotoolbox_hw_input: false,
         };
 
         let mut encoder =
@@ -800,6 +801,7 @@ impl WindowsFragmentedM4SCameraMuxer {
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
+            prefer_videotoolbox_hw_input: false,
         };
 
         let mut encoder =
