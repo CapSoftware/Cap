@@ -107,23 +107,32 @@ pub async fn upload_exported_video(
         tracing::error!("Failed to save recording meta: {error}");
     }
 
-    match upload_video(
-        &s3_config.id,
-        &file_path,
-        &screenshot_path,
-        &metadata,
-        progress,
-        &cancel,
-    )
-    .await
-    {
+    match upload_video(&s3_config.id, &file_path, &metadata, progress, &cancel).await {
         Ok(link) => {
-            meta.upload = Some(UploadMeta::Complete);
+            // The video content is fully uploaded at this point, so persist the
+            // sharing meta before attempting the thumbnail: a retry after a
+            // thumbnail failure then runs as a reupload against this video id
+            // instead of creating a duplicate server video.
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
                 content_hash: None,
             });
+
+            if screenshot_path.exists()
+                && let Err(error) = upload_screenshot(&s3_config.id, &screenshot_path).await
+            {
+                let message = format!("thumbnail upload failed: {error}");
+                meta.upload = Some(UploadMeta::Failed {
+                    error: message.clone(),
+                });
+                if let Err(save_error) = meta.save_for_project() {
+                    tracing::error!("Failed to save recording meta: {save_error}");
+                }
+                return Err(message);
+            }
+
+            meta.upload = Some(UploadMeta::Complete);
             if let Err(error) = meta.save_for_project() {
                 tracing::error!("Failed to save recording meta: {error}");
             }
@@ -197,7 +206,6 @@ async fn create_or_get_video(
 async fn upload_video(
     video_id: &str,
     file_path: &Path,
-    screenshot_path: &Path,
     metadata: &VideoMeta,
     progress: impl Fn(f64),
     cancel: &AtomicBool,
@@ -218,14 +226,6 @@ async fn upload_video(
     }
     multipart_complete(video_id, &initiate.upload_id, &parts, Some(metadata)).await?;
     progress(1.0);
-
-    if screenshot_path.exists()
-        && let Err(error) = upload_screenshot(video_id, screenshot_path).await
-    {
-        return Err(AuthApiError::Other(format!(
-            "thumbnail upload failed: {error}"
-        )));
-    }
 
     Ok(format!("{}/s/{video_id}", auth::server_url()))
 }
