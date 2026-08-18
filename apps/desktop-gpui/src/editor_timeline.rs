@@ -311,7 +311,7 @@ impl Transform {
     }
 
     /// `isSegmentVisible` (`TL/context.ts:65-68`).
-    fn segment_visible(&self, start: f64, end: f64) -> bool {
+    pub(crate) fn segment_visible(&self, start: f64, end: f64) -> bool {
         let (range_start, range_end) = self.visible_range();
         end >= range_start && start <= range_end
     }
@@ -405,7 +405,9 @@ pub fn format_time(seconds: f64) -> String {
 }
 
 /// The *other* `formatTime`, the clip track's own (`TL/ClipTrack.tsx:129-141`):
-/// `Nh Nm Ns` / `Nm Ns` / `Ns`.
+/// `Nh Nm Ns` / `Nm Ns` / `Ns`. One deliberate deviation: the source floors,
+/// which labels a 0.8s sliver "0s" -- below ten seconds this shows one decimal
+/// instead (Blip's `duration_label`).
 pub fn format_clip_time(seconds: f64) -> String {
     let seconds = seconds.max(0.0);
     let hours = (seconds / 3600.0).floor() as u64;
@@ -415,6 +417,8 @@ pub fn format_clip_time(seconds: f64) -> String {
         format!("{hours}h {minutes}m {secs}s")
     } else if minutes > 0 {
         format!("{minutes}m {secs}s")
+    } else if seconds < 9.95 {
+        format!("{:.1}s", (seconds * 10.0).round() / 10.0)
     } else {
         format!("{secs}s")
     }
@@ -904,6 +908,10 @@ pub struct TimelineModel {
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
     pub system_waveforms: Vec<Arc<Vec<f32>>>,
+    pub camera3d_setup_ghosts: Vec<(f64, f64, String)>,
+    /// The span a live ghost trim is removing, in output time. Drawn as a gap
+    /// with a red duration badge, the way Blip's ghost resize marks the cut.
+    pub clip_ghost_gap: Option<(f64, f64)>,
 }
 
 impl TimelineModel {
@@ -1106,6 +1114,8 @@ impl TimelineModel {
             system_volume_db: config.audio.system_volume_db as f64,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
+            camera3d_setup_ghosts: Vec::new(),
+            clip_ghost_gap: None,
         };
         model.rows = build_rows(
             config,
@@ -1387,6 +1397,11 @@ pub struct SegmentUi<'a> {
     /// `trackState.draggingSegment` (`TL/ZoomTrack.tsx:785`) plus
     /// `creatingSegmentViaDrag` (`:106`): either one hides the create ghost.
     pub dragging: bool,
+    /// `editorState.timeline.audioPicker` -- the empty audio lane whose
+    /// library panel is open (`TL/AudioTrack.tsx:405`).
+    pub audio_picker_lane: Option<u32>,
+    /// `isHoveringGenerateZoomButton` (`TL/ZoomTrack.tsx:308-309, 784`).
+    pub hovering_generate_zoom: bool,
 }
 
 impl SegmentUi<'_> {
@@ -1708,7 +1723,13 @@ fn render_track_content(
     let mut content = div().relative().size_full();
 
     if !segments.iter().any(|segment| segment.lane == row.lane)
-        && let Some(empty) = render_empty_track(theme, row.kind)
+        && !(row.kind == TrackKind::ThreeD && !model.camera3d_setup_ghosts.is_empty())
+        && let Some(empty) = render_empty_track(
+            theme,
+            row.kind,
+            view.hovered_track == Some(row.kind),
+            row.kind == TrackKind::Audio && ui.audio_picker_lane == Some(row.lane),
+        )
     {
         content = content.child(empty);
     }
@@ -1745,11 +1766,63 @@ fn render_track_content(
     // land. Pressing it is what creates the segment.
     if row.kind == TrackKind::Zoom
         && !ui.dragging
+        && !ui.hovering_generate_zoom
         && view.hovered_track == Some(TrackKind::Zoom)
         && let Some(preview) = view.preview_time
         && let Some(ghost) = new_zoom_segment(model, preview, secs_per_pixel)
     {
         content = content.child(render_zoom_ghost(ghost, view, secs_per_pixel, height));
+    }
+
+    if row.kind == TrackKind::ThreeD {
+        for (start, end, label) in &model.camera3d_setup_ghosts {
+            content = content.child(render_camera3d_setup_ghost(
+                theme,
+                (*start, *end),
+                label,
+                view,
+                secs_per_pixel,
+                height,
+            ));
+        }
+    }
+
+    if row.kind == TrackKind::Clip
+        && let Some((gap_start, gap_end)) = model.clip_ghost_gap
+    {
+        let x = ((gap_start - view.transform.position) / secs_per_pixel) as f32;
+        let width = ((gap_end - gap_start) / secs_per_pixel) as f32;
+        if width > 0.5 {
+            let mut gap = div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(x))
+                .w(px(width))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .bg(with_alpha(Hsla::from(gpui::rgb(0xef4444)), 0.12));
+            if width >= 26. {
+                gap = gap.child(
+                    div()
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(gpui::rgb(0xef4444)))
+                        .text_size(px(10.))
+                        .line_height(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(gpui::white())
+                        .child(SharedString::from(format!(
+                            "{:.1}s",
+                            ((gap_end - gap_start).max(0.) * 10.).round() / 10.
+                        ))),
+                );
+            }
+            content = content.child(gap);
+        }
     }
 
     content.into_any_element()
@@ -1763,11 +1836,20 @@ pub fn new_zoom_segment(
     preview: f64,
     secs_per_pixel: f64,
 ) -> Option<(f64, f64)> {
-    let min_duration = new_segment_min_duration(secs_per_pixel);
+    new_gap_segment(model, TrackKind::Zoom, preview, secs_per_pixel)
+}
 
-    let next = model.zoom.iter().find(|segment| preview <= segment.start);
-    let previous = model
-        .zoom
+pub fn new_gap_segment(
+    model: &TimelineModel,
+    kind: TrackKind,
+    preview: f64,
+    secs_per_pixel: f64,
+) -> Option<(f64, f64)> {
+    let min_duration = new_segment_min_duration(secs_per_pixel);
+    let segments = model.segments(kind);
+
+    let next = segments.iter().find(|segment| preview <= segment.start);
+    let previous = segments
         .iter()
         .rev()
         .find(|segment| preview >= segment.start);
@@ -1791,6 +1873,51 @@ pub fn new_zoom_segment(
     }
 
     Some((preview, preview + min_duration))
+}
+
+fn render_camera3d_setup_ghost(
+    theme: &Theme,
+    (start, end): (f64, f64),
+    label: &str,
+    view: TimelineView,
+    secs_per_pixel: f64,
+    height: f32,
+) -> AnyElement {
+    let color = TrackKind::ThreeD.color();
+    let x = ((start - view.transform.position) / secs_per_pixel) as f32;
+    let width = ((end - start) / secs_per_pixel) as f32;
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(x))
+        .w(px(width))
+        .rounded(px(12.))
+        .border_1()
+        .border_dashed()
+        .border_color(with_alpha(color, 0.7))
+        .bg(with_alpha(color, 0.14))
+        .child(
+            div()
+                .h(px(height))
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(px(8.))
+                .child(
+                    div()
+                        .px(px(8.))
+                        .py(px(2.))
+                        .rounded(px(6.))
+                        .bg(with_alpha(Hsla::from(theme.gray_1), 0.82))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child(SharedString::from(label.to_string())),
+                ),
+        )
+        .into_any_element()
 }
 
 fn render_zoom_ghost(
@@ -1836,8 +1963,103 @@ fn render_zoom_ghost(
         .into_any_element()
 }
 
+/// Radix emerald steps the empty audio button uses
+/// (`TL/AudioTrack.tsx:405-420`). Step 9 is constant across appearances.
+fn emerald_9() -> Hsla {
+    gpui::rgb(0x30a46c).into()
+}
+
+fn emerald_11(theme: &Theme) -> Hsla {
+    if theme.is_dark() {
+        gpui::rgb(0x6dcea4).into()
+    } else {
+        gpui::rgb(0x18794e).into()
+    }
+}
+
+fn render_add_track_empty(
+    theme: &Theme,
+    label: &'static str,
+    accent: Hsla,
+    accent_text: Hsla,
+    active: bool,
+    hovered: bool,
+) -> AnyElement {
+    let emphasized = active || hovered;
+    let border = if active {
+        accent
+    } else if hovered {
+        with_alpha(accent, 0.6)
+    } else {
+        with_alpha(Hsla::from(theme.gray_4), 0.85)
+    };
+    let background = if active {
+        with_alpha(accent, 0.1)
+    } else if hovered {
+        with_alpha(accent, 0.05)
+    } else {
+        with_alpha(Hsla::from(theme.gray_3), 0.2)
+    };
+    let text = if active {
+        accent_text
+    } else if hovered {
+        Hsla::from(theme.gray_12)
+    } else {
+        Hsla::from(theme.gray_11)
+    };
+    let chip_bg = if emphasized {
+        accent
+    } else {
+        with_alpha(Hsla::from(theme.gray_4), 0.55)
+    };
+    let chip_fg = if emphasized {
+        gpui::white()
+    } else {
+        Hsla::from(theme.gray_12)
+    };
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_row()
+        .gap(px(8.))
+        .items_center()
+        .justify_center()
+        .w_full()
+        .rounded(px(12.))
+        .border_1()
+        .when(!active, |this| this.border_dashed())
+        .border_color(border)
+        .bg(background)
+        .text_size(px(14.))
+        .text_color(text)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .size(px(24.))
+                .bg(chip_bg)
+                .child(
+                    svg()
+                        .path("icons/plus.svg")
+                        .size(px(14.))
+                        .text_color(chip_fg),
+                ),
+        )
+        .child(div().font_weight(FontWeight::MEDIUM).child(label))
+        .into_any_element()
+}
+
 /// The empty-lane states. Only three tracks have one; the rest render nothing.
-fn render_empty_track(theme: &Theme, kind: TrackKind) -> Option<AnyElement> {
+fn render_empty_track(
+    theme: &Theme,
+    kind: TrackKind,
+    hovered: bool,
+    active: bool,
+) -> Option<AnyElement> {
     match kind {
         // `TL/CaptionsTrack.tsx:146-160`.
         TrackKind::Caption => Some(
@@ -1880,39 +2102,35 @@ fn render_empty_track(theme: &Theme, kind: TrackKind) -> Option<AnyElement> {
                 .into_any_element(),
         ),
         // `TL/AudioTrack.tsx:400-427` -- the dashed "Add audio" button.
-        TrackKind::Audio => Some(
+        TrackKind::Audio => Some(render_add_track_empty(
+            theme,
+            "Add audio",
+            emerald_9(),
+            emerald_11(theme),
+            active,
+            hovered,
+        )),
+        // `TL/ThreeDTrack.tsx:319-337`.
+        TrackKind::ThreeD => Some(render_add_track_empty(
+            theme,
+            "Add 3D scene",
+            TrackKind::ThreeD.color(),
+            Hsla::from(theme.gray_12),
+            active,
+            hovered,
+        )),
+        // The empty zoom track's tint (`TL/ZoomTrack.tsx:300`):
+        // `bg-gray-3/20 dark:bg-gray-3/10 rounded-xl`. The generate button is
+        // interactive and lives on the window's row overlay instead.
+        TrackKind::Zoom => Some(
             div()
                 .absolute()
                 .inset_0()
-                .flex()
-                .flex_row()
-                .gap(px(8.))
-                .items_center()
-                .justify_center()
-                .w_full()
                 .rounded(px(12.))
-                .border_1()
-                .border_dashed()
-                .border_color(with_alpha(Hsla::from(theme.gray_4), 0.6))
-                .bg(with_alpha(Hsla::from(theme.gray_3), 0.15))
-                .text_size(px(14.))
-                .text_color(text_tertiary(theme))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .size(px(24.))
-                        .bg(with_alpha(Hsla::from(theme.gray_4), 0.4))
-                        .child(
-                            svg()
-                                .path("icons/plus.svg")
-                                .size(px(14.))
-                                .text_color(Hsla::from(theme.gray_11)),
-                        ),
-                )
-                .child(div().font_weight(FontWeight::MEDIUM).child("Add audio"))
+                .bg(with_alpha(
+                    Hsla::from(theme.gray_3),
+                    if theme.is_dark() { 0.1 } else { 0.2 },
+                ))
                 .into_any_element(),
         ),
         _ => None,
@@ -2470,7 +2688,6 @@ fn label_body(
             SegmentDetail::Clip {
                 name,
                 source_duration,
-                timescale,
                 ..
             },
             LabelTier::Full,
@@ -2507,15 +2724,12 @@ fn label_body(
                             .flex_none()
                             .text_color(on_fill),
                     )
-                    .child(format_clip_time(*source_duration))
-                    .when(*timescale != 1., |this| this.child(format!("{timescale}x"))),
+                    .child(format_clip_time(*source_duration)),
             )
             .into_any_element(),
         (
             SegmentDetail::Clip {
-                source_duration,
-                timescale,
-                ..
+                source_duration, ..
             },
             LabelTier::Compact,
         ) => div()
@@ -2525,20 +2739,10 @@ fn label_body(
             .items_center()
             .text_size(px(10.))
             .text_color(on_fill)
-            .when(*timescale != 1., |this| this.child(format!("{timescale}x")))
             .child(div().truncate().child(format_clip_time(*source_duration)))
             .into_any_element(),
-        // The clip's glyph tier exists only for a segment whose speed was
-        // changed (`TL/ClipTrack.tsx:1274-1278`).
-        (SegmentDetail::Clip { timescale, .. }, LabelTier::Glyph) => {
-            if *timescale == 1. {
-                return None;
-            }
-            div()
-                .text_size(px(10.))
-                .text_color(on_fill)
-                .child(format!("{timescale}x"))
-                .into_any_element()
+        (SegmentDetail::Clip { .. }, LabelTier::Glyph) => {
+            return None;
         }
 
         // -- Zoom (`TL/ZoomTrack.tsx:696-723`) ----------------------------
