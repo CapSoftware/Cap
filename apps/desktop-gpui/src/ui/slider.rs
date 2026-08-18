@@ -183,14 +183,28 @@ impl Slider {
         on_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
         on_up: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        // The release can land outside the window -- gpui element listeners
+        // are hitbox-gated, so without the `_out` pair the drag would survive
+        // its own mouse-up and keep tracking on re-entry.
+        let on_up = std::rc::Rc::new(on_up);
+        let on_up_out = on_up.clone();
         div()
             .id(id.into())
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .on_mouse_move(on_move)
-            .on_mouse_up(MouseButton::Left, on_up)
+            .on_mouse_move(move |event, window, cx| {
+                if event.dragging() {
+                    on_move(event, window, cx);
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |event, window, cx| {
+                on_up(event, window, cx)
+            })
+            .on_mouse_up_out(MouseButton::Left, move |event, window, cx| {
+                on_up_out(event, window, cx)
+            })
     }
 }
 
