@@ -340,7 +340,8 @@ impl H264EncoderBuilder {
                 height: output_height,
             });
         }
-        if force_software_encoder() || requires_software_encoder(&input_config, self.preset, false)
+        if force_software_encoder()
+            || requires_software_encoder(&input_config, self.preset, self.is_export)
         {
             return Err(H264EncoderError::VideoToolboxHwInput(
                 "software encoder required for this resolution/frame rate".to_string(),

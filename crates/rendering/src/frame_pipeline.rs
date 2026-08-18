@@ -7,6 +7,11 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderingError};
 
+#[cfg(target_os = "macos")]
+use crate::iosurface_texture::{IOSurfaceTextureCache, import_metal_texture_to_wgpu_with_usage};
+#[cfg(target_os = "macos")]
+use cidre::{arc, cf, cv, mtl};
+
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
 
@@ -137,13 +142,201 @@ pub struct RgbaToNv12Converter {
     nv12_buffer: Option<wgpu::Buffer>,
     readback_buffers: [Option<Arc<wgpu::Buffer>>; 2],
     current_readback: usize,
-    pending: Option<PendingNv12Readback>,
+    pending: Option<PendingNv12Output>,
     cached_width: u32,
     cached_height: u32,
     cached_stride: u32,
     cached_bind_groups: Option<[wgpu::BindGroup; 2]>,
     cached_texture_view: Option<wgpu::TextureView>,
     cached_texture_ptr: usize,
+    surface_output: bool,
+    #[cfg(target_os = "macos")]
+    surface_ring: Option<Nv12SurfaceRing>,
+}
+
+/// An NV12 CVPixelBuffer produced by the GPU converter, ready for zero-copy
+/// VideoToolbox encoding. Consumers outside this crate use the raw-pointer and
+/// locked-plane accessors so they need no CoreVideo bindings of their own.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub struct Nv12Surface(arc::R<cv::PixelBuf>);
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for Nv12Surface {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for Nv12Surface {}
+
+#[cfg(target_os = "macos")]
+impl Nv12Surface {
+    /// The underlying `CVPixelBufferRef`, valid while `self` is alive.
+    pub fn as_pixel_buffer_ptr(&self) -> *mut std::ffi::c_void {
+        (self.0.as_ref() as *const cv::PixelBuf as *const std::ffi::c_void).cast_mut()
+    }
+
+    /// Locks the buffer for CPU reads and hands the callback both NV12 planes
+    /// with their strides: `(y, y_stride, uv, uv_stride)`.
+    pub fn with_locked_planes<T>(
+        &self,
+        callback: impl FnOnce(&[u8], usize, &[u8], usize) -> T,
+    ) -> Option<T> {
+        let mut buf = self.0.clone();
+        unsafe {
+            buf.lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY)
+                .result()
+                .ok()?;
+        }
+        let y_stride = buf.plane_bytes_per_row(0);
+        let uv_stride = buf.plane_bytes_per_row(1);
+        let y_height = buf.plane_height(0);
+        let uv_height = buf.plane_height(1);
+        let result = unsafe {
+            let y_plane =
+                std::slice::from_raw_parts(buf.plane_base_address(0), y_stride * y_height);
+            let uv_plane =
+                std::slice::from_raw_parts(buf.plane_base_address(1), uv_stride * uv_height);
+            callback(y_plane, y_stride, uv_plane, uv_stride)
+        };
+        unsafe {
+            buf.unlock_lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY);
+        }
+        Some(result)
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct Nv12SurfaceSlot {
+    pixel_buffer: arc::R<cv::PixelBuf>,
+    y_texture: wgpu::Texture,
+    uv_texture: wgpu::Texture,
+}
+
+#[cfg(target_os = "macos")]
+struct Nv12SurfaceRing {
+    texture_cache: IOSurfaceTextureCache,
+    slots: Vec<Nv12SurfaceSlot>,
+    next: usize,
+    size: (u32, u32),
+}
+
+// SAFETY: same contract as RgbaToBgraSurfaceConverter — the CF objects have
+// atomic refcounts and all access is serialized by the owning converter.
+#[cfg(target_os = "macos")]
+unsafe impl Send for Nv12SurfaceRing {}
+
+#[cfg(target_os = "macos")]
+impl Nv12SurfaceRing {
+    const SLOTS: usize = 8;
+
+    fn new() -> Result<Self, RenderingError> {
+        let texture_cache = IOSurfaceTextureCache::new()
+            .ok_or_else(|| RenderingError::Surface("Metal device is unavailable".to_string()))?;
+        Ok(Self {
+            texture_cache,
+            slots: Vec::new(),
+            next: 0,
+            size: (0, 0),
+        })
+    }
+
+    fn ensure_size(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderingError> {
+        if self.size == (width, height) && !self.slots.is_empty() {
+            return Ok(());
+        }
+
+        let minimum_count = cf::Number::from_usize(3);
+        let width_number = cf::Number::from_usize(width as usize);
+        let height_number = cf::Number::from_usize(height as usize);
+        let io_surface_properties = cf::Dictionary::new();
+        let pool_keys: [&cf::Type; 1] =
+            [cv::pixel_buffer_pool::keys::minimum_buffer_count().as_ref()];
+        let pool_values: [&cf::Type; 1] = [minimum_count.as_ref()];
+        let pool_attributes = cf::Dictionary::with_keys_values(&pool_keys, &pool_values)
+            .ok_or_else(|| {
+                RenderingError::Surface("Failed to create pixel buffer pool attributes".to_string())
+            })?;
+        let pixel_buffer_keys: [&cf::Type; 5] = [
+            cv::pixel_buffer::keys::pixel_format().as_ref(),
+            cv::pixel_buffer::keys::width().as_ref(),
+            cv::pixel_buffer::keys::height().as_ref(),
+            cv::pixel_buffer::keys::io_surf_props().as_ref(),
+            cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+        ];
+        let pixel_buffer_values: [&cf::Type; 5] = [
+            cv::PixelFormat::_420V.to_cf_number().as_ref(),
+            width_number.as_ref(),
+            height_number.as_ref(),
+            io_surface_properties.as_ref(),
+            cf::Boolean::value_true().as_ref(),
+        ];
+        let pixel_buffer_attributes =
+            cf::Dictionary::with_keys_values(&pixel_buffer_keys, &pixel_buffer_values).ok_or_else(
+                || RenderingError::Surface("Failed to create pixel buffer attributes".to_string()),
+            )?;
+        let pool = cv::PixelBufPool::new(
+            Some(pool_attributes.as_ref()),
+            Some(pixel_buffer_attributes.as_ref()),
+        )
+        .map_err(|error| RenderingError::Surface(error.to_string()))?;
+
+        let mut slots = Vec::with_capacity(Self::SLOTS);
+        for _ in 0..Self::SLOTS {
+            let pixel_buffer = pool
+                .pixel_buf()
+                .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let io_surface = pixel_buffer.io_surf().ok_or_else(|| {
+                RenderingError::Surface("Pixel buffer has no IOSurface".to_string())
+            })?;
+            let y_metal = self
+                .texture_cache
+                .create_y_texture(io_surface, width, height)
+                .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let y_texture = import_metal_texture_to_wgpu_with_usage(
+                device,
+                &y_metal,
+                wgpu::TextureFormat::R8Unorm,
+                width,
+                height,
+                wgpu::TextureUsages::COPY_DST,
+                Some("NV12 IOSurface Y"),
+            )
+            .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let uv_metal = self
+                .texture_cache
+                .create_uv_texture(io_surface, width, height)
+                .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let uv_texture = import_metal_texture_to_wgpu_with_usage(
+                device,
+                &uv_metal,
+                wgpu::TextureFormat::Rg8Unorm,
+                width / 2,
+                height / 2,
+                wgpu::TextureUsages::COPY_DST,
+                Some("NV12 IOSurface UV"),
+            )
+            .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            slots.push(Nv12SurfaceSlot {
+                pixel_buffer,
+                y_texture,
+                uv_texture,
+            });
+        }
+
+        self.slots = slots;
+        self.next = 0;
+        self.size = (width, height);
+        Ok(())
+    }
+
+    fn next_slot(&mut self) -> &Nv12SurfaceSlot {
+        let index = self.next;
+        self.next = (self.next + 1) % self.slots.len();
+        &self.slots[index]
+    }
 }
 
 #[repr(C)]
@@ -236,15 +429,32 @@ impl RgbaToNv12Converter {
             cached_bind_groups: None,
             cached_texture_view: None,
             cached_texture_ptr: 0,
+            surface_output: false,
+            #[cfg(target_os = "macos")]
+            surface_ring: None,
         }
     }
 
-    fn aligned_stride(width: u32) -> u32 {
-        (width + 3) & !3
+    /// Emit IOSurface-backed NV12 CVPixelBuffers instead of CPU readbacks:
+    /// the same compute output is GPU-copied into imported IOSurface planes
+    /// (byte-identical pixel values, 256-aligned stride for the buffer→texture
+    /// copy). If the surface machinery fails at any point the converter falls
+    /// back to readback mode permanently.
+    #[cfg(target_os = "macos")]
+    pub fn enable_surface_output(&mut self) {
+        self.surface_output = true;
     }
 
-    fn nv12_size(width: u32, height: u32) -> u64 {
-        let stride = Self::aligned_stride(width) as u64;
+    fn aligned_stride(&self, width: u32) -> u32 {
+        if self.surface_output {
+            width.next_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT)
+        } else {
+            (width + 3) & !3
+        }
+    }
+
+    fn nv12_size(&self, width: u32, height: u32) -> u64 {
+        let stride = self.aligned_stride(width) as u64;
         let aligned_height = ((height + 1) & !1) as u64;
         let y_size = stride * aligned_height;
         let uv_size = stride * (aligned_height / 2);
@@ -252,7 +462,28 @@ impl RgbaToNv12Converter {
     }
 
     fn ensure_buffers(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let stride = Self::aligned_stride(width);
+        #[cfg(target_os = "macos")]
+        if self.surface_output {
+            let ring_result = match self.surface_ring.as_mut() {
+                Some(ring) => ring.ensure_size(device, width, height),
+                None => Nv12SurfaceRing::new().and_then(|mut ring| {
+                    ring.ensure_size(device, width, height)?;
+                    self.surface_ring = Some(ring);
+                    Ok(())
+                }),
+            };
+            if let Err(error) = ring_result {
+                tracing::warn!(
+                    %error,
+                    "NV12 IOSurface ring unavailable, falling back to CPU readback output"
+                );
+                self.surface_output = false;
+                self.surface_ring = None;
+                self.cached_width = 0;
+            }
+        }
+
+        let stride = self.aligned_stride(width);
         if self.cached_width == width
             && self.cached_height == height
             && self.cached_stride == stride
@@ -260,7 +491,7 @@ impl RgbaToNv12Converter {
             return;
         }
 
-        let nv12_size = Self::nv12_size(width, height);
+        let nv12_size = self.nv12_size(width, height);
         let aligned_size = nv12_size.div_ceil(4) * 4;
 
         self.nv12_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
@@ -318,8 +549,8 @@ impl RgbaToNv12Converter {
         };
         self.current_readback = 1 - self.current_readback;
 
-        let y_stride = Self::aligned_stride(width);
-        let uv_stride = Self::aligned_stride(width);
+        let y_stride = self.aligned_stride(width);
+        let uv_stride = self.aligned_stride(width);
 
         let params = Nv12Params {
             width,
@@ -377,10 +608,60 @@ impl RgbaToNv12Converter {
             pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
         }
 
-        let nv12_size = Self::nv12_size(width, height);
+        #[cfg(target_os = "macos")]
+        if self.surface_output
+            && let Some(ring) = self.surface_ring.as_mut()
+        {
+            let slot = ring.next_slot();
+            let y_plane_bytes = (y_stride as u64) * (height as u64);
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: nv12_buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(y_stride),
+                        rows_per_image: None,
+                    },
+                },
+                slot.y_texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            encoder.copy_buffer_to_texture(
+                wgpu::TexelCopyBufferInfo {
+                    buffer: nv12_buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: y_plane_bytes,
+                        bytes_per_row: Some(uv_stride),
+                        rows_per_image: None,
+                    },
+                },
+                slot.uv_texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width: width / 2,
+                    height: height / 2,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.pending = Some(PendingNv12Output::Surface(PendingNv12Surface {
+                pixel_buffer: slot.pixel_buffer.clone(),
+                completed: None,
+                width,
+                height,
+                y_stride,
+                frame_number,
+                frame_rate,
+            }));
+            return true;
+        }
+
+        let nv12_size = self.nv12_size(width, height);
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
 
-        self.pending = Some(PendingNv12Readback {
+        self.pending = Some(PendingNv12Output::Readback(PendingNv12Readback {
             rx: None,
             buffer: readback_buffer,
             width,
@@ -388,26 +669,115 @@ impl RgbaToNv12Converter {
             y_stride,
             frame_number,
             frame_rate,
-        });
+        }));
 
         true
     }
 
-    pub fn start_readback(&mut self) {
-        if let Some(ref mut pending) = self.pending {
-            let (tx, rx) = oneshot::channel();
-            pending
-                .buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let _ = tx.send(result);
+    /// Arms the pending output after its command buffer has been submitted:
+    /// readback mode starts the buffer map, surface mode registers a
+    /// submitted-work-done completion flag.
+    pub fn after_submit(&mut self, queue: &wgpu::Queue) {
+        match self.pending.as_mut() {
+            Some(PendingNv12Output::Readback(pending)) => {
+                let (tx, rx) = oneshot::channel();
+                pending
+                    .buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = tx.send(result);
+                    });
+                pending.rx = Some(rx);
+            }
+            #[cfg(target_os = "macos")]
+            Some(PendingNv12Output::Surface(pending)) => {
+                let completed = Arc::new(AtomicBool::new(false));
+                let callback_completed = Arc::clone(&completed);
+                queue.on_submitted_work_done(move || {
+                    callback_completed.store(true, Ordering::Release);
                 });
-            pending.rx = Some(rx);
+                pending.completed = Some(completed);
+            }
+            None => {}
         }
+        let _ = queue;
     }
 
-    pub fn take_pending(&mut self) -> Option<PendingNv12Readback> {
+    pub fn take_pending(&mut self) -> Option<PendingNv12Output> {
         self.pending.take()
+    }
+}
+
+pub enum PendingNv12Output {
+    Readback(PendingNv12Readback),
+    #[cfg(target_os = "macos")]
+    Surface(PendingNv12Surface),
+}
+
+impl PendingNv12Output {
+    pub async fn wait_with_pool(
+        self,
+        device: &wgpu::Device,
+        buffer_pool: Option<&mut NV12BufferPool>,
+    ) -> Result<Nv12RenderedFrame, RenderingError> {
+        match self {
+            Self::Readback(pending) => pending.wait_with_pool(device, buffer_pool).await,
+            #[cfg(target_os = "macos")]
+            Self::Surface(pending) => pending.wait(device).await,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub struct PendingNv12Surface {
+    pixel_buffer: arc::R<cv::PixelBuf>,
+    completed: Option<Arc<AtomicBool>>,
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    frame_number: u32,
+    frame_rate: u32,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for PendingNv12Surface {}
+
+#[cfg(target_os = "macos")]
+impl PendingNv12Surface {
+    async fn wait(self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let Some(completed) = self.completed.as_ref() else {
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+        let started = Instant::now();
+        let mut poll_count = 0u32;
+        while !completed.load(Ordering::Acquire) {
+            if started.elapsed() > gpu_buffer_wait_timeout() {
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            device.poll(wgpu::PollType::Poll)?;
+            poll_count += 1;
+            if poll_count < 10 {
+                tokio::task::yield_now().await;
+            } else if poll_count < 100 {
+                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+
+        let target_time_ns =
+            (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
+
+        Ok(Nv12RenderedFrame {
+            data: SharedNv12Buffer::from_vec(Vec::new()),
+            width: self.width,
+            height: self.height,
+            y_stride: self.y_stride,
+            frame_number: self.frame_number,
+            target_time_ns,
+            format: GpuOutputFormat::Nv12,
+            surface: Some(Nv12Surface(self.pixel_buffer)),
+        })
     }
 }
 
@@ -496,6 +866,8 @@ impl PendingNv12Readback {
             frame_number: self.frame_number,
             target_time_ns,
             format: GpuOutputFormat::Nv12,
+            #[cfg(target_os = "macos")]
+            surface: None,
         })
     }
 }
@@ -514,6 +886,10 @@ pub struct Nv12RenderedFrame {
     pub frame_number: u32,
     pub target_time_ns: u64,
     pub format: GpuOutputFormat,
+    /// When set, the frame lives in an IOSurface-backed CVPixelBuffer and
+    /// `data` is empty (surface-output mode; macOS export path).
+    #[cfg(target_os = "macos")]
+    pub surface: Option<Nv12Surface>,
 }
 
 impl Nv12RenderedFrame {
@@ -526,6 +902,8 @@ impl Nv12RenderedFrame {
             frame_number: self.frame_number,
             target_time_ns: self.target_time_ns,
             format: self.format,
+            #[cfg(target_os = "macos")]
+            surface: self.surface.clone(),
         }
     }
 
@@ -545,6 +923,292 @@ impl Nv12RenderedFrame {
         } else {
             &[]
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub struct SurfaceFrame {
+    pub pixel_buffer: arc::R<cv::PixelBuf>,
+    pub width: u32,
+    pub height: u32,
+    pub frame_number: u32,
+    pub target_time_ns: u64,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for SurfaceFrame {}
+
+#[cfg(target_os = "macos")]
+unsafe impl Sync for SurfaceFrame {}
+
+#[cfg(target_os = "macos")]
+pub struct RgbaToBgraSurfaceConverter {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    texture_cache: IOSurfaceTextureCache,
+    surface_ring: Vec<BgraSurfaceSlot>,
+    next_surface: usize,
+    pool_size: (u32, u32),
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for RgbaToBgraSurfaceConverter {}
+
+#[cfg(target_os = "macos")]
+struct BgraSurfaceSlot {
+    pixel_buffer: arc::R<cv::PixelBuf>,
+    texture: wgpu::Texture,
+}
+
+#[cfg(target_os = "macos")]
+impl RgbaToBgraSurfaceConverter {
+    pub fn new(device: &wgpu::Device) -> Result<Self, RenderingError> {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RGBA to BGRA Surface Blit"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shaders/blit_bgra_surface.wgsl"
+            ))),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("RGBA to BGRA Surface Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("RGBA to BGRA Surface Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("RGBA to BGRA Surface Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let texture_cache = IOSurfaceTextureCache::new()
+            .ok_or_else(|| RenderingError::Surface("Metal device is unavailable".to_string()))?;
+
+        Ok(Self {
+            pipeline,
+            bind_group_layout,
+            texture_cache,
+            surface_ring: Vec::new(),
+            next_surface: 0,
+            pool_size: (0, 0),
+        })
+    }
+
+    fn ensure_pixel_buffer_pool(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<(), RenderingError> {
+        if self.pool_size == (width, height) && !self.surface_ring.is_empty() {
+            return Ok(());
+        }
+
+        let minimum_count = cf::Number::from_usize(3);
+        let width_number = cf::Number::from_usize(width as usize);
+        let height_number = cf::Number::from_usize(height as usize);
+        let io_surface_properties = cf::Dictionary::new();
+        let pool_keys: [&cf::Type; 1] =
+            [cv::pixel_buffer_pool::keys::minimum_buffer_count().as_ref()];
+        let pool_values: [&cf::Type; 1] = [minimum_count.as_ref()];
+        let pool_attributes = cf::Dictionary::with_keys_values(&pool_keys, &pool_values)
+            .ok_or_else(|| {
+                RenderingError::Surface("Failed to create pixel buffer pool attributes".to_string())
+            })?;
+        let pixel_buffer_keys: [&cf::Type; 5] = [
+            cv::pixel_buffer::keys::pixel_format().as_ref(),
+            cv::pixel_buffer::keys::width().as_ref(),
+            cv::pixel_buffer::keys::height().as_ref(),
+            cv::pixel_buffer::keys::io_surf_props().as_ref(),
+            cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+        ];
+        let pixel_buffer_values: [&cf::Type; 5] = [
+            cv::PixelFormat::_32_BGRA.to_cf_number().as_ref(),
+            width_number.as_ref(),
+            height_number.as_ref(),
+            io_surface_properties.as_ref(),
+            cf::Boolean::value_true().as_ref(),
+        ];
+        let pixel_buffer_attributes =
+            cf::Dictionary::with_keys_values(&pixel_buffer_keys, &pixel_buffer_values).ok_or_else(
+                || RenderingError::Surface("Failed to create pixel buffer attributes".to_string()),
+            )?;
+        let pool = cv::PixelBufPool::new(
+            Some(pool_attributes.as_ref()),
+            Some(pixel_buffer_attributes.as_ref()),
+        )
+        .map_err(|error| RenderingError::Surface(error.to_string()))?;
+        let metal_usage = mtl::TextureUsage::SHADER_READ | mtl::TextureUsage::RENDER_TARGET;
+        let texture_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let mut surface_ring = Vec::with_capacity(8);
+        for _ in 0..8 {
+            let pixel_buffer = pool
+                .pixel_buf()
+                .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let io_surface = pixel_buffer.io_surf().ok_or_else(|| {
+                RenderingError::Surface("Pixel buffer has no IOSurface".to_string())
+            })?;
+            let metal_texture = self
+                .texture_cache
+                .create_bgra_texture_with_usage(io_surface, width, height, metal_usage)
+                .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let texture = import_metal_texture_to_wgpu_with_usage(
+                device,
+                &metal_texture,
+                wgpu::TextureFormat::Bgra8Unorm,
+                width,
+                height,
+                texture_usage,
+                Some("BGRA IOSurface"),
+            )
+            .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            surface_ring.push(BgraSurfaceSlot {
+                pixel_buffer,
+                texture,
+            });
+        }
+
+        self.surface_ring = surface_ring;
+        self.next_surface = 0;
+        self.pool_size = (width, height);
+        Ok(())
+    }
+
+    pub fn encode(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        frame_number: u32,
+        frame_rate: u32,
+    ) -> Result<PendingSurface, RenderingError> {
+        self.ensure_pixel_buffer_pool(device, width, height)?;
+        let slot = &self.surface_ring[self.next_surface];
+        let pixel_buffer = slot.pixel_buffer.clone();
+        self.next_surface = (self.next_surface + 1) % self.surface_ring.len();
+        let source_view = source_texture.create_view(&Default::default());
+        let dest_view = slot.texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to BGRA Surface Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            }],
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("RGBA to BGRA IOSurface Blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dest_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        Ok(PendingSurface {
+            pixel_buffer,
+            width,
+            height,
+            frame_number,
+            frame_rate,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub struct PendingSurface {
+    pixel_buffer: arc::R<cv::PixelBuf>,
+    width: u32,
+    height: u32,
+    frame_number: u32,
+    frame_rate: u32,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for PendingSurface {}
+
+#[cfg(target_os = "macos")]
+impl PendingSurface {
+    pub async fn wait(
+        self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<SurfaceFrame, RenderingError> {
+        let completed = Arc::new(AtomicBool::new(false));
+        let callback_completed = Arc::clone(&completed);
+        queue.on_submitted_work_done(move || {
+            callback_completed.store(true, Ordering::Release);
+        });
+        let started = Instant::now();
+        let mut poll_count = 0u32;
+        while !completed.load(Ordering::Acquire) {
+            if started.elapsed() > gpu_buffer_wait_timeout() {
+                return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            device.poll(wgpu::PollType::Poll)?;
+            poll_count += 1;
+            if poll_count < 10 {
+                tokio::task::yield_now().await;
+            } else if poll_count < 100 {
+                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+
+        Ok(SurfaceFrame {
+            pixel_buffer: self.pixel_buffer,
+            width: self.width,
+            height: self.height,
+            frame_number: self.frame_number,
+            target_time_ns: (self.frame_number as u64 * 1_000_000_000)
+                / self.frame_rate.max(1) as u64,
+        })
     }
 }
 
@@ -790,17 +1454,13 @@ impl PipelinedGpuReadback {
     pub fn take_pending(&mut self) -> Option<PendingReadback> {
         self.pending.take()
     }
-
-    pub fn has_pending(&self) -> bool {
-        self.pending.is_some()
-    }
 }
 
 pub struct RenderSession {
     pub textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     pub current_is_left: bool,
-    pub pipelined_readback: PipelinedGpuReadback,
+    pipelined_readback: Option<PipelinedGpuReadback>,
     texture_width: u32,
     texture_height: u32,
 }
@@ -827,8 +1487,6 @@ impl RenderSession {
         };
 
         let textures = (make_texture(), make_texture());
-        let padded = padded_bytes_per_row((width, height));
-        let initial_buffer_size = (padded * height) as u64;
 
         Self {
             current_is_left: true,
@@ -837,7 +1495,7 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
-            pipelined_readback: PipelinedGpuReadback::new(device, initial_buffer_size),
+            pipelined_readback: None,
             texture_width: width,
             texture_height: height,
         }
@@ -994,9 +1652,14 @@ pub async fn finish_encoder_timed(
     encoder: wgpu::CommandEncoder,
 ) -> Result<(Option<RenderedFrame>, FinishEncoderTimings), RenderingError> {
     let mut timings = FinishEncoderTimings::default();
+    let initial_buffer_size =
+        (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
+    let readback = session
+        .pipelined_readback
+        .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
 
     let wait_start = Instant::now();
-    let previous_frame = if let Some(prev) = session.pipelined_readback.take_pending() {
+    let previous_frame = if let Some(prev) = readback.take_pending() {
         Some(prev.wait(device).await?)
     } else {
         None
@@ -1004,7 +1667,7 @@ pub async fn finish_encoder_timed(
     timings.wait_previous_duration = wait_start.elapsed();
 
     let resize_start = Instant::now();
-    session.pipelined_readback.perform_resize_if_needed(device);
+    readback.perform_resize_if_needed(device);
     timings.resize_duration = resize_start.elapsed();
 
     let texture = if session.current_is_left {
@@ -1014,9 +1677,7 @@ pub async fn finish_encoder_timed(
     };
 
     let submit_start = Instant::now();
-    session
-        .pipelined_readback
-        .submit_readback(device, queue, texture, uniforms, encoder)?;
+    readback.submit_readback(device, queue, texture, uniforms, encoder)?;
     timings.submit_readback_duration = submit_start.elapsed();
 
     Ok((previous_frame, timings))
@@ -1059,7 +1720,7 @@ pub async fn finish_encoder_nv12_pooled(
 
     if submitted {
         queue.submit(std::iter::once(encoder.finish()));
-        nv12_converter.start_readback();
+        nv12_converter.after_submit(queue);
 
         Ok(previous_frame)
     } else if let Some(prev_frame) = previous_frame {
@@ -1075,17 +1736,212 @@ pub async fn finish_encoder_nv12_pooled(
             frame_number: f.frame_number,
             target_time_ns: f.target_time_ns,
             format: GpuOutputFormat::Rgba,
+            #[cfg(target_os = "macos")]
+            surface: None,
         }))
     }
+}
+
+#[cfg(target_os = "macos")]
+pub async fn finish_encoder_bgra_surface(
+    session: &mut RenderSession,
+    converter: &mut RgbaToBgraSurfaceConverter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
+    mut encoder: wgpu::CommandEncoder,
+) -> Result<SurfaceFrame, RenderingError> {
+    let texture = if session.current_is_left {
+        &session.textures.0
+    } else {
+        &session.textures.1
+    };
+    let pending = converter.encode(
+        device,
+        &mut encoder,
+        texture,
+        uniforms.output_size.0,
+        uniforms.output_size.1,
+        uniforms.frame_number,
+        uniforms.frame_rate,
+    )?;
+    queue.submit(std::iter::once(encoder.finish()));
+    pending.wait(device, queue).await
 }
 
 pub async fn flush_pending_readback(
     session: &mut RenderSession,
     device: &wgpu::Device,
 ) -> Option<Result<RenderedFrame, RenderingError>> {
-    if let Some(pending) = session.pipelined_readback.take_pending() {
+    let readback = session.pipelined_readback.as_mut()?;
+    if let Some(pending) = readback.take_pending() {
         Some(pending.wait(device).await)
     } else {
         None
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod surface_output_tests {
+    use super::*;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    fn gradient_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> wgpu::Texture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("exactness source"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut data = vec![0u8; (width * height * 4) as usize];
+        for row in 0..height as usize {
+            for col in 0..width as usize {
+                let i = (row * width as usize + col) * 4;
+                data[i] = ((col * 7 + row) % 256) as u8;
+                data[i + 1] = ((row * 5 + col * 3) % 256) as u8;
+                data[i + 2] = ((col + row * 11) % 256) as u8;
+                data[i + 3] = 255;
+            }
+        }
+        queue.write_texture(
+            texture.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture
+    }
+
+    async fn convert(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        converter: &mut RgbaToNv12Converter,
+        source: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Nv12RenderedFrame {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(converter.submit_conversion(
+            device,
+            queue,
+            &mut encoder,
+            source,
+            width,
+            height,
+            0,
+            30
+        ));
+        queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(queue);
+        converter
+            .take_pending()
+            .expect("conversion pending")
+            .wait_with_pool(device, None)
+            .await
+            .expect("conversion completes")
+    }
+
+    /// The IOSurface output is a GPU copy of the same compute-shader buffer
+    /// the readback path maps, so every pixel must match byte-for-byte. Both
+    /// strides differ (4-aligned vs 256-aligned vs the IOSurface's own), which
+    /// is exactly what this guards.
+    #[tokio::test]
+    async fn the_surface_output_matches_the_readback_output() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+
+        for (width, height) in [(1920u32, 1080u32), (1284, 722)] {
+            let source = gradient_texture(&device, &queue, width, height);
+
+            let mut readback_converter = RgbaToNv12Converter::new(&device);
+            let cpu_frame = convert(
+                &device,
+                &queue,
+                &mut readback_converter,
+                &source,
+                width,
+                height,
+            )
+            .await;
+            assert!(cpu_frame.surface.is_none());
+            let cpu_stride = cpu_frame.y_stride as usize;
+
+            let mut surface_converter = RgbaToNv12Converter::new(&device);
+            surface_converter.enable_surface_output();
+            let surface_frame = convert(
+                &device,
+                &queue,
+                &mut surface_converter,
+                &source,
+                width,
+                height,
+            )
+            .await;
+            let surface = surface_frame
+                .surface
+                .as_ref()
+                .expect("surface output produces a CVPixelBuffer");
+
+            let mut max_delta = 0u8;
+            surface
+                .with_locked_planes(|y_plane, y_stride, uv_plane, uv_stride| {
+                    for row in 0..height as usize {
+                        let cpu_row =
+                            &cpu_frame.data[row * cpu_stride..row * cpu_stride + width as usize];
+                        let surf_row = &y_plane[row * y_stride..row * y_stride + width as usize];
+                        for (a, b) in cpu_row.iter().zip(surf_row) {
+                            max_delta = max_delta.max(a.abs_diff(*b));
+                        }
+                    }
+                    let cpu_uv_base = cpu_stride * height as usize;
+                    for row in 0..(height as usize / 2) {
+                        let cpu_row = &cpu_frame.data[cpu_uv_base + row * cpu_stride
+                            ..cpu_uv_base + row * cpu_stride + width as usize];
+                        let surf_row = &uv_plane[row * uv_stride..row * uv_stride + width as usize];
+                        for (a, b) in cpu_row.iter().zip(surf_row) {
+                            max_delta = max_delta.max(a.abs_diff(*b));
+                        }
+                    }
+                })
+                .expect("lock surface planes");
+
+            assert_eq!(
+                max_delta, 0,
+                "{width}x{height}: surface NV12 diverges from readback NV12"
+            );
+        }
     }
 }

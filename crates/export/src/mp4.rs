@@ -195,11 +195,46 @@ impl Mp4ExportSettings {
         let encoder_thread = tokio::task::spawn_blocking(move || {
             trace!("Creating MP4File encoder (NV12 path)");
 
+            // The encoder's input mode has to match what the renderer actually
+            // produces, so the first frame decides: IOSurface frames open
+            // VideoToolbox for zero-copy hardware input (falling back to
+            // software frames if that fails), CPU frames keep today's path.
+            let first_frame = frame_rx.recv().ok();
+            #[cfg(target_os = "macos")]
+            let want_hw_input = !self.optimize_filesize
+                && matches!(
+                    first_frame.as_ref().map(|frame| &frame.payload),
+                    Some(ExportFramePayload::Surface(_))
+                );
+
+            #[cfg(target_os = "macos")]
+            let mut encoder_is_hw = false;
+            #[cfg(not(target_os = "macos"))]
+            let encoder_is_hw = false;
+
             let mut encoder = MP4File::init(
                 "output",
                 base.output_path.clone(),
                 self.optimize_filesize,
                 |o| {
+                    #[cfg(target_os = "macos")]
+                    if want_hw_input {
+                        match H264Encoder::builder(video_info)
+                            .with_bpp(self.effective_bpp())
+                            .with_export_settings()
+                            .build_videotoolbox_hw_input(o)
+                        {
+                            Ok(encoder) => {
+                                encoder_is_hw = true;
+                                return Ok(encoder);
+                            }
+                            Err(error) => info!(
+                                %error,
+                                "Zero-copy VideoToolbox export input unavailable, using software frames"
+                            ),
+                        }
+                    }
+
                     let builder = H264Encoder::builder(video_info)
                         .with_bpp(self.effective_bpp())
                         .with_export_priority()
@@ -222,7 +257,10 @@ impl Mp4ExportSettings {
             )
             .map_err(|v| v.to_string())?;
 
-            info!("Created MP4File encoder (NV12, external conversion, export settings)");
+            info!(
+                zero_copy_input = encoder_is_hw,
+                "Created MP4File encoder (NV12, export settings)"
+            );
 
             let mut audio_renderer = if has_audio {
                 Some(AudioRenderer::new(audio_segments).with_music(music))
@@ -242,7 +280,10 @@ impl Mp4ExportSettings {
             let fps_u64 = u64::from(fps);
             let mut audio_sample_cursor = 0u64;
 
-            while let Ok(input) = frame_rx.recv() {
+            let frames = first_frame
+                .into_iter()
+                .chain(std::iter::from_fn(|| frame_rx.recv().ok()));
+            for input in frames {
                 if encoded_frames == 0
                     && let Some(audio) = &mut audio_renderer
                 {
@@ -261,21 +302,60 @@ impl Mp4ExportSettings {
                     Some(frame)
                 });
 
-                fill_nv12_frame_direct(
-                    &mut reusable_frame,
-                    &input.nv12_data,
-                    input.width,
-                    input.height,
-                    input.y_stride,
-                    input.frame_number as i64,
-                );
-                encoder
-                    .queue_video_frame_reusable(
-                        &mut reusable_frame,
-                        &mut converted_frame,
-                        Duration::MAX,
-                    )
-                    .map_err(|err| err.to_string())?;
+                match &input.payload {
+                    ExportFramePayload::Cpu(nv12_data) => {
+                        fill_nv12_frame_direct(
+                            &mut reusable_frame,
+                            nv12_data,
+                            input.width,
+                            input.height,
+                            input.y_stride,
+                            input.frame_number as i64,
+                        );
+                        encoder
+                            .queue_video_frame_reusable(
+                                &mut reusable_frame,
+                                &mut converted_frame,
+                                Duration::MAX,
+                            )
+                            .map_err(|err| err.to_string())?;
+                    }
+                    #[cfg(target_os = "macos")]
+                    ExportFramePayload::Surface(surface) => {
+                        if encoder_is_hw {
+                            let mut frame = encoder
+                                .video_encoder()
+                                .wrap_videotoolbox_pixel_buffer(surface.as_pixel_buffer_ptr())
+                                .map_err(|err| err.to_string())?;
+                            frame.set_pts(Some(input.frame_number as i64));
+                            encoder
+                                .queue_video_frame_reusable(
+                                    &mut frame,
+                                    &mut converted_frame,
+                                    Duration::MAX,
+                                )
+                                .map_err(|err| err.to_string())?;
+                        } else {
+                            fill_nv12_frame_from_surface(
+                                &mut reusable_frame,
+                                surface,
+                                input.width,
+                                input.height,
+                                input.frame_number as i64,
+                            )
+                            .ok_or_else(|| {
+                                "failed to lock NV12 surface for encoding".to_string()
+                            })?;
+                            encoder
+                                .queue_video_frame_reusable(
+                                    &mut reusable_frame,
+                                    &mut converted_frame,
+                                    Duration::MAX,
+                                )
+                                .map_err(|err| err.to_string())?;
+                        }
+                    }
+                }
                 if let Some(audio) = audio_frame {
                     encoder.queue_audio_frame(audio);
                 }
@@ -347,29 +427,71 @@ impl Mp4ExportSettings {
     }
 }
 
+enum ExportFramePayload {
+    Cpu(SharedNv12Buffer),
+    #[cfg(target_os = "macos")]
+    Surface(cap_rendering::Nv12Surface),
+}
+
 struct ExportFrame {
-    nv12_data: SharedNv12Buffer,
+    payload: ExportFramePayload,
     width: u32,
     height: u32,
     y_stride: u32,
     frame_number: u32,
 }
 
+impl ExportFrame {
+    /// Contiguous NV12 bytes for CPU consumers (the first-frame screenshot);
+    /// surface frames are locked and copied once.
+    fn materialize_nv12(&self) -> Option<(Vec<u8>, u32)> {
+        match &self.payload {
+            ExportFramePayload::Cpu(data) => Some((data.as_ref().to_vec(), self.y_stride)),
+            #[cfg(target_os = "macos")]
+            ExportFramePayload::Surface(surface) => {
+                surface.with_locked_planes(|y_plane, y_stride, uv_plane, uv_stride| {
+                    let width = self.width as usize;
+                    let height = self.height as usize;
+                    let mut data = Vec::with_capacity(width * height * 3 / 2);
+                    for row in 0..height {
+                        data.extend_from_slice(&y_plane[row * y_stride..row * y_stride + width]);
+                    }
+                    for row in 0..(height / 2) {
+                        data.extend_from_slice(&uv_plane[row * uv_stride..row * uv_stride + width]);
+                    }
+                    (data, self.width)
+                })
+            }
+        }
+    }
+}
+
 struct FirstFrameNv12 {
-    data: SharedNv12Buffer,
+    data: Vec<u8>,
     width: u32,
     height: u32,
     y_stride: u32,
 }
 
 fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
+    #[cfg(target_os = "macos")]
+    if let Some(surface) = frame.surface.clone() {
+        return ExportFrame {
+            width: frame.width,
+            height: frame.height,
+            y_stride: frame.y_stride,
+            frame_number: frame.frame_number,
+            payload: ExportFramePayload::Surface(surface),
+        };
+    }
+
     if frame.format != GpuOutputFormat::Rgba {
         return ExportFrame {
             width: frame.width,
             height: frame.height,
             y_stride: frame.y_stride,
             frame_number: frame.frame_number,
-            nv12_data: frame.data,
+            payload: ExportFramePayload::Cpu(frame.data),
         };
     }
 
@@ -432,7 +554,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             }
 
             return ExportFrame {
-                nv12_data: SharedNv12Buffer::from_vec(result),
+                payload: ExportFramePayload::Cpu(SharedNv12Buffer::from_vec(result)),
                 width,
                 height,
                 y_stride: width,
@@ -446,7 +568,13 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         "swscale RGBA to NV12 conversion failed, using zeroed NV12"
     );
     ExportFrame {
-        nv12_data: SharedNv12Buffer::from_vec(vec![0u8; width as usize * height as usize * 3 / 2]),
+        payload: ExportFramePayload::Cpu(SharedNv12Buffer::from_vec(vec![
+            0u8;
+            width as usize
+                * height as usize
+                * 3
+                / 2
+        ])),
         width,
         height,
         y_stride: width,
@@ -484,6 +612,37 @@ fn silent_audio_frame(samples: usize) -> ffmpeg::frame::Audio {
         frame.data_mut(plane).fill(0);
     }
     frame
+}
+
+#[cfg(target_os = "macos")]
+fn fill_nv12_frame_from_surface(
+    frame: &mut ffmpeg::frame::Video,
+    surface: &cap_rendering::Nv12Surface,
+    width: u32,
+    height: u32,
+    pts: i64,
+) -> Option<()> {
+    surface.with_locked_planes(|y_plane, y_stride, uv_plane, uv_stride| {
+        frame.set_pts(Some(pts));
+        let width = width as usize;
+        let height = height as usize;
+
+        let dst_y_stride = frame.stride(0);
+        for row in 0..height {
+            let src_start = row * y_stride;
+            let dst_start = row * dst_y_stride;
+            frame.data_mut(0)[dst_start..dst_start + width]
+                .copy_from_slice(&y_plane[src_start..src_start + width]);
+        }
+
+        let dst_uv_stride = frame.stride(1);
+        for row in 0..(height / 2) {
+            let src_start = row * uv_stride;
+            let dst_start = row * dst_uv_stride;
+            frame.data_mut(1)[dst_start..dst_start + width]
+                .copy_from_slice(&uv_plane[src_start..src_start + width]);
+        }
+    })
 }
 
 fn fill_nv12_frame_direct(
@@ -701,12 +860,14 @@ async fn export_render_to_channel(
 
                 let export_frame = nv12_from_rendered_frame(frame);
 
-                if first_frame_data.is_none() {
+                if first_frame_data.is_none()
+                    && let Some((data, y_stride)) = export_frame.materialize_nv12()
+                {
                     first_frame_data = Some(FirstFrameNv12 {
-                        data: export_frame.nv12_data.clone(),
+                        data,
                         width: export_frame.width,
                         height: export_frame.height,
-                        y_stride: export_frame.y_stride,
+                        y_stride,
                     });
                 }
 
@@ -724,7 +885,7 @@ async fn export_render_to_channel(
                 let pp = screenshot_project_path;
                 let _screenshot_task = tokio::task::spawn_blocking(move || {
                     save_screenshot_from_nv12(
-                        first.data.as_ref(),
+                        &first.data,
                         first.width,
                         first.height,
                         first.y_stride,
@@ -869,10 +1030,15 @@ mod tests {
             frame_number: 0,
             target_time_ns: 0,
             format: GpuOutputFormat::Nv12,
+            #[cfg(target_os = "macos")]
+            surface: None,
         };
 
         let result = nv12_from_rendered_frame(frame);
-        assert_eq!(*result.nv12_data, data);
+        let ExportFramePayload::Cpu(nv12_data) = &result.payload else {
+            panic!("CPU frame must stay a CPU payload");
+        };
+        assert_eq!(&**nv12_data, data.as_slice());
     }
 
     #[test]

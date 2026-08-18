@@ -93,6 +93,10 @@ impl MP4File {
         RawVideoFormat::Yuv420p
     }
 
+    pub fn video_encoder(&self) -> &H264Encoder {
+        &self.video
+    }
+
     pub fn queue_video_frame(
         &mut self,
         frame: frame::Video,
