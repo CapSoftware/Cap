@@ -20,10 +20,16 @@ macro_rules! assets {
     };
 }
 
+/// Exactly the three faces the webview loads -- `unplugin-fonts` is configured
+/// for `weights: [400, 500, 700]` (`packages/ui-solid/vite.js:31-33`) and
+/// nothing else. Deliberately *not* four: there is no SemiBold here because
+/// there is none over there, so a Tailwind `font-semibold` (600) finds no 600
+/// face and CSS font-matching resolves it up to 700. Embedding a real 600 would
+/// let this app render a weight the original cannot, which is how the two
+/// drift apart.
 const FONTS: &[(&str, &[u8])] = assets!("fonts":
     "Geist.ttf",
     "Geist-Medium.ttf",
-    "Geist-SemiBold.ttf",
     "Geist-Bold.ttf",
 );
 
@@ -50,6 +56,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "chevron-left.svg",
     "chevron-right.svg",
     "circle-help.svg",
+    "circle-plus.svg",
     "circle-x.svg",
     "enlarge.svg",
     "eye-off.svg",
@@ -159,6 +166,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "move-right.svg",
     "palette.svg",
     "rabbit.svg",
+    "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
     "rotate-cw.svg",
@@ -177,12 +185,29 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "link.svg",
     "import.svg",
     "edit.svg",
+    "copy.svg",
     "record-fill.svg",
     "warning-bold.svg",
     // The main window's hand-drawn traffic lights: the x and expand glyphs
     // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
     "traffic-zoom.svg",
+    // The remaining settings pages (`settings_pages.rs`). `circle-check` is
+    // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
+    // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
+    // `~icons/lucide/*` imports resolve to, except `google-drive`, which is
+    // integrations/index.tsx's inline multi-colour logo flattened to one fill
+    // (gpui's `svg()` keeps only the alpha).
+    "circle-check.svg",
+    "chevron-up.svg",
+    "arrow-left.svg",
+    "film.svg",
+    "folder-open.svg",
+    "folder-down.svg",
+    "cloud-upload.svg",
+    "webhook.svg",
+    "database.svg",
+    "google-drive.svg",
 );
 
 /// Full-colour art, which `svg()` cannot draw -- it keeps only the alpha. The
@@ -269,6 +294,7 @@ mod tests {
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),
         include_str!("settings_window.rs"),
+        include_str!("settings_pages.rs"),
         include_str!("mode_select_window.rs"),
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
@@ -283,6 +309,11 @@ mod tests {
         include_str!("editor_tabs.rs"),
         include_str!("editor_color.rs"),
         include_str!("editor_panels.rs"),
+        // The crop dialog's ratio / Full / Reset glyphs and the chevron
+        // between its two panes.
+        include_str!("editor_crop.rs"),
+        // The clips sidebar's cards, import menu and record modal.
+        include_str!("editor_clips.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
     ];
