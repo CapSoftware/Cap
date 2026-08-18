@@ -124,6 +124,82 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     .detach();
 }
 
+/// `createThemeListener` + `commands.setTheme`: persist is already done; this
+/// forces native appearance on every open window and invalidates so each
+/// `sync_appearance` rebuilds the palette.
+pub fn broadcast_theme(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    let windows = cx.global::<AppWindows>();
+    let main = windows.main;
+    let settings = windows.settings;
+    let onboarding = windows.onboarding;
+    let mode_select = windows.mode_select;
+    let teleprompter = windows.teleprompter;
+    let controls = windows.controls;
+    let camera = windows.camera;
+    let overlays: Vec<_> = windows.overlays.iter().map(|(_, handle)| *handle).collect();
+    let editors: Vec<_> = windows.editors.iter().map(|(_, handle)| *handle).collect();
+
+    let refresh = |window: &mut gpui::Window, cx: &mut gpui::App| {
+        crate::theme::apply_native(window, cx);
+    };
+
+    let _ = main.update(cx, |_, window, cx| {
+        refresh(window, cx);
+        cx.notify();
+    });
+    if let Some(handle) = settings {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    if let Some(handle) = onboarding {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    if let Some(handle) = mode_select {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    if let Some(handle) = teleprompter {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    if let Some(handle) = controls {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    if let Some(handle) = camera {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    for handle in overlays {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    for handle in editors {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+}
+
 /// `makeKeyAndOrderFront:` re-enters gpui's window callbacks, so it runs from
 /// a task, never inside the borrow that decided to call it (the
 /// `place_overlay_panel` rule).
