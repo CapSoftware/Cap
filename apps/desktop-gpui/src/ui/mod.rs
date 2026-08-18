@@ -42,14 +42,15 @@
 
 mod button;
 mod collapsible;
+mod color_picker;
 mod editor_button;
 mod field;
 mod kbd;
+mod menu;
 mod number_field;
 mod position_pad;
-mod radio_cards;
-mod menu;
 mod progress;
+mod radio_cards;
 mod segmented;
 mod select;
 mod selection_header;
@@ -74,11 +75,18 @@ pub use button::{Button, ButtonSize, ButtonVariant, ClickHandler, IconButton};
 #[allow(unused_imports)]
 pub use collapsible::{Collapsible, CollapsibleState};
 #[allow(unused_imports)]
+pub use color_picker::{
+    ColorPicker, ColorPickerSnapshot, hsv_to_rgb, hue_from_point, preview_ring, rgb_to_hsv,
+    sv_from_point,
+};
+#[allow(unused_imports)]
 pub use editor_button::{EditorButton, EditorButtonVariant};
 #[allow(unused_imports)]
 pub use field::{Field, Subfield};
 #[allow(unused_imports)]
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
+#[allow(unused_imports)]
+pub use menu::{Menu, MenuItem, MenuKey, MenuState};
 #[allow(unused_imports)]
 pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
@@ -86,11 +94,9 @@ pub use number_field::{
 #[allow(unused_imports)]
 pub use position_pad::{PAD_HEIGHT, PositionPad, pad_position};
 #[allow(unused_imports)]
-pub use radio_cards::{RadioCard, RadioCards};
-#[allow(unused_imports)]
-pub use menu::{Menu, MenuItem, MenuKey, MenuState};
-#[allow(unused_imports)]
 pub use progress::CircularProgress;
+#[allow(unused_imports)]
+pub use radio_cards::{RadioCard, RadioCards};
 #[allow(unused_imports)]
 pub use segmented::{SegmentOption, SegmentedControl, option_at};
 #[allow(unused_imports)]
@@ -103,7 +109,7 @@ pub use slider::{
     value_from_fraction,
 };
 #[allow(unused_imports)]
-pub use surface::{Card, Popover, SettingRow, Section};
+pub use surface::{Card, Popover, Section, SettingRow};
 #[allow(unused_imports)]
 pub use tab_rail::{TabRail, TabRailItem};
 #[allow(unused_imports)]
