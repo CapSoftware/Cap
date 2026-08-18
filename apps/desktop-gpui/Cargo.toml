@@ -18,6 +18,15 @@ publish = false
 name = "cap-gpui"
 path = "src/main.rs"
 
+[package.metadata.bundle]
+name = "Cap GPUI"
+identifier = "so.cap.desktop.gpui"
+icon = ["assets/dock-icon.png"]
+category = "public.app-category.productivity"
+osx_minimum_system_version = "11.0"
+osx_info_plist_exts = ["resources/Info.plist"]
+osx_url_schemes = ["cap-desktop"]
+
 [dependencies]
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
@@ -88,9 +97,25 @@ chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
+rfd = "0.15"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Web-backed settings pages (feedback, changelog, license) and transcription
+# model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+futures-util = "0.3"
+dirs = "6"
+# Caption transcription (`src/transcription.rs`): the exact engine pin the
+# Tauri app carries (`apps/desktop/src-tauri/Cargo.toml:75`), so a model file
+# downloaded by either app loads identically in both.
+whisper-rs = "0.11.0"
 
 [dev-dependencies]
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
@@ -98,6 +123,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+raw-window-handle = "0.6"
+x11rb = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Native window treatment (panel levels, Spaces) gpui does not expose. Same
@@ -110,6 +146,8 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSRespon
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = "0.2.2"
 raw-window-handle = "0.6"
+core-foundation = "0.10"
+core-video = { version = "0.5.2", features = ["metal"] }
 # ScreenCaptureKit shareable content, acquired the same way recording.rs in
 # src-tauri does. Same fork/rev/features as the root workspace.
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
@@ -129,10 +167,24 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "vn",
 ], default-features = false }
 
+# The Tauri app's own target gate (`apps/desktop/src-tauri/Cargo.toml:151-152`):
+# parakeet-rs has no Intel-macOS ONNX Runtime build, so those Macs get the
+# Whisper caption models only.
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+parakeet-rs = "0.3.4"
+
 # Mirror of the root workspace patch: cap-recording's converter stack is built
 # and tested against the vendored wgpu-hal, not the crates.io release.
 [patch.crates-io]
 wgpu-hal = { path = "../../vendor/wgpu-hal" }
+
+# Local checkout of the pinned wingleeio/zed rev plus one commit: paint_surface
+# accepts 32BGRA CVPixelBuffers, which the editor preview's zero-copy path
+# hands it (see cap-rendering's RgbaToBgraSurfaceConverter).
+[patch."https://github.com/wingleeio/zed"]
+gpui = { path = "../../../zed-cap/crates/gpui" }
+gpui_platform = { path = "../../../zed-cap/crates/gpui_platform" }
+gpui_tokio = { path = "../../../zed-cap/crates/gpui_tokio" }
 
 [profile.dev]
 # gpui is unusably slow when its dependencies are unoptimized; zed/comet both
