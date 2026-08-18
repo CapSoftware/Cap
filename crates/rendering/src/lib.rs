@@ -1022,6 +1022,7 @@ pub fn zero_copy_export_disabled() -> bool {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel_nv12(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,

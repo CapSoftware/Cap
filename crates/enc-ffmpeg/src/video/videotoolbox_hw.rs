@@ -44,9 +44,11 @@ pub struct VideoToolboxHwFrames {
     height: u32,
 }
 
-// SAFETY: AVBufferRef reference counting is thread-safe, and the wrapped
-// contexts carry no thread affinity.
+// SAFETY: AVBufferRef reference counting is thread-safe, the wrapped contexts
+// carry no thread affinity, and every method either takes ownership or only
+// performs atomic refcount operations.
 unsafe impl Send for VideoToolboxHwFrames {}
+unsafe impl Sync for VideoToolboxHwFrames {}
 
 unsafe extern "C" fn release_pixel_buffer(_opaque: *mut c_void, data: *mut u8) {
     unsafe { CFRelease(data as *const c_void) };
@@ -121,10 +123,11 @@ impl VideoToolboxHwFrames {
     /// The buffer is CFRetained for the frame's lifetime and released when the
     /// frame's backing `AVBufferRef` drops.
     ///
+    /// # Safety
     /// `pixel_buffer` must be a valid `CVPixelBufferRef` whose dimensions
     /// match this context and whose pixel format is biplanar 4:2:0 (`420v` /
     /// `420f`, ffmpeg `NV12`).
-    pub fn wrap_pixel_buffer(
+    pub unsafe fn wrap_pixel_buffer(
         &self,
         pixel_buffer: *mut c_void,
     ) -> Result<ffmpeg::frame::Video, VideoToolboxHwError> {

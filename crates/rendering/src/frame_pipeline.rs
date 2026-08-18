@@ -1105,6 +1105,7 @@ impl RgbaToBgraSurfaceConverter {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         device: &wgpu::Device,

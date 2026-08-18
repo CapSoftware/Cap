@@ -409,13 +409,14 @@ impl MacOSFragmentedM4SMuxer {
 
                         let queued = match sample_buf.image_buf() {
                             Some(image_buf) => {
-                                let ptr = (&*image_buf as *const cidre::cv::ImageBuf
+                                let ptr = (std::ptr::from_ref(image_buf)
                                     as *const std::ffi::c_void)
                                     .cast_mut();
                                 match encoder_clone.lock() {
-                                    Ok(mut encoder) => encoder
-                                        .queue_hw_pixel_buffer(ptr, timestamp)
-                                        .map_err(|e| anyhow!("{e}")),
+                                    Ok(mut encoder) => {
+                                        unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }
+                                            .map_err(|e| anyhow!("{e}"))
+                                    }
                                     Err(_) => {
                                         error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
                                         return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));

@@ -523,8 +523,8 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
         let cache = IOSurfaceTextureCache::new().expect("metal device");
 
         println!(
-            "{:>11} | {:>7} | {:>8} | {}",
-            "resolution", "path", "phase", "mean / p50 / p95 (us)"
+            "{:>11} | {:>7} | {:>8} | mean / p50 / p95 (us)",
+            "resolution", "path", "phase"
         );
 
         for (width, height) in SIZES {

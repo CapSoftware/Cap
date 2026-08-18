@@ -849,8 +849,12 @@ impl H264Encoder {
     /// Wraps an IOSurface-backed NV12 `CVPixelBufferRef` as a frame this
     /// encoder can queue directly. Only available on encoders built with
     /// [`H264EncoderBuilder::build_videotoolbox_hw_input`].
+    ///
+    /// # Safety
+    /// `pixel_buffer` must be a valid `CVPixelBufferRef` matching the
+    /// encoder's dimensions with a biplanar 4:2:0 pixel format.
     #[cfg(target_os = "macos")]
-    pub fn wrap_videotoolbox_pixel_buffer(
+    pub unsafe fn wrap_videotoolbox_pixel_buffer(
         &self,
         pixel_buffer: *mut std::ffi::c_void,
     ) -> Result<frame::Video, H264EncoderError> {
@@ -859,8 +863,7 @@ impl H264Encoder {
                 "encoder was not built for VideoToolbox hardware input".to_string(),
             )
         })?;
-        hw_frames
-            .wrap_pixel_buffer(pixel_buffer)
+        unsafe { hw_frames.wrap_pixel_buffer(pixel_buffer) }
             .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 

@@ -361,9 +361,7 @@ mod macos {
             let timestamp = Duration::from_nanos(i as u64 * frame_ns);
             let ptr = src.as_ref() as *const cv::PixelBuf as *mut c_void;
             let started = Instant::now();
-            encoder
-                .queue_hw_pixel_buffer(ptr, timestamp)
-                .expect("queue hw");
+            unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }.expect("queue hw");
             let elapsed = started.elapsed().as_secs_f64() * 1e6;
             if i >= WARMUP {
                 stats.samples.push(elapsed);

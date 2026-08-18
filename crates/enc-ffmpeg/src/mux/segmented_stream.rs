@@ -359,15 +359,17 @@ impl SegmentedVideoEncoder {
 
     /// Queues an IOSurface-backed NV12 `CVPixelBufferRef` without copying its
     /// planes. Only valid when [`Self::is_videotoolbox_hw_input`] is true.
+    ///
+    /// # Safety
+    /// `pixel_buffer` must be a valid `CVPixelBufferRef` matching the
+    /// encoder's dimensions with a biplanar 4:2:0 pixel format.
     #[cfg(target_os = "macos")]
-    pub fn queue_hw_pixel_buffer(
+    pub unsafe fn queue_hw_pixel_buffer(
         &mut self,
         pixel_buffer: *mut std::ffi::c_void,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
-        let frame = self
-            .encoder
-            .wrap_videotoolbox_pixel_buffer(pixel_buffer)
+        let frame = unsafe { self.encoder.wrap_videotoolbox_pixel_buffer(pixel_buffer) }
             .map_err(InitError::Encoder)?;
         self.queue_frame(frame, timestamp)
     }

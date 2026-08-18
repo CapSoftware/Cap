@@ -323,10 +323,12 @@ impl Mp4ExportSettings {
                     #[cfg(target_os = "macos")]
                     ExportFramePayload::Surface(surface) => {
                         if encoder_is_hw {
-                            let mut frame = encoder
-                                .video_encoder()
-                                .wrap_videotoolbox_pixel_buffer(surface.as_pixel_buffer_ptr())
-                                .map_err(|err| err.to_string())?;
+                            let mut frame = unsafe {
+                                encoder
+                                    .video_encoder()
+                                    .wrap_videotoolbox_pixel_buffer(surface.as_pixel_buffer_ptr())
+                            }
+                            .map_err(|err| err.to_string())?;
                             frame.set_pts(Some(input.frame_number as i64));
                             encoder
                                 .queue_video_frame_reusable(
