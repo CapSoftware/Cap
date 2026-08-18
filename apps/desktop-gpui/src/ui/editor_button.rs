@@ -27,7 +27,7 @@ use gpui::{
 
 use crate::theme::Theme;
 
-use super::ClickHandler;
+use super::{ClickHandler, Tooltip};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorButtonVariant {
@@ -57,6 +57,7 @@ pub struct EditorButton {
     hover_bg: Hsla,
     pressed_bg: Hsla,
     pressed_text: Hsla,
+    tooltip: Option<(Theme, SharedString)>,
     on_click: Option<ClickHandler>,
 }
 
@@ -79,6 +80,7 @@ impl EditorButton {
             hover_bg: Hsla::from(theme.gray_3),
             pressed_bg: Hsla::from(theme.gray_3),
             pressed_text: Hsla::from(theme.gray_12),
+            tooltip: None,
             on_click: None,
         }
     }
@@ -132,7 +134,15 @@ impl EditorButton {
         self
     }
 
-    pub fn on_click(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+    pub fn tooltip(mut self, theme: &Theme, label: impl Into<SharedString>) -> Self {
+        self.tooltip = Some((*theme, label.into()));
+        self
+    }
+
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_click = Some(Box::new(handler));
         self
     }
@@ -157,6 +167,7 @@ impl RenderOnce for EditorButton {
             hover_bg,
             pressed_bg,
             pressed_text,
+            tooltip,
             on_click,
         } = self;
 
@@ -189,15 +200,13 @@ impl RenderOnce for EditorButton {
             .when(!disabled && !pressed, |this| {
                 this.cursor_pointer().hover(|this| this.bg(hover_bg))
             })
-            .children(
-                left_icon.map(|icon| {
-                    svg()
-                        .path(icon)
-                        .size(icon_size)
-                        .flex_shrink_0()
-                        .text_color(foreground)
-                }),
-            )
+            .children(left_icon.map(|icon| {
+                svg()
+                    .path(icon)
+                    .size(icon_size)
+                    .flex_shrink_0()
+                    .text_color(foreground)
+            }))
             .children(label.map(|label| div().truncate().child(label)))
             .children(right_icon.map(|icon| {
                 svg()
@@ -207,6 +216,9 @@ impl RenderOnce for EditorButton {
                     .when(right_icon_end, |this| this.ml_auto())
                     .text_color(foreground)
             }))
+            .when_some(tooltip, |this, (theme, label)| {
+                this.tooltip(move |_window, cx| Tooltip::new(&theme, label.clone()).view(cx))
+            })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

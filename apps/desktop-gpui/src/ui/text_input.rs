@@ -65,13 +65,12 @@
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    FontWeight, GlobalElementId, Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    RenderOnce, SharedString, Size, Style, Styled, TextAlign, TextRun, UTF16Selection,
-    UnderlineStyle, WeakEntity, Window, WrappedLine, actions, div, fill, point, prelude::*, px,
-    relative, size, svg,
+    App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight, GlobalElementId, Hsla,
+    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, RenderOnce, SharedString, Size,
+    Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window,
+    WrappedLine, actions, div, fill, point, prelude::*, px, relative, size, svg,
 };
 use smallvec::SmallVec;
 use unicode_segmentation::UnicodeSegmentation;
@@ -793,7 +792,12 @@ impl TextInputState {
         }
     }
 
-    fn on_delete_forward(&mut self, _: &DeleteForward, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_delete_forward(
+        &mut self,
+        _: &DeleteForward,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selected_range.is_empty() {
             let next = self.next_boundary(self.cursor_offset());
             if next == self.cursor_offset() {
@@ -817,7 +821,12 @@ impl TextInputState {
         }
     }
 
-    fn on_delete_word_right(&mut self, _: &DeleteWordRight, _w: &mut Window, cx: &mut Context<Self>) {
+    fn on_delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.selected_range.is_empty() {
             return self.replace(None, "", UndoGroup::Discrete, cx);
         }
@@ -901,7 +910,12 @@ impl TextInputState {
         }
     }
 
-    fn on_move_word_left(&mut self, _: &MoveWordLeft, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_move_word_left(
+        &mut self,
+        _: &MoveWordLeft,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.goal_x = None;
         let offset = word_start_before(&self.content, self.cursor_offset());
         self.move_to(offset, cx);
@@ -913,7 +927,12 @@ impl TextInputState {
         self.move_to(offset, cx);
     }
 
-    fn on_move_to_line_start(&mut self, _: &MoveToLineStart, _w: &mut Window, cx: &mut Context<Self>) {
+    fn on_move_to_line_start(
+        &mut self,
+        _: &MoveToLineStart,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.goal_x = None;
         let offset = paragraph_start(&self.content, self.cursor_offset());
         self.move_to(offset, cx);
@@ -968,7 +987,12 @@ impl TextInputState {
         self.select_to(offset, cx);
     }
 
-    fn on_select_word_right(&mut self, _: &SelectWordRight, _w: &mut Window, cx: &mut Context<Self>) {
+    fn on_select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        _w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.goal_x = None;
         let offset = word_end_after(&self.content, self.cursor_offset());
         self.select_to(offset, cx);
@@ -1107,7 +1131,12 @@ impl TextInputState {
         }
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.disabled {
             return;
         }
@@ -1135,19 +1164,25 @@ impl TextInputState {
                 self.selected_range = range.clone();
                 self.selection_reversed = false;
                 self.drag = Some((DragGranularity::Word, range));
-                        cx.notify();
+                cx.notify();
             }
             _ => {
-                let range = paragraph_start(&self.content, offset)..paragraph_end(&self.content, offset);
+                let range =
+                    paragraph_start(&self.content, offset)..paragraph_end(&self.content, offset);
                 self.selected_range = range.clone();
                 self.selection_reversed = false;
                 self.drag = Some((DragGranularity::Line, range));
-                        cx.notify();
+                cx.notify();
             }
         }
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((granularity, anchor)) = self.drag.clone() else {
             return;
         };
@@ -1234,7 +1269,11 @@ impl EntityInputHandler for TextInputState {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
         self.marked_range
             .as_ref()
             .map(|range| self.range_to_utf16(range))
@@ -1297,7 +1336,8 @@ impl EntityInputHandler for TextInputState {
         next.push_str(&self.content[range.end..]);
         self.content = next.into();
 
-        self.marked_range = (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
+        self.marked_range =
+            (!new_text.is_empty()).then(|| range.start..range.start + new_text.len());
         self.selected_range = new_selected_range_utf16
             .as_ref()
             .map(|utf16| self.range_from_utf16(utf16))
@@ -1330,9 +1370,7 @@ impl EntityInputHandler for TextInputState {
         let align = self.align_offset(layout, row, bounds.size.width);
         let start_x = bounds.left() + align + layout.x_for_offset(range.start, self.line_height)
             - self.scroll_x;
-        let end_x = bounds.left()
-            + align
-            + layout.x_for_offset(range.end, self.line_height)
+        let end_x = bounds.left() + align + layout.x_for_offset(range.end, self.line_height)
             - self.scroll_x;
         let top = bounds.top() + self.line_height * row as f32;
         Some(Bounds::from_corners(
@@ -1351,7 +1389,11 @@ impl EntityInputHandler for TextInputState {
         Some(self.offset_to_utf16(offset))
     }
 
-    fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+    fn text_length_utf16(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
         Some(self.offset_to_utf16(self.content.len()))
     }
 
@@ -1589,14 +1631,15 @@ impl TextInput {
     /// The settings window's inputs: `<Input>` is `h-8 rounded-lg bg-gray-2
     /// px-2 text-xs` in `editor/ui.tsx`, re-filled from the settings material's
     /// `--macos-settings-fill` / `-border` / `-text` / `-muted`.
-    pub fn settings(theme: &Theme, id: impl Into<ElementId>, state: &Entity<TextInputState>) -> Self {
+    pub fn settings(
+        theme: &Theme,
+        id: impl Into<ElementId>,
+        state: &Entity<TextInputState>,
+    ) -> Self {
         Self {
             bg: Some(theme.settings_fill()),
             border: Some(theme.settings_border()),
-            focus_border: Some(Theme::with_alpha(
-                gpui::rgb(Theme::SETTINGS_ACCENT).into(),
-                0.8,
-            )),
+            focus_border: Some(Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT), 0.8)),
             text: theme.settings_text(),
             muted: theme.settings_muted(),
             caret_color: theme.settings_text(),
@@ -1749,7 +1792,7 @@ impl TextInput {
 /// same macOS blue the toggles already deviate to, at the 30 % a focused
 /// `<input>`'s selection paints at.
 fn selection_tint() -> Hsla {
-    Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT).into(), 0.30)
+    Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT), 0.30)
 }
 
 // -- Rendering ----------------------------------------------------------------
@@ -1830,9 +1873,7 @@ impl RenderOnce for TextInput {
             .rounded(self.radius)
             .overflow_hidden()
             .when_some(self.bg, |this, bg| this.bg(bg))
-            .when_some(border, |this, border| {
-                this.border_1().border_color(border)
-            })
+            .when_some(border, |this, border| this.border_1().border_color(border))
             .when(!disabled, |this| this.cursor(gpui::CursorStyle::IBeam))
             .text_size(self.text_size)
             .text_color(self.text)
@@ -2189,13 +2230,14 @@ impl Element for TextBody {
                 if start > end {
                     continue;
                 }
-                if start == end && !(selected.start <= row.range.start && selected.end > row.range.end)
+                if start == end
+                    && !(selected.start <= row.range.start && selected.end > row.range.end)
                 {
                     continue;
                 }
                 let align = state.align_offset(layout, index, bounds.size.width);
-                let left = bounds.left() + align + layout.x_for_offset(start, self.line_height)
-                    - scroll_x;
+                let left =
+                    bounds.left() + align + layout.x_for_offset(start, self.line_height) - scroll_x;
                 // A selection that runs past this row's end paints to the row's
                 // full width, which is what shows a selected newline.
                 let right = if selected.end > row.range.end {
@@ -2286,8 +2328,15 @@ impl Element for TextBody {
             if let Some(layout) = layout.as_ref() {
                 for line in layout.lines.iter() {
                     let height = line.size(self.line_height).height;
-                    line.paint(origin, self.line_height, self.align, Some(bounds), window, cx)
-                        .ok();
+                    line.paint(
+                        origin,
+                        self.line_height,
+                        self.align,
+                        Some(bounds),
+                        window,
+                        cx,
+                    )
+                    .ok();
                     origin.y += height;
                 }
             }
@@ -2310,11 +2359,13 @@ impl Element for TextBody {
                     }
                 }
             });
-            window.on_mouse_event(move |event: &MouseUpEvent, phase, window: &mut Window, cx: &mut App| {
-                if phase == gpui::DispatchPhase::Bubble {
-                    state.update(cx, |this, cx| this.on_mouse_up(event, window, cx));
-                }
-            });
+            window.on_mouse_event(
+                move |event: &MouseUpEvent, phase, window: &mut Window, cx: &mut App| {
+                    if phase == gpui::DispatchPhase::Bubble {
+                        state.update(cx, |this, cx| this.on_mouse_up(event, window, cx));
+                    }
+                },
+            );
         }
     }
 }
@@ -2481,12 +2532,24 @@ mod tests {
     fn typed_characters_coalesce_into_one_undo_step() {
         assert!(!undo_coalesces(None, UndoGroup::Typing));
         assert!(undo_coalesces(Some(UndoGroup::Typing), UndoGroup::Typing));
-        assert!(undo_coalesces(Some(UndoGroup::Deleting), UndoGroup::Deleting));
+        assert!(undo_coalesces(
+            Some(UndoGroup::Deleting),
+            UndoGroup::Deleting
+        ));
         // Typing then deleting is two steps, and back again is a third.
-        assert!(!undo_coalesces(Some(UndoGroup::Typing), UndoGroup::Deleting));
-        assert!(!undo_coalesces(Some(UndoGroup::Deleting), UndoGroup::Typing));
+        assert!(!undo_coalesces(
+            Some(UndoGroup::Typing),
+            UndoGroup::Deleting
+        ));
+        assert!(!undo_coalesces(
+            Some(UndoGroup::Deleting),
+            UndoGroup::Typing
+        ));
         // A paste is always its own step, even after another paste.
-        assert!(!undo_coalesces(Some(UndoGroup::Discrete), UndoGroup::Discrete));
+        assert!(!undo_coalesces(
+            Some(UndoGroup::Discrete),
+            UndoGroup::Discrete
+        ));
     }
 
     // -- Caret maths across wrapped rows ---------------------------------------
