@@ -91,7 +91,8 @@ smallvec = "1"
 # lockfile through gpui, so this makes an existing build unit direct.
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
+md-5 = "0.10"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
@@ -127,6 +128,11 @@ whisper-rs = "0.11.0"
 # dev-dependencies so the shipped binary's tokio features are unchanged.
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
+# kill(2) for the new-instance-wins guard (`src/single_instance.rs`); already
+# in the lockfile through half the tree, this only makes it direct.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
 windows-sys = { version = "0.59", features = [
@@ -144,7 +150,7 @@ x11rb = "0.13"
 objc2 = "0.5.2"
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = "0.2.2"
