@@ -11,13 +11,11 @@
 //! whatever the interrupted turn left it as. So the ObjC target does exactly
 //! one thing -- push the clicked item's tag into a channel -- and a gpui
 //! foreground task drains that channel and dispatches with a clean borrow.
-//! Same seam `platform::open_color_panel` uses for `changeColor:`.
+//! Same seam the editor's overlay panels use for AppKit callbacks.
 //!
 //! Menu strings, order and separators are byte-identical to `build_tray_menu`.
-//! Deviations, all deliberate and all noted in the module below: the
-//! onboarding-minimal variant is not reproduced (this app has no onboarding
-//! window), and "Take a Screenshot", "Import Media..." and "Upload Logs" render
-//! disabled because the capture, import and log-upload paths do not exist here.
+//! "Take a Screenshot" and "Upload Logs" render disabled because the capture
+//! and log-upload paths do not exist here.
 
 use std::path::{Path, PathBuf};
 
@@ -63,9 +61,11 @@ pub enum TrayItem {
     RecordDisplay,
     RecordWindow,
     RecordArea,
+    ImportMedia,
     ViewAllRecordings,
     ViewAllScreenshots,
     OpenSettings,
+    RequestPermissions,
     Quit,
     PreviousItem(PathBuf),
     ModeStudio,
@@ -301,16 +301,17 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
         entries.push(Entry::disabled("Take a Screenshot"));
     }
 
-    // `crate::import::start_video_import` / `start_image_import`: no import
-    // infrastructure here either.
-    entries.push(Entry::disabled("Import Media..."));
+    entries.push(Entry::item("Import Media...", TrayItem::ImportMedia));
 
     entries.push(Entry::Separator);
     entries.push(mode_submenu(mode));
     entries.push(previous_submenu(previous));
     entries.push(Entry::Separator);
 
-    entries.push(Entry::item("View all recordings", TrayItem::ViewAllRecordings));
+    entries.push(Entry::item(
+        "View all recordings",
+        TrayItem::ViewAllRecordings,
+    ));
     entries.push(Entry::item(
         "View all screenshots",
         TrayItem::ViewAllScreenshots,
@@ -325,6 +326,22 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
     entries.push(Entry::item("Quit Cap", TrayItem::Quit));
 
     entries
+}
+
+pub fn build_onboarding_menu(version: &str) -> Vec<Entry> {
+    vec![
+        Entry::item("Request Permissions", TrayItem::RequestPermissions),
+        Entry::Separator,
+        Entry::disabled(format!("Cap v{version}")),
+        Entry::item("Quit Cap", TrayItem::Quit),
+    ]
+}
+
+fn current_menu_entries(cx: &App, mode: Mode, previous: &[PreviousItem]) -> Vec<Entry> {
+    if crate::app_windows::onboarding_is_open(cx) && !crate::permissions::necessary_granted() {
+        return build_onboarding_menu(crate::menus::app_version());
+    }
+    build_menu(mode, previous, crate::menus::app_version())
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +363,9 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::RecordDisplay => app_windows::arm_target_mode(TargetType::Display, cx),
         TrayItem::RecordWindow => app_windows::arm_target_mode(TargetType::Window, cx),
         TrayItem::RecordArea => app_windows::arm_target_mode(TargetType::Area, cx),
+        // `TrayItem::ImportVideo` (`src-tauri/src/tray.rs:839-911`): one
+        // picker over both media filters, routed by extension.
+        TrayItem::ImportMedia => crate::import::pick_and_import_media(cx),
         TrayItem::ViewAllRecordings => {
             app_windows::open_settings(Page::Recordings, cx);
             cx.activate(true);
@@ -356,6 +376,10 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         }
         TrayItem::OpenSettings => {
             app_windows::open_settings(Page::General, cx);
+            cx.activate(true);
+        }
+        TrayItem::RequestPermissions => {
+            app_windows::open_onboarding(cx);
             cx.activate(true);
         }
         TrayItem::Quit => menus::quit(cx),
@@ -383,7 +407,10 @@ fn open_previous_item(path: PathBuf, cx: &mut App) {
 
     let screenshots_dir = library::screenshots_dir();
     let is_screenshot = path.extension().and_then(|ext| ext.to_str()) == Some("cap")
-        && path.parent().map(|parent| parent == screenshots_dir).unwrap_or(false);
+        && path
+            .parent()
+            .map(|parent| parent == screenshots_dir)
+            .unwrap_or(false);
 
     if is_screenshot {
         // `ShowCapWindow::ScreenshotEditor` has no gpui counterpart yet
@@ -488,8 +515,12 @@ pub fn describe_menu(entries: &[Entry]) -> String {
 ///
 /// `CAP_GPUI_TRAY_DUMP=<path>` writes [`describe_menu`] of the live menu.
 pub fn drive_from_env(cx: &mut App) {
-    let spec = std::env::var("CAP_GPUI_AUTO_TRAY").ok().filter(|s| !s.is_empty());
-    let dump = std::env::var("CAP_GPUI_TRAY_DUMP").ok().filter(|s| !s.is_empty());
+    let spec = std::env::var("CAP_GPUI_AUTO_TRAY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let dump = std::env::var("CAP_GPUI_TRAY_DUMP")
+        .ok()
+        .filter(|s| !s.is_empty());
     let delay_ms = std::env::var("CAP_GPUI_AUTO_TRAY_DELAY")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -536,6 +567,7 @@ fn harness_item(spec: &str, cx: &App) -> Option<TrayItem> {
         "record_display" => TrayItem::RecordDisplay,
         "record_window" => TrayItem::RecordWindow,
         "record_area" => TrayItem::RecordArea,
+        "import_media" => TrayItem::ImportMedia,
         "recordings" => TrayItem::ViewAllRecordings,
         "screenshots" => TrayItem::ViewAllScreenshots,
         "settings" => TrayItem::OpenSettings,
@@ -565,10 +597,10 @@ mod mac {
     use objc2_foundation::NSString;
 
     use super::{
-        Entry, PreviousItem, STOP_ICON, TrayItem, build_menu, handle_item, mode_icon,
+        Entry, PreviousItem, STOP_ICON, TrayItem, current_menu_entries, handle_item, mode_icon,
         scan_previous, stop_recording,
     };
-    use crate::{main_window::Mode, menus};
+    use crate::main_window::Mode;
 
     /// `NSVariableStatusItemLength`.
     const NS_VARIABLE_STATUS_ITEM_LENGTH: f64 = -1.0;
@@ -658,16 +690,12 @@ mod mac {
         // arrives here, on the foreground executor, with nothing borrowed.
         cx.spawn(async move |cx| {
             while let Ok(tag) = rx.recv_async().await {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     if tag == STOP_TAG {
                         stop_recording(cx);
                         return;
                     }
-                    let item = cx
-                        .global::<Tray>()
-                        .actions
-                        .get(tag as usize)
-                        .cloned();
+                    let item = cx.global::<Tray>().actions.get(tag as usize).cloned();
                     match item {
                         Some(item) => handle_item(item, cx),
                         None => tracing::warn!(tag, "tray click with no item behind it"),
@@ -823,7 +851,7 @@ mod mac {
             let tray = cx.global::<Tray>();
             (tray.mode, tray.previous.clone())
         };
-        let entries = build_menu(mode, &previous, menus::app_version());
+        let entries = current_menu_entries(cx, mode, &previous);
 
         let mut actions = Vec::new();
         let menu = {
@@ -942,7 +970,8 @@ mod mac {
         unsafe {
             let button: *mut AnyObject = msg_send![&*tray.status_item, button];
             if recording {
-                let _: () = msg_send![&*tray.status_item, setMenu: std::ptr::null_mut::<AnyObject>()];
+                let _: () =
+                    msg_send![&*tray.status_item, setMenu: std::ptr::null_mut::<AnyObject>()];
                 if !button.is_null() {
                     let _: () = msg_send![button, setTarget: &*tray.target];
                     let _: () = msg_send![button, setAction: Some(sel!(capTrayStop:))];
@@ -1021,7 +1050,11 @@ mod mac {
             return Vec::new();
         }
         let tray = cx.global::<Tray>();
-        build_menu(tray.mode, &tray.previous, menus::app_version())
+        current_menu_entries(cx, tray.mode, &tray.previous)
+    }
+
+    pub fn refresh_menu(cx: &mut App) {
+        rebuild(cx);
     }
 }
 
@@ -1036,6 +1069,7 @@ mod stub {
     pub fn set_recording(_recording: bool, _cx: &mut App) {}
     pub fn mode_changed(_mode: crate::main_window::Mode, _cx: &mut App) {}
     pub fn refresh_previous(_cx: &mut App) {}
+    pub fn refresh_menu(_cx: &mut App) {}
     pub fn previous_items(_cx: &App) -> Vec<PreviousItem> {
         Vec::new()
     }
@@ -1111,6 +1145,15 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_menu_is_permissions_only() {
+        let menu = build_onboarding_menu("0.1.0");
+        assert_eq!(
+            titles(&menu),
+            vec!["Request Permissions", "-", "Cap v0.1.0", "Quit Cap",]
+        );
+    }
+
+    #[test]
     fn menu_matches_build_tray_menu() {
         let menu = build_menu(Mode::Studio, &[], "0.1.0");
         assert_eq!(
@@ -1160,8 +1203,14 @@ mod tests {
     #[test]
     fn the_current_mode_is_ticked() {
         for (mode, expected) in [
-            (Mode::Studio, ["\u{2713} Studio", "   Instant", "   Screenshot"]),
-            (Mode::Instant, ["   Studio", "\u{2713} Instant", "   Screenshot"]),
+            (
+                Mode::Studio,
+                ["\u{2713} Studio", "   Instant", "   Screenshot"],
+            ),
+            (
+                Mode::Instant,
+                ["   Studio", "\u{2713} Instant", "   Screenshot"],
+            ),
             (
                 Mode::Screenshot,
                 ["   Studio", "   Instant", "\u{2713} Screenshot"],
@@ -1193,7 +1242,11 @@ mod tests {
     #[test]
     fn previous_items_carry_their_type_prefix() {
         let items = [
-            (MediaKind::Studio, "Screen Recording", "\u{1f3ac} Screen Recording"),
+            (
+                MediaKind::Studio,
+                "Screen Recording",
+                "\u{1f3ac} Screen Recording",
+            ),
             (MediaKind::Instant, "Quick Take", "\u{26a1} Quick Take"),
             (MediaKind::Screenshot, "Shot", "\u{1f4f7} Shot"),
         ]
@@ -1217,7 +1270,7 @@ mod tests {
         );
     }
 
-    /// Only the rows with a real handler are enabled; the four deviations are
+    /// Only the rows with a real handler are enabled; the deviations are
     /// present and greyed, in place, so the menu keeps its shape.
     #[test]
     fn unimplemented_rows_are_present_but_disabled() {
@@ -1235,12 +1288,7 @@ mod tests {
             .collect();
         assert_eq!(
             disabled,
-            vec![
-                "Take a Screenshot",
-                "Import Media...",
-                "Upload Logs",
-                "Cap v0.1.0",
-            ]
+            vec!["Take a Screenshot", "Upload Logs", "Cap v0.1.0",]
         );
     }
 }
