@@ -172,9 +172,21 @@ fn main() {
         if !std::env::var("CAP_GPUI_NO_TRAY").is_ok_and(|v| v == "1") {
             tray::init(cx);
         }
-        if crate::store::should_show_onboarding() {
-            app_windows::open_onboarding(cx);
-        }
+        // The gate's TCC queries (screen recording preflight, AXIsProcessTrusted)
+        // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
+        // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
+        // the gate runs off-main and onboarding opens a beat after the main
+        // window instead of holding it back.
+        cx.spawn(async move |cx| {
+            let show_onboarding = cx
+                .background_executor()
+                .spawn(async { crate::store::should_show_onboarding() })
+                .await;
+            if show_onboarding {
+                cx.update(app_windows::open_onboarding);
+            }
+        })
+        .detach();
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
