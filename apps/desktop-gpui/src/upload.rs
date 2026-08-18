@@ -222,7 +222,9 @@ async fn upload_video(
     if screenshot_path.exists()
         && let Err(error) = upload_screenshot(video_id, screenshot_path).await
     {
-        tracing::warn!("thumbnail upload failed: {error}");
+        return Err(AuthApiError::Other(format!(
+            "thumbnail upload failed: {error}"
+        )));
     }
 
     Ok(format!("{}/s/{video_id}", auth::server_url()))
