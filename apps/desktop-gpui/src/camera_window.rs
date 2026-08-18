@@ -5,19 +5,20 @@
 //! appears on hover), preview container below it clipped to the shape
 //! (round / square / full), four corner resize handles below the toolbar,
 //! drag-anywhere to move the window. Frames arrive as CoreVideo pixel buffers
-//! from the app-scoped [`CameraFeed`] and are painted zero-copy through gpui's
-//! `surface()` element with the same manual cover-fit math the web Canvas uses.
+//! from the app-scoped [`CameraFeed`]; VideoToolbox converts them to BGRA
+//! IOSurfaces and gpui paints those directly via `paint_surface_fitted`
+//! (cover-fit + rounded clip on the primitive) -- no CPU pixel copies and no
+//! sprite-atlas uploads on the frame path.
 //!
-//! Known deviations (also in the README): no mirroring (this gpui rev has no
-//! flip transform for surfaces -- the toolbar button is present but disabled),
-//! background blur cycles/persists but does not process frames yet, and the
-//! window position is not persisted per-monitor.
+//! Known deviations (also in the README): no mirroring (the toolbar button is
+//! present but disabled), background blur cycles/persists but does not
+//! process frames yet, and the window position is not persisted per-monitor.
 
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
+    Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
     prelude::FluentBuilder as _, px, size, svg,
 };
 
@@ -60,55 +61,67 @@ pub fn window_size(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32
 
 #[cfg(target_os = "macos")]
 mod frame {
-    use std::sync::Arc;
+    use cidre::{arc, cf, cv};
 
-    use cidre::{arc, cv};
-    use gpui::RenderImage;
-    use image::Frame;
-    use smallvec::smallvec;
-
-    /// Converts camera frames into gpui images.
+    /// Converts camera frames (typically `420v`) into BGRA IOSurface-backed
+    /// pixel buffers that gpui paints directly via `paint_surface_fitted`.
     ///
-    /// Why not gpui's zero-copy `surface()` element: on this rev its Metal path
-    /// hard-asserts `420f` (the camera vends `420v`), and surfaces ignore
-    /// rounded-corner clipping -- fatal for a preview whose default shape is a
-    /// circle. Images go through the sprite atlas, where the fork explicitly
-    /// fixed cover-crop corner radii. So: VideoToolbox converts `420v` -> BGRA
-    /// in hardware, one CPU row-copy lifts it into a [`RenderImage`], and the
-    /// caller drops the previous image from the atlas each frame.
+    /// VideoToolbox does the `420v` -> BGRA conversion in hardware either way;
+    /// pointing it at an IOSurface destination removes the old per-frame CPU
+    /// row-copy into a `RenderImage` and the sprite-atlas re-upload
+    /// (`camera-preview-convert-benchmark`: 196us -> 137us per 720p frame on
+    /// the conversion alone, byte-identical output, before atlas savings).
+    ///
+    /// The fixed ring keeps a buffer alive while gpui's scene still references
+    /// the previous one; four slots at camera rates leaves ~100ms before a
+    /// slot is overwritten.
     pub struct FrameConverter {
         session: arc::R<cidre::vt::PixelTransferSession>,
-        dst: arc::R<cv::PixelBuf>,
+        ring: Vec<arc::R<cv::PixelBuf>>,
+        next: usize,
         dims: (usize, usize),
     }
 
     // Only touched from the main thread; the CF objects have atomic refcounts.
     unsafe impl Send for FrameConverter {}
 
-    unsafe extern "C-unwind" {
-        // cidre only exposes the planar variants; BGRA is non-planar.
-        fn CVPixelBufferGetBaseAddress(pixel_buf: *const cv::PixelBuf) -> *const u8;
-        fn CVPixelBufferGetBytesPerRow(pixel_buf: *const cv::PixelBuf) -> usize;
-    }
+    const RING_SIZE: usize = 4;
 
     impl FrameConverter {
         fn new(width: usize, height: usize) -> Option<Self> {
             let mut session = cidre::vt::PixelTransferSession::new().ok()?;
             session.set_realtime(true).ok()?;
-            let dst = cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, None).ok()?;
+            let io_surface_properties = cf::Dictionary::new();
+            let keys: [&cf::Type; 2] = [
+                cv::pixel_buffer::keys::io_surf_props().as_ref(),
+                cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+            ];
+            let values: [&cf::Type; 2] = [
+                io_surface_properties.as_ref(),
+                cf::Boolean::value_true().as_ref(),
+            ];
+            let attrs = cf::Dictionary::with_keys_values(&keys, &values)?;
+            let ring = (0..RING_SIZE)
+                .map(|_| {
+                    cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, Some(&attrs))
+                        .ok()
+                        .filter(|buf| buf.io_surf().is_some())
+                })
+                .collect::<Option<Vec<_>>>()?;
             Some(Self {
                 session,
-                dst,
+                ring,
+                next: 0,
                 dims: (width, height),
             })
         }
 
-        /// The frame as a BGRA [`RenderImage`]. Recreates the destination
-        /// buffer when the camera's frame size changes.
+        /// The frame as a BGRA IOSurface-backed pixel buffer. Recreates the
+        /// ring when the camera's frame size changes.
         pub fn convert(
             this: &mut Option<Self>,
             frame: &cap_recording::NativeCameraFrame,
-        ) -> Option<Arc<RenderImage>> {
+        ) -> Option<arc::R<cv::PixelBuf>> {
             let src = frame.sample_buf.image_buf()?;
             let dims = (src.width(), src.height());
             if this.as_ref().is_none_or(|converter| converter.dims != dims) {
@@ -116,33 +129,10 @@ mod frame {
             }
             let converter = this.as_mut()?;
 
-            converter.session.transfer(src, &converter.dst).ok()?;
-
-            let (width, height) = dims;
-            let mut data = vec![0u8; width * height * 4];
-            {
-                // Raw pointer taken before the lock guard: the guard mutably
-                // borrows `dst`, and the getters only need the CF reference.
-                let dst_ptr = converter.dst.as_ref() as *const cv::PixelBuf;
-                let _guard = converter
-                    .dst
-                    .base_address_lock(cv::pixel_buffer::LockFlags::READ_ONLY)
-                    .ok()?;
-                let base = unsafe { CVPixelBufferGetBaseAddress(dst_ptr) };
-                let stride = unsafe { CVPixelBufferGetBytesPerRow(dst_ptr) };
-                if base.is_null() || stride < width * 4 {
-                    return None;
-                }
-                for row in 0..height {
-                    let src_row = unsafe { std::slice::from_raw_parts(base.add(row * stride), width * 4) };
-                    data[row * width * 4..(row + 1) * width * 4].copy_from_slice(src_row);
-                }
-            }
-
-            // gpui's atlas expects BGRA bytes; `image`'s type is just the
-            // container.
-            let buffer = image::RgbaImage::from_raw(width as u32, height as u32, data)?;
-            Some(Arc::new(RenderImage::new(smallvec![Frame::new(buffer)])))
+            let dst = converter.ring[converter.next].clone();
+            converter.next = (converter.next + 1) % converter.ring.len();
+            converter.session.transfer(&src, &dst).ok()?;
+            Some(dst)
         }
     }
 }
@@ -185,7 +175,8 @@ pub struct CameraWindow {
     resizing: Option<ResizeDrag>,
     #[cfg(target_os = "macos")]
     converter: Option<frame::FrameConverter>,
-    latest_frame: Option<std::sync::Arc<gpui::RenderImage>>,
+    #[cfg(target_os = "macos")]
+    latest_frame: Option<core_video::pixel_buffer::CVPixelBuffer>,
     frame_dims: Option<(usize, usize)>,
     // Cadence instrumentation: proves the preview stays live while the app is
     // inactive (the whole point of the per-frame `window.refresh()`).
@@ -204,6 +195,7 @@ impl CameraWindow {
             resizing: None,
             #[cfg(target_os = "macos")]
             converter: None,
+            #[cfg(target_os = "macos")]
             latest_frame: None,
             frame_dims: None,
             frames_in_window: 0,
@@ -222,16 +214,15 @@ impl CameraWindow {
     ) {
         #[cfg(target_os = "macos")]
         {
-            if let Some(image) = frame::FrameConverter::convert(&mut self.converter, &frame) {
-                let dims = (image.size(0).width.0 as usize, image.size(0).height.0 as usize);
+            use core_foundation::base::TCFType as _;
+            use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+
+            if let Some(buffer) = frame::FrameConverter::convert(&mut self.converter, &frame) {
+                let dims = (buffer.width(), buffer.height());
                 let dims_changed = self.frame_dims != Some(dims);
                 self.frame_dims = Some(dims);
-                // Freed explicitly: nothing else evicts per-frame images from
-                // the sprite atlas, and a 3.7MB 720p frame 25x a second would
-                // otherwise fill it in seconds.
-                if let Some(old) = self.latest_frame.replace(image) {
-                    let _ = window.drop_image(old);
-                }
+                let raw = buffer.as_ref() as *const cidre::cv::PixelBuf as CVPixelBufferRef;
+                self.latest_frame = Some(unsafe { CVPixelBuffer::wrap_under_get_rule(raw) });
                 if dims_changed {
                     self.apply_window_size(window);
                 }
@@ -246,7 +237,10 @@ impl CameraWindow {
         let elapsed = self.cadence_window_start.elapsed();
         if elapsed >= Duration::from_secs(5) {
             tracing::info!(
-                fps = format!("{:.1}", self.frames_in_window as f64 / elapsed.as_secs_f64()),
+                fps = format!(
+                    "{:.1}",
+                    self.frames_in_window as f64 / elapsed.as_secs_f64()
+                ),
                 "camera preview cadence"
             );
             self.frames_in_window = 0;
@@ -499,20 +493,41 @@ impl CameraWindow {
             .bg(theme.gray_1)
             .text_color(theme.gray_12);
 
-        if let Some(image) = self.latest_frame.clone() {
-            use gpui::StyledImage as _;
-            // Cover-fit through the sprite atlas; the image element's own
-            // rounding holds under cover-crop (fork-fixed via atlas-tile UVs),
-            // which is what makes the circular shape actually clip the video.
+        #[cfg(target_os = "macos")]
+        if let Some(buffer) = self.latest_frame.clone() {
+            let frame_dims = self.frame_dims;
+            // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
+            // computes the same fitted box the old `img()` element used, and
+            // `paint_surface_fitted` UV-crops it to the element bounds so the
+            // corner radii round the visible rect (circle shape included).
             container = container.child(
-                gpui::img(image)
-                    .object_fit(gpui::ObjectFit::Cover)
-                    .size_full()
-                    .rounded(px(radius)),
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let Some((width, height)) = frame_dims else {
+                            return;
+                        };
+                        let frame_size = gpui::size(
+                            gpui::DevicePixels(width as i32),
+                            gpui::DevicePixels(height as i32),
+                        );
+                        let fitted = gpui::ObjectFit::Cover.get_bounds(bounds, frame_size);
+                        window.paint_surface_fitted(
+                            bounds,
+                            fitted,
+                            gpui::Corners::all(px(radius)),
+                            buffer.clone(),
+                        );
+                    },
+                )
+                .size_full(),
             );
         }
 
+        #[cfg(target_os = "macos")]
         let showing_frame = self.latest_frame.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let showing_frame = false;
 
         if !showing_frame {
             let message = Feeds::global(cx)
@@ -574,7 +589,12 @@ impl CameraWindow {
         layer
     }
 
-    fn handle_resize_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_resize_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(drag) = &self.resizing else {
             return;
         };
@@ -582,8 +602,16 @@ impl CameraWindow {
         // grows the square size, diagonal takes the larger delta.
         let delta_x = f32::from(event.position.x - drag.start_position.x);
         let delta_y = f32::from(event.position.y - drag.start_position.y);
-        let dx = if drag.corner.east() { delta_x } else { -delta_x };
-        let dy = if drag.corner.south() { delta_y } else { -delta_y };
+        let dx = if drag.corner.east() {
+            delta_x
+        } else {
+            -delta_x
+        };
+        let dy = if drag.corner.south() {
+            delta_y
+        } else {
+            -delta_y
+        };
         let delta = dx.max(dy);
         let next = clamp_size(drag.start_size + delta);
         if (next - self.state.size).abs() > 0.5 {
@@ -615,6 +643,8 @@ impl Render for CameraWindow {
             .flex()
             .flex_col()
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.chrome_visible != *hovered {
                     this.chrome_visible = *hovered;

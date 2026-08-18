@@ -668,19 +668,20 @@ stutters across a start, and the bar's mute button (instant mode only, like
 the real app) flips the recording-scoped payload-zeroing mute on the mic lock.
 
 Frames arrive as `420v` CoreMedia sample buffers on a bounded flume channel.
-gpui's zero-copy `surface()` element turned out to be unusable for this on the
-pinned rev — its Metal path hard-asserts `420f`, and surface primitives ignore
-rounded-corner clipping (fatal when the default shape is a circle). Instead
-VideoToolbox converts `420v` → BGRA in hardware, one row-copy lifts the frame
-into a gpui `RenderImage`, and the previous frame's image is explicitly
-dropped from the sprite atlas each frame. Cover-fit and the circular clip both
-hold on the image path. Camera-window deviations: no mirroring (no flip
-transform exists in this gpui rev — the toolbar button is present but
-disabled), background blur does not process *preview* frames yet (the
-`cap-camera-effects` segmentation pipeline needs a `wgpu::Device` this app
-does not have — it is its own unit), the window position is not persisted
-per-monitor, and chrome state persists to `gpui-state.json` next to the Tauri
-store rather than `localStorage`.
+VideoToolbox converts `420v` → BGRA in hardware into an IOSurface-backed ring
+(four buffers), and gpui paints the surface directly through the fork's
+`paint_surface_fitted` — cover-fit via source-UV crop, circular clip via
+corner radii on the surface primitive, no CPU pixel copies and no sprite-atlas
+uploads on the frame path (`camera-preview-convert-benchmark` measures the
+conversion at 137µs vs the old path's 196µs per 720p frame, byte-identical
+output, before counting the atlas upload the new path deletes; the fork
+originally hard-asserted `420f` and had no surface clipping, which is what the
+`cap/bgra-surface` patches add). Camera-window deviations: no mirroring (the
+toolbar button is present but disabled), background blur does not process
+*preview* frames yet (the `cap-camera-effects` segmentation pipeline needs a
+`wgpu::Device` this app does not have — it is its own unit), the window
+position is not persisted per-monitor, and chrome state persists to
+`gpui-state.json` next to the Tauri store rather than `localStorage`.
 
 The blur toggle is no longer preview-only state, though: its value is copied
 into every studio recording's `project-config.json` at finalize time, the way
