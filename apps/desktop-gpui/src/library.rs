@@ -17,8 +17,10 @@
 //! draws the bundle's own PNG. All of it is ordinary `std::fs` work, so it is
 //! transcribed here rather than reached for through a Tauri command.
 //!
-//! Everything in this module is called from the background executor. Nothing
-//! in it touches gpui state.
+//! Everything in this module runs on the background executor --
+//! [`spawn_decode_pool`] is the one function called from the foreground, and
+//! all it does is fan jobs out to that executor. Nothing here touches gpui
+//! state.
 
 use std::{
     collections::HashSet,
@@ -32,9 +34,14 @@ use cap_project::{
     StudioRecordingStatus,
 };
 use gpui::RenderImage;
+use image::buffer::ConvertBuffer as _;
 
 /// `RECENT_MEDIA_LIMIT` in `new-main/index.tsx:129`.
 pub const RECENT_MEDIA_LIMIT: usize = 9;
+
+/// Main-window recordings/screenshots panels slice to this many
+/// (`new-main/index.tsx:2377-2393`).
+pub const LIBRARY_PANEL_LIMIT: usize = 20;
 
 /// Which of the three card shapes `RecentCard` draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +100,8 @@ pub struct RecentItem {
     /// existence check happens here instead, on the same background pass that
     /// already stat'd the directory.
     pub thumbnail: Option<PathBuf>,
+    /// `meta.sharing.link` -- Instant Mode cards open this in the browser.
+    pub sharing: Option<String>,
 }
 
 /// `media_sort_time_millis` (`lib.rs:3966-3972`): the filesystem `created()`
@@ -170,19 +179,22 @@ pub fn screenshots_dir() -> PathBuf {
 /// carousel and the settings page can never disagree about what is in the
 /// library.
 fn scan_recordings(dir: &Path, out: &mut Vec<RecentItem>) {
-    out.extend(list_recordings_in(std::slice::from_ref(&dir.to_path_buf())).into_iter().map(
-        |item| RecentItem {
-            kind: match item.mode {
-                RecordingMode::Studio => MediaKind::Studio,
-                RecordingMode::Instant => MediaKind::Instant,
-            },
-            pretty_name: item.pretty_name,
-            clip_count: item.clip_count,
-            sort_time_millis: item.sort_time_millis,
-            thumbnail: item.thumbnail,
-            bundle: item.path,
-        },
-    ));
+    out.extend(
+        list_recordings_in(std::slice::from_ref(&dir.to_path_buf()))
+            .into_iter()
+            .map(|item| RecentItem {
+                kind: match item.mode {
+                    RecordingMode::Studio => MediaKind::Studio,
+                    RecordingMode::Instant => MediaKind::Instant,
+                },
+                pretty_name: item.pretty_name,
+                clip_count: item.clip_count,
+                sort_time_millis: item.sort_time_millis,
+                thumbnail: item.thumbnail,
+                sharing: item.sharing,
+                bundle: item.path,
+            }),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -439,53 +451,105 @@ pub fn delete_recording_directory(path: &Path) -> Result<(), String> {
 
 /// `openRecordingFolder` (`utils/recording.ts:53-70`).
 ///
-/// An instant recording opens its `content` directory in Finder --
+/// An instant recording opens its `content` directory --
 /// `commands.openFilePath` is `open <dir>` on macOS -- and anything else, or a
-/// bundle with no `content` directory, is revealed with `open -R`. The trailing
-/// separator the TS strips and re-adds does not survive `PathBuf`, and Finder
-/// does not need it.
-///
-/// One deviation, deliberate: the TS treats *spawning* the opener as success,
-/// so an instant bundle with no `content` directory silently opens nothing.
-/// Here the directory is stat'd first and the bundle is revealed instead.
+/// bundle with no `content` directory, is revealed in the file manager.
 pub fn open_recording_folder(path: &Path, mode: RecordingMode) {
-    #[cfg(target_os = "macos")]
-    {
-        let content = path.join("content");
-        let (argument, target) = if mode == RecordingMode::Instant && content.is_dir() {
-            (None, content)
-        } else {
-            (Some("-R"), path.to_path_buf())
-        };
-        let mut command = std::process::Command::new("open");
-        if let Some(argument) = argument {
-            command.arg(argument);
-        }
-        if let Err(error) = command.arg(&target).spawn() {
-            tracing::warn!(path = %target.display(), "opening the recording folder failed: {error}");
-        }
+    let content = path.join("content");
+    if mode == RecordingMode::Instant && content.is_dir() {
+        open_path(&content);
+    } else {
+        reveal_in_folder(path);
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (path, mode);
 }
 
-/// `list_screenshots`: `*.cap` directories only, and the sort key is the PNG's
-/// timestamp rather than the directory's -- both quirks are the Tauri
-/// command's, kept so the two apps order an identical library identically.
-fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
+pub fn open_path(path: &Path) {
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open").arg(path).spawn()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", &path.to_string_lossy()])
+                .spawn()
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            std::process::Command::new("xdg-open").arg(path).spawn()
+        }
+    };
+    if let Err(error) = result {
+        tracing::warn!(path = %path.display(), "opening a path failed: {error}");
+    }
+}
+
+pub fn reveal_in_folder(path: &Path) {
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(path)
+                .spawn()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("explorer")
+                .arg(format!("/select,{}", path.display()))
+                .spawn()
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            let parent = path.parent().unwrap_or(path);
+            std::process::Command::new("xdg-open").arg(parent).spawn()
+        }
+    };
+    if let Err(error) = result {
+        tracing::warn!(path = %path.display(), "revealing a path failed: {error}");
+    }
+}
+
+pub fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::copy(src, dest)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to copy file: {error}"))
+}
+
+/// One `(png_path, ScreenshotMetaWithMetadata)` pair out of `list_screenshots`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScreenshotItem {
+    /// The PNG inside the `.cap` bundle -- the listed path the Tauri command
+    /// returns, and what copy / save / the screenshot editor take.
+    pub path: PathBuf,
+    /// The `.cap` directory itself -- what delete and reveal operate on.
+    pub bundle: PathBuf,
+    pub pretty_name: String,
+    pub sort_time_millis: f64,
+    pub thumbnail: Option<PathBuf>,
+}
+
+/// `list_screenshots` (`lib.rs:4055-4091`): `*.cap` directories only, and the
+/// sort key is the PNG's timestamp rather than the directory's.
+pub fn list_screenshots_in(dir: &Path) -> Vec<ScreenshotItem> {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
 
+    let mut out = Vec::new();
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() || path.extension().and_then(|ext| ext.to_str()) != Some("cap") {
+        let bundle = entry.path();
+        if !bundle.is_dir() || bundle.extension().and_then(|ext| ext.to_str()) != Some("cap") {
             continue;
         }
-        let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+        let Ok(meta) = RecordingMeta::load_for_project(&bundle) else {
             continue;
         };
-        let Some(png) = std::fs::read_dir(&path).ok().and_then(|entries| {
+        let Some(png) = std::fs::read_dir(&bundle).ok().and_then(|entries| {
             entries
                 .flatten()
                 .map(|entry| entry.path())
@@ -494,17 +558,71 @@ fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
             continue;
         };
 
-        out.push(RecentItem {
-            kind: MediaKind::Screenshot,
-            bundle: path,
+        out.push(ScreenshotItem {
+            path: png.clone(),
             pretty_name: meta.pretty_name,
-            clip_count: 1,
-            // `previewPath = candidate.target.path` -- for a screenshot the
-            // listed path *is* the PNG.
             sort_time_millis: media_sort_time_millis(&png),
             thumbnail: Some(png),
+            bundle,
         });
     }
+    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+    out
+}
+
+pub fn list_screenshots() -> Vec<ScreenshotItem> {
+    list_screenshots_in(&screenshots_dir())
+}
+
+/// Delete the `.cap` bundle that owns `path` (the PNG or the directory).
+pub fn delete_screenshot(path: &Path) -> Result<(), String> {
+    let bundle = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "Invalid path".to_string())?
+    };
+
+    if bundle
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Invalid path".to_string());
+    }
+
+    let screenshots = screenshots_dir();
+    if !bundle.starts_with(&screenshots) {
+        return Err("Path is not inside the screenshots directory".to_string());
+    }
+
+    if bundle.exists() {
+        let canonical = bundle
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve screenshot path: {error}"))?;
+        let canonical_root = screenshots
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve screenshots directory: {error}"))?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err("Path is not inside the screenshots directory".to_string());
+        }
+        std::fs::remove_dir_all(&canonical)
+            .map_err(|error| format!("Failed to delete screenshot: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
+    out.extend(list_screenshots_in(dir).into_iter().map(|item| RecentItem {
+        kind: MediaKind::Screenshot,
+        bundle: item.bundle,
+        pretty_name: item.pretty_name,
+        clip_count: 1,
+        sort_time_millis: item.sort_time_millis,
+        thumbnail: item.thumbnail,
+        sharing: None,
+    }));
 }
 
 fn newest_first(items: &mut [RecentItem]) {
@@ -557,7 +675,244 @@ pub fn recent_media() -> Vec<RecentItem> {
 const THUMBNAIL_WIDTH: u32 = 392;
 const THUMBNAIL_HEIGHT: u32 = 224;
 
-/// Decode a pre-baked bundle thumbnail into a gpui image.
+/// Cached thumbnails re-encode at 80: `display.jpg` is itself a quality-75
+/// JPEG, and at a few hundred pixels wide the double re-encode stays clean
+/// while the biggest cache file lands around 25KB.
+const THUMBNAIL_JPEG_QUALITY: u8 = 80;
+
+/// Workers per [`spawn_decode_pool`]. The macOS dispatcher hands every spawn
+/// to a GCD global queue and a decode never yields, so each worker occupies a
+/// pool thread until the queue drains -- capped so a cold library scan cannot
+/// crowd out the camera and recording tasks sharing that executor.
+const MAX_DECODE_WORKERS: usize = 8;
+
+/// Fan `jobs` out to the background executor through a bounded worker pool;
+/// results come back over the receiver in completion order.
+///
+/// Callers keep the returned tasks alive while draining the receiver --
+/// dropping them cancels whatever has not started, the same cancel-on-reassign
+/// contract the sequential await-per-item loops this replaced had.
+pub fn spawn_decode_pool<J, R>(
+    executor: &gpui::BackgroundExecutor,
+    jobs: Vec<J>,
+    decode: impl Fn(J) -> Option<R> + Send + Sync + Clone + 'static,
+) -> (Vec<gpui::Task<()>>, flume::Receiver<R>)
+where
+    J: Send + 'static,
+    R: Send + 'static,
+{
+    let (job_tx, job_rx) = flume::unbounded();
+    for job in jobs {
+        let _ = job_tx.send(job);
+    }
+    drop(job_tx);
+
+    let (result_tx, result_rx) = flume::unbounded();
+    let workers = std::thread::available_parallelism()
+        .map_or(4, std::num::NonZeroUsize::get)
+        .min(MAX_DECODE_WORKERS)
+        .min(job_rx.len().max(1));
+    let tasks = (0..workers)
+        .map(|_| {
+            let job_rx = job_rx.clone();
+            let result_tx = result_tx.clone();
+            let decode = decode.clone();
+            executor.spawn(async move {
+                while let Ok(job) = job_rx.try_recv() {
+                    if let Some(result) = decode(job) {
+                        let _ = result_tx.send(result);
+                    }
+                }
+            })
+        })
+        .collect();
+    (tasks, result_rx)
+}
+
+/// Where the shared downscaled-thumbnail cache lives: the OS cache dir under
+/// this app's own identifier (cache data is regenerable, so it belongs where
+/// backups and migration skip it), not the `so.cap.desktop` app-data dir both
+/// apps share.
+fn thumbnail_cache_dir() -> PathBuf {
+    // Verification runs point CAP_GPUI_APP_DATA_DIR at a sandbox; a cache that
+    // still wrote to the user's real one would leak state across runs.
+    if std::env::var("CAP_GPUI_APP_DATA_DIR").is_ok_and(|dir| !dir.trim().is_empty()) {
+        return crate::store::app_data_dir().join("thumbnail-cache");
+    }
+    dirs::cache_dir().map_or_else(
+        || crate::store::app_data_dir().join("thumbnail-cache"),
+        |base| base.join("so.cap.desktop.gpui").join("thumbnails"),
+    )
+}
+
+fn source_mtime_nanos(path: &Path) -> Option<u128> {
+    path.metadata()
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_nanos())
+}
+
+/// FNV-1a, spelled out because `DefaultHasher`'s algorithm is unspecified
+/// across Rust releases and a silent change would orphan every cached file.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+/// A recording bundle's pre-baked `screenshots/display.jpg`. Its cache can
+/// live next to it: the Tauri app only ever touches that directory by exact
+/// filename (`screenshots/display.jpg` at write and upload), never by listing
+/// it -- the extension scans in both apps are over the *screenshot* bundle
+/// root and the app-data screenshots dir, neither of which is this.
+fn is_bundle_display(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "display.jpg")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "screenshots")
+}
+
+/// One cache entry for a downscaled thumbnail: `<dir>/<prefix>-<mtime>.jpg`.
+///
+/// The source's mtime is baked into the file name, so freshness is exact-name
+/// existence -- no comparison logic, and a source rewritten in place simply
+/// misses. [`Self::store`] sweeps the stale mtime variants after writing.
+pub struct CacheSlot {
+    dir: PathBuf,
+    prefix: String,
+    mtime: u128,
+}
+
+impl CacheSlot {
+    /// The slot [`decode_thumbnail`] uses: bundle-local for a recording's
+    /// `display.jpg` (survives the bundle moving, dies with the bundle),
+    /// shared-dir keyed by path hash + target size for everything else --
+    /// screenshot PNGs live in bundles both apps extension-scan, so extra
+    /// files are not written there.
+    fn for_source(source: &Path) -> Option<Self> {
+        let mtime = source_mtime_nanos(source)?;
+        if is_bundle_display(source) {
+            return Some(Self {
+                dir: source.parent()?.to_path_buf(),
+                prefix: "thumbnail".to_string(),
+                mtime,
+            });
+        }
+        Some(Self {
+            dir: thumbnail_cache_dir(),
+            prefix: format!(
+                "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
+                fnv1a64(source.to_string_lossy().as_bytes())
+            ),
+            mtime,
+        })
+    }
+
+    /// A shared-dir slot under an explicit key -- the wallpaper tiles use
+    /// this, keyed by wallpaper id, because the id is stabler (and more
+    /// debuggable in the cache dir) than a hash of whichever install's asset
+    /// path resolved this run.
+    pub fn keyed(source: &Path, prefix: String) -> Option<Self> {
+        Some(Self {
+            dir: thumbnail_cache_dir(),
+            prefix,
+            mtime: source_mtime_nanos(source)?,
+        })
+    }
+
+    fn file(&self) -> PathBuf {
+        self.dir
+            .join(format!("{}-{:x}.jpg", self.prefix, self.mtime))
+    }
+
+    pub fn load(&self) -> Option<Arc<RenderImage>> {
+        let bytes = std::fs::read(self.file()).ok()?;
+        let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok()?;
+        Some(rgba_to_render_image(decoded.into_rgba8()))
+    }
+
+    /// Best effort throughout: a cache that cannot be written (read-only
+    /// bundle, full disk) just means the next run decodes again, and a
+    /// half-written file a parallel reader sees fails its JPEG decode and
+    /// falls through to a fresh decode-and-store.
+    pub fn store(&self, rgba: &image::RgbaImage) {
+        if std::fs::create_dir_all(&self.dir).is_err() {
+            return;
+        }
+        let rgb: image::RgbImage = rgba.convert();
+        let mut encoded = Vec::new();
+        if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, THUMBNAIL_JPEG_QUALITY)
+            .encode_image(&rgb)
+            .is_err()
+        {
+            return;
+        }
+        let file = self.file();
+        // The prefix keeps two same-mtime slots (wallpapers installed in one
+        // copy) from interleaving writes into one tmp file.
+        let tmp = self.dir.join(format!(
+            "{}-{:x}.{}.tmp",
+            self.prefix,
+            self.mtime,
+            std::process::id()
+        ));
+        if std::fs::write(&tmp, &encoded).is_err() || std::fs::rename(&tmp, &file).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        self.remove_stale_variants(&file);
+    }
+
+    /// Sweep the other `<prefix>-<hex>.jpg` mtime variants. The remainder must
+    /// parse as bare hex so that one key can never delete another key's files
+    /// when it happens to be a string prefix of it (`wallpaper-a-128` vs a
+    /// hypothetical `wallpaper-a-128-128`), and so `display.jpg` next to a
+    /// bundle-local slot is untouchable by construction.
+    fn remove_stale_variants(&self, keep: &Path) {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return;
+        };
+        let prefix = format!("{}-", self.prefix);
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.as_path() == keep {
+                continue;
+            }
+            let is_stale_variant = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix(&prefix))
+                .and_then(|rest| rest.strip_suffix(".jpg"))
+                .is_some_and(|hex| u128::from_str_radix(hex, 16).is_ok());
+            if is_stale_variant {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
+/// same swap gpui's own asset loader does after decoding).
+pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+        rgba
+    )]))
+}
+
+/// Decode a pre-baked bundle thumbnail into a gpui image, through the
+/// persistent cache: a warm hit decodes a ~20KB JPEG instead of the
+/// native-resolution original, which is what makes a revisit of Recents
+/// effectively instant.
 ///
 /// The scale factor covers the card rather than fitting inside it, because the
 /// element paints with `ObjectFit::Cover` (`object-cover` on the TSX's `<img>`)
@@ -565,6 +920,13 @@ const THUMBNAIL_HEIGHT: u32 = 224;
 /// smaller than the card is handed over as-is and the element stretches it,
 /// same as the browser would.
 pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
+    let cache = CacheSlot::for_source(path);
+    if let Some(cache) = &cache
+        && let Some(image) = cache.load()
+    {
+        return Some(image);
+    }
+
     let bytes = std::fs::read(path).ok()?;
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
@@ -575,11 +937,21 @@ pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
     let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
         .max(THUMBNAIL_HEIGHT as f32 / height as f32)
         .min(1.0);
-    let mut rgba = if scale < 1.0 {
+    let target_width = ((width as f32 * scale).round() as u32).max(1);
+    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    // Box sampling for the big ratios (one pass over a multi-megapixel
+    // source, and at 8x down every output pixel averages a whole block);
+    // Triangle when the sizes are close, where box would alias and costs
+    // nothing to avoid.
+    let rgba = if scale <= 0.5 {
+        decoded
+            .thumbnail_exact(target_width, target_height)
+            .into_rgba8()
+    } else if scale < 1.0 {
         decoded
             .resize_exact(
-                ((width as f32 * scale).round() as u32).max(1),
-                ((height as f32 * scale).round() as u32).max(1),
+                target_width,
+                target_height,
                 image::imageops::FilterType::Triangle,
             )
             .into_rgba8()
@@ -587,14 +959,10 @@ pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
         decoded.into_rgba8()
     };
 
-    // gpui's atlas takes BGRA; `image`'s RgbaImage is just the container (the
-    // same swap gpui's own asset loader does after decoding).
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    if let Some(cache) = &cache {
+        cache.store(&rgba);
     }
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(rgba)
-    ])))
+    Some(rgba_to_render_image(rgba))
 }
 
 // ---------------------------------------------------------------------------
@@ -615,7 +983,11 @@ pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
 /// *first* video frame comes out, scale to RGB24 at the source's own size
 /// (`size: None` at both call sites, so a native-resolution JPEG, not a
 /// thumbnail), save as JPEG. Blocking; callers hand it to `spawn_blocking`.
-pub fn create_screenshot(input: &Path, output: &Path, size: Option<(u32, u32)>) -> Result<(), String> {
+pub fn create_screenshot(
+    input: &Path,
+    output: &Path,
+    size: Option<(u32, u32)>,
+) -> Result<(), String> {
     let mut ictx = ffmpeg::format::input(input).map_err(|e| e.to_string())?;
     let input_stream = ictx
         .streams()
@@ -651,7 +1023,9 @@ pub fn create_screenshot(input: &Path, output: &Path, size: Option<(u32, u32)>) 
         }
 
         let mut rgb_frame = ffmpeg::frame::Video::empty();
-        scaler.run(&frame, &mut rgb_frame).map_err(|e| e.to_string())?;
+        scaler
+            .run(&frame, &mut rgb_frame)
+            .map_err(|e| e.to_string())?;
 
         // The scaler's rows are padded to its own stride; the image buffer is
         // tight, so the copy is row by row.
@@ -753,10 +1127,13 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(6));
         }
 
-        let items = recent_media_in(&[recordings.clone()], &screenshots);
+        let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
         assert_eq!(items.len(), RECENT_MEDIA_LIMIT, "capped at the limit");
         assert_eq!(items[0].pretty_name, "rec-11", "newest first");
-        assert_eq!(items[8].pretty_name, "rec-03", "oldest kept is the 9th newest");
+        assert_eq!(
+            items[8].pretty_name, "rec-03",
+            "oldest kept is the 9th newest"
+        );
         assert!(
             items
                 .windows(2)
@@ -781,7 +1158,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(6));
         write_studio_bundle(&recordings, "new-recording", 3);
 
-        let items = recent_media_in(&[recordings.clone()], &screenshots);
+        let items = recent_media_in(std::slice::from_ref(&recordings), &screenshots);
         let names: Vec<&str> = items.iter().map(|item| item.pretty_name.as_str()).collect();
         assert_eq!(
             names,
@@ -789,7 +1166,10 @@ mod tests {
             "one ordering across both kinds"
         );
         assert_eq!(items[0].kind, MediaKind::Studio);
-        assert_eq!(items[0].clip_count, 3, "multi-segment studio meta counts segments");
+        assert_eq!(
+            items[0].clip_count, 3,
+            "multi-segment studio meta counts segments"
+        );
         assert_eq!(items[1].kind, MediaKind::Screenshot);
         assert!(
             items[1]
@@ -822,7 +1202,10 @@ mod tests {
         std::fs::create_dir_all(recordings.join("not-a-recording")).unwrap();
         std::fs::write(recordings.join("loose-file.mp4"), b"").unwrap();
 
-        let items = recent_media_in(&[recordings.clone()], &root.join("missing-screenshots"));
+        let items = recent_media_in(
+            std::slice::from_ref(&recordings),
+            &root.join("missing-screenshots"),
+        );
         assert_eq!(items.len(), 1, "only the bundle with a meta is listed");
         assert_eq!(items[0].thumbnail.as_deref(), Some(thumbnail.as_path()));
 
@@ -902,11 +1285,8 @@ mod tests {
         write_bundle(&recordings, "unparseable", "{ not json ");
         std::fs::write(recordings.join("loose-file.mp4"), b"").unwrap();
 
-        let items = list_recordings_in(&[recordings.clone()]);
-        let names: Vec<&str> = items
-            .iter()
-            .map(|item| item.pretty_name.as_str())
-            .collect();
+        let items = list_recordings_in(std::slice::from_ref(&recordings));
+        let names: Vec<&str> = items.iter().map(|item| item.pretty_name.as_str()).collect();
         assert_eq!(
             names,
             [
@@ -937,7 +1317,10 @@ mod tests {
             "a MultipleSegments meta with no status key is Complete"
         );
         assert_eq!(multi.sharing.as_deref(), Some("https://cap.so/s/abc"));
-        assert!(multi.opens_editor(), "studio + Complete is the clickable row");
+        assert!(
+            multi.opens_editor(),
+            "studio + Complete is the clickable row"
+        );
         assert!(!multi.is_active());
 
         let single = by_name("Studio single");
@@ -1032,6 +1415,149 @@ mod tests {
         assert!(!bundle.exists());
         // A path that is already gone is a no-op success, as it is there.
         assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // -- The thumbnail cache ---------------------------------------------
+
+    #[test]
+    fn fnv1a64_matches_the_reference_vectors() {
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x85944171f73967e8);
+    }
+
+    #[test]
+    fn a_bundle_display_caches_next_to_itself_and_a_png_does_not() {
+        let root = temp_dir("slot");
+        let screenshots = root.join("bundle.cap").join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        std::fs::write(&display, b"jpeg bytes").unwrap();
+
+        let slot = CacheSlot::for_source(&display).unwrap();
+        let file = slot.file();
+        assert_eq!(file.parent(), Some(screenshots.as_path()));
+        let name = file.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("thumbnail-") && name.ends_with(".jpg"));
+
+        let png = root.join("shot.png");
+        std::fs::write(&png, b"png bytes").unwrap();
+        let shared = CacheSlot::for_source(&png).unwrap();
+        assert_ne!(
+            shared.file().parent(),
+            Some(root.as_path()),
+            "a non-display source caches in the shared dir, not beside itself"
+        );
+        assert!(
+            shared
+                .prefix
+                .contains(&format!("{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}")),
+            "the target size is part of the key, so a size change re-decodes"
+        );
+
+        assert!(
+            CacheSlot::for_source(&root.join("missing.jpg")).is_none(),
+            "no mtime, no slot"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn store_sweeps_stale_mtime_variants_but_not_lookalike_keys() {
+        let root = temp_dir("sweep");
+        let rgba = image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 40, 40, 255]));
+
+        let stale = CacheSlot {
+            dir: root.clone(),
+            prefix: "wallpaper-a-128".to_string(),
+            mtime: 1,
+        };
+        stale.store(&rgba);
+        assert!(stale.file().is_file());
+
+        // A different key that the sweep prefix happens to be a string prefix
+        // of, and a non-hex sibling; neither may be swept.
+        let lookalike = root.join("wallpaper-a-128-128-ff.jpg");
+        std::fs::write(&lookalike, b"other key").unwrap();
+        let display = root.join("display.jpg");
+        std::fs::write(&display, b"not a variant").unwrap();
+
+        let fresh = CacheSlot {
+            dir: root.clone(),
+            prefix: "wallpaper-a-128".to_string(),
+            mtime: 2,
+        };
+        fresh.store(&rgba);
+
+        assert!(!stale.file().exists(), "the old mtime variant is swept");
+        assert!(fresh.file().is_file());
+        assert!(lookalike.is_file(), "another key's file survives the sweep");
+        assert!(display.is_file());
+
+        let loaded = fresh.load().expect("a stored thumbnail loads back");
+        assert_eq!(loaded.size(0).width.0, 8);
+        assert_eq!(loaded.size(0).height.0, 6);
+        let missing = CacheSlot {
+            dir: root.clone(),
+            prefix: "wallpaper-a-128".to_string(),
+            mtime: 3,
+        };
+        assert!(
+            missing.load().is_none(),
+            "a missing mtime variant is a miss, not a fallback"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn decode_thumbnail_writes_reuses_and_invalidates_the_bundle_cache() {
+        let root = temp_dir("decode");
+        let screenshots = root.join("bundle.cap").join("screenshots");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        let display = screenshots.join("display.jpg");
+        image::RgbImage::from_pixel(800, 600, image::Rgb([10, 120, 240]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let cached_thumbs = || -> Vec<PathBuf> {
+            std::fs::read_dir(&screenshots)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("thumbnail-"))
+                })
+                .collect()
+        };
+
+        assert!(decode_thumbnail(&display).is_some());
+        let first = cached_thumbs();
+        assert_eq!(first.len(), 1, "one decode, one cached variant");
+        // 800x600 covering 392x224: scale = 392/800, so 392x294.
+        assert_eq!(image::image_dimensions(&first[0]).unwrap(), (392, 294));
+
+        let image = decode_thumbnail(&display).expect("the warm path decodes the cache");
+        assert_eq!(image.size(0).width.0, 392);
+        assert_eq!(image.size(0).height.0, 294);
+        assert_eq!(cached_thumbs(), first, "a hit rewrites nothing");
+
+        // A regenerated display.jpg (new mtime) misses and re-caches.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        image::RgbImage::from_pixel(600, 600, image::Rgb([240, 120, 10]))
+            .save_with_format(&display, image::ImageFormat::Jpeg)
+            .unwrap();
+        assert!(decode_thumbnail(&display).is_some());
+        let second = cached_thumbs();
+        assert_eq!(second.len(), 1, "the stale variant is swept");
+        assert_ne!(second, first);
+        // 600x600 covering 392x224: scale = 392/600, so 392x392.
+        assert_eq!(image::image_dimensions(&second[0]).unwrap(), (392, 392));
 
         std::fs::remove_dir_all(&root).ok();
     }
