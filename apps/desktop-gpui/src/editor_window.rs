@@ -49,8 +49,8 @@ use std::{
 
 use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
-    TimelineConfiguration, XY,
+    ClipSpeedAudioMode, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, TimelineConfiguration, XY,
 };
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
 #[cfg(target_os = "macos")]
@@ -69,7 +69,7 @@ use crate::{
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
     store::SettingsEnum,
-    theme::{Appearance, Theme},
+    theme::Theme,
     ui,
 };
 
@@ -138,6 +138,15 @@ const RESIZE_HANDLE_HEIGHT: f32 = 16.;
 /// `MIN_PLAYER_CONTENT_HEIGHT` + `RESIZE_HANDLE_HEIGHT` = `MIN_PLAYER_HEIGHT`.
 const MIN_PLAYER_CONTENT_HEIGHT: f32 = 320.;
 const MIN_PLAYER_HEIGHT: f32 = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
+
+/// The magnetic radius for a segment drag, in pixels. Shift disables it, the
+/// same as the canvas overlays' snap.
+const DRAG_SNAP_PX: f64 = 8.;
+
+/// Blip's `TIMELINE_RESIZE_DURATION`: releasing a ghost trim glides every clip
+/// box into its packed position over this window, on a quintic ease-out.
+const CLIP_RESIZE_ANIM_DURATION: Duration = Duration::from_millis(180);
+const CLIP_RESIZE_ANIM_TICK: Duration = Duration::from_millis(16);
 
 /// `h-14` on the header row (`Header.tsx:92`).
 const HEADER_HEIGHT: f32 = 56.;
@@ -373,6 +382,38 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
 }
 
 /// `meta().hasRecordedCursorData` -- any segment with a cursor file on disk.
+/// The click half of `generate_zoom_segments_for_project`
+/// (`src-tauri/src/recording.rs:3806-3848`): every recorded cursor click, with
+/// the same short-lived-shape stabilisation the Tauri command applies.
+fn load_recording_clicks(project_path: &std::path::Path) -> Vec<cap_project::CursorClickEvent> {
+    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
+        return Vec::new();
+    };
+    let cap_project::RecordingMetaInner::Studio(studio) = &meta.inner else {
+        return Vec::new();
+    };
+    match &**studio {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            let Some(cursor) = &segment.cursor else {
+                return Vec::new();
+            };
+            let mut events =
+                cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap_or_default();
+            let pointer_ids = studio.pointer_cursor_ids();
+            events.stabilize_short_lived_cursor_shapes(
+                (!pointer_ids.is_empty()).then_some(&pointer_ids),
+                cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+            );
+            events.clicks
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cursor_events(&meta).clicks)
+            .collect(),
+    }
+}
+
 fn has_recorded_cursor_data(meta: &RecordingMeta, studio: &StudioRecordingMeta) -> bool {
     match studio {
         StudioRecordingMeta::SingleSegment { segment } => segment
@@ -1049,6 +1090,23 @@ struct Drag {
     paused: bool,
 }
 
+/// The recording-domain edges a clip handle is dragging, uncommitted.
+#[derive(Clone, Copy, Debug)]
+struct ClipDraft {
+    index: usize,
+    start_edge: bool,
+    start: f64,
+    end: f64,
+}
+
+/// One release animation: where every clip box was drawn when the pointer
+/// came up, eased toward wherever the committed config puts it.
+struct ClipReleaseAnim {
+    from: Vec<(f64, f64)>,
+    started: Instant,
+    generation: u64,
+}
+
 pub struct EditorWindow {
     pub(crate) theme: Theme,
     pub(crate) project_path: PathBuf,
@@ -1125,8 +1183,33 @@ pub struct EditorWindow {
     /// The segment under the pointer: `(track, lane, index)`. This is the
     /// `group-hover` the trim handles' reveal hangs off.
     hovered_segment: Option<(TrackKind, u32, usize)>,
+    /// The gutter chip under the pointer, which is what reveals the red
+    /// per-track delete button (`TL/index.tsx:1516-1546`, `group/icon`).
+    hovered_gutter: Option<(TrackKind, u32)>,
     /// The live segment drag, if any.
     drag: Option<Drag>,
+    /// Generation guard for the 60Hz playback redraw ticker.
+    playback_tick: u64,
+    /// `isGeneratingAutoZoom` / `sessionDismissedGenerateZoomPrompt`
+    /// (`TL/ZoomTrack.tsx:60-65`).
+    generating_auto_zoom: bool,
+    zoom_prompt_dismissed: bool,
+    hovering_generate_zoom: bool,
+    clip_speed: Option<ClipSpeedMenu>,
+    timeline_scroll: gpui::ScrollHandle,
+    /// Magnetic edges for the live drag: playhead, clip cuts and every other
+    /// segment's edges, gathered once when the drag arms.
+    drag_snap_targets: Vec<f64>,
+    /// The target the drag is currently snapped onto, for the guide line.
+    drag_snap_time: Option<f64>,
+    /// Blip-style ghost trim: while a clip handle drags, only this draft
+    /// moves -- the config is untouched until release, so nothing downstream
+    /// shuffles mid-drag and nothing rebuilds or publishes per pointer move.
+    clip_draft: Option<ClipDraft>,
+    /// The release animation gliding the clip boxes from the ghost layout to
+    /// the committed one.
+    clip_anim: Option<ClipReleaseAnim>,
+    clip_anim_generation: u64,
     /// `editorInstance.recordings.segments[i].display.duration`, which the clip
     /// trim clamps read (`TL/ClipTrack.tsx:1160-1162`).
     clip_display_durations: Vec<f64>,
@@ -1203,6 +1286,7 @@ pub struct EditorWindow {
     pub(crate) canvas_drag_rect: Option<crate::editor_canvas::NormRect>,
     /// `dragRects().camera`.
     pub(crate) canvas_drag_camera_rect: Option<crate::editor_canvas::NormRect>,
+    pub(crate) canvas_overlay_rect: Option<crate::editor_canvas::NormRect>,
     /// `snapGuides()`.
     pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
 
@@ -1210,6 +1294,10 @@ pub struct EditorWindow {
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     add_track: Option<AddTrackMenu>,
+    pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
+    pub(crate) camera3d_setup: Option<Camera3DSetup>,
+    timeline_height: f32,
+    timeline_resize: Option<(f32, f32)>,
     /// The header's Presets dropdown (`PresetsDropdown.tsx`), and whichever
     /// of its three dialogs is up. The dialog closes the menu when it opens,
     /// exactly as the Solid dialogs replace the dropdown.
@@ -1254,6 +1342,12 @@ struct AddTrackMenu {
     max_height: Pixels,
 }
 
+#[derive(Clone, Copy)]
+struct ClipSpeedMenu {
+    index: usize,
+    origin: Point<Pixels>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarMenu {
     AspectRatio,
@@ -1267,6 +1361,7 @@ struct OpenToolbarMenu {
 
 impl EditorWindow {
     pub fn new(project_path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::theme::bind_window(window, cx);
         // `CapWindowId::Editor`'s `Destroyed` arm drops the window from
         // `EditorWindowIds`, disposes the instance and calls
         // `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`). Deferred
@@ -1384,7 +1479,7 @@ impl EditorWindow {
             // in the `(window-chrome)` layout and `/editor` is not one of its
             // routes, and `is_transparent()` (`windows.rs:1069-1082`) does not
             // list Editor. The root paints `bg-gray-2 dark:bg-gray-1`.
-            theme: Theme::new(Appearance::from_window(window.appearance())),
+            theme: Theme::for_window(window, cx, false),
             project_path,
             state: LoadState::Loading,
             latest_frame: None,
@@ -1416,7 +1511,19 @@ impl EditorWindow {
             split_mode: false,
             split_preview: None,
             hovered_segment: None,
+            hovered_gutter: None,
             drag: None,
+            playback_tick: 0,
+            generating_auto_zoom: false,
+            zoom_prompt_dismissed: false,
+            hovering_generate_zoom: false,
+            clip_speed: None,
+            timeline_scroll: gpui::ScrollHandle::new(),
+            drag_snap_targets: Vec::new(),
+            drag_snap_time: None,
+            clip_draft: None,
+            clip_anim: None,
+            clip_anim_generation: 0,
             clip_display_durations: Vec::new(),
             recording_duration: 0.0,
             has_camera: false,
@@ -1441,11 +1548,16 @@ impl EditorWindow {
             canvas_drag: None,
             canvas_drag_rect: None,
             canvas_drag_camera_rect: None,
+            canvas_overlay_rect: None,
             snap_guides: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             add_track: None,
+            audio_picker: None,
+            camera3d_setup: None,
+            timeline_height: DEFAULT_TIMELINE_HEIGHT,
+            timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
             caption_track_sig: None,
@@ -1557,9 +1669,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
-        // `totalDuration()` is derived from the store, so a trim, split or
-        // delete moves it -- and it is what the transport clamps and the
-        // engine stops at.
+        self.timeline.camera3d_setup_ghosts = self.camera3d_setup_preview();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -1668,6 +1778,11 @@ impl EditorWindow {
         window.refresh();
     }
 
+    pub(crate) fn project_changed_live(&mut self, cx: &mut Context<Self>) {
+        self.publish_project();
+        cx.notify();
+    }
+
     /// The Solid effect at `ED/context.ts:1630-1704`: whenever the clip list,
     /// transitions, text holds or the caption source master move, re-project
     /// `timeline.captionSegments` through the edit list so captions follow
@@ -1761,7 +1876,7 @@ impl EditorWindow {
     /// The disk half: restart the 250ms timer, then write on the background
     /// executor. A later edit drops this task, which is `clearTimeout` plus a
     /// fresh `setTimeout`.
-    fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_save.borrow_mut().config = Some(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
@@ -1881,7 +1996,7 @@ impl EditorWindow {
         is_at_end(self.total, self.playhead)
     }
 
-    fn total_duration(&self) -> f64 {
+    pub(crate) fn total_duration(&self) -> f64 {
         if self.total > 0.0 {
             self.total
         } else {
@@ -1915,10 +2030,8 @@ impl EditorWindow {
             self.stop_playback(cx);
         }
 
-        if self.last_playhead_redraw.elapsed() >= Duration::from_millis(33) || self.is_at_end() {
-            self.last_playhead_redraw = Instant::now();
-            self.invalidate_playback_chrome(window, cx);
-        }
+        self.last_playhead_redraw = Instant::now();
+        self.invalidate_playback_chrome(window, cx);
     }
 
     /// The pause half of `handlePlayPauseClick`, also used by the end-of-media
@@ -1951,6 +2064,31 @@ impl EditorWindow {
             .stats
             .as_ref()
             .map(|stats| (Instant::now(), stats.snapshot()));
+        // Playhead events land at the preview fps (30Hz); the ticker redraws
+        // at ~60Hz so the interpolated playhead line glides between them.
+        self.playback_tick += 1;
+        let generation = self.playback_tick;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        if this.playback_tick != generation || !this.playing {
+                            return false;
+                        }
+                        this.timeline_view.update(cx, |_, cx| cx.notify());
+                        this.transport_controls.update(cx, |_, cx| cx.notify());
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -2142,6 +2280,12 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        if self.clip_speed.is_some() && event.keystroke.key.as_str() == "escape" {
+            self.clip_speed = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.sidebar.color_picker.is_some() && event.keystroke.key.as_str() == "escape" {
             self.close_color_picker(cx);
             cx.stop_propagation();
@@ -2262,6 +2406,15 @@ impl EditorWindow {
             }
             "escape" => {
                 cx.stop_propagation();
+                if self.audio_picker.is_some() {
+                    self.audio_picker = None;
+                    cx.notify();
+                    return;
+                }
+                if self.camera3d_setup.is_some() {
+                    self.close_camera3d_setup(cx);
+                    return;
+                }
                 if self.selection.is_some() {
                     self.set_selection(None, cx);
                     self.note_edit("deselect", None);
@@ -2317,16 +2470,26 @@ impl EditorWindow {
         let delta_y = -f32::from(pixels.y) as f64;
         let total = self.total_duration();
 
+        let horizontal = delta_x.abs() > delta_y.abs() * 0.5 || event.modifiers.shift;
+        if event.modifiers.control || horizontal {
+            let offset = self.timeline_scroll.offset();
+            let editor = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                if let Some(editor) = editor.upgrade() {
+                    editor.update(cx, |this, _| {
+                        this.timeline_scroll.set_offset(offset);
+                    });
+                }
+            });
+        }
+
         if event.modifiers.control {
             let origin = self.view.preview_time.unwrap_or(self.playhead);
             let delta = timeline::wheel_zoom_delta(delta_y, self.view.transform.zoom);
             let zoom = self.view.transform.zoom;
             self.view.transform.update_zoom(zoom + delta, origin, total);
-        } else {
-            // Horizontal wins when it dominates; otherwise macOS reads the
-            // shift key, which is what turns a vertical trackpad swipe into a
-            // pan (`TL/index.tsx:1197-1203`).
-            let delta = if delta_x.abs() > delta_y.abs() * 0.5 || event.modifiers.shift {
+        } else if horizontal {
+            let delta = if delta_x.abs() > 0.5 {
                 delta_x
             } else {
                 delta_y
@@ -2338,10 +2501,11 @@ impl EditorWindow {
                 .secs_per_pixel(timeline::content_width(viewport_width));
             let position = self.view.transform.position + secs_per_pixel * delta;
             self.view.transform.set_position(position, total);
+        } else {
+            return;
         }
         self.note_transform("wheel", None);
         cx.notify();
-        window.refresh();
     }
 
     /// Pinch-to-zoom. In the webview a trackpad pinch arrives as `ctrl+wheel`
@@ -2353,7 +2517,7 @@ impl EditorWindow {
     fn timeline_pinch(
         &mut self,
         event: &gpui::PinchEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let total = self.total_duration();
@@ -2364,14 +2528,12 @@ impl EditorWindow {
         self.view.transform.update_zoom(zoom + delta, origin, total);
         self.note_transform("pinch", Some(origin));
         cx.notify();
-        window.refresh();
     }
 
-    fn invalidate_playback_chrome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn invalidate_playback_chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
         self.transport_controls.update(cx, |_, cx| cx.notify());
         cx.notify();
-        window.refresh();
     }
 
     fn emit_preview_frame(&self) {
@@ -2397,7 +2559,7 @@ impl EditorWindow {
         // writes, so a preview time set while paused survives a play rather
         // than being cleared. The ghost is hidden by the render's own
         // `!editorState.playing` gate instead (`TL/index.tsx:1246-1253`).
-        if self.playing {
+        if self.playing || self.drag.is_some() {
             return;
         }
         let viewport_width: f32 = window.viewport_size().width.into();
@@ -2421,13 +2583,12 @@ impl EditorWindow {
     fn set_hovered_track(
         &mut self,
         track: Option<TrackKind>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.view.hovered_track != track {
             self.view.hovered_track = track;
             cx.notify();
-            window.refresh();
         }
     }
 
@@ -2565,6 +2726,10 @@ impl EditorWindow {
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
+        if self.clip_anim.is_some() {
+            self.clip_anim = None;
+            self.clip_anim_generation += 1;
+        }
         let viewport_width: f32 = window.viewport_size().width.into();
         let secs_per_pixel = self.secs_per_pixel(viewport_width);
         let x = self.content_x(f32::from(event.position.x));
@@ -2598,13 +2763,36 @@ impl EditorWindow {
 
         let index = match hit {
             Hit::Empty => {
-                // `TL/ZoomTrack.tsx:188-295`. The press deliberately does *not*
-                // stop propagating: the container arms its own press behind it,
-                // which is why a click-create ends with the playhead moved.
                 if kind == TrackKind::Zoom {
-                    self.begin_zoom_create(secs_per_pixel, f32::from(event.position.x), cx);
+                    self.begin_gap_create(
+                        TrackKind::Zoom,
+                        secs_per_pixel,
+                        f32::from(event.position.x),
+                        cx,
+                    );
+                } else if kind == TrackKind::ThreeD {
+                    if self
+                        .project
+                        .timeline
+                        .as_ref()
+                        .is_none_or(|timeline| timeline.camera3d_segments.is_empty())
+                    {
+                        cx.stop_propagation();
+                        self.start_camera3d_setup(cx);
+                    } else if self.camera3d_setup.is_none() {
+                        self.begin_gap_create(
+                            TrackKind::ThreeD,
+                            secs_per_pixel,
+                            f32::from(event.position.x),
+                            cx,
+                        );
+                    }
                 } else if kind == TrackKind::Audio {
-                    self.import_audio_for_lane(lane, window, cx);
+                    cx.stop_propagation();
+                    self.open_audio_picker(lane, cx);
+                } else if matches!(kind, TrackKind::Text | TrackKind::Mask | TrackKind::Scene) {
+                    cx.stop_propagation();
+                    self.add_segment_at_click(kind, lane, press_time, window, cx);
                 }
                 return;
             }
@@ -2717,6 +2905,7 @@ impl EditorWindow {
         // `projectHistory.pause()` for the whole drag: sixty intermediate
         // states become one undo entry.
         self.history.pause();
+        self.arm_drag_snap(kind, Some(index));
         tracing::debug!(track = ?kind, lane, index, kind = ?drag_kind, "timeline drag armed");
         self.drag = Some(Drag {
             track: kind,
@@ -2740,35 +2929,35 @@ impl EditorWindow {
     /// `newSegmentDetails()` plus `createSegment` (`TL/ZoomTrack.tsx:104-295`).
     /// The ghost the track already draws is where the segment lands; the press
     /// arms a drag that stretches its end until the button comes up.
-    fn begin_zoom_create(&mut self, secs_per_pixel: f64, down_x: f32, cx: &mut Context<Self>) {
-        let ghost = (self.view.hovered_track == Some(TrackKind::Zoom))
+    fn begin_gap_create(
+        &mut self,
+        kind: TrackKind,
+        secs_per_pixel: f64,
+        down_x: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let ghost = (self.view.hovered_track == Some(kind))
             .then_some(self.view.preview_time)
             .flatten()
             .and_then(|preview| {
-                timeline::new_zoom_segment(&self.timeline, preview, secs_per_pixel)
+                timeline::new_gap_segment(&self.timeline, kind, preview, secs_per_pixel)
                     .map(|ghost| (preview, ghost))
             });
-        tracing::debug!(
-            hovered = ?self.view.hovered_track,
-            preview = ?self.view.preview_time,
-            ghost = ?ghost,
-            "zoom create"
-        );
         let Some((preview, (start, end))) = ghost else {
             return;
         };
-        // `max`: the next segment's start, or the timeline's end.
         let max = self
             .timeline
-            .zoom
+            .segments(kind)
             .iter()
             .find(|segment| preview <= segment.start)
             .map_or(self.total_duration(), |segment| segment.start);
         let min_duration = timeline::new_segment_min_duration(secs_per_pixel);
 
         self.history.pause();
+        self.arm_drag_snap(kind, None);
         self.drag = Some(Drag {
-            track: TrackKind::Zoom,
+            track: kind,
             index: 0,
             kind: DragKind::CreateZoom {
                 base_start: start,
@@ -2790,10 +2979,77 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// Every edge a live drag can magnetise onto: the playhead, zero, the
+    /// total duration, and every other segment's edges across every track.
+    /// Gathered once when the drag arms; Shift bypasses them.
+    fn arm_drag_snap(&mut self, kind: TrackKind, exclude: Option<usize>) {
+        let mut targets = vec![0.0, self.playhead];
+        // A clip trim moves every box after it, so downstream clip edges and
+        // the total are not stable targets for one; the overlay tracks keep
+        // absolute times and are.
+        if kind != TrackKind::Clip {
+            targets.push(self.total_duration());
+        }
+        for track in [
+            TrackKind::Clip,
+            TrackKind::Caption,
+            TrackKind::Keyboard,
+            TrackKind::Text,
+            TrackKind::Mask,
+            TrackKind::Audio,
+            TrackKind::Zoom,
+            TrackKind::ThreeD,
+            TrackKind::Scene,
+        ] {
+            if kind == TrackKind::Clip && track == TrackKind::Clip {
+                continue;
+            }
+            for (index, segment) in self.timeline.segments(track).iter().enumerate() {
+                if track == kind && Some(index) == exclude {
+                    continue;
+                }
+                targets.push(segment.start);
+                targets.push(segment.end);
+            }
+        }
+        self.drag_snap_targets = targets;
+        self.drag_snap_time = None;
+    }
+
+    /// Snap `value` to the nearest armed target within [`DRAG_SNAP_PX`].
+    fn snap_dragged_time(
+        &self,
+        value: f64,
+        secs_per_pixel: f64,
+        disabled: bool,
+    ) -> (f64, Option<f64>) {
+        if disabled {
+            return (value, None);
+        }
+        let radius = DRAG_SNAP_PX * secs_per_pixel;
+        let mut best: Option<f64> = None;
+        for &target in &self.drag_snap_targets {
+            let distance = (target - value).abs();
+            if distance <= radius && best.is_none_or(|b| (b - value).abs() > distance) {
+                best = Some(target);
+            }
+        }
+        match best {
+            Some(target) => (target, Some(target)),
+            None => (value, None),
+        }
+    }
+
     /// A pointer move with a segment drag live. Runs off the root's handler, so
     /// a drag that leaves its own row keeps tracking -- which is what
     /// `createEventListenerMap(window, ...)` gives the source.
-    fn drag_mouse_move(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+    fn drag_mouse_move(
+        &mut self,
+        x: f32,
+        snap_disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(drag) = self.drag.as_mut() else {
             return;
         };
@@ -2818,43 +3074,88 @@ impl EditorWindow {
 
         match drag.kind {
             DragKind::Move { start, end, bounds } => {
-                let shift = bounds.clamp(delta);
+                let raw = bounds.clamp(delta);
+                let mut shift = raw;
+                let mut engaged = None;
+                if !snap_disabled {
+                    let radius = DRAG_SNAP_PX * secs_per_pixel;
+                    let mut best = f64::INFINITY;
+                    for &target in &self.drag_snap_targets {
+                        for edge in [start + raw, end + raw] {
+                            let adjust = target - edge;
+                            if adjust.abs() <= radius && adjust.abs() < best.abs() {
+                                best = adjust;
+                                engaged = Some(target);
+                            }
+                        }
+                    }
+                    if best.is_finite() {
+                        let snapped = bounds.clamp(raw + best);
+                        if (snapped - (raw + best)).abs() < 1e-9 {
+                            shift = snapped;
+                        } else {
+                            engaged = None;
+                        }
+                    }
+                }
+                self.drag_snap_time = engaged;
                 let (track, index) = (drag.track, drag.index);
-                self.edit(
+                self.edit_live(
                     |timeline| {
                         edits::move_segment(timeline, track, index, start + shift, end + shift)
                     },
-                    window,
                     cx,
                 );
             }
             DragKind::TrimStart { start, bounds } => {
-                let next = bounds.clamp(start + delta);
+                let (snapped, engaged) =
+                    self.snap_dragged_time(start + delta, secs_per_pixel, snap_disabled);
+                let next = bounds.clamp(snapped);
+                self.drag_snap_time = engaged.filter(|target| (target - next).abs() < 1e-9);
                 let (track, index) = (drag.track, drag.index);
-                if self.edit(
+                if self.edit_live(
                     |timeline| edits::set_segment_start(timeline, track, index, next),
-                    window,
                     cx,
                 ) {
                     self.set_preview_time(next);
                 }
             }
             DragKind::TrimEnd { end, bounds } => {
-                let next = bounds.clamp(end + delta);
+                let (snapped, engaged) =
+                    self.snap_dragged_time(end + delta, secs_per_pixel, snap_disabled);
+                let next = bounds.clamp(snapped);
+                self.drag_snap_time = engaged.filter(|target| (target - next).abs() < 1e-9);
                 let (track, index) = (drag.track, drag.index);
-                if self.edit(
+                if self.edit_live(
                     |timeline| edits::set_segment_end(timeline, track, index, next),
-                    window,
                     cx,
                 ) {
                     self.set_preview_time(next);
                 }
             }
             DragKind::ClipTrimStart { start } => {
-                self.clip_trim(drag.index, start, delta, true, secs_per_pixel, window, cx);
+                self.clip_trim(
+                    drag.index,
+                    start,
+                    delta,
+                    true,
+                    secs_per_pixel,
+                    snap_disabled,
+                    window,
+                    cx,
+                );
             }
             DragKind::ClipTrimEnd { end } => {
-                self.clip_trim(drag.index, end, delta, false, secs_per_pixel, window, cx);
+                self.clip_trim(
+                    drag.index,
+                    end,
+                    delta,
+                    false,
+                    secs_per_pixel,
+                    snap_disabled,
+                    window,
+                    cx,
+                );
             }
             DragKind::CreateZoom {
                 base_start,
@@ -2863,16 +3164,17 @@ impl EditorWindow {
                 min_duration,
                 created,
             } => {
-                // `deltaTime = deltaX * secsPerPixel - (base.end - base.start)`
-                // over `initialEndTime = base.end`, i.e. the end tracks the
-                // pointer measured from the segment's own start.
                 let delta_time = delta - (base_end - base_start);
                 let new_end = base_end + delta_time;
+                let (new_end, engaged) =
+                    self.snap_dragged_time(new_end, secs_per_pixel, snap_disabled);
                 let min_end = base_start + min_duration;
                 let clamped = new_end.max(min_end).min(max.max(min_end));
+                self.drag_snap_time = engaged.filter(|target| (target - clamped).abs() < 1e-9);
                 match created {
                     None => {
-                        let index = self.create_zoom_segment(base_start, clamped, window, cx);
+                        let index =
+                            self.create_gap_segment(drag.track, base_start, clamped, window, cx);
                         if let Some(drag) = self.drag.as_mut()
                             && let DragKind::CreateZoom { created, .. } = &mut drag.kind
                         {
@@ -2880,16 +3182,11 @@ impl EditorWindow {
                         }
                     }
                     Some(index) => {
-                        // `if (deltaTime < 0) return;` -- dragging back left
-                        // never shrinks the segment below its created size.
                         if delta_time < 0. {
                             return;
                         }
-                        self.edit(
-                            |timeline| {
-                                edits::set_segment_end(timeline, TrackKind::Zoom, index, clamped)
-                            },
-                            window,
+                        self.edit_live(
+                            |timeline| edits::set_segment_end(timeline, drag.track, index, clamped),
                             cx,
                         );
                     }
@@ -2909,7 +3206,8 @@ impl EditorWindow {
         delta: f64,
         start_edge: bool,
         secs_per_pixel: f64,
-        window: &mut Window,
+        snap_disabled: bool,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(timeline) = self.project.timeline.as_ref() else {
@@ -2919,6 +3217,7 @@ impl EditorWindow {
             return;
         };
         let timescale = segment.timescale;
+        let segment_start = segment.start;
         let requested = anchor + delta * timescale;
         let displays = self.clip_display_durations.clone();
         let recording = self.recording_duration;
@@ -2942,75 +3241,947 @@ impl EditorWindow {
                 recording,
             )
         };
-        let Some(clamped) = clamped else { return };
+        let Some(mut clamped) = clamped else { return };
 
-        let applied = self.edit(
+        // The end handle is the one whose box edge moves on screen, so it is
+        // the one that magnetises: project the edge into output time, snap it,
+        // and map the snapped time back into the recording domain.
+        self.drag_snap_time = None;
+        if !start_edge && !snap_disabled && timescale > 0. {
+            let box_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
+            let out_edge = box_start + (clamped - segment_start) / timescale;
+            let (snapped_out, engaged) = self.snap_dragged_time(out_edge, secs_per_pixel, false);
+            if let Some(target) = engaged
+                && (snapped_out - out_edge).abs() > f64::EPSILON
+                && let Some(timeline) = self.project.timeline.as_ref()
+            {
+                let requested = segment_start + (snapped_out - box_start) * timescale;
+                if let Some(resnapped) = edits::clip_trim_end(
+                    timeline,
+                    index,
+                    requested,
+                    secs_per_pixel,
+                    &displays,
+                    recording,
+                ) && (resnapped - requested).abs() < 1e-9
+                {
+                    clamped = resnapped;
+                    self.drag_snap_time = Some(target);
+                }
+            } else if engaged.is_some() {
+                self.drag_snap_time = engaged;
+            }
+        }
+
+        // The ghost trim: the config stays untouched for the whole drag --
+        // only this draft moves, exactly Blip's `draft_source_*`. Downstream
+        // boxes hold still, the removed span is drawn as a gap, and the
+        // commit happens once on release.
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.segments.get(index))
+        else {
+            return;
+        };
+        self.clip_draft = Some(if start_edge {
+            ClipDraft {
+                index,
+                start_edge,
+                start: clamped,
+                end: segment.end,
+            }
+        } else {
+            ClipDraft {
+                index,
+                start_edge,
+                start: segment.start,
+                end: clamped,
+            }
+        });
+        // The frame under the dragged edge: output `box_start + (edge -
+        // original_start) / timescale` maps through the *unchanged* config to
+        // the draft's source frame, so the preview scrubs the material being
+        // trimmed without a commit.
+        let box_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
+        self.set_preview_time(box_start + (clamped - segment_start) / timescale);
+        cx.notify();
+    }
+
+    /// Blip's `video_segment_drag_layout` in Ghost mode, expressed as deltas
+    /// over the frozen model boxes: the dragged edge follows the draft,
+    /// shrinking opens a gap in place, growing pushes the boxes after it.
+    fn ghost_clip_boxes(&self) -> Option<(Vec<(f64, f64)>, Option<(f64, f64)>)> {
+        let draft = self.clip_draft?;
+        let timeline = self.project.timeline.as_ref()?;
+        let segment = timeline.segments.get(draft.index)?;
+        let timescale = segment.timescale.max(0.0001);
+        let original_out = (segment.end - segment.start) / timescale;
+        let draft_out = (draft.end - draft.start) / timescale;
+        let growth = draft_out - original_out;
+
+        let mut boxes = Vec::with_capacity(self.timeline.clips.len());
+        let mut gap = None;
+        for (index, clip) in self.timeline.clips.iter().enumerate() {
+            let range = match index.cmp(&draft.index) {
+                std::cmp::Ordering::Less => (clip.start, clip.end),
+                std::cmp::Ordering::Greater => {
+                    (clip.start + growth.max(0.), clip.end + growth.max(0.))
+                }
+                std::cmp::Ordering::Equal => {
+                    if growth >= 0. {
+                        (clip.start, clip.end + growth)
+                    } else if draft.start_edge {
+                        gap = Some((clip.start, clip.start - growth));
+                        (clip.start - growth, clip.end)
+                    } else {
+                        gap = Some((clip.start + draft_out, clip.end));
+                        (clip.start, clip.start + draft_out)
+                    }
+                }
+            };
+            boxes.push(range);
+        }
+        Some((boxes, gap))
+    }
+
+    /// The model the timeline should *draw* this frame: the real one, or a
+    /// clone with the clip boxes replaced by the ghost layout (mid-drag) or
+    /// the release animation's eased positions.
+    fn display_timeline_model(&self) -> Option<timeline::TimelineModel> {
+        if let Some(draft) = self.clip_draft {
+            let (boxes, gap) = self.ghost_clip_boxes()?;
+            let mut model = self.timeline.clone();
+            for (clip, (start, end)) in model.clips.iter_mut().zip(&boxes) {
+                clip.start = *start;
+                clip.end = *end;
+            }
+            if let Some(clip) = model.clips.get_mut(draft.index)
+                && let timeline::SegmentDetail::Clip {
+                    source_start,
+                    source_duration,
+                    ..
+                } = &mut clip.detail
+            {
+                *source_start = draft.start;
+                *source_duration = draft.end - draft.start;
+            }
+            model.clip_ghost_gap = gap;
+            return Some(model);
+        }
+        let anim = self.clip_anim.as_ref()?;
+        if anim.from.len() != self.timeline.clips.len() {
+            return None;
+        }
+        let progress = (anim.started.elapsed().as_secs_f64()
+            / CLIP_RESIZE_ANIM_DURATION.as_secs_f64())
+        .clamp(0., 1.);
+        if progress >= 1. {
+            return None;
+        }
+        let eased = 1. - (1. - progress).powi(5);
+        let mut model = self.timeline.clone();
+        for (clip, (from_start, from_end)) in model.clips.iter_mut().zip(&anim.from) {
+            clip.start = from_start + (clip.start - from_start) * eased;
+            clip.end = from_end + (clip.end - from_end) * eased;
+        }
+        Some(model)
+    }
+
+    /// Commit the ghost draft once, then glide every box from where the drag
+    /// left it to where the packed layout puts it -- Blip's
+    /// `animate_video_timeline_resize`, 180ms of quintic ease-out.
+    fn commit_clip_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.clip_draft.take() else {
+            return;
+        };
+        let Some((from, _)) = self.ghost_clip_boxes_for(draft) else {
+            return;
+        };
+        let committed = self.edit(
             |timeline| {
-                let Some(segment) = timeline.segments.get_mut(index) else {
+                let Some(segment) = timeline.segments.get_mut(draft.index) else {
                     return false;
                 };
-                let edge = if start_edge {
-                    &mut segment.start
-                } else {
-                    &mut segment.end
-                };
-                if *edge == clamped {
+                if segment.start == draft.start && segment.end == draft.end {
                     return false;
                 }
-                *edge = clamped;
+                segment.start = draft.start;
+                segment.end = draft.end;
                 true
             },
             window,
             cx,
         );
-        if !applied {
+        if !committed {
             return;
         }
-        // `setPreviewTime(prevDuration())` on the start handle and
-        // `prevDuration() + (clampedEnd - seg.start) / timescale` on the end.
-        let box_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
-        if start_edge {
-            self.set_preview_time(box_start);
-        } else {
-            let source_start = self
-                .project
-                .timeline
-                .as_ref()
-                .and_then(|timeline| timeline.segments.get(index))
-                .map_or(0., |segment| segment.start);
-            self.set_preview_time(box_start + (clamped - source_start) / timescale);
+        self.note_edit("trim", Some(TrackKind::Clip));
+        if from.len() != self.timeline.clips.len()
+            || from
+                .iter()
+                .zip(&self.timeline.clips)
+                .all(|((start, end), clip)| {
+                    (start - clip.start).abs() < 1e-6 && (end - clip.end).abs() < 1e-6
+                })
+        {
+            return;
+        }
+        self.clip_anim_generation += 1;
+        let generation = self.clip_anim_generation;
+        self.clip_anim = Some(ClipReleaseAnim {
+            from,
+            started: Instant::now(),
+            generation,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(CLIP_RESIZE_ANIM_TICK).await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        let Some(anim) = this.clip_anim.as_ref() else {
+                            return false;
+                        };
+                        if anim.generation != generation {
+                            return false;
+                        }
+                        let done = anim.started.elapsed() >= CLIP_RESIZE_ANIM_DURATION;
+                        if done {
+                            this.clip_anim = None;
+                        }
+                        cx.notify();
+                        !done
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn ghost_clip_boxes_for(
+        &mut self,
+        draft: ClipDraft,
+    ) -> Option<(Vec<(f64, f64)>, Option<(f64, f64)>)> {
+        self.clip_draft = Some(draft);
+        let result = self.ghost_clip_boxes();
+        self.clip_draft = None;
+        result
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Camera3DSetup {
+    pub scene_id: &'static str,
+    pub shots: usize,
+}
+
+impl EditorWindow {
+    fn clamp_timeline_height(&self, value: f32, viewport_height: f32) -> f32 {
+        let available = (viewport_height - HEADER_HEIGHT - 8.).max(MIN_TIMELINE_HEIGHT);
+        let max_height = (available - MIN_PLAYER_HEIGHT).max(MIN_TIMELINE_HEIGHT);
+        value.clamp(MIN_TIMELINE_HEIGHT, max_height)
+    }
+
+    fn edit_live(
+        &mut self,
+        change: impl FnOnce(&mut TimelineConfiguration) -> bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return false;
+        };
+        if !change(timeline) {
+            return false;
+        }
+        self.rebuild_timeline();
+        self.publish_project();
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn open_audio_picker(&mut self, lane: u32, cx: &mut Context<Self>) {
+        self.audio_picker = Some(crate::editor_audio::AudioPicker::Add { lane });
+        self.camera3d_setup = None;
+        self.set_selection(None, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn open_audio_replace(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.audio_picker = Some(crate::editor_audio::AudioPicker::Replace { index });
+        self.camera3d_setup = None;
+        cx.notify();
+    }
+
+    pub(crate) fn add_library_track(
+        &mut self,
+        id: &'static str,
+        name: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self.audio_picker else {
+            return;
+        };
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let imported = cx
+                .background_executor()
+                .spawn(
+                    async move { crate::editor_audio::copy_library_track(&project_path, id, name) },
+                )
+                .await;
+            match imported {
+                Ok((path, name, duration)) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.commit_picked_audio(picker, path, name, duration, window, cx);
+                    })
+                    .ok();
+                }
+                Err(error) => tracing::error!("adding library audio failed: {error}"),
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn import_audio_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.audio_picker {
+            Some(crate::editor_audio::AudioPicker::Add { lane }) => {
+                self.import_audio_for_lane(lane, window, cx);
+            }
+            Some(crate::editor_audio::AudioPicker::Replace { index }) => {
+                self.replace_audio_from_file(index, window, cx);
+            }
+            None => {}
         }
     }
 
-    /// `createSegment`'s insert, plus the selection it leaves behind.
-    fn create_zoom_segment(
+    fn commit_picked_audio(
         &mut self,
+        picker: crate::editor_audio::AudioPicker,
+        path: String,
+        name: String,
+        duration: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match picker {
+            crate::editor_audio::AudioPicker::Add { lane } => {
+                self.commit_audio_import(
+                    lane,
+                    ImportedAudio {
+                        path,
+                        name,
+                        duration,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            crate::editor_audio::AudioPicker::Replace { index } => {
+                self.replace_audio_segment(index, path, name, duration, window, cx);
+            }
+        }
+        self.audio_picker = None;
+    }
+
+    fn replace_audio_from_file(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(source) = crate::platform::open_audio_panel() else {
+                return;
+            };
+            let imported = cx
+                .background_executor()
+                .spawn(async move { import_audio_file(&project_path, &source) })
+                .await;
+            match imported {
+                Ok(imported) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.replace_audio_segment(
+                            index,
+                            imported.path,
+                            imported.name,
+                            imported.duration,
+                            window,
+                            cx,
+                        );
+                        this.audio_picker = None;
+                    })
+                    .ok();
+                }
+                Err(error) => tracing::error!("replacing audio failed: {error}"),
+            }
+        })
+        .detach();
+    }
+
+    fn replace_audio_segment(
+        &mut self,
+        index: usize,
+        path: String,
+        name: String,
+        duration: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self.edit(
+            |timeline| {
+                let Some(segment) = timeline.audio_segments.get_mut(index) else {
+                    return false;
+                };
+                segment.path = path;
+                segment.name = Some(name);
+                segment.duration = (duration > 0.0).then_some(duration);
+                true
+            },
+            window,
+            cx,
+        );
+        if changed {
+            self.note_edit("replace-audio", Some(TrackKind::Audio));
+        }
+    }
+
+    /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
+    /// recorded clicks off the bundle, run the auto-zoom pass, and land the
+    /// result as the zoom track.
+    fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generating_auto_zoom {
+            return;
+        }
+        self.generating_auto_zoom = true;
+        cx.notify();
+        let path = self.project_path.clone();
+        let duration = self.recording_duration;
+        let amount = f64::from(
+            crate::store::GeneralSettings::load()
+                .default_zoom_amount
+                .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let segments = cx
+                .background_executor()
+                .spawn(async move {
+                    let clicks = load_recording_clicks(&path);
+                    edits::generate_zoom_segments_from_clicks(clicks, duration, amount)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.generating_auto_zoom = false;
+                this.hovering_generate_zoom = false;
+                if segments.is_empty() {
+                    tracing::info!("auto zoom produced no segments");
+                    cx.notify();
+                    return;
+                }
+                edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
+                let applied = this.edit(
+                    |timeline| {
+                        timeline.zoom_segments = segments;
+                        true
+                    },
+                    window,
+                    cx,
+                );
+                if applied {
+                    this.note_edit("generate-zoom", Some(TrackKind::Zoom));
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn create_gap_segment(
+        &mut self,
+        kind: TrackKind,
         start: f64,
         end: f64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> usize {
+        edits::ensure_timeline(&mut self.project, &self.clip_display_durations);
         let mut index = 0;
         self.edit(
             |timeline| {
-                index =
-                    edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT);
+                index = match kind {
+                    TrackKind::ThreeD => edits::insert_camera3d_segment(
+                        timeline,
+                        edits::default_camera3d_segment(start, end),
+                    ),
+                    _ => {
+                        edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT)
+                    }
+                };
                 true
             },
             window,
             cx,
         );
-        self.set_selection(Some(Selection::single(TrackKind::Zoom, index)), cx);
+        self.set_selection(Some(Selection::single(kind, index)), cx);
         index
+    }
+
+    fn add_segment_at_click(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        time: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let total = self.total_duration();
+        let length = (1.0_f64).max(secs_per_pixel * 80.).min(total);
+        if length <= 0.0 {
+            return;
+        }
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let placement = match kind {
+            TrackKind::Text => {
+                let lane_segments: Vec<_> = timeline
+                    .text_segments
+                    .iter()
+                    .filter(|segment| segment.track == lane)
+                    .cloned()
+                    .collect();
+                edits::find_placement(&lane_segments, time, length, total)
+            }
+            TrackKind::Mask => {
+                let lane_segments: Vec<_> = timeline
+                    .mask_segments
+                    .iter()
+                    .filter(|segment| segment.track == lane)
+                    .cloned()
+                    .collect();
+                edits::find_placement(&lane_segments, time, length, total)
+            }
+            TrackKind::Scene => {
+                let max_duration = {
+                    let next = timeline
+                        .scene_segments
+                        .iter()
+                        .filter(|segment| segment.start > time)
+                        .map(|segment| segment.start)
+                        .min_by(|a, b| a.total_cmp(b));
+                    let available = next.unwrap_or(total) - time;
+                    3.0_f64.min(available)
+                };
+                if max_duration < 0.5 {
+                    None
+                } else {
+                    Some((time, time + max_duration))
+                }
+            }
+            _ => None,
+        };
+        let Some((start, end)) = placement else {
+            return;
+        };
+        match kind {
+            TrackKind::Text => self.tracks.text = self.tracks.text.max(lane + 1),
+            TrackKind::Mask => self.tracks.mask = self.tracks.mask.max(lane + 1),
+            TrackKind::Scene => self.tracks.scene = true,
+            _ => {}
+        }
+        let mut index = 0;
+        let inserted = self.edit(
+            |timeline| {
+                index = match kind {
+                    TrackKind::Text => edits::insert_text_segment(
+                        timeline,
+                        edits::default_text_segment(start, end, lane),
+                    ),
+                    TrackKind::Mask => edits::insert_mask_segment(
+                        timeline,
+                        edits::default_mask_segment(start, end, lane),
+                    ),
+                    TrackKind::Scene => edits::insert_scene_segment(
+                        timeline,
+                        edits::default_scene_segment(start, end),
+                    ),
+                    _ => return false,
+                };
+                true
+            },
+            window,
+            cx,
+        );
+        if !inserted {
+            return;
+        }
+        self.set_selection(Some(Selection::single(kind, index)), cx);
+        self.seek_to_time(time.clamp(start, end), cx);
+        self.view.preview_time = None;
+        self.audio_picker = None;
+        self.note_edit("add-track", Some(kind));
+    }
+
+    fn close_camera3d_setup(&mut self, cx: &mut Context<Self>) {
+        self.camera3d_setup = None;
+        self.rebuild_timeline();
+        cx.notify();
+    }
+
+    fn start_camera3d_setup(&mut self, cx: &mut Context<Self>) {
+        self.set_selection(None, cx);
+        self.audio_picker = None;
+        self.tracks.three_d = true;
+        self.camera3d_setup = Some(Camera3DSetup {
+            scene_id: "showcase",
+            shots: 3,
+        });
+        self.rebuild_timeline();
+        cx.notify();
+    }
+
+    fn camera3d_setup_preview(&self) -> Vec<(f64, f64, String)> {
+        let Some(setup) = self.camera3d_setup else {
+            return Vec::new();
+        };
+        let Some(scene) = crate::editor_panels::CAMERA3D_SCENES
+            .iter()
+            .find(|scene| scene.id == setup.scene_id)
+        else {
+            return Vec::new();
+        };
+        let shots = setup.shots.clamp(1, scene.shots.len());
+        let limited = crate::editor_panels::Camera3DScene {
+            id: scene.id,
+            name: scene.name,
+            shots: &scene.shots[..shots],
+        };
+        let clip_cuts: Vec<f64> = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                let mut acc = 0.0;
+                timeline
+                    .segments
+                    .iter()
+                    .map(|segment| {
+                        acc += (segment.end - segment.start) / segment.timescale.max(0.0001);
+                        acc
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        crate::editor_panels::apply_scene_to_range(&limited, 0.0, self.total_duration(), &clip_cuts)
+            .into_iter()
+            .enumerate()
+            .map(|(index, segment)| (segment.start, segment.end, format!("Shot {}", index + 1)))
+            .collect()
+    }
+
+    pub(crate) fn confirm_camera3d_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(setup) = self.camera3d_setup else {
+            return;
+        };
+        if self
+            .project
+            .timeline
+            .as_ref()
+            .is_some_and(|timeline| !timeline.camera3d_segments.is_empty())
+        {
+            return;
+        }
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            return;
+        }
+        let total = self.total_duration();
+        let clip_cuts: Vec<f64> = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                let mut acc = 0.0;
+                timeline
+                    .segments
+                    .iter()
+                    .map(|segment| {
+                        acc += (segment.end - segment.start) / segment.timescale.max(0.0001);
+                        acc
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(scene) = crate::editor_panels::CAMERA3D_SCENES
+            .iter()
+            .find(|scene| scene.id == setup.scene_id)
+        else {
+            return;
+        };
+        let shots = setup.shots.clamp(1, scene.shots.len());
+        let limited = crate::editor_panels::Camera3DScene {
+            id: scene.id,
+            name: scene.name,
+            shots: &scene.shots[..shots],
+        };
+        let generated =
+            crate::editor_panels::apply_scene_to_range(&limited, 0.0, total, &clip_cuts);
+        if generated.is_empty() {
+            return;
+        }
+        let inserted = self.edit(
+            |timeline| {
+                timeline.camera3d_segments.extend(generated);
+                true
+            },
+            window,
+            cx,
+        );
+        if !inserted {
+            return;
+        }
+        self.camera3d_setup = None;
+        self.tracks.three_d = true;
+        self.set_selection(Some(Selection::single(TrackKind::ThreeD, 0)), cx);
+        self.seek_to_time(0.0, cx);
+        self.view.preview_time = None;
+        self.note_edit("add-track", Some(TrackKind::ThreeD));
+    }
+
+    pub(crate) fn render_camera3d_setup(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let setup = self.camera3d_setup.unwrap_or(Camera3DSetup {
+            scene_id: "showcase",
+            shots: 3,
+        });
+        let scene = crate::editor_panels::CAMERA3D_SCENES
+            .iter()
+            .find(|scene| scene.id == setup.scene_id)
+            .unwrap_or(&crate::editor_panels::CAMERA3D_SCENES[0]);
+        let max_shots = ((self.total_duration() / crate::editor_panels::CAMERA3D_MIN_SHOT_DURATION)
+            .floor() as usize)
+            .clamp(1, scene.shots.len());
+        let shots = setup.shots.min(max_shots);
+
+        div()
+            .id("camera3d-setup")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p(px(16.))
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        ui::EditorButton::plain(&theme, "camera3d-setup-close")
+                            .left_icon("icons/x-mark.svg")
+                            .icon_size(px(16.))
+                            .label("Close")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_camera3d_setup(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .text_color(Hsla::from(theme.gray_10))
+                            .child("New 3D scene"),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child("Lay a chain of camera moves over the whole video"),
+            )
+            .child(
+                ui::Field::plain(&theme, "Style")
+                    .icon("icons/rotate-3d.svg")
+                    .child(div().flex().flex_row().gap(px(8.)).children(
+                        crate::editor_panels::CAMERA3D_SCENES.iter().map(|item| {
+                            let selected = item.id == scene.id;
+                            let id = item.id;
+                            div()
+                                .id(SharedString::from(format!("camera3d-setup-{id}")))
+                                .flex_1()
+                                .px(px(10.))
+                                .py(px(12.))
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(Hsla::from(if selected {
+                                    theme.blue_9
+                                } else {
+                                    theme.gray_4
+                                }))
+                                .bg(Hsla::from(if selected {
+                                    theme.gray_3
+                                } else {
+                                    theme.gray_2
+                                }))
+                                .cursor_pointer()
+                                .tab_index(0)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(setup) = this.camera3d_setup.as_mut() {
+                                        setup.scene_id = id;
+                                    }
+                                    this.rebuild_timeline();
+                                    cx.notify();
+                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Hsla::from(theme.gray_12))
+                                        .child(item.name),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(4.))
+                                        .text_size(px(10.))
+                                        .text_color(Hsla::from(theme.gray_11))
+                                        .child(format!(
+                                            "{} {}",
+                                            item.shots.len(),
+                                            if item.shots.len() == 1 {
+                                                "shot"
+                                            } else {
+                                                "shots"
+                                            }
+                                        )),
+                                )
+                        }),
+                    )),
+            )
+            .child(
+                ui::Field::plain(&theme, "How many shots?").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(4.))
+                                .p(px(4.))
+                                .rounded(px(8.))
+                                .bg(Hsla::from(theme.gray_3))
+                                .children((1..=scene.shots.len()).map(|count| {
+                                    let selected = shots == count;
+                                    let too_short = count > max_shots;
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "camera3d-setup-shots-{count}"
+                                        )))
+                                        .flex_1()
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .text_center()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Hsla::from(theme.gray_11))
+                                        .when(selected, |this| {
+                                            this.bg(if theme.is_dark() {
+                                                Hsla::from(theme.gray_5)
+                                            } else {
+                                                Hsla::from(theme.gray_1)
+                                            })
+                                            .text_color(Hsla::from(theme.gray_12))
+                                        })
+                                        .when(too_short, |this| this.opacity(0.4))
+                                        .when(!too_short, |this| {
+                                            this.cursor_pointer().tab_index(0).on_click(
+                                                cx.listener(move |this, _, _, cx| {
+                                                    if let Some(setup) =
+                                                        this.camera3d_setup.as_mut()
+                                                    {
+                                                        setup.shots = count;
+                                                    }
+                                                    this.rebuild_timeline();
+                                                    cx.notify();
+                                                }),
+                                            )
+                                        })
+                                        .child(count.to_string())
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_10))
+                                .child("Shots split the video into separate camera moves."),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        ui::Button::plain(
+                            &theme,
+                            "camera3d-setup-add",
+                            ui::ButtonVariant::Primary,
+                            ui::ButtonSize::Md,
+                        )
+                        .label("Add scene")
+                        .disabled(self.total_duration() <= 0.0)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.confirm_camera3d_setup(window, cx);
+                        })),
+                    )
+                    .child(
+                        ui::Button::plain(
+                            &theme,
+                            "camera3d-setup-cancel",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Md,
+                        )
+                        .label("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_camera3d_setup(cx);
+                        })),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
     fn drag_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drag_snap_targets = Vec::new();
+        self.drag_snap_time = None;
         let Some(drag) = self.drag.take() else {
+            self.clip_draft = None;
             return;
         };
+
+        // The ghost trim's single commit, before the history resume below so
+        // the resumed snapshot records the committed config.
+        if matches!(
+            drag.kind,
+            DragKind::ClipTrimStart { .. } | DragKind::ClipTrimEnd { .. }
+        ) {
+            self.commit_clip_draft(window, cx);
+        }
 
         if let DragKind::CreateZoom {
             base_start,
@@ -3023,7 +4194,7 @@ impl EditorWindow {
             // (`TL/ZoomTrack.tsx:284-287`) -- `initialEndTime` is the ghost's
             // own end, which is where the drawn `+` box already was.
             if created.is_none() {
-                self.create_zoom_segment(base_start, base_end, window, cx);
+                self.create_gap_segment(drag.track, base_start, base_end, window, cx);
             }
         } else if !drag.moved && drag.selects_on_click {
             let selection = edits::click_selection(
@@ -3040,6 +4211,9 @@ impl EditorWindow {
         if drag.paused {
             let config = self.project.clone();
             self.history.resume(&config);
+        }
+        if drag.moved {
+            self.schedule_save(window, cx);
         }
 
         if matches!(
@@ -3059,7 +4233,6 @@ impl EditorWindow {
             Some(drag.track),
         );
         cx.notify();
-        window.refresh();
     }
 
     /// `onHandleReleased` (`TL/ClipTrack.tsx:549-559`): a trim that shortened
@@ -3126,7 +4299,6 @@ impl EditorWindow {
         }
         if changed {
             cx.notify();
-            window.refresh();
         }
     }
 
@@ -3177,9 +4349,27 @@ impl EditorWindow {
                 window,
                 cx,
             ) {
-                // `if (didSplit) setEditorState("timeline", "selection", null)`.
                 self.set_selection(None, cx);
                 self.note_edit("split", Some(TrackKind::Clip));
+            }
+            return;
+        }
+        if kind == TrackKind::ThreeD {
+            let Some(segment) = self.timeline.segments(kind).get(index) else {
+                return;
+            };
+            let left = (segment.start - self.view.transform.position) / secs_per_pixel;
+            let width = (segment.end - segment.start) / secs_per_pixel;
+            if width <= 0. {
+                return;
+            }
+            let local = ((x - left) / width) * (segment.end - segment.start);
+            if self.edit(
+                |timeline| split_camera3d_segment(timeline, index, local),
+                window,
+                cx,
+            ) {
+                self.note_edit("split", Some(kind));
             }
             return;
         }
@@ -3220,6 +4410,139 @@ impl EditorWindow {
         if deleted {
             self.set_selection(None, cx);
             self.note_edit("delete", Some(selection.track));
+        }
+    }
+
+    /// `handleDeleteTrackLane` (`TL/index.tsx:497-555`): the red gutter button
+    /// on a text/mask/audio row -- drop the lane's segments, renumber the
+    /// lanes above it, and lower the lane count.
+    fn delete_track_lane(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.track == kind)
+        {
+            self.set_selection(None, cx);
+        }
+        self.edit(
+            |timeline| edits::delete_track_lane(timeline, kind, lane),
+            window,
+            cx,
+        );
+        let count = match kind {
+            TrackKind::Text => &mut self.tracks.text,
+            TrackKind::Mask => &mut self.tracks.mask,
+            TrackKind::Audio => &mut self.tracks.audio,
+            _ => return,
+        };
+        let current = *count;
+        let used = match (kind, self.project.timeline.as_ref()) {
+            (TrackKind::Text, Some(timeline)) => edits::used_lane_count(&timeline.text_segments),
+            (TrackKind::Mask, Some(timeline)) => edits::used_lane_count(&timeline.mask_segments),
+            (TrackKind::Audio, Some(timeline)) => edits::used_lane_count(&timeline.audio_segments),
+            _ => 0,
+        };
+        let next = used.max(current.saturating_sub(1));
+        match kind {
+            TrackKind::Text => self.tracks.text = next,
+            TrackKind::Mask => self.tracks.mask = next,
+            TrackKind::Audio => self.tracks.audio = next,
+            _ => {}
+        }
+        self.hovered_gutter = None;
+        self.rebuild_timeline();
+        self.note_edit("delete-track", Some(kind));
+        cx.notify();
+    }
+
+    /// `handleDeleteSingleTrack` (`TL/index.tsx:557-620`): caption and
+    /// keyboard clear their segments and switch themselves off.
+    fn delete_single_track(
+        &mut self,
+        kind: TrackKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.track == kind)
+        {
+            self.set_selection(None, cx);
+        }
+        match kind {
+            TrackKind::Caption => {
+                if let Some(captions) = self.project.captions.as_mut() {
+                    captions.segments.clear();
+                    captions.settings.enabled = false;
+                }
+                if let Some(timeline) = self.project.timeline.as_mut() {
+                    timeline.caption_segments.clear();
+                }
+                self.tracks.caption = false;
+            }
+            TrackKind::Keyboard => {
+                if let Some(keyboard) = self.project.keyboard.as_mut() {
+                    keyboard.settings.enabled = false;
+                }
+                if let Some(timeline) = self.project.timeline.as_mut() {
+                    timeline.keyboard_segments.clear();
+                }
+                self.tracks.keyboard = false;
+            }
+            _ => return,
+        }
+        self.hovered_gutter = None;
+        self.project_changed(window, cx);
+        self.note_edit("delete-track", Some(kind));
+    }
+
+    /// `handleClearTrackSegments` (`TL/index.tsx:624-644`): zoom, scene and 3D
+    /// keep their row; the button clears every segment on it.
+    fn clear_track_segments(
+        &mut self,
+        kind: TrackKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.track == kind)
+        {
+            self.set_selection(None, cx);
+        }
+        let cleared = self.edit(
+            |timeline| match kind {
+                TrackKind::Zoom => {
+                    let had = !timeline.zoom_segments.is_empty();
+                    timeline.zoom_segments.clear();
+                    had
+                }
+                TrackKind::ThreeD => {
+                    let had = !timeline.camera3d_segments.is_empty();
+                    timeline.camera3d_segments.clear();
+                    had
+                }
+                TrackKind::Scene => {
+                    let had = !timeline.scene_segments.is_empty();
+                    timeline.scene_segments.clear();
+                    had
+                }
+                _ => false,
+            },
+            window,
+            cx,
+        );
+        if cleared {
+            self.hovered_gutter = None;
+            self.note_edit("clear-track", Some(kind));
         }
     }
 
@@ -3318,11 +4641,8 @@ impl EditorWindow {
         }
     }
 
-    fn sync_appearance(&mut self, window: &Window) {
-        let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
-        }
+    fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
+        self.theme.refresh(window, cx, false);
     }
 
     /// `NameEditor`'s commit (`Header.tsx:303-318`), verbatim.
@@ -3925,8 +5245,7 @@ impl EditorWindow {
         // The trigger is `absolute bottom-0 left-0` in the 32px timeline
         // header, itself under the slot's fixed geometry, so its top edge is a
         // constant offset from the window's bottom-left corner.
-        let button_top =
-            f32::from(viewport.height) - DEFAULT_TIMELINE_HEIGHT + TIMELINE_TOP_PADDING;
+        let button_top = f32::from(viewport.height) - self.timeline_height + TIMELINE_TOP_PADDING;
         let bottom = f32::from(viewport.height) - (button_top - 8.);
         // `overflowPadding: 64` -- stay clear of the titlebar.
         let max_height = (button_top - 8. - 64.).max(160.);
@@ -4112,7 +5431,22 @@ impl EditorWindow {
                 self.tracks.keyboard = next;
             }
             TrackKind::Scene => self.tracks.scene = next,
-            TrackKind::ThreeD => self.tracks.three_d = next,
+            TrackKind::ThreeD => {
+                self.tracks.three_d = next;
+                if next
+                    && self
+                        .project
+                        .timeline
+                        .as_ref()
+                        .is_none_or(|timeline| timeline.camera3d_segments.is_empty())
+                {
+                    self.start_camera3d_setup(cx);
+                    return;
+                }
+                if !next {
+                    self.camera3d_setup = None;
+                }
+            }
             _ => return,
         }
         if !next
@@ -4143,7 +5477,7 @@ impl EditorWindow {
                     .unwrap_or(lane_count);
                 self.tracks.audio = lane_count.max(lane + 1);
                 self.rebuild_timeline();
-                self.import_audio_for_lane(lane, window, cx);
+                self.open_audio_picker(lane, cx);
             }
             TrackKind::Text | TrackKind::Mask => {
                 self.add_overlay_segment(kind, window, cx);
@@ -4160,6 +5494,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            return;
+        }
         let Some(timeline) = self.project.timeline.as_ref() else {
             return;
         };
@@ -4310,6 +5647,7 @@ impl EditorWindow {
                 Ok(imported) => {
                     this.update_in(cx, |this, window, cx| {
                         this.commit_audio_import(lane, imported, window, cx);
+                        this.audio_picker = None;
                     })
                     .ok();
                 }
@@ -4377,6 +5715,329 @@ impl EditorWindow {
         self.note_edit("add-audio", Some(TrackKind::Audio));
         cx.notify();
         window.refresh();
+    }
+
+    fn open_clip_speed(
+        &mut self,
+        index: usize,
+        origin: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .clip_speed
+            .as_ref()
+            .is_some_and(|menu| menu.index == index)
+        {
+            self.clip_speed = None;
+            cx.notify();
+            return;
+        }
+        let focus = self.focus_handle_for_menu();
+        window.focus(&focus, cx);
+        self.clip_speed = Some(ClipSpeedMenu { index, origin });
+        cx.notify();
+    }
+
+    fn set_clip_timescale(
+        &mut self,
+        index: usize,
+        timescale: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::set_clip_segment_timescale(timeline, index, timescale) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-speed", Some(TrackKind::Clip));
+    }
+
+    fn set_clip_muted(
+        &mut self,
+        index: usize,
+        muted: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::set_clip_muted(timeline, index, muted) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-mute", Some(TrackKind::Clip));
+    }
+
+    fn set_clip_speed_audio_mode(
+        &mut self,
+        index: usize,
+        mode: ClipSpeedAudioMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::set_clip_segment_speed_audio_mode(timeline, index, mode) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-speed-audio", Some(TrackKind::Clip));
+    }
+
+    fn render_clip_speed_overlays(
+        &self,
+        model: &timeline::TimelineModel,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let secs_per_pixel = self
+            .view
+            .transform
+            .secs_per_pixel(timeline::content_width(viewport_width));
+        let open = self.clip_speed.as_ref().map(|menu| menu.index);
+        let hovered = match self.hovered_segment {
+            Some((TrackKind::Clip, _, index)) => Some(index),
+            _ => None,
+        };
+        let mut layer = div()
+            .absolute()
+            .left(px(timeline::TRACK_GUTTER))
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .overflow_hidden();
+        for (index, segment) in model.clips.iter().enumerate() {
+            if !self
+                .view
+                .transform
+                .segment_visible(segment.start, segment.end)
+            {
+                continue;
+            }
+            let active = open == Some(index);
+            if !active && hovered != Some(index) {
+                continue;
+            }
+            let x = ((segment.start - self.view.transform.position) / secs_per_pixel) as f32;
+            let width = ((segment.end - segment.start) / secs_per_pixel) as f32;
+            if width < 28. {
+                continue;
+            }
+            layer = layer.child(
+                div()
+                    .id(gpui::ElementId::NamedInteger(
+                        "clip-settings".into(),
+                        index as u64,
+                    ))
+                    .absolute()
+                    .left(px(x + 6.))
+                    .bottom(px(6.))
+                    .size(px(22.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(gpui::hsla(0., 0., 0., if active { 0.5 } else { 0.3 }))
+                    .hover(|this| this.bg(gpui::hsla(0., 0., 0., 0.5)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_clip_speed(index, event.position, window, cx);
+                        }),
+                    )
+                    .child(
+                        svg()
+                            .path("icons/settings.svg")
+                            .size(px(12.))
+                            .text_color(gpui::white()),
+                    ),
+            );
+        }
+        layer.into_any_element()
+    }
+
+    fn render_clip_speed_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.clip_speed?;
+        let theme = self.theme;
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.segments.get(menu.index))
+        else {
+            return None;
+        };
+        let timescale = segment.timescale;
+        let muted = edits::clip_is_muted(segment);
+        let audio_mode = segment.speed_audio_mode.unwrap_or_default();
+        let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
+        let audio_modes = [
+            (ClipSpeedAudioMode::Mute, "Mute"),
+            (ClipSpeedAudioMode::MaintainPitch, "Maintain pitch"),
+            (ClipSpeedAudioMode::MatchSpeed, "Match speed"),
+        ];
+        let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
+        let index = menu.index;
+        let origin = menu.origin;
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("clip-speed-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.clip_speed = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id("clip-speed-popover")
+                        .absolute()
+                        .left(px((f32::from(origin.x) - 8.).max(12.)))
+                        .top(px((f32::from(origin.y) - 8. - 86.).max(12.)))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.gray_1))
+                        .p(px(8.))
+                        .shadow_lg()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.))
+                                .rounded(px(8.))
+                                .bg(Hsla::from(theme.gray_2))
+                                .p(px(4.))
+                                .children(speeds.into_iter().map(|speed| {
+                                    let selected = (timescale - speed).abs() < 1e-6;
+                                    let label = if (speed - speed.round()).abs() < 1e-6 {
+                                        format!("{}x", speed.round() as i32)
+                                    } else {
+                                        format!("{speed}x")
+                                    };
+                                    div()
+                                        .id(SharedString::from(format!("clip-speed-{speed}")))
+                                        .rounded(px(6.))
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .text_size(px(12.))
+                                        .cursor_pointer()
+                                        .bg(if selected {
+                                            Hsla::from(theme.gray_4)
+                                        } else {
+                                            gpui::transparent_black()
+                                        })
+                                        .text_color(Hsla::from(if selected {
+                                            theme.gray_12
+                                        } else {
+                                            theme.gray_10
+                                        }))
+                                        .hover(|this| this.text_color(Hsla::from(theme.gray_12)))
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.set_clip_timescale(index, speed, window, cx);
+                                        }))
+                                })),
+                        )
+                        .child(if normal_speed {
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.))
+                                .rounded(px(8.))
+                                .bg(Hsla::from(theme.gray_2))
+                                .p(px(4.))
+                                .child(
+                                    div()
+                                        .id("clip-speed-mute")
+                                        .rounded(px(6.))
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .text_size(px(12.))
+                                        .cursor_pointer()
+                                        .bg(if muted {
+                                            Hsla::from(theme.gray_4)
+                                        } else {
+                                            gpui::transparent_black()
+                                        })
+                                        .text_color(Hsla::from(if muted {
+                                            theme.gray_12
+                                        } else {
+                                            theme.gray_10
+                                        }))
+                                        .hover(|this| this.text_color(Hsla::from(theme.gray_12)))
+                                        .child(if muted { "Unmute clip" } else { "Mute clip" })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.set_clip_muted(index, !muted, window, cx);
+                                        })),
+                                )
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.))
+                                .rounded(px(8.))
+                                .bg(Hsla::from(theme.gray_2))
+                                .p(px(4.))
+                                .children(audio_modes.into_iter().map(|(mode, label)| {
+                                    let selected = audio_mode == mode
+                                        || (mode == ClipSpeedAudioMode::Mute && muted);
+                                    div()
+                                        .id(SharedString::from(format!("clip-speed-audio-{label}")))
+                                        .rounded(px(6.))
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .text_size(px(12.))
+                                        .cursor_pointer()
+                                        .bg(if selected {
+                                            Hsla::from(theme.gray_4)
+                                        } else {
+                                            gpui::transparent_black()
+                                        })
+                                        .text_color(Hsla::from(if selected {
+                                            theme.gray_12
+                                        } else {
+                                            theme.gray_10
+                                        }))
+                                        .hover(|this| this.text_color(Hsla::from(theme.gray_12)))
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.set_clip_speed_audio_mode(index, mode, window, cx);
+                                        }))
+                                }))
+                                .into_any_element()
+                        }),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_add_track_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -5271,7 +6932,21 @@ impl EditorWindow {
                     .child(div().flex_1().h_full())
                     // `Button` (gray), `flex gap-1.5 justify-center h-[40px]`.
                     .child(self.render_clips_pill(cx))
-                    .child(self.header_pill("icons/captions.svg", "Captions"))
+                    // `<Show when={hasTranscript()}>` (`Header.tsx:74-77,
+                    // 188`): the pill only exists once a transcript with words
+                    // does.
+                    .children(
+                        self.project
+                            .captions
+                            .as_ref()
+                            .is_some_and(|captions| {
+                                captions
+                                    .segments
+                                    .iter()
+                                    .any(|segment| !segment.words.is_empty())
+                            })
+                            .then(|| self.header_pill("icons/captions.svg", "Captions")),
+                    )
                     .child(self.render_export_button(cx)),
             )
     }
@@ -5591,7 +7266,7 @@ impl EditorWindow {
     fn apply_zoom_slider(
         &mut self,
         position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(fraction) = ui::slider_value_at(&self.zoom_slider_track, position, 0., 1., 0.001)
@@ -5603,7 +7278,6 @@ impl EditorWindow {
         self.view.transform.apply_slider(fraction, origin, total);
         self.note_transform("slider", Some(origin));
         cx.notify();
-        window.refresh();
     }
 
     /// The transport row (`Player.tsx:357-481`): `relative flex overflow-hidden
@@ -5626,77 +7300,101 @@ impl EditorWindow {
 
         div()
             .relative()
+            .w_full()
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
-            .gap(px(12.))
             .p(px(20.))
             .flex_none()
             .overflow_hidden()
             .child(
                 div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
                     .flex_1()
+                    .min_w_0()
                     .text_size(px(14.))
-                    .text_color(Hsla::from(theme.gray_11))
-                    .child(format!(
-                        "{} / {}",
-                        timeline::format_time(current),
-                        timeline::format_time(total)
-                    )),
+                    .child(
+                        div()
+                            .text_color(Hsla::from(theme.gray_12))
+                            .child(timeline::format_time(current)),
+                    )
+                    .child(div().text_color(Hsla::from(theme.gray_11)).child(" / "))
+                    .child(
+                        div()
+                            .text_color(Hsla::from(theme.gray_11))
+                            .child(timeline::format_time(total)),
+                    ),
             )
-            // `flex flex-row items-center justify-center text-gray-11 gap-8
-            // text-[0.875rem]`.
             .child(
                 div()
+                    .absolute()
+                    .inset_0()
                     .flex()
                     .flex_row()
                     .items_center()
                     .justify_center()
-                    .gap(px(32.))
-                    .when(!live, |this| this.opacity(0.5))
                     .child(
                         div()
-                            .id("transport-prev")
                             .flex()
+                            .flex_row()
                             .items_center()
                             .justify_center()
-                            .when(live, |this| this.cursor_pointer())
+                            .gap(px(32.))
+                            .when(!live, |this| this.opacity(0.5))
                             .child(
-                                svg()
-                                    .path("icons/prev.svg")
-                                    .size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_12)),
+                                div()
+                                    .id("transport-prev")
+                                    .tab_index(0)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(live, |this| this.cursor_pointer())
+                                    .child(
+                                        svg()
+                                            .path("icons/prev.svg")
+                                            .size(px(12.))
+                                            .text_color(Hsla::from(theme.gray_12)),
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, _window, cx| this.jump_to_start(cx)),
+                                    ),
                             )
-                            .on_click(cx.listener(|this, _, _window, cx| this.jump_to_start(cx))),
-                    )
-                    // `rounded-full border border-gray-300 bg-gray-3 size-9`
-                    // with `hover:bg-gray-4` -- [`ui::IconButton`].
-                    .child(
-                        ui::IconButton::new("transport-play", icon)
-                            .size(px(36.))
-                            .icon_size(px(12.))
-                            .color(Hsla::from(theme.gray_12))
-                            .filled(Hsla::from(theme.gray_3), Some(Hsla::from(theme.gray_5)))
-                            .hover_bg(Hsla::from(theme.gray_4))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_play(window, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("transport-next")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(live, |this| this.cursor_pointer())
+                            // `rounded-full border border-gray-300 bg-gray-3 size-9`
+                            // with `hover:bg-gray-4` -- [`ui::IconButton`].
                             .child(
-                                svg()
-                                    .path("icons/next.svg")
-                                    .size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_12)),
+                                ui::IconButton::new("transport-play", icon)
+                                    .size(px(36.))
+                                    .icon_size(px(12.))
+                                    .color(Hsla::from(theme.gray_12))
+                                    .filled(
+                                        Hsla::from(theme.gray_3),
+                                        Some(Hsla::from(theme.gray_5)),
+                                    )
+                                    .hover_bg(Hsla::from(theme.gray_4))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_play(window, cx);
+                                    })),
                             )
-                            .on_click(cx.listener(|this, _, _window, cx| this.jump_to_end(cx))),
+                            .child(
+                                div()
+                                    .id("transport-next")
+                                    .tab_index(0)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(live, |this| this.cursor_pointer())
+                                    .child(
+                                        svg()
+                                            .path("icons/next.svg")
+                                            .size(px(12.))
+                                            .text_color(Hsla::from(theme.gray_12)),
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, _window, cx| this.jump_to_end(cx)),
+                                    ),
+                            ),
                     ),
             )
             // `flex flex-row flex-1 gap-4 justify-end items-center`.
@@ -5714,6 +7412,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .id("transport-split")
+                            .tab_index(0)
                             .flex()
                             .flex_row()
                             .items_center()
@@ -5810,7 +7509,18 @@ impl EditorWindow {
         let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
 
-        let playhead_x = timeline::playhead_offset(self.view, content_width);
+        // Playhead events arrive at 30Hz; while playing, the drawn line runs
+        // ahead by the wall-clock elapsed since the last one so the 60Hz
+        // ticker's redraws land between events instead of on them.
+        let playhead_view = {
+            let mut view = self.view;
+            if self.playing {
+                let ahead = self.last_playhead_redraw.elapsed().as_secs_f64().min(0.25);
+                view.playhead = (view.playhead + ahead).min(self.total_duration());
+            }
+            view
+        };
+        let playhead_x = timeline::playhead_offset(playhead_view, content_width);
         let ghost_x = timeline::ghost_offset(self.view, content_width);
 
         let minimap_width = (viewport_width
@@ -5830,7 +7540,7 @@ impl EditorWindow {
             // layoutHeight - MIN_PLAYER_HEIGHT]` (`Editor.tsx:421-435`).
             // Nothing writes it yet -- the drag handle is inert -- so it sits
             // at the default with the floor still expressed.
-            .h(px(DEFAULT_TIMELINE_HEIGHT))
+            .h(px(self.timeline_height))
             .min_h(px(MIN_TIMELINE_HEIGHT))
             .child(
                 div().h_full().child(
@@ -5935,6 +7645,14 @@ impl EditorWindow {
                                 / self.view.transform.secs_per_pixel(content_width))
                                 as f32;
                             Some(render_split_preview(&theme, x, snapped))
+                        }))
+                        // The drag-snap guide: while a trim, move or create is
+                        // magnetised onto an edge, a 1px blue column marks it.
+                        .children(self.drag_snap_time.and_then(|time| {
+                            let x = ((time - self.view.transform.position)
+                                / self.view.transform.secs_per_pixel(content_width))
+                                as f32;
+                            x.is_finite().then(|| render_split_preview(&theme, x, true))
                         })),
                 ),
             )
@@ -6050,7 +7768,16 @@ impl EditorWindow {
             split_mode: self.split_mode,
             hovered: self.hovered_segment,
             dragging: self.drag.is_some(),
+            audio_picker_lane: match self.audio_picker {
+                Some(crate::editor_audio::AudioPicker::Add { lane }) => Some(lane),
+                _ => None,
+            },
+            hovering_generate_zoom: self.hovering_generate_zoom,
         };
+        // The ghost trim and its release animation draw from a patched copy
+        // of the model; everything else draws the real one.
+        let display = self.display_timeline_model();
+        let model = display.as_ref().unwrap_or(&self.timeline);
         let mut rows = div()
             .flex()
             .flex_col()
@@ -6058,15 +7785,34 @@ impl EditorWindow {
             .min_h_full()
             .w_full();
 
-        for row in &self.timeline.rows {
+        let zoom_prompt = !self.zoom_prompt_dismissed
+            && model.segments(TrackKind::Zoom).is_empty()
+            && self
+                .summary()
+                .is_some_and(|summary| summary.has_cursor_data)
+            && self.transport.is_some();
+        for row in &model.rows {
             let kind = row.kind;
             let lane = row.lane;
+            // `TrackRow`'s hover-reveal delete (`TL/index.tsx:1505-1546`):
+            // caption/keyboard delete themselves, the multi-lane tracks delete
+            // one lane, and zoom/3D/scene offer "Clear all" once they have
+            // segments. The clip row has none.
+            let delete_label = match kind {
+                TrackKind::Clip => None,
+                TrackKind::Caption | TrackKind::Keyboard => Some("Delete"),
+                TrackKind::Text | TrackKind::Mask | TrackKind::Audio => Some("Delete"),
+                TrackKind::Zoom | TrackKind::ThreeD | TrackKind::Scene => {
+                    (!model.segments(kind).is_empty()).then_some("Clear all")
+                }
+            };
             rows = rows.child(
                 div()
                     .id(gpui::ElementId::NamedInteger(
                         "timeline-row".into(),
                         (kind as usize as u64) << 16 | row.lane as u64,
                     ))
+                    .relative()
                     // Every track sets `hoveredTrack` on enter and clears it
                     // on leave (`TL/ZoomTrack.tsx:170-171` and its eight
                     // siblings); the zoom and 3D tracks read it to decide
@@ -6080,7 +7826,7 @@ impl EditorWindow {
                             this.hovered_segment = None;
                             this.split_preview = None;
                             cx.notify();
-                            window.refresh();
+                            let _ = window;
                         }
                     }))
                     // The per-segment hover the trim handles' reveal reads,
@@ -6100,12 +7846,161 @@ impl EditorWindow {
                     )
                     .child(timeline::render_row(
                         &theme,
-                        &self.timeline,
+                        model,
                         *row,
                         self.view,
                         viewport_width,
                         ui,
-                    )),
+                    ))
+                    // The empty zoom track's generate prompt
+                    // (`TL/ZoomTrack.tsx:297-336`): a centered button plus a
+                    // session-dismiss X, shown while cursor data exists.
+                    .children(
+                        (kind == TrackKind::Clip)
+                            .then(|| self.render_clip_speed_overlays(model, viewport_width, cx)),
+                    )
+                    .children((kind == TrackKind::Zoom && zoom_prompt).then(|| {
+                        let generating = self.generating_auto_zoom;
+                        div()
+                            .id("zoom-generate-prompt")
+                            .absolute()
+                            .left(px(timeline::TRACK_GUTTER))
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
+                            .child(
+                                div()
+                                    .id("zoom-generate-hit")
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                        if this.hovering_generate_zoom != *hovered {
+                                            this.hovering_generate_zoom = *hovered;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child(
+                                        ui::Button::plain(
+                                            &theme,
+                                            "zoom-generate",
+                                            ui::ButtonVariant::Gray,
+                                            ui::ButtonSize::Md,
+                                        )
+                                        .label(if generating {
+                                            "Generating..."
+                                        } else {
+                                            "Click to generate zoom segments"
+                                        })
+                                        .disabled(generating)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.generate_auto_zoom(window, cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        ui::IconButton::new("zoom-generate-dismiss", "icons/x.svg")
+                                            .size(px(32.))
+                                            .icon_size(px(16.))
+                                            .color(Hsla::from(theme.gray_11))
+                                            .hover_bg(Hsla::from(theme.gray_5))
+                                            .disabled(generating)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.zoom_prompt_dismissed = true;
+                                                this.hovering_generate_zoom = false;
+                                                cx.notify();
+                                            })),
+                                    ),
+                            )
+                    }))
+                    .children(delete_label.map(|label| {
+                        let hovered = self.hovered_gutter == Some((kind, lane));
+                        div()
+                            .id(gpui::ElementId::NamedInteger(
+                                "track-gutter".into(),
+                                (kind as usize as u64) << 16 | lane as u64,
+                            ))
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .w(px(timeline::TRACK_ICON_WIDTH))
+                            .h(px(52.))
+                            .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
+                                let next = if *entered {
+                                    Some((kind, lane))
+                                } else if this.hovered_gutter == Some((kind, lane)) {
+                                    None
+                                } else {
+                                    this.hovered_gutter
+                                };
+                                if this.hovered_gutter != next {
+                                    this.hovered_gutter = next;
+                                    cx.notify();
+                                }
+                            }))
+                            .when(hovered, |this| {
+                                this.cursor_pointer()
+                                    .tab_index(0)
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(2.))
+                                    .rounded(px(12.))
+                                    .bg(gpui::linear_gradient(
+                                        180.,
+                                        gpui::linear_color_stop(gpui::rgb(0xef4444), 0.),
+                                        gpui::linear_color_stop(gpui::rgb(0xdc2626), 1.),
+                                    ))
+                                    .text_color(gpui::white())
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            match kind {
+                                                TrackKind::Caption | TrackKind::Keyboard => {
+                                                    this.delete_single_track(kind, window, cx);
+                                                }
+                                                TrackKind::Text
+                                                | TrackKind::Mask
+                                                | TrackKind::Audio => {
+                                                    this.delete_track_lane(kind, lane, window, cx);
+                                                }
+                                                TrackKind::Zoom
+                                                | TrackKind::ThreeD
+                                                | TrackKind::Scene => {
+                                                    this.clear_track_segments(kind, window, cx);
+                                                }
+                                                TrackKind::Clip => {}
+                                            }
+                                        }),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path("icons/trash.svg")
+                                            .size(px(16.))
+                                            .text_color(gpui::white()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .line_height(px(10.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(label),
+                                    )
+                            })
+                    })),
             );
         }
 
@@ -6119,17 +8014,16 @@ impl EditorWindow {
                     .absolute()
                     .inset_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.timeline_scroll)
                     .pr(px(SCROLL_BODY_PADDING_RIGHT))
-                    // `if (!e.ctrlKey && |deltaY| > |deltaX|) e.stopPropagation()`
-                    // (`TL/index.tsx:1327-1331`): a vertical wheel inside the
-                    // body scrolls the track list instead of panning the
-                    // timeline. gpui dispatches innermost-first, so stopping
-                    // here is what keeps it off the container's pan handler.
                     .on_scroll_wheel(cx.listener(
                         |_this, event: &gpui::ScrollWheelEvent, window, cx| {
                             let pixels = event.delta.pixel_delta(window.line_height());
+                            let delta_x = f32::from(pixels.x).abs();
+                            let delta_y = f32::from(pixels.y).abs();
                             if !event.modifiers.control
-                                && f32::from(pixels.y).abs() > f32::from(pixels.x).abs()
+                                && !event.modifiers.shift
+                                && delta_x <= delta_y * 0.5
                             {
                                 cx.stop_propagation();
                             }
@@ -6184,7 +8078,7 @@ fn is_at_end(total: f64, playhead: f64) -> bool {
 
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_appearance(window);
+        self.sync_appearance(window, cx);
         // Fields first: a field created this frame has no text yet, and gpui
         // only renders on invalidation, so syncing before creating would leave
         // a brand-new box empty until something else asked for a frame.
@@ -6238,26 +8132,63 @@ impl Render for EditorWindow {
             .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _window, cx| {
                 this.crop_key_up(event, cx);
             }))
-            // A drag continues while the pointer is anywhere in the window,
-            // which is what `createEventListenerMap(window, {mousemove,
-            // mouseup})` gives the source (`TL/index.tsx:938-955`); a gpui
-            // element only sees moves over its own hitbox, so the handlers go
-            // on the root while a scrub is live -- the camera bubble's resize
-            // pattern.
+            // A drag continues while the pointer is anywhere -- including
+            // *outside the window*, which is what `createEventListenerMap(
+            // window, {mousemove, mouseup})` gives the source
+            // (`TL/index.tsx:938-955`). gpui element listeners are
+            // hitbox-gated, so a release past the window edge would never
+            // land and the drag would stay armed; window-level listeners are
+            // not gated, and macOS keeps routing drag events to the mouse-down
+            // window wherever the pointer is.
             .when(scrubbing, |this| {
-                this.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    this.timeline_mouse_move(event, window, cx);
-                    this.drag_mouse_move(f32::from(event.position.x), window, cx);
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
-                        this.window_mouse_up(cx);
-                        // After the container's own mouseup, which is the
-                        // order the DOM's bubbling gives the source.
-                        this.drag_mouse_up(window, cx);
-                    }),
-                )
+                let move_editor = cx.entity().downgrade();
+                let up_editor = cx.entity().downgrade();
+                this.child(gpui::canvas(
+                    |_bounds, _window, _cx| (),
+                    move |_bounds, (), window, _cx| {
+                        let editor = move_editor.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase != gpui::DispatchPhase::Bubble {
+                                return;
+                            }
+                            let event = event.clone();
+                            editor
+                                .update(cx, |this, cx| {
+                                    if !event.dragging() {
+                                        // The release happened somewhere the
+                                        // window never heard about (another
+                                        // app, a system gesture): settle the
+                                        // drag at its last state.
+                                        this.window_mouse_up(cx);
+                                        this.drag_mouse_up(window, cx);
+                                        return;
+                                    }
+                                    this.timeline_mouse_move(&event, window, cx);
+                                    this.drag_mouse_move(
+                                        f32::from(event.position.x),
+                                        event.modifiers.shift,
+                                        window,
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        });
+                        let editor = up_editor.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                            if phase != gpui::DispatchPhase::Bubble
+                                || event.button != MouseButton::Left
+                            {
+                                return;
+                            }
+                            editor
+                                .update(cx, |this, cx| {
+                                    this.window_mouse_up(cx);
+                                    this.drag_mouse_up(window, cx);
+                                })
+                                .ok();
+                        });
+                    },
+                ))
             })
             .child(
                 self.header
@@ -6317,6 +8248,7 @@ impl Render for EditorWindow {
                                             // resizing the timeline is E3.
                                             .child(
                                                 div()
+                                                    .id("timeline-resize-handle")
                                                     .h(px(RESIZE_HANDLE_HEIGHT))
                                                     .flex_none()
                                                     .flex()
@@ -6324,6 +8256,8 @@ impl Render for EditorWindow {
                                                     .gap(px(2.))
                                                     .items_center()
                                                     .justify_center()
+                                                    .cursor(gpui::CursorStyle::ResizeRow)
+                                                    .tab_index(0)
                                                     .border_t_1()
                                                     .border_color(if theme.is_dark() {
                                                         Hsla::from(theme.gray_5)
@@ -6335,6 +8269,18 @@ impl Render for EditorWindow {
                                                     } else {
                                                         with_alpha(theme.gray_2, 0.95)
                                                     })
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            |this, event: &MouseDownEvent, _, cx| {
+                                                                this.timeline_resize = Some((
+                                                                    f32::from(event.position.y),
+                                                                    this.timeline_height,
+                                                                ));
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    )
                                                     .children((0..3).map(|_| {
                                                         div()
                                                             .h(px(2.))
@@ -6360,7 +8306,7 @@ impl Render for EditorWindow {
                                 self.timeline_view.clone().cached(
                                     StyleRefinement::default()
                                         .w_full()
-                                        .h(px(DEFAULT_TIMELINE_HEIGHT)),
+                                        .h(px(self.timeline_height)),
                                 ),
                             ),
                     ),
@@ -6369,6 +8315,25 @@ impl Render for EditorWindow {
             // over everything -- the same shape the settings window's sliders
             // use, because gpui has no pointer capture and a 96px row would
             // otherwise lose the drag the moment the pointer left it.
+            .children(self.timeline_resize.is_some().then(|| {
+                ui::Slider::drag_layer(
+                    "timeline-height-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        let Some((start_y, start_height)) = this.timeline_resize else {
+                            return;
+                        };
+                        let viewport_height: f32 = window.viewport_size().height.into();
+                        let delta = f32::from(event.position.y) - start_y;
+                        this.timeline_height =
+                            this.clamp_timeline_height(start_height - delta, viewport_height);
+                        cx.notify();
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.timeline_resize = None;
+                        cx.notify();
+                    }),
+                )
+            }))
             .children(self.zoom_slider_drag.then(|| {
                 ui::Slider::drag_layer(
                     "timeline-zoom-drag",
@@ -6431,6 +8396,7 @@ impl Render for EditorWindow {
             .children(self.render_sidebar_menu(cx))
             .children(self.render_toolbar_menu(cx))
             .children(self.render_add_track_popover(cx))
+            .children(self.render_clip_speed_popover(cx))
             .children(self.render_color_picker_popover(cx))
             .children(self.render_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
@@ -6519,6 +8485,37 @@ fn aspect_ratio_eq(
         (Some(left), Some(right)) => std::mem::discriminant(left) == std::mem::discriminant(right),
         _ => false,
     }
+}
+
+fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at: f64) -> bool {
+    let Some(segment) = timeline.camera3d_segments.get(index).cloned() else {
+        return false;
+    };
+    let duration = segment.end - segment.start;
+    if at < 1.0 || duration - at < 1.0 {
+        return false;
+    }
+    let start_pose = crate::editor_panels::start_pose(&segment);
+    let mid_pose = crate::editor_panels::evaluate_pose(&segment, at);
+    let end_pose = crate::editor_panels::end_pose(&segment);
+    let easing =
+        crate::editor_panels::MOTION_EASINGS[crate::editor_panels::motion_easing(&segment)];
+    let cut = segment.start + at;
+
+    let mut right = segment.clone();
+    right.start = cut;
+    right.end = segment.end;
+    right.tracks = Default::default();
+    crate::editor_panels::set_motion(&mut right, &mid_pose, &end_pose, (easing.2, easing.3));
+
+    let Some(left) = timeline.camera3d_segments.get_mut(index) else {
+        return false;
+    };
+    left.end = cut;
+    left.tracks = Default::default();
+    crate::editor_panels::set_motion(left, &start_pose, &mid_pose, (easing.2, easing.3));
+    timeline.camera3d_segments.insert(index + 1, right);
+    true
 }
 
 fn with_alpha(color: gpui::Rgba, alpha: f32) -> Hsla {
