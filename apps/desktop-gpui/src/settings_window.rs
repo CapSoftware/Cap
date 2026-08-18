@@ -29,7 +29,7 @@ use crate::{
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, PostStudioBehaviour,
         RECORDING_START_SAFETY, SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
     },
-    theme::{Appearance, Theme},
+    theme::Theme,
     ui,
 };
 
@@ -525,11 +525,15 @@ pub struct SettingsWindow {
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
     pub(crate) focus: FocusHandle,
+    sign_in_pending: bool,
+    sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    sign_in_task: Option<gpui::Task<()>>,
 }
 
 impl SettingsWindow {
     pub fn new(page: Page, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = Theme::new(Appearance::from_window(window.appearance()));
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, true);
         let settings = GeneralSettings::load();
 
         // The Tauri app's close button and Cmd-W both go through the window's
@@ -609,6 +613,9 @@ impl SettingsWindow {
             slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
+            sign_in_pending: false,
+            sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sign_in_task: None,
         }
     }
 
@@ -1046,11 +1053,7 @@ impl SettingsWindow {
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
-        let appearance = Appearance::from_window(window.appearance());
-        let material = crate::platform::active_material(cx);
-        if appearance != self.theme.appearance || material != self.theme.material_kind() {
-            self.theme = Theme::new(appearance).with_material(material);
-        }
+        self.theme.refresh(window, cx, true);
     }
 
     // -- Writes ------------------------------------------------------------
@@ -1600,21 +1603,74 @@ impl SettingsWindow {
                         div().opacity(0.5).child("Check for updates"),
                     ),
             )
-            .child(
-                // `<SignInButton>`: `size="md"`, `variant="primary"`, which
-                // the settings material paints as the accent button.
+            .child({
+                let signed_in = store::auth_snapshot().signed_in();
+                let (variant, label) = if self.sign_in_pending {
+                    (ui::ButtonVariant::Gray, "Cancel Sign In")
+                } else if signed_in {
+                    (ui::ButtonVariant::Dark, "Sign Out")
+                } else {
+                    (ui::ButtonVariant::Dark, "Sign In")
+                };
                 self.button(
                     "settings-sign-in",
-                    ui::ButtonVariant::Dark,
+                    variant,
                     None,
-                    "Sign In",
+                    label,
                     false,
                     cx,
-                    |_, _, _| {},
+                    |this, window, cx| this.toggle_sign_in(window, cx),
                 )
                 .full_width()
-                .height(px(34.)),
-            )
+                .height(px(34.))
+            })
+    }
+
+    fn toggle_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use std::sync::atomic::Ordering;
+
+        if self.sign_in_pending {
+            self.sign_in_cancel.store(true, Ordering::Relaxed);
+            self.sign_in_pending = false;
+            cx.notify();
+            return;
+        }
+        if store::auth_snapshot().signed_in() {
+            crate::auth::sign_out();
+            cx.notify();
+            return;
+        }
+
+        self.sign_in_cancel.store(false, Ordering::Relaxed);
+        let cancel = self.sign_in_cancel.clone();
+        let session = match crate::auth::begin_sign_in(cancel.clone()) {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::error!("starting sign-in: {error}");
+                return;
+            }
+        };
+        cx.open_url(&session.url);
+        self.sign_in_pending = true;
+        self.sign_in_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let signed_in = cx
+                .background_executor()
+                .spawn(async move { session.complete() })
+                .await;
+            if matches!(signed_in, Ok(true))
+                && let Ok(plan) =
+                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
+                && let Err(error) = plan
+            {
+                tracing::warn!("updating auth plan after sign-in: {error}");
+            }
+            crate::platform::activate_app();
+            let _ = this.update(cx, |this, cx| {
+                this.sign_in_pending = false;
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     // -- Content pane ------------------------------------------------------
@@ -2495,6 +2551,9 @@ impl SettingsWindow {
                             } else {
                                 Hsla::from(theme.gray_4)
                             })
+                            .when(!selected, |this| {
+                                this.hover(|style| style.border_color(Hsla::from(theme.gray_6)))
+                            })
                             .child(img(theme_preview(option)).size_full()),
                     )
                     .child(
@@ -2510,9 +2569,16 @@ impl SettingsWindow {
                             })
                             .child(option.label()),
                     )
-                    .on_click(cx.listener(move |this, _, _window, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if this.settings.theme == option {
+                            return;
+                        }
                         this.settings.theme = option;
                         this.write_enum("theme", option, cx);
+                        crate::theme::set_preference(option, cx);
+                        crate::theme::apply_native(window, cx);
+                        this.theme.refresh(window, cx, true);
+                        cx.defer(|cx: &mut gpui::App| crate::app_windows::broadcast_theme(cx));
                     }))
             }));
 
