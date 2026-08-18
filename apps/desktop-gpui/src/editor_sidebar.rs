@@ -2280,36 +2280,36 @@ impl EditorWindow {
             }));
 
         div()
-            // The column: `ml-2 flex min-h-0 w-104 min-w-104 flex-none
-            // overflow-hidden` (`Editor.tsx:728`).
             .ml(px(8.))
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
-            .flex_none()
+            .h_full()
             .flex()
+            .flex_col()
+            .flex_none()
             .min_h_0()
             .overflow_hidden()
             .child(
-                // The card: `flex flex-col min-h-0 shrink-0 flex-1 max-w-104
-                // overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2
-                // border border-gray-3`.
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .h_full()
                     .overflow_hidden()
                     .rounded(px(12.))
                     .bg(self.panel_bg())
                     .border_1()
                     .border_color(Hsla::from(theme.gray_3))
                     .child(rail)
-                    .child(match selection {
-                        // The selection overlay replaces the scroll body
-                        // wholesale: the tab content takes `hidden`
-                        // (`:685-691`) and the panel is drawn in its place
-                        // (`:1077-1093`).
-                        Some(selection) => self.render_selection_panel(&selection, cx),
-                        None => self.render_tab_body(cx),
+                    .child(if self.audio_picker.is_some() {
+                        self.render_audio_library(cx)
+                    } else if self.camera3d_setup.is_some() {
+                        self.render_camera3d_setup(cx)
+                    } else {
+                        match selection {
+                            Some(selection) => self.render_selection_panel(&selection, cx),
+                            None => self.render_tab_body(cx),
+                        }
                     }),
             )
     }
@@ -2693,7 +2693,10 @@ impl EditorWindow {
                                     .hover(|this| this.border_color(Hsla::from(theme.gray_7)))
                             })
                             .children(preview.map(|image| {
-                                img(image).size_full().object_fit(gpui::ObjectFit::Cover)
+                                img(image)
+                                    .size_full()
+                                    .object_fit(gpui::ObjectFit::Cover)
+                                    .rounded(px(8.))
                             }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let path = path.to_string_lossy().into_owned();
@@ -2830,7 +2833,12 @@ impl EditorWindow {
                                 })
                             })
                             .children(image.map(|image| {
-                                img(image).size_full().object_fit(gpui::ObjectFit::Cover)
+                                // `overflow_hidden` clips to the rect, not the
+                                // radius, so the picture needs its own corners.
+                                img(image)
+                                    .size_full()
+                                    .object_fit(gpui::ObjectFit::Cover)
+                                    .rounded(px(8.))
                             }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let Some(path) = wallpaper_path(id) else {
@@ -2898,10 +2906,12 @@ impl EditorWindow {
                 .overflow_hidden()
                 .border_1()
                 .border_color(Hsla::from(theme.gray_3))
-                .children(
-                    self.tile_image(&path)
-                        .map(|image| img(image).size_full().object_fit(gpui::ObjectFit::Cover)),
-                )
+                .children(self.tile_image(&path).map(|image| {
+                    img(image)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover)
+                        .rounded(px(6.))
+                }))
                 .child(
                     div().absolute().top(px(8.)).right(px(8.)).child(
                         ui::IconButton::new("clear-background-image", "icons/circle-x.svg")
