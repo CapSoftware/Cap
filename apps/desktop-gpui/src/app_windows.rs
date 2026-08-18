@@ -26,6 +26,7 @@ use crate::{
     editor_window::{self, EditorWindow},
     main_window::{MainWindow, Mode, TargetType},
     mode_select_window::{self, ModeSelectWindow},
+    onboarding_window::{self, OnboardingWindow},
     platform,
     recording::{RecordingMode, StartConfig},
     session::{Phase, RecordingSession},
@@ -46,6 +47,7 @@ pub struct AppWindows {
     pub controls: Option<WindowHandle<ControlsWindow>>,
     pub camera: Option<WindowHandle<CameraWindow>>,
     pub settings: Option<WindowHandle<SettingsWindow>>,
+    pub onboarding: Option<WindowHandle<OnboardingWindow>>,
     pub mode_select: Option<WindowHandle<ModeSelectWindow>>,
     pub teleprompter: Option<WindowHandle<TeleprompterWindow>>,
     /// One target-select overlay per display, keyed by display so a mode
@@ -76,6 +78,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         controls: None,
         camera: None,
         settings: None,
+        onboarding: None,
         mode_select: None,
         teleprompter: None,
         overlays: Vec::new(),
@@ -90,7 +93,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     let escape = platform::escape_hotkey_events();
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
-            let _ = cx.update(dismiss_target_overlays);
+            cx.update(dismiss_target_overlays);
         }
     })
     .detach();
@@ -128,6 +131,10 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
 /// Public because the tray's "Open Main Window" is exactly this
 /// (`ShowCapWindow::Main { init_target_mode: None }`).
 pub fn show_main_window(cx: &mut App) {
+    if crate::store::should_show_onboarding() {
+        open_onboarding(cx);
+        return;
+    }
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |view, window, cx| {
@@ -154,7 +161,7 @@ pub fn show_main_window(cx: &mut App) {
         // reports it visible (alpha 1, on the active Space) but it has no
         // backing surface and the frozen link never delivers one. Kick it and
         // ask for a frame, the `open_settings` recipe.
-        let _ = cx.update(|cx| {
+        cx.update(|cx| {
             main.update(cx, |_, window, cx| {
                 platform::kick_display_link(window);
                 cx.notify();
@@ -229,6 +236,16 @@ pub fn handle_dock_reopen(cx: &mut App) {
         return;
     }
     let windows = cx.global::<AppWindows>();
+    if crate::store::should_show_onboarding() {
+        if windows.onboarding.is_some() {
+            open_onboarding(cx);
+            cx.activate(true);
+            return;
+        }
+        open_onboarding(cx);
+        cx.activate(true);
+        return;
+    }
     let focus: Option<gpui::AnyWindowHandle> = windows
         .editors
         .first()
@@ -415,6 +432,103 @@ pub fn settings_closed(cx: &mut App) {
     tracing::info!("settings window closed");
     cx.global_mut::<AppWindows>().settings.take();
     restore_after_settings(cx);
+}
+
+pub fn open_onboarding(cx: &mut App) {
+    if let Some(handle) = cx.global::<AppWindows>().onboarding {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        hide_main_window(cx);
+        return;
+    }
+
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(onboarding_window::ONBOARDING_WIDTH),
+            px(onboarding_window::ONBOARDING_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Welcome to Cap".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(onboarding_window::TRAFFIC_LIGHTS),
+            }),
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            is_resizable: false,
+            is_minimizable: true,
+            window_min_size: Some(size(
+                px(onboarding_window::ONBOARDING_WIDTH),
+                px(onboarding_window::ONBOARDING_HEIGHT),
+            )),
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        },
+        |window, cx| cx.new(|cx| OnboardingWindow::new(window, cx)),
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("onboarding window failed to open: {error:#}");
+            return;
+        }
+    };
+
+    cx.global_mut::<AppWindows>().onboarding = Some(handle);
+    let native = handle
+        .update(cx, |view, window, cx| {
+            platform::kick_display_link(window);
+            view.focus_root(window, cx);
+            platform::native_window(window)
+        })
+        .ok()
+        .flatten();
+    cx.spawn(async move |_| {
+        if let Some(native) = &native {
+            platform::show_native(native);
+        }
+    })
+    .detach();
+    hide_main_window(cx);
+    crate::tray::refresh_menu(cx);
+}
+
+pub fn onboarding_finished(cx: &mut App) {
+    if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    crate::tray::refresh_menu(cx);
+    show_main_window(cx);
+}
+
+pub fn onboarding_closed(cx: &mut App) {
+    cx.global_mut::<AppWindows>().onboarding.take();
+    crate::tray::refresh_menu(cx);
+    if !crate::store::should_show_onboarding() {
+        show_main_window(cx);
+    }
+}
+
+pub fn onboarding_is_open(cx: &App) -> bool {
+    cx.has_global::<AppWindows>() && cx.global::<AppWindows>().onboarding.is_some()
 }
 
 fn restore_after_settings(cx: &mut App) {
@@ -854,7 +968,12 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
         {
             continue;
         }
-        open_overlay(&display, select.clone(), Some(&id) == focus_display.as_ref(), cx);
+        open_overlay(
+            &display,
+            select.clone(),
+            Some(&id) == focus_display.as_ref(),
+            cx,
+        );
     }
 
     // `global_shortcut.register("Escape")` while the overlays are up
@@ -881,7 +1000,8 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
 pub fn dismiss_target_overlays(cx: &mut App) {
     close_target_overlays(cx);
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, _window, cx| view.clear_target(cx)).ok();
+    main.update(cx, |view, _window, cx| view.clear_target(cx))
+        .ok();
 
     let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
@@ -981,10 +1101,7 @@ pub fn start_from_overlay(display: Option<DisplayId>, cx: &mut App) -> bool {
         .is_ok()
 }
 
-fn overlay_handle(
-    display: Option<DisplayId>,
-    cx: &App,
-) -> Option<WindowHandle<OverlayWindow>> {
+fn overlay_handle(display: Option<DisplayId>, cx: &App) -> Option<WindowHandle<OverlayWindow>> {
     let overlays = &cx.global::<AppWindows>().overlays;
     match display {
         Some(id) => overlays
@@ -1401,9 +1518,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         );
         log_timeline_model(&summary.timeline);
         if handle
-            .update(cx, |view, window, cx| {
-                view.set_summary(summary, window, cx)
-            })
+            .update(cx, |view, window, cx| view.set_summary(summary, window, cx))
             .is_err()
         {
             return;
@@ -1440,20 +1555,32 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                 // already has.
                 let state_cb = editor_window::make_state_callback(playhead);
                 let frame_cb = editor_window::make_frame_callback(frame_tx, frame_stats);
+                #[cfg(target_os = "macos")]
+                let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
+                #[cfg(not(target_os = "macos"))]
+                let frame_format = cap_editor::EditorFrameFormat::Rgba;
                 if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
                     let silent = std::sync::Arc::new(cap_editor::AudioOutput::new_headless(
                         Box::new(|_samples, _at| {}),
                     ));
-                    cap_editor::EditorInstance::new_with_audio_output(
+                    cap_editor::EditorInstance::new_with_audio_output_and_frame_format(
                         instance_path,
                         state_cb,
                         frame_cb,
                         None,
+                        frame_format,
                         silent,
                     )
                     .await
                 } else {
-                    cap_editor::EditorInstance::new(instance_path, state_cb, frame_cb, None).await
+                    cap_editor::EditorInstance::new_with_frame_format(
+                        instance_path,
+                        state_cb,
+                        frame_cb,
+                        None,
+                        frame_format,
+                    )
+                    .await
                 }
             })
         });
@@ -1494,22 +1621,43 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         cx.spawn({
             let stats = stats.clone();
             async move |cx| {
-                while let Ok((frame, layout)) = frame_rx.recv_async().await {
-                    let stats = stats.clone();
-                    let number = frame.frame_number;
-                    let image = cx
-                        .background_executor()
-                        .spawn(async move { editor_window::frame_image_timed(&frame, &stats) })
-                        .await;
-                    let Some(image) = image else {
-                        tracing::warn!("a rendered frame could not be converted for display");
-                        continue;
+                while let Ok((output, layout)) = frame_rx.recv_async().await {
+                    let (frame, number) = match output {
+                        cap_editor::EditorFrameOutput::Rgba(rgba) => {
+                            let stats = stats.clone();
+                            let number = rgba.frame_number;
+                            let image = cx
+                                .background_executor()
+                                .spawn(
+                                    async move { editor_window::frame_image_timed(&rgba, &stats) },
+                                )
+                                .await;
+                            let Some(image) = image else {
+                                tracing::warn!(
+                                    "a rendered frame could not be converted for display"
+                                );
+                                continue;
+                            };
+                            (editor_window::EditorPreviewFrame::Image(image), number)
+                        }
+                        cap_editor::EditorFrameOutput::Nv12(frame) => {
+                            tracing::warn!(
+                                number = frame.frame_number,
+                                "buffer-backed NV12 preview is unsupported"
+                            );
+                            continue;
+                        }
+                        #[cfg(target_os = "macos")]
+                        cap_editor::EditorFrameOutput::Surface(surface) => {
+                            let number = surface.frame_number;
+                            (editor_window::surface_preview_frame(surface), number)
+                        }
                     };
                     if handle
                         .update(cx, |view, window, cx| {
                             view.frame_arrived(
                                 editor_window::EditorFrame {
-                                    image,
+                                    frame,
                                     layout,
                                     number,
                                 },
@@ -1608,7 +1756,13 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The initial kick, exactly as `lib.rs:6617-6618` does it after
         // creating an instance. Without this the canvas stays black: `seek_to`
         // and `set_playhead_position` render nothing.
-        editor_window::request_frame(&instance, 0);
+        editor_window::request_frame(
+            &instance,
+            0,
+            editor_window::preview_resolution(
+                crate::store::GeneralSettings::load().editor_preview_quality,
+            ),
+        );
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
@@ -1719,7 +1873,9 @@ fn load_editor_waveforms(
 async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
     let tab = std::env::var("CAP_GPUI_AUTO_SIDEBAR").ok();
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
-    if tab.is_none() && select.is_none() {
+    let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
+    let crop = std::env::var("CAP_GPUI_AUTO_CROP").ok();
+    if tab.is_none() && select.is_none() && canvas.is_none() && crop.is_none() {
         return;
     }
     cx.background_executor()
@@ -1741,6 +1897,25 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     if let Some(spec) = select {
         handle
             .update(cx, |view, _window, cx| view.auto_select_segments(&spec, cx))
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CANVAS=1`: select the on-canvas display box, which a
+    // click on it does. Before the crop hook, because opening the crop dialog
+    // hides the overlay.
+    if std::env::var("CAP_GPUI_AUTO_CANVAS").is_ok_and(|value| value == "1") {
+        handle
+            .update(cx, |view, window, cx| view.auto_canvas_select(window, cx))
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CROP=1[:16x9][:nosnap]`: open the crop dialog through the
+    // toolbar's own handler.
+    if let Ok(spec) = std::env::var("CAP_GPUI_AUTO_CROP")
+        && !spec.is_empty()
+    {
+        handle
+            .update(cx, |view, window, cx| view.auto_crop(&spec, window, cx))
             .ok();
     }
 }
@@ -1833,13 +2008,22 @@ async fn drive_auto_playback(
     let close_after = std::env::var("CAP_GPUI_AUTO_EDITOR_CLOSE")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
-        .filter(|_| {
-            !CLOSE_SCENARIO_DONE.swap(true, std::sync::atomic::Ordering::SeqCst)
-        });
+        .filter(|_| !CLOSE_SCENARIO_DONE.swap(true, std::sync::atomic::Ordering::SeqCst));
 
     if let Some(secs) = play_secs {
+        cx.update(|cx| cx.activate(true));
         if handle
-            .update(cx, |view, window, cx| view.toggle_play(window, cx))
+            .update(cx, |_, window, _| window.activate_window())
+            .is_err()
+        {
+            return;
+        }
+        sleep(cx, 200).await;
+        if handle
+            .update(cx, |view, window, cx| {
+                tracing::info!(active = window.is_window_active(), "auto playback focus");
+                view.toggle_play(window, cx)
+            })
             .is_err()
         {
             return;
@@ -1851,7 +2035,10 @@ async fn drive_auto_playback(
                 .update(cx, |_, window, _| platform::native_window(window))
                 .ok()
                 .flatten();
-            tracing::info!(close_after, "auto playback: closing the editor mid-playback");
+            tracing::info!(
+                close_after,
+                "auto playback: closing the editor mid-playback"
+            );
             if let Some(native) = &native {
                 platform::close_native(native);
             }
@@ -1911,6 +2098,42 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
         // even when the main window is not the thing coming back.
         crate::menus::schedule_dock_sync(cx);
     }
+}
+
+/// `addExistingRecordingToEditor` ends with `EditorInstances::remove(window)`
+/// and the sidebar reloads the webview (`ClipsSidebar.tsx:513-517`,
+/// `import.rs:1892`): the same bundle, re-read from disk. The native
+/// spelling: tear this editor window down -- discarding its pending config
+/// write, which is older than what the import just wrote -- and open a fresh
+/// one on the same path. The registry entry goes first so `open_editor` does
+/// not just refocus the dying window, and the main window never flashes in
+/// between.
+pub fn reload_editor(project_path: &Path, cx: &mut App) {
+    let key = editor_key(project_path);
+    let handle = {
+        let editors = &mut cx.global_mut::<AppWindows>().editors;
+        let index = editors.iter().position(|(path, _)| path == &key);
+        index.map(|index| editors.remove(index).1)
+    };
+
+    if let Some(handle) = handle {
+        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
+            pending.borrow_mut().discard();
+        }
+        let instance = handle
+            .update(cx, |view, _window, _cx| view.take_instance())
+            .ok()
+            .flatten();
+        if let Some(instance) = instance {
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+        }
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+
+    tracing::info!(path = %key.display(), "reloading editor after import");
+    open_editor(key, cx);
 }
 
 /// The tray's Record Display / Record Window / Record Area.
@@ -2040,6 +2263,18 @@ fn open_controls(
             tracing::error!("recording controls window failed to open: {error:#}");
             None
         }
+    }
+}
+
+pub fn refresh_library_after_delete(cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    let settings = cx.global::<AppWindows>().settings;
+    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+        .ok();
+    if let Some(settings) = settings {
+        settings
+            .update(cx, |view, window, cx| view.refresh_recordings(window, cx))
+            .ok();
     }
 }
 

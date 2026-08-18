@@ -19,7 +19,7 @@
 //! `TextInput` key context, so ⌘Z is a menu key equivalent only while a field
 //! is focused and falls through to the editor's own project-undo otherwise.
 
-use gpui::{App, AnyWindowHandle, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
+use gpui::{AnyWindowHandle, App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
 
 use crate::{
     app_windows::{self, AppWindows},
@@ -94,9 +94,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
     cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
     cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
-    cx.on_action(|_: &Minimize, cx: &mut App| {
-        with_key_native(cx, platform::minimize_native)
-    });
+    cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
     cx.on_action(|_: &ToggleFullscreen, cx: &mut App| {
         with_key_native(cx, platform::toggle_fullscreen_native)
@@ -381,7 +379,7 @@ fn any_window_fullscreen(cx: &mut App) -> bool {
 /// `(has_visible_panel_window, has_visible_dock_window)`.
 ///
 /// The split is `CapWindowId::activates_dock()` (`windows.rs:1049-1060`): Main,
-/// Editor, Settings, ModeSelect (plus Upgrade/Onboarding/ScreenshotEditor,
+/// Editor, Settings, ModeSelect, Onboarding (plus Upgrade/ScreenshotEditor,
 /// which this app has no equivalent of) activate the dock; the camera bubble,
 /// the recording bar, the target-select overlays and the teleprompter do not.
 ///
@@ -409,6 +407,7 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
         || teleprompter_visible;
     let dock = main_visible
         || windows.settings.is_some()
+        || windows.onboarding.is_some()
         || windows.mode_select.is_some()
         || !windows.editors.is_empty();
     (panel, dock)
