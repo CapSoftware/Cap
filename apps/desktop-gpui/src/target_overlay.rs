@@ -39,7 +39,7 @@ use scap_targets::{
 use crate::{
     app_windows,
     main_window::{Mode, TargetType},
-    theme::{Appearance, Theme},
+    theme::Theme,
 };
 
 /// How often the cursor probe runs. The Tauri loop sleeps 50ms between
@@ -435,7 +435,8 @@ impl OverlayWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let theme = Theme::new(Appearance::from_window(window.appearance()));
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, false);
         cx.observe(&select, |_, _, cx| cx.notify()).detach();
 
         let logical = display
@@ -521,11 +522,8 @@ impl OverlayWindow {
         cx.defer(app_windows::dismiss_target_overlays);
     }
 
-    fn sync_appearance(&mut self, window: &Window) {
-        let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
-        }
+    fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
+        self.theme.refresh(window, cx, false);
     }
 
     /// True when the cursor is on this overlay's display -- `data-over` in the
@@ -537,7 +535,7 @@ impl OverlayWindow {
 
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_appearance(window);
+        self.sync_appearance(window, cx);
         let mode = self.select.read(cx).mode;
 
         let root = div()

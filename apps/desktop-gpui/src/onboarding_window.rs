@@ -16,7 +16,7 @@ use crate::{
         self, OSPermission, OSPermissionStatus, OSPermissionsCheck, do_permissions_check,
     },
     store,
-    theme::{Appearance, Theme},
+    theme::Theme,
     ui,
 };
 
@@ -58,8 +58,9 @@ impl OnboardingWindow {
             Step::Permissions
         };
 
+        crate::theme::bind_window(window, cx);
         let mut this = Self {
-            theme: Theme::new(Appearance::from_window(window.appearance())),
+            theme: Theme::for_window(window, cx, false),
             step,
             permissions,
             interacted: false,
@@ -434,7 +435,7 @@ impl OnboardingWindow {
 
 impl Render for OnboardingWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.theme = Theme::new(Appearance::from_window(window.appearance()));
+        self.theme.refresh(window, cx, false);
         let theme = self.theme;
 
         div()

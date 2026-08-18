@@ -41,7 +41,7 @@ use gpui::{
 use crate::{
     feeds::Feeds,
     store::{self, BlurMode, CameraShape, CameraWindowState},
-    theme::{Appearance, Theme},
+    theme::Theme,
 };
 
 pub const CAMERA_MIN_SIZE: f32 = 150.;
@@ -373,7 +373,8 @@ pub struct CameraWindow {
 
 impl CameraWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = Theme::new(Appearance::from_window(window.appearance()));
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, false);
         let state = store::load().camera_window.unwrap_or_default();
         let paints = Arc::new(AtomicU32::new(0));
         let preview = cx.new({
@@ -767,9 +768,7 @@ impl CameraWindow {
 
 impl Render for CameraWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
+        if self.theme.refresh(window, cx, false) {
             self.sync_preview_chrome(cx);
         }
         let resizing = self.resizing.is_some();

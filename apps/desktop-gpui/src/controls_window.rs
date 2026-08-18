@@ -19,7 +19,7 @@ use crate::{
     feeds::{self, Feeds},
     recording::RecordingMode,
     session::{Phase, RecordingSession},
-    theme::{Appearance, Theme},
+    theme::Theme,
 };
 
 pub struct ControlsWindow {
@@ -38,7 +38,8 @@ impl ControlsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let theme = Theme::new(Appearance::from_window(window.appearance()));
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, false);
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
 
         // 4 ticks a second keeps the seconds display honest without burning a
@@ -315,10 +316,7 @@ impl ControlsWindow {
 
 impl Render for ControlsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
-        }
+        self.theme.refresh(window, cx, false);
 
         div()
             .size_full()

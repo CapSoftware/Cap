@@ -21,7 +21,7 @@ use crate::{
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
-    theme::{Appearance, Theme},
+    theme::Theme,
     ui,
 };
 use gpui::Entity;
@@ -357,7 +357,8 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let theme = Theme::new(Appearance::from_window(window.appearance()));
+        crate::theme::bind_window(window, cx);
+        let theme = Theme::for_window(window, cx, true);
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
 
         // Track the app-scoped feeds: the camera bubble's close button
@@ -635,11 +636,7 @@ impl MainWindow {
     /// global is polled here rather than pushed, and the install notifies the
     /// window once so this runs again.
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
-        let appearance = Appearance::from_window(window.appearance());
-        let material = crate::platform::active_material(cx);
-        if appearance != self.theme.appearance || material != self.theme.material_kind() {
-            self.theme = Theme::new(appearance).with_material(material);
-        }
+        self.theme.refresh(window, cx, true);
     }
 
     /// `CAP_GPUI_AUTO_EXPAND=1`: open expanded, the way clicking the zoom
@@ -647,7 +644,19 @@ impl MainWindow {
     /// unprivileged synthetic clicks are dropped, so the screenshot harness
     /// needs a way in.
     pub fn auto_expand(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if std::env::var("CAP_GPUI_AUTO_EXPAND").is_ok_and(|value| value == "1") && !self.expanded {
+        if std::env::var("CAP_GPUI_AUTO_EXPAND").is_ok_and(|value| value == "1") {
+            self.ensure_expanded(window, cx);
+        }
+    }
+
+    pub fn is_expanded(&self) -> bool {
+        self.expanded
+    }
+
+    /// Expand through `toggle_expanded` so the restore takes the exact path
+    /// the zoom light takes (resize animation, section reveal, Recents scan).
+    pub fn ensure_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.expanded {
             self.toggle_expanded(window, cx);
         }
     }

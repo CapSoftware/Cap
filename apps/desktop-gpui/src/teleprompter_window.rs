@@ -32,7 +32,7 @@ use gpui::{
 use crate::{
     platform,
     store::{self, TeleprompterState},
-    theme::{Appearance, Theme},
+    theme::Theme,
     ui,
 };
 
@@ -237,8 +237,9 @@ impl TeleprompterWindow {
             },
         );
 
+        crate::theme::bind_window(window, cx);
         Self {
-            theme: Theme::new(Appearance::from_window(window.appearance())),
+            theme: Theme::for_window(window, cx, true),
             state,
             settings_open: false,
             playing: false,
@@ -273,11 +274,7 @@ impl TeleprompterWindow {
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
-        let appearance = Appearance::from_window(window.appearance());
-        let material = platform::active_material(cx);
-        if appearance != self.theme.appearance || material != self.theme.material_kind() {
-            self.theme = Theme::new(appearance).with_material(material);
-        }
+        self.theme.refresh(window, cx, true);
     }
 
     // -- Persistence -------------------------------------------------------

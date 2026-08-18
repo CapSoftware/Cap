@@ -13,10 +13,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use crate::{
-    main_window::Mode,
-    theme::{Appearance, Theme},
-};
+use crate::{main_window::Mode, theme::Theme};
 
 /// `.inner_size(580.0, 340.0)` / `.min_inner_size(580.0, 340.0)` /
 /// `.resizable(false)` on the `ShowCapWindow::ModeSelect` arm in `windows.rs`,
@@ -61,12 +58,13 @@ impl ModeSelectWindow {
             true
         });
 
+        crate::theme::bind_window(window, cx);
         Self {
             // No material: `applyMacOSWindowMaterial` runs in the
             // `(window-chrome)` layout, and this route is not in it. The window
             // is `bg-gray-1` and opaque (`is_transparent()` is false for
             // ModeSelect).
-            theme: Theme::new(Appearance::from_window(window.appearance())),
+            theme: Theme::for_window(window, cx, false),
             mode,
             focus: cx.focus_handle(),
         }
@@ -94,11 +92,8 @@ impl ModeSelectWindow {
         cx.defer(move |cx: &mut gpui::App| crate::app_windows::set_recording_mode(mode, cx));
     }
 
-    fn sync_appearance(&mut self, window: &Window) {
-        let appearance = Appearance::from_window(window.appearance());
-        if appearance != self.theme.appearance {
-            self.theme = Theme::new(appearance);
-        }
+    fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
+        self.theme.refresh(window, cx, false);
     }
 
     /// `ModeOption`: one card per mode, the whole card a button.
@@ -240,7 +235,7 @@ impl ModeSelectWindow {
 
 impl Render for ModeSelectWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_appearance(window);
+        self.sync_appearance(window, cx);
         let theme = self.theme;
 
         div()
