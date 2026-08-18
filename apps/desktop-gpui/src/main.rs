@@ -5,11 +5,14 @@
 
 mod app_windows;
 mod assets;
+mod auth;
 #[cfg(target_os = "macos")]
 mod camera_bench;
 mod camera_window;
 mod controls_window;
+mod dev_restore;
 mod devices;
+mod editor_audio;
 mod editor_canvas;
 mod editor_clips;
 mod editor_color;
@@ -35,6 +38,7 @@ mod recording;
 mod session;
 mod settings_pages;
 mod settings_window;
+mod single_instance;
 mod store;
 mod target_overlay;
 mod teleprompter_window;
@@ -42,6 +46,7 @@ mod theme;
 mod transcription;
 mod tray;
 mod ui;
+mod upload;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
@@ -93,6 +98,17 @@ fn main() {
         )
         .init();
 
+    // A relaunch means "run the code I just built": take over from any
+    // previous instance still alive in the tray (see `single_instance`).
+    single_instance::acquire();
+
+    platform::install_url_scheme_handler();
+    for argument in std::env::args().skip(1) {
+        if argument.contains("token") || argument.contains("api_key") {
+            crate::auth::submit_deep_link(&argument);
+        }
+    }
+
     let app = gpui_platform::application().with_assets(Assets);
     // `RunEvent::Reopen`: the dock icon clicked while the app runs. Must be
     // registered on the builder -- gpui exposes it nowhere else -- with the
@@ -117,6 +133,7 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
+        crate::theme::init(cx);
 
         let session = RecordingSession::init(cx);
         crate::feeds::Feeds::init(cx);
@@ -219,6 +236,11 @@ fn main() {
         // The Tauri app syncs the dock the moment a dock-activating window is
         // shown; the main window is up by here.
         menus::sync_dock_visibility(cx);
+
+        // `CAP_GPUI_DEV_RESTORE=<state file>`: `dev.sh`'s relaunch loop.
+        // Reopens the previous process's windows in place and keeps the
+        // state file current for the next swap.
+        dev_restore::init(cx);
 
         // Enumeration is started here rather than in `MainWindow::new`, which
         // runs before the window is fully built -- see `start_enumeration`.
@@ -397,6 +419,12 @@ fn main() {
                 })
                 .expect("failed to arm the target overlay");
         }
-        cx.activate(true);
+        // Under the dev loop the app relaunches on every save; activating
+        // would yank focus from the code editor each time. The restored
+        // windows come forward with `orderFrontRegardless` instead, and the
+        // main window floats at panel level 100 regardless of activation.
+        if !dev_restore::enabled() {
+            cx.activate(true);
+        }
     });
 }
