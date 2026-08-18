@@ -78,6 +78,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Commits & PRs
 - Conventional style: `feat:`, `fix:`, `chore:`, `improve:`, `refactor:`, `docs:` (e.g., `fix: hide watermark for pro users`).
+- Never add `Co-authored-by` or other attribution trailers (Cursor, Cursor Agent, or anyone else). Commit as the user only.
 - PRs: clear description, linked issues, screenshots/GIFs for UI, env/migration notes. Keep scope tight and update docs when behavior changes.
 
 ## Agent‑Specific Practices
