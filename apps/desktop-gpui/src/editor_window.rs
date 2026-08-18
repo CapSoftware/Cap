@@ -53,18 +53,22 @@ use cap_project::{
     TimelineConfiguration, XY,
 };
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
+#[cfg(target_os = "macos")]
+use core_foundation::base::TCFType;
+#[cfg(target_os = "macos")]
+use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage,
-    SharedString, StatefulInteractiveElement as _, Styled, Window, div, point,
-    prelude::FluentBuilder, px, svg,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Point, Render, RenderImage, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, StyledImage as _, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder,
+    px, svg,
 };
 
 use crate::{
-    editor_edits::{
-        self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection,
-    },
+    editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
+    editor_export::ExportUi,
+    store::SettingsEnum,
     theme::{Appearance, Theme},
     ui,
 };
@@ -104,23 +108,21 @@ pub const EDITOR_PREVIEW_FPS: u32 = 60;
 /// `lib.rs:147`).
 const EDITOR_OUTPUT_SIZE: XY<u32> = XY { x: 1920, y: 1080 };
 
-/// Preview quality `half` -- the default of `full | half | quarter`
-/// (`context.ts:155-161`), 65 % (`lib.rs:148-149`).
-const EDITOR_PREVIEW_SCALE: f32 = 0.65;
-
-/// `default_editor_preview_resolution()` (`lib.rs:151-157`): the output size
-/// at the preview scale, width rounded up to a multiple of 4 and height to a
-/// multiple of 2 -- encoder/format alignment, asserted to be 1248x702 at
-/// `lib.rs:192-194`.
-///
-/// E1 renders at this fixed base rather than following the player area's size
-/// the way the Tauri `previewQuality` select lets the user do; see the README
-/// deviation.
-pub fn default_preview_resolution() -> XY<u32> {
-    let width = ((EDITOR_OUTPUT_SIZE.x as f32 * EDITOR_PREVIEW_SCALE).round() as u32).div_ceil(4) * 4;
-    let height =
-        ((EDITOR_OUTPUT_SIZE.y as f32 * EDITOR_PREVIEW_SCALE).round() as u32).div_ceil(2) * 2;
+pub fn preview_resolution(quality: crate::store::EditorPreviewQuality) -> XY<u32> {
+    let scale = quality.scale();
+    let width = ((EDITOR_OUTPUT_SIZE.x as f32 * scale).round() as u32)
+        .max(4)
+        .div_ceil(4)
+        * 4;
+    let height = ((EDITOR_OUTPUT_SIZE.y as f32 * scale).round() as u32)
+        .max(2)
+        .div_ceil(2)
+        * 2;
     XY::new(width, height)
+}
+
+pub fn default_preview_resolution() -> XY<u32> {
+    preview_resolution(crate::store::EditorPreviewQuality::Half)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,10 +158,10 @@ const PLAYER_CANVAS_PADDING: f32 = 4.;
 // ---------------------------------------------------------------------------
 
 use crate::editor_timeline::{
-    self as timeline, MINIMAP_HEIGHT, MINIMAP_TOP, SCROLL_BODY_PADDING_RIGHT, START_SNAP_PX,
-    TIMELINE_HEADER_HEIGHT, TIMELINE_PADDING, TIMELINE_SLOT_PADDING, TIMELINE_TOP_PADDING,
-    TRACK_GUTTER, TRACK_ICON_WIDTH, TRACK_ROW_GAP, TimelineModel, TimelineView, TrackKind,
-    Transform,
+    self as timeline, ADD_TRACK_OPTIONS, MINIMAP_HEIGHT, MINIMAP_TOP, SCROLL_BODY_PADDING_RIGHT,
+    START_SNAP_PX, TIMELINE_HEADER_HEIGHT, TIMELINE_PADDING, TIMELINE_SLOT_PADDING,
+    TIMELINE_TOP_PADDING, TRACK_GUTTER, TRACK_ICON_WIDTH, TRACK_ROW_GAP, TimelineModel,
+    TimelineView, TrackKind, TrackLanes, Transform,
 };
 
 // ---------------------------------------------------------------------------
@@ -281,12 +283,11 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     // (`ED/context.ts:1776-1783`).
     let (has_microphone, has_system_audio) = match studio.as_ref() {
         StudioRecordingMeta::SingleSegment { segment } => (segment.audio.is_some(), false),
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .first()
-            .map_or((false, false), |segment| {
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            inner.segments.first().map_or((false, false), |segment| {
                 (segment.mic.is_some(), segment.system_audio.is_some())
-            }),
+            })
+        }
     };
 
     if segment_count == 0 {
@@ -416,9 +417,184 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
+/// The poster: the recording's own first-frame JPEG, decoded to at most the
+/// canvas's retina size. `thumbnail` (a box filter) over `resize` because the
+/// picture is on screen for well under a second.
+fn decode_poster(path: &std::path::Path) -> Option<Arc<RenderImage>> {
+    let bytes = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    let (width, height) = (image.width().max(1), image.height().max(1));
+    let scale = (1920. / width as f32).min(1080. / height as f32).min(1.);
+    let mut scaled = if scale < 1. {
+        image::imageops::thumbnail(
+            &image.into_rgba8(),
+            ((width as f32 * scale) as u32).max(1),
+            ((height as f32 * scale) as u32).max(1),
+        )
+    } else {
+        image.into_rgba8()
+    };
+    for pixel in scaled.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(smallvec::smallvec![
+        image::Frame::new(scaled)
+    ])))
+}
+
 /// What the frame pump hands the window.
+#[derive(Clone)]
+pub(crate) enum EditorPreviewFrame {
+    Image(Arc<RenderImage>),
+    #[cfg(target_os = "macos")]
+    Surface(CVPixelBuffer),
+}
+
+impl EditorPreviewFrame {
+    pub(crate) fn paint(&self, bounds: gpui::Bounds<Pixels>, window: &mut Window) {
+        match self {
+            Self::Image(image) => {
+                let _ = window.paint_image(
+                    bounds,
+                    gpui::Corners::default(),
+                    Arc::clone(image),
+                    0,
+                    false,
+                );
+            }
+            #[cfg(target_os = "macos")]
+            Self::Surface(surface) => window.paint_surface(bounds, surface.clone()),
+        }
+    }
+}
+
+struct PreviewFrameView {
+    frame: Option<EditorPreviewFrame>,
+    frame_size: (f32, f32),
+    frame_rect: crate::editor_canvas::CanvasRect,
+    stats: Option<Arc<PumpStats>>,
+}
+
+impl PreviewFrameView {
+    fn new(frame_rect: crate::editor_canvas::CanvasRect) -> Self {
+        Self {
+            frame: None,
+            frame_size: (1920., 1080.),
+            frame_rect,
+            stats: None,
+        }
+    }
+
+    fn set_frame(
+        &mut self,
+        frame: EditorPreviewFrame,
+        frame_size: (f32, f32),
+        stats: Option<Arc<PumpStats>>,
+        cx: &mut Context<Self>,
+    ) -> Option<EditorPreviewFrame> {
+        self.frame_size = frame_size;
+        self.stats = stats;
+        let previous = self.frame.replace(frame);
+        cx.notify();
+        previous
+    }
+}
+
+impl Render for PreviewFrameView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(frame) = self.frame.clone() else {
+            return div().size_full().into_any_element();
+        };
+        let frame_size = self.frame_size;
+        let frame_rect = self.frame_rect.clone();
+        let painted = self.stats.clone();
+
+        gpui::canvas(
+            |bounds, _window, _cx| bounds,
+            move |_, bounds, window, _cx| {
+                let container_width: f32 = bounds.size.width.into();
+                let container_height: f32 = bounds.size.height.into();
+                let (width, height) = letterbox((container_width, container_height), frame_size);
+                let fitted = gpui::Bounds {
+                    origin: gpui::point(
+                        bounds.origin.x + px((container_width - width) / 2.),
+                        bounds.origin.y + px((container_height - height) / 2.),
+                    ),
+                    size: gpui::size(px(width), px(height)),
+                };
+                frame_rect.set(Some(crate::editor_canvas::PlayerFrame {
+                    container: bounds,
+                    frame: fitted,
+                }));
+                window.paint_quad(gpui::fill(fitted, gpui::black()));
+                frame.paint(fitted, window);
+                if let Some(stats) = &painted {
+                    stats.painted.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+        )
+        .size_full()
+        .into_any_element()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum EditorSection {
+    Header,
+    Toolbar,
+    Transport,
+    Sidebar,
+    Timeline,
+}
+
+struct EditorSectionView {
+    editor: WeakEntity<EditorWindow>,
+    section: EditorSection,
+    _editor_subscription: Subscription,
+}
+
+impl EditorSectionView {
+    fn new(editor: &Entity<EditorWindow>, section: EditorSection, cx: &mut Context<Self>) -> Self {
+        let editor_subscription = cx.observe(editor, |_, _, cx| cx.notify());
+        Self {
+            editor: editor.downgrade(),
+            section,
+            _editor_subscription: editor_subscription,
+        }
+    }
+}
+
+impl Render for EditorSectionView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(editor) = self.editor.upgrade() else {
+            return div().into_any_element();
+        };
+        editor.update(cx, |editor, cx| match self.section {
+            EditorSection::Header => editor.render_header(window, cx).into_any_element(),
+            EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
+            EditorSection::Transport => editor.render_transport(cx).into_any_element(),
+            // The Clips layout mode swaps the config sidebar's column for the
+            // clips sidebar; the config sidebar is hidden, not destroyed
+            // (`Editor.tsx:728-747`).
+            EditorSection::Sidebar => {
+                if editor.clips.open {
+                    editor.render_clips_sidebar(cx).into_any_element()
+                } else {
+                    editor.render_sidebar(cx).into_any_element()
+                }
+            }
+            EditorSection::Timeline => {
+                let viewport_width: f32 = window.viewport_size().width.into();
+                editor
+                    .render_timeline(viewport_width, cx)
+                    .into_any_element()
+            }
+        })
+    }
+}
+
 pub struct EditorFrame {
-    pub image: Arc<RenderImage>,
+    pub(crate) frame: EditorPreviewFrame,
     pub layout: FrameLayout,
     /// `RenderedFrame.frame_number` -- which frame this picture actually is.
     /// Logged at debug so a seek can be checked against what it asked for.
@@ -589,13 +765,25 @@ pub fn make_state_callback(
 /// afterwards (`beginRulerScrub`'s `seekInFlight`/`seekQueued`,
 /// `Timeline/index.tsx:890-909`). Latest-wins state gives that for free and
 /// cannot queue up a backlog of stale positions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Desired {
     pub playing: bool,
     /// The frame the *last* seek asked for, with a generation so that seeking
     /// to the frame you are already on still re-applies.
     pub seek: Option<u32>,
     pub seek_gen: u64,
+    pub resolution: XY<u32>,
+}
+
+impl Default for Desired {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            seek: None,
+            seek_gen: 0,
+            resolution: default_preview_resolution(),
+        }
+    }
 }
 
 /// The UI half. Cheap to clone, safe to call from the main thread: writing it
@@ -642,6 +830,10 @@ impl TransportHandle {
     /// `seekTo(frame)` then `startPlayback(FPS, previewResolutionBase())` --
     /// the shape every play in `handlePlayPauseClick` takes
     /// (`Player.tsx:212-233`).
+    pub fn set_resolution(&self, resolution: XY<u32>) {
+        self.modify(|desired| desired.resolution = resolution);
+    }
+
     pub fn play_from(&self, frame: u32) {
         self.modify(|desired| {
             desired.playing = true;
@@ -672,7 +864,6 @@ impl TransportHandle {
 /// tracks before it can begin. None of it may happen on the UI thread.
 pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDriver) {
     let fps = EDITOR_PREVIEW_FPS;
-    let resolution_base = default_preview_resolution();
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
 
@@ -709,13 +900,13 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                     // The repaint half, which `seek_to` does not do: the
                     // frontend emits `RenderFrameEvent` and Rust forwards it
                     // into `preview_tx` (`lib.rs:3009-3014, 6603-6614`).
-                    request_frame(&instance, frame);
+                    request_frame(&instance, frame, want.resolution);
                 }
             }
         }
 
         if want.playing && !applied_playing {
-            instance.start_playback(fps, resolution_base).await;
+            instance.start_playback(fps, want.resolution).await;
             applied_playing = true;
         }
     }
@@ -767,6 +958,12 @@ pub struct PendingProjectSave {
 }
 
 impl PendingProjectSave {
+    /// Drop a scheduled write without performing it -- the reload path after
+    /// an import, where the config on disk is newer than the editor's copy.
+    pub fn discard(&mut self) {
+        self.config = None;
+    }
+
     pub fn flush(&mut self) {
         let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
             return;
@@ -785,15 +982,29 @@ impl PendingProjectSave {
 enum DragKind {
     /// `SegmentContent`'s drag: the whole segment slides between its
     /// neighbours (`TL/MaskTrack.tsx:445-479`).
-    Move { start: f64, end: f64, bounds: DragBounds },
+    Move {
+        start: f64,
+        end: f64,
+        bounds: DragBounds,
+    },
     /// `SegmentHandle position="start"`.
-    TrimStart { start: f64, bounds: DragBounds },
+    TrimStart {
+        start: f64,
+        bounds: DragBounds,
+    },
     /// `SegmentHandle position="end"`.
-    TrimEnd { end: f64, bounds: DragBounds },
+    TrimEnd {
+        end: f64,
+        bounds: DragBounds,
+    },
     /// The clip track's own handles, which move a *recording*-domain edge
     /// scaled by the clip's timescale (`TL/ClipTrack.tsx:1134-1230`).
-    ClipTrimStart { start: f64 },
-    ClipTrimEnd { end: f64 },
+    ClipTrimStart {
+        start: f64,
+    },
+    ClipTrimEnd {
+        end: f64,
+    },
     /// `TL/ZoomTrack.tsx:188-295`: a press on bare zoom track, which becomes a
     /// segment either on the first move (dragged to length) or on release
     /// (the default one-`minDuration` box).
@@ -842,8 +1053,21 @@ pub struct EditorWindow {
     pub(crate) theme: Theme,
     pub(crate) project_path: PathBuf,
     state: LoadState,
-    latest_frame: Option<Arc<RenderImage>>,
-    frame_layout: Option<FrameLayout>,
+    pub(crate) latest_frame: Option<EditorPreviewFrame>,
+    /// The bundle's `screenshots/display.jpg`, letterboxed into the canvas
+    /// until the first composed frame lands -- decoded in parallel with
+    /// `EditorInstance` construction, so the editor opens onto a picture
+    /// rather than "Loading project...". The Solid app hides the same wait
+    /// behind a skeleton; a poster is the native equivalent with the added
+    /// courtesy of showing the recording itself.
+    poster: Option<Arc<RenderImage>>,
+    preview: Entity<PreviewFrameView>,
+    header: Entity<EditorSectionView>,
+    toolbar: Entity<EditorSectionView>,
+    transport_controls: Entity<EditorSectionView>,
+    sidebar_view: Entity<EditorSectionView>,
+    timeline_view: Entity<EditorSectionView>,
+    pub(crate) frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
@@ -851,9 +1075,10 @@ pub struct EditorWindow {
 
     // -- Transport ----------------------------------------------------------
     /// `editorState.playing`.
-    playing: bool,
+    pub(crate) playing: bool,
     /// `editorState.playbackTime`, in seconds.
     playhead: f64,
+    last_playhead_redraw: Instant,
     /// `totalDuration()`. Taken from the instance's own timeline once it
     /// exists, because that is the number the playback engine stops at
     /// (`playback.rs:560-570`, `TimelineConfiguration::duration`).
@@ -928,6 +1153,12 @@ pub struct EditorWindow {
     /// created on the first frame that draws them, because `TextInputState`
     /// needs a `&mut Window` and the sidebar renders from `&self`.
     pub(crate) hex_inputs: HashMap<crate::editor_sidebar::ColorTarget, Entity<ui::TextInputState>>,
+    /// The colour picker popover's own hex field. One entity for the window:
+    /// the popover edits one colour at a time, and its commits route through
+    /// whatever `sidebar.color_target` is current.
+    pub(crate) picker_hex: Entity<ui::TextInputState>,
+    /// The preset create/rename dialogs' name field, shared between the two.
+    preset_name_input: Entity<ui::TextInputState>,
     /// Every other text field the sidebar can show -- segment content, names,
     /// numeric boxes -- same lazy story, keyed by what it edits.
     pub(crate) fields: HashMap<crate::editor_panels::FieldKey, Entity<ui::TextInputState>>,
@@ -945,6 +1176,93 @@ pub struct EditorWindow {
     /// resolves it through a `createResource` and never refetches inside the
     /// editor, so one read at open is the same behaviour.
     pub(crate) cursor_capture: bool,
+
+    // -- Crop mode (E6) -------------------------------------------------------
+    /// The open crop dialog, if any. `None` is `dialog().type !== "crop"`.
+    pub(crate) crop: Option<crate::editor_crop::CropState>,
+    /// `snapToRatio`, a `makePersisted` signal defaulting to `true`
+    /// (`Editor.tsx:1143-1146`). It lives on the window rather than in the
+    /// dialog so it survives a close, which is the closest thing to the
+    /// source's `localStorage` this app has -- see the README deviation.
+    pub(crate) crop_snap_to_ratio: bool,
+    /// The crop box's painted rect, written from its own prepaint canvas and
+    /// read by the pointer maths -- gpui has no `getBoundingClientRect`.
+    pub(crate) crop_area_rect: ui::SliderTrack,
+
+    // -- The canvas display drag (E6) -----------------------------------------
+    /// The letterboxed frame rect the preview canvas last painted.
+    pub(crate) player_frame_rect: crate::editor_canvas::CanvasRect,
+    /// `editorState.canvasSelection`.
+    pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
+    /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
+    pub(crate) hovered_canvas: Option<crate::editor_canvas::CanvasSelection>,
+    /// The live display/camera drag.
+    pub(crate) canvas_drag: Option<crate::editor_canvas::CanvasDrag>,
+    /// `dragRects().display` -- the optimistic rect that follows the pointer
+    /// at input rate while the rendered frame catches up.
+    pub(crate) canvas_drag_rect: Option<crate::editor_canvas::NormRect>,
+    /// `dragRects().camera`.
+    pub(crate) canvas_drag_camera_rect: Option<crate::editor_canvas::NormRect>,
+    /// `snapGuides()`.
+    pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
+
+    preview_quality: crate::store::EditorPreviewQuality,
+    pub(crate) tracks: TrackLanes,
+    toolbar_menu: Option<OpenToolbarMenu>,
+    add_track: Option<AddTrackMenu>,
+    /// The header's Presets dropdown (`PresetsDropdown.tsx`), and whichever
+    /// of its three dialogs is up. The dialog closes the menu when it opens,
+    /// exactly as the Solid dialogs replace the dropdown.
+    presets_menu: Option<PresetsMenu>,
+    preset_dialog: Option<PresetDialog>,
+    /// The last caption-projection signature -- clip list, transitions, text
+    /// holds and the caption source master -- so `project_changed` only
+    /// re-derives `timeline.captionSegments` when one of those moved, the
+    /// same inputs the Solid effect keys on (`ED/context.ts:1630-1661`).
+    caption_track_sig: Option<u64>,
+    pub(crate) export: Option<ExportUi>,
+    /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
+    /// sidebar's column draws the clips sidebar instead.
+    pub(crate) clips: crate::editor_clips::ClipsState,
+}
+
+struct PresetsMenu {
+    origin: gpui::Point<Pixels>,
+    store: crate::presets::PresetsStore,
+    /// An open per-preset submenu: which row, and where it was summoned.
+    submenu: Option<(usize, gpui::Point<Pixels>)>,
+    scroll: gpui::ScrollHandle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PresetDialog {
+    Create { default: bool },
+    Rename { index: usize },
+    Delete { index: usize },
+}
+
+/// The add-track popover's geometry, computed once when it opens. Anchored to
+/// the trigger's top-left with an 8px gutter (Kobalte `placement:
+/// "bottom-start"` flipped upward), growing up and capped so it never leaves
+/// the viewport -- `fitViewport` -- with the list scrolling instead
+/// (`TrackManager.tsx:166-209`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AddTrackMenu {
+    left: Pixels,
+    /// Distance from the window's bottom edge to the popover's bottom edge.
+    bottom: Pixels,
+    max_height: Pixels,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolbarMenu {
+    AspectRatio,
+    PreviewQuality,
+}
+
+struct OpenToolbarMenu {
+    kind: ToolbarMenu,
+    state: ui::MenuState,
 }
 
 impl EditorWindow {
@@ -960,6 +1278,27 @@ impl EditorWindow {
             true
         });
 
+        // Decode the poster off-thread immediately: it races EditorInstance
+        // construction and reliably wins, so the first paint has a picture.
+        let poster_path = project_path.join("screenshots").join("display.jpg");
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(poster) = cx
+                .background_executor()
+                .spawn(async move { decode_poster(&poster_path) })
+                .await
+            else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if this.latest_frame.is_none() {
+                    this.poster = Some(poster);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+
         let name_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
         let hex_targets = [
             crate::editor_sidebar::ColorTarget::BackgroundColor,
@@ -969,7 +1308,12 @@ impl EditorWindow {
         ];
         let hex_inputs: HashMap<_, _> = hex_targets
             .iter()
-            .map(|target| (*target, cx.new(|cx| ui::TextInputState::single_line(window, cx))))
+            .map(|target| {
+                (
+                    *target,
+                    cx.new(|cx| ui::TextInputState::single_line(window, cx)),
+                )
+            })
             .collect();
         let mut text_events = vec![cx.subscribe_in(
             &name_input,
@@ -988,6 +1332,52 @@ impl EditorWindow {
                 },
             ));
         }
+        let picker_hex = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        text_events.push(cx.subscribe_in(
+            &picker_hex,
+            window,
+            |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
+                this.on_picker_hex_event(event, window, cx)
+            },
+        ));
+        let preset_name_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_placeholder("Preset name");
+            input
+        });
+        text_events.push(cx.subscribe_in(
+            &preset_name_input,
+            window,
+            |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| match event {
+                ui::TextInputEvent::Confirmed => this.commit_preset_dialog(window, cx),
+                ui::TextInputEvent::Cancelled => {
+                    this.preset_dialog = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        ));
+        let player_frame_rect = crate::editor_canvas::canvas_rect_cell();
+        let preview = cx.new(|_| PreviewFrameView::new(player_frame_rect.clone()));
+        let editor = cx.entity();
+        let header = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Header, cx)
+        });
+        let toolbar = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Toolbar, cx)
+        });
+        let transport_controls = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Transport, cx)
+        });
+        let sidebar_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
+        });
+        let timeline_view =
+            cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
 
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
@@ -998,11 +1388,18 @@ impl EditorWindow {
             project_path,
             state: LoadState::Loading,
             latest_frame: None,
+            preview,
+            header,
+            toolbar,
+            transport_controls,
+            sidebar_view,
+            timeline_view,
             frame_layout: None,
             instance: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
+            last_playhead_redraw: Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
             total: 0.0,
             transport: None,
             scrub: None,
@@ -1028,12 +1425,50 @@ impl EditorWindow {
             save_task: None,
             name_input,
             hex_inputs,
+            picker_hex,
+            preset_name_input,
             fields: HashMap::new(),
             field_editing: None,
             _text_events: text_events,
             sidebar: crate::editor_sidebar::SidebarState::new(&ProjectConfiguration::default()),
             cursor_capture: crate::store::GeneralSettings::load().custom_cursor_capture,
+            crop: None,
+            crop_snap_to_ratio: true,
+            crop_area_rect: ui::SliderTrack::default(),
+            player_frame_rect,
+            canvas_selection: None,
+            hovered_canvas: None,
+            canvas_drag: None,
+            canvas_drag_rect: None,
+            canvas_drag_camera_rect: None,
+            snap_guides: Vec::new(),
+            preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
+            tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
+            toolbar_menu: None,
+            add_track: None,
+            presets_menu: None,
+            preset_dialog: None,
+            caption_track_sig: None,
+            poster: None,
+            export: None,
+            clips: crate::editor_clips::ClipsState::default(),
         }
+    }
+
+    /// `frameNumberToRender`'s time: `previewTime ?? playbackTime`
+    /// (`Editor.tsx:515-519`), floored at zero.
+    pub(crate) fn preview_or_playhead(&self) -> f64 {
+        self.view.preview_time.unwrap_or(self.playhead).max(0.0)
+    }
+
+    pub(crate) fn preview_resolution(&self) -> XY<u32> {
+        preview_resolution(self.preview_quality)
+    }
+
+    /// The transport's own play toggle, reachable from the crop dialog's open
+    /// path (which stops playback first).
+    pub(crate) fn toggle_play_from_crop(&mut self, cx: &mut Context<Self>) {
+        self.stop_playback(cx);
     }
 
     /// Hand the close path the pending write, so a `.cap` closed inside the
@@ -1059,7 +1494,12 @@ impl EditorWindow {
         window.focus(&self.focus, cx);
     }
 
-    pub fn set_summary(&mut self, summary: ProjectSummary, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_summary(
+        &mut self,
+        summary: ProjectSummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.timeline = summary.timeline.clone();
         self.clip_display_durations = summary.clip_display_durations.clone();
         self.recording_duration = summary.recording_duration;
@@ -1071,8 +1511,9 @@ impl EditorWindow {
         // the on-mount 80px fit then narrows it on the first render that knows
         // the timeline's width.
         self.view.transform = Transform::initial(summary.duration);
-        self.name_input
-            .update(cx, |input, cx| input.set_text(summary.pretty_name.clone(), cx));
+        self.name_input.update(cx, |input, cx| {
+            input.set_text(summary.pretty_name.clone(), cx)
+        });
         self.state = LoadState::Ready(Box::new(summary));
         cx.notify();
         window.refresh();
@@ -1091,6 +1532,7 @@ impl EditorWindow {
     ) {
         self.project = config;
         self.history = ProjectHistory::new(self.project.clone());
+        self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
         self.rebuild_timeline();
         // The sidebar's own signals are seeded from the config the instance
         // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
@@ -1107,7 +1549,12 @@ impl EditorWindow {
     fn rebuild_timeline(&mut self) {
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
-        self.timeline = TimelineModel::build(&self.project, self.has_camera, self.multiple_clips);
+        self.timeline = TimelineModel::build_with_lanes(
+            &self.project,
+            self.has_camera,
+            self.multiple_clips,
+            &self.tracks,
+        );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
         // `totalDuration()` is derived from the store, so a trim, split or
@@ -1210,6 +1657,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Before `history.record`, so the re-projected caption track is part
+        // of the same undo entry as the edit that moved it.
+        self.rederive_caption_track();
         self.history.record(&self.project);
         self.rebuild_timeline();
         self.publish_project();
@@ -1218,18 +1668,93 @@ impl EditorWindow {
         window.refresh();
     }
 
+    /// The Solid effect at `ED/context.ts:1630-1704`: whenever the clip list,
+    /// transitions, text holds or the caption source master move, re-project
+    /// `timeline.captionSegments` through the edit list so captions follow
+    /// trims, deletes, reorders and inserts with no re-transcription.
+    fn rederive_caption_track(&mut self) {
+        let Some(sig) = self.caption_projection_signature() else {
+            self.caption_track_sig = None;
+            return;
+        };
+        if self.caption_track_sig == Some(sig) {
+            return;
+        }
+        self.caption_track_sig = Some(sig);
+        let Some(summary) = self.summary() else {
+            return;
+        };
+        let durations = summary.clip_display_durations.clone();
+        let Some(captions) = self.project.captions.as_ref() else {
+            return;
+        };
+        let segments = captions.segments.clone();
+        if let Some(timeline) = self.project.timeline.as_mut() {
+            timeline.caption_segments = crate::transcription::derive_caption_track_segments(
+                &segments, timeline, &durations,
+            );
+        }
+    }
+
+    /// The effect's dependency signature (`ED/context.ts:1632-1661`): caption
+    /// sources, clip segments, transitions and hold windows. `None` when
+    /// there is nothing to project -- no captions, legacy non-source-timed
+    /// data, or no timeline.
+    fn caption_projection_signature(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+
+        let captions = self.project.captions.as_ref()?;
+        if !captions.source_timed || captions.segments.is_empty() {
+            return None;
+        }
+        let timeline = self.project.timeline.as_ref()?;
+
+        let mut hasher = std::hash::DefaultHasher::new();
+        for segment in &captions.segments {
+            segment.id.hash(&mut hasher);
+            segment.start.to_bits().hash(&mut hasher);
+            segment.end.to_bits().hash(&mut hasher);
+            segment.text.hash(&mut hasher);
+            for word in &segment.words {
+                word.text.hash(&mut hasher);
+                word.start.to_bits().hash(&mut hasher);
+                word.end.to_bits().hash(&mut hasher);
+            }
+        }
+        for segment in &timeline.segments {
+            segment.start.to_bits().hash(&mut hasher);
+            segment.end.to_bits().hash(&mut hasher);
+            segment.timescale.to_bits().hash(&mut hasher);
+            segment.recording_clip.hash(&mut hasher);
+        }
+        for transition in &timeline.transitions {
+            transition.segment_index.hash(&mut hasher);
+            format!("{:?}", transition.kind).hash(&mut hasher);
+            transition.duration.to_bits().hash(&mut hasher);
+        }
+        for (start, end) in timeline.hold_windows() {
+            start.to_bits().hash(&mut hasher);
+            end.to_bits().hash(&mut hasher);
+        }
+        Some(hasher.finish())
+    }
+
     /// The renderer half. `frameNumberToRender` is `previewTime ??
     /// playbackTime` (`Editor.tsx:515-519`), floored into a frame number, and
     /// the re-render is skipped while playing exactly as `emitRenderFrame`'s
     /// `if (!editorState.playing)` gate does (`:493`).
-    fn publish_project(&self) {
+    pub(crate) fn publish_project(&self) {
         let Some(instance) = &self.instance else {
             return;
         };
         instance.project_config.0.send(self.project.clone()).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
-            request_frame(instance, (time * EDITOR_PREVIEW_FPS as f64).floor() as u32);
+            request_frame(
+                instance,
+                (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
+                self.preview_resolution(),
+            );
         }
     }
 
@@ -1335,10 +1860,14 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        transport.set_resolution(self.preview_resolution());
         self.transport = Some(transport);
         self.stats = Some(stats);
         if total > 0.0 {
             self.total = total;
+        }
+        if let Some(instance) = &self.instance {
+            request_frame(instance, 0, self.preview_resolution());
         }
         cx.notify();
         window.refresh();
@@ -1374,6 +1903,8 @@ impl EditorWindow {
             return;
         }
         self.playhead = next;
+        self.view.playhead = next;
+        self.view.playing = self.playing;
 
         // `createEffect(() => { if (isAtEnd() && editorState.playing) {
         // commands.stopPlayback(); setEditorState("playing", false); } })`
@@ -1384,18 +1915,22 @@ impl EditorWindow {
             self.stop_playback(cx);
         }
 
-        cx.notify();
-        window.refresh();
+        if self.last_playhead_redraw.elapsed() >= Duration::from_millis(33) || self.is_at_end() {
+            self.last_playhead_redraw = Instant::now();
+            self.invalidate_playback_chrome(window, cx);
+        }
     }
 
     /// The pause half of `handlePlayPauseClick`, also used by the end-of-media
-    /// effect and by prev/next.
-    fn stop_playback(&mut self, cx: &mut Context<Self>) {
+    /// effect, by prev/next, and by the clips sidebar's import path
+    /// (`ClipsSidebar.tsx:508-511`).
+    pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
         if let Some(transport) = &self.transport {
             transport.pause();
         }
         if self.playing {
             self.playing = false;
+            self.view.playing = false;
             self.report_playback();
         }
         cx.notify();
@@ -1409,7 +1944,9 @@ impl EditorWindow {
         let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
         transport.play_from(frame);
         self.playhead = from.max(0.0);
+        self.view.playhead = self.playhead;
         self.playing = true;
+        self.view.playing = true;
         self.play_mark = self
             .stats
             .as_ref()
@@ -1462,6 +1999,8 @@ impl EditorWindow {
             transport.seek(frame);
         }
         self.playhead = time;
+        self.view.playhead = time;
+        self.view.playing = self.playing;
         cx.notify();
     }
 
@@ -1509,6 +2048,63 @@ impl EditorWindow {
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Crop mode first. It takes Escape and the four arrows and lets
+        // **everything else through**, which is what the source does: the
+        // dialog is a Kobalte modal but `useEditorShortcuts` and the
+        // timeline's own listener are both bound on `document`, and Kobalte
+        // does not stop key events reaching them. So Space still plays, `S`
+        // still toggles the scissors and Backspace still deletes the timeline
+        // selection with the cropper open. See the README.
+        if self.crop.is_some() {
+            // gpui delivers AppKit's key repeat; the cropper's own rAF ticker
+            // owns repetition (`Cropper.tsx:1019-1022`), so a repeat must not
+            // double-apply.
+            if event.is_held {
+                if crate::editor_crop::is_nudge_key(event.keystroke.key.as_str()).is_some() {
+                    cx.stop_propagation();
+                }
+                return;
+            }
+            if self.crop_key_down(event, window, cx) {
+                cx.stop_propagation();
+                window.refresh();
+                return;
+            }
+        }
+
+        // The canvas arrow-key nudge is scoped outside `useEditorShortcuts`
+        // precisely so held keys repeat (`CanvasElementsOverlay.tsx:561-565`),
+        // so it is the one editor shortcut that runs on a repeat.
+        if !event.keystroke.modifiers.platform
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !ui::text_input_has_focus(window, cx)
+            && self.canvas_selection.is_some()
+        {
+            let key = event.keystroke.key.as_str();
+            if key == "escape" && !event.is_held {
+                self.canvas_selection = None;
+                cx.stop_propagation();
+                cx.notify();
+                window.refresh();
+                return;
+            }
+            let direction = match key {
+                "left" => Some((-1., 0.)),
+                "right" => Some((1., 0.)),
+                "up" => Some((0., -1.)),
+                "down" => Some((0., 1.)),
+                _ => None,
+            };
+            if let Some(direction) = direction
+                && self.canvas_nudge(direction, event.keystroke.modifiers.shift, window, cx)
+            {
+                cx.stop_propagation();
+                window.refresh();
+                return;
+            }
+        }
+
         if event.is_held {
             return;
         }
@@ -1531,6 +2127,38 @@ impl EditorWindow {
         if self.sidebar.menu.is_some()
             && self.sidebar_menu_key(event.keystroke.key.as_str(), window, cx)
         {
+            cx.stop_propagation();
+            return;
+        }
+        if self.toolbar_menu.is_some()
+            && self.toolbar_menu_key(event.keystroke.key.as_str(), window, cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
+        if self.add_track.is_some() && event.keystroke.key.as_str() == "escape" {
+            self.add_track = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if self.sidebar.color_picker.is_some() && event.keystroke.key.as_str() == "escape" {
+            self.close_color_picker(cx);
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key.as_str() == "escape"
+            && (self.presets_menu.is_some() || self.preset_dialog.is_some())
+        {
+            self.presets_menu = None;
+            self.preset_dialog = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        // The clips overlays -- the import menu and the record modal
+        // (`ClipsSidebar.tsx:764-775`).
+        if event.keystroke.key.as_str() == "escape" && self.clips_overlay_escape(cx) {
             cx.stop_propagation();
             return;
         }
@@ -1650,7 +2278,9 @@ impl EditorWindow {
     fn zoom_by(&mut self, factor: f64, origin: f64, cx: &mut Context<Self>) {
         let total = self.total_duration();
         let zoom = self.view.transform.zoom;
-        self.view.transform.update_zoom(zoom * factor, origin, total);
+        self.view
+            .transform
+            .update_zoom(zoom * factor, origin, total);
         self.note_transform("zoom", Some(origin));
         cx.notify();
     }
@@ -1696,9 +2326,7 @@ impl EditorWindow {
             // Horizontal wins when it dominates; otherwise macOS reads the
             // shift key, which is what turns a vertical trackpad swipe into a
             // pan (`TL/index.tsx:1197-1203`).
-            let delta = if delta_x.abs() > delta_y.abs() * 0.5 {
-                delta_x
-            } else if event.modifiers.shift {
+            let delta = if delta_x.abs() > delta_y.abs() * 0.5 || event.modifiers.shift {
                 delta_x
             } else {
                 delta_y
@@ -1739,6 +2367,28 @@ impl EditorWindow {
         window.refresh();
     }
 
+    fn invalidate_playback_chrome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
+        cx.notify();
+        window.refresh();
+    }
+
+    fn emit_preview_frame(&self) {
+        let Some(instance) = &self.instance else {
+            return;
+        };
+        if self.playing {
+            return;
+        }
+        let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
+        request_frame(
+            instance,
+            (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
+            self.preview_resolution(),
+        );
+    }
+
     /// `onMouseMove` on the timeline container (`TL/index.tsx:1170-1188`):
     /// while paused, the pointer's time becomes `previewTime`; outside the
     /// content column, and at all times while playing, it is cleared.
@@ -1754,9 +2404,18 @@ impl EditorWindow {
         let next = timeline::preview_time_from_x(x, viewport_width, self.view.transform);
         if next != self.view.preview_time {
             self.view.preview_time = next;
-            cx.notify();
-            window.refresh();
+            self.emit_preview_frame();
+            self.invalidate_playback_chrome(window, cx);
         }
+    }
+
+    fn timeline_hover_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.playing || self.view.preview_time.is_none() {
+            return;
+        }
+        self.view.preview_time = None;
+        self.emit_preview_frame();
+        self.invalidate_playback_chrome(window, cx);
     }
 
     fn set_hovered_track(
@@ -1775,7 +2434,12 @@ impl EditorWindow {
     // -- Timeline seeking ----------------------------------------------------
 
     fn time_at(&self, x: f32, viewport_width: f32) -> f64 {
-        timeline::time_from_x(x, viewport_width, self.view.transform, self.total_duration())
+        timeline::time_from_x(
+            x,
+            viewport_width,
+            self.view.transform,
+            self.total_duration(),
+        )
     }
 
     fn timeline_mouse_down(
@@ -1875,6 +2539,7 @@ impl EditorWindow {
     /// value being dragged.
     fn set_preview_time(&mut self, time: f64) {
         self.view.preview_time = Some(time.clamp(0.0, self.total_duration()));
+        self.emit_preview_frame();
     }
 
     /// `setEditorState("timeline", "selection", ...)`.
@@ -1905,7 +2570,13 @@ impl EditorWindow {
         let x = self.content_x(f32::from(event.position.x));
         let position = self.view.transform.position;
         let total = self.total_duration();
-        let hit = edits::hit_test(self.timeline.segments(kind), lane, x, position, secs_per_pixel);
+        let hit = edits::hit_test(
+            self.timeline.segments(kind),
+            lane,
+            x,
+            position,
+            secs_per_pixel,
+        );
         let press_time = self.time_at(f32::from(event.position.x), viewport_width);
         // The whole geometry of the press, so a scripted click's predicted
         // seconds can be checked against what the app actually resolved.
@@ -1932,6 +2603,8 @@ impl EditorWindow {
                 // which is why a click-create ends with the playhead moved.
                 if kind == TrackKind::Zoom {
                     self.begin_zoom_create(secs_per_pixel, f32::from(event.position.x), cx);
+                } else if kind == TrackKind::Audio {
+                    self.import_audio_for_lane(lane, window, cx);
                 }
                 return;
             }
@@ -1944,11 +2617,22 @@ impl EditorWindow {
         cx.stop_propagation();
 
         if self.split_mode {
-            self.split_at_pointer(kind, index, x, secs_per_pixel, event.modifiers.alt, window, cx);
+            self.split_at_pointer(
+                kind,
+                index,
+                x,
+                secs_per_pixel,
+                event.modifiers.alt,
+                window,
+                cx,
+            );
             return;
         }
 
-        let modifiers = (event.modifiers.shift, event.modifiers.platform || event.modifiers.control);
+        let modifiers = (
+            event.modifiers.shift,
+            event.modifiers.platform || event.modifiers.control,
+        );
         let segments = self.timeline.segments(kind);
         if index >= segments.len() {
             return;
@@ -2137,7 +2821,9 @@ impl EditorWindow {
                 let shift = bounds.clamp(delta);
                 let (track, index) = (drag.track, drag.index);
                 self.edit(
-                    |timeline| edits::move_segment(timeline, track, index, start + shift, end + shift),
+                    |timeline| {
+                        edits::move_segment(timeline, track, index, start + shift, end + shift)
+                    },
                     window,
                     cx,
                 );
@@ -2200,7 +2886,9 @@ impl EditorWindow {
                             return;
                         }
                         self.edit(
-                            |timeline| edits::set_segment_end(timeline, TrackKind::Zoom, index, clamped),
+                            |timeline| {
+                                edits::set_segment_end(timeline, TrackKind::Zoom, index, clamped)
+                            },
                             window,
                             cx,
                         );
@@ -2236,9 +2924,23 @@ impl EditorWindow {
         let recording = self.recording_duration;
 
         let clamped = if start_edge {
-            edits::clip_trim_start(timeline, index, requested, secs_per_pixel, &displays, recording)
+            edits::clip_trim_start(
+                timeline,
+                index,
+                requested,
+                secs_per_pixel,
+                &displays,
+                recording,
+            )
         } else {
-            edits::clip_trim_end(timeline, index, requested, secs_per_pixel, &displays, recording)
+            edits::clip_trim_end(
+                timeline,
+                index,
+                requested,
+                secs_per_pixel,
+                &displays,
+                recording,
+            )
         };
         let Some(clamped) = clamped else { return };
 
@@ -2266,11 +2968,7 @@ impl EditorWindow {
         }
         // `setPreviewTime(prevDuration())` on the start handle and
         // `prevDuration() + (clampedEnd - seg.start) / timescale` on the end.
-        let box_start = self
-            .timeline
-            .clips
-            .get(index)
-            .map_or(0., |clip| clip.start);
+        let box_start = self.timeline.clips.get(index).map_or(0., |clip| clip.start);
         if start_edge {
             self.set_preview_time(box_start);
         } else {
@@ -2295,7 +2993,8 @@ impl EditorWindow {
         let mut index = 0;
         self.edit(
             |timeline| {
-                index = edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT);
+                index =
+                    edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT);
                 true
             },
             window,
@@ -2397,7 +3096,13 @@ impl EditorWindow {
         let secs_per_pixel = self.secs_per_pixel(viewport_width);
         let x = self.content_x(window_x);
         let position = self.view.transform.position;
-        let hit = edits::hit_test(self.timeline.segments(kind), lane, x, position, secs_per_pixel);
+        let hit = edits::hit_test(
+            self.timeline.segments(kind),
+            lane,
+            x,
+            position,
+            secs_per_pixel,
+        );
 
         let hovered = match hit {
             Hit::Body { index } | Hit::Handle { index, .. } => Some((kind, lane, index)),
@@ -2564,27 +3269,53 @@ impl EditorWindow {
     /// A frame off the pump. `refresh` as well as `notify`: this window may be
     /// inactive when the first frame lands, and an inactive window repaints
     /// only when explicitly asked (the unit-2 finding).
-    pub fn frame_arrived(&mut self, frame: EditorFrame, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn frame_arrived(
+        &mut self,
+        frame: EditorFrame,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let first_frame = self.latest_frame.is_none();
+        let layout_changed = self.frame_layout != Some(frame.layout);
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
             tracing::info!(
                 output_size = ?frame.layout.output_size,
                 display = ?frame.layout.display,
                 camera = ?frame.layout.camera,
+                active = window.is_window_active(),
                 "editor frame size"
             );
         }
         tracing::debug!(number = frame.number, "editor frame");
         self.frame_layout = Some(frame.layout);
-        // Freed explicitly: nothing else evicts per-frame images from the
-        // sprite atlas, and a 3MB 1080x702 frame per scrub would fill it.
-        if let Some(previous) = self.latest_frame.replace(frame.image) {
+        // `createEffect(on(latestFrameLayout, () => { if (!dragging)
+        // setDragRects(null) }))` (`CanvasElementsOverlay.tsx:214-222`): the
+        // optimistic rect is dropped the moment the renderer agrees with it.
+        let cleared_drag_rect = self.canvas_drag.is_none()
+            && (self.canvas_drag_rect.take().is_some()
+                || self.canvas_drag_camera_rect.take().is_some());
+        let frame_size = (
+            frame.layout.output_size[0] as f32,
+            frame.layout.output_size[1] as f32,
+        );
+        self.latest_frame = Some(frame.frame.clone());
+        // The composed frame supersedes the poster; free its atlas memory.
+        self.poster = None;
+        let previous = self.preview.update(cx, |preview, cx| {
+            preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
+        });
+        if let Some(EditorPreviewFrame::Image(previous)) = previous {
             let _ = window.drop_image(previous);
         }
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
         }
-        cx.notify();
-        window.refresh();
+        if layout_changed || cleared_drag_rect {
+            cx.notify();
+        }
+        if !window.is_window_active() && (first_frame || !self.playing) {
+            window.refresh();
+        }
     }
 
     fn sync_appearance(&mut self, window: &Window) {
@@ -2624,7 +3355,7 @@ impl EditorWindow {
         };
         let draft = self.name_input.read(cx).text().trim().to_string();
         let count = draft.chars().count();
-        if count < 5 || count > 100 || draft == stored {
+        if !(5..=100).contains(&count) || draft == stored {
             if draft != stored {
                 self.name_input
                     .update(cx, |input, cx| input.set_text(stored, cx));
@@ -2760,6 +3491,73 @@ impl EditorWindow {
         }
     }
 
+    /// The popover's own hex field -- the same three handlers as
+    /// [`Self::on_hex_event`], but a commit also re-seats the picker's HSV so
+    /// the field and hue thumb jump to the typed colour.
+    fn on_picker_hex_event(
+        &mut self,
+        event: &ui::TextInputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            ui::TextInputEvent::Changed => {
+                let text = self.picker_hex.read(cx).text().to_string();
+                let digits = crate::editor_sidebar::hex_digit_count(&text);
+                if digits != 6 && digits != 8 {
+                    return;
+                }
+                if let Some(rgba) = crate::editor_sidebar::hex_to_rgb(text.trim()) {
+                    self.apply_picker_rgb([rgba[0], rgba[1], rgba[2]], window, cx);
+                }
+            }
+            ui::TextInputEvent::Confirmed | ui::TextInputEvent::Cancelled => {
+                self.commit_picker_hex(window, cx);
+                let focus = self.focus.clone();
+                window.focus(&focus, cx);
+            }
+            ui::TextInputEvent::Blurred => self.commit_picker_hex(window, cx),
+        }
+    }
+
+    fn commit_picker_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.picker_hex.read(cx).text().trim().to_string();
+        match crate::editor_sidebar::hex_to_rgb(&text) {
+            Some(rgba) => {
+                self.apply_picker_rgb([rgba[0], rgba[1], rgba[2]], window, cx);
+                let rgb = crate::editor_sidebar::rgb_to_hex([
+                    u16::from(rgba[0]),
+                    u16::from(rgba[1]),
+                    u16::from(rgba[2]),
+                ]);
+                self.picker_hex
+                    .update(cx, |input, cx| input.set_text(rgb, cx));
+            }
+            None => {
+                let current = self
+                    .sidebar
+                    .color_picker
+                    .map(|picker| {
+                        let rgb = picker.rgb();
+                        crate::editor_sidebar::rgb_to_hex([
+                            u16::from(rgb[0]),
+                            u16::from(rgb[1]),
+                            u16::from(rgb[2]),
+                        ])
+                    })
+                    .unwrap_or_default();
+                self.picker_hex
+                    .update(cx, |input, cx| input.set_text(current, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    fn apply_picker_rgb(&mut self, rgb: [u8; 3], window: &mut Window, cx: &mut Context<Self>) {
+        let (hue, sat, val) = ui::rgb_to_hsv(rgb);
+        self.apply_picker_color(hue, sat, val, window, cx);
+    }
+
     fn commit_hex(
         &mut self,
         target: crate::editor_sidebar::ColorTarget,
@@ -2890,6 +3688,1451 @@ impl EditorWindow {
             }))
     }
 
+    fn aspect_ratio_label(aspect: Option<&cap_project::AspectRatio>) -> &'static str {
+        match aspect {
+            None => "Auto",
+            Some(cap_project::AspectRatio::Wide) => "Wide",
+            Some(cap_project::AspectRatio::Vertical) => "Vertical",
+            Some(cap_project::AspectRatio::Square) => "Square",
+            Some(cap_project::AspectRatio::Classic) => "Classic",
+            Some(cap_project::AspectRatio::Tall) => "Tall",
+        }
+    }
+
+    fn toolbar_menu_items(&self, kind: ToolbarMenu) -> Vec<ui::MenuItem> {
+        match kind {
+            ToolbarMenu::AspectRatio => {
+                const OPTIONS: &[(Option<cap_project::AspectRatio>, &str)] = &[
+                    (None, "Auto"),
+                    (Some(cap_project::AspectRatio::Wide), "Wide ⋅16:9"),
+                    (Some(cap_project::AspectRatio::Vertical), "Vertical ⋅9:16"),
+                    (Some(cap_project::AspectRatio::Square), "Square ⋅1:1"),
+                    (Some(cap_project::AspectRatio::Classic), "Classic ⋅4:3"),
+                    (Some(cap_project::AspectRatio::Tall), "Tall ⋅3:4"),
+                ];
+                OPTIONS
+                    .iter()
+                    .map(|(value, label)| {
+                        ui::MenuItem::new(
+                            *label,
+                            aspect_ratio_eq(value, &self.project.aspect_ratio),
+                        )
+                    })
+                    .collect()
+            }
+            ToolbarMenu::PreviewQuality => crate::store::EditorPreviewQuality::ALL
+                .iter()
+                .rev()
+                .map(|quality| ui::MenuItem::new(quality.label(), *quality == self.preview_quality))
+                .collect(),
+        }
+    }
+
+    fn open_toolbar_menu(
+        &mut self,
+        kind: ToolbarMenu,
+        origin: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let focus = self.focus_handle_for_menu();
+        window.focus(&focus, cx);
+        self.add_track = None;
+        let items = self.toolbar_menu_items(kind);
+        self.toolbar_menu = Some(OpenToolbarMenu {
+            kind,
+            state: ui::MenuState::new(origin, &items),
+        });
+        cx.notify();
+    }
+
+    fn toolbar_menu_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(menu) = self.toolbar_menu.as_mut() else {
+            return false;
+        };
+        let kind = menu.kind;
+        match menu.state.on_key(key) {
+            ui::MenuKey::Moved => {
+                cx.notify();
+                true
+            }
+            ui::MenuKey::Commit(index) => {
+                self.choose_toolbar_menu(kind, index, window, cx);
+                true
+            }
+            ui::MenuKey::Dismiss => {
+                self.toolbar_menu = None;
+                cx.notify();
+                true
+            }
+            ui::MenuKey::Ignored => false,
+        }
+    }
+
+    fn choose_toolbar_menu(
+        &mut self,
+        kind: ToolbarMenu,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toolbar_menu = None;
+        match kind {
+            ToolbarMenu::AspectRatio => {
+                const OPTIONS: [Option<cap_project::AspectRatio>; 6] = [
+                    None,
+                    Some(cap_project::AspectRatio::Wide),
+                    Some(cap_project::AspectRatio::Vertical),
+                    Some(cap_project::AspectRatio::Square),
+                    Some(cap_project::AspectRatio::Classic),
+                    Some(cap_project::AspectRatio::Tall),
+                ];
+                let Some(next) = OPTIONS.get(index).cloned() else {
+                    return;
+                };
+                self.edit_project("aspect-ratio", window, cx, move |project| {
+                    if aspect_ratio_eq(&project.aspect_ratio, &next) {
+                        return false;
+                    }
+                    project.aspect_ratio = next;
+                    true
+                });
+            }
+            ToolbarMenu::PreviewQuality => {
+                let Some(quality) = crate::store::EditorPreviewQuality::ALL
+                    .iter()
+                    .rev()
+                    .nth(index)
+                    .copied()
+                else {
+                    return;
+                };
+                self.set_preview_quality(quality, cx);
+            }
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    fn render_toolbar_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.toolbar_menu.as_ref()?;
+        let kind = menu.kind;
+        let items = self.toolbar_menu_items(kind);
+        Some(
+            ui::Menu::plain(&self.theme, "toolbar-menu", items, &menu.state)
+                .min_width(px(200.))
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    this.choose_toolbar_menu(kind, *index, window, cx);
+                }))
+                .on_dismiss(cx.listener(|this, _, _window, cx| {
+                    this.toolbar_menu = None;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn set_preview_quality(
+        &mut self,
+        quality: crate::store::EditorPreviewQuality,
+        cx: &mut Context<Self>,
+    ) {
+        if quality == self.preview_quality {
+            return;
+        }
+        let was_playing = self.playing;
+        let from = self.playhead;
+        self.preview_quality = quality;
+        let resolution = self.preview_resolution();
+        if let Some(transport) = &self.transport {
+            transport.set_resolution(resolution);
+        }
+        let value = serde_json::Value::String(quality.as_json().to_string());
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            "editorPreviewQuality",
+            value,
+        ) {
+            tracing::warn!("failed to persist preview quality");
+        }
+        if was_playing {
+            self.stop_playback(cx);
+            self.start_playback(from, cx);
+        } else {
+            self.publish_project();
+        }
+        cx.notify();
+    }
+
+    fn open_recording_bundle(&mut self, cx: &mut Context<Self>) {
+        self.set_selection(None, cx);
+        crate::library::open_recording_folder(
+            &self.project_path,
+            crate::library::RecordingMode::Studio,
+        );
+    }
+
+    fn delete_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selection(None, cx);
+        let path = self.project_path.clone();
+        cx.spawn_in(window, async move |_this, cx| {
+            let confirmed = crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this recording?",
+                "Yes",
+                "No",
+                false,
+            );
+            if !confirmed {
+                return;
+            }
+            _this
+                .update_in(cx, |_this, window, _cx| {
+                    window.remove_window();
+                })
+                .ok();
+            cx.background_executor()
+                .timer(Duration::from_millis(20))
+                .await;
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { crate::library::delete_recording_directory(&path) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                return;
+            }
+            let _ = cx.update(|_window, cx| {
+                crate::app_windows::refresh_library_after_delete(cx);
+            });
+        })
+        .detach();
+    }
+
+    fn open_add_track(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.add_track.is_some() {
+            self.add_track = None;
+            cx.notify();
+            return;
+        }
+        let focus = self.focus_handle_for_menu();
+        window.focus(&focus, cx);
+        self.toolbar_menu = None;
+        let viewport = window.viewport_size();
+        // The trigger is `absolute bottom-0 left-0` in the 32px timeline
+        // header, itself under the slot's fixed geometry, so its top edge is a
+        // constant offset from the window's bottom-left corner.
+        let button_top =
+            f32::from(viewport.height) - DEFAULT_TIMELINE_HEIGHT + TIMELINE_TOP_PADDING;
+        let bottom = f32::from(viewport.height) - (button_top - 8.);
+        // `overflowPadding: 64` -- stay clear of the titlebar.
+        let max_height = (button_top - 8. - 64.).max(160.);
+        self.add_track = Some(AddTrackMenu {
+            left: px(TIMELINE_SLOT_PADDING + TIMELINE_PADDING),
+            bottom: px(bottom),
+            max_height: px(max_height),
+        });
+        cx.notify();
+    }
+
+    fn open_presets_menu(
+        &mut self,
+        anchor: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.presets_menu.is_some() {
+            self.presets_menu = None;
+            cx.notify();
+            return;
+        }
+        let focus = self.focus_handle_for_menu();
+        window.focus(&focus, cx);
+        self.toolbar_menu = None;
+        let viewport = window.viewport_size();
+        // `gutter={8}`, opening downward from the header trigger; `w-72`.
+        let x = f32::from(anchor.x)
+            .min(f32::from(viewport.width) - 288. - 12.)
+            .max(12.);
+        let y = f32::from(anchor.y) + 8.;
+        self.presets_menu = Some(PresetsMenu {
+            origin: point(px(x), px(y)),
+            store: crate::presets::PresetsStore::load(),
+            submenu: None,
+            scroll: gpui::ScrollHandle::new(),
+        });
+        cx.notify();
+    }
+
+    /// Apply row `index`: the preset's config with the current timeline and
+    /// clips kept -- one undo entry, like any other config edit.
+    fn apply_preset_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.presets_menu.as_ref() else {
+            return;
+        };
+        let Some(entry) = menu.store.presets.get(index) else {
+            return;
+        };
+        let Some(next) = crate::presets::apply_preset(&entry.config, &self.project) else {
+            tracing::warn!("preset {index} no longer deserializes; not applied");
+            return;
+        };
+        self.presets_menu = None;
+        self.edit_project("apply-preset", window, cx, move |project| {
+            *project = next.clone();
+            true
+        });
+    }
+
+    /// The submenu's store mutations: everything but Apply and the two
+    /// dialog-opening rows.
+    fn mutate_presets(
+        &mut self,
+        cx: &mut Context<Self>,
+        mutate: impl FnOnce(&mut crate::presets::PresetsStore),
+    ) {
+        let Some(menu) = self.presets_menu.as_mut() else {
+            return;
+        };
+        mutate(&mut menu.store);
+        if !menu.store.save() {
+            tracing::warn!("the presets store could not be written");
+        }
+        menu.submenu = None;
+        cx.notify();
+    }
+
+    fn open_preset_dialog(
+        &mut self,
+        dialog: PresetDialog,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prefill = match dialog {
+            PresetDialog::Rename { index } => self
+                .presets_menu
+                .as_ref()
+                .and_then(|menu| menu.store.presets.get(index))
+                .map(|entry| entry.name.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        // The dropdown closes when its dialog opens, as Kobalte's does.
+        self.presets_menu = None;
+        self.preset_dialog = Some(dialog);
+        if !matches!(dialog, PresetDialog::Delete { .. }) {
+            self.preset_name_input.update(cx, |input, cx| {
+                input.set_text(prefill, cx);
+                input.focus_and_select_all(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn commit_preset_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.preset_dialog else {
+            return;
+        };
+        let name = self.preset_name_input.read(cx).text().trim().to_string();
+        match dialog {
+            PresetDialog::Create { default } => {
+                if name.is_empty() {
+                    return;
+                }
+                let config = crate::presets::preset_config(&self.project);
+                let mut store = crate::presets::PresetsStore::load();
+                store.create(name, config, default);
+                if !store.save() {
+                    tracing::warn!("the presets store could not be written");
+                }
+            }
+            PresetDialog::Rename { index } => {
+                if name.is_empty() {
+                    return;
+                }
+                let mut store = crate::presets::PresetsStore::load();
+                store.rename(index, name);
+                if !store.save() {
+                    tracing::warn!("the presets store could not be written");
+                }
+            }
+            PresetDialog::Delete { index } => {
+                let mut store = crate::presets::PresetsStore::load();
+                store.delete(index);
+                if !store.save() {
+                    tracing::warn!("the presets store could not be written");
+                }
+            }
+        }
+        self.preset_dialog = None;
+        let focus = self.focus.clone();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn scene_available(&self) -> bool {
+        self.has_camera && !self.project.camera.hide
+    }
+
+    fn toggle_track(
+        &mut self,
+        kind: TrackKind,
+        next: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match kind {
+            TrackKind::Caption => {
+                self.edit_project("caption-enabled", window, cx, move |project| {
+                    let captions = project
+                        .captions
+                        .get_or_insert_with(cap_project::CaptionsData::default);
+                    if captions.settings.enabled == next {
+                        return false;
+                    }
+                    captions.settings.enabled = next;
+                    true
+                });
+                self.tracks.caption = next;
+            }
+            TrackKind::Keyboard => {
+                self.edit_project("keyboard-enabled", window, cx, move |project| {
+                    let keyboard = project
+                        .keyboard
+                        .get_or_insert_with(cap_project::KeyboardData::default);
+                    if keyboard.settings.enabled == next {
+                        return false;
+                    }
+                    keyboard.settings.enabled = next;
+                    true
+                });
+                self.tracks.keyboard = next;
+            }
+            TrackKind::Scene => self.tracks.scene = next,
+            TrackKind::ThreeD => self.tracks.three_d = next,
+            _ => return,
+        }
+        if !next
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.track == kind)
+        {
+            self.set_selection(None, cx);
+        }
+        self.rebuild_timeline();
+        cx.notify();
+        window.refresh();
+    }
+
+    fn add_track_kind(&mut self, kind: TrackKind, window: &mut Window, cx: &mut Context<Self>) {
+        match kind {
+            TrackKind::Audio => {
+                let segments = self
+                    .project
+                    .timeline
+                    .as_ref()
+                    .map(|timeline| timeline.audio_segments.as_slice())
+                    .unwrap_or(&[]);
+                let lane_count = self.tracks.audio.max(edits::used_lane_count(segments));
+                let lane = (0..lane_count)
+                    .find(|lane| !segments.iter().any(|segment| segment.track == *lane))
+                    .unwrap_or(lane_count);
+                self.tracks.audio = lane_count.max(lane + 1);
+                self.rebuild_timeline();
+                self.import_audio_for_lane(lane, window, cx);
+            }
+            TrackKind::Text | TrackKind::Mask => {
+                self.add_overlay_segment(kind, window, cx);
+            }
+            _ => {}
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    fn add_overlay_segment(
+        &mut self,
+        kind: TrackKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let total = self.total_duration();
+        let length = (1.0_f64).max(secs_per_pixel * 80.).min(total);
+        let time = self.playhead.max(0.0);
+        let lane_count = match kind {
+            TrackKind::Text => self
+                .tracks
+                .text
+                .max(edits::used_lane_count(&timeline.text_segments)),
+            TrackKind::Mask => self
+                .tracks
+                .mask
+                .max(edits::used_lane_count(&timeline.mask_segments)),
+            _ => return,
+        };
+
+        let mut lane = lane_count;
+        let mut placement = None;
+        for index in 0..lane_count {
+            let candidate = match kind {
+                TrackKind::Text => {
+                    let lane_segments: Vec<_> = timeline
+                        .text_segments
+                        .iter()
+                        .filter(|segment| segment.track == index)
+                        .cloned()
+                        .collect();
+                    edits::place_segment_at_time(&lane_segments, time, length, total)
+                }
+                TrackKind::Mask => {
+                    let lane_segments: Vec<_> = timeline
+                        .mask_segments
+                        .iter()
+                        .filter(|segment| segment.track == index)
+                        .cloned()
+                        .collect();
+                    edits::place_segment_at_time(&lane_segments, time, length, total)
+                }
+                _ => None,
+            };
+            if let Some(found) = candidate {
+                lane = index;
+                placement = Some(found);
+                break;
+            }
+        }
+        if placement.is_none() {
+            placement = edits::place_segment_at_time(
+                &[] as &[cap_project::TextSegment],
+                time,
+                length,
+                total,
+            );
+        }
+        let Some((start, end)) = placement else {
+            match kind {
+                TrackKind::Text => self.tracks.text += 1,
+                TrackKind::Mask => self.tracks.mask += 1,
+                _ => {}
+            }
+            self.rebuild_timeline();
+            return;
+        };
+
+        self.tracks.text = if kind == TrackKind::Text {
+            lane_count.max(lane + 1)
+        } else {
+            self.tracks.text
+        };
+        self.tracks.mask = if kind == TrackKind::Mask {
+            lane_count.max(lane + 1)
+        } else {
+            self.tracks.mask
+        };
+
+        let inserted = self.edit(
+            |timeline| {
+                let index = match kind {
+                    TrackKind::Text => edits::insert_text_segment(
+                        timeline,
+                        edits::default_text_segment(start, end, lane),
+                    ),
+                    TrackKind::Mask => edits::insert_mask_segment(
+                        timeline,
+                        edits::default_mask_segment(start, end, lane),
+                    ),
+                    _ => return false,
+                };
+                let _ = index;
+                true
+            },
+            window,
+            cx,
+        );
+        if !inserted {
+            return;
+        }
+        let index = match kind {
+            TrackKind::Text => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| {
+                    timeline
+                        .text_segments
+                        .iter()
+                        .rposition(|segment| segment.start == start && segment.track == lane)
+                })
+                .unwrap_or(0),
+            TrackKind::Mask => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| {
+                    timeline
+                        .mask_segments
+                        .iter()
+                        .rposition(|segment| segment.start == start && segment.track == lane)
+                })
+                .unwrap_or(0),
+            _ => 0,
+        };
+        self.set_selection(Some(Selection::single(kind, index)), cx);
+        let pad = 0.15_f64.min(length / 4.0);
+        let target = time.max(start + pad).min(end - pad);
+        if (target - time).abs() > f64::EPSILON {
+            self.seek_to_time(target, cx);
+        }
+        self.view.preview_time = None;
+        self.note_edit("add-track", Some(kind));
+    }
+
+    fn import_audio_for_lane(&mut self, lane: u32, window: &mut Window, cx: &mut Context<Self>) {
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(source) = crate::platform::open_audio_panel() else {
+                return;
+            };
+            let imported = cx
+                .background_executor()
+                .spawn(async move { import_audio_file(&project_path, &source) })
+                .await;
+            match imported {
+                Ok(imported) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.commit_audio_import(lane, imported, window, cx);
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    tracing::error!("importing audio failed: {error}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn commit_audio_import(
+        &mut self,
+        lane: u32,
+        imported: ImportedAudio,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let total = self.total_duration();
+        let has_source = imported.duration > 0.0;
+        let source_duration = if has_source { imported.duration } else { total };
+        let length = edits::MIN_AUDIO_SEGMENT_DURATION.max(source_duration.min(if total > 0.0 {
+            total
+        } else {
+            source_duration
+        }));
+        let max_start = (total - length).max(0.0);
+        let start = self.playhead.max(0.0).min(max_start);
+        let end = start + length;
+        let path = imported.path.clone();
+        let inserted = self.edit(
+            |timeline| {
+                edits::insert_audio_segment(
+                    timeline,
+                    edits::default_audio_segment(
+                        start,
+                        end,
+                        lane,
+                        imported.path,
+                        imported.name,
+                        has_source.then_some(imported.duration),
+                    ),
+                );
+                true
+            },
+            window,
+            cx,
+        );
+        if !inserted {
+            return;
+        }
+        let segments = self
+            .project
+            .timeline
+            .as_ref()
+            .map(|timeline| timeline.audio_segments.as_slice())
+            .unwrap_or(&[]);
+        self.tracks.audio = edits::used_lane_count(segments).max(lane + 1);
+        if let Some(index) = segments.iter().rposition(|segment| {
+            segment.track == lane && segment.start == start && segment.path == path
+        }) {
+            self.set_selection(Some(Selection::single(TrackKind::Audio, index)), cx);
+        }
+        self.rebuild_timeline();
+        self.note_edit("add-audio", Some(TrackKind::Audio));
+        cx.notify();
+        window.refresh();
+    }
+
+    fn render_add_track_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.add_track?;
+        let theme = self.theme;
+        let scene_available = self.scene_available();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("add-track-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.add_track = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id("add-track-popover")
+                        .absolute()
+                        .left(menu.left)
+                        .bottom(menu.bottom)
+                        .w(px(336.))
+                        .max_h(menu.max_height)
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .rounded(px(16.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.gray_1))
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_none()
+                                .gap(px(2.))
+                                .px(px(16.))
+                                .pt(px(14.))
+                                .pb(px(12.))
+                                .border_b_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(Hsla::from(theme.gray_12))
+                                        .child("Add a track"),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(Hsla::from(theme.gray_10))
+                                        .child("Layer captions, audio, zooms and more onto your timeline."),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("add-track-list")
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .gap(px(2.))
+                                .p(px(6.))
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .children(ADD_TRACK_OPTIONS.iter().copied().map(|kind| {
+                                    let available = kind != TrackKind::Scene || scene_available;
+                                    let active = self.tracks.is_active(kind);
+                                    let count = self.tracks.count(kind);
+                                    let description = if available {
+                                        kind.picker_description()
+                                    } else {
+                                        kind.picker_unavailable()
+                                    };
+                                    let color = kind.color();
+                                    div()
+                                        .id(SharedString::from(format!("add-track-{kind:?}")))
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(12.))
+                                        .p(px(8.))
+                                        .rounded(px(12.))
+                                        .when(!available, |this| this.opacity(0.55))
+                                        .when(available, |this| {
+                                            this.cursor_pointer().hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                                        })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size(px(36.))
+                                                .rounded(px(10.))
+                                                .flex_none()
+                                                .bg(if available {
+                                                    color
+                                                } else {
+                                                    Hsla::from(theme.gray_3)
+                                                })
+                                                .child(
+                                                    svg()
+                                                        .path(kind.icon())
+                                                        .size(px(16.))
+                                                        .text_color(if available {
+                                                            gpui::white()
+                                                        } else {
+                                                            Hsla::from(theme.gray_10)
+                                                        }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .flex_row()
+                                                        .items_center()
+                                                        .gap(px(6.))
+                                                        .text_size(px(13.))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(Hsla::from(theme.gray_12))
+                                                        .child(kind.picker_label())
+                                                        .when(kind.supports_multiple() && count > 0, |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .rounded_full()
+                                                                    .min_w(px(16.))
+                                                                    .px(px(6.))
+                                                                    .text_size(px(10.))
+                                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                                    .text_color(gpui::white())
+                                                                    .bg(color)
+                                                                    .child(format!("{count}")),
+                                                            )
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .text_color(Hsla::from(theme.gray_10))
+                                                        .child(description),
+                                                ),
+                                        )
+                                        .child(if !kind.supports_multiple() && active {
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size(px(24.))
+                                                .rounded_full()
+                                                .flex_none()
+                                                .bg(color)
+                                                .child(
+                                                    svg()
+                                                        .path("icons/check.svg")
+                                                        .size(px(14.))
+                                                        .text_color(gpui::white()),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .size(px(24.))
+                                                .rounded_full()
+                                                .flex_none()
+                                                .border_1()
+                                                .border_color(Hsla::from(theme.gray_5))
+                                                .child(
+                                                    svg()
+                                                        .path("icons/plus.svg")
+                                                        .size(px(14.))
+                                                        .text_color(Hsla::from(theme.gray_10)),
+                                                )
+                                                .into_any_element()
+                                        })
+                                        .when(available, |this| {
+                                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                                this.add_track = None;
+                                                if kind.supports_multiple() {
+                                                    this.add_track_kind(kind, window, cx);
+                                                } else {
+                                                    this.toggle_track(
+                                                        kind,
+                                                        !this.tracks.is_active(kind),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            }))
+                                        })
+                                })),
+                        )
+                        .child(
+                            div()
+                                .p(px(6.))
+                                .flex_none()
+                                .border_t_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .child(
+                                    div()
+                                        .id("add-track-close")
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(6.))
+                                        .w_full()
+                                        .h(px(36.))
+                                        .rounded(px(8.))
+                                        .border_1()
+                                        .border_color(Hsla::from(theme.gray_4))
+                                        .bg(Hsla::from(theme.gray_2))
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Hsla::from(theme.gray_12))
+                                        .cursor_pointer()
+                                        .hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                                        .child(
+                                            svg()
+                                                .path("icons/x.svg")
+                                                .size(px(14.))
+                                                .text_color(Hsla::from(theme.gray_12)),
+                                        )
+                                        .child("Close")
+                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                            this.add_track = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// `PresetsDropdown.tsx`'s menu: `w-72 max-h-56` on the dropdown palette
+    /// (`rounded-xl border-gray-3 bg-gray-1 shadow-s`), a scrollable row list,
+    /// and a bordered footer with "Create new preset". Each row applies on
+    /// click; its gear opens the five-item submenu.
+    fn render_presets_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.presets_menu.as_ref()?;
+        let theme = self.theme;
+        let store = menu.store.clone();
+        let submenu = menu.submenu;
+
+        let rows: Vec<gpui::AnyElement> = if store.presets.is_empty() {
+            vec![
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(40.))
+                    .text_size(px(14.))
+                    .text_color(Hsla::from(theme.gray_11))
+                    .child("No Presets")
+                    .into_any_element(),
+            ]
+        } else {
+            store
+                .presets
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let is_default = store.default == Some(index);
+                    div()
+                        .id(SharedString::from(format!("preset-{index}")))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .flex_none()
+                        .gap(px(8.))
+                        .h(px(40.))
+                        .px(px(8.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(14.))
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(entry.name.clone()),
+                        )
+                        .when(is_default, |this| {
+                            this.child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .rounded_full()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .bg(Hsla::from(theme.gray_2))
+                                    .text_color(Hsla::from(theme.gray_11))
+                                    .child("Default"),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("preset-gear-{index}")))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .size(px(24.))
+                                .rounded(px(6.))
+                                .flex_none()
+                                .cursor_pointer()
+                                .hover(|this| this.bg(Hsla::from(theme.gray_4)))
+                                .child(
+                                    svg()
+                                        .path("icons/gear.svg")
+                                        .size(px(16.))
+                                        .text_color(Hsla::from(theme.gray_11)),
+                                )
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(
+                                    move |this, event: &gpui::ClickEvent, _window, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(menu) = this.presets_menu.as_mut() {
+                                            menu.submenu = match menu.submenu {
+                                                Some((open, _)) if open == index => None,
+                                                _ => Some((index, event.position())),
+                                            };
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.apply_preset_at(index, window, cx);
+                        }))
+                        .into_any_element()
+                })
+                .collect()
+        };
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("presets-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.presets_menu = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(menu.origin.x)
+                        .top(menu.origin.y)
+                        .w(px(288.))
+                        .flex()
+                        .flex_col()
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.gray_1))
+                        .shadow_md()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id("presets-list")
+                                .flex()
+                                .flex_col()
+                                .max_h(px(224.))
+                                .min_h_0()
+                                .p(px(6.))
+                                .gap(px(2.))
+                                .overflow_y_scroll()
+                                .track_scroll(&menu.scroll)
+                                .children(rows),
+                        )
+                        .child(
+                            div()
+                                .p(px(6.))
+                                .border_t_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .child(
+                                    div()
+                                        .id("preset-create")
+                                        .flex()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .h(px(40.))
+                                        .px(px(8.))
+                                        .rounded(px(8.))
+                                        .cursor_pointer()
+                                        .hover(|this| this.bg(Hsla::from(theme.gray_3)))
+                                        .text_size(px(14.))
+                                        .text_color(Hsla::from(theme.gray_12))
+                                        .child(div().flex_1().child("Create new preset"))
+                                        .child(
+                                            svg()
+                                                .path("icons/circle-plus.svg")
+                                                .size(px(16.))
+                                                .text_color(Hsla::from(theme.gray_11)),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_preset_dialog(
+                                                PresetDialog::Create { default: false },
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                ),
+                        ),
+                )
+                .children(submenu.map(|(index, at)| self.render_preset_submenu(index, at, cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// The per-preset submenu (`w-52`): Apply, Save settings to preset, Set
+    /// as default, Rename, Delete.
+    fn render_preset_submenu(
+        &self,
+        index: usize,
+        at: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let row = |id: SharedString, label: &'static str, danger: bool| {
+            div()
+                .id(id)
+                .flex()
+                .flex_row()
+                .items_center()
+                .h(px(32.))
+                .px(px(8.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(move |this| this.bg(Hsla::from(theme.gray_3)))
+                .text_size(px(13.))
+                .text_color(if danger {
+                    Hsla::from(theme.red_9)
+                } else {
+                    Hsla::from(theme.gray_12)
+                })
+                .child(label)
+        };
+
+        div()
+            .absolute()
+            .left(at.x)
+            .top(at.y)
+            .w(px(208.))
+            .flex()
+            .flex_col()
+            .p(px(4.))
+            .gap(px(2.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(Hsla::from(theme.gray_3))
+            .bg(Hsla::from(theme.gray_1))
+            .shadow_md()
+            .child(
+                row("preset-apply".into(), "Apply", false).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.apply_preset_at(index, window, cx);
+                    },
+                )),
+            )
+            .child(
+                row("preset-save".into(), "Save settings to preset", false).on_click(cx.listener(
+                    move |this, _, _window, cx| {
+                        let config = crate::presets::preset_config(&this.project);
+                        this.mutate_presets(cx, |store| store.save_to(index, config));
+                    },
+                )),
+            )
+            .child(
+                row("preset-default".into(), "Set as default", false).on_click(cx.listener(
+                    move |this, _, _window, cx| {
+                        this.mutate_presets(cx, |store| store.set_default(index));
+                    },
+                )),
+            )
+            .child(
+                row("preset-rename".into(), "Rename", false).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.open_preset_dialog(PresetDialog::Rename { index }, window, cx);
+                    },
+                )),
+            )
+            .child(
+                row("preset-delete".into(), "Delete", true).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.open_preset_dialog(PresetDialog::Delete { index }, window, cx);
+                    },
+                )),
+            )
+            .into_any_element()
+    }
+
+    /// The three preset dialogs, centred over a dimmed backdrop like the
+    /// Solid `Dialog.Root`s in `Editor.tsx`.
+    fn render_preset_dialog(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let dialog = self.preset_dialog?;
+        let theme = self.theme;
+
+        let (title, primary, danger) = match dialog {
+            PresetDialog::Create { .. } => ("Create Preset", "Create", false),
+            PresetDialog::Rename { .. } => ("Rename Preset", "Rename", false),
+            PresetDialog::Delete { .. } => ("Delete Preset", "Delete", true),
+        };
+
+        let body: gpui::AnyElement = match dialog {
+            PresetDialog::Delete { index } => div()
+                .text_size(px(14.))
+                .text_color(Hsla::from(theme.gray_11))
+                .child(SharedString::from(format!(
+                    "Are you sure you want to delete \"{}\"?",
+                    crate::presets::PresetsStore::load()
+                        .presets
+                        .get(index)
+                        .map(|entry| entry.name.clone())
+                        .unwrap_or_default()
+                )))
+                .into_any_element(),
+            PresetDialog::Create { default } => div()
+                .flex()
+                .flex_col()
+                .gap(px(16.))
+                .child(
+                    ui::TextInput::plain(&theme, "preset-name", &self.preset_name_input)
+                        .padding_x(px(12.))
+                        .height(px(36.))
+                        .radius(px(8.))
+                        .text_size(px(14.)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child("Set as default"),
+                        )
+                        .child(
+                            ui::Toggle::plain(&theme, "preset-default", default)
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    this.preset_dialog =
+                                        Some(PresetDialog::Create { default: !default });
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
+                        ),
+                )
+                .into_any_element(),
+            PresetDialog::Rename { .. } => div()
+                .child(
+                    ui::TextInput::plain(&theme, "preset-name", &self.preset_name_input)
+                        .padding_x(px(12.))
+                        .height(px(36.))
+                        .radius(px(8.))
+                        .text_size(px(14.)),
+                )
+                .into_any_element(),
+        };
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .id("preset-dialog-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(gpui::hsla(0., 0., 0., 0.5))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.preset_dialog = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .w(px(400.))
+                        .flex()
+                        .flex_col()
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.gray_1))
+                        .shadow_lg()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .px(px(16.))
+                                .py(px(12.))
+                                .border_b_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(title),
+                        )
+                        .child(div().p(px(16.)).child(body))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_end()
+                                .gap(px(8.))
+                                .px(px(16.))
+                                .pb(px(16.))
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "preset-cancel",
+                                        ui::ButtonVariant::Gray,
+                                        ui::ButtonSize::Md,
+                                    )
+                                    .label("Cancel")
+                                    .on_click(cx.listener(
+                                        |this, _, _window, cx| {
+                                            this.preset_dialog = None;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "preset-confirm",
+                                        if danger {
+                                            ui::ButtonVariant::Destructive
+                                        } else {
+                                            ui::ButtonVariant::Blue
+                                        },
+                                        ui::ButtonSize::Md,
+                                    )
+                                    .label(primary)
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            this.commit_preset_dialog(window, cx);
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The colour picker popover: backdrop for click-away, the panel itself,
+    /// and -- while a thumb is being dragged -- a window-wide capture layer,
+    /// because gpui has no pointer capture and the drag would die the moment
+    /// the pointer left the 240px field.
+    fn render_color_picker_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let snapshot = self.sidebar.color_picker?;
+        let theme = self.theme;
+        let dragging = self.sidebar.color_drag.is_some();
+
+        let hex_field = ui::TextInput::plain(&theme, "picker-hex", &self.picker_hex)
+            .width(px(96.))
+            .padding_x(px(6.))
+            .padding_y(px(6.))
+            .height(px(30.))
+            .radius(px(8.))
+            .bg(Hsla::from(theme.gray_1))
+            .border(Hsla::from(theme.gray_12))
+            .text_size(px(13.))
+            .text_color(Hsla::from(theme.gray_12))
+            .into_any_element();
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("color-picker-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.close_color_picker(cx);
+                        })),
+                )
+                .child(
+                    ui::ColorPicker::new(&theme, snapshot)
+                        .hex_field(hex_field)
+                        .on_sv_down(cx.listener(
+                            |this, event: &gpui::MouseDownEvent, window, cx| {
+                                this.sidebar.color_drag =
+                                    Some(crate::editor_sidebar::ColorPickerDrag::Field);
+                                this.picker_pointer(event.position, window, cx);
+                            },
+                        ))
+                        .on_hue_down(cx.listener(
+                            |this, event: &gpui::MouseDownEvent, window, cx| {
+                                this.sidebar.color_drag =
+                                    Some(crate::editor_sidebar::ColorPickerDrag::Hue);
+                                this.picker_pointer(event.position, window, cx);
+                            },
+                        )),
+                )
+                .children(dragging.then(|| {
+                    ui::Slider::drag_layer(
+                        "color-picker-drag",
+                        cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                            this.picker_pointer(event.position, window, cx);
+                        }),
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.sidebar.color_drag = None;
+                            cx.notify();
+                        }),
+                    )
+                }))
+                .into_any_element(),
+        )
+    }
+
     /// `Header.tsx:89-235` -- `h-14`, three groups, the middle one bracketed by
     /// `border-x border-black-transparent-10`.
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2917,8 +5160,22 @@ impl EditorWindow {
                     .h_full()
                     // The macOS spacer for the inset traffic lights: `h-full w-16`.
                     .child(div().h_full().w(px(64.)).flex_none())
-                    .child(self.editor_button("icons/trash.svg", None, None, None))
-                    .child(self.editor_button("icons/folder.svg", None, None, None))
+                    .child(
+                        ui::EditorButton::plain(&theme, "delete-recording")
+                            .left_icon("icons/trash.svg")
+                            .tooltip(&theme, "Delete recording")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.delete_recording(window, cx);
+                            })),
+                    )
+                    .child(
+                        ui::EditorButton::plain(&theme, "open-recording-bundle")
+                            .left_icon("icons/folder.svg")
+                            .tooltip(&theme, "Open recording bundle")
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.open_recording_bundle(cx);
+                            })),
+                    )
                     // `NameEditor` + the literal `.cap` suffix
                     // (`Header.tsx:123-126`), editable. The Solid version is an
                     // `<input>` overlaying a measuring `<span>`; here the field
@@ -2979,12 +5236,16 @@ impl EditorWindow {
                     .border_l_1()
                     .border_r_1()
                     .border_color(gpui::hsla(0., 0., 0., 0.1))
-                    .child(self.editor_button(
-                        "icons/presets.svg",
-                        Some("Presets"),
-                        Some("icons/chevron-down.svg"),
-                        None,
-                    ))
+                    .child(
+                        ui::EditorButton::plain(&theme, "presets")
+                            .left_icon("icons/presets.svg")
+                            .label("Presets")
+                            .right_icon("icons/chevron-down.svg")
+                            .pressed(self.presets_menu.is_some())
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                                this.open_presets_menu(event.position(), window, cx);
+                            })),
+                    )
                     .child(self.editor_button(
                         "icons/building-2.svg",
                         Some("Sign in"),
@@ -3009,15 +5270,16 @@ impl EditorWindow {
                     .child(self.history_button("editor-redo", "icons/redo.svg", false, cx))
                     .child(div().flex_1().h_full())
                     // `Button` (gray), `flex gap-1.5 justify-center h-[40px]`.
-                    .child(self.header_pill("icons/clapperboard.svg", "Clips"))
+                    .child(self.render_clips_pill(cx))
                     .child(self.header_pill("icons/captions.svg", "Captions"))
-                    .child(self.render_export_button()),
+                    .child(self.render_export_button(cx)),
             )
     }
 
-    /// The Clips / Captions toggles: `Button variant="gray"` at
-    /// `class="flex gap-1.5 justify-center h-[40px]"` (`Header.tsx:173-209`).
-    /// Inert -- neither layout mode exists yet.
+    /// The Captions toggle: `Button variant="gray"` at
+    /// `class="flex gap-1.5 justify-center h-[40px]"` (`Header.tsx:188-209`).
+    /// Inert -- the transcript layout mode does not exist yet. Clips has its
+    /// own live pill (`crate::editor_clips`).
     fn header_pill(&self, icon: &'static str, label: &'static str) -> impl IntoElement {
         let theme = self.theme;
         div()
@@ -3047,11 +5309,10 @@ impl EditorWindow {
 
     /// The Export button (`Header.tsx:210-231`): `h-[40px] max-w-[100px]
     /// text-[0.8125rem] font-medium text-white rounded-xl`, gradient
-    /// `bg-linear-to-b from-[#3b82f6] to-[#2563eb]`. Disabled here -- export
-    /// is its own unit -- so it carries the same 50 % wash the other inert
-    /// affordances do.
-    fn render_export_button(&self) -> impl IntoElement {
+    /// `bg-linear-to-b from-[#3b82f6] to-[#2563eb]`.
+    fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .id("editor-export")
             .flex()
             .flex_row()
             .items_center()
@@ -3062,7 +5323,7 @@ impl EditorWindow {
             .h(px(40.))
             .flex_none()
             .rounded(px(12.))
-            .opacity(0.5)
+            .cursor_pointer()
             .bg(gpui::linear_gradient(
                 180.,
                 gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
@@ -3079,6 +5340,7 @@ impl EditorWindow {
                     .text_color(gpui::white()),
             )
             .child("Export")
+            .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx)))
     }
 
     // -- Player --------------------------------------------------------------
@@ -3090,13 +5352,21 @@ impl EditorWindow {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(self.render_player_toolbar())
-            .child(self.render_preview_canvas())
-            .child(self.render_transport(cx))
+            .child(
+                self.toolbar
+                    .clone()
+                    .cached(StyleRefinement::default().w_full().h(px(64.))),
+            )
+            .child(self.render_preview_canvas(cx))
+            .child(
+                self.transport_controls
+                    .clone()
+                    .cached(StyleRefinement::default().w_full().h(px(76.))),
+            )
     }
 
     /// `flex items-center justify-between gap-3 p-3` (`Player.tsx:290`).
-    fn render_player_toolbar(&self) -> impl IntoElement {
+    fn render_player_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         div()
             .flex()
@@ -3112,14 +5382,36 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .gap(px(12.))
-                    // `AspectRatioSelect`: EditorButton at `class="w-28"`.
-                    .child(self.editor_button(
-                        "icons/layout.svg",
-                        Some("Auto"),
-                        Some("icons/chevron-down.svg"),
-                        Some(112.),
-                    ))
-                    .child(self.editor_button("icons/crop.svg", Some("Crop"), None, None))
+                    .child(
+                        ui::EditorButton::plain(&theme, "aspect-ratio")
+                            .left_icon("icons/layout.svg")
+                            .label(Self::aspect_ratio_label(self.project.aspect_ratio.as_ref()))
+                            .tooltip(&theme, "Aspect Ratio")
+                            .pressed(
+                                self.toolbar_menu
+                                    .as_ref()
+                                    .is_some_and(|menu| menu.kind == ToolbarMenu::AspectRatio),
+                            )
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                                this.open_toolbar_menu(
+                                    ToolbarMenu::AspectRatio,
+                                    event.position(),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    // `EditorButton tooltipText="Crop Video"`
+                    // (`Player.tsx:293-299`) -> `cropDialogHandler`.
+                    .child(
+                        ui::EditorButton::plain(&theme, "crop")
+                            .left_icon("icons/crop.svg")
+                            .label("Crop")
+                            .pressed(self.crop.is_some())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_crop(window, cx);
+                            })),
+                    )
                     // `FrameButton`, whose idle label is "Frame".
                     .child(self.editor_button(
                         "icons/app-window-mac.svg",
@@ -3142,13 +5434,17 @@ impl EditorWindow {
                             .text_color(Hsla::from(theme.gray_11))
                             .child("Preview quality"),
                     )
-                    // `KSelect.Trigger` -- [`ui::Select::plain`]. Inert this
-                    // unit (preview quality is pinned to `half`), so it draws
-                    // in its disabled state.
                     .child(
-                        ui::Select::plain(&theme, "preview-quality", "Half")
+                        ui::Select::plain(&theme, "preview-quality", self.preview_quality.label())
                             .stretch_label()
-                            .disabled(true),
+                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                                this.open_toolbar_menu(
+                                    ToolbarMenu::PreviewQuality,
+                                    event.position(),
+                                    window,
+                                    cx,
+                                );
+                            })),
                     ),
             )
     }
@@ -3157,86 +5453,52 @@ impl EditorWindow {
     /// with the frame centred inside it at its letterboxed size, over the
     /// canvas's `background-color: #000000`.
     ///
-    /// The frame is a gpui `img()` rather than a canvas: the picture arrives as
-    /// a CPU `RenderedFrame`, gets un-padded and BGRA-swapped once, and goes
-    /// through the sprite atlas -- the same path the camera preview uses.
-    fn render_preview_canvas(&self) -> impl IntoElement {
+    /// On macOS the frame stays on the GPU end to end: the renderer blits into
+    /// a BGRA IOSurface-backed CVPixelBuffer and gpui paints it directly via
+    /// `paint_surface` -- the camera preview does the same through
+    /// `paint_surface_fitted`. Elsewhere the picture arrives as a CPU
+    /// `RenderedFrame`, gets un-padded and BGRA-swapped once, and goes through
+    /// the sprite atlas.
+    fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let image = self.latest_frame.clone();
-        let frame_size = self
-            .frame_layout
-            .map(|layout| (layout.output_size[0] as f32, layout.output_size[1] as f32))
-            // `latestFrame()?.width ?? 1920` / `?? 1080` (`Player.tsx:567-568`).
-            .unwrap_or((1920., 1080.));
-
-        let painted = self.stats.clone();
-        let body = match (&self.state, image) {
+        let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
-            (_, Some(image)) => {
-                // gpui has no `createElementBounds`, so the container's own
-                // painted bounds come back through a `canvas` element and the
-                // frame is painted into the rect [`letterbox`] computes --
-                // the same explicit-px sizing the TSX applies to its
-                // `<canvas>`, with the 4px padding folded in. Centring is
-                // `justify-center items-center` on the wrapper.
-                gpui::canvas(
-                    |bounds, _window, _cx| bounds,
-                    move |_, bounds, window, _cx| {
-                        let container_width: f32 = bounds.size.width.into();
-                        let container_height: f32 = bounds.size.height.into();
-                        let (width, height) =
-                            letterbox((container_width, container_height), frame_size);
-                        let fitted = gpui::Bounds {
-                            origin: gpui::point(
-                                bounds.origin.x + px((container_width - width) / 2.),
-                                bounds.origin.y + px((container_height - height) / 2.),
-                            ),
-                            size: gpui::size(px(width), px(height)),
-                        };
-                        // `background-color: #000000` is on the `<canvas>`
-                        // itself, not its container: what shows outside the
-                        // fitted rect is the player card, not black.
-                        window.paint_quad(gpui::fill(fitted, gpui::black()));
-                        let _ = window.paint_image(
-                            fitted,
-                            gpui::Corners::default(),
-                            image,
-                            0,
-                            false,
-                        );
-                        // Paints, not frames -- the clock and the playhead
-                        // invalidate too. It is the other end of the pump:
-                        // fewer paints than delivered frames would mean gpui
-                        // was coalescing pictures away before they were drawn.
-                        if let Some(stats) = &painted {
-                            stats.painted.fetch_add(1, Ordering::Relaxed);
-                        }
-                    },
-                )
-                .absolute()
-                .size_full()
-                .into_any_element()
+            (_, true) => self
+                .preview
+                .clone()
+                .cached(StyleRefinement::default().size_full())
+                .into_any_element(),
+            (state, false) => {
+                if let Some(poster) = self.poster.clone() {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            gpui::img(poster)
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Contain),
+                        )
+                        .into_any_element()
+                } else {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(14.))
+                        .text_color(Hsla::from(theme.gray_11))
+                        .child(if matches!(state, LoadState::Loading) {
+                            "Loading project..."
+                        } else {
+                            "Rendering first frame..."
+                        })
+                        .into_any_element()
+                }
             }
-            (LoadState::Loading, None) => div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(14.))
-                .text_color(Hsla::from(theme.gray_11))
-                .child("Loading project...")
-                .into_any_element(),
-            (LoadState::Ready(_), None) => div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(14.))
-                .text_color(Hsla::from(theme.gray_11))
-                .child("Rendering first frame...")
-                .into_any_element(),
         };
 
         // `relative flex-1 justify-center items-center` -- no background of
@@ -3247,6 +5509,10 @@ impl EditorWindow {
             .min_h_0()
             .overflow_hidden()
             .child(body)
+            // `CanvasElementsOverlay` + `SnapGuidesOverlay`
+            // (`Player.tsx:636-643`), both mounted inside the letterbox
+            // wrapper and only while a frame exists.
+            .children(self.render_canvas_overlay(cx))
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -3287,9 +5553,7 @@ impl EditorWindow {
                     .max_w(px(520.))
                     .text_size(px(12.))
                     .text_color(Hsla::from(theme.gray_10))
-                    .child(SharedString::from(
-                        self.project_path.display().to_string(),
-                    )),
+                    .child(SharedString::from(self.project_path.display().to_string())),
             )
     }
 
@@ -3330,8 +5594,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(fraction) =
-            ui::slider_value_at(&self.zoom_slider_track, position, 0., 1., 0.001)
+        let Some(fraction) = ui::slider_value_at(&self.zoom_slider_track, position, 0., 1., 0.001)
         else {
             return;
         };
@@ -3462,16 +5725,13 @@ impl EditorWindow {
                             .when(!self.split_mode, |this| {
                                 this.hover(|this| this.bg(Hsla::from(theme.gray_3)))
                             })
-                            .child(
-                                svg()
-                                    .path("icons/scissors.svg")
-                                    .size(px(20.))
-                                    .text_color(if self.split_mode {
-                                        Hsla::from(theme.gray_1)
-                                    } else {
-                                        Hsla::from(theme.gray_12)
-                                    }),
-                            )
+                            .child(svg().path("icons/scissors.svg").size(px(20.)).text_color(
+                                if self.split_mode {
+                                    Hsla::from(theme.gray_1)
+                                } else {
+                                    Hsla::from(theme.gray_12)
+                                },
+                            ))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_split_mode(cx);
                                 window.refresh();
@@ -3521,20 +5781,16 @@ impl EditorWindow {
                             Some(Hsla::from(theme.gray_6)),
                         )
                         .thumb_top(px(-6.3))
-                        .on_drag_start(cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            this.zoom_slider_drag = true;
-                            this.apply_zoom_slider(event.position, window, cx);
-                        })),
+                        .on_drag_start(cx.listener(
+                            |this, event: &MouseDownEvent, window, cx| {
+                                this.zoom_slider_drag = true;
+                                this.apply_zoom_slider(event.position, window, cx);
+                            },
+                        )),
                     ),
             )
     }
 
-    // -- Config sidebar ------------------------------------------------------
-
-    /// `ConfigSidebar`'s shell (`ConfigSidebar.tsx:593-692`) with its six-tab
-    /// icon rail. The rail is transcribed; the bodies are not (that is a later
-    /// unit), so the scroll region shows the same "not built yet" card the
-    /// settings window's placeholder pages use.
     // -- Timeline ------------------------------------------------------------
 
     /// The timeline strip at its default 260px, 1:1 and read-only.
@@ -3557,10 +5813,12 @@ impl EditorWindow {
         let playhead_x = timeline::playhead_offset(self.view, content_width);
         let ghost_x = timeline::ghost_offset(self.view, content_width);
 
-        let minimap_width =
-            (viewport_width - TIMELINE_SLOT_PADDING * 2. - TIMELINE_PADDING - TRACK_GUTTER
-                - TIMELINE_PADDING)
-                .max(1.);
+        let minimap_width = (viewport_width
+            - TIMELINE_SLOT_PADDING * 2.
+            - TIMELINE_PADDING
+            - TRACK_GUTTER
+            - TIMELINE_PADDING)
+            .max(1.);
 
         div()
             .flex_none()
@@ -3612,6 +5870,11 @@ impl EditorWindow {
                         .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                             this.timeline_hover(f32::from(event.position.x), window, cx);
                         }))
+                        .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                            if !*hovered {
+                                this.timeline_hover_leave(window, cx);
+                            }
+                        }))
                         // `onWheel` (`:1189-1207`) and the pinch the webview
                         // would have delivered as `ctrl+wheel`.
                         .on_scroll_wheel(cx.listener(
@@ -3657,15 +5920,12 @@ impl EditorWindow {
                         // The playhead (`:1279-1295`). It dims to 50 % in
                         // split mode, where the cut line is the thing to
                         // watch (`TL/index.tsx:1281`).
-                        .child(
-                            div()
-                                .when(self.split_mode, |this| this.opacity(0.5))
-                                .child(timeline::render_playhead(
-                                    timeline::playhead_color(),
-                                    playhead_x,
-                                    timeline::playhead_color(),
-                                )),
-                        )
+                        .child(timeline::render_playhead_with_opacity(
+                            timeline::playhead_color(),
+                            playhead_x,
+                            timeline::playhead_color(),
+                            if self.split_mode { 0.5 } else { 1. },
+                        ))
                         // The split preview (`TL/index.tsx:1296-1316`): a 1px
                         // column at the cut, blue with a rotated 8px diamond
                         // when it snapped to a boundary and grey otherwise.
@@ -3693,7 +5953,11 @@ impl EditorWindow {
             .relative()
             .h(px(TIMELINE_HEADER_HEIGHT))
             .flex_none()
-            .child(timeline::render_ruler(&self.theme, self.view, viewport_width))
+            .child(timeline::render_ruler(
+                &self.theme,
+                self.view,
+                viewport_width,
+            ))
             // `TrackManager`'s trigger (`TL/TrackManager.tsx:174-188`):
             // `h-8 w-full rounded-lg` with the app's blue gradient, at `z-30`
             // over the ruler. Its popover -- nine rows with descriptions,
@@ -3705,6 +5969,7 @@ impl EditorWindow {
             // translucent button would let it bleed through.
             .child(
                 div()
+                    .id("add-track")
                     .absolute()
                     .bottom_0()
                     .left_0()
@@ -3717,6 +5982,7 @@ impl EditorWindow {
                     .gap(px(4.))
                     .px(px(8.))
                     .rounded(px(8.))
+                    .cursor_pointer()
                     .bg(gpui::linear_gradient(
                         180.,
                         gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
@@ -3739,7 +6005,11 @@ impl EditorWindow {
                             .size(px(10.))
                             .flex_none()
                             .text_color(gpui::white()),
-                    ),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                        this.open_add_track(window, cx);
+                    })),
             )
             // `absolute inset-y-0 right-0 z-40` at
             // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's scrub
@@ -3769,7 +6039,11 @@ impl EditorWindow {
     /// carrying the edge-fade mask, with `absolute inset-0 overflow-y-auto
     /// overflow-x-hidden pr-1` inside it and the rows in a `flex flex-col
     /// gap-2 min-h-full`.
-    fn render_timeline_body(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_timeline_body(
+        &self,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let ui = timeline::SegmentUi {
             selection: self.selection.as_ref(),
@@ -3799,8 +6073,9 @@ impl EditorWindow {
                     // whether to draw their new-segment ghost.
                     .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                         this.set_hovered_track(hovered.then_some(kind), window, cx);
-                        if !*hovered && this.hovered_segment.map(|(kind, lane, _)| (kind, lane))
-                            == Some((kind, lane))
+                        if !*hovered
+                            && this.hovered_segment.map(|(kind, lane, _)| (kind, lane))
+                                == Some((kind, lane))
                         {
                             this.hovered_segment = None;
                             this.split_preview = None;
@@ -3810,11 +6085,11 @@ impl EditorWindow {
                     }))
                     // The per-segment hover the trim handles' reveal reads,
                     // and split mode's cut preview.
-                    .on_mouse_move(cx.listener(
-                        move |this, event: &MouseMoveEvent, window, cx| {
+                    .on_mouse_move(
+                        cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
                             this.track_hover(kind, lane, f32::from(event.position.x), window, cx);
-                        },
-                    ))
+                        }),
+                    )
                     // The press: a handle, a body or bare track, resolved by
                     // the same geometry the row was drawn from.
                     .on_mouse_down(
@@ -3915,6 +6190,8 @@ impl Render for EditorWindow {
         // a brand-new box empty until something else asked for a frame.
         self.prepare_sidebar_fields(window, cx);
         self.sync_hex_inputs(window, cx);
+        self.sync_picker_hex(window, cx);
+        self.sync_crop_container(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
         // this window is resizable, so read them off the viewport rather than
@@ -3935,6 +6212,18 @@ impl Render for EditorWindow {
                 .fit_on_mount(timeline::content_width(viewport_width), total);
         }
 
+        if self.export.is_some() {
+            return div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .font_family("Geist")
+                .bg(self.root_bg())
+                .text_color(Hsla::from(theme.gray_12))
+                .track_focus(&self.focus)
+                .child(self.render_export_page(cx));
+        }
+
         div()
             .size_full()
             .flex()
@@ -3944,6 +6233,11 @@ impl Render for EditorWindow {
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            // Only the cropper needs key-*up*: its nudge loop runs until every
+            // arrow is released (`Cropper.tsx:1025-1051`).
+            .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _window, cx| {
+                this.crop_key_up(event, cx);
+            }))
             // A drag continues while the pointer is anywhere in the window,
             // which is what `createEventListenerMap(window, {mousemove,
             // mouseup})` gives the source (`TL/index.tsx:938-955`); a gpui
@@ -3965,7 +6259,11 @@ impl Render for EditorWindow {
                     }),
                 )
             })
-            .child(self.render_header(window, cx))
+            .child(
+                self.header
+                    .clone()
+                    .cached(StyleRefinement::default().w_full().h(px(HEADER_HEIGHT))),
+            )
             // `flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0
             // leading-5` (`Editor.tsx:676`).
             .child(
@@ -4050,9 +6348,21 @@ impl Render for EditorWindow {
                                                     })),
                                             ),
                                     )
-                                    .child(self.render_sidebar(cx)),
+                                    .child(
+                                        self.sidebar_view.clone().cached(
+                                            StyleRefinement::default()
+                                                .w(px(SIDEBAR_WIDTH + 8.))
+                                                .h_full(),
+                                        ),
+                                    ),
                             )
-                            .child(self.render_timeline(viewport_width, cx)),
+                            .child(
+                                self.timeline_view.clone().cached(
+                                    StyleRefinement::default()
+                                        .w_full()
+                                        .h(px(DEFAULT_TIMELINE_HEIGHT)),
+                                ),
+                            ),
                     ),
             )
             // The zoom slider's window-wide drag layer, painted last so it is
@@ -4101,9 +6411,113 @@ impl Render for EditorWindow {
                     }),
                 )
             }))
+            // The canvas display drag: the source installs `mousemove` /
+            // `mouseup` on `window` for the duration (`CEO.tsx:611-618`), so
+            // a drag that leaves the letterboxed rect keeps tracking and the
+            // release closes the undo bracket wherever it happens.
+            .children(self.canvas_drag.is_some().then(|| {
+                ui::Slider::drag_layer(
+                    "canvas-display-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.canvas_mouse_move(event, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                        this.canvas_mouse_up(window, cx);
+                    }),
+                )
+            }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
             .children(self.render_sidebar_menu(cx))
+            .children(self.render_toolbar_menu(cx))
+            .children(self.render_add_track_popover(cx))
+            .children(self.render_color_picker_popover(cx))
+            .children(self.render_presets_menu(cx))
+            .children(self.render_preset_dialog(cx))
+            // The clips overlays: import menu, record modal, and the card
+            // drag's window-wide layer with its floating ghost.
+            .children(self.render_clips_overlays(cx))
+            // Crop mode is a modal: it goes over everything, including the
+            // menu above.
+            .children(self.render_crop_dialog(cx))
+            // ...and its own pointer-capture stand-in over that, which is
+            // `trackPointerSession`'s `setPointerCapture` + window listeners
+            // (`Cropper.tsx:686-733`).
+            .children(
+                self.crop
+                    .as_ref()
+                    .is_some_and(|state| state.drag.is_some())
+                    .then(|| {
+                        ui::Slider::drag_layer(
+                            "crop-drag",
+                            cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                                this.crop_mouse_move(event, window, cx);
+                            }),
+                            cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                                this.crop_mouse_up(window, cx);
+                            }),
+                        )
+                    }),
+            )
+    }
+}
+
+struct ImportedAudio {
+    path: String,
+    name: String,
+    duration: f64,
+}
+
+fn import_audio_file(
+    project_path: &std::path::Path,
+    source: &std::path::Path,
+) -> Result<ImportedAudio, String> {
+    let extension = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .ok_or_else(|| "Audio file has no extension".to_string())?;
+    const EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "ogg", "flac", "aac"];
+    if !EXTENSIONS.contains(&extension.as_str()) {
+        return Err(format!("Unsupported audio format: .{extension}"));
+    }
+    if !source.exists() {
+        return Err(format!("Audio file not found: {}", source.display()));
+    }
+    let display_name = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Audio")
+        .to_string();
+    let audio_dir = project_path.join("assets").join("audio");
+    std::fs::create_dir_all(&audio_dir)
+        .map_err(|error| format!("Failed to create audio directory: {error}"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let dest_name = format!("{stamp}.{extension}");
+    let dest = audio_dir.join(&dest_name);
+    std::fs::copy(source, &dest).map_err(|error| format!("Failed to copy audio file: {error}"))?;
+    Ok(ImportedAudio {
+        path: format!("assets/audio/{dest_name}"),
+        name: display_name,
+        duration: probe_audio_duration(&dest),
+    })
+}
+
+fn probe_audio_duration(_path: &std::path::Path) -> f64 {
+    0.0
+}
+
+fn aspect_ratio_eq(
+    left: &Option<cap_project::AspectRatio>,
+    right: &Option<cap_project::AspectRatio>,
+) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => std::mem::discriminant(left) == std::mem::discriminant(right),
+        _ => false,
     }
 }
 
@@ -4116,10 +6530,10 @@ fn with_alpha(color: gpui::Rgba, alpha: f32) -> Hsla {
 /// The instruction that actually produces a picture. `seek_to` and
 /// `set_playhead_position` would move the playhead and render nothing --
 /// the classic "the editor opened but the canvas is black" bug.
-pub fn request_frame(instance: &EditorInstance, frame_number: u32) {
+pub fn request_frame(instance: &EditorInstance, frame_number: u32, resolution: XY<u32>) {
     instance
         .preview_tx
-        .send_modify(|value| *value = Some((frame_number, EDITOR_PREVIEW_FPS, default_preview_resolution())));
+        .send_modify(|value| *value = Some((frame_number, EDITOR_PREVIEW_FPS, resolution)));
 }
 
 /// Wrap the flume sender the pump drains into an `EditorFrameCallback`.
@@ -4128,20 +6542,22 @@ pub fn request_frame(instance: &EditorInstance, frame_number: u32) {
 /// discards all but the newest, `editor.rs:242-312`), so a small bounded
 /// channel that drops on a full queue is the right backpressure here.
 pub fn make_frame_callback(
-    tx: flume::Sender<(RenderedFrame, FrameLayout)>,
+    tx: flume::Sender<(EditorFrameOutput, FrameLayout)>,
     stats: Arc<PumpStats>,
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
-        // The editor renderer always emits `Rgba` -- `editor.rs:371-373`
-        // hardcodes `PlaybackRenderOutputFormat::Rgba`. NV12 is the export
-        // path's.
-        if let EditorFrameOutput::Rgba(frame) = output {
-            stats.rendered.fetch_add(1, Ordering::Relaxed);
-            if tx.try_send((frame, layout)).is_err() {
-                stats.dropped.fetch_add(1, Ordering::Relaxed);
-            }
+        stats.rendered.fetch_add(1, Ordering::Relaxed);
+        if tx.try_send((output, layout)).is_err() {
+            stats.dropped.fetch_add(1, Ordering::Relaxed);
         }
     })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn surface_preview_frame(frame: cap_rendering::SurfaceFrame) -> EditorPreviewFrame {
+    let raw = frame.pixel_buffer.as_ref() as *const cidre::cv::PixelBuf as CVPixelBufferRef;
+    let pixel_buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+    EditorPreviewFrame::Surface(pixel_buffer)
 }
 
 /// [`frame_image`], timed. The pump calls this so the CPU conversion's cost is
@@ -4156,6 +6572,12 @@ pub fn frame_image_timed(frame: &RenderedFrame, stats: &PumpStats) -> Option<Arc
     image
 }
 
+/// `hexToRgb` hands back RGBA bytes; `cap_project::Color` is `[u16; 3]` and
+/// the alpha lives on the background source, not on the swatch.
+fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
+    [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4167,6 +6589,14 @@ mod tests {
     fn preview_resolution_matches_the_tauri_editor() {
         let base = default_preview_resolution();
         assert_eq!((base.x, base.y), (1248, 702));
+        assert_eq!(
+            preview_resolution(crate::store::EditorPreviewQuality::Full),
+            XY::new(1920, 1080)
+        );
+        assert_eq!(
+            preview_resolution(crate::store::EditorPreviewQuality::Quarter),
+            XY::new(480, 270)
+        );
     }
 
     #[test]
@@ -4212,10 +6642,8 @@ mod tests {
 
     #[test]
     fn preflight_rejects_a_bundle_with_no_meta() {
-        let dir = std::env::temp_dir().join(format!(
-            "cap-gpui-preflight-{}.cap",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cap-gpui-preflight-{}.cap", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let error = preflight(&dir).unwrap_err();
@@ -4304,7 +6732,11 @@ mod tests {
         handle.pause();
         let after_pause = read();
         assert!(!after_pause.playing);
-        assert_eq!(after_pause.seek, Some(120), "pause does not move the playhead");
+        assert_eq!(
+            after_pause.seek,
+            Some(120),
+            "pause does not move the playhead"
+        );
         assert_eq!(after_pause.seek_gen, 1);
 
         handle.seek(120);
@@ -4356,10 +6788,4 @@ mod tests {
         assert_eq!(&bytes[0..4], &[30, 20, 10, 255]);
         assert!(!bytes.contains(&99));
     }
-}
-
-/// `hexToRgb` hands back RGBA bytes; `cap_project::Color` is `[u16; 3]` and
-/// the alpha lives on the background source, not on the swatch.
-fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
-    [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16]
 }
