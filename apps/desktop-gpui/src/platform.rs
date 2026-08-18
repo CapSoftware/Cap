@@ -5,10 +5,14 @@
 //! `tauri_nspanel`, raised to a specific window level, joined to all Spaces.
 //! gpui exposes none of that, but its `Window` implements
 //! `raw_window_handle::HasWindowHandle`, and on macOS the AppKit handle's
-//! `ns_view` reaches the `NSWindow`, where the same AppKit calls apply. We skip
-//! the NSPanel class swizzle -- level + collection behavior covers the
-//! observable behavior (always-on-top, follows Spaces); the difference is noted
-//! in the README.
+//! `ns_view` reaches the `NSWindow`, where the same AppKit calls apply.
+//!
+//! A plain `NSWindow` with `FullScreenPrimary` stays off other apps'
+//! fullscreen Spaces. Tauri swizzles to `NSPanel` and the nspanel fullscreen
+//! sample uses `CanJoinAllSpaces | FullScreenAuxiliary`. We promote
+//! `GPUIWindow` to `GPUIPanel` (same ivar layout, already registered) and
+//! apply that collection behavior so the recorder stays above Chrome
+//! fullscreen the way the Tauri app does.
 //!
 //! Everything here must run on the main thread. gpui's foreground executor is
 //! the main thread, and every caller sits inside a `Window` update, so that
@@ -49,8 +53,8 @@ pub fn active_material(cx: &gpui::App) -> Option<MaterialKind> {
 #[derive(Debug, Clone, Copy)]
 pub struct PanelBehavior {
     pub level: isize,
-    /// `CanJoinAllSpaces | FullScreenPrimary`, the combination every Cap panel
-    /// window uses.
+    /// `CanJoinAllSpaces | FullScreenAuxiliary`, so the window follows Spaces
+    /// and can sit over another app's fullscreen session.
     pub join_all_spaces: bool,
     /// Borderless NSWindows get a system shadow; the recording controls bar is
     /// drawn shadowless (`.shadow(false)` in the Tauri builder).
@@ -65,7 +69,6 @@ mod mac {
     use gpui::Window;
     use objc2::rc::Id;
     use objc2::runtime::{AnyObject, Sel};
-    use objc2::{ClassType, DeclaredClass};
     use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -155,8 +158,7 @@ mod mac {
                     }
 
                     let _: () = msg_send![glass, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
-                    let _: () =
-                        msg_send![glass, setAutoresizingMask: NS_VIEW_WIDTH_HEIGHT_SIZABLE];
+                    let _: () = msg_send![glass, setAutoresizingMask: NS_VIEW_WIDTH_HEIGHT_SIZABLE];
                     // The `alloc` claim is deliberately not balanced: the view
                     // lives for the life of the process (there is no teardown
                     // path here, unlike the Tauri command that can be called
@@ -461,12 +463,7 @@ mod mac {
             true,
         );
         ns_window.setLevel(level);
-        unsafe {
-            ns_window.setCollectionBehavior(
-                NSWindowCollectionBehavior::CanJoinAllSpaces
-                    | NSWindowCollectionBehavior::FullScreenPrimary,
-            );
-        }
+        apply_fullscreen_overlay_behavior(ns_window);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
         unsafe { ns_window.orderFrontRegardless() };
@@ -502,14 +499,62 @@ mod mac {
             "panel level applied"
         );
         if behavior.join_all_spaces {
-            unsafe {
-                ns_window.setCollectionBehavior(
-                    NSWindowCollectionBehavior::CanJoinAllSpaces
-                        | NSWindowCollectionBehavior::FullScreenPrimary,
-                );
-            }
+            apply_fullscreen_overlay_behavior(&ns_window);
         }
         ns_window.setHasShadow(behavior.shadow);
+    }
+
+    /// Stay visible on every Space, including another app's fullscreen.
+    ///
+    /// `FullScreenPrimary` is what a document window uses to *become*
+    /// fullscreen. On a normal `NSWindow` it also keeps the window out of
+    /// foreign fullscreen Spaces. `FullScreenAuxiliary` is the flag AppKit
+    /// documents for floating over those Spaces, and it is what
+    /// tauri-nspanel's fullscreen example sets after the panel swizzle.
+    fn apply_fullscreen_overlay_behavior(ns_window: &NSWindow) {
+        promote_to_gpui_panel(ns_window);
+        unsafe {
+            ns_window.setCollectionBehavior(
+                NSWindowCollectionBehavior::CanJoinAllSpaces
+                    | NSWindowCollectionBehavior::FullScreenAuxiliary,
+            );
+            ns_window.setHidesOnDeactivate(false);
+            let can_float: bool = objc2::msg_send![
+                ns_window,
+                respondsToSelector: objc2::sel!(setFloatingPanel:)
+            ];
+            if can_float {
+                let _: () = objc2::msg_send![ns_window, setFloatingPanel: true];
+            }
+        }
+    }
+
+    /// `object_setClass` from `GPUIWindow` to `GPUIPanel` -- the gpui spelling
+    /// of tauri-nspanel's `to_panel()`. Both classes are built with the same
+    /// ivar (`WINDOW_STATE_IVAR`); if the sizes ever diverge we leave the
+    /// window as-is and rely on the collection-behavior flags alone.
+    fn promote_to_gpui_panel(ns_window: &NSWindow) {
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        let class = ns_window.class();
+        if class.name() != "GPUIWindow" {
+            return;
+        }
+        let Some(panel) = AnyClass::get("GPUIPanel") else {
+            return;
+        };
+        if class.instance_size() != panel.instance_size() {
+            tracing::warn!(
+                window_size = class.instance_size(),
+                panel_size = panel.instance_size(),
+                "GPUIWindow/GPUIPanel instance sizes differ; not promoting to panel"
+            );
+            return;
+        }
+        unsafe {
+            AnyObject::set_class(ns_window.as_ref(), panel);
+        }
+        tracing::info!("promoted GPUIWindow to GPUIPanel for fullscreen overlay");
     }
 
     /// `NSWindow.setAlphaValue:` -- the whole of
@@ -608,8 +653,7 @@ mod mac {
                 !manager.is_null() && msg_send![manager, fileExistsAtPath: &*cap_app]
             };
             if exists {
-                let workspace: *mut AnyObject =
-                    msg_send![class!(NSWorkspace), sharedWorkspace];
+                let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
                 if !workspace.is_null() {
                     let raw: *mut AnyObject = msg_send![workspace, iconForFile: &*cap_app];
                     // `iconForFile:` is autoreleased; retain for the setter.
@@ -644,23 +688,6 @@ mod mac {
                 let _: () = msg_send![app, setApplicationIconImage: &*image];
             }
             tracing::info!(from_installed_app = exists, "dock icon set");
-        }
-    }
-
-    /// Debug: the AppKit-side state of a window, for chasing order-front
-    /// no-shows.
-    pub fn debug_window_state(native: &NativeWindow) -> String {
-        use objc2::msg_send;
-        unsafe {
-            let visible: bool = msg_send![&*native.0, isVisible];
-            let alpha: f64 = msg_send![&*native.0, alphaValue];
-            let on_active_space: bool = msg_send![&*native.0, isOnActiveSpace];
-            let frame: objc2_foundation::NSRect = msg_send![&*native.0, frame];
-            let level: isize = msg_send![&*native.0, level];
-            format!(
-                "visible={visible} alpha={alpha:.2} active_space={on_active_space} level={level} frame=({}, {}, {}x{})",
-                frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
-            )
         }
     }
 
@@ -807,8 +834,14 @@ mod mac {
                     id: 1,
                 };
                 let mut hotkey = std::ptr::null_mut();
-                let status =
-                    RegisterEventHotKey(KVK_ESCAPE, 0, id, GetEventDispatcherTarget(), 0, &mut hotkey);
+                let status = RegisterEventHotKey(
+                    KVK_ESCAPE,
+                    0,
+                    id,
+                    GetEventDispatcherTarget(),
+                    0,
+                    &mut hotkey,
+                );
                 if status != 0 {
                     tracing::warn!(status, "RegisterEventHotKey(Escape) failed");
                     return;
@@ -847,7 +880,8 @@ mod mac {
     pub fn minimize_native(native: &NativeWindow) {
         use objc2::msg_send;
         unsafe {
-            let _: () = msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
+            let _: () =
+                msg_send![&*native.0, performMiniaturize: std::ptr::null_mut::<AnyObject>()];
         }
     }
 
@@ -887,176 +921,6 @@ mod mac {
         ns_window(window).map(|w| unsafe { w.windowNumber() })
     }
 
-    // -- The colour panel ----------------------------------------------------
-    //
-    // Cap has never shipped a hue/saturation surface: every colour control in
-    // the editor -- the background colour, both gradient stops, the border
-    // colour, the caption and keyboard text colours -- is a swatch that
-    // `.click()`s a hidden `<input type="color">` (`color-utils.tsx:50-64`),
-    // and what that opens on macOS is `NSColorPanel`. So the panel *is* the
-    // shipping behaviour, not a substitute for it.
-    //
-    // The panel reports every change through a target/action pair, and that
-    // action fires from AppKit's run loop with no gpui borrow available: it
-    // may not touch a window, an entity or the App. It therefore does exactly
-    // one thing -- push the colour down a channel -- and the window drains
-    // that channel from its own task, which is the same seam
-    // `on_state_change` uses for playhead positions off the playback thread.
-
-    use std::cell::RefCell;
-
-    thread_local! {
-        /// The live sender, read by the action. `thread_local` rather than a
-        /// static: AppKit only ever calls the action on the main thread, and
-        /// this way it needs no lock.
-        static COLOR_PANEL_TX: RefCell<Option<flume::Sender<[u8; 3]>>> =
-            const { RefCell::new(None) };
-        /// The target object, retained for as long as the panel may call it.
-        static COLOR_PANEL_TARGET: RefCell<Option<Id<ColorPanelTarget>>> =
-            const { RefCell::new(None) };
-    }
-
-    objc2::declare_class!(
-        /// The `changeColor:` receiver. No ivars: the sender lives in the
-        /// thread-local above, which keeps the class declaration to the
-        /// minimum that can go wrong.
-        struct ColorPanelTarget;
-
-        unsafe impl ClassType for ColorPanelTarget {
-            type Super = objc2::runtime::NSObject;
-            type Mutability = objc2::mutability::InteriorMutable;
-            const NAME: &'static str = "CapGpuiColorPanelTarget";
-        }
-
-        impl DeclaredClass for ColorPanelTarget {}
-
-        unsafe impl ColorPanelTarget {
-            #[method(changeColor:)]
-            fn change_color(&self, _sender: *mut AnyObject) {
-                let Some(color) = color_panel_color() else {
-                    return;
-                };
-                COLOR_PANEL_TX.with(|tx| {
-                    if let Some(sender) = tx.borrow().as_ref() {
-                        // Bounded by nothing, drained latest-wins: a colour
-                        // dragged around the wheel produces hundreds of these
-                        // and only the newest matters.
-                        let _ = sender.send(color);
-                    }
-                });
-            }
-        }
-    );
-
-    /// The shared panel's current colour, converted to sRGB 0-255.
-    ///
-    /// `colorUsingColorSpace:` is not optional: the panel hands back colours in
-    /// whatever space its current picker uses (a grey-scale slider gives a
-    /// two-component `NSColor`), and asking such a colour for `redComponent`
-    /// raises.
-    pub fn color_panel_color() -> Option<[u8; 3]> {
-        use objc2::{class, msg_send};
-
-        unsafe {
-            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
-            if panel.is_null() {
-                return None;
-            }
-            let color: *mut AnyObject = msg_send![panel, color];
-            if color.is_null() {
-                return None;
-            }
-            let space: *mut AnyObject = msg_send![class!(NSColorSpace), sRGBColorSpace];
-            let color: *mut AnyObject = msg_send![color, colorUsingColorSpace: space];
-            if color.is_null() {
-                return None;
-            }
-            let red: f64 = msg_send![color, redComponent];
-            let green: f64 = msg_send![color, greenComponent];
-            let blue: f64 = msg_send![color, blueComponent];
-            Some([
-                (red.clamp(0., 1.) * 255.).round() as u8,
-                (green.clamp(0., 1.) * 255.).round() as u8,
-                (blue.clamp(0., 1.) * 255.).round() as u8,
-            ])
-        }
-    }
-
-    /// Open the shared colour panel seeded with `initial`, and hand back the
-    /// channel its changes arrive on.
-    ///
-    /// Must not run inside a gpui update: `orderFront:` fires AppKit's window
-    /// callbacks synchronously, which re-borrows the App -- the same rule
-    /// `install_window_material` and `place_overlay_panel` carry.
-    pub fn open_color_panel(initial: [u8; 3]) -> Option<flume::Receiver<[u8; 3]>> {
-        use objc2::{class, msg_send, msg_send_id, sel};
-
-        let (tx, rx) = flume::unbounded();
-
-        unsafe {
-            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
-            if panel.is_null() {
-                return None;
-            }
-
-            let color: *mut AnyObject = msg_send![
-                class!(NSColor),
-                colorWithSRGBRed: f64::from(initial[0]) / 255.,
-                green: f64::from(initial[1]) / 255.,
-                blue: f64::from(initial[2]) / 255.,
-                alpha: 1.0f64,
-            ];
-            if !color.is_null() {
-                let _: () = msg_send![panel, setColor: color];
-            }
-            // `<input type="color">` has no alpha channel, and neither does
-            // `BackgroundSource::Color`'s `value` -- the sidebar's swatches are
-            // opaque RGB triples (`normalizeOpaqueHexColor`).
-            let _: () = msg_send![panel, setShowsAlpha: false];
-
-            let target: Id<ColorPanelTarget> = msg_send_id![ColorPanelTarget::alloc(), init];
-            let _: () = msg_send![panel, setTarget: &*target];
-            let _: () = msg_send![panel, setAction: sel!(changeColor:)];
-            let _: () = msg_send![panel, setContinuous: true];
-            let _: () = msg_send![panel, orderFront: std::ptr::null_mut::<AnyObject>()];
-
-            COLOR_PANEL_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
-        }
-
-        COLOR_PANEL_TX.with(|slot| *slot.borrow_mut() = Some(tx));
-        Some(rx)
-    }
-
-    /// Whether the panel is still up. The window polls this to know when the
-    /// user is done, which is what closes the undo bracket -- the panel has no
-    /// "commit" action of its own.
-    pub fn color_panel_is_open() -> bool {
-        use objc2::{class, msg_send};
-        unsafe {
-            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
-            if panel.is_null() {
-                return false;
-            }
-            msg_send![panel, isVisible]
-        }
-    }
-
-    /// Drop the target and the sender, and close the panel if it is still up.
-    pub fn close_color_panel(order_out: bool) {
-        use objc2::{class, msg_send};
-        unsafe {
-            let panel: *mut AnyObject = msg_send![class!(NSColorPanel), sharedColorPanel];
-            if !panel.is_null() {
-                let _: () = msg_send![panel, setTarget: std::ptr::null_mut::<AnyObject>()];
-                if order_out {
-                    let _: () = msg_send![panel, orderOut: std::ptr::null_mut::<AnyObject>()];
-                }
-            }
-        }
-        COLOR_PANEL_TX.with(|slot| *slot.borrow_mut() = None);
-        COLOR_PANEL_TARGET.with(|slot| *slot.borrow_mut() = None);
-    }
-
     // -- The open panel ------------------------------------------------------
 
     /// `<input type="file" accept="image/...">`, which on macOS is an
@@ -1065,7 +929,102 @@ mod mac {
     /// `runModal` spins AppKit's own modal run loop, so like every other call
     /// here it must be made with no gpui borrow held -- from a spawned task,
     /// never from inside an update.
+    pub fn open_audio_panel() -> Option<std::path::PathBuf> {
+        open_file_panel(&["mp3", "wav", "m4a", "ogg", "flac", "aac"])
+    }
+
     pub fn open_image_panel(extensions: &[&str]) -> Option<std::path::PathBuf> {
+        open_file_panel(extensions)
+    }
+
+    pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSArray, NSString};
+
+        unsafe {
+            let panel: *mut AnyObject = msg_send![class!(NSSavePanel), savePanel];
+            if panel.is_null() {
+                return None;
+            }
+            let _: () = msg_send![panel, setCanCreateDirectories: true];
+            let _: () = msg_send![panel, setNameFieldStringValue: &*NSString::from_str(suggested)];
+            if !extensions.is_empty() {
+                let types: Vec<Id<NSString>> = extensions
+                    .iter()
+                    .map(|extension| NSString::from_str(extension))
+                    .collect();
+                let types = NSArray::from_vec(types);
+                let _: () = msg_send![panel, setAllowedFileTypes: &*types];
+            }
+            let response: isize = msg_send![panel, runModal];
+            if response != 1 {
+                return None;
+            }
+            let url: *mut AnyObject = msg_send![panel, URL];
+            if url.is_null() {
+                return None;
+            }
+            let path: *mut NSString = msg_send![url, path];
+            if path.is_null() {
+                return None;
+            }
+            Some(std::path::PathBuf::from((*path).to_string()))
+        }
+    }
+
+    pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe {
+            let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return Err("Clipboard unavailable".into());
+            }
+            let _: isize = msg_send![pasteboard, clearContents];
+            let url_class = class!(NSURL);
+            let ns_path = NSString::from_str(&path.to_string_lossy());
+            let url: *mut AnyObject = msg_send![url_class, fileURLWithPath: &*ns_path];
+            if url.is_null() {
+                return Err("Failed to build file URL".into());
+            }
+            let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url];
+            let ok: bool = msg_send![pasteboard, writeObjects: objects];
+            if ok {
+                Ok(())
+            } else {
+                Err("Failed to copy file to clipboard".into())
+            }
+        }
+    }
+
+    pub fn copy_image_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe {
+            let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pasteboard.is_null() {
+                return Err("Clipboard unavailable".into());
+            }
+            let _: isize = msg_send![pasteboard, clearContents];
+            let ns_path = NSString::from_str(&path.to_string_lossy());
+            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let image: *mut AnyObject = msg_send![image, initWithContentsOfFile: &*ns_path];
+            if image.is_null() {
+                return Err("Failed to load image".into());
+            }
+            let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: image];
+            let ok: bool = msg_send![pasteboard, writeObjects: objects];
+            if ok {
+                Ok(())
+            } else {
+                Err("Failed to copy image to clipboard".into())
+            }
+        }
+    }
+
+    fn open_file_panel(extensions: &[&str]) -> Option<std::path::PathBuf> {
         use objc2::{class, msg_send};
         use objc2_foundation::{NSArray, NSString};
 
@@ -1264,10 +1223,8 @@ mod mac {
             // [`desktop_picture_path`] gives: the typed binding needs another
             // objc2-app-kit/foundation feature, and the rule here is that those
             // versions stay pinned to gpui's.
-            let values = NSArray::from_vec(vec![
-                NSString::from_str(name),
-                NSString::from_str(version),
-            ]);
+            let values =
+                NSArray::from_vec(vec![NSString::from_str(name), NSString::from_str(version)]);
             let keys = NSArray::from_vec(vec![
                 NSString::from_str("ApplicationName"),
                 NSString::from_str("ApplicationVersion"),
@@ -1342,7 +1299,77 @@ mod stub {
     }
     pub fn install_occlusion_shim() {}
     pub fn kick_display_link(_window: &Window) {}
-    pub fn apply_panel_behavior(_window: &Window, _behavior: PanelBehavior) {}
+    pub fn apply_panel_behavior(window: &Window, _behavior: PanelBehavior) {
+        apply_always_on_top(window);
+    }
+
+    fn apply_always_on_top(window: &Window) {
+        #[cfg(windows)]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+            };
+            if let Ok(handle) = window.window_handle()
+                && let RawWindowHandle::Win32(win) = handle.as_raw()
+            {
+                let hwnd = win.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+                unsafe {
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                }
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        apply_x11_always_on_top(window);
+        #[cfg(not(any(windows, unix)))]
+        let _ = window;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn apply_x11_always_on_top(window: &Window) {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{
+            CLIENT_MESSAGE_EVENT, ClientMessageEvent, ConnectionExt, EventMask,
+        };
+
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let window_id = match handle.as_raw() {
+            RawWindowHandle::Xlib(xlib) => xlib.window as u32,
+            RawWindowHandle::Xcb(xcb) => xcb.window.get(),
+            _ => return,
+        };
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return;
+        };
+        let screen = &conn.setup().roots[screen_num];
+        let Ok(state) = conn.intern_atom(false, b"_NET_WM_STATE") else {
+            return;
+        };
+        let Ok(above) = conn.intern_atom(false, b"_NET_WM_STATE_ABOVE") else {
+            return;
+        };
+        let (Ok(state), Ok(above)) = (state.reply(), above.reply()) else {
+            return;
+        };
+        let event = ClientMessageEvent {
+            response_type: CLIENT_MESSAGE_EVENT,
+            format: 32,
+            sequence: 0,
+            window: window_id,
+            type_: state.atom,
+            data: [1, above.atom, 0, 0, 0].into(),
+        };
+        let _ = conn.send_event(
+            false,
+            screen.root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        );
+        let _ = conn.flush();
+    }
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
     pub fn close_native(_native: &NativeWindow) {}
@@ -1367,27 +1394,74 @@ mod stub {
     pub fn window_number(_window: &Window) -> Option<isize> {
         None
     }
-    pub fn color_panel_color() -> Option<[u8; 3]> {
-        None
-    }
-    pub fn open_color_panel(_initial: [u8; 3]) -> Option<flume::Receiver<[u8; 3]>> {
-        None
-    }
-    pub fn color_panel_is_open() -> bool {
-        false
-    }
-    pub fn close_color_panel(_order_out: bool) {}
     pub fn open_image_panel(_extensions: &[&str]) -> Option<std::path::PathBuf> {
         None
     }
+    pub fn open_audio_panel() -> Option<std::path::PathBuf> {
+        None
+    }
     pub fn confirm_dialog(
-        _title: &str,
-        _message: &str,
-        _accept: &str,
-        _cancel: &str,
-        _warning: bool,
+        title: &str,
+        message: &str,
+        accept: &str,
+        cancel: &str,
+        warning: bool,
     ) -> bool {
-        false
+        let level = if warning {
+            rfd::MessageLevel::Warning
+        } else {
+            rfd::MessageLevel::Info
+        };
+        rfd::MessageDialog::new()
+            .set_title(title)
+            .set_description(message)
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                accept.to_string(),
+                cancel.to_string(),
+            ))
+            .set_level(level)
+            .show()
+            == rfd::MessageDialogResult::Custom(accept.to_string())
+    }
+
+    pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
+        if !extensions.is_empty() {
+            dialog = dialog.add_filter("Export", extensions);
+        }
+        dialog.save_file()
+    }
+
+    pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let _ = path;
+            Err("Copy to clipboard is not available yet on Windows".into())
+        }
+        #[cfg(not(windows))]
+        {
+            let uri = format!("file://{}", path.display());
+            let copied = std::process::Command::new("wl-copy")
+                .arg(&uri)
+                .status()
+                .ok()
+                .is_some_and(|status| status.success())
+                || std::process::Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .arg(path)
+                    .status()
+                    .ok()
+                    .is_some_and(|status| status.success());
+            if copied {
+                Ok(())
+            } else {
+                Err("Failed to copy file to clipboard".into())
+            }
+        }
+    }
+
+    pub fn copy_image_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+        copy_file_to_clipboard(path)
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         None
