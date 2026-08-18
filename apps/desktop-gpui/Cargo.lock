@@ -1483,6 +1483,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-rendering",
+ "cap-timestamp",
  "cap-utils",
  "chrono",
  "cidre",

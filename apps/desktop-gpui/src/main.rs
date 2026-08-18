@@ -5,6 +5,8 @@
 
 mod app_windows;
 mod assets;
+#[cfg(target_os = "macos")]
+mod camera_bench;
 mod camera_window;
 mod controls_window;
 mod devices;
@@ -313,6 +315,14 @@ fn main() {
             } {
                 app_windows::choose_mode_in_mode_select(mode, cx);
             }
+        }
+
+        // `CAP_GPUI_AUTO_CAMERA_BENCH=1`: open the camera bubble and pump
+        // synthetic frames through the production delivery path, reporting
+        // gpui draw timings for that window. See `camera_bench`.
+        #[cfg(target_os = "macos")]
+        if std::env::var("CAP_GPUI_AUTO_CAMERA_BENCH").is_ok_and(|v| v == "1") {
+            camera_bench::run(cx);
         }
 
         // `CAP_GPUI_AUTO_TELEPROMPTER=1`: open the teleprompter the way the

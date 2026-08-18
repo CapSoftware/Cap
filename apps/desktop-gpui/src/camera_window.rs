@@ -10,16 +10,32 @@
 //! (cover-fit + rounded clip on the primitive) -- no CPU pixel copies and no
 //! sprite-atlas uploads on the frame path.
 //!
+//! Invalidation mirrors the editor window: each frame notifies only the
+//! [`CameraPreviewView`] child entity, while the toolbar chrome lives in a
+//! [`CameraToolbarView`] mounted `.cached()`, re-rendered only when the parent
+//! notifies (hover, resize, state mutations). A per-frame `window.refresh()`
+//! would bust every cache and relayout the whole window at camera rate
+//! (`CAP_GPUI_AUTO_CAMERA_BENCH`, 8 interleaved A/B pairs: median p50 draw
+//! 319us -> 222us; the remainder is gpui's fixed per-draw cost, which a
+//! clean-draw floor measurement puts at ~150us on this window either way).
+//! Verified live on a real C920: 29.9fps delivered, 29.9fps painted with no
+//! per-frame refresh.
+//!
 //! Known deviations (also in the README): no mirroring (the toolbar button is
 //! present but disabled), background blur cycles/persists but does not
 //! process frames yet, and the window position is not persisted per-monitor.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled, Window, div,
-    prelude::FluentBuilder as _, px, size, svg,
+    AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
+    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
+    div, prelude::FluentBuilder as _, px, size, svg,
 };
 
 use crate::{
@@ -57,6 +73,21 @@ pub fn preview_dimensions(state: &CameraWindowState, frame_aspect: Option<f32>) 
 pub fn window_size(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32, f32) {
     let (width, height) = preview_dimensions(state, frame_aspect);
     (width, height + CAMERA_TOOLBAR_HEIGHT)
+}
+
+/// 0..1 across the 150..600 size range -- drives the toolbar scale and the
+/// square-shape corner radius, like `cameraToolbarScale` /
+/// `cameraBorderRadius`.
+fn normalized_size(state: &CameraWindowState) -> f32 {
+    (clamp_size(state.size) - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE)
+}
+
+fn preview_radius(state: &CameraWindowState) -> f32 {
+    match state.shape {
+        CameraShape::Round => clamp_size(state.size) / 2.,
+        // 3rem + normalized * 1.5rem.
+        _ => 48. + normalized_size(state) * 24.,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -168,6 +199,160 @@ struct ResizeDrag {
     start_position: gpui::Point<gpui::Pixels>,
 }
 
+/// The per-frame half of the window: owns the latest converted frame and is
+/// the only entity notified at camera rate. Chrome invalidation goes through
+/// the parent [`CameraWindow`] instead, so a frame draw reuses the cached
+/// toolbar subtree.
+struct CameraPreviewView {
+    theme: Theme,
+    radius: f32,
+    #[cfg(target_os = "macos")]
+    latest_frame: Option<core_video::pixel_buffer::CVPixelBuffer>,
+    frame_dims: Option<(usize, usize)>,
+    /// Bumped by the canvas paint callback; the parent's cadence log reads it
+    /// to prove notify-driven repaints actually present.
+    paints: Arc<AtomicU32>,
+    /// `camera_error` feeds the placeholder message; the cache only busts on
+    /// this entity's own notify, so observe the source.
+    _feeds_subscription: Subscription,
+}
+
+impl CameraPreviewView {
+    fn new(theme: Theme, radius: f32, paints: Arc<AtomicU32>, cx: &mut Context<Self>) -> Self {
+        let feeds_subscription = cx.observe(&Feeds::global(cx), |_, _, cx| cx.notify());
+        Self {
+            theme,
+            radius,
+            #[cfg(target_os = "macos")]
+            latest_frame: None,
+            frame_dims: None,
+            paints,
+            _feeds_subscription: feeds_subscription,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_frame(
+        &mut self,
+        frame: core_video::pixel_buffer::CVPixelBuffer,
+        dims: (usize, usize),
+        cx: &mut Context<Self>,
+    ) {
+        self.latest_frame = Some(frame);
+        self.frame_dims = Some(dims);
+        cx.notify();
+    }
+
+    fn set_chrome(&mut self, theme: Theme, radius: f32, cx: &mut Context<Self>) {
+        if self.theme.appearance != theme.appearance || self.radius != radius {
+            self.theme = theme;
+            self.radius = radius;
+            cx.notify();
+        }
+    }
+}
+
+impl Render for CameraPreviewView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let radius = self.radius;
+
+        let mut container = div()
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .rounded(px(radius))
+            .bg(theme.gray_1)
+            .text_color(theme.gray_12);
+
+        #[cfg(target_os = "macos")]
+        if let Some(buffer) = self.latest_frame.clone() {
+            let frame_dims = self.frame_dims;
+            let paints = self.paints.clone();
+            // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
+            // computes the same fitted box the old `img()` element used, and
+            // `paint_surface_fitted` UV-crops it to the element bounds so the
+            // corner radii round the visible rect (circle shape included).
+            container = container.child(
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        let Some((width, height)) = frame_dims else {
+                            return;
+                        };
+                        let frame_size = gpui::size(
+                            gpui::DevicePixels(width as i32),
+                            gpui::DevicePixels(height as i32),
+                        );
+                        let fitted = gpui::ObjectFit::Cover.get_bounds(bounds, frame_size);
+                        window.paint_surface_fitted(
+                            bounds,
+                            fitted,
+                            gpui::Corners::all(px(radius)),
+                            buffer.clone(),
+                        );
+                        paints.fetch_add(1, Ordering::Relaxed);
+                    },
+                )
+                .size_full(),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        let showing_frame = self.latest_frame.is_some();
+        #[cfg(not(target_os = "macos"))]
+        let showing_frame = false;
+
+        if !showing_frame {
+            let message = Feeds::global(cx)
+                .read(cx)
+                .camera_error
+                .clone()
+                .unwrap_or_else(|| "Loading camera...".into());
+            container = container.child(
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(14.))
+                    .text_color(theme.gray_11)
+                    .child(message),
+            );
+        }
+
+        container
+    }
+}
+
+/// The chrome half: renders the parent's toolbar, re-rendered only when the
+/// parent notifies (same shape as the editor's `EditorSectionView`).
+struct CameraToolbarView {
+    camera: WeakEntity<CameraWindow>,
+    _camera_subscription: Subscription,
+}
+
+impl CameraToolbarView {
+    fn new(camera: &Entity<CameraWindow>, cx: &mut Context<Self>) -> Self {
+        let camera_subscription = cx.observe(camera, |_, _, cx| cx.notify());
+        Self {
+            camera: camera.downgrade(),
+            _camera_subscription: camera_subscription,
+        }
+    }
+}
+
+impl Render for CameraToolbarView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(camera) = self.camera.upgrade() else {
+            return div().into_any_element();
+        };
+        camera.update(cx, |camera, cx| {
+            camera.render_toolbar(cx).into_any_element()
+        })
+    }
+}
+
 pub struct CameraWindow {
     theme: Theme,
     state: CameraWindowState,
@@ -175,19 +360,29 @@ pub struct CameraWindow {
     resizing: Option<ResizeDrag>,
     #[cfg(target_os = "macos")]
     converter: Option<frame::FrameConverter>,
-    #[cfg(target_os = "macos")]
-    latest_frame: Option<core_video::pixel_buffer::CVPixelBuffer>,
+    preview: Entity<CameraPreviewView>,
+    toolbar: Entity<CameraToolbarView>,
     frame_dims: Option<(usize, usize)>,
-    // Cadence instrumentation: proves the preview stays live while the app is
-    // inactive (the whole point of the per-frame `window.refresh()`).
+    // Cadence instrumentation: proves the preview stays live (delivered) and
+    // actually presents (painted) while the window is inactive.
     frames_in_window: u32,
     cadence_window_start: Instant,
+    paints: Arc<AtomicU32>,
+    paints_at_window_start: u32,
 }
 
 impl CameraWindow {
-    pub fn new(window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = Theme::new(Appearance::from_window(window.appearance()));
         let state = store::load().camera_window.unwrap_or_default();
+        let paints = Arc::new(AtomicU32::new(0));
+        let preview = cx.new({
+            let paints = paints.clone();
+            let radius = preview_radius(&state);
+            move |cx| CameraPreviewView::new(theme, radius, paints, cx)
+        });
+        let camera = cx.entity();
+        let toolbar = cx.new(|cx| CameraToolbarView::new(&camera, cx));
         Self {
             theme,
             state,
@@ -195,17 +390,20 @@ impl CameraWindow {
             resizing: None,
             #[cfg(target_os = "macos")]
             converter: None,
-            #[cfg(target_os = "macos")]
-            latest_frame: None,
+            preview,
+            toolbar,
             frame_dims: None,
             frames_in_window: 0,
             cadence_window_start: Instant::now(),
+            paints,
+            paints_at_window_start: 0,
         }
     }
 
-    /// Called by the feed pump for every camera frame. `refresh` and not just
-    /// `notify`: this window is essentially never the active one, and an
-    /// inactive window repaints only when explicitly asked (unit-2 finding).
+    /// Called by the feed pump for every camera frame. Only the preview child
+    /// is notified, so the cached toolbar chrome is reused; `refresh` is
+    /// reserved for the first frame, where an inactive window may need the
+    /// explicit ask (unit-2 finding).
     pub fn frame_arrived(
         &mut self,
         frame: cap_recording::NativeCameraFrame,
@@ -218,37 +416,49 @@ impl CameraWindow {
             use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 
             if let Some(buffer) = frame::FrameConverter::convert(&mut self.converter, &frame) {
+                let first_frame = self.frame_dims.is_none();
                 let dims = (buffer.width(), buffer.height());
                 let dims_changed = self.frame_dims != Some(dims);
                 self.frame_dims = Some(dims);
                 let raw = buffer.as_ref() as *const cidre::cv::PixelBuf as CVPixelBufferRef;
-                self.latest_frame = Some(unsafe { CVPixelBuffer::wrap_under_get_rule(raw) });
+                let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+                self.preview
+                    .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
                 if dims_changed {
                     self.apply_window_size(window);
+                    cx.notify();
+                }
+                if first_frame && !window.is_window_active() {
+                    window.refresh();
                 }
             } else if self.frame_dims.is_none() && self.frames_in_window == 0 {
                 tracing::warn!("camera frame could not be converted for preview");
             }
         }
         #[cfg(not(target_os = "macos"))]
-        let _ = frame;
+        {
+            let _ = (frame, window);
+        }
 
         self.frames_in_window += 1;
         let elapsed = self.cadence_window_start.elapsed();
         if elapsed >= Duration::from_secs(5) {
+            let painted = self
+                .paints
+                .load(Ordering::Relaxed)
+                .wrapping_sub(self.paints_at_window_start);
             tracing::info!(
                 fps = format!(
                     "{:.1}",
                     self.frames_in_window as f64 / elapsed.as_secs_f64()
                 ),
+                painted_fps = format!("{:.1}", painted as f64 / elapsed.as_secs_f64()),
                 "camera preview cadence"
             );
             self.frames_in_window = 0;
             self.cadence_window_start = Instant::now();
+            self.paints_at_window_start = self.paints.load(Ordering::Relaxed);
         }
-
-        cx.notify();
-        window.refresh();
     }
 
     fn frame_aspect(&self) -> Option<f32> {
@@ -256,23 +466,17 @@ impl CameraWindow {
             .map(|(width, height)| width as f32 / height.max(1) as f32)
     }
 
-    /// 0..1 across the 150..600 size range -- drives the toolbar scale and the
-    /// square-shape corner radius, like `cameraToolbarScale` /
-    /// `cameraBorderRadius`.
-    fn normalized_size(&self) -> f32 {
-        (clamp_size(self.state.size) - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE)
-    }
-
     fn toolbar_scale(&self) -> f32 {
-        0.7 + self.normalized_size() * 0.3
+        0.7 + normalized_size(&self.state) * 0.3
     }
 
-    fn preview_radius(&self, preview_height: f32) -> f32 {
-        match self.state.shape {
-            CameraShape::Round => preview_height / 2.,
-            // 3rem + normalized * 1.5rem.
-            _ => 48. + self.normalized_size() * 24.,
-        }
+    /// Pushes the chrome inputs the preview renders with (its own notify is
+    /// the only thing that busts its cache).
+    fn sync_preview_chrome(&mut self, cx: &mut Context<Self>) {
+        let theme = self.theme;
+        let radius = preview_radius(&self.state);
+        self.preview
+            .update(cx, |preview, cx| preview.set_chrome(theme, radius, cx));
     }
 
     fn mutate_state(
@@ -284,6 +488,7 @@ impl CameraWindow {
         mutate(&mut self.state);
         self.state.size = clamp_size(self.state.size);
         self.apply_window_size(window);
+        self.sync_preview_chrome(cx);
         self.persist(cx);
         cx.notify();
     }
@@ -480,76 +685,6 @@ impl CameraWindow {
             )
     }
 
-    fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let (_preview_width, preview_height) = preview_dimensions(&self.state, self.frame_aspect());
-        let radius = self.preview_radius(preview_height);
-
-        let mut container = div()
-            .relative()
-            .flex_1()
-            .overflow_hidden()
-            .rounded(px(radius))
-            .bg(theme.gray_1)
-            .text_color(theme.gray_12);
-
-        #[cfg(target_os = "macos")]
-        if let Some(buffer) = self.latest_frame.clone() {
-            let frame_dims = self.frame_dims;
-            // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
-            // computes the same fitted box the old `img()` element used, and
-            // `paint_surface_fitted` UV-crops it to the element bounds so the
-            // corner radii round the visible rect (circle shape included).
-            container = container.child(
-                gpui::canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let Some((width, height)) = frame_dims else {
-                            return;
-                        };
-                        let frame_size = gpui::size(
-                            gpui::DevicePixels(width as i32),
-                            gpui::DevicePixels(height as i32),
-                        );
-                        let fitted = gpui::ObjectFit::Cover.get_bounds(bounds, frame_size);
-                        window.paint_surface_fitted(
-                            bounds,
-                            fitted,
-                            gpui::Corners::all(px(radius)),
-                            buffer.clone(),
-                        );
-                    },
-                )
-                .size_full(),
-            );
-        }
-
-        #[cfg(target_os = "macos")]
-        let showing_frame = self.latest_frame.is_some();
-        #[cfg(not(target_os = "macos"))]
-        let showing_frame = false;
-
-        if !showing_frame {
-            let message = Feeds::global(cx)
-                .read(cx)
-                .camera_error
-                .clone()
-                .unwrap_or_else(|| "Loading camera...".into());
-            container = container.child(
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(14.))
-                    .text_color(theme.gray_11)
-                    .child(message),
-            );
-        }
-
-        container
-    }
-
     fn render_resize_handles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut layer = div()
             .absolute()
@@ -617,6 +752,7 @@ impl CameraWindow {
         if (next - self.state.size).abs() > 0.5 {
             self.state.size = next;
             self.apply_window_size(window);
+            self.sync_preview_chrome(cx);
             cx.notify();
         }
     }
@@ -634,6 +770,7 @@ impl Render for CameraWindow {
         let appearance = Appearance::from_window(window.appearance());
         if appearance != self.theme.appearance {
             self.theme = Theme::new(appearance);
+            self.sync_preview_chrome(cx);
         }
         let resizing = self.resizing.is_some();
 
@@ -668,8 +805,19 @@ impl Render for CameraWindow {
                     cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)),
                 )
             })
-            .child(self.render_toolbar(cx))
-            .child(self.render_preview(cx))
+            .child(
+                self.toolbar.clone().cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(px(CAMERA_TOOLBAR_HEIGHT))
+                        .flex_none(),
+                ),
+            )
+            .child(
+                self.preview
+                    .clone()
+                    .cached(StyleRefinement::default().w_full().flex_1()),
+            )
             .child(self.render_resize_handles(cx))
     }
 }
