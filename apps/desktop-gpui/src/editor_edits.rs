@@ -26,8 +26,9 @@
 //!   for its duration.
 
 use cap_project::{
-    AudioTrackSegment, Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskSegment,
-    ProjectConfiguration, SceneSegment, TextSegment, TimelineConfiguration, ZoomSegment,
+    AudioTrackSegment, Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind,
+    MaskSegment, ProjectConfiguration, SceneSegment, TextSegment, TimelineConfiguration, XY,
+    ZoomSegment, mask_effect_contract,
 };
 
 use crate::editor_timeline::{Segment, TrackKind};
@@ -581,10 +582,13 @@ fn normalize_track<T: TrackSegmentOps>(segments: &mut [T], set_lane: impl Fn(&mu
     let mut mapping: Vec<u32> = Vec::new();
     for segment in segments.iter_mut() {
         let lane = segment.lane();
-        let next = mapping.iter().position(|value| *value == lane).unwrap_or_else(|| {
-            mapping.push(lane);
-            mapping.len() - 1
-        });
+        let next = mapping
+            .iter()
+            .position(|value| *value == lane)
+            .unwrap_or_else(|| {
+                mapping.push(lane);
+                mapping.len() - 1
+            });
         set_lane(segment, next as u32);
     }
     sort_track(segments);
@@ -891,6 +895,164 @@ pub fn insert_zoom_segment(
 /// `generalSettings.data?.defaultZoomAmount ?? 1.5` (`TL/ZoomTrack.tsx:226`).
 pub const DEFAULT_ZOOM_AMOUNT: f64 = 1.5;
 
+pub const MIN_AUDIO_SEGMENT_DURATION: f64 = 0.5;
+
+pub fn used_lane_count<T: TrackSegmentOps>(segments: &[T]) -> u32 {
+    segments
+        .iter()
+        .map(|segment| segment.lane() + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+pub fn place_segment_at_time<T: TrackSegmentOps>(
+    segments: &[T],
+    time: f64,
+    length: f64,
+    total: f64,
+) -> Option<(f64, f64)> {
+    if length <= 0.0 || total <= 0.0 {
+        return None;
+    }
+    let mut gap_start: f64 = 0.0;
+    let mut gap_end = total;
+    for segment in segments {
+        if segment.start() <= time && time < segment.end() {
+            return None;
+        }
+        if segment.end() <= time {
+            gap_start = gap_start.max(segment.end());
+        } else {
+            gap_end = gap_end.min(segment.start());
+        }
+    }
+    if gap_end - gap_start < length {
+        return None;
+    }
+    let start = (time - length / 2.0).clamp(gap_start, gap_end - length);
+    Some((start, start + length))
+}
+
+pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
+    TextSegment {
+        start,
+        end,
+        track,
+        enabled: true,
+        content: "Text".to_string(),
+        center: XY::new(0.5, 0.5),
+        size: XY::new(0.1, 0.055),
+        font_family: "sans-serif".to_string(),
+        font_size: 48.0,
+        font_weight: 700.0,
+        italic: false,
+        color: "#ffffff".to_string(),
+        fade_duration: 0.15,
+        align: Default::default(),
+        letter_spacing: 0.0,
+        line_height: 1.2,
+        opacity: 1.0,
+        shadow: 0.0,
+        animation_in: Default::default(),
+        animation_out: Default::default(),
+        animation_in_duration: 0.15,
+        animation_out_duration: 0.15,
+        layout: Default::default(),
+        layout_transition: 0.5,
+    }
+}
+
+pub fn default_mask_segment(start: f64, end: f64, track: u32) -> MaskSegment {
+    let contract = mask_effect_contract();
+    MaskSegment {
+        start,
+        end,
+        track,
+        enabled: true,
+        mask_type: MaskKind::Sensitive,
+        center: XY::new(0.5, 0.5),
+        size: XY::new(0.35, 0.35),
+        feather: 0.1,
+        opacity: 1.0,
+        pixelation: contract.blur_encoding_offset + contract.default_amount,
+        darkness: 0.5,
+        fade_duration: 0.0,
+        keyframes: Default::default(),
+    }
+}
+
+pub fn default_audio_segment(
+    start: f64,
+    end: f64,
+    track: u32,
+    path: String,
+    name: String,
+    duration: Option<f64>,
+) -> AudioTrackSegment {
+    AudioTrackSegment {
+        start,
+        end,
+        track,
+        path,
+        name: Some(name),
+        enabled: true,
+        trim_start: 0.0,
+        volume_db: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        duration,
+    }
+}
+
+fn sort_lane_segments<T: TrackSegmentOps>(segments: &mut [T]) {
+    segments.sort_by(|a, b| {
+        a.lane()
+            .cmp(&b.lane())
+            .then(a.start().total_cmp(&b.start()))
+            .then(a.end().total_cmp(&b.end()))
+    });
+}
+
+pub fn insert_text_segment(timeline: &mut TimelineConfiguration, segment: TextSegment) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    timeline.text_segments.push(segment);
+    sort_lane_segments(&mut timeline.text_segments);
+    timeline
+        .text_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track)
+        .unwrap_or(timeline.text_segments.len().saturating_sub(1))
+}
+
+pub fn insert_mask_segment(timeline: &mut TimelineConfiguration, segment: MaskSegment) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    timeline.mask_segments.push(segment);
+    sort_lane_segments(&mut timeline.mask_segments);
+    timeline
+        .mask_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track)
+        .unwrap_or(timeline.mask_segments.len().saturating_sub(1))
+}
+
+pub fn insert_audio_segment(
+    timeline: &mut TimelineConfiguration,
+    segment: AudioTrackSegment,
+) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    let path = segment.path.clone();
+    timeline.audio_segments.push(segment);
+    sort_lane_segments(&mut timeline.audio_segments);
+    timeline
+        .audio_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track && item.path == path)
+        .unwrap_or(timeline.audio_segments.len().saturating_sub(1))
+}
+
 // ---------------------------------------------------------------------------
 // The clip track
 // ---------------------------------------------------------------------------
@@ -925,7 +1087,11 @@ fn clip_available_timeline_duration(
     index: usize,
     recording_duration: f64,
 ) -> f64 {
-    let total: f64 = timeline.segments.iter().map(|segment| segment.duration()).sum();
+    let total: f64 = timeline
+        .segments
+        .iter()
+        .map(|segment| segment.duration())
+        .sum();
     let own = timeline
         .segments
         .get(index)
@@ -1303,7 +1469,7 @@ mod tests {
     fn with_zoom_count(count: usize) -> ProjectConfiguration {
         let mut config = zoom_fixture();
         let timeline = config.timeline.as_mut().unwrap();
-        timeline.zoom_segments.truncate(0);
+        timeline.zoom_segments.clear();
         for index in 0..count {
             insert_zoom_segment(timeline, index as f64 * 2., index as f64 * 2. + 1., 1.5);
         }
@@ -1389,10 +1555,19 @@ mod tests {
         let spp = 0.03;
         let at = |x: f64| hit_test(&zoom, 0, x, 0., spp);
 
-        assert_eq!(at(2.0 / spp), Hit::Handle { index: 0, start: true });
+        assert_eq!(
+            at(2.0 / spp),
+            Hit::Handle {
+                index: 0,
+                start: true
+            }
+        );
         assert_eq!(
             at(2.0 / spp + 9.),
-            Hit::Handle { index: 0, start: true },
+            Hit::Handle {
+                index: 0,
+                start: true
+            },
             "inside the segment but inside the handle too"
         );
         assert_eq!(at(2.0 / spp + 11.), Hit::Body { index: 0 });
@@ -1439,15 +1614,24 @@ mod tests {
         // 0.0125 s/px, so the shared edge at 10s is x = 800.
         assert_eq!(
             hit_test(&clips, 0, 800., 0., 0.0125),
-            Hit::Handle { index: 1, start: true }
+            Hit::Handle {
+                index: 1,
+                start: true
+            }
         );
         // Ten pixels the other side of it is still clip 1's handle.
         assert_eq!(
             hit_test(&clips, 0, 792., 0., 0.0125),
-            Hit::Handle { index: 1, start: true }
+            Hit::Handle {
+                index: 1,
+                start: true
+            }
         );
         // Past the handle's reach, clip 0's body takes over again.
-        assert_eq!(hit_test(&clips, 0, 780., 0., 0.0125), Hit::Body { index: 0 });
+        assert_eq!(
+            hit_test(&clips, 0, 780., 0., 0.0125),
+            Hit::Body { index: 0 }
+        );
     }
 
     #[test]
@@ -1611,19 +1795,34 @@ mod tests {
         let timeline = config.timeline.as_mut().unwrap();
         assert!(split_clip_segment(timeline, 4.0, None));
         assert_eq!(timeline.segments.len(), 3);
-        assert_eq!((timeline.segments[0].start, timeline.segments[0].end), (0., 4.));
-        assert_eq!((timeline.segments[1].start, timeline.segments[1].end), (4., 10.));
+        assert_eq!(
+            (timeline.segments[0].start, timeline.segments[0].end),
+            (0., 4.)
+        );
+        assert_eq!(
+            (timeline.segments[1].start, timeline.segments[1].end),
+            (4., 10.)
+        );
         assert_eq!(timeline.segments[1].recording_clip, 0);
         // The second recording clip is untouched.
-        assert_eq!((timeline.segments[2].start, timeline.segments[2].end), (0., 8.));
+        assert_eq!(
+            (timeline.segments[2].start, timeline.segments[2].end),
+            (0., 8.)
+        );
     }
 
     #[test]
     fn a_split_on_a_boundary_is_refused() {
         let mut config = two_clip_config();
         let timeline = config.timeline.as_mut().unwrap();
-        assert!(!split_clip_segment(timeline, 0.0, None), "at the very start");
-        assert!(!split_clip_segment(timeline, 10.0, Some(0)), "at its own end");
+        assert!(
+            !split_clip_segment(timeline, 0.0, None),
+            "at the very start"
+        );
+        assert!(
+            !split_clip_segment(timeline, 10.0, Some(0)),
+            "at its own end"
+        );
         assert_eq!(timeline.segments.len(), 2);
     }
 
@@ -1855,5 +2054,15 @@ mod tests {
             ),
             (8., 11.)
         );
+    }
+
+    #[test]
+    fn place_segment_at_time_fits_the_gap_around_the_playhead() {
+        let existing = [default_text_segment(2.0, 4.0, 0)];
+        let placed = place_segment_at_time(&existing, 6.0, 2.0, 10.0).unwrap();
+        assert!((placed.0 - 5.0).abs() < 1e-9);
+        assert!((placed.1 - 7.0).abs() < 1e-9);
+        assert!(place_segment_at_time(&existing, 3.0, 1.0, 10.0).is_none());
+        assert!(place_segment_at_time(&existing, 6.0, 8.0, 10.0).is_none());
     }
 }
