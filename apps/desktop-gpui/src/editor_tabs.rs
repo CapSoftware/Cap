@@ -15,27 +15,38 @@
 //!
 //! Two things in this file are not the project's: the **menus** (`KSelect` has
 //! no gpui equivalent, so every select opens `ui::Menu` at the pointer, and the
-//! open menu's identity lives in the sidebar state) and the **model catalogue**
-//! on the Captions tab, which names transcription commands this app does not
-//! have -- see the module's deviations in the README.
+//! open menu's identity lives in the sidebar state) and the **transcription
+//! flow** on the Captions tab, which drives [`crate::transcription`] -- the
+//! in-process port of the Tauri binary's caption commands -- rather than
+//! invoking them over IPC. The chosen model/language persist in the shared
+//! store's `gpui` section, this app's stand-in for the webview's
+//! `localStorage` keys.
 
-use cap_project::{
-    BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
-    CaptionSettings, CornerStyle, CursorAnimationStyle, KeyboardData, KeyboardSettings,
-    ProjectConfiguration, ShadowConfiguration, StereoMode,
+use std::{
+    collections::HashSet,
+    sync::{LazyLock, Mutex},
+    time::Duration,
 };
+
 #[cfg(test)]
 use cap_project::CaptionsData;
-use gpui::{
-    AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, svg,
+use cap_project::{
+    BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
+    CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, KeyboardData,
+    KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
 };
+use gpui::{
+    AnyElement, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px, relative, svg,
+};
+use serde_json::Value;
 
 use crate::{
     editor_color::GradeTarget,
     editor_sidebar::{SliderKey, collapsible, dashed_divider},
     editor_window::EditorWindow,
-    ui,
+    store, transcription, ui,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,23 +142,57 @@ pub const CAPTION_ANIMATIONS: [(&str, &str); 3] =
 /// `CAPTION_HIGHLIGHT_STYLE_OPTIONS` (`text-style.tsx:70-73`).
 pub const CAPTION_HIGHLIGHT_STYLES: [(&str, &str); 2] = [("color", "Color"), ("pill", "Pill")];
 
+/// One row of `MODEL_OPTIONS` (`CaptionsTab.tsx:72-78`).
+pub struct CaptionModel {
+    pub name: &'static str,
+    pub label: &'static str,
+    /// The engine identity the source shows in an info tooltip.
+    pub model_name: &'static str,
+    pub size: &'static str,
+    pub description: &'static str,
+}
+
 /// `MODEL_OPTIONS` (`CaptionsTab.tsx:87-116`).
-pub const CAPTION_MODELS: [(&str, &str, &str, &str); 4] = [
-    (
-        "best",
-        "Recommended",
-        "~640MB",
-        "Best balance for most recordings",
-    ),
-    (
-        "best-max",
-        "High Accuracy",
-        "~2.4GB",
-        "Larger download, higher accuracy",
-    ),
-    ("small", "Small", "466MB", "Smallest download"),
-    ("medium", "Medium", "1.5GB", "Slower, more accurate"),
+pub static CAPTION_MODELS: &[CaptionModel] = &[
+    CaptionModel {
+        name: "best",
+        label: "Recommended",
+        model_name: "parakeet-tdt-0.6b-v3 int8",
+        size: "~640MB",
+        description: "Best balance for most recordings",
+    },
+    CaptionModel {
+        name: "best-max",
+        label: "High Accuracy",
+        model_name: "parakeet-tdt-0.6b-v3",
+        size: "~2.4GB",
+        description: "Larger download, higher accuracy",
+    },
+    CaptionModel {
+        name: "small",
+        label: "Small",
+        model_name: "whisper.cpp small",
+        size: "466MB",
+        description: "Smallest download",
+    },
+    CaptionModel {
+        name: "medium",
+        label: "Medium",
+        model_name: "whisper.cpp medium",
+        size: "1.5GB",
+        description: "Slower, more accurate",
+    },
 ];
+
+/// `availableModelOptions` (`CaptionsTab.tsx:416-420`): the two Parakeet
+/// entries are hidden on Intel macOS.
+pub fn available_caption_models() -> &'static [CaptionModel] {
+    if transcription::supports_parakeet() {
+        CAPTION_MODELS
+    } else {
+        &CAPTION_MODELS[2..]
+    }
+}
 
 /// `LANGUAGE_OPTIONS` (`CaptionsTab.tsx:118-148`), de-duplicated: the array
 /// repeats `ar`/`hi`/`bn`/`ta` at the end, and a Kobalte listbox keyed on the
@@ -575,24 +620,36 @@ impl EditorWindow {
                 .collect(),
             SidebarMenu::CameraCornerStyle => CORNER_STYLES
                 .iter()
-                .map(|(style, label)| ui::MenuItem::new(*label, *style == project.camera.rounding_type))
+                .map(|(style, label)| {
+                    ui::MenuItem::new(*label, *style == project.camera.rounding_type)
+                })
                 .collect(),
             SidebarMenu::AudioStereo => STEREO_MODES
                 .iter()
-                .map(|(mode, label)| ui::MenuItem::new(*label, *mode == project.audio.mic_stereo_mode))
-                .collect(),
-            SidebarMenu::CaptionModel => CAPTION_MODELS
-                .iter()
-                .map(|(name, label, size, _)| {
-                    ui::MenuItem::new(
-                        SharedString::from(format!("{label} · {size}")),
-                        *name == self.sidebar.caption_model,
-                    )
+                .map(|(mode, label)| {
+                    ui::MenuItem::new(*label, *mode == project.audio.mic_stereo_mode)
                 })
                 .collect(),
+            SidebarMenu::CaptionModel => {
+                let selected = self.selected_caption_model().name;
+                available_caption_models()
+                    .iter()
+                    .map(|model| {
+                        ui::MenuItem::new(
+                            SharedString::from(format!(
+                                "{} · {} · {}",
+                                model.label, model.size, model.description
+                            )),
+                            model.name == selected,
+                        )
+                    })
+                    .collect()
+            }
             SidebarMenu::CaptionLanguage => CAPTION_LANGUAGES
                 .iter()
-                .map(|(code, label)| ui::MenuItem::new(*label, *code == self.sidebar.caption_language))
+                .map(|(code, label)| {
+                    ui::MenuItem::new(*label, *code == self.sidebar.caption_language)
+                })
                 .collect(),
             SidebarMenu::CaptionFont => FONT_OPTIONS
                 .iter()
@@ -762,16 +819,32 @@ impl EditorWindow {
                 });
             }
             // The two transcription pickers are local UI state in the source
-            // too (`createSignal` + a store key), not project config.
+            // too (`createSignal` persisted to `localStorage`,
+            // `CaptionsTab.tsx:622-641`), not project config; the store's
+            // `gpui` section is this app's `localStorage`.
             SidebarMenu::CaptionModel => {
-                if let Some((name, ..)) = CAPTION_MODELS.get(index) {
-                    self.sidebar.caption_model = name;
+                if let Some(model) = available_caption_models().get(index) {
+                    self.sidebar.caption_model = model.name;
+                    if !store::set_store_setting(
+                        transcription::GPUI_STORE_SECTION,
+                        transcription::SELECTED_MODEL_KEY,
+                        Value::String(model.name.to_string()),
+                    ) {
+                        tracing::warn!("the store refused the transcription model write");
+                    }
                     cx.notify();
                 }
             }
             SidebarMenu::CaptionLanguage => {
                 if let Some((code, _)) = CAPTION_LANGUAGES.get(index) {
                     self.sidebar.caption_language = code;
+                    if !store::set_store_setting(
+                        transcription::GPUI_STORE_SECTION,
+                        transcription::SELECTED_LANGUAGE_KEY,
+                        Value::String((*code).to_string()),
+                    ) {
+                        tracing::warn!("the store refused the transcription language write");
+                    }
                     cx.notify();
                 }
             }
@@ -915,10 +988,7 @@ impl EditorWindow {
                 CameraSlider::ShadowSize
                 | CameraSlider::ShadowOpacity
                 | CameraSlider::ShadowBlur => {
-                    let mut shadow = camera
-                        .advanced_shadow
-                        .clone()
-                        .unwrap_or(UI_SHADOW_FALLBACK);
+                    let mut shadow = camera.advanced_shadow.clone().unwrap_or(UI_SHADOW_FALLBACK);
                     match slider {
                         CameraSlider::ShadowSize => shadow.size = value,
                         CameraSlider::ShadowOpacity => shadow.opacity = value,
@@ -990,9 +1060,7 @@ impl EditorWindow {
     ) {
         self.set_caption_setting("caption-slider", window, cx, move |settings| match slider {
             CaptionSlider::Size => settings.size = value.round() as u32,
-            CaptionSlider::BackgroundOpacity => {
-                settings.background_opacity = value.round() as u32
-            }
+            CaptionSlider::BackgroundOpacity => settings.background_opacity = value.round() as u32,
             CaptionSlider::FadeDuration => settings.fade_duration = value / 100.,
         });
     }
@@ -1004,17 +1072,22 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_keyboard_setting("keyboard-slider", window, cx, move |settings| match slider {
-            KeyboardSlider::Size => settings.size = value.round() as u32,
-            KeyboardSlider::BackgroundOpacity => {
-                settings.background_opacity = value.round() as u32
-            }
-            KeyboardSlider::FadeDuration => settings.fade_duration = value / 100.,
-            KeyboardSlider::LingerDuration => settings.linger_duration = value / 100.,
-            KeyboardSlider::GroupingThreshold => {
-                settings.grouping_threshold_ms = f64::from(value)
-            }
-        });
+        self.set_keyboard_setting(
+            "keyboard-slider",
+            window,
+            cx,
+            move |settings| match slider {
+                KeyboardSlider::Size => settings.size = value.round() as u32,
+                KeyboardSlider::BackgroundOpacity => {
+                    settings.background_opacity = value.round() as u32
+                }
+                KeyboardSlider::FadeDuration => settings.fade_duration = value / 100.,
+                KeyboardSlider::LingerDuration => settings.linger_duration = value / 100.,
+                KeyboardSlider::GroupingThreshold => {
+                    settings.grouping_threshold_ms = f64::from(value)
+                }
+            },
+        );
     }
 }
 
@@ -1080,10 +1153,12 @@ impl EditorWindow {
     ) -> AnyElement {
         ui::Select::plain(&self.theme, id, label)
             .stretch_label()
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                let origin = event.position();
-                this.open_sidebar_menu(kind, origin, window, cx);
-            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    let origin = event.position();
+                    this.open_sidebar_menu(kind, origin, window, cx);
+                }),
+            )
             .into_any_element()
     }
 
@@ -1098,10 +1173,12 @@ impl EditorWindow {
     ) -> AnyElement {
         ui::Select::plain(&self.theme, id, label)
             .stretch_label()
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                let origin = event.position();
-                this.open_sidebar_menu(kind, origin, window, cx);
-            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    let origin = event.position();
+                    this.open_sidebar_menu(kind, origin, window, cx);
+                }),
+            )
             .into_any_element()
     }
 
@@ -1141,55 +1218,44 @@ impl EditorWindow {
                             .flex_col()
                             .gap(px(24.))
                             .child(self.render_camera_position(cx))
-                            .child(
-                                ui::Subfield::plain(&theme, "Hide Camera").child(
-                                    ui::Toggle::plain(&theme, "camera-hide", camera.hide)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            let next = !this.project.camera.hide;
-                                            this.edit_project("camera-hide", window, cx, move |p| {
-                                                p.camera.hide = next;
-                                                true
-                                            });
-                                        })),
+                            .child(ui::Subfield::plain(&theme, "Hide Camera").child(
+                                ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        let next = !this.project.camera.hide;
+                                        this.edit_project("camera-hide", window, cx, move |p| {
+                                            p.camera.hide = next;
+                                            true
+                                        });
+                                    }),
                                 ),
-                            )
-                            .child(
-                                ui::Subfield::plain(&theme, "Mirror Camera").child(
-                                    ui::Toggle::plain(&theme, "camera-mirror", camera.mirror)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            let next = !this.project.camera.mirror;
-                                            this.edit_project(
-                                                "camera-mirror",
-                                                window,
-                                                cx,
-                                                move |p| {
-                                                    p.camera.mirror = next;
-                                                    true
-                                                },
-                                            );
-                                        })),
+                            ))
+                            .child(ui::Subfield::plain(&theme, "Mirror Camera").child(
+                                ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        let next = !this.project.camera.mirror;
+                                        this.edit_project("camera-mirror", window, cx, move |p| {
+                                            p.camera.mirror = next;
+                                            true
+                                        });
+                                    }),
                                 ),
-                            )
-                            .child(
-                                ui::Subfield::plain(&theme, "Background Blur").child(
-                                    div().w(px(160.)).child(self.menu_select(
-                                        SidebarMenu::CameraBlur,
-                                        "camera-blur",
-                                        blur_label,
-                                        cx,
-                                    )),
-                                ),
-                            )
-                            .child(
-                                ui::Subfield::plain(&theme, "Shape").child(
-                                    div().w(px(160.)).child(self.menu_select(
-                                        SidebarMenu::CameraShape,
-                                        "camera-shape",
-                                        shape_label,
-                                        cx,
-                                    )),
-                                ),
-                            ),
+                            ))
+                            .child(ui::Subfield::plain(&theme, "Background Blur").child(
+                                div().w(px(160.)).child(self.menu_select(
+                                    SidebarMenu::CameraBlur,
+                                    "camera-blur",
+                                    blur_label,
+                                    cx,
+                                )),
+                            ))
+                            .child(ui::Subfield::plain(&theme, "Shape").child(
+                                div().w(px(160.)).child(self.menu_select(
+                                    SidebarMenu::CameraShape,
+                                    "camera-shape",
+                                    shape_label,
+                                    cx,
+                                )),
+                            )),
                     ),
             )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
@@ -1206,24 +1272,20 @@ impl EditorWindow {
             )
             .child(
                 ui::Subfield::plain(&theme, "Keep original size during zoom").child(
-                    ui::Toggle::plain(
-                        &theme,
-                        "camera-keep-size",
-                        camera.scale_during_zoom >= 1.,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // `keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM`.
-                        let keep = this.project.camera.scale_during_zoom >= 1.;
-                        let next = if keep {
-                            DEFAULT_CAMERA_SCALE_DURING_ZOOM
-                        } else {
-                            1.
-                        };
-                        this.edit_project("camera-scale-zoom", window, cx, move |p| {
-                            p.camera.scale_during_zoom = next;
-                            true
-                        });
-                    })),
+                    ui::Toggle::plain(&theme, "camera-keep-size", camera.scale_during_zoom >= 1.)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // `keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM`.
+                            let keep = this.project.camera.scale_during_zoom >= 1.;
+                            let next = if keep {
+                                DEFAULT_CAMERA_SCALE_DURING_ZOOM
+                            } else {
+                                1.
+                            };
+                            this.edit_project("camera-scale-zoom", window, cx, move |p| {
+                                p.camera.scale_during_zoom = next;
+                                true
+                            });
+                        })),
                 ),
             )
             .child(
@@ -1313,14 +1375,7 @@ impl EditorWindow {
         let selected = camera.manual_position.is_none();
         let (x, y) = (&camera.position.x, &camera.position.y);
 
-        let dots = [
-            (0usize, 0usize),
-            (1, 0),
-            (2, 0),
-            (0, 1),
-            (1, 1),
-            (2, 1),
-        ];
+        let dots = [(0usize, 0usize), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)];
         let x_index = match x {
             CameraXPosition::Left => 0usize,
             CameraXPosition::Center => 1,
@@ -1494,19 +1549,17 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(16.))
-                            .child(
-                                ui::Subfield::plain(&theme, "Mute Audio").child(
-                                    ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            let next = !this.project.audio.mute;
-                                            this.edit_project("audio-mute", window, cx, move |p| {
-                                                p.audio.mute = next;
-                                                true
-                                            });
-                                        }),
-                                    ),
+                            .child(ui::Subfield::plain(&theme, "Mute Audio").child(
+                                ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        let next = !this.project.audio.mute;
+                                        this.edit_project("audio-mute", window, cx, move |p| {
+                                            p.audio.mute = next;
+                                            true
+                                        });
+                                    }),
                                 ),
-                            )
+                            ))
                             // Only a two-channel microphone gets the stereo row
                             // (`:709-711`).
                             .children(stereo_mic.then(|| {
@@ -1600,12 +1653,14 @@ impl EditorWindow {
                                 .collect(),
                             type_index,
                         )
-                        .on_select(cx.listener(|this, index: &usize, window, cx| {
-                            let Some((value, _, _)) = CURSOR_TYPES.get(*index) else {
-                                return;
-                            };
-                            this.set_cursor_type(value, window, cx);
-                        })),
+                        .on_select(cx.listener(
+                            |this, index: &usize, window, cx| {
+                                let Some((value, _, _)) = CURSOR_TYPES.get(*index) else {
+                                    return;
+                                };
+                                this.set_cursor_type(value, window, cx);
+                            },
+                        )),
                     ),
             )
             .child(
@@ -1679,23 +1734,25 @@ impl EditorWindow {
                             .collect(),
                         style_index,
                     )
-                    .on_select(cx.listener(|this, index: &usize, window, cx| {
-                        let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
-                            return;
-                        };
-                        let style = *style;
-                        // `applyCursorStylePreset` (`:551-561`): the style and
-                        // its three physics values, in one batch.
-                        this.edit_project("cursor-style", window, cx, move |project| {
-                            project.cursor.animation_style = style;
-                            if let Some(preset) = style.preset() {
-                                project.cursor.tension = preset.tension;
-                                project.cursor.mass = preset.mass;
-                                project.cursor.friction = preset.friction;
-                            }
-                            true
-                        });
-                    })),
+                    .on_select(cx.listener(
+                        |this, index: &usize, window, cx| {
+                            let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
+                                return;
+                            };
+                            let style = *style;
+                            // `applyCursorStylePreset` (`:551-561`): the style and
+                            // its three physics values, in one batch.
+                            this.edit_project("cursor-style", window, cx, move |project| {
+                                project.cursor.animation_style = style;
+                                if let Some(preset) = style.preset() {
+                                    project.cursor.tension = preset.tension;
+                                    project.cursor.mass = preset.mass;
+                                    project.cursor.friction = preset.friction;
+                                }
+                                true
+                            });
+                        },
+                    )),
                 ),
         )
         .child(
@@ -1767,7 +1824,12 @@ impl EditorWindow {
     /// and no setter, and this app does not edit the shared crate -- so the
     /// write goes through serde, which is the field's public surface. One
     /// round trip per click of a radio card costs nothing.
-    fn set_cursor_type(&mut self, value: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_cursor_type(
+        &mut self,
+        value: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.edit_project("cursor-type", window, cx, move |project| {
             let Ok(mut json) = serde_json::to_value(&project.cursor) else {
                 return false;
@@ -1834,11 +1896,13 @@ impl EditorWindow {
                                     cx,
                                 ),
                             ))
-                            .child(self.labelled(
-                                "Size",
-                                self.slider(SliderKey::Keyboard(KeyboardSlider::Size), "", cx)
-                                    .into_any_element(),
-                            ))
+                            .child(
+                                self.labelled(
+                                    "Size",
+                                    self.slider(SliderKey::Keyboard(KeyboardSlider::Size), "", cx)
+                                        .into_any_element(),
+                                ),
+                            )
                             .child(self.labelled(
                                 "Text Color",
                                 self.render_hex_field(
@@ -1865,15 +1929,17 @@ impl EditorWindow {
                                     cx,
                                 ),
                             ))
-                            .child(self.labelled(
-                                "Background Opacity",
-                                self.slider(
-                                    SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            )),
+                            .child(
+                                self.labelled(
+                                    "Background Opacity",
+                                    self.slider(
+                                        SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -1939,16 +2005,18 @@ impl EditorWindow {
                                         "keyboard-modifiers",
                                         settings.show_modifiers,
                                     )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let next =
-                                            !keyboard_settings(&this.project).show_modifiers;
-                                        this.set_keyboard_setting(
-                                            "keyboard-modifiers",
-                                            window,
-                                            cx,
-                                            move |settings| settings.show_modifiers = next,
-                                        );
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !keyboard_settings(&this.project).show_modifiers;
+                                            this.set_keyboard_setting(
+                                                "keyboard-modifiers",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_modifiers = next,
+                                            );
+                                        },
+                                    )),
                                 ),
                             )
                             .child(
@@ -1958,16 +2026,18 @@ impl EditorWindow {
                                         "keyboard-special",
                                         settings.show_special_keys,
                                     )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let next =
-                                            !keyboard_settings(&this.project).show_special_keys;
-                                        this.set_keyboard_setting(
-                                            "keyboard-special",
-                                            window,
-                                            cx,
-                                            move |settings| settings.show_special_keys = next,
-                                        );
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !keyboard_settings(&this.project).show_special_keys;
+                                            this.set_keyboard_setting(
+                                                "keyboard-special",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_special_keys = next,
+                                            );
+                                        },
+                                    )),
                                 ),
                             )
                             .child(
@@ -1977,15 +2047,17 @@ impl EditorWindow {
                                         "keyboard-uppercase",
                                         settings.uppercase,
                                     )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let next = !keyboard_settings(&this.project).uppercase;
-                                        this.set_keyboard_setting(
-                                            "keyboard-uppercase",
-                                            window,
-                                            cx,
-                                            move |settings| settings.uppercase = next,
-                                        );
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next = !keyboard_settings(&this.project).uppercase;
+                                            this.set_keyboard_setting(
+                                                "keyboard-uppercase",
+                                                window,
+                                                cx,
+                                                move |settings| settings.uppercase = next,
+                                            );
+                                        },
+                                    )),
                                 ),
                             ),
                     ),
@@ -2001,13 +2073,13 @@ impl EditorWindow {
                         ui::ButtonVariant::Primary,
                         ui::ButtonSize::Md,
                     )
-                        .label(if has_segments {
-                            "Regenerate Keyboard Segments"
-                        } else {
-                            "Generate Keyboard Segments"
-                        })
-                        .full_width()
-                        .disabled(true),
+                    .label(if has_segments {
+                        "Regenerate Keyboard Segments"
+                    } else {
+                        "Generate Keyboard Segments"
+                    })
+                    .full_width()
+                    .disabled(true),
                 ),
             )
             .children((!has_segments).then(|| {
@@ -2043,19 +2115,17 @@ impl EditorWindow {
                 ui::Toggle::plain(&theme, "keyboard-enabled", enabled)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let next = !enabled;
+                        this.tracks.keyboard = next;
                         this.edit_project("keyboard-enabled", window, cx, move |project| {
                             let keyboard =
                                 project.keyboard.get_or_insert_with(KeyboardData::default);
                             keyboard.settings.enabled = next;
                             true
                         });
-                        // `if (!enabled && selection?.type === "keyboard")
-                        //  setEditorState(.., "selection", null)`.
                         if !next
-                            && this
-                                .selection
-                                .as_ref()
-                                .is_some_and(|s| s.track == crate::editor_timeline::TrackKind::Keyboard)
+                            && this.selection.as_ref().is_some_and(|s| {
+                                s.track == crate::editor_timeline::TrackKind::Keyboard
+                            })
                         {
                             this.set_selection(None, cx);
                         }
@@ -2114,13 +2184,11 @@ impl EditorWindow {
                 .as_ref()
                 .is_some_and(|captions| !captions.segments.is_empty());
 
-        let model_label = CAPTION_MODELS
-            .iter()
-            .find(|(name, ..)| *name == self.sidebar.caption_model)
-            .map_or_else(
-                || SharedString::from("Recommended"),
-                |(_, label, size, _)| SharedString::from(format!("{label} · {size}")),
-            );
+        self.ensure_captions_init(cx);
+        let snapshot = transcription::ui_snapshot(&self.project_path);
+        let models = available_caption_models();
+        let model = self.selected_caption_model();
+
         let language_label = CAPTION_LANGUAGES
             .iter()
             .find(|(code, _)| *code == self.sidebar.caption_language)
@@ -2143,77 +2211,274 @@ impl EditorWindow {
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or("Bold", |(_, label)| *label);
 
-        let transcription = div()
+        let model_downloaded = snapshot.downloaded.contains(model.name);
+        let active_download = snapshot
+            .download
+            .as_ref()
+            .filter(|download| download.state == transcription::DownloadState::Downloading);
+        let is_downloading = active_download.is_some();
+        let download_percent = active_download.map_or(0_u32, |download| {
+            download.progress.clamp(0.0, 100.0).round() as u32
+        });
+        let downloading_label = active_download
+            .and_then(|download| models.iter().find(|entry| entry.name == download.model))
+            .map_or(model.label, |entry| entry.label);
+        let download_message = active_download
+            .map(|download| download.message.clone())
+            .filter(|message| !message.is_empty());
+        let download_failure = snapshot
+            .download
+            .as_ref()
+            .filter(|download| {
+                download.state == transcription::DownloadState::Failed
+                    && download.model == model.name
+            })
+            .map(|download| download.message.clone());
+        let deleting = snapshot.deleting.as_deref() == Some(model.name);
+        let any_deleting = snapshot.deleting.is_some();
+        let generating = snapshot.generating;
+        // `hasAudio` (`CaptionsTab.tsx:600-605`).
+        let has_audio = self
+            .summary()
+            .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
+        let error_color = Hsla::from(gpui::rgb(0xef4444));
+
+        // The `KSelect.Trigger` with label, description and size
+        // (`CaptionsTab.tsx:824-860`); the info tooltip carries the engine
+        // identity the source puts behind the ⓘ button.
+        let model_trigger = div()
+            .id("caption-model")
+            .w_full()
             .flex()
-            .flex_col()
-            .gap(px(16.))
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .px(px(12.))
+            .py(px(8.))
+            .rounded(px(8.))
+            .bg(self.panel_bg())
+            .border_1()
+            .border_color(Hsla::from(theme.gray_3))
             .child(
-                ui::Subfield::plain(&theme, "Model").child(
-                    div()
-                        .w(px(200.))
-                        .child(self.menu_select(
-                            SidebarMenu::CaptionModel,
-                            "caption-model",
-                            model_label,
-                            cx,
-                        )),
-                ),
-            )
-            .child(
-                ui::Subfield::plain(&theme, "Language").child(
-                    div()
-                        .w(px(200.))
-                        .child(self.menu_select(
-                            SidebarMenu::CaptionLanguage,
-                            "caption-language",
-                            language_label,
-                            cx,
-                        )),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(theme.gray_12))
+                            .truncate()
+                            .child(model.label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.gray_11))
+                            .truncate()
+                            .child(model.description),
+                    ),
             )
             .child(
                 div()
-                    .pt(px(8.))
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(model.size),
+            )
+            .child(
+                svg()
+                    .path("icons/chevron-down.svg")
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(theme.gray_11)),
+            )
+            .tooltip({
+                let model_name = SharedString::new_static(model.model_name);
+                move |_window, cx| ui::Tooltip::new(&theme, model_name.clone()).view(cx)
+            })
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                this.open_sidebar_menu(SidebarMenu::CaptionModel, event.position(), window, cx);
+            }));
+
+        // The download / generate column (`CaptionsTab.tsx:936-1032`).
+        let action = if model_downloaded {
+            let mut column = div().flex().flex_col().gap(px(8.));
+            if has_audio {
+                column = column.child(
+                    ui::Button::plain(
+                        &theme,
+                        "caption-generate",
+                        ui::ButtonVariant::Primary,
+                        ui::ButtonSize::Md,
+                    )
+                    .label(if generating {
+                        "Generating..."
+                    } else if has_captions {
+                        "Regenerate Captions"
+                    } else {
+                        "Generate Captions"
+                    })
+                    .full_width()
+                    .disabled(generating || any_deleting)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.generate_captions_clicked(window, cx);
+                    })),
+                );
+            }
+            column = column.child(
+                div()
                     .flex()
-                    .flex_col()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
                     .gap(px(8.))
                     .child(
-                        ui::Button::plain(
-                            &theme,
-                            "caption-download",
-                            ui::ButtonVariant::Primary,
-                            ui::ButtonSize::Md,
-                        )
-                            .label("Download model")
-                            .icon("icons/download.svg")
-                            .full_width()
-                            .disabled(true),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.))
+                            .min_w_0()
+                            .child(
+                                svg()
+                                    .path("icons/check.svg")
+                                    .size(px(14.))
+                                    .flex_shrink_0()
+                                    .text_color(Hsla::from(theme.gray_9)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(theme.gray_10))
+                                    .truncate()
+                                    .child(SharedString::from(format!(
+                                        "{} model downloaded",
+                                        model.label
+                                    ))),
+                            ),
                     )
                     .child(
                         ui::Button::plain(
                             &theme,
-                            "caption-generate",
-                            ui::ButtonVariant::Primary,
-                            ui::ButtonSize::Md,
+                            "caption-delete",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Sm,
                         )
-                            .label(if has_captions {
-                                "Regenerate Captions"
-                            } else {
-                                "Generate Captions"
-                            })
-                            .full_width()
-                            .disabled(true),
+                        .icon("icons/trash.svg")
+                        .label(if deleting { "Deleting..." } else { "Delete" })
+                        .disabled(generating || is_downloading || deleting)
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.delete_caption_model(cx);
+                        })),
+                    ),
+            );
+            if let Some(error) = snapshot.generation_error.clone() {
+                column = column.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(error_color)
+                        .child(error),
+                );
+            }
+            column
+        } else {
+            let download_button = ui::Button::plain(
+                &theme,
+                "caption-download",
+                ui::ButtonVariant::Primary,
+                ui::ButtonSize::Md,
+            )
+            .full_width()
+            .disabled(is_downloading)
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.start_caption_model_download(cx);
+            }));
+            let download_button = if is_downloading {
+                download_button.label(format!(
+                    "Downloading {downloading_label}... {download_percent}%"
+                ))
+            } else {
+                download_button
+                    .icon("icons/download.svg")
+                    .label(format!("Download {} Model", model.label))
+            };
+
+            let mut column = div().flex().flex_col().gap(px(8.)).child(download_button);
+            if is_downloading {
+                column = column
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(6.))
+                            .rounded_full()
+                            .overflow_hidden()
+                            .bg(Hsla::from(theme.gray_3))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(Hsla::from(theme.blue_9))
+                                    .w(relative(download_percent as f32 / 100.)),
+                            ),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.gray_10))
-                            .child(
-                                "Transcription runs through Tauri commands this build does not \
-                                 have; the caption style settings below are live.",
-                            ),
+                            .child(download_message.unwrap_or_else(|| {
+                                "Keep Cap open while the model downloads. Editor reloads will \
+                                 reconnect automatically."
+                                    .to_string()
+                            })),
+                    );
+            }
+            if let Some(failure) = download_failure {
+                column = column.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(error_color)
+                        .child(failure),
+                );
+            }
+            column
+        };
+
+        let transcription = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                ui::Subfield::plain(&theme, "Model").child(div().w(px(220.)).child(model_trigger)),
+            )
+            .children((!transcription::supports_parakeet()).then(|| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(
+                        "Parakeet caption models are unavailable on Intel Macs. Whisper models \
+                         remain available.",
+                    )
+            }))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child("One time download to your system. All captions are stored locally."),
+            )
+            .child(
+                ui::Subfield::plain(&theme, "Language").child(div().w(px(200.)).child(
+                    self.menu_select(
+                        SidebarMenu::CaptionLanguage,
+                        "caption-language",
+                        language_label,
+                        cx,
                     ),
-            );
+                )),
+            )
+            .child(div().pt(px(8.)).child(action));
 
         let style = div()
             .flex()
@@ -2242,11 +2507,13 @@ impl EditorWindow {
                                     cx,
                                 ),
                             ))
-                            .child(self.labelled(
-                                "Size",
-                                self.slider(SliderKey::Caption(CaptionSlider::Size), "", cx)
-                                    .into_any_element(),
-                            ))
+                            .child(
+                                self.labelled(
+                                    "Size",
+                                    self.slider(SliderKey::Caption(CaptionSlider::Size), "", cx)
+                                        .into_any_element(),
+                                ),
+                            )
                             .child(
                                 ui::Subfield::plain(&theme, "Uppercase").child(
                                     ui::Toggle::plain(
@@ -2254,15 +2521,17 @@ impl EditorWindow {
                                         "caption-uppercase",
                                         settings.uppercase,
                                     )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let next = !caption_settings(&this.project).uppercase;
-                                        this.set_caption_setting(
-                                            "caption-uppercase",
-                                            window,
-                                            cx,
-                                            move |settings| settings.uppercase = next,
-                                        );
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next = !caption_settings(&this.project).uppercase;
+                                            this.set_caption_setting(
+                                                "caption-uppercase",
+                                                window,
+                                                cx,
+                                                move |settings| settings.uppercase = next,
+                                            );
+                                        },
+                                    )),
                                 ),
                             )
                             .child(
@@ -2277,18 +2546,20 @@ impl EditorWindow {
                                                 "caption-active-word",
                                                 settings.active_word_highlight,
                                             )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                let next = !caption_settings(&this.project)
-                                                    .active_word_highlight;
-                                                this.set_caption_setting(
-                                                    "caption-active-word",
-                                                    window,
-                                                    cx,
-                                                    move |settings| {
-                                                        settings.active_word_highlight = next
-                                                    },
-                                                );
-                                            })),
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
+                                                    let next = !caption_settings(&this.project)
+                                                        .active_word_highlight;
+                                                    this.set_caption_setting(
+                                                        "caption-active-word",
+                                                        window,
+                                                        cx,
+                                                        move |settings| {
+                                                            settings.active_word_highlight = next
+                                                        },
+                                                    );
+                                                }),
+                                            ),
                                         ),
                                     )
                                     .child(
@@ -2340,15 +2611,17 @@ impl EditorWindow {
                                     cx,
                                 ),
                             ))
-                            .child(self.labelled(
-                                "Background Opacity",
-                                self.slider(
-                                    SliderKey::Caption(CaptionSlider::BackgroundOpacity),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            )),
+                            .child(
+                                self.labelled(
+                                    "Background Opacity",
+                                    self.slider(
+                                        SliderKey::Caption(CaptionSlider::BackgroundOpacity),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -2414,16 +2687,18 @@ impl EditorWindow {
                                 "caption-export",
                                 settings.export_with_subtitles,
                             )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let next =
-                                    !caption_settings(&this.project).export_with_subtitles;
-                                this.set_caption_setting(
-                                    "caption-export",
-                                    window,
-                                    cx,
-                                    move |settings| settings.export_with_subtitles = next,
-                                );
-                            })),
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    let next =
+                                        !caption_settings(&this.project).export_with_subtitles;
+                                    this.set_caption_setting(
+                                        "caption-export",
+                                        window,
+                                        cx,
+                                        move |settings| settings.export_with_subtitles = next,
+                                    );
+                                },
+                            )),
                         ),
                     ),
             );
@@ -2520,7 +2795,7 @@ impl EditorWindow {
                 colour.a = preset.background_opacity as f32 / 100.;
                 colour
             })
-            .unwrap_or_else(|| gpui::transparent_black());
+            .unwrap_or_else(gpui::transparent_black);
 
         div()
             .h(px(48.))
@@ -2563,9 +2838,7 @@ impl EditorWindow {
                                 Hsla::from(color)
                             })
                             .when(pill, |this| {
-                                this.bg(Hsla::from(highlight))
-                                    .rounded(px(4.))
-                                    .px(px(4.))
+                                this.bg(Hsla::from(highlight)).rounded(px(4.)).px(px(4.))
                             })
                             .child(text)
                     })),
@@ -2603,6 +2876,204 @@ impl EditorWindow {
         });
     }
 
+    // -- Transcription glue ---------------------------------------------------
+
+    /// `resolveCaptionModel` (`captions.ts:58-68`): the selected name if this
+    /// platform offers it, otherwise the platform default -- the first
+    /// available entry, which is `best` everywhere and `small` on Intel macOS.
+    pub(crate) fn selected_caption_model(&self) -> &'static CaptionModel {
+        let models = available_caption_models();
+        models
+            .iter()
+            .find(|model| model.name == self.sidebar.caption_model)
+            .unwrap_or(&models[0])
+    }
+
+    /// The Captions tab's `onMount` (`CaptionsTab.tsx:557-615`): scan the
+    /// model folder, restore the persisted model/language selection, and --
+    /// when a download started by an earlier editor window is still streaming
+    /// -- reattach the progress poller. Deferred out of render because it
+    /// mutates the sidebar state, and keyed by entity so it runs once per
+    /// window.
+    fn ensure_captions_init(&self, cx: &mut Context<Self>) {
+        static INITIALISED: LazyLock<Mutex<HashSet<EntityId>>> =
+            LazyLock::new(|| Mutex::new(HashSet::new()));
+        if !INITIALISED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cx.entity().entity_id())
+        {
+            return;
+        }
+
+        let entity = cx.entity();
+        cx.defer(move |cx: &mut gpui::App| {
+            entity.update(cx, |this, cx| {
+                transcription::refresh_downloaded_models();
+
+                let section = store::store_section(transcription::GPUI_STORE_SECTION);
+                if let Some(saved) = section
+                    .get(transcription::SELECTED_MODEL_KEY)
+                    .and_then(Value::as_str)
+                    && let Some(saved_model) = available_caption_models()
+                        .iter()
+                        .find(|model| model.name == saved)
+                {
+                    this.sidebar.caption_model = saved_model.name;
+                }
+                if let Some(saved) = section
+                    .get(transcription::SELECTED_LANGUAGE_KEY)
+                    .and_then(Value::as_str)
+                    && let Some((code, _)) =
+                        CAPTION_LANGUAGES.iter().find(|(code, _)| *code == saved)
+                {
+                    this.sidebar.caption_language = code;
+                }
+
+                if transcription::download_active() {
+                    this.spawn_caption_download_poll(cx);
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    /// Repaints the tab while a download streams -- the stand-in for Tauri's
+    /// `DownloadProgress` events plus the 1s status poll
+    /// (`CaptionsTab.tsx:550-555`); the hub already carries the numbers.
+    fn spawn_caption_download_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(150))
+                    .await;
+                let active = transcription::download_active();
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+                if !active {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// `downloadModel` (`CaptionsTab.tsx:643-690`). The download runs on the
+    /// tokio runtime and survives this window; the poll task repaints.
+    fn start_caption_model_download(&mut self, cx: &mut Context<Self>) {
+        let model = self.selected_caption_model().name;
+        if !transcription::begin_download(model) {
+            return;
+        }
+        gpui_tokio::Tokio::spawn(cx, transcription::run_model_download(model.to_string())).detach();
+        self.spawn_caption_download_poll(cx);
+        cx.notify();
+    }
+
+    /// `deleteModel` (`CaptionsTab.tsx:692-713`).
+    fn delete_caption_model(&mut self, cx: &mut Context<Self>) {
+        let model = self.selected_caption_model().name;
+        if !transcription::begin_delete(model) {
+            return;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { transcription::run_model_delete(model) })
+                .await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
+    /// `generateCaptions` (`CaptionsTab.tsx:715-757`): transcribe on the
+    /// tokio blocking pool, then apply the result through one `edit_project`
+    /// write so a regenerate is a single undo entry.
+    fn generate_captions_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(summary) = self.summary() else {
+            return;
+        };
+        let recording_durations = summary.clip_display_durations.clone();
+        let recording_duration = summary.recording_duration;
+        let project_path = self.project_path.clone();
+        let model = self.selected_caption_model().name;
+        let language = self.sidebar.caption_language;
+
+        if !transcription::begin_generation(&project_path) {
+            return;
+        }
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let task_path = project_path.clone();
+            let task = gpui_tokio::Tokio::spawn(cx, async move {
+                tokio::task::spawn_blocking(move || {
+                    transcription::transcribe_blocking(&task_path, model, language)
+                })
+                .await
+                .map_err(|error| format!("Transcription task panicked: {error}"))?
+            });
+            let result = match task.await {
+                Ok(result) => result,
+                Err(error) => Err(format!("Transcription task failed: {error}")),
+            };
+
+            match result {
+                Ok(segments) => {
+                    transcription::finish_generation(&project_path, None);
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.apply_generated_captions(
+                            segments,
+                            &recording_durations,
+                            recording_duration,
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                Err(error) => {
+                    tracing::error!("caption generation failed: {error}");
+                    transcription::finish_generation(
+                        &project_path,
+                        Some(format!(
+                            "Failed to generate captions: {}",
+                            transcription::caption_generation_error_message(&error)
+                        )),
+                    );
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The success half of `generateCaptions` (`CaptionsTab.tsx:730-744`):
+    /// `applyCaptionResultToProject` inside the project-write fan-out, then
+    /// the caption track lane switched on.
+    fn apply_generated_captions(
+        &mut self,
+        segments: Vec<CaptionSegment>,
+        recording_durations: &[f64],
+        recording_duration: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let recording_durations = recording_durations.to_vec();
+        self.edit_project("caption-generate", window, cx, move |project| {
+            transcription::apply_caption_result(
+                project,
+                segments,
+                &recording_durations,
+                recording_duration,
+            );
+            true
+        });
+        // `setEditorState("timeline", "tracks", "caption", true)`.
+        self.tracks.caption = true;
+        cx.notify();
+    }
+
     // -- Sync offsets --------------------------------------------------------
 
     /// `SyncOffsetsConfig` (`:6081-6178`): per **recording** clip, not per
@@ -2632,14 +3103,10 @@ impl EditorWindow {
                                 .text_color(Hsla::from(theme.gray_12))
                                 .child("Sync"),
                         )
-                        .child(
-                            div()
-                                .text_color(Hsla::from(theme.gray_11))
-                                .child(
-                                    "Fine-tune source offsets if audio or camera drifts out of \
+                        .child(div().text_color(Hsla::from(theme.gray_11)).child(
+                            "Fine-tune source offsets if audio or camera drifts out of \
                                      sync with the screen recording.",
-                                ),
-                        ),
+                        )),
                 )
                 .children((0..clips).map(|clip| {
                     let auto = self
@@ -2737,88 +3204,6 @@ fn default_captions() -> CaptionsData {
     CaptionsData::default()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_tab_slider_has_the_range_its_call_site_declares() {
-        assert_eq!(CameraSlider::Size.limits(), (20., 80., 0.1));
-        assert_eq!(CameraSlider::ZoomSize.limits(), (10., 60., 0.1));
-        assert_eq!(CameraSlider::ShadowBlur.limits(), (0., 100., 0.1));
-        assert_eq!(AudioSlider::MicVolume.limits(), (-30., 10., 0.1));
-        assert_eq!(CursorSlider::Size.limits(), (20., 300., 1.));
-        assert_eq!(CursorSlider::IdleDelay.limits(), (0.5, 5., 0.1));
-        assert_eq!(CursorSlider::Mass.limits(), (0.1, 15., 0.01));
-        assert_eq!(KeyboardSlider::LingerDuration.limits(), (0., 300., 5.));
-        assert_eq!(KeyboardSlider::GroupingThreshold.limits(), (50., 1000., 10.));
-        assert_eq!(CaptionSlider::FadeDuration.limits(), (0., 50., 1.));
-    }
-
-    #[test]
-    fn the_percent_sliders_read_and_write_the_same_number() {
-        // `value={[getSetting("fadeDuration") * 100]}` / `v[0] / 100`.
-        let mut project = ProjectConfiguration::default();
-        project.keyboard = Some(KeyboardData::default());
-        project.keyboard.as_mut().unwrap().settings.fade_duration = 0.15;
-        assert!((KeyboardSlider::FadeDuration.read(&project) - 15.).abs() < 1e-4);
-        project.keyboard.as_mut().unwrap().settings.linger_duration = 0.8;
-        assert!((KeyboardSlider::LingerDuration.read(&project) - 80.).abs() < 1e-4);
-    }
-
-    #[test]
-    fn the_physics_sliders_fall_back_to_custom_off_a_preset() {
-        // Mellow's preset is `{470, 3, 70}`.
-        assert_eq!(
-            match_cursor_preset(470., 3., 70.),
-            Some(CursorAnimationStyle::Mellow)
-        );
-        assert_eq!(match_cursor_preset(471., 3., 70.), None);
-        // Every named style in the picker has a preset behind it.
-        for (style, ..) in CURSOR_STYLES {
-            assert!(style.preset().is_some(), "{style:?} has no preset");
-        }
-    }
-
-    #[test]
-    fn the_catalogues_match_the_source() {
-        assert_eq!(CAPTION_PRESETS.len(), 5);
-        assert_eq!(CAPTION_PRESETS[0].id, "classic");
-        assert_eq!(CAPTION_PRESETS[2].highlight_style, "pill");
-        assert_eq!(CAPTION_POSITIONS[0].0, "manual");
-        assert_eq!(KEYBOARD_POSITIONS.len(), 6);
-        assert_eq!(FONT_OPTIONS.len(), 3);
-        assert_eq!(TEXT_WEIGHTS.len(), 3);
-        assert_eq!(CAMERA_BLUR_MODES.len(), 3);
-    }
-
-    #[test]
-    fn a_project_without_a_captions_block_refuses_a_settings_write() {
-        // `if (!project?.captions) return` (`CaptionsTab.tsx:325`).
-        let mut project = ProjectConfiguration::default();
-        assert!(!with_caption_settings(&mut project, |settings| {
-            settings.size = 99
-        }));
-        project.captions = Some(default_captions());
-        assert!(with_caption_settings(&mut project, |settings| {
-            settings.size = 99
-        }));
-        assert_eq!(caption_settings(&project).size, 99);
-    }
-
-    #[test]
-    fn a_keyboard_settings_write_creates_the_block_it_needs() {
-        // `if (!project?.keyboard) { setProject("keyboard", { settings: {...} }) }`
-        let mut project = ProjectConfiguration::default();
-        assert!(with_keyboard_settings(&mut project, |settings| {
-            settings.size = 72
-        }));
-        assert_eq!(keyboard_settings(&project).size, 72);
-        // The rest of the defaults come along, not just the written key.
-        assert_eq!(keyboard_settings(&project).position, "bottom-center");
-    }
-}
-
 impl EditorWindow {
     /// `SourceOffsetField` (`ConfigSidebar.tsx:6179-6243`): a `NumberField`
     /// reading milliseconds, an `ms` label, and four nudge buttons.
@@ -2862,37 +3247,133 @@ impl EditorWindow {
                             .gap(px(4.))
                             .child(self.render_number_field(key, "ms", 80.)),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(4.))
-                            .children([-100_i32, -10, 10, 100].map(|delta| {
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "offset-{clip}-{kind:?}-{delta}"
-                                    )))
-                                    .px(px(4.))
-                                    .py(px(2.))
-                                    .rounded(px(2.))
-                                    .border_1()
-                                    .border_color(Hsla::from(theme.gray_3))
-                                    .bg(Hsla::from(theme.gray_1))
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child(SharedString::from(format!(
-                                        "{}{}ms",
-                                        if delta > 0 { "+" } else { "-" },
-                                        delta.abs()
-                                    )))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        // `rawValue() + v`, in milliseconds.
-                                        let next = (current * 1000.).round() + f64::from(delta);
-                                        this.set_clip_offset(clip, kind, next, window, cx);
-                                    }))
-                            })),
-                    ),
+                    .child(div().flex().flex_row().gap(px(4.)).children(
+                        [-100_i32, -10, 10, 100].map(|delta| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "offset-{clip}-{kind:?}-{delta}"
+                                )))
+                                .px(px(4.))
+                                .py(px(2.))
+                                .rounded(px(2.))
+                                .border_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .bg(Hsla::from(theme.gray_1))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(SharedString::from(format!(
+                                    "{}{}ms",
+                                    if delta > 0 { "+" } else { "-" },
+                                    delta.abs()
+                                )))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    // `rawValue() + v`, in milliseconds.
+                                    let next = (current * 1000.).round() + f64::from(delta);
+                                    this.set_clip_offset(clip, kind, next, window, cx);
+                                }))
+                        }),
+                    )),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_tab_slider_has_the_range_its_call_site_declares() {
+        assert_eq!(CameraSlider::Size.limits(), (20., 80., 0.1));
+        assert_eq!(CameraSlider::ZoomSize.limits(), (10., 60., 0.1));
+        assert_eq!(CameraSlider::ShadowBlur.limits(), (0., 100., 0.1));
+        assert_eq!(AudioSlider::MicVolume.limits(), (-30., 10., 0.1));
+        assert_eq!(CursorSlider::Size.limits(), (20., 300., 1.));
+        assert_eq!(CursorSlider::IdleDelay.limits(), (0.5, 5., 0.1));
+        assert_eq!(CursorSlider::Mass.limits(), (0.1, 15., 0.01));
+        assert_eq!(KeyboardSlider::LingerDuration.limits(), (0., 300., 5.));
+        assert_eq!(
+            KeyboardSlider::GroupingThreshold.limits(),
+            (50., 1000., 10.)
+        );
+        assert_eq!(CaptionSlider::FadeDuration.limits(), (0., 50., 1.));
+    }
+
+    #[test]
+    fn the_percent_sliders_read_and_write_the_same_number() {
+        // `value={[getSetting("fadeDuration") * 100]}` / `v[0] / 100`.
+        let mut project = ProjectConfiguration {
+            keyboard: Some(KeyboardData::default()),
+            ..Default::default()
+        };
+        project.keyboard.as_mut().unwrap().settings.fade_duration = 0.15;
+        assert!((KeyboardSlider::FadeDuration.read(&project) - 15.).abs() < 1e-4);
+        project.keyboard.as_mut().unwrap().settings.linger_duration = 0.8;
+        assert!((KeyboardSlider::LingerDuration.read(&project) - 80.).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_physics_sliders_fall_back_to_custom_off_a_preset() {
+        // Mellow's preset is `{470, 3, 70}`.
+        assert_eq!(
+            match_cursor_preset(470., 3., 70.),
+            Some(CursorAnimationStyle::Mellow)
+        );
+        assert_eq!(match_cursor_preset(471., 3., 70.), None);
+        // Every named style in the picker has a preset behind it.
+        for (style, ..) in CURSOR_STYLES {
+            assert!(style.preset().is_some(), "{style:?} has no preset");
+        }
+    }
+
+    #[test]
+    fn the_catalogues_match_the_source() {
+        assert_eq!(CAPTION_PRESETS.len(), 5);
+        assert_eq!(CAPTION_PRESETS[0].id, "classic");
+        assert_eq!(CAPTION_PRESETS[2].highlight_style, "pill");
+        assert_eq!(CAPTION_POSITIONS[0].0, "manual");
+        assert_eq!(KEYBOARD_POSITIONS.len(), 6);
+        assert_eq!(FONT_OPTIONS.len(), 3);
+        assert_eq!(TEXT_WEIGHTS.len(), 3);
+        assert_eq!(CAMERA_BLUR_MODES.len(), 3);
+        // `MODEL_OPTIONS` (`CaptionsTab.tsx:87-116`): two Parakeet entries in
+        // front of the two Whisper ones, so the Intel-macOS slice keeps
+        // exactly the Whisper pair.
+        assert_eq!(CAPTION_MODELS.len(), 4);
+        assert_eq!(CAPTION_MODELS[0].name, "best");
+        assert_eq!(CAPTION_MODELS[1].name, "best-max");
+        assert_eq!(CAPTION_MODELS[2].name, "small");
+        assert_eq!(CAPTION_MODELS[3].name, "medium");
+        assert!(
+            CAPTION_MODELS[2..]
+                .iter()
+                .all(|model| !transcription::is_parakeet_model(model.name))
+        );
+    }
+
+    #[test]
+    fn a_project_without_a_captions_block_refuses_a_settings_write() {
+        // `if (!project?.captions) return` (`CaptionsTab.tsx:325`).
+        let mut project = ProjectConfiguration::default();
+        assert!(!with_caption_settings(&mut project, |settings| {
+            settings.size = 99
+        }));
+        project.captions = Some(default_captions());
+        assert!(with_caption_settings(&mut project, |settings| {
+            settings.size = 99
+        }));
+        assert_eq!(caption_settings(&project).size, 99);
+    }
+
+    #[test]
+    fn a_keyboard_settings_write_creates_the_block_it_needs() {
+        // `if (!project?.keyboard) { setProject("keyboard", { settings: {...} }) }`
+        let mut project = ProjectConfiguration::default();
+        assert!(with_keyboard_settings(&mut project, |settings| {
+            settings.size = 72
+        }));
+        assert_eq!(keyboard_settings(&project).size, 72);
+        // The rest of the defaults come along, not just the written key.
+        assert_eq!(keyboard_settings(&project).position, "bottom-center");
     }
 }
