@@ -420,6 +420,7 @@ impl RenderOnce for Button {
 
         div()
             .id(id)
+            .tab_index(0)
             .flex()
             .flex_row()
             .items_center()
@@ -639,6 +640,7 @@ impl RenderOnce for IconButton {
 
         div()
             .id(id)
+            .tab_index(0)
             .flex()
             .items_center()
             .justify_center()

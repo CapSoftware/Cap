@@ -181,8 +181,7 @@ impl RenderOnce for EditorButton {
 
         div()
             .id(id)
-            // `flex flex-row items-center px-1.5 gap-1.5 h-8 rounded-lg
-            //  text-[0.875rem]`
+            .tab_index(0)
             .flex()
             .flex_row()
             .items_center()

@@ -136,6 +136,7 @@ impl RenderOnce for TabRail {
                 // items-center px-4 py-2`.
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
+                    .tab_index(0)
                     .relative()
                     .flex()
                     .flex_1()
