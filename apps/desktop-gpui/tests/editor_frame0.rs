@@ -51,6 +51,11 @@ fn preview_resolution_base() -> XY<u32> {
     XY::new(width, height)
 }
 
+/// Both tests decode the same source bundle; running them concurrently makes
+/// AVAssetReader fail to open the file it is already reading in the other
+/// test, so they take turns.
+static E0_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A studio `.cap` to render. `CAP_GPUI_E0_PROJECT` wins; otherwise the newest
 /// bundle on the Desktop that has a baked `screenshots/display.jpg` (i.e. one
 /// the shipping app finished normally) and parses as a studio recording.
@@ -76,7 +81,7 @@ fn locate_project() -> Option<PathBuf> {
         })
         .collect();
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|(created, _)| std::cmp::Reverse(*created));
     candidates.into_iter().next().map(|(_, path)| path)
 }
 
@@ -116,10 +121,12 @@ fn unpad(frame: &RenderedFrame) -> Vec<u8> {
 
 #[test]
 fn renders_frame_zero_of_a_real_studio_project() {
+    let _serial = E0_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .try_init();
 
@@ -197,13 +204,10 @@ fn renders_frame_zero_of_a_real_studio_project() {
             .preview_tx
             .send_modify(|v| *v = Some((0, PREVIEW_FPS, resolution_base)));
 
-        let (frame, layout) = tokio::time::timeout(
-            Duration::from_secs(180),
-            frame_rx.recv_async(),
-        )
-        .await
-        .expect("timed out waiting for frame 0")
-        .expect("frame channel closed before a frame arrived");
+        let (frame, layout) = tokio::time::timeout(Duration::from_secs(180), frame_rx.recv_async())
+            .await
+            .expect("timed out waiting for frame 0")
+            .expect("frame channel closed before a frame arrived");
 
         instance.dispose().await;
 
@@ -244,7 +248,10 @@ fn renders_frame_zero_of_a_real_studio_project() {
     );
 
     let pixels = unpad(&frame);
-    assert_eq!(pixels.len(), frame.width as usize * frame.height as usize * 4);
+    assert_eq!(
+        pixels.len(),
+        frame.width as usize * frame.height as usize * 4
+    );
 
     let image = image::RgbaImage::from_raw(frame.width, frame.height, pixels)
         .expect("frame buffer into RgbaImage");
@@ -280,5 +287,174 @@ fn renders_frame_zero_of_a_real_studio_project() {
         distinct.len() > 64,
         "only {} distinct colours — not a real decoded frame",
         distinct.len()
+    );
+}
+
+/// The zero-copy preview path: render frame 0 once through the CPU `Rgba`
+/// readback and once through `BgraSurface` (the wgpu blit into an
+/// IOSurface-backed CVPixelBuffer that gpui paints directly), and require the
+/// pixels to agree. The blit is a plain copy — the BGRA byte order is handled
+/// by the texture unit — so any real divergence means the surface path is
+/// rendering something other than what the editor produces.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_bgra_surface_frame_matches_the_rgba_render() {
+    use cap_editor::EditorFrameFormat;
+    use cap_rendering::SurfaceFrame;
+    use cidre::cv::pixel_buffer::LockFlags;
+
+    let _serial = E0_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+        )
+        .try_init();
+
+    let Some(source) = locate_project() else {
+        eprintln!(
+            "skipping: no studio .cap with screenshots/display.jpg found \
+             (set CAP_GPUI_E0_PROJECT to point at one)"
+        );
+        return;
+    };
+
+    let out_dir = std::env::var_os("CAP_GPUI_E0_OUT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")));
+    std::fs::create_dir_all(&out_dir).expect("create output dir");
+    let work_dir = out_dir.join("e0-bgra-project.cap");
+    let _ = std::fs::remove_dir_all(&work_dir);
+    copy_dir(&source, &work_dir).expect("copy .cap bundle");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let resolution_base = preview_resolution_base();
+
+    let rgba_frame = {
+        let (frame_tx, frame_rx) = flume::unbounded::<RenderedFrame>();
+        let work_dir = work_dir.clone();
+        runtime.block_on(async move {
+            let audio_output = Arc::new(AudioOutput::new_headless(Box::new(|_samples, _at| {})));
+            let instance = EditorInstance::new_with_audio_output(
+                work_dir,
+                |_state| {},
+                Box::new(move |output, _layout| {
+                    if let EditorFrameOutput::Rgba(frame) = output {
+                        let _ = frame_tx.send(frame);
+                    }
+                }),
+                None,
+                audio_output,
+            )
+            .await
+            .expect("EditorInstance::new (rgba)");
+            instance
+                .preview_tx
+                .send_modify(|v| *v = Some((0, PREVIEW_FPS, resolution_base)));
+            let frame = tokio::time::timeout(Duration::from_secs(180), frame_rx.recv_async())
+                .await
+                .expect("timed out waiting for the RGBA frame")
+                .expect("rgba frame channel closed");
+            instance.dispose().await;
+            frame
+        })
+    };
+
+    let mut surface_frame = {
+        let (frame_tx, frame_rx) = flume::unbounded::<SurfaceFrame>();
+        let work_dir = work_dir.clone();
+        runtime.block_on(async move {
+            let audio_output = Arc::new(AudioOutput::new_headless(Box::new(|_samples, _at| {})));
+            let instance = EditorInstance::new_with_audio_output_and_frame_format(
+                work_dir,
+                |_state| {},
+                Box::new(move |output, _layout| {
+                    if let EditorFrameOutput::Surface(frame) = output {
+                        let _ = frame_tx.send(frame);
+                    }
+                }),
+                None,
+                EditorFrameFormat::BgraSurface,
+                audio_output,
+            )
+            .await
+            .expect("EditorInstance::new (bgra surface)");
+            instance
+                .preview_tx
+                .send_modify(|v| *v = Some((0, PREVIEW_FPS, resolution_base)));
+            let frame = tokio::time::timeout(Duration::from_secs(180), frame_rx.recv_async())
+                .await
+                .expect("timed out waiting for the BGRA surface frame")
+                .expect("surface frame channel closed");
+            instance.dispose().await;
+            frame
+        })
+    };
+
+    assert_eq!(
+        (surface_frame.width, surface_frame.height),
+        (rgba_frame.width, rgba_frame.height),
+        "both paths must render the same output size"
+    );
+    assert_eq!(surface_frame.frame_number, rgba_frame.frame_number);
+
+    let width = surface_frame.width as usize;
+    let height = surface_frame.height as usize;
+    let pixel_buffer = &mut surface_frame.pixel_buffer;
+    assert_eq!(
+        pixel_buffer.pixel_format(),
+        cidre::cv::PixelFormat::_32_BGRA,
+        "the surface path must hand gpui a 32BGRA pixel buffer"
+    );
+    unsafe {
+        pixel_buffer
+            .lock_base_addr(LockFlags::READ_ONLY)
+            .result()
+            .expect("lock pixel buffer");
+    }
+    let stride = pixel_buffer.plane_bytes_per_row(0);
+    let bgra =
+        unsafe { std::slice::from_raw_parts(pixel_buffer.plane_base_address(0), stride * height) };
+    let mut surface_rgba = Vec::with_capacity(width * height * 4);
+    for row in bgra.chunks(stride).take(height) {
+        for px in row[..width * 4].chunks_exact(4) {
+            surface_rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+        }
+    }
+    unsafe {
+        pixel_buffer.unlock_lock_base_addr(LockFlags::READ_ONLY);
+    }
+
+    let rgba = unpad(&rgba_frame);
+    assert_eq!(surface_rgba.len(), rgba.len());
+
+    let mut max_delta = 0u8;
+    let mut differing_pixels = 0usize;
+    for (surface_px, rgba_px) in surface_rgba.chunks_exact(4).zip(rgba.chunks_exact(4)) {
+        let mut differs = false;
+        for c in 0..3 {
+            let delta = surface_px[c].abs_diff(rgba_px[c]);
+            max_delta = max_delta.max(delta);
+            differs |= delta != 0;
+        }
+        differing_pixels += usize::from(differs);
+    }
+    eprintln!(
+        "e0-bgra: {width}x{height}, max channel delta {max_delta}, \
+         {differing_pixels}/{} pixels differ",
+        width * height
+    );
+
+    // The blit is an exact copy of the same render, but the two frames come
+    // from two independently constructed GPU pipelines, so allow rounding-off
+    // noise while still catching swizzle, stride and colour-matrix mistakes
+    // (the old NV12 path diverged by 10+ per channel on saturated edges).
+    assert!(
+        max_delta <= 2,
+        "surface pixels diverge from the RGBA render (max channel delta {max_delta})"
     );
 }
