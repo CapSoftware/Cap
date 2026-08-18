@@ -28,6 +28,15 @@ pub const MAIN_WINDOW_LEVEL: isize = 100;
 /// `apps/desktop/src/utils/macos-window-material.ts` picks between exactly
 /// these two: `visualSystem = majorVersion >= 26 ? "liquid-glass" :
 /// "vibrancy"`. The main window is material `"panel"`, radius 16 on both.
+/// `tauri::Window::set_theme`: `None` follows the OS, Light/Dark force
+/// `NSAppearanceNameAqua` / `DarkAqua` on that window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedAppearance {
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialKind {
     /// `NSGlassEffectView`, macOS 26+ only.
@@ -72,7 +81,47 @@ mod mac {
     use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    use super::{MaterialKind, PanelBehavior};
+    use super::{ForcedAppearance, MaterialKind, PanelBehavior};
+
+    pub fn apply_window_theme(window: &Window, appearance: ForcedAppearance) {
+        use objc2_app_kit::{
+            NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+        };
+
+        let Some(ns) = ns_window(window) else {
+            return;
+        };
+        let named = match appearance {
+            ForcedAppearance::System => None,
+            ForcedAppearance::Light => {
+                NSAppearance::appearanceNamed(unsafe { NSAppearanceNameAqua })
+            }
+            ForcedAppearance::Dark => {
+                NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
+            }
+        };
+        unsafe {
+            NSAppearanceCustomization::setAppearance(&*ns, named.as_deref());
+        }
+    }
+
+    pub fn window_is_dark(window: &Window) -> Option<bool> {
+        use objc2_app_kit::{
+            NSAppearanceCustomization, NSAppearanceNameAccessibilityHighContrastDarkAqua,
+            NSAppearanceNameAccessibilityHighContrastVibrantDark, NSAppearanceNameDarkAqua,
+            NSAppearanceNameVibrantDark,
+        };
+
+        let ns = ns_window(window)?;
+        let effective = unsafe { NSAppearanceCustomization::effectiveAppearance(&*ns) };
+        let name = unsafe { effective.name() };
+        Some(unsafe {
+            name.isEqualToString(NSAppearanceNameDarkAqua)
+                || name.isEqualToString(NSAppearanceNameVibrantDark)
+                || name.isEqualToString(NSAppearanceNameAccessibilityHighContrastDarkAqua)
+                || name.isEqualToString(NSAppearanceNameAccessibilityHighContrastVibrantDark)
+        })
+    }
 
     /// `NS_GLASS_EFFECT_VIEW_STYLE_REGULAR` in
     /// `apps/desktop/src-tauri/src/platform/macos/mod.rs`. The main window
@@ -467,6 +516,41 @@ mod mac {
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
         unsafe { ns_window.orderFrontRegardless() };
+    }
+
+    /// The window's raw AppKit frame (bottom-left origin). The dev-restore
+    /// snapshot stores frames in AppKit coordinates and hands them straight
+    /// back to [`set_window_frame`], so the roundtrip needs no flip math and
+    /// cannot drift. A plain getter, safe inside a gpui update.
+    pub fn window_frame(native: &NativeWindow) -> (f64, f64, f64, f64) {
+        let frame = native.0.frame();
+        (
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+        )
+    }
+
+    /// Counterpart of [`window_frame`]: `setFrame:display:` with the captured
+    /// AppKit rect, no coordinate conversion. Same borrow rule as
+    /// [`place_overlay_panel`] -- `setFrame:` synchronously re-enters gpui's
+    /// own window callbacks, so call from a task, never inside an update.
+    pub fn set_window_frame(native: &NativeWindow, x: f64, y: f64, width: f64, height: f64) {
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+        native.0.setFrame_display(
+            NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)),
+            true,
+        );
+    }
+
+    /// `orderFrontRegardless` on the retained handle: bring a restored window
+    /// forward without activating the app -- the dev loop relaunches on every
+    /// rebuild and must not steal focus from whatever the user is typing in.
+    /// Same task-only rule as every other ordering call here.
+    pub fn order_front_native(native: &NativeWindow) {
+        unsafe { native.0.orderFrontRegardless() };
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -1117,6 +1201,107 @@ mod mac {
         }
     }
 
+    pub fn alert_dialog(title: &str, message: &str) {
+        use objc2::{class, msg_send, msg_send_id};
+        use objc2_foundation::NSString;
+
+        const NS_ALERT_STYLE_INFORMATIONAL: usize = 1;
+
+        unsafe {
+            let alert: Id<AnyObject> = msg_send_id![class!(NSAlert), new];
+            let _: () = msg_send![&*alert, setMessageText: &*NSString::from_str(title)];
+            let _: () = msg_send![&*alert, setInformativeText: &*NSString::from_str(message)];
+            let _: () = msg_send![&*alert, setAlertStyle: NS_ALERT_STYLE_INFORMATIONAL];
+            let _: *mut AnyObject =
+                msg_send![&*alert, addButtonWithTitle: &*NSString::from_str("OK")];
+            let _: isize = msg_send![&*alert, runModal];
+        }
+    }
+
+    pub fn activate_app() {
+        use objc2::{class, msg_send};
+
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
+            }
+        }
+    }
+
+    pub fn install_url_scheme_handler() {
+        install_get_url_handler();
+    }
+
+    fn install_get_url_handler() {
+        type OsType = u32;
+        type OsErr = i16;
+
+        #[repr(C)]
+        struct AeDesc {
+            descriptor_type: OsType,
+            data_handle: *mut std::ffi::c_void,
+        }
+
+        #[link(name = "CoreServices", kind = "framework")]
+        unsafe extern "C" {
+            fn AEInstallEventHandler(
+                the_ae_event_class: OsType,
+                the_ae_event_id: OsType,
+                handler: unsafe extern "C" fn(*const AeDesc, *mut AeDesc, isize) -> OsErr,
+                handler_refcon: isize,
+                is_sys_handler: u8,
+            ) -> OsErr;
+
+            fn AEGetParamPtr(
+                the_apple_event: *const AeDesc,
+                the_ae_keyword: OsType,
+                desired_type: OsType,
+                actual_type: *mut OsType,
+                data_ptr: *mut std::ffi::c_void,
+                maximum_size: isize,
+                actual_size: *mut isize,
+            ) -> OsErr;
+        }
+
+        const INTERNET_EVENT_CLASS: OsType = u32::from_be_bytes(*b"GURL");
+        const GET_URL: OsType = u32::from_be_bytes(*b"GURL");
+        const KEY_DIRECT_OBJECT: OsType = u32::from_be_bytes(*b"----");
+        const TYPE_UTF8_TEXT: OsType = u32::from_be_bytes(*b"utf8");
+
+        unsafe extern "C" fn handle_get_url(
+            event: *const AeDesc,
+            _reply: *mut AeDesc,
+            _refcon: isize,
+        ) -> OsErr {
+            let mut actual_type = 0u32;
+            let mut actual_size = 0isize;
+            let mut buffer = [0u8; 4096];
+            let status = unsafe {
+                AEGetParamPtr(
+                    event,
+                    KEY_DIRECT_OBJECT,
+                    TYPE_UTF8_TEXT,
+                    &mut actual_type,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len() as isize,
+                    &mut actual_size,
+                )
+            };
+            if status == 0 && actual_size > 0 {
+                let len = (actual_size as usize).min(buffer.len());
+                if let Ok(url) = std::str::from_utf8(&buffer[..len]) {
+                    crate::auth::submit_deep_link(url.trim_end_matches('\0'));
+                }
+            }
+            0
+        }
+
+        unsafe {
+            let _ = AEInstallEventHandler(INTERNET_EVENT_CLASS, GET_URL, handle_get_url, 0, 0);
+        }
+    }
+
     /// `current_desktop_background_source_path` (`src-tauri/recording.rs:271-305`):
     /// the file behind the main screen's desktop picture.
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
@@ -1260,7 +1445,12 @@ mod mac {
 mod stub {
     use gpui::Window;
 
-    use super::{MaterialKind, PanelBehavior};
+    use super::{ForcedAppearance, MaterialKind, PanelBehavior};
+
+    pub fn apply_window_theme(_window: &Window, _appearance: ForcedAppearance) {}
+    pub fn window_is_dark(_window: &Window) -> Option<bool> {
+        None
+    }
 
     pub fn install_window_material(_native: &NativeWindow, _radius: f64) -> Option<MaterialKind> {
         None
@@ -1372,6 +1562,11 @@ mod stub {
     }
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
+    pub fn window_frame(_native: &NativeWindow) -> (f64, f64, f64, f64) {
+        (0., 0., 0., 0.)
+    }
+    pub fn set_window_frame(_native: &NativeWindow, _x: f64, _y: f64, _width: f64, _height: f64) {}
+    pub fn order_front_native(_native: &NativeWindow) {}
     pub fn close_native(_native: &NativeWindow) {}
     pub fn debug_window_state(_native: &NativeWindow) -> String {
         String::new()
@@ -1423,6 +1618,19 @@ mod stub {
             .show()
             == rfd::MessageDialogResult::Custom(accept.to_string())
     }
+
+    pub fn alert_dialog(title: &str, message: &str) {
+        let _ = rfd::MessageDialog::new()
+            .set_title(title)
+            .set_description(message)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .set_level(rfd::MessageLevel::Info)
+            .show();
+    }
+
+    pub fn activate_app() {}
+
+    pub fn install_url_scheme_handler() {}
 
     pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
         let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
