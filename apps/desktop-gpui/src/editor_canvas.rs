@@ -288,6 +288,88 @@ pub fn snap_moving_rect(
     (dx, dy, guides)
 }
 
+fn overlay_drag_center(
+    rect: NormRect,
+    canvas: (f64, f64),
+    delta: (f64, f64),
+    targets: &SnapTargets,
+    shift: bool,
+) -> (XY<f64>, Vec<SnapGuide>) {
+    let raw = NormRect {
+        x: rect.x + delta.0 / canvas.0.max(1.),
+        y: rect.y + delta.1 / canvas.1.max(1.),
+        ..rect
+    };
+    let (dx, dy, guides) = if shift {
+        (0., 0., Vec::new())
+    } else {
+        snap_moving_rect(raw, targets, 7. / canvas.0.max(1.), 7. / canvas.1.max(1.))
+    };
+    let x = (raw.x + dx).clamp(0., 1.);
+    let y = (raw.y + dy).clamp(0., 1.);
+    (
+        XY {
+            x: (x + raw.w / 2.).clamp(0., 1.),
+            y: (y + raw.h / 2.).clamp(0., 1.),
+        },
+        guides,
+    )
+}
+
+fn overlay_resize_rect(
+    start: NormRect,
+    canvas: (f64, f64),
+    delta: (f64, f64),
+    dir_x: i8,
+    dir_y: i8,
+    targets: &SnapTargets,
+    shift: bool,
+) -> (NormRect, Vec<SnapGuide>) {
+    let ndx = delta.0 / canvas.0.max(1.);
+    let ndy = delta.1 / canvas.1.max(1.);
+    let mut w = start.w;
+    let mut h = start.h;
+    let mut cx = start.x + start.w / 2.;
+    let mut cy = start.y + start.h / 2.;
+    if dir_x != 0 {
+        w = (start.w + ndx * f64::from(dir_x)).max(0.01);
+        cx = start.x + start.w / 2. + ndx / 2.;
+    }
+    if dir_y != 0 {
+        h = (start.h + ndy * f64::from(dir_y)).max(0.01);
+        cy = start.y + start.h / 2. + ndy / 2.;
+    }
+    let rect = NormRect {
+        x: (cx - w / 2.).clamp(0., 1.),
+        y: (cy - h / 2.).clamp(0., 1.),
+        w,
+        h,
+    };
+    let guides = if shift {
+        Vec::new()
+    } else {
+        snap_moving_rect(rect, targets, 7. / canvas.0.max(1.), 7. / canvas.1.max(1.)).2
+    };
+    (rect, guides)
+}
+
+fn overlay_nudge_center(rect: NormRect, direction: (f64, f64), shift: bool) -> XY<f64> {
+    let step = if shift { 0.05 } else { 0.01 };
+    XY {
+        x: (rect.x + rect.w / 2. + direction.0 * step).clamp(0., 1.),
+        y: (rect.y + rect.h / 2. + direction.1 * step).clamp(0., 1.),
+    }
+}
+
+fn overlay_rect_from_center_size(segment: &cap_project::MaskSegment) -> Option<NormRect> {
+    Some(NormRect {
+        x: segment.center.x - segment.size.x / 2.,
+        y: segment.center.y - segment.size.y / 2.,
+        w: segment.size.x,
+        h: segment.size.y,
+    })
+}
+
 /// The whole move mapping, pure, so a scripted drag can be predicted.
 ///
 /// `canvas` is the letterboxed frame size on screen; `delta` is the pointer's
@@ -363,13 +445,34 @@ pub type CanvasRect = Rc<Cell<Option<PlayerFrame>>>;
 pub enum CanvasSelection {
     Display,
     Camera,
+    Mask(usize),
+    Text(usize),
 }
 
 impl CanvasSelection {
-    fn label(self) -> &'static str {
+    fn label(self) -> SharedString {
         match self {
-            Self::Display => "Screen",
-            Self::Camera => "Camera",
+            Self::Display => "Screen".into(),
+            Self::Camera => "Camera".into(),
+            Self::Mask(_) => "Mask".into(),
+            Self::Text(_) => "Text".into(),
+        }
+    }
+
+    fn element_id(self) -> SharedString {
+        match self {
+            Self::Display => "canvas-display".into(),
+            Self::Camera => "canvas-camera".into(),
+            Self::Mask(index) => format!("canvas-mask-{index}").into(),
+            Self::Text(index) => format!("canvas-text-{index}").into(),
+        }
+    }
+
+    fn timeline_selection(self) -> Option<(TrackKind, usize)> {
+        match self {
+            Self::Mask(index) => Some((TrackKind::Mask, index)),
+            Self::Text(index) => Some((TrackKind::Text, index)),
+            _ => None,
         }
     }
 }
@@ -494,7 +597,10 @@ impl EditorWindow {
         }
         let t = self.preview_or_playhead();
         if let Some(timeline) = self.project.timeline.as_ref() {
-            for segment in &timeline.text_segments {
+            for (index, segment) in timeline.text_segments.iter().enumerate() {
+                if exclude == CanvasSelection::Text(index) {
+                    continue;
+                }
                 if !(t >= segment.start && t < segment.end) || !segment.enabled {
                     continue;
                 }
@@ -507,7 +613,10 @@ impl EditorWindow {
                     h: size.y,
                 });
             }
-            for segment in &timeline.mask_segments {
+            for (index, segment) in timeline.mask_segments.iter().enumerate() {
+                if exclude == CanvasSelection::Mask(index) {
+                    continue;
+                }
                 if !(t >= segment.start && t < segment.end) {
                     continue;
                 }
@@ -535,22 +644,25 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.canvas_selection != Some(element) {
+        if let Some((kind, index)) = element.timeline_selection() {
+            self.canvas_selection = Some(element);
+            self.set_selection(
+                Some(crate::editor_edits::Selection::single(kind, index)),
+                cx,
+            );
+        } else if self.canvas_selection != Some(element) {
             self.canvas_selection = Some(element);
             self.set_selection(None, cx);
         }
         let draggable = match element {
             CanvasSelection::Display => self.display_draggable(),
-            CanvasSelection::Camera => true,
+            CanvasSelection::Camera | CanvasSelection::Mask(_) | CanvasSelection::Text(_) => true,
         };
         if !draggable {
             cx.notify();
             return;
         }
-        let Some(rect) = (match element {
-            CanvasSelection::Display => self.display_rect(),
-            CanvasSelection::Camera => self.camera_rect(),
-        }) else {
+        let Some(rect) = self.element_rect(element) else {
             return;
         };
         self.history.pause();
@@ -578,18 +690,22 @@ impl EditorWindow {
         let resizable = match element {
             CanvasSelection::Display => self.display_draggable(),
             CanvasSelection::Camera => self.camera_resizable(),
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => true,
         };
         if !resizable {
             return;
         }
-        if self.canvas_selection != Some(element) {
+        if let Some((kind, index)) = element.timeline_selection() {
+            self.canvas_selection = Some(element);
+            self.set_selection(
+                Some(crate::editor_edits::Selection::single(kind, index)),
+                cx,
+            );
+        } else if self.canvas_selection != Some(element) {
             self.canvas_selection = Some(element);
             self.set_selection(None, cx);
         }
-        let Some(rect) = (match element {
-            CanvasSelection::Display => self.display_rect(),
-            CanvasSelection::Camera => self.camera_rect(),
-        }) else {
+        let Some(rect) = self.element_rect(element) else {
             return;
         };
         let Some(layout) = self.frame_layout else {
@@ -705,7 +821,7 @@ impl EditorWindow {
                     self.canvas_drag_rect = Some(rect);
                     if (self.project.background.padding - padding).abs() > 1e-6 {
                         self.project.background.padding = padding;
-                        self.project_changed(window, cx);
+                        self.project_changed_live(cx);
                     }
                 }
                 CanvasSelection::Camera => {
@@ -727,15 +843,26 @@ impl EditorWindow {
                     self.canvas_drag_camera_rect = Some(rect);
                     if (f64::from(self.project.camera.size) - size_pct).abs() > 1e-6 {
                         self.project.camera.size = size_pct as f32;
-                        self.project_changed(window, cx);
+                        self.project_changed_live(cx);
                     }
                 }
+                CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+                    let (rect, guides) =
+                        overlay_resize_rect(start, size, delta, dir_x, dir_y, &targets, shift);
+                    self.snap_guides = guides;
+                    self.canvas_overlay_rect = Some(rect);
+                    self.write_overlay_rect(element, rect, cx);
+                }
             }
+            let _ = (window, output_w, output_h);
             return;
         }
         let (center, guides) = match element {
             CanvasSelection::Display => display_drag_center(start, size, delta, &targets, shift),
             CanvasSelection::Camera => camera_drag_center(start, size, delta, &targets, shift),
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+                overlay_drag_center(start, size, delta, &targets, shift)
+            }
         };
         self.snap_guides = guides;
         let optimistic = NormRect {
@@ -746,13 +873,18 @@ impl EditorWindow {
         match element {
             CanvasSelection::Display => {
                 self.canvas_drag_rect = Some(optimistic);
-                self.write_display_position(center, window, cx);
+                self.write_display_position(center, cx);
             }
             CanvasSelection::Camera => {
                 self.canvas_drag_camera_rect = Some(optimistic);
-                self.write_camera_position(center, window, cx);
+                self.write_camera_position(center, cx);
+            }
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+                self.canvas_overlay_rect = Some(optimistic);
+                self.write_overlay_rect(element, optimistic, cx);
             }
         }
+        let _ = window;
     }
 
     pub(crate) fn canvas_mouse_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -762,7 +894,9 @@ impl EditorWindow {
         let config = self.project.clone();
         self.history.resume(&config);
         self.snap_guides.clear();
+        self.canvas_overlay_rect = None;
         if drag.moved {
+            self.schedule_save(window, cx);
             match drag.element {
                 CanvasSelection::Display => tracing::info!(
                     position = ?self
@@ -780,10 +914,15 @@ impl EditorWindow {
                         .map(|p| format!("{:.6},{:.6}", p.x, p.y)),
                     "canvas camera drag"
                 ),
+                CanvasSelection::Mask(index) => {
+                    tracing::info!(index, "canvas mask drag");
+                }
+                CanvasSelection::Text(index) => {
+                    tracing::info!(index, "canvas text drag");
+                }
             }
         }
         cx.notify();
-        window.refresh();
     }
 
     /// One arrow press on a selected element (`:563-720`).
@@ -800,21 +939,16 @@ impl EditorWindow {
         if !self.canvas_overlay_visible() {
             return false;
         }
-        let (Some(canvas), Some(rect)) = (
-            self.canvas_bounds(),
-            match selected {
-                CanvasSelection::Display => self.display_rect(),
-                CanvasSelection::Camera => self.camera_rect(),
-            },
-        ) else {
+        let (Some(canvas), Some(rect)) = (self.canvas_bounds(), self.element_rect(selected)) else {
             return false;
         };
-        match selected {
-            CanvasSelection::Display if !self.show_display() || !self.display_draggable() => {
-                return false;
-            }
-            CanvasSelection::Camera if !self.show_camera() => return false,
-            _ => {}
+        if matches!(selected, CanvasSelection::Display)
+            && (!self.show_display() || !self.display_draggable())
+        {
+            return false;
+        }
+        if matches!(selected, CanvasSelection::Camera) && !self.show_camera() {
+            return false;
         }
         let size = (
             f64::from(f32::from(canvas.size.width)),
@@ -823,6 +957,9 @@ impl EditorWindow {
         let center = match selected {
             CanvasSelection::Display => display_nudge_center(rect, size, direction, shift),
             CanvasSelection::Camera => camera_nudge_center(rect, size, direction, shift),
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+                overlay_nudge_center(rect, direction, shift)
+            }
         };
         let optimistic = NormRect {
             x: center.x - rect.w / 2.,
@@ -832,40 +969,113 @@ impl EditorWindow {
         match selected {
             CanvasSelection::Display => {
                 self.canvas_drag_rect = Some(optimistic);
-                self.write_display_position(center, window, cx);
+                self.write_display_position(center, cx);
             }
             CanvasSelection::Camera => {
                 self.canvas_drag_camera_rect = Some(optimistic);
-                self.write_camera_position(center, window, cx);
+                self.write_camera_position(center, cx);
+            }
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+                self.canvas_overlay_rect = Some(optimistic);
+                self.write_overlay_rect(selected, optimistic, cx);
             }
         }
+        let _ = window;
         true
     }
 
-    fn write_display_position(
-        &mut self,
-        center: XY<f64>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn write_display_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
         if self.project.background.display_position == Some(center) {
             return;
         }
         self.project.background.display_position = Some(center);
-        self.project_changed(window, cx);
+        self.project_changed_live(cx);
     }
 
-    fn write_camera_position(
-        &mut self,
-        center: XY<f64>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn write_camera_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
         if self.project.camera.manual_position == Some(center) {
             return;
         }
         self.project.camera.manual_position = Some(center);
-        self.project_changed(window, cx);
+        self.project_changed_live(cx);
+    }
+
+    fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
+        match element {
+            CanvasSelection::Display => self.display_rect(),
+            CanvasSelection::Camera => self.camera_rect(),
+            CanvasSelection::Mask(index) => {
+                if self
+                    .canvas_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.element == element)
+                {
+                    if let Some(rect) = self.canvas_overlay_rect {
+                        return Some(rect);
+                    }
+                }
+                overlay_rect_from_center_size(
+                    self.project.timeline.as_ref()?.mask_segments.get(index)?,
+                )
+            }
+            CanvasSelection::Text(index) => {
+                if self
+                    .canvas_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.element == element)
+                {
+                    if let Some(rect) = self.canvas_overlay_rect {
+                        return Some(rect);
+                    }
+                }
+                let segment = self.project.timeline.as_ref()?.text_segments.get(index)?;
+                Some(NormRect {
+                    x: segment.center.x - segment.size.x / 2.,
+                    y: segment.center.y - segment.size.y / 2.,
+                    w: segment.size.x,
+                    h: segment.size.y,
+                })
+            }
+        }
+    }
+
+    fn write_overlay_rect(
+        &mut self,
+        element: CanvasSelection,
+        rect: NormRect,
+        cx: &mut Context<Self>,
+    ) {
+        let center = XY {
+            x: rect.x + rect.w / 2.,
+            y: rect.y + rect.h / 2.,
+        };
+        let size = XY {
+            x: rect.w.max(0.01),
+            y: rect.h.max(0.01),
+        };
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        match element {
+            CanvasSelection::Mask(index) => {
+                let Some(segment) = timeline.mask_segments.get_mut(index) else {
+                    return;
+                };
+                segment.center = center;
+                segment.size = size;
+                segment.keyframes.position.clear();
+                segment.keyframes.size.clear();
+            }
+            CanvasSelection::Text(index) => {
+                let Some(segment) = timeline.text_segments.get_mut(index) else {
+                    return;
+                };
+                segment.center = center;
+                segment.size = size;
+            }
+            _ => return,
+        }
+        self.project_changed_live(cx);
     }
 
     fn set_canvas_hover(
@@ -953,6 +1163,27 @@ impl EditorWindow {
             layer =
                 layer.child(self.render_element_box(CanvasSelection::Camera, rect, (cw, ch), cx));
         }
+        let time = self.preview_or_playhead();
+        if let Some(timeline) = self.project.timeline.as_ref() {
+            for (index, segment) in timeline.mask_segments.iter().enumerate() {
+                if !(time >= segment.start && time < segment.end) {
+                    continue;
+                }
+                let element = CanvasSelection::Mask(index);
+                if let Some(rect) = self.element_rect(element) {
+                    layer = layer.child(self.render_element_box(element, rect, (cw, ch), cx));
+                }
+            }
+            for (index, segment) in timeline.text_segments.iter().enumerate() {
+                if !(time >= segment.start && time < segment.end) || !segment.enabled {
+                    continue;
+                }
+                let element = CanvasSelection::Text(index);
+                if let Some(rect) = self.element_rect(element) {
+                    layer = layer.child(self.render_element_box(element, rect, (cw, ch), cx));
+                }
+            }
+        }
 
         for guide in &self.snap_guides {
             let color = gpui::rgb(0xFF3B6B);
@@ -1003,16 +1234,15 @@ impl EditorWindow {
                 self.camera_resizable(),
                 (!self.camera_resizable()).then_some("Camera size follows the zoom — drag to move"),
             ),
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => (true, true, None),
         };
 
         let left = rect.x as f32 * canvas.0;
         let top = rect.y as f32 * canvas.1;
         let width = rect.w as f32 * canvas.0;
         let height = rect.h as f32 * canvas.1;
-        let id = match element {
-            CanvasSelection::Display => "canvas-display",
-            CanvasSelection::Camera => "canvas-camera",
-        };
+        let id = element.element_id();
+        let box_id = id.clone();
 
         let border = if selected {
             Hsla::from(theme.blue_9)
@@ -1023,7 +1253,7 @@ impl EditorWindow {
         };
 
         let mut box_el = div()
-            .id(id)
+            .id(box_id)
             .absolute()
             .left(px(left))
             .top(px(top))
@@ -1045,9 +1275,13 @@ impl EditorWindow {
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 this.set_canvas_hover(element, *hovered, cx);
             }))
+            // Boxes overlap -- a mask sits on the display -- and gpui runs
+            // every containing sibling's listener topmost-first, so without
+            // the stop the display would hijack the drag one event later.
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event, window, cx| {
+                    cx.stop_propagation();
                     this.begin_canvas_move(element, event, window, cx);
                 }),
             );
