@@ -369,53 +369,8 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
-	it("rate limits single Loom imports per user", async () => {
+	it("does not call the Vercel firewall from the Loom import server action", async () => {
 		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
-		headersMock.mockResolvedValue(
-			new Headers({
-				host: "cap.test",
-				"x-real-ip": "127.0.0.1",
-				"next-action": "40382acacfe2b9dd0581bfc42bc9a2c02535278e38",
-			}),
-		);
-
-		const fetchMock = vi.mocked(fetch);
-		const { importFromLoom } = await import("@/actions/loom");
-
-		const result = await importFromLoom({
-			loomUrl: "https://www.loom.com/share/loom-abc1234567",
-			orgId: "org-1" as never,
-		});
-
-		expect(result).toEqual({
-			success: false,
-			error:
-				"Too many Loom imports started. Please wait a few minutes, then try again.",
-		});
-		expect(checkRateLimitMock).toHaveBeenCalledWith(
-			"rl_loom_import_per_user",
-			expect.objectContaining({
-				rateLimitKey: "loom-import:user-123",
-			}),
-		);
-		const rateLimitOptions = checkRateLimitMock.mock.calls[0]?.[1] as {
-			headers?: Headers;
-			request?: Request;
-		};
-		expect(rateLimitOptions.headers?.get("next-action")).toBeNull();
-		expect(rateLimitOptions.request?.headers.get("next-action")).toBeNull();
-		expect(rateLimitOptions.headers?.get("host")).toBe("cap.test");
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(valuesMock).not.toHaveBeenCalled();
-	});
-
-	it("fails open when the Loom import rate limit check throws", async () => {
-		checkRateLimitMock.mockRejectedValueOnce(
-			new Error("Unexpected response 494"),
-		);
-		const consoleErrorSpy = vi
-			.spyOn(console, "error")
-			.mockImplementation(() => {});
 
 		const fetchMock = vi.mocked(fetch);
 		fetchMock.mockImplementation(async (input) => {
@@ -460,10 +415,7 @@ describe("importFromLoom", () => {
 			success: true,
 			videoId: "video-123",
 		});
-		expect(consoleErrorSpy).toHaveBeenCalledWith(
-			'Rate limit check failed for "rl_loom_import_per_user":',
-			expect.any(Error),
-		);
+		expect(checkRateLimitMock).not.toHaveBeenCalled();
 		expect(startMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -666,53 +618,7 @@ describe("importFromLoom", () => {
 		);
 	});
 
-	it("rejects CSV imports when the current user is rate limited", async () => {
-		whereMock.mockReturnValueOnce(
-			withLimit([{ userId: "member-123", email: "member@example.com" }]),
-		);
-		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
-
-		const fetchMock = vi.mocked(fetch);
-		const { importFromLoomCsv } = await import("@/actions/loom");
-
-		const result = await importFromLoomCsv({
-			orgId: "org-1" as never,
-			rows: [
-				{
-					rowNumber: 2,
-					loomUrl: "https://www.loom.com/share/loom-abc1234567",
-					userEmail: "member@example.com",
-				},
-			],
-		});
-
-		expect(result).toEqual({
-			success: false,
-			importedCount: 0,
-			failedCount: 1,
-			results: [
-				{
-					rowNumber: 2,
-					userEmail: "member@example.com",
-					spaceName: undefined,
-					success: false,
-					error:
-						"Too many Loom imports started. Please wait a few minutes, then try again.",
-				},
-			],
-			error: "No Loom videos were imported.",
-		});
-		expect(checkRateLimitMock).toHaveBeenCalledWith(
-			"rl_loom_import_per_user",
-			expect.objectContaining({
-				rateLimitKey: "loom-import:user-123",
-			}),
-		);
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(valuesMock).not.toHaveBeenCalled();
-	});
-
-	it("skips rate limit checks for csv rows that were already imported", async () => {
+	it("imports a CSV row without calling the Vercel firewall", async () => {
 		whereMock.mockImplementation((conditions: unknown) => {
 			const serializedConditions = JSON.stringify(conditions);
 
@@ -800,7 +706,7 @@ describe("importFromLoom", () => {
 			],
 			error: undefined,
 		});
-		expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+		expect(checkRateLimitMock).not.toHaveBeenCalled();
 		expect(fetchMock).toHaveBeenCalled();
 		expect(startMock).toHaveBeenCalledTimes(1);
 	});
