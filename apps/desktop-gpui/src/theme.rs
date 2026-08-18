@@ -6,9 +6,10 @@
 //! `.dark`). The overridden ones are marked below -- they are *not* stock Radix,
 //! so regenerating this from a Radix crate would silently change the palette.
 
-use gpui::{Hsla, Rgba, WindowAppearance, rgb, rgba};
+use gpui::{App, Context, Global, Hsla, Rgba, Window, WindowAppearance, rgb, rgba};
 
-use crate::platform::MaterialKind;
+use crate::platform::{self, ForcedAppearance, MaterialKind};
+use crate::store::AppTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
@@ -23,6 +24,58 @@ impl Appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
         }
     }
+}
+
+/// `general_settings.theme`, the same `AppTheme` the Tauri app persists and
+/// applies through `commands.setTheme` / `windows::set_theme`.
+struct ThemePreference(AppTheme);
+
+impl Global for ThemePreference {}
+
+pub fn init(cx: &mut App) {
+    cx.set_global(ThemePreference(crate::store::GeneralSettings::load().theme));
+}
+
+pub fn current_preference(cx: &App) -> AppTheme {
+    cx.try_global::<ThemePreference>()
+        .map(|preference| preference.0)
+        .unwrap_or_else(|| crate::store::GeneralSettings::load().theme)
+}
+
+pub fn set_preference(preference: AppTheme, cx: &mut App) {
+    cx.set_global(ThemePreference(preference));
+}
+
+/// Light/Dark force that appearance; System follows the window (and therefore
+/// the OS, once `NSWindow.appearance` is cleared).
+pub fn resolve_appearance(preference: AppTheme, system: Appearance) -> Appearance {
+    match preference {
+        AppTheme::System => system,
+        AppTheme::Light => Appearance::Light,
+        AppTheme::Dark => Appearance::Dark,
+    }
+}
+
+fn forced_appearance(preference: AppTheme) -> ForcedAppearance {
+    match preference {
+        AppTheme::System => ForcedAppearance::System,
+        AppTheme::Light => ForcedAppearance::Light,
+        AppTheme::Dark => ForcedAppearance::Dark,
+    }
+}
+
+/// `window.set_theme(...)` — native chrome (traffic lights, materials, menus)
+/// follows the preference, not only the painted palette.
+pub fn apply_native(window: &Window, cx: &App) {
+    platform::apply_window_theme(window, forced_appearance(current_preference(cx)));
+}
+
+/// Force the native appearance and invalidate on OS theme changes so a System
+/// preference picks up a light/dark flip without waiting for another event.
+pub fn bind_window<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
+    apply_native(window, cx);
+    cx.observe_window_appearance(window, |_, _, cx| cx.notify())
+        .detach();
 }
 
 /// What the shell paints *over* a native window material, resolved for one
@@ -357,6 +410,35 @@ impl Theme {
         match appearance {
             Appearance::Light => Self::light(),
             Appearance::Dark => Self::dark(),
+        }
+    }
+
+    pub fn for_window(window: &Window, cx: &App, with_material: bool) -> Self {
+        let preference = current_preference(cx);
+        let system = platform::window_is_dark(window)
+            .map(|dark| {
+                if dark {
+                    Appearance::Dark
+                } else {
+                    Appearance::Light
+                }
+            })
+            .unwrap_or_else(|| Appearance::from_window(window.appearance()));
+        let theme = Self::new(resolve_appearance(preference, system));
+        if with_material {
+            theme.with_material(platform::active_material(cx))
+        } else {
+            theme
+        }
+    }
+
+    pub fn refresh(&mut self, window: &Window, cx: &App, with_material: bool) -> bool {
+        let next = Self::for_window(window, cx, with_material);
+        if next.appearance != self.appearance || next.material_kind() != self.material_kind() {
+            *self = next;
+            true
+        } else {
+            false
         }
     }
 
@@ -839,6 +921,26 @@ mod tests {
     /// With no material the palette must be byte-for-byte what it was before
     /// the material existed: the shell is opaque `gray-1`, and every body fill
     /// is its plain Radix step.
+    #[test]
+    fn theme_preference_resolves_like_tauri() {
+        assert_eq!(
+            resolve_appearance(AppTheme::System, Appearance::Dark),
+            Appearance::Dark
+        );
+        assert_eq!(
+            resolve_appearance(AppTheme::System, Appearance::Light),
+            Appearance::Light
+        );
+        assert_eq!(
+            resolve_appearance(AppTheme::Light, Appearance::Dark),
+            Appearance::Light
+        );
+        assert_eq!(
+            resolve_appearance(AppTheme::Dark, Appearance::Light),
+            Appearance::Dark
+        );
+    }
+
     #[test]
     fn no_material_keeps_the_radix_palette() {
         for theme in [Theme::light(), Theme::dark()] {
