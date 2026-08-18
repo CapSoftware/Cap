@@ -16,22 +16,21 @@ use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton,
-    ParentElement, Pixels, Point, Render, RenderImage, SharedString, StatefulInteractiveElement,
-    Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
+    IntoElement, MouseButton, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
 };
 use serde_json::Value;
 
 use crate::{
     devices::WindowOption,
-    library::{self, RecordingItem, RecordingMode},
-    ui,
+    library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, PostStudioBehaviour,
         RECORDING_START_SAFETY, SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
     },
     theme::{Appearance, Theme},
+    ui,
 };
 
 /// `.inner_size(782.0, 775.0)` / `.min_inner_size(780.0, 560.0)` on the
@@ -170,36 +169,19 @@ impl Page {
         }
     }
 
-    /// What the page is for, for the placeholder body. Not a string from the
-    /// TSX -- those pages are whole routes, not one description -- so it is
-    /// written here rather than quoted.
-    fn blurb(self) -> &'static str {
-        match self {
-            Self::General => "",
-            Self::Shortcuts => {
-                "Global shortcuts for starting, stopping and restarting a recording."
-            }
-            Self::Cli => "Install the `cap` command and mint API keys for it.",
-            Self::Recordings => "Your recordings library.",
-            Self::Screenshots => "Your screenshots library.",
-            Self::Automations => "Run an action when a recording finishes.",
-            Self::Transcription => "The transcription model, language and custom vocabulary.",
-            Self::Integrations => "Connect Cap to the other tools you use.",
-            Self::License => "Your commercial license key.",
-            Self::Experimental => "Features that are still being tried out.",
-            Self::Feedback => "Tell us what is broken or missing.",
-            Self::Changelog => "What changed in each release.",
-        }
-    }
-
     pub fn from_slug(slug: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|page| page.slug() == slug)
     }
 }
 
 /// A popup list standing in for the native `Menu.popup()` the selects use.
+///
+/// The variants from `S3Provider` down belong to the pages in
+/// `settings_pages.rs`, whose option lists and commits live there
+/// (`pages_menu_items` / `pages_choose`); the `usize` payloads are the rule
+/// index and, where present, the condition/action index within it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MenuKind {
+pub(crate) enum MenuKind {
     Countdown,
     MainWindowStart,
     PostStudio,
@@ -208,6 +190,21 @@ enum MenuKind {
     /// The excluded-windows card's Add button, whose menu is the live window
     /// list rather than a fixed option set.
     AddWindow,
+    /// The S3 config page's Storage Provider select.
+    S3Provider,
+    AutomationTrigger(usize),
+    AutomationMatchMode(usize),
+    AutomationConditionType(usize, usize),
+    AutomationConditionTarget(usize, usize),
+    AutomationConditionMode(usize, usize),
+    AutomationActionType(usize, usize),
+    AutomationClipboardSource(usize, usize),
+    AutomationWebhookMethod(usize, usize),
+    AutomationExportFormat(usize, usize),
+    AutomationExportResolution(usize, usize),
+    AutomationExportFps(usize, usize),
+    AutomationExportCompression(usize, usize),
+    AutomationPreset(usize, usize),
 }
 
 struct OpenMenu {
@@ -292,6 +289,7 @@ enum Field {
     ServerUrl,
     /// The Recordings page's filter.
     RecordingsSearch,
+    ScreenshotsSearch,
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +417,44 @@ fn matches_recording_filters(item: &RecordingItem, tab: RecordingsTab, query: &s
     query.is_empty() || item.pretty_name.to_lowercase().contains(query)
 }
 
+struct ScreenshotRow {
+    item: ScreenshotItem,
+    thumbnail: Option<Arc<RenderImage>>,
+}
+
+struct Screenshots {
+    items: Option<Vec<ScreenshotRow>>,
+    search_input: Entity<ui::TextInputState>,
+    search: String,
+    visible_count: usize,
+    scan: Option<gpui::Task<()>>,
+}
+
+impl Screenshots {
+    fn new(search_input: Entity<ui::TextInputState>) -> Self {
+        Self {
+            items: None,
+            search_input,
+            search: String::new(),
+            visible_count: RECORDINGS_PAGE_SIZE,
+            scan: None,
+        }
+    }
+
+    fn trimmed_search(&self) -> &str {
+        self.search.trim()
+    }
+
+    fn filtered(&self) -> Vec<&ScreenshotRow> {
+        let query = self.trimmed_search().to_lowercase();
+        self.items
+            .iter()
+            .flatten()
+            .filter(|row| query.is_empty() || row.item.pretty_name.to_lowercase().contains(&query))
+            .collect()
+    }
+}
+
 /// `visibleRecordings()`: an active search shows every match, unpaginated.
 fn visible_recordings_len(total: usize, has_search: bool, visible_count: usize) -> usize {
     if has_search {
@@ -453,10 +489,13 @@ fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> String 
 }
 
 pub struct SettingsWindow {
-    theme: Theme,
-    page: Page,
-    settings: GeneralSettings,
+    pub(crate) theme: Theme,
+    pub(crate) page: Page,
+    pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
+    /// Everything the pages in `settings_pages.rs` own -- their fetch state,
+    /// drafts and text-input entities.
+    pub(crate) pages: crate::settings_pages::PagesState,
     /// Drafts for the two text fields. Both are Save/Update-committed in the
     /// shipping page too, so the store only sees them on the button.
     project_name: String,
@@ -466,9 +505,10 @@ pub struct SettingsWindow {
     /// Save/Update are the commit, not Return.
     project_name_input: Entity<ui::TextInputState>,
     server_url_input: Entity<ui::TextInputState>,
-    _field_events: [gpui::Subscription; 3],
+    _field_events: [gpui::Subscription; 4],
     /// The Recordings page.
     recordings: Recordings,
+    screenshots: Screenshots,
     /// `Collapsible` under the project-name input, with the content's measured
     /// height so the reveal animates a real layout property.
     placeholders: ui::CollapsibleState,
@@ -484,7 +524,7 @@ pub struct SettingsWindow {
     windows: Vec<WindowOption>,
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
 }
 
 impl SettingsWindow {
@@ -525,6 +565,11 @@ impl SettingsWindow {
             input.set_placeholder("Search");
             input
         });
+        let screenshots_search = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_placeholder("Search");
+            input
+        });
         let field_events = [
             cx.subscribe(&project_name_input, |this, input, event, cx| {
                 this.on_field_event(Field::ProjectName, input, event, cx)
@@ -535,11 +580,17 @@ impl SettingsWindow {
             cx.subscribe(&recordings_search, |this, input, event, cx| {
                 this.on_field_event(Field::RecordingsSearch, input, event, cx)
             }),
+            cx.subscribe(&screenshots_search, |this, input, event, cx| {
+                this.on_field_event(Field::ScreenshotsSearch, input, event, cx)
+            }),
         ];
+
+        let pages = crate::settings_pages::PagesState::new(window, cx);
 
         Self {
             theme,
             page,
+            pages,
             project_name: settings
                 .default_project_name_template
                 .clone()
@@ -551,6 +602,7 @@ impl SettingsWindow {
             server_url_input,
             _field_events: field_events,
             recordings: Recordings::new(recordings_search),
+            screenshots: Screenshots::new(screenshots_search),
             placeholders: ui::CollapsibleState::new(false),
             placeholders_task: None,
             slider_track: Rc::new(Cell::new(None)),
@@ -610,16 +662,21 @@ impl SettingsWindow {
     /// `open_window`'s builder closure updates the model without ever
     /// scheduling a frame.
     pub fn page_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pages_shown(window, cx);
         if self.page == Page::Recordings {
+            self.screenshots.scan = None;
             self.refresh_recordings(window, cx);
             return;
         }
-        // Safe to drop here and nowhere else: both tasks are asleep whenever a
-        // page change can be observed (a click, or `showWindow`), never
-        // executing. Dropping a task from inside its own body would cancel a
-        // running future.
+        if self.page == Page::Screenshots {
+            self.recordings.scan = None;
+            self.recordings.tick = None;
+            self.refresh_screenshots(window, cx);
+            return;
+        }
         self.recordings.scan = None;
         self.recordings.tick = None;
+        self.screenshots.scan = None;
     }
 
     /// The `recordings` query: scan the library on the background executor,
@@ -643,9 +700,9 @@ impl SettingsWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the recordings library");
 
-            let Ok(thumbnails) =
-                this.update_in(cx, |this, window, cx| this.set_recordings(items, window, cx))
-            else {
+            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
+                this.set_recordings(items, window, cx)
+            }) else {
                 return;
             };
 
@@ -811,6 +868,149 @@ impl SettingsWindow {
         .detach();
     }
 
+    pub fn refresh_screenshots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page != Page::Screenshots {
+            return;
+        }
+
+        self.screenshots.scan = Some(cx.spawn_in(window, async move |this, cx| {
+            let items = cx
+                .background_executor()
+                .spawn(async { library::list_screenshots() })
+                .await;
+            tracing::info!(count = items.len(), "scanned the screenshots library");
+
+            let Ok(thumbnails) = this.update_in(cx, |this, window, cx| {
+                this.set_screenshots(items, window, cx)
+            }) else {
+                return;
+            };
+
+            for (index, path) in thumbnails {
+                let image = cx
+                    .background_executor()
+                    .spawn({
+                        let path = path.clone();
+                        async move { library::decode_thumbnail(&path) }
+                    })
+                    .await;
+                let Some(image) = image else { continue };
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        let Some(row) = this
+                            .screenshots
+                            .items
+                            .as_mut()
+                            .and_then(|rows| rows.get_mut(index))
+                        else {
+                            return;
+                        };
+                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                            return;
+                        }
+                        if let Some(old) = row.thumbnail.replace(image) {
+                            let _ = window.drop_image(old);
+                        }
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }));
+    }
+
+    fn set_screenshots(
+        &mut self,
+        items: Vec<ScreenshotItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(usize, PathBuf)> {
+        let mut cached: std::collections::HashMap<PathBuf, Arc<RenderImage>> = self
+            .screenshots
+            .items
+            .take()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.thumbnail.map(|image| (row.item.path, image)))
+            .collect();
+
+        let mut pending = Vec::new();
+        let rows: Vec<ScreenshotRow> = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let thumbnail = cached.remove(&item.path);
+                if thumbnail.is_none()
+                    && let Some(path) = item.thumbnail.clone()
+                {
+                    pending.push((index, path));
+                }
+                ScreenshotRow { item, thumbnail }
+            })
+            .collect();
+
+        for (_, image) in cached {
+            let _ = window.drop_image(image);
+        }
+
+        self.screenshots.items = Some(rows);
+        cx.notify();
+        window.refresh();
+        pending
+    }
+
+    fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let confirmed = crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this screenshot?",
+                "Yes",
+                "No",
+                false,
+            );
+            if !confirmed {
+                return;
+            }
+
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { library::delete_screenshot(&path) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
+                return;
+            }
+            this.update_in(cx, |this, window, cx| this.refresh_screenshots(window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn save_screenshot(
+        &mut self,
+        src: PathBuf,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |_this, _cx| {
+            let dest = crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+            let Some(dest) = dest else {
+                return;
+            };
+            if let Err(error) = library::copy_file_to_path(&src, &dest) {
+                tracing::error!("saving screenshot failed: {error}");
+            }
+        })
+        .detach();
+    }
+
     /// The Edit button on a `Failed` studio recording, which asks first.
     fn open_editor_confirmed(
         &mut self,
@@ -839,10 +1039,8 @@ impl SettingsWindow {
             }
             // Deferred inside the update for the same reason the direct arm
             // defers: `open_window` paints synchronously.
-            cx.update(|_window, cx| {
-                cx.defer(move |cx| crate::app_windows::open_editor(path, cx))
-            })
-            .ok();
+            cx.update(|_window, cx| cx.defer(move |cx| crate::app_windows::open_editor(path, cx)))
+                .ok();
         })
         .detach();
     }
@@ -862,7 +1060,7 @@ impl SettingsWindow {
     /// kilobytes and the write is a read-modify-write, so pushing it to the
     /// background executor would let two quick toggles interleave and lose
     /// one.
-    fn write(&mut self, key: &'static str, value: Value, cx: &mut Context<Self>) {
+    pub(crate) fn write(&mut self, key: &'static str, value: Value, cx: &mut Context<Self>) {
         if !store::set_store_setting(GENERAL_SETTINGS, key, value) {
             // The store refused (unparseable file); reload so the UI shows
             // what is actually on disk rather than the change that did not
@@ -872,7 +1070,7 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn write_bool(&mut self, key: &'static str, value: bool, cx: &mut Context<Self>) {
+    pub(crate) fn write_bool(&mut self, key: &'static str, value: bool, cx: &mut Context<Self>) {
         self.write(key, Value::Bool(value), cx);
     }
 
@@ -920,7 +1118,7 @@ impl SettingsWindow {
 
     // -- Menus -------------------------------------------------------------
 
-    fn open_menu(
+    pub(crate) fn open_menu(
         &mut self,
         kind: MenuKind,
         origin: Point<Pixels>,
@@ -944,7 +1142,7 @@ impl SettingsWindow {
 
     /// Arrows / Home / End / Enter / Escape on an open menu -- the Kobalte
     /// `Select` contract. Returns whether the key was consumed.
-    fn menu_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+    fn menu_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(menu) = self.menu.as_mut() else {
             return false;
         };
@@ -955,7 +1153,7 @@ impl SettingsWindow {
                 true
             }
             ui::MenuKey::Commit(index) => {
-                self.choose(kind, index, cx);
+                self.choose(kind, index, window, cx);
                 true
             }
             ui::MenuKey::Dismiss => {
@@ -991,10 +1189,17 @@ impl SettingsWindow {
                 .into_iter()
                 .map(|window| ui::MenuItem::new(window_option_label(&window), false))
                 .collect(),
+            kind => self.pages_menu_items(kind),
         }
     }
 
-    fn choose(&mut self, kind: MenuKind, index: usize, cx: &mut Context<Self>) {
+    fn choose(
+        &mut self,
+        kind: MenuKind,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.menu = None;
         match kind {
             MenuKind::Countdown => {
@@ -1028,7 +1233,7 @@ impl SettingsWindow {
                 }
             }
             MenuKind::AddWindow => {
-                let Some(window) = self.available_windows().get(index).cloned() else {
+                let Some(option) = self.available_windows().get(index).cloned() else {
                     return;
                 };
                 // `handleAddWindow`: the title is only recorded when there is
@@ -1036,11 +1241,12 @@ impl SettingsWindow {
                 let mut next = self.settings.excluded_windows.clone();
                 next.push(WindowExclusion {
                     bundle_identifier: None,
-                    owner_name: Some(window.app.clone()),
-                    window_title: Some(window.label.clone()),
+                    owner_name: Some(option.app.clone()),
+                    window_title: Some(option.label.clone()),
                 });
                 self.write_excluded(next, cx);
             }
+            kind => self.pages_choose(kind, index, window, cx),
         }
         cx.notify();
     }
@@ -1142,12 +1348,17 @@ impl Render for SettingsWindow {
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let keystroke = &event.keystroke;
                 // An open menu takes arrows, Home/End, Enter and Escape first
                 // -- the Kobalte `Select` contract. Everything else, and every
                 // key at all when no menu is open, falls through.
-                if this.menu_key(&keystroke.key, cx) {
+                if this.menu_key(&keystroke.key, window, cx) {
+                    return;
+                }
+                // The Shortcuts page's listen mode eats every key while it
+                // is armed (hotkeys.tsx's window keydown listener).
+                if this.shortcuts_capture_key(keystroke, cx) {
                     return;
                 }
                 if keystroke.modifiers.platform && keystroke.key == "w" {
@@ -1165,6 +1376,8 @@ impl Render for SettingsWindow {
             // `platform::install_window_material`.
             .rounded(px(theme.settings_window_radius()))
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.settings_text())
             .child(self.render_sidebar(cx))
             .child(self.render_content(window, cx))
@@ -1439,49 +1652,18 @@ impl SettingsWindow {
                     .children(match self.page {
                         Page::General => self.render_general(window, cx),
                         Page::Recordings => self.render_recordings(cx),
-                        page => self.render_placeholder(page),
+                        Page::Screenshots => self.render_screenshots(cx),
+                        Page::Shortcuts => self.render_shortcuts(cx),
+                        Page::Cli => self.render_cli(cx),
+                        Page::Automations => self.render_automations(cx),
+                        Page::Transcription => self.render_transcription(cx),
+                        Page::Integrations => self.render_integrations(cx),
+                        Page::License => self.render_license(cx),
+                        Page::Experimental => self.render_experimental(cx),
+                        Page::Feedback => self.render_feedback(cx),
+                        Page::Changelog => self.render_changelog(cx),
                     }),
             )
-    }
-
-    /// Honest stand-in for the eleven pages that are not built.
-    fn render_placeholder(&self, page: Page) -> Vec<gpui::AnyElement> {
-        let theme = self.theme;
-        vec![
-            self.section(
-                page.label(),
-                Some(page.blurb()),
-                None,
-                vec![
-                    self.card(true)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .child("Not part of the gpui rewrite yet"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .line_height(px(16.))
-                                        .text_color(theme.settings_muted())
-                                        .child(
-                                            "This page exists in the shipping app. Only \
-                                             General is implemented here so far -- \
-                                             everything it writes goes into the same \
-                                             settings file, so the two stay in step.",
-                                        ),
-                                ),
-                        )
-                        .into_any_element(),
-                ],
-            )
-            .into_any_element(),
-        ]
     }
 
     // -- The Recordings page -----------------------------------------------
@@ -1492,19 +1674,18 @@ impl SettingsWindow {
     /// (three tab pills and the search field) and the bordered list, which is
     /// replaced wholesale by "No recordings found" when the library is empty.
     fn render_recordings(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        // `variant="gray" size="sm" class="h-[36px] px-3 gap-1.5"`. Disabled:
-        // `importVideoFromPicker` remuxes the picked file through
-        // `commands.importVideoToProject`, which is Tauri-side work this app
-        // does not have (see the README's deviation).
+        // `variant="gray" size="sm" class="h-[36px] px-3 gap-1.5"` --
+        // `importVideoFromPicker` (`recordings.tsx:192-215`), through this
+        // build's own remux pipeline.
         let import = self
             .button(
                 "recordings-import",
                 ui::ButtonVariant::Gray,
                 Some("icons/import.svg"),
                 "Import",
-                true,
+                false,
                 cx,
-                |_, _, _| {},
+                |_, _, cx| crate::import::pick_and_import_video(cx),
             )
             .height(px(36.))
             .into_any_element();
@@ -1519,7 +1700,10 @@ impl SettingsWindow {
             .is_none_or(|items| items.is_empty());
 
         let children = if empty_library {
-            vec![self.recordings_message("No recordings found").into_any_element()]
+            vec![
+                self.recordings_message("No recordings found")
+                    .into_any_element(),
+            ]
         } else {
             vec![
                 self.render_recordings_filters(cx).into_any_element(),
@@ -1536,6 +1720,250 @@ impl SettingsWindow {
             )
             .into_any_element(),
         ]
+    }
+
+    fn render_screenshots(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        // `importImageFromPicker` (`screenshots.tsx:154-177`).
+        let import = self
+            .button(
+                "screenshots-import",
+                ui::ButtonVariant::Gray,
+                Some("icons/import.svg"),
+                "Import image",
+                false,
+                cx,
+                |_, _, cx| crate::import::pick_and_import_image(cx),
+            )
+            .height(px(36.))
+            .into_any_element();
+
+        let empty_library = self
+            .screenshots
+            .items
+            .as_ref()
+            .is_none_or(|items| items.is_empty());
+
+        let children = if empty_library {
+            vec![
+                self.recordings_message("No screenshots found")
+                    .into_any_element(),
+            ]
+        } else {
+            vec![
+                self.render_screenshots_filters(cx).into_any_element(),
+                self.render_screenshots_list(cx).into_any_element(),
+            ]
+        };
+
+        vec![
+            self.section(
+                "Screenshots",
+                Some("Manage your screenshots and perform actions."),
+                Some(import),
+                children,
+            )
+            .into_any_element(),
+        ]
+    }
+
+    fn render_screenshots_filters(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let search = div().flex().flex_row().items_center().w(px(260.)).child(
+            ui::TextInput::search(&theme, "screenshots-search", &self.screenshots.search_input)
+                .height(px(36.))
+                .radius(px(8.))
+                .bg(theme.settings_card_bg())
+                .border(theme.settings_border())
+                .text_color(theme.settings_text())
+                .placeholder_color(theme.settings_muted()),
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(12.))
+            .pb(px(16.))
+            .border_b_1()
+            .border_color(theme.settings_border())
+            .child(search)
+    }
+
+    fn render_screenshots_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let rows = self.screenshots.filtered();
+        let total = rows.len();
+        let has_search = !self.screenshots.trimmed_search().is_empty();
+        let visible = visible_recordings_len(total, has_search, self.screenshots.visible_count);
+        let more = has_more_recordings(total, has_search, self.screenshots.visible_count);
+
+        let mut items = Vec::with_capacity(visible);
+        for (index, row) in rows.iter().take(visible).enumerate() {
+            items.push(
+                self.render_screenshot_row(index, row, index + 1 == visible, cx)
+                    .into_any_element(),
+            );
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .relative()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(theme.settings_border())
+            .bg(theme.settings_card_bg())
+            .overflow_hidden()
+            .when(total == 0, |this| {
+                this.child(self.recordings_message(if has_search {
+                    "No matching screenshots"
+                } else {
+                    "No screenshots"
+                }))
+            })
+            .child(div().flex().flex_col().w_full().children(items))
+            .when(more, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .p(px(12.))
+                        .border_t_1()
+                        .border_color(theme.settings_border())
+                        .child(self.button(
+                            "screenshots-load-more",
+                            ui::ButtonVariant::Gray,
+                            None,
+                            "Load more",
+                            false,
+                            cx,
+                            |this, _window, cx| {
+                                let total = this.screenshots.filtered().len();
+                                this.screenshots.visible_count =
+                                    load_more_count(this.screenshots.visible_count, total);
+                                cx.notify();
+                            },
+                        )),
+                )
+            })
+    }
+
+    fn render_screenshot_row(
+        &self,
+        index: usize,
+        row: &ScreenshotRow,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let item = &row.item;
+        let png = item.path.clone();
+        let name = item.pretty_name.clone();
+        let bundle = item.bundle.clone();
+
+        let thumbnail = match row.thumbnail.clone() {
+            Some(image) => {
+                use gpui::StyledImage as _;
+                img(image)
+                    .size(px(48.))
+                    .flex_shrink_0()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .rounded(px(4.))
+                    .into_any_element()
+            }
+            None => div()
+                .size(px(44.))
+                .mr(px(16.))
+                .flex_shrink_0()
+                .rounded(px(4.))
+                .bg(theme.gray_10)
+                .into_any_element(),
+        };
+
+        let left = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(20.))
+            .flex_1()
+            .min_w_0()
+            .child(thumbnail)
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(16.))
+                    .child(item.pretty_name.clone()),
+            );
+
+        let actions = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .child(self.row_button(
+                ("screenshot-copy", index),
+                "icons/copy.svg",
+                "Copy to clipboard",
+                false,
+                cx,
+                {
+                    let png = png.clone();
+                    move |_this, _window, _cx| {
+                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png) {
+                            tracing::warn!("copying screenshot failed: {error}");
+                        }
+                    }
+                },
+            ))
+            .child(self.row_button(
+                ("screenshot-save", index),
+                "icons/download.svg",
+                "Save as",
+                false,
+                cx,
+                move |this, window, cx| {
+                    this.save_screenshot(png.clone(), name.clone(), window, cx);
+                },
+            ))
+            .child(self.row_button(
+                ("screenshot-folder", index),
+                "icons/folder.svg",
+                "Open folder",
+                false,
+                cx,
+                move |_this, _window, _cx| library::reveal_in_folder(&bundle),
+            ))
+            .child(self.row_button(
+                ("screenshot-delete", index),
+                "icons/trash.svg",
+                "Delete",
+                false,
+                cx,
+                {
+                    let path = item.path.clone();
+                    move |this, window, cx| this.delete_screenshot(path.clone(), window, cx)
+                },
+            ));
+
+        div()
+            .id(("screenshot-row", index))
+            .flex()
+            .flex_row()
+            .justify_between()
+            .items_center()
+            .w_full()
+            .p(px(12.))
+            .when(!last, |this| {
+                this.border_b_1().border_color(theme.settings_border())
+            })
+            .child(left)
+            .child(actions)
+            .on_click({
+                let png = item.path.clone();
+                move |_, _, _| library::open_path(&png)
+            })
     }
 
     /// Both empty states: `text-center text-(--text-tertiary) absolute flex
@@ -1995,7 +2423,12 @@ impl SettingsWindow {
             .flex_shrink_0()
             .rounded_full()
             .opacity(if disabled { 0.45 } else { 0.7 })
-            .child(svg().path(icon).size(px(16.)).text_color(theme.settings_text()))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .text_color(theme.settings_text()),
+            )
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .hover(|style| style.opacity(1.).bg(theme.settings_fill()))
@@ -2115,9 +2548,7 @@ impl SettingsWindow {
                                 // listener -> `schedule_macos_dock_visibility_sync`.
                                 // Deferred past the debounced write, which is
                                 // what the sync then reads back.
-                                cx.defer(|cx: &mut gpui::App| {
-                                    crate::menus::schedule_dock_sync(cx)
-                                });
+                                cx.defer(|cx: &mut gpui::App| crate::menus::schedule_dock_sync(cx));
                             },
                         )
                         .into_any_element(),
@@ -2176,7 +2607,9 @@ impl SettingsWindow {
                     "instant-resolution",
                     INSTANT_RESOLUTION_TIERS
                         .iter()
-                        .map(|(value, label, _)| ui::SegmentOption::new(*label, *value == effective))
+                        .map(|(value, label, _)| {
+                            ui::SegmentOption::new(*label, *value == effective)
+                        })
                         .collect(),
                     cx,
                     |_, _, _| {},
@@ -2696,113 +3129,114 @@ impl SettingsWindow {
             ("", "{time}", "the recording's time"),
         ];
 
-        let body =
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .child(self.text_field(Field::ProjectName, cx))
-                .child(
-                    // The live preview box. The Tauri card renders
-                    // `commands.formatProjectName(...)`; ours formats the six
-                    // literal placeholders (see `format_project_name`).
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.))
-                        .px(px(12.))
-                        .py(px(8.))
-                        .rounded(px(8.))
-                        .bg(theme.settings_fill())
-                        .border_dashed()
-                        .border_1()
-                        .border_color(theme.settings_border())
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .child(format_project_name(&draft)),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("placeholders-trigger")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(4.))
-                        .text_size(px(12.))
-                        .text_color(theme.settings_muted())
-                        .child(
-                            svg()
-                                .path("icons/chevron-down.svg")
-                                .size(px(14.))
-                                .text_color(theme.settings_muted()),
-                        )
-                        .child("Available placeholders")
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.toggle_placeholders(cx);
-                        })),
-                )
-                // Mounted while open *and* while animating shut, so the reveal
-                // has something to collapse; unmounted once settled closed, or
-                // the parent's `gap-3` would leave a 12px hole under the
-                // trigger.
-                .when(
-                    self.placeholders.is_open() || self.placeholders.is_animating(),
-                    |this| {
-                        let (height, _) = self.placeholders.height_for(std::time::Instant::now());
-                        this.child(ui::Collapsible::new(height, self.placeholders.measure_cell()).content(
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(self.text_field(Field::ProjectName, cx))
+            .child(
+                // The live preview box. The Tauri card renders
+                // `commands.formatProjectName(...)`; ours formats the six
+                // literal placeholders (see `format_project_name`).
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(8.))
+                    .bg(theme.settings_fill())
+                    .border_dashed()
+                    .border_1()
+                    .border_color(theme.settings_border())
+                    .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_size(px(12.))
-                            .children(placeholder_rows.into_iter().map(
-                                |(heading, code, meaning)| {
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(4.))
-                                        .when(!heading.is_empty(), |this| {
-                                            this.child(
-                                                div()
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(heading.to_string()),
-                                            )
-                                        })
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .gap(px(6.))
-                                                .child(
+                            .child(format_project_name(&draft)),
+                    ),
+            )
+            .child(
+                div()
+                    .id("placeholders-trigger")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.))
+                    .text_size(px(12.))
+                    .text_color(theme.settings_muted())
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(14.))
+                            .text_color(theme.settings_muted()),
+                    )
+                    .child("Available placeholders")
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.toggle_placeholders(cx);
+                    })),
+            )
+            // Mounted while open *and* while animating shut, so the reveal
+            // has something to collapse; unmounted once settled closed, or
+            // the parent's `gap-3` would leave a 12px hole under the
+            // trigger.
+            .when(
+                self.placeholders.is_open() || self.placeholders.is_animating(),
+                |this| {
+                    let (height, _) = self.placeholders.height_for(std::time::Instant::now());
+                    this.child(
+                        ui::Collapsible::new(height, self.placeholders.measure_cell()).content(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .text_size(px(12.))
+                                .children(placeholder_rows.into_iter().map(
+                                    |(heading, code, meaning)| {
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(4.))
+                                            .when(!heading.is_empty(), |this| {
+                                                this.child(
                                                     div()
-                                                        .px(px(6.))
-                                                        .py(px(2.))
-                                                        .rounded(px(6.))
-                                                        .bg(theme.settings_fill())
-                                                        .text_size(px(11.))
-                                                        .child(code.to_string()),
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .child(heading.to_string()),
                                                 )
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_w_0()
-                                                        .truncate()
-                                                        .text_color(theme.settings_muted())
-                                                        .child(format!("-> {meaning}")),
-                                                ),
-                                        )
-                                },
-                            )),
-                        ))
-                    },
-                );
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_row()
+                                                    .items_center()
+                                                    .gap(px(6.))
+                                                    .child(
+                                                        div()
+                                                            .px(px(6.))
+                                                            .py(px(2.))
+                                                            .rounded(px(6.))
+                                                            .bg(theme.settings_fill())
+                                                            .text_size(px(11.))
+                                                            .child(code.to_string()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .truncate()
+                                                            .text_color(theme.settings_muted())
+                                                            .child(format!("-> {meaning}")),
+                                                    ),
+                                            )
+                                    },
+                                )),
+                        ),
+                    )
+                },
+            );
 
         self.section(
             "Default project name",
@@ -3103,9 +3537,8 @@ impl SettingsWindow {
                             if this.settings.server_url == DEFAULT_SERVER_URL {
                                 this.server_url = DEFAULT_SERVER_URL.to_string();
                                 let input = this.server_url_input.clone();
-                                input.update(cx, |input, cx| {
-                                    input.set_text(DEFAULT_SERVER_URL, cx)
-                                });
+                                input
+                                    .update(cx, |input, cx| input.set_text(DEFAULT_SERVER_URL, cx));
                                 cx.notify();
                                 return;
                             }
@@ -3204,7 +3637,7 @@ impl SettingsWindow {
     /// `<Section>`: `space-y-2.5`, header `flex justify-between items-end
     /// gap-3 px-1`, title `text-sm font-semibold tracking-tight`, description
     /// `text-xs leading-relaxed text-gray-10`.
-    fn section(
+    pub(crate) fn section(
         &self,
         title: &'static str,
         description: Option<&'static str>,
@@ -3215,17 +3648,17 @@ impl SettingsWindow {
     }
 
     /// `<SectionCard>` -- [`ui::Card::settings`].
-    fn card(&self, padded: bool) -> gpui::Div {
+    pub(crate) fn card(&self, padded: bool) -> gpui::Div {
         ui::Card::settings(&self.theme, padded)
     }
 
     /// `<SectionRows>`: the same card with `divide-y divide-gray-3`.
-    fn rows(&self, children: Vec<gpui::AnyElement>) -> gpui::Div {
+    pub(crate) fn rows(&self, children: Vec<gpui::AnyElement>) -> gpui::Div {
         ui::Card::settings_rows(&self.theme, children)
     }
 
     /// `<SettingItem>` -- [`ui::SettingRow`].
-    fn setting_row(
+    pub(crate) fn setting_row(
         &self,
         label: &'static str,
         description: Option<&'static str>,
@@ -3236,7 +3669,7 @@ impl SettingsWindow {
 
     /// The grey explanation box under the two segmented controls:
     /// `flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3`.
-    fn note_box(&self) -> gpui::Div {
+    pub(crate) fn note_box(&self) -> gpui::Div {
         div()
             .flex()
             .flex_col()
@@ -3248,9 +3681,9 @@ impl SettingsWindow {
     }
 
     /// `<Toggle size="sm">` on the settings material -- [`ui::Toggle::settings`].
-    fn toggle(
+    pub(crate) fn toggle(
         &self,
-        id: &'static str,
+        id: impl Into<gpui::ElementId>,
         checked: bool,
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, &mut Context<Self>) + 'static,
@@ -3261,9 +3694,9 @@ impl SettingsWindow {
 
     /// `SelectSettingItem`'s button -- [`ui::Select::settings`], opening the
     /// in-window stand-in for `Menu.popup()`.
-    fn select(
+    pub(crate) fn select(
         &self,
-        id: &'static str,
+        id: impl Into<gpui::ElementId>,
         label: impl Into<SharedString>,
         kind: MenuKind,
         cx: &mut Context<Self>,
@@ -3306,18 +3739,18 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         on_change: impl Fn(&mut Self, usize, &mut Context<Self>) + Clone + 'static,
     ) -> ui::SegmentedControl {
-        ui::SegmentedControl::settings(&self.theme, id, options).on_select(cx.listener(
-            move |this, index: &usize, _window, cx| on_change(this, *index, cx),
-        ))
+        ui::SegmentedControl::settings(&self.theme, id, options).on_select(
+            cx.listener(move |this, index: &usize, _window, cx| on_change(this, *index, cx)),
+        )
     }
 
     /// `<Button size="sm">` under the settings material -- [`ui::Button::settings`].
-    fn button(
+    pub(crate) fn button(
         &self,
-        id: &'static str,
+        id: impl Into<gpui::ElementId>,
         variant: ui::ButtonVariant,
         icon: Option<&'static str>,
-        label: &'static str,
+        label: impl Into<SharedString>,
         disabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -3345,9 +3778,8 @@ impl SettingsWindow {
             Field::ProjectName => ("project-name-input", &self.project_name_input),
             Field::ServerUrl => ("server-url-input", &self.server_url_input),
             // Drawn by the Recordings page itself, as a search field.
-            Field::RecordingsSearch => {
-                ("recordings-search", &self.recordings.search_input)
-            }
+            Field::RecordingsSearch => ("recordings-search", &self.recordings.search_input),
+            Field::ScreenshotsSearch => ("screenshots-search", &self.screenshots.search_input),
         };
         let _ = cx;
         div().child(ui::TextInput::settings(&self.theme, id, input))
@@ -3374,6 +3806,10 @@ impl SettingsWindow {
                         //  setVisibleCount(PAGE_SIZE) })`.
                         self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
                     }
+                    Field::ScreenshotsSearch => {
+                        self.screenshots.search = value;
+                        self.screenshots.visible_count = RECORDINGS_PAGE_SIZE;
+                    }
                 }
                 cx.notify();
             }
@@ -3384,6 +3820,14 @@ impl SettingsWindow {
                 if !self.recordings.search.is_empty() {
                     self.recordings.search.clear();
                     self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                    input.update(cx, |input, cx| input.set_text("", cx));
+                    cx.notify();
+                }
+            }
+            ui::TextInputEvent::Cancelled if field == Field::ScreenshotsSearch => {
+                if !self.screenshots.search.is_empty() {
+                    self.screenshots.search.clear();
+                    self.screenshots.visible_count = RECORDINGS_PAGE_SIZE;
                     input.update(cx, |input, cx| input.set_text("", cx));
                     cx.notify();
                 }
@@ -3400,12 +3844,12 @@ impl SettingsWindow {
                     Field::ServerUrl => self.settings.server_url.clone(),
                     // Taken by the guarded arm above; nothing is "stored" for
                     // the search field.
-                    Field::RecordingsSearch => return,
+                    Field::RecordingsSearch | Field::ScreenshotsSearch => return,
                 };
                 match field {
                     Field::ProjectName => self.project_name = stored.clone(),
                     Field::ServerUrl => self.server_url = stored.clone(),
-                    Field::RecordingsSearch => return,
+                    Field::RecordingsSearch | Field::ScreenshotsSearch => return,
                 }
                 input.update(cx, |input, cx| input.set_text(stored, cx));
                 cx.notify();
@@ -3436,10 +3880,12 @@ impl SettingsWindow {
             // Transcribed, not corrected: the thumb sits half a pixel high of
             // centre over the 5px track.
             .thumb_top(px(-6.))
-            .on_drag_start(cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                this.slider_dragging = true;
-                this.set_zoom_from(event.position, cx);
-            }))
+            .on_drag_start(
+                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                    this.slider_dragging = true;
+                    this.set_zoom_from(event.position, cx);
+                }),
+            )
     }
 
     /// While the button is held the whole window takes the mouse, so a drag
@@ -3473,7 +3919,8 @@ impl SettingsWindow {
 
     fn set_zoom_from(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         // `step={0.1}`
-        let Some(value) = ui::slider_value_at(&self.slider_track, position, ZOOM_MIN, ZOOM_MAX, 0.1)
+        let Some(value) =
+            ui::slider_value_at(&self.slider_track, position, ZOOM_MIN, ZOOM_MAX, 0.1)
         else {
             return;
         };
@@ -3492,8 +3939,8 @@ impl SettingsWindow {
 
         Some(
             ui::Menu::settings(&self.theme, "settings-menu", items, &menu.state)
-                .on_select(cx.listener(move |this, index: &usize, _window, cx| {
-                    this.choose(kind, *index, cx);
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    this.choose(kind, *index, window, cx);
                 }))
                 .on_dismiss(cx.listener(|this, _, _window, cx| {
                     this.menu = None;
@@ -3648,13 +4095,15 @@ mod tests {
             matching(RecordingsTab::All, "standup"),
             ["Team standup", "STANDUP notes"]
         );
-        assert_eq!(matching(RecordingsTab::All, "  "), [
-            "Team standup",
-            "Bug repro",
-            "STANDUP notes"
-        ]);
+        assert_eq!(
+            matching(RecordingsTab::All, "  "),
+            ["Team standup", "Bug repro", "STANDUP notes"]
+        );
         // The two filters compose.
-        assert_eq!(matching(RecordingsTab::Instant, " STAND "), ["STANDUP notes"]);
+        assert_eq!(
+            matching(RecordingsTab::Instant, " STAND "),
+            ["STANDUP notes"]
+        );
         assert!(matching(RecordingsTab::Studio, "repro").is_empty());
     }
 
