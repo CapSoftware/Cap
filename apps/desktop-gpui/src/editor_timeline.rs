@@ -256,7 +256,9 @@ impl Transform {
     /// in that order, so on a project shorter than 3 s the *floor* wins and the
     /// viewport is allowed to show more than the whole timeline.
     pub fn update_zoom(&mut self, new_zoom: f64, origin: f64, total_duration: f64) {
-        let zoom = new_zoom.min(zoom_out_limit(total_duration)).max(MAX_ZOOM_IN);
+        let zoom = new_zoom
+            .min(zoom_out_limit(total_duration))
+            .max(MAX_ZOOM_IN);
 
         let visible_origin = origin - self.position;
         let origin_percentage = (visible_origin / self.zoom).min(1.);
@@ -472,11 +474,7 @@ pub fn waveform_peaks(samples: &[f32], channels: u16) -> Vec<f32> {
         for s in &samples[i..end] {
             sum += s.abs();
         }
-        let avg = if end > i {
-            sum / (end - i) as f32
-        } else {
-            0.0
-        };
+        let avg = if end > i { sum / (end - i) as f32 } else { 0.0 };
         waveform.push(avg);
         i += CHUNK_SIZE * channels;
     }
@@ -557,7 +555,9 @@ pub fn waveform_path(
     }
 
     let native_samples = (duration / WAVEFORM_SAMPLE_STEP).ceil() as usize + 1;
-    let num_samples = target_samples.max(50).min(MAX_WAVEFORM_SAMPLES).min(native_samples);
+    let num_samples = target_samples
+        .clamp(50, MAX_WAVEFORM_SAMPLES)
+        .min(native_samples);
     if num_samples == 0 {
         return None;
     }
@@ -606,11 +606,7 @@ pub fn waveform_path(
         let prev_y = 1. - waveform_amplitude(peaks, source_time_at(prev_time));
         let cp_x1 = prev_x + control_step / 2.;
         let cp_x2 = normalized_x - control_step / 2.;
-        builder.cubic_bezier_to(
-            map(normalized_x, y),
-            map(cp_x1, prev_y),
-            map(cp_x2, y),
-        );
+        builder.cubic_bezier_to(map(normalized_x, y), map(cp_x1, prev_y), map(cp_x2, y));
     }
 
     let closing_x = (range.1 + WAVEFORM_PADDING_SECONDS - range.0) / duration;
@@ -701,6 +697,115 @@ impl TrackKind {
         })
         .into()
     }
+
+    pub fn picker_label(self) -> &'static str {
+        match self {
+            Self::Clip => "Clip",
+            other => other.label(),
+        }
+    }
+
+    pub fn picker_description(self) -> &'static str {
+        match self {
+            Self::Clip => "Your recorded screen footage.",
+            Self::Zoom => "Smooth zoom-ins that follow the action.",
+            Self::Caption => "Auto-transcribe your recording into on-screen subtitles.",
+            Self::Keyboard => "Display key presses on screen as you type.",
+            Self::Text => "Add custom text overlays and titles to the canvas.",
+            Self::Mask => "Blur or black out private areas of the screen.",
+            Self::Audio => "Add background music or import your own audio.",
+            Self::Scene => "Switch layouts between your screen and camera.",
+            Self::ThreeD => "Tilt the scene in 3D perspective.",
+        }
+    }
+
+    pub fn picker_unavailable(self) -> &'static str {
+        match self {
+            Self::Scene => "Record with a camera to use scenes.",
+            _ => "",
+        }
+    }
+
+    pub fn supports_multiple(self) -> bool {
+        matches!(self, Self::Text | Self::Mask | Self::Audio)
+    }
+}
+
+pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
+    TrackKind::Caption,
+    TrackKind::Keyboard,
+    TrackKind::Text,
+    TrackKind::Mask,
+    TrackKind::Audio,
+    TrackKind::Scene,
+    TrackKind::ThreeD,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackLanes {
+    pub caption: bool,
+    pub keyboard: bool,
+    pub scene: bool,
+    pub three_d: bool,
+    pub text: u32,
+    pub mask: u32,
+    pub audio: u32,
+}
+
+impl TrackLanes {
+    pub fn from_project(config: &ProjectConfiguration, has_camera: bool) -> Self {
+        let timeline = config.timeline.as_ref();
+        Self {
+            caption: config
+                .captions
+                .as_ref()
+                .map(|captions| captions.settings.enabled)
+                .unwrap_or_else(|| {
+                    timeline.is_some_and(|timeline| !timeline.caption_segments.is_empty())
+                }),
+            keyboard: config
+                .keyboard
+                .as_ref()
+                .is_some_and(|keyboard| keyboard.settings.enabled),
+            scene: has_camera && !config.camera.hide,
+            three_d: timeline.is_some_and(|timeline| !timeline.camera3d_segments.is_empty()),
+            text: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.text_segments.iter().map(|segment| segment.track))
+            }),
+            mask: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.mask_segments.iter().map(|segment| segment.track))
+            }),
+            audio: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.audio_segments.iter().map(|segment| segment.track))
+            }),
+        }
+    }
+
+    pub fn is_active(self, kind: TrackKind) -> bool {
+        match kind {
+            TrackKind::Caption => self.caption,
+            TrackKind::Keyboard => self.keyboard,
+            TrackKind::Scene => self.scene,
+            TrackKind::ThreeD => self.three_d,
+            TrackKind::Text => self.text > 0,
+            TrackKind::Mask => self.mask > 0,
+            TrackKind::Audio => self.audio > 0,
+            TrackKind::Clip | TrackKind::Zoom => true,
+        }
+    }
+
+    pub fn count(self, kind: TrackKind) -> u32 {
+        match kind {
+            TrackKind::Text => self.text,
+            TrackKind::Mask => self.mask,
+            TrackKind::Audio => self.audio,
+            _ => 0,
+        }
+    }
+}
+
+fn used_config_lane_count(tracks: impl Iterator<Item = u32>) -> u32 {
+    tracks.map(|track| track + 1).max().unwrap_or(0)
 }
 
 /// One drawn box on a track. Every field the *read-only* render needs; the
@@ -1002,7 +1107,23 @@ impl TimelineModel {
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
         };
-        model.rows = build_rows(config, &model, has_camera);
+        model.rows = build_rows(
+            config,
+            &model,
+            has_camera,
+            &TrackLanes::from_project(config, has_camera),
+        );
+        model
+    }
+
+    pub fn build_with_lanes(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        lanes: &TrackLanes,
+    ) -> Self {
+        let mut model = Self::build(config, has_camera, multiple_clips);
+        model.rows = build_rows(config, &model, has_camera, lanes);
         model
     }
 }
@@ -1017,44 +1138,34 @@ impl TimelineModel {
 /// (`TL/index.tsx:200, 238`), and the three multi-lane tracks show one row per
 /// used lane (`getUsedTrackCount` / `getTrackRowsWithCount`,
 /// `ED/timelineTracks.ts:39-96`).
-fn build_rows(config: &ProjectConfiguration, model: &TimelineModel, has_camera: bool) -> Vec<TrackRow> {
-    let timeline = config.timeline.as_ref();
-    let caption_visible = config
-        .captions
-        .as_ref()
-        .map(|captions| captions.settings.enabled)
-        .unwrap_or_else(|| {
-            timeline.is_some_and(|timeline| !timeline.caption_segments.is_empty())
-        });
-    let keyboard_visible = config
-        .keyboard
-        .as_ref()
-        .is_some_and(|keyboard| keyboard.settings.enabled);
-    let three_d_visible = !model.three_d.is_empty();
-    let scene_visible = has_camera && !config.camera.hide;
-
+fn build_rows(
+    config: &ProjectConfiguration,
+    model: &TimelineModel,
+    has_camera: bool,
+    lanes: &TrackLanes,
+) -> Vec<TrackRow> {
     let mut rows = vec![TrackRow {
         kind: TrackKind::Clip,
         lane: 0,
     }];
-    if caption_visible {
+    if lanes.caption {
         rows.push(TrackRow {
             kind: TrackKind::Caption,
             lane: 0,
         });
     }
-    if keyboard_visible {
+    if lanes.keyboard {
         rows.push(TrackRow {
             kind: TrackKind::Keyboard,
             lane: 0,
         });
     }
-    for (kind, segments) in [
-        (TrackKind::Text, &model.text),
-        (TrackKind::Mask, &model.mask),
-        (TrackKind::Audio, &model.audio),
+    for (kind, segments, count) in [
+        (TrackKind::Text, &model.text, lanes.text),
+        (TrackKind::Mask, &model.mask, lanes.mask),
+        (TrackKind::Audio, &model.audio, lanes.audio),
     ] {
-        for lane in 0..lane_count(segments) {
+        for lane in 0..lane_count(segments).max(count) {
             rows.push(TrackRow { kind, lane });
         }
     }
@@ -1062,13 +1173,13 @@ fn build_rows(config: &ProjectConfiguration, model: &TimelineModel, has_camera: 
         kind: TrackKind::Zoom,
         lane: 0,
     });
-    if three_d_visible {
+    if lanes.three_d {
         rows.push(TrackRow {
             kind: TrackKind::ThreeD,
             lane: 0,
         });
     }
-    if scene_visible {
+    if lanes.scene && has_camera && !config.camera.hide {
         rows.push(TrackRow {
             kind: TrackKind::Scene,
             lane: 0,
@@ -1432,8 +1543,8 @@ pub fn render_minimap(
         .max(MINIMAP_MIN_CHIP_WIDTH)
         .min(bar_width);
     let max_position = (total - view.transform.zoom).max(0.001);
-    let chip_left =
-        ((view.transform.position / max_position).min(1.) as f32) * (bar_width - chip_width).max(0.);
+    let chip_left = ((view.transform.position / max_position).min(1.) as f32)
+        * (bar_width - chip_width).max(0.);
 
     let mut bar = div()
         .relative()
@@ -1482,13 +1593,17 @@ pub fn render_minimap(
 /// `FADE_RAMP_PX` of scroll; gpui has no mask-image, so [`render_edge_fade`]
 /// paints the same ramp as two gradient overlays in the container's own
 /// background colour. The strengths are the source's exactly.
-pub fn edge_fade_strengths(model: &TimelineModel, view: TimelineView, viewport_width: f32) -> (f32, f32) {
+pub fn edge_fade_strengths(
+    model: &TimelineModel,
+    view: TimelineView,
+    viewport_width: f32,
+) -> (f32, f32) {
     let secs_per_pixel = view.transform.secs_per_pixel(content_width(viewport_width));
     let scroll_left_px = view.transform.position / secs_per_pixel;
-    let left = (scroll_left_px / FADE_RAMP_PX).min(1.).max(0.);
+    let left = (scroll_left_px / FADE_RAMP_PX).clamp(0., 1.);
     let scroll_right_px =
         (model.total_duration - (view.transform.position + view.transform.zoom)) / secs_per_pixel;
-    let right = (scroll_right_px / FADE_RAMP_PX).min(1.).max(0.);
+    let right = (scroll_right_px / FADE_RAMP_PX).clamp(0., 1.);
     (left as f32, right as f32)
 }
 
@@ -1650,10 +1765,7 @@ pub fn new_zoom_segment(
 ) -> Option<(f64, f64)> {
     let min_duration = new_segment_min_duration(secs_per_pixel);
 
-    let next = model
-        .zoom
-        .iter()
-        .find(|segment| preview <= segment.start);
+    let next = model.zoom.iter().find(|segment| preview <= segment.start);
     let previous = model
         .zoom
         .iter()
@@ -1713,6 +1825,11 @@ fn render_zoom_ghost(
                 .border_1()
                 .border_color(track_fill_border(color))
                 .text_color(gpui::white())
+                // Genuinely 16px, unlike the `text-md` label rows below: the
+                // ghost `<p class="... text-md text-primary">`
+                // (`TL/ZoomTrack.tsx:797`) has *no* sized ancestor anywhere up
+                // to `<body>`, and nothing in the stylesheet sets a body
+                // font-size, so it lands on the 16px UA default. Leave it.
                 .text_size(px(16.))
                 .child("+"),
         )
@@ -1795,11 +1912,7 @@ fn render_empty_track(theme: &Theme, kind: TrackKind) -> Option<AnyElement> {
                                 .text_color(Hsla::from(theme.gray_11)),
                         ),
                 )
-                .child(
-                    div()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Add audio"),
-                )
+                .child(div().font_weight(FontWeight::MEDIUM).child("Add audio"))
                 .into_any_element(),
         ),
         _ => None,
@@ -1851,7 +1964,10 @@ fn render_segment(
     // The clip track's waveform and its per-second markings, both under the
     // label (`TL/ClipTrack.tsx:943-957`).
     if let SegmentDetail::Clip {
-        timescale, holds, recording_clip, ..
+        timescale,
+        holds,
+        recording_clip,
+        ..
     } = &segment.detail
     {
         if *timescale == 1. {
@@ -1880,13 +1996,7 @@ fn render_segment(
         }
     }
 
-    fill = fill.child(render_label(
-        theme,
-        kind,
-        segment,
-        visible_width,
-        center_x,
-    ));
+    fill = fill.child(render_label(theme, kind, segment, visible_width, center_x));
 
     // The audio track's fade envelopes (`FadeControl`,
     // `TL/AudioTrack.tsx:118-201`). The fade *handles* -- dragging the envelope
@@ -1943,9 +2053,7 @@ fn render_segment(
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
-        .when(split_mode, |this| {
-            this.cursor(gpui::CursorStyle::Crosshair)
-        })
+        .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
         .child(fill)
         .child(render_handle(true, handle_opacity))
         .child(render_handle(false, handle_opacity))
@@ -1976,11 +2084,7 @@ fn render_handle(start: bool, opacity: f32) -> impl IntoElement {
         .child(
             // `w-[3px] h-8 bg-solid-white rounded-full` -- `--solid-white` is
             // `#ffffff` in both themes (`theme.css:74, 140`).
-            div()
-                .w(px(3.))
-                .h(px(32.))
-                .rounded_full()
-                .bg(gpui::white()),
+            div().w(px(3.)).h(px(32.)).rounded_full().bg(gpui::white()),
         )
 }
 
@@ -2388,7 +2492,13 @@ fn label_body(
                     .flex_row()
                     .gap(px(4.))
                     .items_center()
-                    .text_size(px(16.))
+                    // `text-md` (`TL/ClipTrack.tsx:1259`) is *not* a defined
+                    // class in this Tailwind v4 setup -- there is no
+                    // `--text-md` token and it emits nothing into the built
+                    // CSS -- so the row keeps the `text-xs` it inherits from
+                    // the label wrapper (`ClipTrack.tsx:1257`): 12px, not 16.
+                    // The clock stays `size-3.5` = 14px regardless.
+                    .text_size(px(12.))
                     .text_color(on_fill)
                     .child(
                         svg()
@@ -2398,9 +2508,7 @@ fn label_body(
                             .text_color(on_fill),
                     )
                     .child(format_clip_time(*source_duration))
-                    .when(*timescale != 1., |this| {
-                        this.child(format!("{timescale}x"))
-                    }),
+                    .when(*timescale != 1., |this| this.child(format!("{timescale}x"))),
             )
             .into_any_element(),
         (
@@ -2417,9 +2525,7 @@ fn label_body(
             .items_center()
             .text_size(px(10.))
             .text_color(on_fill)
-            .when(*timescale != 1., |this| {
-                this.child(format!("{timescale}x"))
-            })
+            .when(*timescale != 1., |this| this.child(format!("{timescale}x")))
             .child(div().truncate().child(format_clip_time(*source_duration)))
             .into_any_element(),
         // The clip's glyph tier exists only for a segment whose speed was
@@ -2444,28 +2550,29 @@ fn label_body(
             .justify_center()
             .text_size(px(12.))
             .text_color(on_fill)
-            .child(
-                div().opacity(0.7).child(SharedString::from(
-                    // The mode label only appears once the visible box is at
-                    // least 140px wide (`TL/ZoomTrack.tsx:700-704`).
-                    if visible_width >= 140. {
-                        if *automatic {
-                            "Automatic Zoom"
-                        } else {
-                            "Manual Zoom"
-                        }
+            .child(div().opacity(0.7).child(SharedString::from(
+                // The mode label only appears once the visible box is at
+                // least 140px wide (`TL/ZoomTrack.tsx:700-704`).
+                if visible_width >= 140. {
+                    if *automatic {
+                        "Automatic Zoom"
                     } else {
-                        "Zoom"
-                    },
-                )),
-            )
+                        "Manual Zoom"
+                    }
+                } else {
+                    "Zoom"
+                },
+            )))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .gap(px(4.))
                     .items_center()
-                    .text_size(px(16.))
+                    // `text-md` (`TL/ZoomTrack.tsx:705`) is undefined over
+                    // there, so this inherits the `text-xs` wrapper at
+                    // `ZoomTrack.tsx:699`: 12px, not 16.
+                    .text_size(px(12.))
                     .child(
                         svg()
                             .path("icons/search.svg")
@@ -2566,7 +2673,10 @@ fn label_body(
                     .flex_row()
                     .gap(px(4.))
                     .items_center()
-                    .text_size(px(16.))
+                    // `text-md` (`TL/ThreeDTrack.tsx:663`) is undefined over
+                    // there, so this inherits the `text-xs` wrapper at
+                    // `ThreeDTrack.tsx:657`: 12px, not 16.
+                    .text_size(px(12.))
                     .child(
                         svg()
                             .path("icons/rotate-3d.svg")
@@ -2680,7 +2790,10 @@ fn label_body(
             .text_size(px(12.))
             .text_color(on_fill)
             .child(div().opacity(0.7).child("Mask"))
-            .child(div().text_size(px(16.)).child(*label))
+            // `text-md` (`TL/MaskTrack.tsx:485`) is undefined over there, so
+            // this inherits the `text-xs` wrapper at `MaskTrack.tsx:483`:
+            // 12px, not 16.
+            .child(div().text_size(px(12.)).child(*label))
             .into_any_element(),
         (SegmentDetail::Mask { label }, LabelTier::Compact) => div()
             .text_size(px(12.))
@@ -2719,7 +2832,7 @@ fn label_body(
             .font_weight(FontWeight::MEDIUM)
             .truncate()
             .text_color(with_alpha(gpui::white(), 0.95))
-            .child(SharedString::from(name.clone()))
+            .child(name.clone())
             .into_any_element(),
         (SegmentDetail::Audio { .. }, LabelTier::Glyph) => return None,
 
@@ -2769,7 +2882,12 @@ fn text_content_row(
         .items_center()
         .justify_center()
         .max_w_full()
-        .text_size(px(16.))
+        // `text-md` (`TL/TextTrack.tsx:328`) is undefined over there. Both
+        // call sites wrap this row in `text-xs` (`TextTrack.tsx:461` for the
+        // full tier, `:472` for the compact one), so it is 12px, not 16 --
+        // set explicitly because the compact tier calls this helper with no
+        // sized parent of its own.
+        .text_size(px(12.))
         .text_color(on_fill)
         .child(
             div()
@@ -2818,6 +2936,15 @@ pub fn ghost_offset(view: TimelineView, content_width: f32) -> Option<f32> {
 }
 
 pub fn render_playhead(color: Hsla, x: f32, knob_color: Hsla) -> AnyElement {
+    render_playhead_with_opacity(color, x, knob_color, 1.)
+}
+
+pub fn render_playhead_with_opacity(
+    color: Hsla,
+    x: f32,
+    knob_color: Hsla,
+    opacity: f32,
+) -> AnyElement {
     div()
         .absolute()
         // `left: ${TIMELINE_PADDING + TRACK_GUTTER}px` (`TL/index.tsx:1285`),
@@ -2828,6 +2955,7 @@ pub fn render_playhead(color: Hsla, x: f32, knob_color: Hsla) -> AnyElement {
         .bottom_0()
         .w(px(1.))
         .rounded_full()
+        .opacity(opacity)
         .bg(playhead_gradient(color))
         .child(
             // `size-3 rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]`: a 12px dot
@@ -2856,9 +2984,11 @@ pub fn render_playhead(color: Hsla, x: f32, knob_color: Hsla) -> AnyElement {
 pub fn selected_border_color(theme: &Theme, kind: TrackKind) -> Hsla {
     match kind {
         // `border-gray-12`.
-        TrackKind::Clip | TrackKind::Zoom | TrackKind::Scene | TrackKind::ThreeD | TrackKind::Mask => {
-            Hsla::from(theme.gray_12)
-        }
+        TrackKind::Clip
+        | TrackKind::Zoom
+        | TrackKind::Scene
+        | TrackKind::ThreeD
+        | TrackKind::Mask => Hsla::from(theme.gray_12),
         // `border-blue-7`: Radix blue-7 is `#205d9e` light / `#8ec8f6` dark.
         TrackKind::Text => {
             if theme.is_dark() {
@@ -2879,6 +3009,13 @@ pub fn selected_border_color(theme: &Theme, kind: TrackKind) -> Hsla {
         // The two dead ones; drawn as transparent so nothing is invented.
         TrackKind::Caption | TrackKind::Keyboard => gpui::transparent_black(),
     }
+}
+
+/// `zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30`
+/// (`TL/index.tsx:1191`). `deltaY` is the **DOM** sign convention: positive is
+/// a scroll downwards, which zooms *out*.
+pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
+    dom_delta_y * zoom.max(0.).sqrt() / 30.
 }
 
 #[cfg(test)]
@@ -2963,7 +3100,11 @@ mod tests {
         let after = (origin - transform.position) / transform.zoom;
         assert!((before - after).abs() < 1e-9, "{before} vs {after}");
         assert_eq!(transform.zoom, 20.);
-        assert!((transform.position - 25.).abs() < 1e-9, "{}", transform.position);
+        assert!(
+            (transform.position - 25.).abs() < 1e-9,
+            "{}",
+            transform.position
+        );
     }
 
     /// `originPercentage` is capped at 1, so an origin past the right edge
@@ -2977,7 +3118,11 @@ mod tests {
         };
         transform.update_zoom(5., 80., total);
         // originPercentage = min(1, 80/10) = 1, so position = 80 - 5 = 75.
-        assert!((transform.position - 75.).abs() < 1e-9, "{}", transform.position);
+        assert!(
+            (transform.position - 75.).abs() < 1e-9,
+            "{}",
+            transform.position
+        );
     }
 
     #[test]
@@ -3035,7 +3180,11 @@ mod tests {
         let mut transform = Transform::initial(total);
         let playhead = 12.0;
         transform.update_zoom(transform.zoom / 1.1, playhead, total);
-        assert!((transform.zoom - 60. / 1.1).abs() < 1e-9, "{}", transform.zoom);
+        assert!(
+            (transform.zoom - 60. / 1.1).abs() < 1e-9,
+            "{}",
+            transform.zoom
+        );
         transform.update_zoom(transform.zoom * 1.1, playhead, total);
         assert!((transform.zoom - 60.).abs() < 1e-9, "{}", transform.zoom);
     }
@@ -3058,7 +3207,11 @@ mod tests {
         let total = 15.9;
         let mut transform = Transform::initial(total);
         transform.fit_on_mount(1111., total);
-        assert!((transform.zoom - 1111. / 80.).abs() < 1e-9, "{}", transform.zoom);
+        assert!(
+            (transform.zoom - 1111. / 80.).abs() < 1e-9,
+            "{}",
+            transform.zoom
+        );
         // A project that already fits is untouched.
         let mut wide = Transform::initial(5.0);
         let before = wide.zoom;
@@ -3068,9 +3221,9 @@ mod tests {
 
     // -- Geometry -----------------------------------------------------------
 
-    /// The editor's default width: 1275 - 16 (slot) - 32 (padding) - 4 (`pr-1`)
-    /// - 112 (gutter) = 1111px of track content starting at x = 136, with the
-    /// ruler's own strip four pixels wider.
+    /// The editor's default width: 1275 minus 16 (slot), 32 (padding), 4
+    /// (`pr-1`) and 112 (gutter) = 1111px of track content starting at
+    /// x = 136, with the ruler's own strip four pixels wider.
     #[test]
     fn the_content_column_carries_the_scroll_bodys_padding() {
         assert_eq!(content_width(1275.), 1111.);
@@ -3235,11 +3388,8 @@ mod tests {
         .expect("the fixture parses");
 
         let model = TimelineModel::build(&config, true, false);
-        let rows: Vec<(TrackKind, u32)> = model
-            .rows
-            .iter()
-            .map(|row| (row.kind, row.lane))
-            .collect();
+        let rows: Vec<(TrackKind, u32)> =
+            model.rows.iter().map(|row| (row.kind, row.lane)).collect();
         assert_eq!(
             rows,
             vec![
@@ -3313,7 +3463,11 @@ mod tests {
 
         let model = TimelineModel::build(&config, false, false);
         // 20s of footage plus a 3s pause.
-        assert!((model.total_duration - 23.0).abs() < 1e-9, "{}", model.total_duration);
+        assert!(
+            (model.total_duration - 23.0).abs() < 1e-9,
+            "{}",
+            model.total_duration
+        );
         let clip = &model.clips[0];
         assert_eq!((clip.start, clip.end), (0.0, 23.0));
         let SegmentDetail::Clip {
@@ -3521,11 +3675,4 @@ mod tests {
         assert_eq!(left, 1.);
         assert_eq!(right, 0.);
     }
-}
-
-/// `zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30`
-/// (`TL/index.tsx:1191`). `deltaY` is the **DOM** sign convention: positive is
-/// a scroll downwards, which zooms *out*.
-pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
-    dom_delta_y * zoom.max(0.).sqrt() / 30.
 }
