@@ -105,6 +105,8 @@ pub struct ExportPrefs {
     pub force_ffmpeg_decoder: bool,
     #[serde(default)]
     pub advanced_open: bool,
+    #[serde(default)]
+    pub organization_id: Option<String>,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -260,6 +262,22 @@ pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
         .expect("just replaced any non-object with an object")
         .insert(key.to_string(), value);
 
+    write_store(&path, &Value::Object(store))
+}
+
+/// Replace or remove one top-level store section. `authStore.set(null)` in
+/// the Tauri app drops the whole `auth` object; writing keys one at a time
+/// would leave a half-signed-out session behind.
+pub fn set_store_value(section: &str, value: Value) -> bool {
+    let path = tauri_store_path();
+    let Some(mut store) = read_store(&path) else {
+        return false;
+    };
+    if value.is_null() {
+        store.remove(section);
+    } else {
+        store.insert(section.to_string(), value);
+    }
     write_store(&path, &Value::Object(store))
 }
 
@@ -957,11 +975,23 @@ pub fn transcription_hints() -> Vec<String> {
 pub struct AuthSnapshot {
     pub token: Option<String>,
     pub plan_upgraded: bool,
+    pub plan_manual: bool,
+    pub organizations: Vec<AuthOrganization>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthOrganization {
+    pub id: String,
+    pub name: String,
 }
 
 impl AuthSnapshot {
     pub fn signed_in(&self) -> bool {
         self.token.is_some()
+    }
+
+    pub fn is_upgraded(&self) -> bool {
+        self.plan_upgraded || self.plan_manual
     }
 }
 
@@ -979,15 +1009,45 @@ pub fn auth_snapshot() -> AuthSnapshot {
                 .and_then(Value::as_str)
         })
         .map(str::to_string);
-    let plan_upgraded = auth
-        .get("plan")
+    let plan = auth.get("plan").and_then(Value::as_object);
+    let plan_upgraded = plan
         .and_then(|plan| plan.get("upgraded"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let plan_manual = plan
+        .and_then(|plan| plan.get("manual"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let organizations = auth
+        .get("organizations")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let object = entry.as_object()?;
+                    Some(AuthOrganization {
+                        id: object.get("id")?.as_str()?.to_string(),
+                        name: object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Organization")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     AuthSnapshot {
         token,
         plan_upgraded,
+        plan_manual,
+        organizations,
     }
+}
+
+pub fn set_auth(value: Option<Value>) -> bool {
+    set_store_value("auth", value.unwrap_or(Value::Null))
 }
 
 // -- The commercial license -------------------------------------------------------
