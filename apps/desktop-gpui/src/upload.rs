@@ -75,6 +75,16 @@ pub async fn upload_exported_video(
         return Err("Export cancelled".into());
     }
 
+    // The recording-time thumbnail is best-effort, so regenerate a missing
+    // `screenshots/display.jpg` from the exported video rather than shipping a
+    // share with no thumbnail or failing a video that could still be shared.
+    let screenshot_path = meta.project_path.join("screenshots/display.jpg");
+    if !screenshot_path.exists()
+        && let Err(error) = crate::library::create_screenshot(&file_path, &screenshot_path, None)
+    {
+        return Err(format!("Failed to generate thumbnail: {error}"));
+    }
+
     let s3_config = match create_or_get_video(
         matches!(mode, UploadMode::Reupload)
             .then(|| {
@@ -96,7 +106,6 @@ pub async fn upload_exported_video(
         Err(error) => return Err(error.to_string()),
     };
 
-    let screenshot_path = meta.project_path.join("screenshots/display.jpg");
     meta.upload = Some(UploadMeta::SinglePartUpload {
         video_id: s3_config.id.clone(),
         file_path: file_path.clone(),
@@ -119,9 +128,7 @@ pub async fn upload_exported_video(
                 content_hash: None,
             });
 
-            if screenshot_path.exists()
-                && let Err(error) = upload_screenshot(&s3_config.id, &screenshot_path).await
-            {
+            if let Err(error) = upload_screenshot(&s3_config.id, &screenshot_path).await {
                 let message = format!("thumbnail upload failed: {error}");
                 meta.upload = Some(UploadMeta::Failed {
                     error: message.clone(),
