@@ -8,26 +8,36 @@ mod assets;
 mod camera_window;
 mod controls_window;
 mod devices;
+mod editor_canvas;
+mod editor_clips;
 mod editor_color;
+mod editor_crop;
 mod editor_edits;
+mod editor_export;
 mod editor_panels;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
 mod editor_window;
 mod feeds;
+mod import;
 mod library;
 mod main_window;
 mod menus;
 mod mode_select_window;
+mod onboarding_window;
+mod permissions;
 mod platform;
+mod presets;
 mod recording;
 mod session;
+mod settings_pages;
 mod settings_window;
 mod store;
 mod target_overlay;
 mod teleprompter_window;
 mod theme;
+mod transcription;
 mod tray;
 mod ui;
 
@@ -159,6 +169,9 @@ fn main() {
         }
         if !std::env::var("CAP_GPUI_NO_TRAY").is_ok_and(|v| v == "1") {
             tray::init(cx);
+        }
+        if crate::store::should_show_onboarding() {
+            app_windows::open_onboarding(cx);
         }
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
@@ -338,10 +351,7 @@ fn main() {
         {
             match resolve_auto_editor(&target) {
                 Some(path) => app_windows::open_editor(path, cx),
-                None => tracing::error!(
-                    target,
-                    "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"
-                ),
+                None => tracing::error!(target, "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"),
             }
         }
 
