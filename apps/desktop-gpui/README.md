@@ -29,6 +29,35 @@ the app crate: the editor's per-frame pixel conversion is 30ms unoptimised and
 0.92ms optimised, which is the difference between a 33fps preview and a 60fps
 one (see the editor's measurements below).
 
+### The dev loop
+
+```sh
+./dev.sh
+```
+
+Native Rust cannot hot-reload, so this is the Solid-dev-server feel rebuilt
+from its observable parts. The script watches the app's sources, the `cap-*`
+crates the editor depends on and the local gpui checkout, rebuilds on save,
+and swaps the running app **only when the build succeeds** — a compile error
+leaves the previous build running, the way Vite keeps the page alive under an
+error overlay. The relaunch reopens exactly where the old process was: same
+windows at the same frames, same settings page, same editor project with its
+sidebar tab and scroll (`src/dev_restore.rs`, driven by
+`CAP_GPUI_DEV_RESTORE`, applied through the same entry points real clicks
+take). Relaunches deliberately do not activate the app, so keyboard focus
+stays in your code editor while the windows refresh beside it; and the swap
+waits out an in-flight recording rather than truncating it (the state file
+doubles as that handshake — `dev.sh` will not kill the app while it reads
+`"recording":true`).
+
+The loop exports `CARGO_INCREMENTAL=1`, overriding this profile's
+`incremental = false` for its own builds only: a warm rebuild drops from ~41s
+to ~3s for a metadata-only change and ~23s for an edit to a 4k-line module.
+The costs are the ones the profile comment warns about, scoped down: a few GB
+of `target/debug/incremental` (delete it to reclaim), and a one-off app-crate
+rebuild when switching between `./dev.sh` and a plain `cargo build`, whose
+flags differ.
+
 ### Why it is a separate workspace
 
 `Cargo.toml` declares its own `[workspace]`. The root workspace carries
@@ -460,7 +489,7 @@ Things that are deliberately different, and why.
 | **Only the chrome windows are on a material** | The main and settings windows are native (see below), which matches the shipping app exactly: `applyMacOSWindowMaterial` runs only in the `(window-chrome)` layout, so the camera bubble, the recording bar and the target overlays never had a native material in the Tauri app either — the bar's liquid-glass look is painted CSS. The teleprompter is the exception that proves it: it is not a chrome route, so it calls `applyMacOSWindowMaterial("teleprompter")` itself, and it is native here too. Mode select calls neither and is an opaque slab in both apps. The chrome window still to come is upgrade. |
 | **No always-active pin on the settings glass** | `apply_liquid_glass_background_inner` gives the *non-main* Tauri windows an "always active" pin (`setState:` / `setActive:` probing on the glass view) so the material does not dim when the app deactivates. It is not reproduced: it broke on 26.3 and falls back to the plain `SystemManaged` install anyway, and the hard rule here is to make only the AppKit calls the shipping app can be shown to rely on. The settings window therefore takes the same `setStyle:`-only path the main window does. |
 | **No header backdrop filter** | On the vibrancy path `.cap-window-header` is `rgba(250,250,249,0.72)` *plus* `backdrop-filter: blur(28px) saturate(1.45)`. The wash is here, the filter is not — same missing hook as the recording overlay's `backdrop-blur-xs`. |
-| **Appearance changes need a relaunch** | `sync_appearance` runs from `render`, and gpui only renders on invalidation, so flipping the system to light while the app is up leaves the dark palette on screen until something else forces a frame. Pre-existing, not specific to the material. |
+| **Appearance follows the settings theme** | System/Light/Dark is the same `general_settings.theme` the Tauri app stores. Light and Dark force `NSAppearance` on every window the way `windows::set_theme` does; System clears it and `observe_window_appearance` rebuilds the palette when the OS flips. |
 | **NSWindow, not NSPanel** | The Tauri app class-swizzles its windows into `NSPanel`s via `tauri_nspanel`. Here the main window stays a normal `NSWindow` and gets the observable parts — level 100, `CanJoinAllSpaces \| FullScreenPrimary` — from the `platform` module. (`WindowKind::Floating` is *not* a shortcut to this: its panel hides on app deactivation.) The controls bar *is* a real panel via `WindowKind::PopUp`, whose non-activating behavior it genuinely needs. |
 | **Controls bar level 8, faithfully** | `windows.rs` raises the bar with `CGWindowLevelForKey(10)` under a constant named `kCGMaximumWindowLevelKey` — but key 10 is `kCGModalPanelWindowLevelKey` (maximum is 14), so the shipping bar actually runs at level 8. Reproduced verbatim rather than "fixed" from over here. |
 | **Resize does not re-clamp** | Expand/collapse animates over 180ms with an ease-out cubic, as the Tauri app does, but does not re-clamp the window into the monitor work area afterwards — expanding near a screen edge can push the window off it. |
@@ -839,7 +868,7 @@ Settings-specific deviations:
 | **`AccentColor` is macOS blue** | `--macos-settings-accent: AccentColor` resolves to the user's system accent; gpui exposes no query for it, so the checked toggles and the selected sidebar icon use `#007aff`. A user on a non-blue accent sees blue here and their own colour in the shipping app. |
 | **No toggle bevel** | `.cap-toggle` carries `box-shadow: inset 0 1px 2px rgba(0,0,0,0.16)`; there is no inset-shadow hook in this gpui rev, so `ui::Toggle`'s track is flat on every surface. |
 | **Settings does not park the other windows** | `ShowCapWindow::Settings::show` also calls `hide_recording_windows` and `release_camera_preview_if_idle`, and its close calls `restore_camera_window`. Neither half is reproduced — the gear hides the main window and nothing else. |
-| **The theme setting is stored, not applied** | Selecting Light or Dark writes `theme`, which the Tauri app uses to force an appearance. This app follows the system appearance only (`sync_appearance`), so the tile is persisted parity, not behaviour. The same is true of `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel: they persist, and the machinery that would obey them is not built yet. |
+| **Several settings persist without a consumer** | `hideDockIcon`, `enableNotifications`, the countdown, the post-recording behaviours and the update channel write the same store keys as Tauri; the machinery that would obey them is not built yet. Theme is applied. |
 | **No confirm on the recordings folder move** | `pickRecordingsFolder` offers to migrate existing recordings afterwards; here the path is written and nothing is moved. |
 | **Version is this crate's** | The sidebar footer shows `v0.1.0` from `CARGO_PKG_VERSION`, not `getVersion()`; "Check for updates" is drawn in its disabled state because there is no updater. |
 
