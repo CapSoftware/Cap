@@ -36,6 +36,7 @@ import {
 } from "@/actions/organization/authorization";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
+import { firewallRequestHeaders } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
@@ -102,16 +103,14 @@ async function createLoomImportRateLimitCheck(userId: User.UserId) {
 
 	return async () => {
 		try {
-			// Built inside the try: a header value that fails the Fetch spec's
-			// Headers validation (raw HTTP allows byte values that WHATWG
-			// Headers.set rejects) throws here, before checkRateLimit ever runs.
-			const headersList = await headers();
+			const headersList = firewallRequestHeaders(await headers());
 			const request = new Request("https://cap.so/api/loom-import-rate-limit", {
 				method: "POST",
 				headers: headersList,
 			});
 
 			const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
+				headers: headersList,
 				request,
 				rateLimitKey: `loom-import:${userId}`,
 			});

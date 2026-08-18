@@ -371,6 +371,13 @@ describe("importFromLoom", () => {
 
 	it("rate limits single Loom imports per user", async () => {
 		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
+		headersMock.mockResolvedValue(
+			new Headers({
+				host: "cap.test",
+				"x-real-ip": "127.0.0.1",
+				"next-action": "40382acacfe2b9dd0581bfc42bc9a2c02535278e38",
+			}),
+		);
 
 		const fetchMock = vi.mocked(fetch);
 		const { importFromLoom } = await import("@/actions/loom");
@@ -391,6 +398,13 @@ describe("importFromLoom", () => {
 				rateLimitKey: "loom-import:user-123",
 			}),
 		);
+		const rateLimitOptions = checkRateLimitMock.mock.calls[0]?.[1] as {
+			headers?: Headers;
+			request?: Request;
+		};
+		expect(rateLimitOptions.headers?.get("next-action")).toBeNull();
+		expect(rateLimitOptions.request?.headers.get("next-action")).toBeNull();
+		expect(rateLimitOptions.headers?.get("host")).toBe("cap.test");
 		expect(fetchMock).not.toHaveBeenCalled();
 		expect(valuesMock).not.toHaveBeenCalled();
 	});

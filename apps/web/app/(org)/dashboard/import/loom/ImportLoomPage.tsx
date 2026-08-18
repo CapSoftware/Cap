@@ -350,8 +350,8 @@ export const ImportLoomPage = () => {
 				orgId: activeOrganization.organization.id,
 			});
 
-			if (!importResult.success) {
-				toast.error(importResult.error || "Failed to import video.");
+			if (!importResult?.success) {
+				toast.error(importResult?.error || "Failed to import video.");
 				setIsImporting(false);
 				return;
 			}

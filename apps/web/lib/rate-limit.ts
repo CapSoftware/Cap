@@ -1,6 +1,22 @@
 import { checkRateLimit } from "@vercel/firewall";
 import { headers as nextHeaders } from "next/headers";
 
+const FIREWALL_FORWARDED_HEADER_NAMES = [
+	"host",
+	"x-real-ip",
+	"x-forwarded-for",
+	"x-vercel-id",
+] as const;
+
+export function firewallRequestHeaders(source: Headers): Headers {
+	const headers = new Headers();
+	for (const name of FIREWALL_FORWARDED_HEADER_NAMES) {
+		const value = source.get(name);
+		if (value) headers.set(name, value);
+	}
+	return headers;
+}
+
 /**
  * Best-effort per-key rate limiting backed by the Vercel Firewall.
  *
@@ -33,7 +49,9 @@ export async function isRateLimited(
 	if (process.env.NODE_ENV !== "production") return false;
 
 	try {
-		const headersList = opts?.headers ?? (await nextHeaders());
+		const headersList = firewallRequestHeaders(
+			opts?.headers ?? (await nextHeaders()),
+		);
 		const request = new Request("https://cap.so/api/rate-limit", {
 			method: "POST",
 			headers: headersList,
