@@ -26,12 +26,13 @@
 //!   for its duration.
 
 use cap_project::{
-    AudioTrackSegment, Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind,
-    MaskSegment, ProjectConfiguration, SceneSegment, TextSegment, TimelineConfiguration, XY,
-    ZoomSegment, mask_effect_contract,
+    AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
+    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
+    MaskSegment, ProjectConfiguration, SceneMode, SceneSegment, TextSegment, TimelineConfiguration,
+    TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
 };
 
-use crate::editor_timeline::{Segment, TrackKind};
+use crate::editor_timeline::{self, Segment, TrackKind};
 
 // ---------------------------------------------------------------------------
 // Selection
@@ -259,10 +260,12 @@ pub enum Hit {
 /// Which segment (and which part of it) is under `x`, where `x` is pixels from
 /// the **content column's** left edge.
 ///
-/// Painted order decides ties, exactly as the DOM's does: segments are siblings
-/// in array order, so a later one is above an earlier one, and a handle
-/// (`z-10`) is above its own segment's fill. Walking the list backwards and
-/// testing handles before the body reproduces both.
+/// The source resolves this by DOM stacking, where a later sibling's handle
+/// covers the whole 20px zone at a shared boundary -- which means the right
+/// clip's *start* handle owns even the pixels inside the left clip's box, and
+/// grabbing "the left clip's end" actually trims the right clip. Deliberate
+/// deviation: a press *inside* a segment's own box belongs to that segment's
+/// nearest handle; a neighbour's handle only reaches across empty space.
 pub fn hit_test(
     segments: &[Segment],
     lane: u32,
@@ -270,12 +273,45 @@ pub fn hit_test(
     position: f64,
     secs_per_pixel: f64,
 ) -> Hit {
+    let edges = |segment: &Segment| {
+        (
+            (segment.start - position) / secs_per_pixel,
+            (segment.end - position) / secs_per_pixel,
+        )
+    };
+
+    // Pass 1: handles clipped to their own box. Later segments win ties at a
+    // shared edge, matching the paint order.
     for (index, segment) in segments.iter().enumerate().rev() {
         if segment.lane != lane {
             continue;
         }
-        let left = (segment.start - position) / secs_per_pixel;
-        let right = (segment.end - position) / secs_per_pixel;
+        let (left, right) = edges(segment);
+        if x < left || x > right {
+            continue;
+        }
+        let from_start = x - left;
+        let from_end = right - x;
+        let start_hit = from_start <= HANDLE_HIT_PX;
+        let end_hit = from_end <= HANDLE_HIT_PX;
+        if start_hit && (!end_hit || from_start <= from_end) {
+            return Hit::Handle { index, start: true };
+        }
+        if end_hit {
+            return Hit::Handle {
+                index,
+                start: false,
+            };
+        }
+        break;
+    }
+
+    // Pass 2: the overhanging halves, for grabs from just outside the box.
+    for (index, segment) in segments.iter().enumerate().rev() {
+        if segment.lane != lane {
+            continue;
+        }
+        let (left, right) = edges(segment);
         if (x - left).abs() <= HANDLE_HIT_PX {
             return Hit::Handle { index, start: true };
         }
@@ -285,6 +321,13 @@ pub fn hit_test(
                 start: false,
             };
         }
+    }
+
+    for (index, segment) in segments.iter().enumerate().rev() {
+        if segment.lane != lane {
+            continue;
+        }
+        let (left, right) = edges(segment);
         if x >= left && x <= right {
             return Hit::Body { index };
         }
@@ -809,6 +852,50 @@ pub fn delete_segments(
     }
 }
 
+/// `deleteTrackLane` (`TL/index.tsx:146-157`): drop every segment on the lane
+/// and renumber the lanes above it down by one.
+pub fn delete_track_lane(timeline: &mut TimelineConfiguration, kind: TrackKind, lane: u32) -> bool {
+    fn apply<T: TrackSegmentOps>(
+        segments: &mut Vec<T>,
+        lane: u32,
+        get: impl Fn(&T) -> u32,
+        set: impl Fn(&mut T, u32),
+    ) -> bool {
+        let before = segments.len();
+        segments.retain(|segment| get(segment) != lane);
+        let mut changed = segments.len() != before;
+        for segment in segments.iter_mut() {
+            let track = get(segment);
+            if track > lane {
+                set(segment, track - 1);
+                changed = true;
+            }
+        }
+        changed
+    }
+    match kind {
+        TrackKind::Text => apply(
+            &mut timeline.text_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
+        TrackKind::Mask => apply(
+            &mut timeline.mask_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
+        TrackKind::Audio => apply(
+            &mut timeline.audio_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
+        _ => false,
+    }
+}
+
 /// `deleteClipSegment` (`ED/context.ts:581-600`), including the guard that
 /// makes it the one track a selection cannot empty: **the last clip cannot be
 /// deleted**. The Delete binding sorts descending and deletes one at a time
@@ -1053,21 +1140,163 @@ pub fn insert_audio_segment(
         .unwrap_or(timeline.audio_segments.len().saturating_sub(1))
 }
 
+pub fn default_camera3d_segment(start: f64, end: f64) -> Camera3DSegment {
+    Camera3DSegment {
+        start,
+        end,
+        enabled: true,
+        properties: Camera3DProperties::default(),
+        blur: cap_project::Camera3DBlur {
+            mode: cap_project::Camera3DBlurMode::None,
+            strength: 0.,
+            falloff: 0.,
+            focus_x: 0.37,
+            focus_y: 0.5,
+            focus_size: 0.5,
+            angle: 0.,
+            dir_position: 0.5,
+            bokeh: false,
+        },
+        tracks: Default::default(),
+        transition_in: 0.,
+        transition_out: 0.,
+    }
+}
+
+pub fn default_scene_segment(start: f64, end: f64) -> SceneSegment {
+    SceneSegment {
+        start,
+        end,
+        mode: SceneMode::CameraOnly,
+        split_layout: None,
+        transition_in: 0.3,
+        transition_out: 0.3,
+    }
+}
+
+pub fn insert_camera3d_segment(
+    timeline: &mut TimelineConfiguration,
+    segment: Camera3DSegment,
+) -> usize {
+    let start = segment.start;
+    let mut index = 0;
+    for (position, existing) in timeline.camera3d_segments.iter().enumerate() {
+        if existing.start < start {
+            index = position + 1;
+        }
+    }
+    timeline.camera3d_segments.insert(index, segment);
+    index
+}
+
+pub fn insert_scene_segment(timeline: &mut TimelineConfiguration, segment: SceneSegment) -> usize {
+    let start = segment.start;
+    let mut index = timeline.scene_segments.len();
+    for (position, existing) in timeline.scene_segments.iter().enumerate().rev() {
+        if existing.start > start {
+            index = position;
+        }
+    }
+    timeline.scene_segments.insert(index, segment);
+    index
+}
+
+pub fn find_placement<T: TrackSegmentOps>(
+    segments: &[T],
+    time: f64,
+    length: f64,
+    total: f64,
+) -> Option<(f64, f64)> {
+    if length <= 0.0 || total <= 0.0 {
+        return None;
+    }
+    let mut sorted: Vec<&T> = segments.iter().collect();
+    sorted.sort_by(|a, b| a.start().total_cmp(&b.start()));
+
+    let mut gaps = Vec::new();
+    let mut cursor = 0.0;
+    for segment in &sorted {
+        if segment.start() - cursor >= length {
+            gaps.push((cursor, segment.start()));
+        }
+        cursor = cursor.max(segment.end());
+    }
+    if total - cursor >= length {
+        gaps.push((cursor, total));
+    }
+    if gaps.is_empty() {
+        return None;
+    }
+
+    let max_start = (total - length).max(0.0);
+    let desired = (time - length / 2.0).clamp(0.0, max_start);
+    let containing = gaps
+        .iter()
+        .copied()
+        .find(|(start, end)| desired >= *start && desired + length <= *end)
+        .or_else(|| {
+            gaps.iter()
+                .copied()
+                .find(|(start, _)| *start >= desired)
+                .or_else(|| gaps.last().copied())
+        })?;
+    let start = desired.clamp(containing.0, containing.1 - length);
+    Some((start, start + length))
+}
+
+pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_durations: &[f64]) -> bool {
+    if project.timeline.is_some() {
+        return true;
+    }
+    if clip_display_durations.is_empty() {
+        return false;
+    }
+    project.timeline = Some(TimelineConfiguration {
+        segments: clip_display_durations
+            .iter()
+            .enumerate()
+            .map(|(index, duration)| TimelineSegment {
+                recording_clip: index as u32,
+                timescale: 1.0,
+                start: 0.0,
+                end: *duration,
+                name: None,
+                speed_audio_mode: None,
+            })
+            .collect(),
+        transitions: Vec::new(),
+        zoom_segments: Vec::new(),
+        scene_segments: Vec::new(),
+        mask_segments: Vec::new(),
+        text_segments: Vec::new(),
+        caption_segments: Vec::new(),
+        keyboard_segments: Vec::new(),
+        audio_segments: Vec::new(),
+        camera3d_segments: Vec::new(),
+    });
+    true
+}
+
 // ---------------------------------------------------------------------------
 // The clip track
 // ---------------------------------------------------------------------------
 
 /// `minRecordedDuration` (`TL/ClipTrack.tsx:1141-1152`), identical on both
-/// handles: a second, the 100px floor and twice the larger of the two adjacent
-/// transitions -- all three in the **recording** domain, so the pixel and
-/// transition terms are scaled by `timescale`.
+/// handles, in the **recording** domain so the pixel and transition terms are
+/// scaled by `timescale`. Deliberate deviation from the source's
+/// `max(1s, 100px)`: at fit-to-window zoom the 100px term alone forbids
+/// trimming below several seconds, and Cap's own Clips feature emits
+/// sub-second segments -- so the floor here is a tenth of a second plus a
+/// 20px grabbability floor (a 20px box is still fully covered by its
+/// handles). The transition term is a correctness constraint -- a crossfade
+/// needs twice its duration of material -- and stays.
 pub fn clip_min_recorded_duration(
     timeline: &TimelineConfiguration,
     index: usize,
     secs_per_pixel: f64,
 ) -> f64 {
     let Some(segment) = timeline.segments.get(index) else {
-        return 1.;
+        return 0.1;
     };
     let transition = |at: usize| {
         timeline
@@ -1075,8 +1304,8 @@ pub fn clip_min_recorded_duration(
             .map_or(0., |transition| transition.duration)
     };
     let neighbouring = transition(index).max(transition(index + 1));
-    1.0f64
-        .max(secs_per_pixel * 100. * segment.timescale)
+    0.1f64
+        .max(secs_per_pixel * 20. * segment.timescale)
         .max(neighbouring * 2. * segment.timescale)
 }
 
@@ -1121,18 +1350,29 @@ pub fn clip_trim_start(
     let max_duration = max_segment.min(available);
 
     // `prevSegmentIsSameClip ? prevSegment.end : 0` -- a clip split in two may
-    // not be trimmed back over its own left-hand half.
+    // not be trimmed back over its own left-hand half. That floor only means
+    // anything when the neighbour really is the left-hand half, i.e. ends at
+    // or before this clip's start. Duplicated and auto-generated clips
+    // *overlap* their neighbours' source ranges, which puts the floor above
+    // the clip's own start and clamps the handle into a window it was never
+    // in -- the handle teleports and cannot reduce the clip (the Tauri clamp
+    // at `TL/ClipTrack.tsx:1191` shares this flaw on such projects).
     let previous_floor = index
         .checked_sub(1)
         .and_then(|previous| timeline.segments.get(previous))
         .filter(|previous| previous.recording_clip == segment.recording_clip)
+        .filter(|previous| previous.end <= segment.start)
         .map_or(0., |previous| previous.end);
 
+    // A clip already below the minimum duration must not be *grown* by its
+    // own clamp -- without this, pressing the start handle of a sub-minimum
+    // clip teleports its start leftwards to make up the difference.
+    let ceiling = (segment.end - min_recorded).max(segment.start);
     Some(
         new_start
             .max(previous_floor)
             .max(segment.end - max_duration)
-            .min(segment.end - min_recorded),
+            .min(ceiling),
     )
 }
 
@@ -1153,18 +1393,115 @@ pub fn clip_trim_end(
         .unwrap_or(f64::INFINITY);
     let available = clip_available_timeline_duration(timeline, index, recording_duration);
 
+    // Mirror of the start handle's floor: the next clip's start is only a
+    // ceiling when that clip really is the right-hand half of a split,
+    // starting at or after this clip's end.
     let next_ceiling = timeline
         .segments
         .get(index + 1)
         .filter(|next| next.recording_clip == segment.recording_clip)
+        .filter(|next| next.start >= segment.end)
         .map_or(max_segment, |next| next.start);
 
+    // Mirror of the start handle's growth guard for sub-minimum clips.
+    let floor = (segment.start + min_recorded).min(segment.end);
     Some(
         new_end
             .min(segment.end + available * segment.timescale)
             .min(next_ceiling)
-            .max(segment.start + min_recorded),
+            .max(floor),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Auto zoom
+// ---------------------------------------------------------------------------
+
+/// `DEFAULT_AUTO_ZOOM_AMOUNT` (`src-tauri/src/recording.rs:3704`).
+pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
+
+/// `generate_zoom_segments_from_clicks_impl`
+/// (`src-tauri/src/recording.rs:3706-3782`), the algorithm behind the Tauri
+/// command the empty zoom track's generate button invokes: every click grows
+/// into a padded interval (300ms before, 2.5s after), clicks in the last
+/// second are ignored, intervals closer than 2.5s merge, and the result is
+/// clamped inside the recording. The Tauri signature also takes the cursor
+/// *moves* and ignores them; this one does not pretend to want them.
+pub fn generate_zoom_segments_from_clicks(
+    mut clicks: Vec<CursorClickEvent>,
+    max_duration: f64,
+    zoom_amount: f64,
+) -> Vec<ZoomSegment> {
+    const MS_PER_SECOND: f64 = 1000.0;
+    const START_MIN_MS: f64 = 1.0;
+    const CLICK_PRE_PADDING_MS: f64 = 300.0;
+    const CLICK_POST_PADDING_MS: f64 = 2500.0;
+    const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
+    const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
+    const MERGE_GAP_MS: f64 = 2500.0;
+
+    if max_duration <= 0.0 {
+        return Vec::new();
+    }
+
+    let duration_ms = max_duration * MS_PER_SECOND;
+    let click_cutoff_ms = duration_ms - TRAILING_CLICK_IGNORE_MS;
+    let end_limit_ms = duration_ms - CLICK_END_CLAMP_PADDING_MS;
+    if click_cutoff_ms <= 0.0 || end_limit_ms <= START_MIN_MS {
+        return Vec::new();
+    }
+
+    clicks.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    for click in clicks {
+        let time_ms = click.time_ms.floor();
+        if time_ms >= click_cutoff_ms {
+            continue;
+        }
+
+        let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
+        let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
+
+        if end > start {
+            intervals.push((start, end));
+        }
+    }
+
+    if intervals.is_empty() {
+        return Vec::new();
+    }
+
+    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for interval in intervals {
+        if let Some(last) = merged.last_mut()
+            && interval.0 <= last.1 + MERGE_GAP_MS
+        {
+            last.1 = last.1.max(interval.1);
+            continue;
+        }
+        merged.push(interval);
+    }
+
+    merged
+        .into_iter()
+        .map(|(start, end)| ZoomSegment {
+            start: start.round() / MS_PER_SECOND,
+            end: end.round() / MS_PER_SECOND,
+            amount: zoom_amount,
+            mode: ZoomMode::Auto,
+            glide_direction: GlideDirection::None,
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        })
+        .collect()
 }
 
 /// `splitClipSegment(time, index)` (`ED/context.ts:512-580`).
@@ -1366,6 +1703,188 @@ pub fn snap_split_time(
         Some(time) => (time, true),
         None => (raw, false),
     }
+}
+
+pub fn clip_timeline_duration(timeline: &TimelineConfiguration) -> f64 {
+    if timeline.segments.is_empty() {
+        return 0.0;
+    }
+    let offsets = editor_timeline::clip_timeline_offsets(timeline);
+    offsets[offsets.len() - 1] + timeline.segments[timeline.segments.len() - 1].duration()
+}
+
+fn timeline_shift_after_clip_duration_change(
+    time: f64,
+    old_current_start: f64,
+    new_current_start: f64,
+    old_stable_start: f64,
+    old_next_boundary: f64,
+    new_next_boundary: f64,
+) -> f64 {
+    if time < old_current_start {
+        return 0.0;
+    }
+    if time < old_stable_start {
+        let incoming_duration = old_stable_start - old_current_start;
+        if incoming_duration <= f64::EPSILON {
+            return 0.0;
+        }
+        return ((new_current_start - old_current_start) * (old_stable_start - time))
+            / incoming_duration;
+    }
+    let full_shift = new_next_boundary - old_next_boundary;
+    if time >= old_next_boundary {
+        return full_shift;
+    }
+    if time <= old_stable_start {
+        return 0.0;
+    }
+    let affected_duration = old_next_boundary - old_stable_start;
+    if affected_duration <= f64::EPSILON {
+        return full_shift;
+    }
+    (full_shift * (time - old_stable_start)) / affected_duration
+}
+
+fn scale_keyframe_times(tracks: &mut cap_project::Camera3DTracks, scale: f64) {
+    for track in tracks.all_tracks_mut() {
+        for keyframe in track.iter_mut() {
+            keyframe.time *= scale;
+        }
+    }
+}
+
+fn normalize_clip_transitions(timeline: &mut TimelineConfiguration) {
+    let count = timeline.segments.len();
+    let mut next = Vec::new();
+    for index in 1..count {
+        if let Some(transition) = timeline.effective_transition(index) {
+            next.push(transition);
+        }
+    }
+    timeline.transitions = next;
+}
+
+pub fn set_clip_segment_timescale(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    timescale: f64,
+) -> bool {
+    if !(0.25..=8.0).contains(&timescale) || !timescale.is_finite() {
+        return false;
+    }
+    let Some(segment) = timeline.segments.get(index) else {
+        return false;
+    };
+    if (segment.timescale - timescale).abs() < f64::EPSILON {
+        return false;
+    }
+
+    let old_duration = clip_timeline_duration(timeline);
+    let old_offsets = editor_timeline::clip_timeline_offsets(timeline);
+    let incoming_duration = timeline
+        .effective_transition(index)
+        .map_or(0.0, |transition| transition.duration);
+
+    timeline.segments[index].timescale = timescale;
+    normalize_clip_transitions(timeline);
+
+    let new_duration = clip_timeline_duration(timeline);
+    let new_offsets = editor_timeline::clip_timeline_offsets(timeline);
+    let absolute_start = old_offsets[index] + incoming_duration;
+    let old_next_boundary = old_offsets.get(index + 1).copied().unwrap_or(old_duration);
+    let new_next_boundary = new_offsets.get(index + 1).copied().unwrap_or(new_duration);
+
+    let shift = |time: f64| {
+        timeline_shift_after_clip_duration_change(
+            time,
+            old_offsets[index],
+            new_offsets[index],
+            absolute_start,
+            old_next_boundary,
+            new_next_boundary,
+        )
+    };
+
+    for segment in &mut timeline.zoom_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.scene_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.mask_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.text_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.audio_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.caption_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.keyboard_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.camera3d_segments {
+        let previous_duration = segment.end - segment.start;
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+        let next_duration = segment.end - segment.start;
+        if previous_duration > 0.0 && (next_duration - previous_duration).abs() > f64::EPSILON {
+            scale_keyframe_times(&mut segment.tracks, next_duration / previous_duration);
+        }
+    }
+    true
+}
+
+pub fn clip_is_muted(segment: &TimelineSegment) -> bool {
+    if (segment.timescale - 1.0).abs() < f64::EPSILON {
+        segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
+    } else {
+        segment.speed_audio_mode.unwrap_or(ClipSpeedAudioMode::Mute) == ClipSpeedAudioMode::Mute
+    }
+}
+
+pub fn set_clip_muted(timeline: &mut TimelineConfiguration, index: usize, muted: bool) -> bool {
+    let Some(segment) = timeline.segments.get_mut(index) else {
+        return false;
+    };
+    let next = if muted {
+        Some(ClipSpeedAudioMode::Mute)
+    } else if (segment.timescale - 1.0).abs() < f64::EPSILON {
+        None
+    } else {
+        Some(ClipSpeedAudioMode::MaintainPitch)
+    };
+    if segment.speed_audio_mode == next {
+        return false;
+    }
+    segment.speed_audio_mode = next;
+    true
+}
+
+pub fn set_clip_segment_speed_audio_mode(
+    timeline: &mut TimelineConfiguration,
+    index: usize,
+    mode: ClipSpeedAudioMode,
+) -> bool {
+    let Some(segment) = timeline.segments.get_mut(index) else {
+        return false;
+    };
+    if segment.speed_audio_mode == Some(mode) {
+        return false;
+    }
+    segment.speed_audio_mode = Some(mode);
+    true
 }
 
 #[cfg(test)]
@@ -1591,12 +2110,15 @@ mod tests {
     }
 
     /// Two segments that share an edge -- which every pair of adjacent clips
-    /// does -- have two handles stacked on the same 20 pixels. The later one is
-    /// painted on top, so it wins, and the earlier segment's *end* handle is
-    /// unreachable until a gap opens. The shipping app behaves the same way:
-    /// the segments are DOM siblings in array order.
+    /// does -- have two handles stacked on the same 20 pixels. The DOM (and so
+    /// the shipping app) gives the whole zone to the later segment's start
+    /// handle, which makes the earlier clip's end unreachable and turns "trim
+    /// the left clip" into "grow the right clip". Here the zone is split at
+    /// the boundary instead: each side belongs to the segment whose box the
+    /// pointer is actually in, and only the exact shared edge keeps the
+    /// paint-order tiebreak.
     #[test]
-    fn a_shared_edge_belongs_to_the_later_segments_handle() {
+    fn a_shared_edge_splits_between_both_segments_handles() {
         let clip = |start: f64, end: f64| Segment {
             start,
             end,
@@ -1619,9 +2141,17 @@ mod tests {
                 start: true
             }
         );
-        // Ten pixels the other side of it is still clip 1's handle.
+        // Eight pixels inside clip 0 is clip 0's own end handle.
         assert_eq!(
             hit_test(&clips, 0, 792., 0., 0.0125),
+            Hit::Handle {
+                index: 0,
+                start: false
+            }
+        );
+        // Eight pixels inside clip 1 is clip 1's start handle.
+        assert_eq!(
+            hit_test(&clips, 0, 808., 0., 0.0125),
             Hit::Handle {
                 index: 1,
                 start: true
@@ -1730,13 +2260,13 @@ mod tests {
     }
 
     #[test]
-    fn the_clip_floor_carries_the_hundred_pixel_width_and_the_timescale() {
+    fn the_clip_floor_carries_the_pixel_width_and_the_timescale() {
         let config = two_clip_config();
         let timeline = config.timeline.as_ref().unwrap();
-        // 0.005 s/px: 100px is 0.5s, so the 1s floor wins.
-        assert_eq!(clip_min_recorded_duration(timeline, 0, 0.005), 1.);
-        // 0.05 s/px: 100px is 5s.
-        assert_eq!(clip_min_recorded_duration(timeline, 0, 0.05), 5.);
+        // 0.001 s/px: 20px is 0.02s, so the 0.1s floor wins.
+        assert_eq!(clip_min_recorded_duration(timeline, 0, 0.001), 0.1);
+        // 0.05 s/px: 20px is 1s.
+        assert_eq!(clip_min_recorded_duration(timeline, 0, 0.05), 1.);
 
         // A transition doubles into the floor, and both terms scale with the
         // clip's own timescale.
@@ -1758,7 +2288,7 @@ mod tests {
         let timeline = config.timeline.as_ref().unwrap();
         let displays = [12.0, 9.0];
         let recording = 21.0;
-        let spp = 0.005; // floor = 1s
+        let spp = 0.05; // floor = 20px * 0.05 = 1s
 
         // Trimming clip 0's start forwards by 3s is allowed.
         assert_eq!(
@@ -1785,6 +2315,153 @@ mod tests {
             clip_trim_end(timeline, 0, 0.1, spp, &displays, recording),
             Some(1.0)
         );
+        // Zoomed in, the floor drops to the 0.1s minimum.
+        assert_eq!(
+            clip_trim_end(timeline, 0, 0.02, 0.001, &displays, recording),
+            Some(0.1)
+        );
+    }
+
+    /// Clips whose source ranges *overlap* their same-clip neighbours --
+    /// duplicates, auto-generated cuts -- must still trim. The shape is a
+    /// real six-clip recording whose non-last clips were locked: clip 0 is
+    /// 2.54..3.14 but clip 1 starts at 2.14, so the old floor (previous end,
+    /// 3.14) sat above clip 1's own ceiling (end - the 1s minimum, 2.29) and
+    /// every drag landed on the same pinned value.
+    #[test]
+    fn overlapping_same_clip_neighbours_do_not_lock_the_trim() {
+        let overlapping = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": 3.14 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.14, "end": 3.29 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 3.29, "end": 6.68 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 5.83, "end": 6.98 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = overlapping.timeline.as_ref().unwrap();
+        let displays = [47.71];
+        let recording = 47.71;
+        let spp = 0.05; // floor = 20px * 0.05 = 1s
+
+        // Clip 1's start reduces freely inside its own window; the old clamp
+        // pinned any drag at 2.29.
+        assert_eq!(
+            clip_trim_start(timeline, 1, 2.2, spp, &displays, recording),
+            Some(2.2)
+        );
+        // And still stops at its own 1s floor.
+        assert_eq!(
+            clip_trim_start(timeline, 1, 3.0, spp, &displays, recording),
+            Some(2.29)
+        );
+        // Clip 2's end grows past clip 3's (overlapping) start; the old
+        // ceiling refused anything above 5.83.
+        assert_eq!(
+            clip_trim_end(timeline, 2, 7.5, spp, &displays, recording),
+            Some(7.5)
+        );
+        assert_eq!(
+            clip_trim_end(timeline, 2, 5.0, spp, &displays, recording),
+            Some(5.0)
+        );
+
+        // The split-halves contract is untouched: abutting neighbours still
+        // floor and ceiling each other.
+        let split = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 5.0, "end": 9.0 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = split.timeline.as_ref().unwrap();
+        assert_eq!(
+            clip_trim_start(timeline, 1, 3.0, spp, &displays, recording),
+            Some(5.0)
+        );
+        assert_eq!(
+            clip_trim_end(timeline, 0, 7.0, spp, &displays, recording),
+            Some(5.0)
+        );
+    }
+
+    /// A clip already shorter than the 1s minimum must not be *grown* by its
+    /// own clamp: clip 0 above is 0.6s, and the old floor (`start + 1s`)
+    /// jumped its end to 3.54 on any handle press.
+    #[test]
+    fn sub_minimum_clips_hold_their_edges_instead_of_growing() {
+        let overlapping = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": 3.14 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.14, "end": 3.29 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = overlapping.timeline.as_ref().unwrap();
+        let displays = [47.71];
+        let recording = 47.71;
+        let spp = 0.05; // floor = 1s, above the clip's own 0.6s
+
+        assert_eq!(
+            clip_trim_end(timeline, 0, 2.6, spp, &displays, recording),
+            Some(3.14)
+        );
+        assert_eq!(
+            clip_trim_start(timeline, 0, 3.0, spp, &displays, recording),
+            Some(2.54)
+        );
+        // Growth away from the minimum still works on both edges.
+        assert_eq!(
+            clip_trim_end(timeline, 0, 4.0, spp, &displays, recording),
+            Some(4.0)
+        );
+        assert_eq!(
+            clip_trim_start(timeline, 0, 1.0, spp, &displays, recording),
+            Some(1.0)
+        );
+    }
+
+    // -- Auto zoom ----------------------------------------------------------
+
+    fn click(time_ms: f64) -> CursorClickEvent {
+        CursorClickEvent {
+            active_modifiers: Vec::new(),
+            cursor_num: 0,
+            cursor_id: String::new(),
+            time_ms,
+            down: true,
+        }
+    }
+
+    /// Two clicks a second apart merge into one segment, a distant one stands
+    /// alone, and a click inside the trailing second is dropped -- the same
+    /// cases `src-tauri/src/recording.rs` pins on its own copy.
+    #[test]
+    fn clicks_pad_merge_and_clamp_into_zoom_segments() {
+        let segments = generate_zoom_segments_from_clicks(
+            vec![click(1_000.), click(2_000.), click(10_000.), click(19_500.)],
+            20.0,
+            2.0,
+        );
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].start, 0.7);
+        assert_eq!(segments[0].end, 4.5);
+        assert_eq!(segments[0].amount, 2.0);
+        assert_eq!(segments[1].start, 9.7);
+        assert_eq!(segments[1].end, 12.5);
+    }
+
+    #[test]
+    fn no_clicks_or_no_duration_generate_no_zoom_segments() {
+        assert!(generate_zoom_segments_from_clicks(Vec::new(), 20.0, 2.0).is_empty());
+        assert!(generate_zoom_segments_from_clicks(vec![click(1_000.)], 0.0, 2.0).is_empty());
     }
 
     // -- Split --------------------------------------------------------------
@@ -2064,5 +2741,69 @@ mod tests {
         assert!((placed.1 - 7.0).abs() < 1e-9);
         assert!(place_segment_at_time(&existing, 3.0, 1.0, 10.0).is_none());
         assert!(place_segment_at_time(&existing, 6.0, 8.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn speed_change_shift_reaches_the_outgoing_transition() {
+        assert_eq!(
+            timeline_shift_after_clip_duration_change(8.0, 0.0, 0.0, 0.0, 8.0, 3.0),
+            -5.0
+        );
+    }
+
+    #[test]
+    fn speed_change_shift_uses_the_full_shift_when_boundaries_share() {
+        assert_eq!(
+            timeline_shift_after_clip_duration_change(4.0, 3.0, 3.0, 4.0, 4.0, 6.0),
+            2.0
+        );
+    }
+
+    #[test]
+    fn setting_clip_timescale_ripples_later_tracks() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(set_clip_segment_timescale(timeline, 0, 2.0));
+        assert_eq!(timeline.segments[0].timescale, 2.0);
+        assert!((timeline.zoom_segments[0].start - 1.0).abs() < 1e-9);
+        assert!((timeline.zoom_segments[0].end - 2.5).abs() < 1e-9);
+        assert!((timeline.zoom_segments[1].start - 10.0).abs() < 1e-9);
+        assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    #[test]
+    fn muting_a_1x_clip_sets_speed_audio_mode() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(!clip_is_muted(&timeline.segments[0]));
+        assert!(set_clip_muted(timeline, 0, true));
+        assert!(clip_is_muted(&timeline.segments[0]));
+        assert_eq!(
+            timeline.segments[0].speed_audio_mode,
+            Some(ClipSpeedAudioMode::Mute)
+        );
+        assert!(set_clip_muted(timeline, 0, false));
+        assert!(!clip_is_muted(&timeline.segments[0]));
+        assert_eq!(timeline.segments[0].speed_audio_mode, None);
+    }
+
+    fn setting_clip_speed_audio_mode_writes_the_segment() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(set_clip_segment_speed_audio_mode(
+            timeline,
+            0,
+            ClipSpeedAudioMode::MaintainPitch
+        ));
+        assert_eq!(
+            timeline.segments[0].speed_audio_mode,
+            Some(ClipSpeedAudioMode::MaintainPitch)
+        );
+        assert!(!set_clip_segment_speed_audio_mode(
+            timeline,
+            0,
+            ClipSpeedAudioMode::MaintainPitch
+        ));
     }
 }
