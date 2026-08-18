@@ -210,10 +210,13 @@ impl ModeSelectWindow {
                     .text_center()
                     .child(
                         // `text-base font-semibold mb-1.5`
+                        // (`components/ModeSelect.tsx:42`). `font-semibold`
+                        // renders 700: no 600 face is loaded over there
+                        // (`ui-solid/vite.js:31-33` ships 400/500/700 only).
                         div()
                             .mb(px(6.))
                             .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .font_weight(FontWeight::BOLD)
                             .text_color(if selected {
                                 Hsla::from(theme.blue_11)
                             } else {
@@ -252,6 +255,8 @@ impl Render for ModeSelectWindow {
             .items_center()
             .bg(Hsla::from(theme.gray_1))
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)
             .child(
                 // `flex flex-col items-center w-full px-6 py-5`
@@ -272,10 +277,12 @@ impl Render for ModeSelectWindow {
                             .text_center()
                             .child(
                                 // `text-xl font-semibold text-gray-12 mb-1`
+                                // (`routes/mode-select.tsx:52`): renders 700,
+                                // no 600 face loaded.
                                 div()
                                     .mb(px(4.))
                                     .text_size(px(20.))
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .font_weight(FontWeight::BOLD)
                                     .text_color(Hsla::from(theme.gray_12))
                                     .child("Choose Recording Mode"),
                             )

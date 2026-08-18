@@ -3,8 +3,8 @@
 //! (`Setting.tsx`'s bordered card list and `editor/ui.tsx`'s stacked fields).
 
 use gpui::{
-    AnyElement, Div, FontWeight, Hsla, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
-    Styled, Window, div, prelude::FluentBuilder, px,
+    AnyElement, Div, FontWeight, Hsla, IntoElement, ParentElement, Pixels, RenderOnce,
+    SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
 use crate::theme::Theme;
@@ -28,14 +28,13 @@ impl Card {
     pub fn settings_rows(theme: &Theme, children: Vec<AnyElement>) -> Div {
         let border = theme.settings_border();
         let last = children.len().saturating_sub(1);
-        Card::settings(theme, false)
-            .flex()
-            .flex_col()
-            .children(children.into_iter().enumerate().map(|(index, child)| {
+        Card::settings(theme, false).flex().flex_col().children(
+            children.into_iter().enumerate().map(|(index, child)| {
                 div()
                     .when(index != last, |this| this.border_b_1().border_color(border))
                     .child(child)
-            }))
+            }),
+        )
     }
 
     /// `LIQUID_GLASS_SURFACE_CLASS`: `rounded-2xl border border-gray-12/10
@@ -262,7 +261,13 @@ impl RenderOnce for Section {
                                     .child(
                                         div()
                                             .text_size(px(14.))
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            // `text-sm font-semibold
+                                            //  tracking-tight`
+                                            // (`settings/Setting.tsx:27`).
+                                            // `font-semibold` renders 700: no
+                                            // 600 face is loaded over there
+                                            // (`ui-solid/vite.js:31-33`).
+                                            .font_weight(FontWeight::BOLD)
                                             .child(title),
                                     )
                                     .when(pro, |this| {

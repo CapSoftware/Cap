@@ -24,9 +24,9 @@ use std::{
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, ParentElement,
-    Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, linear_color_stop, linear_gradient, point, prelude::FluentBuilder, px, svg,
+    IntoElement, ParentElement, Pixels, Point, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, linear_color_stop, linear_gradient, point,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -229,11 +229,9 @@ impl TeleprompterWindow {
                 }
                 // Escape closes the popover and nothing else, whether or not
                 // the script has focus.
-                ui::TextInputEvent::Cancelled => {
-                    if this.settings_open {
-                        this.settings_open = false;
-                        cx.notify();
-                    }
+                ui::TextInputEvent::Cancelled if this.settings_open => {
+                    this.settings_open = false;
+                    cx.notify();
                 }
                 _ => {}
             },
@@ -531,6 +529,8 @@ impl Render for TeleprompterWindow {
                 this.border_1().border_color(color)
             })
             .font_family("Geist")
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
+            .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))
             .child(self.render_header())
             .child(self.render_body(window, cx))
@@ -893,12 +893,12 @@ impl TeleprompterWindow {
             .row_width(px(48.))
             .track(px(4.), Theme::with_alpha(self.theme.gray_12, 0.10))
             .thumb(px(12.), thumb, None)
-            .on_drag_start(cx.listener(
-                move |this, event: &gpui::MouseDownEvent, window, cx| {
+            .on_drag_start(
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                     this.dragging = Some(slider);
                     this.set_slider_from(event.position, window, cx);
-                },
-            ))
+                }),
+            )
     }
 
     /// While a range is held the whole window takes the mouse, so a drag that
@@ -999,7 +999,11 @@ impl TeleprompterWindow {
                     .child(label),
             )
             // `<Toggle size="sm">` on bare glass.
-            .child(ui::Toggle::glass(&theme, SharedString::from(format!("{id}-toggle")), checked))
+            .child(ui::Toggle::glass(
+                &theme,
+                SharedString::from(format!("{id}-toggle")),
+                checked,
+            ))
             .on_click(on_click)
     }
 }

@@ -7,8 +7,8 @@
 //! that leaves the camera bubble's mirror button disabled).
 
 use gpui::{
-    App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, svg,
 };
 
@@ -23,6 +23,11 @@ pub struct Select {
     height: Option<Pixels>,
     radius: Pixels,
     text_size: Pixels,
+    /// The two triggers disagree: `SelectSettingItem`'s button names no
+    /// `font-*` class and so inherits `body`'s Medium, while the editor's
+    /// `KSelect.Value` says `font-normal` explicitly (`ConfigSidebar.tsx:740`
+    /// and friends) and drops back to Regular.
+    weight: FontWeight,
     bg: Option<Hsla>,
     border: Option<Hsla>,
     text: Hsla,
@@ -39,7 +44,11 @@ impl Select {
     /// `SelectSettingItem`'s button: `flex flex-row gap-1.5 text-xs items-center
     /// px-2.5 py-1.5 rounded-lg border bg-gray-3 text-gray-12 border-gray-4`,
     /// radius 8 under the settings material.
-    pub fn settings(theme: &Theme, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+    pub fn settings(
+        theme: &Theme,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
@@ -48,6 +57,8 @@ impl Select {
             height: None,
             radius: px(8.),
             text_size: px(12.),
+            // No `font-*` class on the button, so it keeps `body`'s Medium.
+            weight: FontWeight::MEDIUM,
             bg: Some(theme.settings_fill()),
             border: Some(theme.settings_border()),
             text: theme.settings_text(),
@@ -69,6 +80,10 @@ impl Select {
             padding_y: px(0.),
             height: Some(px(36.)),
             text_size: px(14.),
+            // `KSelect.Value` is `text-sm ... font-normal`, which opts out of
+            // `body`'s Medium (`ConfigSidebar.tsx:740`, `:3121`, `:3173`,
+            // `:3369`, `:5283`, `:5380`).
+            weight: FontWeight::NORMAL,
             bg: Some(if theme.is_dark() {
                 Hsla::from(theme.gray_3)
             } else {
@@ -114,6 +129,7 @@ impl RenderOnce for Select {
             height,
             radius,
             text_size,
+            weight,
             bg,
             border,
             text,
@@ -138,6 +154,8 @@ impl RenderOnce for Select {
             .when_some(border, |this, border| this.border_1().border_color(border))
             .when_some(bg, |this, bg| this.bg(bg))
             .text_size(text_size)
+            // The label is the only text under here -- the chevron is an svg.
+            .font_weight(weight)
             .text_color(text)
             .when(disabled, |this| this.opacity(0.5))
             .map(|this| {
