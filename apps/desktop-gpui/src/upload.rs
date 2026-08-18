@@ -119,14 +119,17 @@ pub async fn upload_exported_video(
     match upload_video(&s3_config.id, &file_path, &metadata, progress, &cancel).await {
         Ok(link) => {
             // The video content is fully uploaded at this point, so persist the
-            // sharing meta before attempting the thumbnail: a retry after a
-            // thumbnail failure then runs as a reupload against this video id
-            // instead of creating a duplicate server video.
+            // sharing meta to disk before attempting the thumbnail: a retry
+            // after any later failure then runs as a reupload against this
+            // video id instead of creating a duplicate server video.
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
                 content_hash: None,
             });
+            if let Err(error) = meta.save_for_project() {
+                tracing::error!("Failed to save recording meta: {error}");
+            }
 
             if let Err(error) = upload_screenshot(&s3_config.id, &screenshot_path).await {
                 let message = format!("thumbnail upload failed: {error}");
