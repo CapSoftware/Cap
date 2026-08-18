@@ -329,11 +329,14 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
 /// edge, exactly as the Size slider does.
 pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
     let style = &preset.style;
-    let box_scale = f64::from(style.font_size / if segment.font_size == 0. {
-        48.
-    } else {
-        segment.font_size
-    });
+    let box_scale = f64::from(
+        style.font_size
+            / if segment.font_size == 0. {
+                48.
+            } else {
+                segment.font_size
+            },
+    );
     let top_edge = segment.center.y - segment.size.y / 2.;
     segment.size.x = (segment.size.x * box_scale).min(1.);
     segment.size.y *= box_scale;
@@ -352,7 +355,9 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.animation_out = style.animation_out;
     segment.animation_in_duration = style.animation_in_duration;
     segment.animation_out_duration = style.animation_out_duration;
-    segment.fade_duration = style.animation_in_duration.max(style.animation_out_duration);
+    segment.fade_duration = style
+        .animation_in_duration
+        .max(style.animation_out_duration);
     if let Some(center) = preset.center {
         segment.center = center;
     }
@@ -474,9 +479,24 @@ pub const SCENE_MODES: [(SceneMode, &str, &str, &str); 5] = [
 
 /// `CAMERA3D_SLIDERS` (`:4519-4530`) with its icons (`:4544-4557`).
 pub const CAMERA3D_POSE_SLIDERS: [(Camera3DProperty, &str, &str, &str); 9] = [
-    (Camera3DProperty::TiltX, "Tilt X", "\u{b0}", "icons/rotate-3d.svg"),
-    (Camera3DProperty::TiltY, "Tilt Y", "\u{b0}", "icons/rotate-3d.svg"),
-    (Camera3DProperty::Roll, "Roll", "\u{b0}", "icons/rotate-cw.svg"),
+    (
+        Camera3DProperty::TiltX,
+        "Tilt X",
+        "\u{b0}",
+        "icons/rotate-3d.svg",
+    ),
+    (
+        Camera3DProperty::TiltY,
+        "Tilt Y",
+        "\u{b0}",
+        "icons/rotate-3d.svg",
+    ),
+    (
+        Camera3DProperty::Roll,
+        "Roll",
+        "\u{b0}",
+        "icons/rotate-cw.svg",
+    ),
     (
         Camera3DProperty::RotateX,
         "Rotate X",
@@ -1226,7 +1246,7 @@ pub fn apply_scene_to_range(
     clip_cuts: &[f64],
 ) -> Vec<Camera3DSegment> {
     let length = end - start;
-    if !(length > 0.) || scene.shots.is_empty() {
+    if length <= 0. || !length.is_finite() || scene.shots.is_empty() {
         return Vec::new();
     }
 
@@ -1259,14 +1279,15 @@ pub fn apply_scene_to_range(
         let min = boundaries[index] + CAMERA3D_MIN_SHOT_DURATION;
         let max = end - (shots.len() - 1 - index) as f64 * CAMERA3D_MIN_SHOT_DURATION;
         let weighted = (start + length * cumulative).clamp(min.min(max), max.max(min));
-        let nearest = cuts.iter().copied().fold(None::<f64>, |best, cut| {
-            match best {
+        let nearest = cuts
+            .iter()
+            .copied()
+            .fold(None::<f64>, |best, cut| match best {
                 Some(current) if (current - weighted).abs() <= (cut - weighted).abs() => {
                     Some(current)
                 }
                 _ => Some(cut),
-            }
-        });
+            });
         boundaries.push(match nearest {
             Some(cut) if (cut - weighted).abs() <= snap_window && cut >= min && cut <= max => cut,
             _ => weighted,
@@ -1358,7 +1379,7 @@ impl Camera3DProperty {
         }
     }
 
-    fn track<'a>(self, tracks: &'a mut cap_project::Camera3DTracks) -> &'a mut Vec<Camera3DKeyframe> {
+    fn track(self, tracks: &mut cap_project::Camera3DTracks) -> &mut Vec<Camera3DKeyframe> {
         match self {
             Self::TiltX => &mut tracks.tilt_x,
             Self::TiltY => &mut tracks.tilt_y,
@@ -1372,7 +1393,7 @@ impl Camera3DProperty {
         }
     }
 
-    fn track_ref<'a>(self, tracks: &'a cap_project::Camera3DTracks) -> &'a [Camera3DKeyframe] {
+    fn track_ref(self, tracks: &cap_project::Camera3DTracks) -> &[Camera3DKeyframe] {
         match self {
             Self::TiltX => &tracks.tilt_x,
             Self::TiltY => &tracks.tilt_y,
@@ -1586,9 +1607,8 @@ pub fn set_motion(
 /// first animated camera track. Anything unrecognised reads as Linear.
 pub fn motion_easing(segment: &Camera3DSegment) -> usize {
     const EPSILON: f64 = 1e-3;
-    let matches = |a: [f64; 2], b: [f64; 2]| {
-        (a[0] - b[0]).abs() <= EPSILON && (a[1] - b[1]).abs() <= EPSILON
-    };
+    let matches =
+        |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() <= EPSILON && (a[1] - b[1]).abs() <= EPSILON;
     for property in Camera3DProperty::ALL {
         let track = property.track_ref(&segment.tracks);
         if track.len() < 2 {
@@ -1781,6 +1801,11 @@ pub enum FieldKey {
     Camera3DEaseIn(usize),
     Camera3DEaseOut(usize),
     SyncOffset(usize, OffsetKind),
+    /// The crop dialog's four `BoundInput`s (`Editor.tsx:1199-1216`). They do
+    /// not edit the project at all -- they drive the open cropper, which is
+    /// why they are the one key whose value comes from outside
+    /// `project.timeline`.
+    Crop(crate::editor_crop::CropField),
 }
 
 impl FieldKey {
@@ -1829,7 +1854,7 @@ impl EditorWindow {
             move |this: &mut Self, _input, event: &ui::TextInputEvent, window, cx| {
                 this.on_field_event(key, event, window, cx)
             },
-        ), );
+        ));
         self.fields.insert(key, input);
     }
 
@@ -1853,6 +1878,12 @@ impl EditorWindow {
 
     /// What a field should read when it is not being typed into.
     fn field_value(&self, key: FieldKey) -> Option<String> {
+        // The crop boxes read the open cropper, not the project: their value
+        // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
+        if let FieldKey::Crop(field) = key {
+            let state = self.crop.as_ref()?;
+            return Some(ui::format_number(field.read(state.real())));
+        }
         let timeline = self.project.timeline.as_ref()?;
         Some(match key {
             FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
@@ -1879,12 +1910,12 @@ impl EditorWindow {
             FieldKey::KeyboardEnd(index) => {
                 format!("{:.2}", timeline.keyboard_segments.get(index)?.end)
             }
-            FieldKey::Camera3DEaseIn(index) => ui::format_number(
-                timeline.camera3d_segments.get(index)?.transition_in,
-            ),
-            FieldKey::Camera3DEaseOut(index) => ui::format_number(
-                timeline.camera3d_segments.get(index)?.transition_out,
-            ),
+            FieldKey::Camera3DEaseIn(index) => {
+                ui::format_number(timeline.camera3d_segments.get(index)?.transition_in)
+            }
+            FieldKey::Camera3DEaseOut(index) => {
+                ui::format_number(timeline.camera3d_segments.get(index)?.transition_out)
+            }
             // `Math.round((props.value ?? 0) * 1000)` -- the offset field is in
             // milliseconds (`:6182`).
             FieldKey::SyncOffset(clip, kind) => {
@@ -1937,6 +1968,11 @@ impl EditorWindow {
     }
 
     fn begin_field_edit(&mut self, key: FieldKey) {
+        // The crop boxes never write the project, and a bracket held open by a
+        // focused box would swallow Save's single history entry.
+        if matches!(key, FieldKey::Crop(_)) {
+            return;
+        }
         if self.field_editing == Some(key) {
             return;
         }
@@ -1969,6 +2005,19 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            // `onRawValueChange={(v) => cropperRef?.setCropProperty(field, v)}`
+            // -- per keystroke, straight into the cropper, no project write
+            // and so no history entry (`Editor.tsx:1186`).
+            FieldKey::Crop(field) => {
+                let Some(value) = ui::parse_number(&text) else {
+                    return;
+                };
+                if let Some(state) = self.crop.as_mut() {
+                    state.set_property(field, value);
+                }
+                self.publish_crop_preview();
+                cx.notify();
+            }
             FieldKey::TextContent(index) => {
                 self.edit_text_segment("text-content", index, window, cx, move |segment| {
                     if segment.content == text {
@@ -2150,8 +2199,45 @@ macro_rules! segment_editor {
 }
 
 segment_editor!(edit_text_segment, text_segments, TextSegment);
-segment_editor!(edit_caption_segment, caption_segments, CaptionTrackSegment);
 segment_editor!(edit_audio_segment, audio_segments, AudioTrackSegment);
+
+impl EditorWindow {
+    /// The captions editor is hand-written where its siblings use the macro:
+    /// after the track-segment change, the edit is routed back onto the
+    /// source-time caption master (`updateSelectedCaption`,
+    /// `CaptionsTab.tsx:257-315`) so the re-derivation that follows every
+    /// clip edit cannot revert it.
+    pub(crate) fn edit_caption_segment(
+        &mut self,
+        reason: &'static str,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut CaptionTrackSegment) -> bool,
+    ) {
+        let recording_durations = self
+            .summary()
+            .map(|summary| summary.clip_display_durations.clone())
+            .unwrap_or_default();
+        self.edit_project(reason, window, cx, move |project| {
+            let Some(timeline) = project.timeline.as_mut() else {
+                return false;
+            };
+            let Some(segment) = timeline.caption_segments.get_mut(index) else {
+                return false;
+            };
+            if !change(segment) {
+                return false;
+            }
+            crate::transcription::write_caption_edit_to_source(
+                project,
+                index,
+                &recording_durations,
+            );
+            true
+        });
+    }
+}
 segment_editor!(
     edit_keyboard_segment,
     keyboard_segments,
@@ -2300,29 +2386,26 @@ impl EditorWindow {
                 .get(index)
                 .map_or(0.3, |segment| segment.transition_out as f32),
             // `split().screenZoom * 100` (`:6449`).
-            PanelSlider::SceneScreenZoom => timeline
-                .scene_segments
-                .get(index)
-                .map_or(100., |segment| {
+            PanelSlider::SceneScreenZoom => {
+                timeline.scene_segments.get(index).map_or(100., |segment| {
                     (segment.split_layout.unwrap_or_default().screen_zoom * 100.) as f32
-                }),
-            PanelSlider::SceneCameraZoom => timeline
-                .scene_segments
-                .get(index)
-                .map_or(100., |segment| {
+                })
+            }
+            PanelSlider::SceneCameraZoom => {
+                timeline.scene_segments.get(index).map_or(100., |segment| {
                     (segment.split_layout.unwrap_or_default().camera_zoom * 100.) as f32
-                }),
-            PanelSlider::Camera3DPose(property) => timeline
-                .camera3d_segments
-                .get(index)
-                .map_or(0., |segment| {
+                })
+            }
+            PanelSlider::Camera3DPose(property) => {
+                timeline.camera3d_segments.get(index).map_or(0., |segment| {
                     let pose = if self.sidebar.editing_end_pose {
                         end_pose(segment)
                     } else {
                         start_pose(segment)
                     };
                     property.read(&pose) as f32
-                }),
+                })
+            }
             PanelSlider::Camera3DBlur(key) => timeline
                 .camera3d_segments
                 .get(index)
@@ -2461,16 +2544,15 @@ impl EditorWindow {
                     true
                 })
             }
-            PanelSlider::SceneTransitionIn | PanelSlider::SceneTransitionOut => {
-                self.edit_scene_segment("scene-transition", index, window, cx, move |segment| {
+            PanelSlider::SceneTransitionIn | PanelSlider::SceneTransitionOut => self
+                .edit_scene_segment("scene-transition", index, window, cx, move |segment| {
                     if slider == PanelSlider::SceneTransitionIn {
                         segment.transition_in = f64::from(value);
                     } else {
                         segment.transition_out = f64::from(value);
                     }
                     true
-                })
-            }
+                }),
             PanelSlider::SceneScreenZoom | PanelSlider::SceneCameraZoom => {
                 self.edit_scene_segment("scene-zoom", index, window, cx, move |segment| {
                     let mut split = segment.split_layout.unwrap_or_default();
@@ -2533,11 +2615,7 @@ impl EditorWindow {
 // ---------------------------------------------------------------------------
 
 impl EditorWindow {
-    pub(crate) fn panel_menu_items(
-        &self,
-        kind: SidebarMenu,
-        index: usize,
-    ) -> Vec<ui::MenuItem> {
+    pub(crate) fn panel_menu_items(&self, kind: SidebarMenu, index: usize) -> Vec<ui::MenuItem> {
         let Some(timeline) = self.timeline() else {
             return Vec::new();
         };
@@ -2820,9 +2898,11 @@ impl EditorWindow {
             y,
             self.sidebar.pad(key),
         )
-        .on_press(cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-            this.pad_mouse_down(key, event, window, cx);
-        }))
+        .on_press(
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.pad_mouse_down(key, event, window, cx);
+            }),
+        )
         .into_any_element()
     }
 }
@@ -2876,9 +2956,9 @@ impl EditorWindow {
                     ui::zoom_selection_label(selected, total),
                 )
                 .on_done(cx.listener(|this, _, _window, cx| this.set_selection(None, cx)))
-                .on_delete(cx.listener(|this, _, window, cx| {
-                    this.delete_selected_segments(window, cx)
-                }))
+                .on_delete(
+                    cx.listener(|this, _, window, cx| this.delete_selected_segments(window, cx)),
+                )
                 // `<Show when={segments.length < totalZoomSegments()}>`
                 .when(selected < total, |header| {
                     header.on_select_all(cx.listener(move |this, _, _window, cx| {
@@ -2949,9 +3029,10 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(16.))
                     .child(self.panel_header("3d", "3D", indices.len(), cx))
-                    .children((indices.len() == 1).then(|| {
-                        self.panel_card(self.render_camera3d_panel(indices[0], cx))
-                    }))
+                    .children(
+                        (indices.len() == 1)
+                            .then(|| self.panel_card(self.render_camera3d_panel(indices[0], cx))),
+                    )
                     .into_any_element()
             }
             TrackKind::Scene => {
@@ -3063,11 +3144,7 @@ impl EditorWindow {
             .child(
                 ui::Field::plain(&theme, SharedString::from(format!("Zoom {}", index + 1)))
                     .icon("icons/search.svg")
-                    .child(self.slider(
-                        SliderKey::Panel(PanelSlider::ZoomAmount, index),
-                        "x",
-                        cx,
-                    )),
+                    .child(self.slider(SliderKey::Panel(PanelSlider::ZoomAmount, index), "x", cx)),
             )
             .child(
                 ui::Field::plain(&theme, "Zoom Mode")
@@ -3077,11 +3154,17 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(24.))
-                            .child(self.zoom_mode_tabs(manual, cx, move |this, want_manual, window, cx| {
-                                this.set_zoom_mode(index, want_manual, window, cx);
-                            }))
+                            .child(self.zoom_mode_tabs(
+                                manual,
+                                cx,
+                                move |this, want_manual, window, cx| {
+                                    this.set_zoom_mode(index, want_manual, window, cx);
+                                },
+                            ))
                             .child(self.zoom_mode_helper(manual, cx))
-                            .children(manual.then(|| self.render_pad(PadKey::ZoomManual(index), cx))),
+                            .children(
+                                manual.then(|| self.render_pad(PadKey::ZoomManual(index), cx)),
+                            ),
                     ),
             )
             .into_any_element()
@@ -3106,9 +3189,10 @@ impl EditorWindow {
             .iter()
             .map(|segment| matches!(segment.mode, ZoomMode::Manual { .. }))
             .collect();
-        let shared_mode = modes.first().copied().filter(|first| {
-            modes.iter().all(|value| value == first)
-        });
+        let shared_mode = modes
+            .first()
+            .copied()
+            .filter(|first| modes.iter().all(|value| value == first));
         let mixed_mode = shared_mode.is_none();
         let manual = shared_mode.unwrap_or(false);
         let positions_mixed = {
@@ -3182,9 +3266,9 @@ impl EditorWindow {
                                             this.set_all_zoom_modes(want_manual, window, cx);
                                         },
                                     ))
-                                    .children((!mixed_mode).then(|| {
-                                        self.zoom_mode_helper(manual, cx)
-                                    }))
+                                    .children(
+                                        (!mixed_mode).then(|| self.zoom_mode_helper(manual, cx)),
+                                    )
                                     .children((manual && !mixed_mode).then(|| {
                                         div()
                                             .flex()
@@ -3411,7 +3495,8 @@ impl EditorWindow {
                                     .rounded(px(6.))
                                     .border_2()
                                     .border_color(crate::editor_sidebar::with_alpha(
-                                        theme.blue_9, 0.6,
+                                        theme.blue_9,
+                                        0.6,
                                     ))
                                     .bg(crate::editor_sidebar::with_alpha(theme.blue_9, 0.1)),
                             )
@@ -3503,7 +3588,7 @@ impl EditorWindow {
             .into_iter()
             .filter(|candidate| *candidate != index)
             .collect();
-        let selection = (!remaining.is_empty()).then(|| Selection {
+        let selection = (!remaining.is_empty()).then_some(Selection {
             track: TrackKind::Zoom,
             indices: remaining,
         });
@@ -3543,25 +3628,22 @@ impl EditorWindow {
             .map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             .unwrap_or([255, 255, 255]);
 
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.))
-            .child(
-                div()
-                    .id(SharedString::from(format!("swatch-{target:?}")))
-                    // `size-[2rem] rounded-[0.5rem]` with an inset 1px ring.
-                    .size(px(32.))
-                    .flex_none()
-                    .rounded(px(8.))
-                    .bg(crate::editor_sidebar::color_to_hsla(rgb))
-                    .border_1()
-                    .border_color(crate::editor_sidebar::preview_border_color(rgb))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_color_panel_for(target, window, cx);
-                    })),
-            );
+        let mut row = div().flex().flex_row().items_center().gap(px(12.)).child(
+            div()
+                .id(SharedString::from(format!("swatch-{target:?}")))
+                // `size-[2rem] rounded-[0.5rem]` with an inset 1px ring.
+                .size(px(32.))
+                .flex_none()
+                .rounded(px(8.))
+                .bg(crate::editor_sidebar::color_to_hsla(rgb))
+                .border_1()
+                .border_color(crate::editor_sidebar::preview_border_color(rgb))
+                .on_click(
+                    cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        this.open_color_panel_for(target, event.position(), window, cx);
+                    }),
+                ),
+        );
 
         if let Some(input) = self.hex_input(target) {
             row = row.child(
@@ -3591,16 +3673,13 @@ impl EditorWindow {
         let Some(input) = self.field(key) else {
             return div().into_any_element();
         };
-        let mut field = ui::TextInput::plain(
-            &theme,
-            SharedString::from(format!("field-{key:?}")),
-            input,
-        )
-        .flex(true)
-        .padding_x(px(12.))
-        .text_size(px(14.))
-        .bg(Hsla::from(theme.gray_2))
-        .border(Hsla::from(theme.gray_3));
+        let mut field =
+            ui::TextInput::plain(&theme, SharedString::from(format!("field-{key:?}")), input)
+                .flex(true)
+                .padding_x(px(12.))
+                .text_size(px(14.))
+                .bg(Hsla::from(theme.gray_2))
+                .border(Hsla::from(theme.gray_3));
         // A `<textarea>` measures its own height; a single-line box is `h-9`.
         field = match height {
             // `min-h-[80px]` / `min-h-[96px]` on the two textareas.
@@ -3628,17 +3707,13 @@ impl EditorWindow {
             .items_center()
             .gap(px(4.))
             .child(
-                ui::TextInput::plain(
-                    &theme,
-                    SharedString::from(format!("number-{key:?}")),
-                    input,
-                )
-                .width(px(width))
-                .padding_x(px(6.))
-                .height(px(30.))
-                .text_size(px(14.))
-                .bg(Hsla::from(theme.gray_1))
-                .border(Hsla::from(theme.gray_12)),
+                ui::TextInput::plain(&theme, SharedString::from(format!("number-{key:?}")), input)
+                    .width(px(width))
+                    .padding_x(px(6.))
+                    .height(px(30.))
+                    .text_size(px(14.))
+                    .bg(Hsla::from(theme.gray_1))
+                    .border(Hsla::from(theme.gray_12)),
             )
             .children((!unit.is_empty()).then(|| {
                 div()
@@ -3674,64 +3749,64 @@ impl EditorWindow {
         // each cell is `flex_1`, which is what a two-column grid of equal
         // fractions resolves to.
         let card = |preset: &'static TextPreset, cx: &mut Context<Self>| {
-                let style = &preset.style;
-                let selected = active == Some(preset.id);
-                let id = preset.id;
-                // `font-size: clamp(11, fontSize * 0.22, 24)`.
-                let sample_size = (style.font_size * 0.22).clamp(11., 24.);
-                div()
-                    .id(SharedString::from(format!("text-preset-{index}-{id}")))
-                    // Explicit, not `flex_1` -- see `card_grid_width`.
-                    .w(px(CARD_GRID_WIDTH_2))
-                    .flex_none()
-                    .h(px(64.))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .relative()
-                    .overflow_hidden()
-                    .rounded(px(8.))
-                    .px(px(8.))
-                    .pb(px(12.))
-                    .bg(gpui::linear_gradient(
-                        135.,
-                        gpui::linear_color_stop(gpui::rgb(0x17181c), 0.),
-                        gpui::linear_color_stop(gpui::rgb(0x2a2c33), 1.),
-                    ))
-                    .border_1()
-                    .border_color(if selected {
-                        Hsla::from(theme.blue_9)
-                    } else {
-                        Hsla::from(theme.gray_3)
-                    })
-                    .when(selected, |this| {
-                        this.border_2().border_color(Hsla::from(theme.blue_9))
-                    })
-                    .child(
-                        div()
-                            .max_w_full()
-                            .overflow_hidden()
-                            .text_size(px(sample_size))
-                            .text_color(gpui::white())
-                            .font_family(preset_font_family(style.font_stack, installed))
-                            .font_weight(gpui::FontWeight(style.font_weight))
-                            .when(style.italic, |this| this.italic())
-                            .child(preset.sample),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom(px(4.))
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(crate::editor_sidebar::with_alpha(gpui::white(), 0.5))
-                            .child(preset.name),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.apply_text_preset_to(index, id, window, cx);
-                    }))
-                    .into_any_element()
+            let style = &preset.style;
+            let selected = active == Some(preset.id);
+            let id = preset.id;
+            // `font-size: clamp(11, fontSize * 0.22, 24)`.
+            let sample_size = (style.font_size * 0.22).clamp(11., 24.);
+            div()
+                .id(SharedString::from(format!("text-preset-{index}-{id}")))
+                // Explicit, not `flex_1` -- see `card_grid_width`.
+                .w(px(CARD_GRID_WIDTH_2))
+                .flex_none()
+                .h(px(64.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .relative()
+                .overflow_hidden()
+                .rounded(px(8.))
+                .px(px(8.))
+                .pb(px(12.))
+                .bg(gpui::linear_gradient(
+                    135.,
+                    gpui::linear_color_stop(gpui::rgb(0x17181c), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x2a2c33), 1.),
+                ))
+                .border_1()
+                .border_color(if selected {
+                    Hsla::from(theme.blue_9)
+                } else {
+                    Hsla::from(theme.gray_3)
+                })
+                .when(selected, |this| {
+                    this.border_2().border_color(Hsla::from(theme.blue_9))
+                })
+                .child(
+                    div()
+                        .max_w_full()
+                        .overflow_hidden()
+                        .text_size(px(sample_size))
+                        .text_color(gpui::white())
+                        .font_family(preset_font_family(style.font_stack, installed))
+                        .font_weight(gpui::FontWeight(style.font_weight))
+                        .when(style.italic, |this| this.italic())
+                        .child(preset.sample),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .bottom(px(4.))
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(crate::editor_sidebar::with_alpha(gpui::white(), 0.5))
+                        .child(preset.name),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.apply_text_preset_to(index, id, window, cx);
+                }))
+                .into_any_element()
         };
 
         div()
@@ -3810,11 +3885,9 @@ impl EditorWindow {
                             .flex()
                             .items_center()
                             .gap(px(12.))
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    self.render_field_input(FieldKey::TextContent(index), Some(80.)),
-                                ),
-                            )
+                            .child(div().flex_1().min_w_0().child(
+                                self.render_field_input(FieldKey::TextContent(index), Some(80.)),
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -3833,18 +3906,20 @@ impl EditorWindow {
                                             SharedString::from(format!("text-enabled-{index}")),
                                             enabled,
                                         )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.edit_text_segment(
-                                                "text-enabled",
-                                                index,
-                                                window,
-                                                cx,
-                                                move |segment| {
-                                                    segment.enabled = !enabled;
-                                                    true
-                                                },
-                                            );
-                                        })),
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.edit_text_segment(
+                                                    "text-enabled",
+                                                    index,
+                                                    window,
+                                                    cx,
+                                                    move |segment| {
+                                                        segment.enabled = !enabled;
+                                                        true
+                                                    },
+                                                );
+                                            }),
+                                        ),
                                     ),
                             ),
                     ),
@@ -3857,39 +3932,41 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(self.icon_toggle_row(
-                                SharedString::from(format!("text-layout-{index}")),
-                                TEXT_LAYOUTS
-                                    .iter()
-                                    .map(|(value, label, icon)| {
-                                        (*icon, Some(*label), *value == layout)
-                                    })
-                                    .collect(),
-                                cx.listener(move |this, choice: &usize, window, cx| {
-                                    let Some((value, ..)) = TEXT_LAYOUTS.get(*choice) else {
-                                        return;
-                                    };
-                                    let value = *value;
-                                    this.edit_text_segment(
-                                        "text-layout",
-                                        index,
-                                        window,
-                                        cx,
-                                        move |segment| {
-                                            if segment.layout == value {
-                                                return false;
-                                            }
-                                            segment.layout = value;
-                                            // A takeover layout implies where
-                                            // the text belongs (`:3672-3677`).
-                                            if value == TextLayout::Fullscreen {
-                                                segment.center = XY::new(0.5, 0.5);
-                                            }
-                                            true
-                                        },
-                                    );
-                                }),
-                            ))
+                            .child(
+                                self.icon_toggle_row(
+                                    SharedString::from(format!("text-layout-{index}")),
+                                    TEXT_LAYOUTS
+                                        .iter()
+                                        .map(|(value, label, icon)| {
+                                            (*icon, Some(*label), *value == layout)
+                                        })
+                                        .collect(),
+                                    cx.listener(move |this, choice: &usize, window, cx| {
+                                        let Some((value, ..)) = TEXT_LAYOUTS.get(*choice) else {
+                                            return;
+                                        };
+                                        let value = *value;
+                                        this.edit_text_segment(
+                                            "text-layout",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| {
+                                                if segment.layout == value {
+                                                    return false;
+                                                }
+                                                segment.layout = value;
+                                                // A takeover layout implies where
+                                                // the text belongs (`:3672-3677`).
+                                                if value == TextLayout::Fullscreen {
+                                                    segment.center = XY::new(0.5, 0.5);
+                                                }
+                                                true
+                                            },
+                                        );
+                                    }),
+                                ),
+                            )
                             .children((layout == TextLayout::Fullscreen).then(|| {
                                 div()
                                     .text_size(px(12.))
@@ -3993,15 +4070,17 @@ impl EditorWindow {
                                             })),
                                     ),
                             )
-                            .child(self.labelled_small(
-                                "Size",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextFontSize, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            )),
+                            .child(
+                                self.labelled_small(
+                                    "Size",
+                                    self.slider(
+                                        SliderKey::Panel(PanelSlider::TextFontSize, index),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -4012,47 +4091,53 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(self.icon_toggle_row(
-                                SharedString::from(format!("text-align-{index}")),
-                                TEXT_ALIGNS
-                                    .iter()
-                                    .map(|(value, icon)| (*icon, None, *value == align))
-                                    .collect(),
-                                cx.listener(move |this, choice: &usize, window, cx| {
-                                    let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
-                                        return;
-                                    };
-                                    let value = *value;
-                                    this.edit_text_segment(
-                                        "text-align",
-                                        index,
-                                        window,
+                            .child(
+                                self.icon_toggle_row(
+                                    SharedString::from(format!("text-align-{index}")),
+                                    TEXT_ALIGNS
+                                        .iter()
+                                        .map(|(value, icon)| (*icon, None, *value == align))
+                                        .collect(),
+                                    cx.listener(move |this, choice: &usize, window, cx| {
+                                        let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
+                                            return;
+                                        };
+                                        let value = *value;
+                                        this.edit_text_segment(
+                                            "text-align",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| {
+                                                segment.align = value;
+                                                true
+                                            },
+                                        );
+                                    }),
+                                ),
+                            )
+                            .child(
+                                self.labelled_small(
+                                    "Line height",
+                                    self.slider(
+                                        SliderKey::Panel(PanelSlider::TextLineHeight, index),
+                                        "",
                                         cx,
-                                        move |segment| {
-                                            segment.align = value;
-                                            true
-                                        },
-                                    );
-                                }),
-                            ))
-                            .child(self.labelled_small(
-                                "Line height",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextLineHeight, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ))
-                            .child(self.labelled_small(
-                                "Letter spacing",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextLetterSpacing, index),
-                                    "px",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            )),
+                                    )
+                                    .into_any_element(),
+                                ),
+                            )
+                            .child(
+                                self.labelled_small(
+                                    "Letter spacing",
+                                    self.slider(
+                                        SliderKey::Panel(PanelSlider::TextLetterSpacing, index),
+                                        "px",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -4063,25 +4148,33 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(self.render_color_input(ColorTarget::TextColor(index), &color, cx))
-                            .child(self.labelled_small(
-                                "Opacity",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextOpacity, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
+                            .child(self.render_color_input(
+                                ColorTarget::TextColor(index),
+                                &color,
+                                cx,
                             ))
-                            .child(self.labelled_small(
-                                "Shadow",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextShadow, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            )),
+                            .child(
+                                self.labelled_small(
+                                    "Opacity",
+                                    self.slider(
+                                        SliderKey::Panel(PanelSlider::TextOpacity, index),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            )
+                            .child(
+                                self.labelled_small(
+                                    "Shadow",
+                                    self.slider(
+                                        SliderKey::Panel(PanelSlider::TextShadow, index),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                            ),
                     ),
             )
             .child(
@@ -4175,42 +4268,42 @@ impl EditorWindow {
             .border_1()
             .border_color(Hsla::from(theme.gray_3))
             .bg(Hsla::from(theme.gray_2))
-            .children(items.into_iter().enumerate().map(|(index, (icon, label, selected))| {
-                let handler = handler.clone();
-                div()
-                    .id(SharedString::from(format!("{id}-{index}")))
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(4.))
-                    .py(px(6.))
-                    .rounded(px(6.))
-                    .when(selected, |this| this.bg(Hsla::from(theme.gray_5)))
-                    .text_color(if selected {
-                        Hsla::from(theme.gray_12)
-                    } else {
-                        Hsla::from(theme.gray_10)
-                    })
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(16.))
+            .children(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (icon, label, selected))| {
+                        let handler = handler.clone();
+                        div()
+                            .id(SharedString::from(format!("{id}-{index}")))
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .when(selected, |this| this.bg(Hsla::from(theme.gray_5)))
                             .text_color(if selected {
                                 Hsla::from(theme.gray_12)
                             } else {
                                 Hsla::from(theme.gray_10)
-                            }),
-                    )
-                    .children(label.map(|label| {
-                        div()
-                            .text_size(px(9.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(label)
-                    }))
-                    .on_click(move |_, window, cx| handler(&index, window, cx))
-            }))
+                            })
+                            .child(svg().path(icon).size(px(16.)).text_color(if selected {
+                                Hsla::from(theme.gray_12)
+                            } else {
+                                Hsla::from(theme.gray_10)
+                            }))
+                            .children(label.map(|label| {
+                                div()
+                                    .text_size(px(9.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(label)
+                            }))
+                            .on_click(move |_, window, cx| handler(&index, window, cx))
+                    }),
+            )
             .into_any_element()
     }
 
@@ -4260,9 +4353,12 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(
-                ui::Field::plain(&theme, SharedString::from(format!("Keyboard {}", index + 1)))
-                    .icon("icons/keyboard.svg")
-                    .child(self.render_field_input(FieldKey::KeyboardText(index), None)),
+                ui::Field::plain(
+                    &theme,
+                    SharedString::from(format!("Keyboard {}", index + 1)),
+                )
+                .icon("icons/keyboard.svg")
+                .child(self.render_field_input(FieldKey::KeyboardText(index), None)),
             )
             .child(self.timing_field(
                 FieldKey::KeyboardStart(index),
@@ -4274,11 +4370,7 @@ impl EditorWindow {
             .child(
                 ui::Field::plain(&theme, "Fade Duration")
                     .icon("icons/timer.svg")
-                    .child(self.slider(
-                        SliderKey::Panel(PanelSlider::KeyboardFade, index),
-                        "",
-                        cx,
-                    )),
+                    .child(self.slider(SliderKey::Panel(PanelSlider::KeyboardFade, index), "", cx)),
             )
             .into_any_element()
     }
@@ -4479,14 +4571,9 @@ impl EditorWindow {
                                     .flex_row()
                                     .gap(px(12.))
                                     .items_center()
-                                    .child(
-                                        div().flex_1().min_w_0().child(
-                                            self.render_field_input(
-                                                FieldKey::AudioName(index),
-                                                None,
-                                            ),
-                                        ),
-                                    )
+                                    .child(div().flex_1().min_w_0().child(
+                                        self.render_field_input(FieldKey::AudioName(index), None),
+                                    ))
                                     .child(
                                         div()
                                             .flex()
@@ -4538,11 +4625,7 @@ impl EditorWindow {
             .child(
                 ui::Field::plain(&theme, "Fade In")
                     .icon("icons/timer.svg")
-                    .child(self.slider(
-                        SliderKey::Panel(PanelSlider::AudioFadeIn, index),
-                        "s",
-                        cx,
-                    )),
+                    .child(self.slider(SliderKey::Panel(PanelSlider::AudioFadeIn, index), "s", cx)),
             )
             .child(
                 ui::Field::plain(&theme, "Fade Out")
@@ -4569,71 +4652,66 @@ impl EditorWindow {
         let enabled = segment.enabled;
         let effect = mask_effect(segment);
 
-        let mut panel = div()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .child(
-                ui::Field::plain(&theme, SharedString::from(format!("Mask {}", index + 1)))
-                    .icon("icons/box-select.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .gap(px(16.))
-                            .child(
-                                div().flex_1().min_w_0().child(self.radio_row(
-                                    SharedString::from(format!("mask-kind-{index}")),
-                                    vec![("Sensitive", sensitive), ("Highlight", !sensitive)],
-                                    cx.listener(move |this, choice: &usize, window, cx| {
-                                        let want_sensitive = *choice == 0;
-                                        this.edit_mask_segment(
-                                            "mask-kind",
-                                            index,
-                                            window,
-                                            cx,
-                                            move |segment| {
-                                                segment.mask_type = if want_sensitive {
-                                                    MaskKind::Sensitive
-                                                } else {
-                                                    MaskKind::Highlight
-                                                };
-                                                // The two kinds seed different
-                                                // defaults (`:4408-4416`).
-                                                if want_sensitive {
-                                                    segment.feather = 0.1;
-                                                    segment.fade_duration = 0.;
-                                                } else {
-                                                    segment.feather = 0.;
-                                                    segment.opacity = 1.;
-                                                }
-                                                true
-                                            },
-                                        );
-                                    }),
-                                )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child("Enabled"),
+        let mut panel = div().flex().flex_col().gap(px(16.)).child(
+            ui::Field::plain(&theme, SharedString::from(format!("Mask {}", index + 1)))
+                .icon("icons/box-select.svg")
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(16.))
+                        .child(div().flex_1().min_w_0().child(self.radio_row(
+                            SharedString::from(format!("mask-kind-{index}")),
+                            vec![("Sensitive", sensitive), ("Highlight", !sensitive)],
+                            cx.listener(move |this, choice: &usize, window, cx| {
+                                let want_sensitive = *choice == 0;
+                                this.edit_mask_segment(
+                                    "mask-kind",
+                                    index,
+                                    window,
+                                    cx,
+                                    move |segment| {
+                                        segment.mask_type = if want_sensitive {
+                                            MaskKind::Sensitive
+                                        } else {
+                                            MaskKind::Highlight
+                                        };
+                                        // The two kinds seed different
+                                        // defaults (`:4408-4416`).
+                                        if want_sensitive {
+                                            segment.feather = 0.1;
+                                            segment.fade_duration = 0.;
+                                        } else {
+                                            segment.feather = 0.;
+                                            segment.opacity = 1.;
+                                        }
+                                        true
+                                    },
+                                );
+                            }),
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(Hsla::from(theme.gray_11))
+                                        .child("Enabled"),
+                                )
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        SharedString::from(format!("mask-enabled-{index}")),
+                                        enabled,
                                     )
-                                    .child(
-                                        ui::Toggle::plain(
-                                            &theme,
-                                            SharedString::from(format!("mask-enabled-{index}")),
-                                            enabled,
-                                        )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
                                             this.edit_mask_segment(
                                                 "mask-enabled",
                                                 index,
@@ -4644,11 +4722,12 @@ impl EditorWindow {
                                                     true
                                                 },
                                             );
-                                        })),
-                                    ),
-                            ),
-                    ),
-            );
+                                        },
+                                    )),
+                                ),
+                        ),
+                ),
+        );
 
         if sensitive {
             panel = panel
@@ -4741,47 +4820,54 @@ impl EditorWindow {
             .flex()
             .flex_row()
             .gap(px(8.))
-            .children(items.into_iter().enumerate().map(|(index, (label, checked))| {
-                let handler = handler.clone();
-                div()
-                    .id(SharedString::from(format!("{id}-{index}")))
-                    .flex_1()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(if checked {
-                        Hsla::from(theme.blue_8)
-                    } else {
-                        Hsla::from(theme.gray_3)
-                    })
-                    .when(checked, |this| {
-                        this.bg(crate::editor_sidebar::with_alpha(theme.blue_3, 0.4))
-                    })
-                    .child(
+            .children(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (label, checked))| {
+                        let handler = handler.clone();
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .p(px(8.))
-                            .text_size(px(14.))
-                            .text_color(Hsla::from(theme.gray_12))
+                            .id(SharedString::from(format!("{id}-{index}")))
+                            .flex_1()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(if checked {
+                                Hsla::from(theme.blue_8)
+                            } else {
+                                Hsla::from(theme.gray_3)
+                            })
+                            .when(checked, |this| {
+                                this.bg(crate::editor_sidebar::with_alpha(theme.blue_3, 0.4))
+                            })
                             .child(
                                 div()
-                                    .size(px(16.))
-                                    .flex_none()
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(if checked {
-                                        Hsla::from(theme.blue_9)
-                                    } else {
-                                        Hsla::from(theme.gray_7)
-                                    })
-                                    .when(checked, |this| this.bg(Hsla::from(theme.blue_9))),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .p(px(8.))
+                                    .text_size(px(14.))
+                                    .text_color(Hsla::from(theme.gray_12))
+                                    .child(
+                                        div()
+                                            .size(px(16.))
+                                            .flex_none()
+                                            .rounded_full()
+                                            .border_1()
+                                            .border_color(if checked {
+                                                Hsla::from(theme.blue_9)
+                                            } else {
+                                                Hsla::from(theme.gray_7)
+                                            })
+                                            .when(checked, |this| {
+                                                this.bg(Hsla::from(theme.blue_9))
+                                            }),
+                                    )
+                                    .child(label),
                             )
-                            .child(label),
-                    )
-                    .on_click(move |_, window, cx| handler(&index, window, cx))
-            }))
+                            .on_click(move |_, window, cx| handler(&index, window, cx))
+                    }),
+            )
             .into_any_element()
     }
 }
@@ -4831,9 +4917,9 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "scene-done")
                             .left_icon("icons/check.svg")
                             .label("Done")
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.set_selection(None, cx)
-                            })),
+                            .on_click(
+                                cx.listener(|this, _, _window, cx| this.set_selection(None, cx)),
+                            ),
                     )
                     .child(
                         ui::EditorButton::plain(&theme, "scene-delete")
@@ -4854,72 +4940,64 @@ impl EditorWindow {
                             .flex_col()
                             .gap(px(12.))
                             // `grid grid-cols-2 gap-2`
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap(px(8.))
-                                    .children(SCENE_MODES.iter().enumerate().map(
-                                        |(choice, (value, label, icon, _))| {
-                                            let selected = std::mem::discriminant(value)
-                                                == std::mem::discriminant(&mode);
-                                            // Split and Floating need a camera.
-                                            let disabled = !has_camera
-                                                && matches!(
-                                                    value,
-                                                    SceneMode::SplitScreen | SceneMode::Floating
-                                                );
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "scene-mode-{choice}"
-                                                )))
-                                                .w(px(187.))
-                                                .flex()
-                                                .flex_row()
-                                                .gap(px(6.))
-                                                .justify_center()
-                                                .items_center()
-                                                .py(px(10.))
-                                                .px(px(8.))
-                                                .rounded(px(10.))
-                                                .border_1()
-                                                .border_color(if selected {
-                                                    Hsla::from(theme.gray_3)
-                                                } else {
-                                                    gpui::transparent_black()
-                                                })
-                                                .when(selected, |this| {
-                                                    this.bg(Hsla::from(theme.gray_3))
-                                                })
-                                                .when(disabled, |this| this.opacity(0.4))
-                                                .text_size(px(12.))
-                                                .text_color(if selected {
+                            .child(div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+                                SCENE_MODES.iter().enumerate().map(
+                                    |(choice, (value, label, icon, _))| {
+                                        let selected = std::mem::discriminant(value)
+                                            == std::mem::discriminant(&mode);
+                                        // Split and Floating need a camera.
+                                        let disabled = !has_camera
+                                            && matches!(
+                                                value,
+                                                SceneMode::SplitScreen | SceneMode::Floating
+                                            );
+                                        div()
+                                            .id(SharedString::from(format!("scene-mode-{choice}")))
+                                            .w(px(187.))
+                                            .flex()
+                                            .flex_row()
+                                            .gap(px(6.))
+                                            .justify_center()
+                                            .items_center()
+                                            .py(px(10.))
+                                            .px(px(8.))
+                                            .rounded(px(10.))
+                                            .border_1()
+                                            .border_color(if selected {
+                                                Hsla::from(theme.gray_3)
+                                            } else {
+                                                gpui::transparent_black()
+                                            })
+                                            .when(selected, |this| {
+                                                this.bg(Hsla::from(theme.gray_3))
+                                            })
+                                            .when(disabled, |this| this.opacity(0.4))
+                                            .text_size(px(12.))
+                                            .text_color(if selected {
+                                                Hsla::from(theme.gray_12)
+                                            } else {
+                                                Hsla::from(theme.gray_11)
+                                            })
+                                            .child(svg().path(*icon).size(px(14.)).text_color(
+                                                if selected {
                                                     Hsla::from(theme.gray_12)
                                                 } else {
                                                     Hsla::from(theme.gray_11)
-                                                })
-                                                .child(
-                                                    svg()
-                                                        .path(*icon)
-                                                        .size(px(14.))
-                                                        .text_color(if selected {
-                                                            Hsla::from(theme.gray_12)
-                                                        } else {
-                                                            Hsla::from(theme.gray_11)
-                                                        }),
-                                                )
-                                                .child(*label)
-                                                .when(!disabled, |this| {
-                                                    this.on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.set_scene_mode(index, choice, window, cx);
-                                                        },
-                                                    ))
-                                                })
-                                        },
-                                    )),
-                            )
+                                                },
+                                            ))
+                                            .child(*label)
+                                            .when(!disabled, |this| {
+                                                this.on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.set_scene_mode(
+                                                            index, choice, window, cx,
+                                                        );
+                                                    },
+                                                ))
+                                            })
+                                    },
+                                ),
+                            ))
                             .child(
                                 div()
                                     .p(px(10.))
@@ -4946,24 +5024,20 @@ impl EditorWindow {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(
-                                ui::Subfield::plain(&theme, "In").child(
-                                    div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
-                                        SliderKey::Panel(PanelSlider::SceneTransitionIn, index),
-                                        "s2",
-                                        cx,
-                                    )),
-                                ),
-                            )
-                            .child(
-                                ui::Subfield::plain(&theme, "Out").child(
-                                    div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
-                                        SliderKey::Panel(PanelSlider::SceneTransitionOut, index),
-                                        "s2",
-                                        cx,
-                                    )),
-                                ),
-                            ),
+                            .child(ui::Subfield::plain(&theme, "In").child(
+                                div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
+                                    SliderKey::Panel(PanelSlider::SceneTransitionIn, index),
+                                    "s2",
+                                    cx,
+                                )),
+                            ))
+                            .child(ui::Subfield::plain(&theme, "Out").child(
+                                div().flex_1().min_w_0().ml(px(16.)).child(self.slider_flex(
+                                    SliderKey::Panel(PanelSlider::SceneTransitionOut, index),
+                                    "s2",
+                                    cx,
+                                )),
+                            )),
                     ),
             );
 
@@ -5155,9 +5229,11 @@ impl EditorWindow {
                                 if shots == 1 { "shot" } else { "shots" }
                             ))),
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.apply_camera3d_scene(index, id, window, cx);
-                        }))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.apply_camera3d_scene(index, id, window, cx);
+                            },
+                        ))
                     })),
             )
             // `grid-cols-5 gap-1.5` -- the angle presets.
@@ -5176,9 +5252,11 @@ impl EditorWindow {
                             active_angle == Some(id),
                             None,
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.apply_camera3d_angle(index, id, window, cx);
-                        }))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.apply_camera3d_angle(index, id, window, cx);
+                            },
+                        ))
                     })),
             )
             // `grid-cols-4 gap-2` -- the motion templates, two rows of four.
@@ -5197,9 +5275,11 @@ impl EditorWindow {
                             false,
                             None,
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.apply_camera3d_template(index, id, window, cx);
-                        }))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.apply_camera3d_template(index, id, window, cx);
+                            },
+                        ))
                     }))
             }))
             .into_any_element()
@@ -5498,215 +5578,230 @@ impl EditorWindow {
                             ),
                     ),
             )
-            .child(self.camera3d_section(
-                "camera3d-camera",
-                "Camera",
-                "icons/video.svg",
-                Some(if editing_end { "End pose" } else { "Start pose" }),
-                PanelSection::Camera3DCamera,
-                &camera_section,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .children(CAMERA3D_POSE_SLIDERS.map(|(property, label, unit, icon)| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(
+            .child(
+                self.camera3d_section(
+                    "camera3d-camera",
+                    "Camera",
+                    "icons/video.svg",
+                    Some(if editing_end {
+                        "End pose"
+                    } else {
+                        "Start pose"
+                    }),
+                    PanelSection::Camera3DCamera,
+                    &camera_section,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .children(CAMERA3D_POSE_SLIDERS.map(|(property, label, unit, icon)| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap(px(6.))
+                                        .items_center()
+                                        .text_size(px(12.))
+                                        .text_color(Hsla::from(theme.gray_11))
+                                        .child(
+                                            svg()
+                                                .path(icon)
+                                                .size(px(16.))
+                                                .text_color(Hsla::from(theme.gray_11)),
+                                        )
+                                        .child(label),
+                                )
+                                .child(self.slider(
+                                    SliderKey::Panel(PanelSlider::Camera3DPose(property), index),
+                                    unit,
+                                    cx,
+                                ))
+                                .into_any_element()
+                        }))
+                        .child(
+                            ui::EditorButton::plain(&theme, "camera3d-reset")
+                                .left_icon("icons/rotate-ccw.svg")
+                                .label("Reset camera")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.reset_camera3d_pose(index, window, cx);
+                                })),
+                        )
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.camera3d_section(
+                    "camera3d-blur",
+                    "Blur",
+                    "icons/wind.svg",
+                    Some(&blur_summary),
+                    PanelSection::Camera3DBlur,
+                    &blur_section,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(
+                            ui::Subfield::plain(&theme, "Mode").child(div().w(px(160.)).child(
+                                self.menu_select(
+                                    SidebarMenu::Camera3DBlurMode(index),
+                                    "camera3d-blur-mode",
+                                    blur_label,
+                                    cx,
+                                ),
+                            )),
+                        )
+                        .children(if blur.mode == Camera3DBlurMode::None {
+                            vec![
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap(px(6.))
-                                    .items_center()
                                     .text_size(px(12.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child(
-                                        svg()
-                                            .path(icon)
-                                            .size(px(16.))
-                                            .text_color(Hsla::from(theme.gray_11)),
+                                    .child("Pick a mode to blur everything outside the focus area.")
+                                    .into_any_element(),
+                            ]
+                        } else {
+                            let mut rows: Vec<AnyElement> = camera3d_blur_sliders(blur.mode)
+                                .iter()
+                                .map(|(key, label)| {
+                                    self.labelled_small(
+                                        label,
+                                        self.slider(
+                                            SliderKey::Panel(
+                                                PanelSlider::Camera3DBlur(*key),
+                                                index,
+                                            ),
+                                            if *key == Camera3DBlurKey::Angle {
+                                                "deg"
+                                            } else {
+                                                ""
+                                            },
+                                            cx,
+                                        )
+                                        .into_any_element(),
                                     )
-                                    .child(label),
-                            )
-                            .child(self.slider(
-                                SliderKey::Panel(PanelSlider::Camera3DPose(property), index),
-                                unit,
-                                cx,
-                            ))
-                            .into_any_element()
-                    }))
-                    .child(
-                        ui::EditorButton::plain(&theme, "camera3d-reset")
-                            .left_icon("icons/rotate-ccw.svg")
-                            .label("Reset camera")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.reset_camera3d_pose(index, window, cx);
-                            })),
-                    )
-                    .into_any_element(),
-                cx,
-            ))
-            .child(self.camera3d_section(
-                "camera3d-blur",
-                "Blur",
-                "icons/wind.svg",
-                Some(&blur_summary),
-                PanelSection::Camera3DBlur,
-                &blur_section,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .child(
-                        ui::Subfield::plain(&theme, "Mode").child(
-                            div().w(px(160.)).child(self.menu_select(
-                                SidebarMenu::Camera3DBlurMode(index),
-                                "camera3d-blur-mode",
-                                blur_label,
-                                cx,
-                            )),
-                        ),
-                    )
-                    .children(if blur.mode == Camera3DBlurMode::None {
-                        vec![
-                            div()
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_11))
-                                .child("Pick a mode to blur everything outside the focus area.")
-                                .into_any_element(),
-                        ]
-                    } else {
-                        let mut rows: Vec<AnyElement> = camera3d_blur_sliders(blur.mode)
-                            .iter()
-                            .map(|(key, label)| {
-                                self.labelled_small(
-                                    label,
-                                    self.slider(
-                                        SliderKey::Panel(PanelSlider::Camera3DBlur(*key), index),
-                                        if *key == Camera3DBlurKey::Angle {
-                                            "deg"
-                                        } else {
-                                            ""
-                                        },
-                                        cx,
+                                })
+                                .collect();
+                            rows.push(
+                                ui::Subfield::plain(&theme, "Bokeh")
+                                    .child(
+                                        ui::Toggle::plain(
+                                            &theme,
+                                            SharedString::from(format!("camera3d-bokeh-{index}")),
+                                            blur.bokeh,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.set_camera3d_bokeh(index, window, cx);
+                                            }),
+                                        ),
                                     )
                                     .into_any_element(),
-                                )
-                            })
-                            .collect();
-                        rows.push(
-                            ui::Subfield::plain(&theme, "Bokeh")
-                                .child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        SharedString::from(format!("camera3d-bokeh-{index}")),
-                                        blur.bokeh,
-                                    )
+                            );
+                            rows.push(
+                                ui::EditorButton::plain(&theme, "camera3d-blur-reset")
+                                    .left_icon("icons/rotate-ccw.svg")
+                                    .label("Turn blur off")
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.set_camera3d_bokeh(index, window, cx);
-                                    })),
-                                )
-                                .into_any_element(),
-                        );
-                        rows.push(
-                            ui::EditorButton::plain(&theme, "camera3d-blur-reset")
-                                .left_icon("icons/rotate-ccw.svg")
-                                .label("Turn blur off")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.edit_camera3d_segment(
-                                        "camera3d-blur-reset",
-                                        index,
-                                        window,
-                                        cx,
-                                        |segment| {
-                                            segment.blur = default_camera3d_blur();
-                                            true
-                                        },
-                                    );
-                                }))
-                                .into_any_element(),
-                        );
-                        rows
-                    })
-                    .into_any_element(),
-                cx,
-            ))
-            .child(self.camera3d_section(
-                "camera3d-advanced",
-                "Advanced",
-                "icons/timer.svg",
-                None,
-                PanelSection::Camera3DAdvanced,
-                &advanced_section,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .child(
-                        ui::Subfield::plain(&theme, "Motion style").child(
-                            div()
-                                .w(px(160.))
-                                // A still shot has no span to shape and nowhere
-                                // to store a curve, so the picker is disabled
-                                // (`:5357-5360`).
-                                .when(still, |this| this.opacity(0.5))
-                                .child(if still {
-                                    ui::Select::plain(&theme, "camera3d-easing", easing_label)
-                                        .stretch_label()
-                                        .disabled(true)
-                                        .into_any_element()
-                                } else {
-                                    self.easing_select(index, easing_index, cx)
-                                }),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.))
-                            .child(
+                                        this.edit_camera3d_segment(
+                                            "camera3d-blur-reset",
+                                            index,
+                                            window,
+                                            cx,
+                                            |segment| {
+                                                segment.blur = default_camera3d_blur();
+                                                true
+                                            },
+                                        );
+                                    }))
+                                    .into_any_element(),
+                            );
+                            rows
+                        })
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.camera3d_section(
+                    "camera3d-advanced",
+                    "Advanced",
+                    "icons/timer.svg",
+                    None,
+                    PanelSection::Camera3DAdvanced,
+                    &advanced_section,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(
+                            ui::Subfield::plain(&theme, "Motion style").child(
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .justify_between()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child("Ease in"),
-                                    )
-                                    .child(self.render_number_field(
-                                        FieldKey::Camera3DEaseIn(index),
-                                        "s",
-                                        80.,
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .justify_between()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child("Ease out"),
-                                    )
-                                    .child(self.render_number_field(
-                                        FieldKey::Camera3DEaseOut(index),
-                                        "s",
-                                        80.,
-                                    )),
+                                    .w(px(160.))
+                                    // A still shot has no span to shape and nowhere
+                                    // to store a curve, so the picker is disabled
+                                    // (`:5357-5360`).
+                                    .when(still, |this| this.opacity(0.5))
+                                    .child(if still {
+                                        ui::Select::plain(&theme, "camera3d-easing", easing_label)
+                                            .stretch_label()
+                                            .disabled(true)
+                                            .into_any_element()
+                                    } else {
+                                        self.easing_select(index, easing_index, cx)
+                                    }),
                             ),
-                    )
-                    .into_any_element(),
-                cx,
-            ))
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(Hsla::from(theme.gray_11))
+                                                .child("Ease in"),
+                                        )
+                                        .child(self.render_number_field(
+                                            FieldKey::Camera3DEaseIn(index),
+                                            "s",
+                                            80.,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(Hsla::from(theme.gray_11))
+                                                .child("Ease out"),
+                                        )
+                                        .child(self.render_number_field(
+                                            FieldKey::Camera3DEaseOut(index),
+                                            "s",
+                                            80.,
+                                        )),
+                                ),
+                        )
+                        .into_any_element(),
+                    cx,
+                ),
+            )
             .into_any_element()
     }
 
@@ -5783,12 +5878,7 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    fn easing_select(
-        &self,
-        index: usize,
-        current: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn easing_select(&self, index: usize, current: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         // Four options, and `ui::Menu` draws at the pointer without flipping;
         // the corner-style select already established the two-option toggle,
@@ -5905,6 +5995,133 @@ impl EditorWindow {
             set_motion(segment, &start, &end, (out, into));
             true
         });
+    }
+}
+
+impl EditorWindow {
+    /// Every text field the frame about to be built will draw.
+    ///
+    /// Creating one needs `&mut Window`, and the sidebar's render chain is
+    /// threaded with `&self`, so the set is computed here from the same state
+    /// the render reads and the fields are created (and re-synced) before the
+    /// tree is built. Called once per frame from `Render::render`, next to
+    /// `sync_hex_inputs`.
+    pub(crate) fn prepare_sidebar_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut fields: Vec<FieldKey> = Vec::new();
+        let mut colors: Vec<ColorTarget> = Vec::new();
+
+        // The crop dialog's four `BoundInput`s, while it is open. Created up
+        // front rather than pushed onto `fields`, because the match below
+        // bails early when the project has no timeline and the dialog is
+        // independent of it.
+        if self.crop.is_some() {
+            use crate::editor_crop::CropField;
+            for field in [
+                CropField::Width,
+                CropField::Height,
+                CropField::X,
+                CropField::Y,
+            ] {
+                self.ensure_field(FieldKey::Crop(field), window, cx);
+            }
+        }
+
+        match self.sidebar_selection().cloned() {
+            Some(selection) => {
+                // The text panel needs the installed families for its font
+                // picker and for matching the active preset; the enumeration
+                // is slow, so it starts here and lands on a later frame.
+                if selection.track == TrackKind::Text {
+                    warm_installed_fonts();
+                }
+                let Some(timeline) = self.timeline() else {
+                    return;
+                };
+                let indices = |length: usize| -> Vec<usize> {
+                    selection
+                        .indices
+                        .iter()
+                        .copied()
+                        .filter(|index| *index < length)
+                        .collect()
+                };
+                match selection.track {
+                    TrackKind::Text => {
+                        for index in indices(timeline.text_segments.len()) {
+                            fields.push(FieldKey::TextContent(index));
+                            colors.push(ColorTarget::TextColor(index));
+                        }
+                    }
+                    TrackKind::Caption => {
+                        for index in indices(timeline.caption_segments.len()) {
+                            fields.push(FieldKey::CaptionText(index));
+                            fields.push(FieldKey::CaptionStart(index));
+                            fields.push(FieldKey::CaptionEnd(index));
+                        }
+                    }
+                    TrackKind::Audio => {
+                        for index in indices(timeline.audio_segments.len()) {
+                            fields.push(FieldKey::AudioName(index));
+                        }
+                    }
+                    TrackKind::Keyboard => {
+                        for index in indices(timeline.keyboard_segments.len()) {
+                            fields.push(FieldKey::KeyboardText(index));
+                            fields.push(FieldKey::KeyboardStart(index));
+                            fields.push(FieldKey::KeyboardEnd(index));
+                        }
+                    }
+                    TrackKind::ThreeD => {
+                        let selected = indices(timeline.camera3d_segments.len());
+                        if selected.len() == 1 {
+                            fields.push(FieldKey::Camera3DEaseIn(selected[0]));
+                            fields.push(FieldKey::Camera3DEaseOut(selected[0]));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None => match self.sidebar.tab {
+                crate::editor_sidebar::SidebarTab::Captions => colors.extend([
+                    ColorTarget::CaptionColor,
+                    ColorTarget::CaptionBackground,
+                    ColorTarget::CaptionHighlight,
+                ]),
+                crate::editor_sidebar::SidebarTab::Keyboard => {
+                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
+                }
+                crate::editor_sidebar::SidebarTab::Audio => {
+                    if let Some(summary) = self.summary() {
+                        let clips = summary.recording_clips.max(1);
+                        let (system, mic, camera) = (
+                            summary.has_system_audio,
+                            summary.has_microphone,
+                            summary.has_camera,
+                        );
+                        for clip in 0..clips {
+                            if system {
+                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::SystemAudio));
+                            }
+                            if mic {
+                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::Mic));
+                            }
+                            if camera {
+                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::Camera));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+        }
+
+        for key in fields {
+            self.ensure_field(key, window, cx);
+        }
+        for target in colors {
+            self.ensure_hex_input(target, window, cx);
+        }
+        self.sync_fields(window, cx);
     }
 }
 
@@ -6195,7 +6412,13 @@ mod tests {
         let angles: Vec<_> = ANGLE_PRESETS.iter().map(|preset| preset.id).collect();
         assert_eq!(
             angles,
-            ["spotlight", "perspective", "center", "low-angle", "close-up"]
+            [
+                "spotlight",
+                "perspective",
+                "center",
+                "low-angle",
+                "close-up"
+            ]
         );
         let motions: Vec<_> = MOTION_TEMPLATES.iter().map(|t| t.id).collect();
         assert_eq!(
@@ -6313,7 +6536,10 @@ mod tests {
         // ring lands back on it.
         let mut segment = camera3d(0., 4.);
         apply_motion_template(&mut segment, &angle_preset_motion(&ANGLE_PRESETS[1]));
-        assert_eq!(match_angle_preset(&start_pose(&segment)), Some("perspective"));
+        assert_eq!(
+            match_angle_preset(&start_pose(&segment)),
+            Some("perspective")
+        );
     }
 
     #[test]
@@ -6326,116 +6552,5 @@ mod tests {
         // name, a real family is its own name (`utils/fonts.ts:27-32`).
         assert_eq!(font_family_label("serif"), "System Serif");
         assert_eq!(font_family_label("Georgia"), "Georgia");
-    }
-}
-
-impl EditorWindow {
-    /// Every text field the frame about to be built will draw.
-    ///
-    /// Creating one needs `&mut Window`, and the sidebar's render chain is
-    /// threaded with `&self`, so the set is computed here from the same state
-    /// the render reads and the fields are created (and re-synced) before the
-    /// tree is built. Called once per frame from `Render::render`, next to
-    /// `sync_hex_inputs`.
-    pub(crate) fn prepare_sidebar_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut fields: Vec<FieldKey> = Vec::new();
-        let mut colors: Vec<ColorTarget> = Vec::new();
-
-        match self.sidebar_selection().cloned() {
-            Some(selection) => {
-                // The text panel needs the installed families for its font
-                // picker and for matching the active preset; the enumeration
-                // is slow, so it starts here and lands on a later frame.
-                if selection.track == TrackKind::Text {
-                    warm_installed_fonts();
-                }
-                let Some(timeline) = self.timeline() else {
-                    return;
-                };
-                let indices = |length: usize| -> Vec<usize> {
-                    selection
-                        .indices
-                        .iter()
-                        .copied()
-                        .filter(|index| *index < length)
-                        .collect()
-                };
-                match selection.track {
-                    TrackKind::Text => {
-                        for index in indices(timeline.text_segments.len()) {
-                            fields.push(FieldKey::TextContent(index));
-                            colors.push(ColorTarget::TextColor(index));
-                        }
-                    }
-                    TrackKind::Caption => {
-                        for index in indices(timeline.caption_segments.len()) {
-                            fields.push(FieldKey::CaptionText(index));
-                            fields.push(FieldKey::CaptionStart(index));
-                            fields.push(FieldKey::CaptionEnd(index));
-                        }
-                    }
-                    TrackKind::Audio => {
-                        for index in indices(timeline.audio_segments.len()) {
-                            fields.push(FieldKey::AudioName(index));
-                        }
-                    }
-                    TrackKind::Keyboard => {
-                        for index in indices(timeline.keyboard_segments.len()) {
-                            fields.push(FieldKey::KeyboardText(index));
-                            fields.push(FieldKey::KeyboardStart(index));
-                            fields.push(FieldKey::KeyboardEnd(index));
-                        }
-                    }
-                    TrackKind::ThreeD => {
-                        let selected = indices(timeline.camera3d_segments.len());
-                        if selected.len() == 1 {
-                            fields.push(FieldKey::Camera3DEaseIn(selected[0]));
-                            fields.push(FieldKey::Camera3DEaseOut(selected[0]));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            None => match self.sidebar.tab {
-                crate::editor_sidebar::SidebarTab::Captions => colors.extend([
-                    ColorTarget::CaptionColor,
-                    ColorTarget::CaptionBackground,
-                    ColorTarget::CaptionHighlight,
-                ]),
-                crate::editor_sidebar::SidebarTab::Keyboard => {
-                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
-                }
-                crate::editor_sidebar::SidebarTab::Audio => {
-                    if let Some(summary) = self.summary() {
-                        let clips = summary.recording_clips.max(1);
-                        let (system, mic, camera) = (
-                            summary.has_system_audio,
-                            summary.has_microphone,
-                            summary.has_camera,
-                        );
-                        for clip in 0..clips {
-                            if system {
-                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::SystemAudio));
-                            }
-                            if mic {
-                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::Mic));
-                            }
-                            if camera {
-                                fields.push(FieldKey::SyncOffset(clip, OffsetKind::Camera));
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            },
-        }
-
-        for key in fields {
-            self.ensure_field(key, window, cx);
-        }
-        for target in colors {
-            self.ensure_hex_input(target, window, cx);
-        }
-        self.sync_fields(window, cx);
     }
 }
