@@ -59,6 +59,7 @@ use crate::{
     editor_tabs::{AudioSlider, CameraSlider, CaptionSlider, CursorSlider, KeyboardSlider},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
+    library,
     ui::{self, CollapsibleState, SliderTrack},
 };
 
@@ -138,8 +139,22 @@ pub const BACKGROUND_THEMES: [(&str, &str); 6] = [
 /// `BACKGROUND_COLORS` (`:259-277`). The last one is transparent and renders as
 /// a checkerboard rather than a swatch.
 pub const BACKGROUND_COLORS: [&str; 17] = [
-    "#FF0000", "#FF4500", "#FF8C00", "#FFD700", "#FFFF00", "#ADFF2F", "#32CD32", "#008000",
-    "#00CED1", "#4785FF", "#0000FF", "#4B0082", "#800080", "#A9A9A9", "#FFFFFF", "#000000",
+    "#FF0000",
+    "#FF4500",
+    "#FF8C00",
+    "#FFD700",
+    "#FFFF00",
+    "#ADFF2F",
+    "#32CD32",
+    "#008000",
+    "#00CED1",
+    "#4785FF",
+    "#0000FF",
+    "#4B0082",
+    "#800080",
+    "#A9A9A9",
+    "#FFFFFF",
+    "#000000",
     "#00000000",
 ];
 
@@ -453,12 +468,21 @@ pub fn wallpaper_dir() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let candidates = [
-        PathBuf::from("/Applications/Cap.app/Contents/Resources/assets/backgrounds"),
+
+    let mut candidates = Vec::with_capacity(3);
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(contents) = executable.parent().and_then(Path::parent)
+    {
+        candidates.push(contents.join("Resources/assets/backgrounds"));
+    }
+    candidates.push(PathBuf::from(
+        "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
+    ));
+    candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../desktop/src-tauri/assets/backgrounds")
             .clean(),
-    ];
+    );
     candidates.into_iter().find(|path| path.is_dir())
 }
 
@@ -688,6 +712,13 @@ impl ColorTarget {
     }
 }
 
+/// Which of the picker popover's two surfaces the pointer went down on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorPickerDrag {
+    Field,
+    Hue,
+}
+
 /// The sidebar's own state -- everything `ConfigSidebar`'s signals hold that is
 /// not in the project config.
 pub struct SidebarState {
@@ -748,13 +779,18 @@ pub struct SidebarState {
     /// sliders point at (`ConfigSidebar.tsx:4908`).
     pub editing_end_pose: bool,
 
-    /// The open colour panel, if any, and the task draining its changes.
+    /// The open colour picker's target, if any -- drives the swatch's blue
+    /// ring while its popover is up.
     pub color_target: Option<ColorTarget>,
-    color_task: Option<gpui::Task<()>>,
-    /// Whether that task is holding a `history.pause()`. It lives here rather
-    /// than inside the task because a *second* swatch clicked while the panel
-    /// is up drops the first task -- and a dropped task cannot resume, which
-    /// would leave the history paused forever and swallow every later edit.
+    /// The picker popover itself: anchor and the HSV triple being edited.
+    pub color_picker: Option<crate::ui::ColorPickerSnapshot>,
+    /// The live picker drag, if the pointer went down on the field or the
+    /// hue rail -- drives the window-wide drag layer.
+    pub color_drag: Option<ColorPickerDrag>,
+    /// Whether the open picker is holding a `history.pause()`. It lives here
+    /// rather than with the popover because a *second* swatch clicked while
+    /// one is up replaces the popover -- and the first bracket must resume or
+    /// the history would stay paused forever and swallow every later edit.
     color_paused: bool,
 
     /// Decoded wallpaper thumbnails, keyed by catalogue id, and the task
@@ -806,7 +842,8 @@ impl SidebarState {
             caption_language: "auto",
             editing_end_pose: false,
             color_target: None,
-            color_task: None,
+            color_picker: None,
+            color_drag: None,
             color_paused: false,
             wallpapers: HashMap::new(),
             wallpaper_task: None,
@@ -820,11 +857,7 @@ impl SidebarState {
     }
 
     pub(crate) fn track(&self, slider: SliderKey) -> SliderTrack {
-        self.tracks
-            .borrow_mut()
-            .entry(slider)
-            .or_default()
-            .clone()
+        self.tracks.borrow_mut().entry(slider).or_default().clone()
     }
 
     /// The grain texture for a grain-scale value, generated once per step.
@@ -1236,8 +1269,8 @@ impl EditorWindow {
                         background.border = Some(border);
                     }
                     BgSlider::NotchWidth | BgSlider::NotchHeight | BgSlider::NotchX => {
-                        let previous = background.notch.clone().unwrap_or(UNPLACED_NOTCH);
-                        let mut next = previous.clone();
+                        let previous = background.notch.unwrap_or(UNPLACED_NOTCH);
+                        let mut next = previous;
                         next.enabled = true;
                         match slider {
                             BgSlider::NotchX => {
@@ -1278,9 +1311,7 @@ impl EditorWindow {
                         }
                         background.advanced_shadow = Some(shadow);
                     }
-                    BgSlider::GradientAngle
-                    | BgSlider::GradientNoise
-                    | BgSlider::GradientGrain => {
+                    BgSlider::GradientAngle | BgSlider::GradientNoise | BgSlider::GradientGrain => {
                         let BackgroundSource::Gradient {
                             angle,
                             noise_intensity,
@@ -1315,9 +1346,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let history = &mut self.history;
-        self.sidebar
-            .slider_drag
-            .begin(slider, || history.pause());
+        self.sidebar.slider_drag.begin(slider, || history.pause());
         self.slider_mouse_move(event.position, window, cx);
     }
 
@@ -1377,98 +1406,136 @@ impl EditorWindow {
 // ---------------------------------------------------------------------------
 
 impl EditorWindow {
-    /// Open the OS colour panel on `target`.
+    /// Open the in-app colour picker popover on `target`, anchored at the
+    /// clicked swatch.
     ///
-    /// The panel is what `<input type="color">` opens, so this is the same
-    /// interaction, not a substitute for it. Three things make it safe:
-    ///
-    /// * the panel is opened from a **spawned task**, never inside the click's
-    ///   update -- `orderFront:` re-enters gpui's window callbacks;
-    /// * the `changeColor:` action only pushes down a channel, and the drain
-    ///   loop -- which is the only thing that touches the model -- runs on the
-    ///   foreground executor;
-    /// * the first change takes `history.pause()` and closing the panel
-    ///   resumes it, so a colour dragged around the wheel is **one** undo
-    ///   entry, exactly as a slider drag is.
+    /// The Solid app's `<input type="color">` opens the OS panel; this build
+    /// replaces that seam with [`crate::ui::ColorPicker`] so every platform
+    /// gets the same picker, parked at the swatch rather than wherever the OS
+    /// left its panel. The undo contract is unchanged: the first change takes
+    /// `history.pause()` and dismissing the popover resumes it, so a whole
+    /// picking session is **one** undo entry, exactly as a slider drag is.
     pub(crate) fn open_color_panel_for(
         &mut self,
         target: ColorTarget,
+        anchor: gpui::Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A second click on the swatch whose popover is already up closes it.
+        if self.sidebar.color_target == Some(target) && self.sidebar.color_picker.is_some() {
+            self.close_color_picker(cx);
+            return;
+        }
+        // A second swatch clicked while a popover is up replaces it; close
+        // the previous bracket first or its pause is never matched.
+        self.end_color_history();
+
         let initial = self.color_for(target).unwrap_or([0, 0, 0]);
-        let initial = [
+        let rgb = [
             initial[0].min(255) as u8,
             initial[1].min(255) as u8,
             initial[2].min(255) as u8,
         ];
-        // A second swatch clicked while the panel is up replaces the task
-        // below; close the previous bracket first or its pause is never
-        // matched.
-        self.end_color_history();
         self.sidebar.color_target = Some(target);
-
-        self.sidebar.color_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let Some(rx) = cx
-                .update(|_, _| crate::platform::open_color_panel(initial))
-                .ok()
-                .flatten()
-            else {
-                this.update(cx, |this, _| this.sidebar.color_target = None).ok();
-                return;
-            };
-
-            loop {
-                // Latest-wins: a drag around the colour wheel produces
-                // hundreds of these and only the newest is worth rendering.
-                let mut latest = None;
-                while let Ok(color) = rx.try_recv() {
-                    latest = Some(color);
-                }
-                if let Some(color) = latest {
-                    let applied = this
-                        .update_in(cx, |this, window, cx| {
-                            if !this.sidebar.color_paused {
-                                this.history.pause();
-                                this.sidebar.color_paused = true;
-                            }
-                            this.set_color(target, [
-                                u16::from(color[0]),
-                                u16::from(color[1]),
-                                u16::from(color[2]),
-                            ], window, cx);
-                            true
-                        })
-                        .unwrap_or(false);
-                    if !applied {
-                        break;
-                    }
-                }
-
-                let open = cx
-                    .update(|_, _| crate::platform::color_panel_is_open())
-                    .unwrap_or(false);
-                if !open {
-                    break;
-                }
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(16))
-                    .await;
-            }
-
-            this.update(cx, |this, cx| {
-                this.end_color_history();
-                this.sidebar.color_target = None;
-                cx.notify();
-            })
-            .ok();
-            cx.update(|_, _| crate::platform::close_color_panel(false)).ok();
-        }));
+        self.sidebar.color_picker = Some(crate::ui::ColorPickerSnapshot::place(
+            anchor,
+            window.viewport_size(),
+            rgb,
+        ));
+        self.sidebar.color_drag = None;
+        self.sync_picker_hex(window, cx);
+        cx.notify();
     }
 
-    /// Close the colour panel's undo bracket, if it is holding one. Every
-    /// exit from the drain loop goes through here, and so does a second panel
-    /// opening on top of the first.
+    /// Dismiss the popover: close the undo bracket and drop its state.
+    pub(crate) fn close_color_picker(&mut self, cx: &mut Context<Self>) {
+        self.end_color_history();
+        self.sidebar.color_target = None;
+        self.sidebar.color_picker = None;
+        self.sidebar.color_drag = None;
+        cx.notify();
+    }
+
+    /// Write the picker's current colour through to the project, bracketing
+    /// the whole popover session as one undo entry.
+    pub(crate) fn apply_picker_color(
+        &mut self,
+        hue: f32,
+        sat: f32,
+        val: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.sidebar.color_target else {
+            return;
+        };
+        if let Some(picker) = self.sidebar.color_picker.as_mut() {
+            picker.hue = hue;
+            picker.sat = sat;
+            picker.val = val;
+        }
+        if !self.sidebar.color_paused {
+            self.history.pause();
+            self.sidebar.color_paused = true;
+        }
+        let rgb = crate::ui::hsv_to_rgb(hue, sat, val);
+        self.set_color(
+            target,
+            [u16::from(rgb[0]), u16::from(rgb[1]), u16::from(rgb[2])],
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// A pointer position on the picker's field or hue rail, from the press
+    /// itself or from the window-wide drag layer.
+    pub(crate) fn picker_pointer(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self.sidebar.color_picker else {
+            return;
+        };
+        match self.sidebar.color_drag {
+            Some(ColorPickerDrag::Field) => {
+                let (sat, val) = crate::ui::sv_from_point(picker.origin, position);
+                self.apply_picker_color(picker.hue, sat, val, window, cx);
+            }
+            Some(ColorPickerDrag::Hue) => {
+                let hue = crate::ui::hue_from_point(picker.origin, position);
+                self.apply_picker_color(hue, picker.sat, picker.val, window, cx);
+            }
+            None => {}
+        }
+    }
+
+    /// Re-derive the popover's hex field from the picker colour -- the same
+    /// `createWritableMemo` contract as `sync_hex_inputs`, and skipped while
+    /// the field is being typed in.
+    pub(crate) fn sync_picker_hex(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(picker) = self.sidebar.color_picker else {
+            return;
+        };
+        let input = self.picker_hex.clone();
+        if input.read(cx).focus_handle().is_focused(window) {
+            return;
+        }
+        let hex = rgb_to_hex({
+            let rgb = picker.rgb();
+            [u16::from(rgb[0]), u16::from(rgb[1]), u16::from(rgb[2])]
+        });
+        if input.read(cx).text() != hex {
+            input.update(cx, |input, cx| input.set_text(hex, cx));
+        }
+    }
+
+    /// Close the colour picker's undo bracket, if it is holding one. Every
+    /// dismissal goes through here, and so does a second popover opening on
+    /// top of the first.
     fn end_color_history(&mut self) {
         if !std::mem::take(&mut self.sidebar.color_paused) {
             return;
@@ -1590,27 +1657,24 @@ impl EditorWindow {
             ColorTarget::CaptionColor => {
                 self.set_caption_setting("caption-color", window, cx, move |s| s.color = hex)
             }
-            ColorTarget::CaptionBackground => self.set_caption_setting(
-                "caption-background-color",
-                window,
-                cx,
-                move |s| s.background_color = hex,
-            ),
-            ColorTarget::CaptionHighlight => self.set_caption_setting(
-                "caption-highlight-color",
-                window,
-                cx,
-                move |s| s.highlight_color = hex,
-            ),
+            ColorTarget::CaptionBackground => {
+                self.set_caption_setting("caption-background-color", window, cx, move |s| {
+                    s.background_color = hex
+                })
+            }
+            ColorTarget::CaptionHighlight => {
+                self.set_caption_setting("caption-highlight-color", window, cx, move |s| {
+                    s.highlight_color = hex
+                })
+            }
             ColorTarget::KeyboardColor => {
                 self.set_keyboard_setting("keyboard-color", window, cx, move |s| s.color = hex)
             }
-            ColorTarget::KeyboardBackground => self.set_keyboard_setting(
-                "keyboard-background-color",
-                window,
-                cx,
-                move |s| s.background_color = hex,
-            ),
+            ColorTarget::KeyboardBackground => {
+                self.set_keyboard_setting("keyboard-background-color", window, cx, move |s| {
+                    s.background_color = hex
+                })
+            }
             ColorTarget::TextColor(index) => {
                 self.edit_text_segment("text-color", index, window, cx, move |segment| {
                     if segment.color == hex {
@@ -1630,31 +1694,69 @@ impl EditorWindow {
 // ---------------------------------------------------------------------------
 
 /// Decode an image for a thumbnail slot, at most `max` pixels on its longest
-/// side, in gpui's BGRA order. The same rule as `library::decode_thumbnail`:
-/// the atlas would otherwise hold a multi-megapixel original per tile.
-fn decode_scaled(path: &Path, max: u32) -> Option<Arc<RenderImage>> {
+/// side. The same rule as `library::decode_thumbnail`: the atlas would
+/// otherwise hold a multi-megapixel original per tile.
+fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
     let bytes = std::fs::read(path).ok()?;
     let format = image::guess_format(&bytes).ok()?;
     let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
     let (width, height) = (decoded.width().max(1), decoded.height().max(1));
     let scale = (max as f32 / width.max(height) as f32).min(1.);
-    let mut rgba = if scale < 1. {
+    let target_width = ((width as f32 * scale).round() as u32).max(1);
+    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    // Same split as `library::decode_thumbnail`: box sampling for the big
+    // ratios (a 4000px wallpaper down to a 128px tile), Triangle where the
+    // sizes are close enough that box would alias.
+    Some(if scale <= 0.5 {
+        decoded
+            .thumbnail_exact(target_width, target_height)
+            .into_rgba8()
+    } else if scale < 1. {
         decoded
             .resize_exact(
-                ((width as f32 * scale).round() as u32).max(1),
-                ((height as f32 * scale).round() as u32).max(1),
+                target_width,
+                target_height,
                 image::imageops::FilterType::Triangle,
             )
             .into_rgba8()
     } else {
         decoded.into_rgba8()
-    };
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    })
+}
+
+/// [`decode_scaled_rgba`] in gpui's BGRA order.
+fn decode_scaled(path: &Path, max: u32) -> Option<Arc<RenderImage>> {
+    decode_scaled_rgba(path, max).map(library::rgba_to_render_image)
+}
+
+/// The `size-16` wallpaper tile (`:2007`), at 2x.
+const WALLPAPER_TILE_MAX: u32 = 128;
+
+/// One wallpaper tile, through the persistent cache. The bundled assets are
+/// immutable in practice, so after the first-ever run every theme switch is
+/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the mtime
+/// in the key still invalidates if an app update ever replaces them.
+fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
+    let path = wallpaper_path(id)?;
+    // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
+    // stays a file name rather than a subdirectory.
+    let slot = library::CacheSlot::keyed(
+        &path,
+        format!(
+            "wallpaper-{}-{WALLPAPER_TILE_MAX}",
+            id.replace(['/', '\\'], "-")
+        ),
+    );
+    if let Some(slot) = &slot
+        && let Some(image) = slot.load()
+    {
+        return Some(image);
     }
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(rgba)
-    ])))
+    let rgba = decode_scaled_rgba(&path, WALLPAPER_TILE_MAX)?;
+    if let Some(slot) = &slot {
+        slot.store(&rgba);
+    }
+    Some(library::rgba_to_render_image(rgba))
 }
 
 /// `write_desktop_background_snapshot` (`recording.rs:437-522`): `sips` first,
@@ -1814,7 +1916,10 @@ impl EditorWindow {
 
     /// Decode the current theme's thumbnails, once. Runs on the background
     /// executor and lands through `notify`, never on the render path -- 18
-    /// multi-megapixel JPEGs would otherwise be decoded inside a paint.
+    /// multi-megapixel JPEGs would otherwise be decoded inside a paint. The
+    /// decodes fan out through `library::spawn_decode_pool` (cache hits are
+    /// near-free, and a cold theme batch takes one image's latency instead of
+    /// eighteen), landing in batches of whatever has finished per notify.
     fn ensure_wallpapers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0;
         let wanted: Vec<&'static str> = wallpapers_for_theme(theme)
@@ -1825,18 +1930,18 @@ impl EditorWindow {
             return;
         }
         self.sidebar.wallpaper_task = Some(cx.spawn_in(window, async move |this, cx| {
-            for id in wanted {
-                let Some(path) = wallpaper_path(id) else {
-                    continue;
-                };
-                let decoded = cx
-                    .background_executor()
-                    .spawn(async move { decode_scaled(&path, 128) })
-                    .await;
-                let Some(image) = decoded else { continue };
+            let (_decodes, results) =
+                library::spawn_decode_pool(cx.background_executor(), wanted, |id| {
+                    decode_wallpaper_thumbnail(id).map(|image| (id, image))
+                });
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update(cx, |this, cx| {
-                        this.sidebar.wallpapers.insert(id, image);
+                        for (id, image) in batch {
+                            this.sidebar.wallpapers.insert(id, image);
+                        }
                         cx.notify();
                     })
                     .is_err()
@@ -2054,8 +2159,8 @@ impl EditorWindow {
                                 .file_name()
                                 .and_then(|name| name.to_str())
                                 .unwrap_or("image");
-                            let destination = crate::store::app_data_dir()
-                                .join(format!("bg-{timestamp}-{name}"));
+                            let destination =
+                                crate::store::app_data_dir().join(format!("bg-{timestamp}-{name}"));
                             std::fs::copy(&source, &destination)
                                 .map_err(|err| format!("Failed to save image: {err}"))?;
                             Ok(destination)
@@ -2113,11 +2218,7 @@ impl EditorWindow {
                         this.sidebar.desktop_background = Some(path.clone());
                         this.sidebar.source_tab = SourceTab::Desktop;
                         this.ensure_background_presentation(from_none);
-                        this.set_wallpaper_source(
-                            path.to_string_lossy().into_owned(),
-                            window,
-                            cx,
-                        );
+                        this.set_wallpaper_source(path.to_string_lossy().into_owned(), window, cx);
                     }
                     Err(error) => {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
@@ -2592,9 +2693,7 @@ impl EditorWindow {
                                     .hover(|this| this.border_color(Hsla::from(theme.gray_7)))
                             })
                             .children(preview.map(|image| {
-                                img(image)
-                                    .size_full()
-                                    .object_fit(gpui::ObjectFit::Cover)
+                                img(image).size_full().object_fit(gpui::ObjectFit::Cover)
                             }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let path = path.to_string_lossy().into_owned();
@@ -2609,7 +2708,11 @@ impl EditorWindow {
                             ui::EditorButton::plain(&theme, "reimport-desktop")
                                 .left_icon("icons/monitor-outline.svg")
                                 .icon_size(px(16.))
-                                .label(if importing { "Importing..." } else { "Re-import" })
+                                .label(if importing {
+                                    "Importing..."
+                                } else {
+                                    "Re-import"
+                                })
                                 .disabled(importing)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.import_desktop_background(window, cx);
@@ -2654,40 +2757,43 @@ impl EditorWindow {
                     .mb(px(12.))
                     .text_size(px(12.))
                     .overflow_x_scroll()
-                    .children(BACKGROUND_THEMES.iter().enumerate().map(
-                        |(index, (_, label))| {
-                            let selected = index == selected_theme;
-                            div()
-                                .id(SharedString::from(format!("wallpaper-theme-{index}")))
-                                .flex()
-                                .flex_1()
-                                .justify_center()
-                                .items_center()
-                                .px(px(16.))
-                                .py(px(8.))
-                                .rounded(px(8.))
-                                .border_1()
-                                .when(selected, |this| {
-                                    this.bg(Hsla::from(theme.gray_3))
-                                        .border_color(Hsla::from(theme.gray_3))
-                                        .text_color(Hsla::from(theme.gray_12))
-                                })
-                                .when(!selected, |this| {
-                                    this.border_color(gpui::transparent_black())
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .cursor_pointer()
-                                        .hover(|this| {
-                                            this.border_color(Hsla::from(theme.gray_7))
-                                        })
-                                })
-                                .child(*label)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.sidebar.wallpaper_theme = index;
-                                    this.ensure_wallpapers(window, cx);
-                                    cx.notify();
-                                }))
-                        },
-                    )),
+                    .children(
+                        BACKGROUND_THEMES
+                            .iter()
+                            .enumerate()
+                            .map(|(index, (_, label))| {
+                                let selected = index == selected_theme;
+                                div()
+                                    .id(SharedString::from(format!("wallpaper-theme-{index}")))
+                                    .flex()
+                                    .flex_1()
+                                    .justify_center()
+                                    .items_center()
+                                    .px(px(16.))
+                                    .py(px(8.))
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .when(selected, |this| {
+                                        this.bg(Hsla::from(theme.gray_3))
+                                            .border_color(Hsla::from(theme.gray_3))
+                                            .text_color(Hsla::from(theme.gray_12))
+                                    })
+                                    .when(!selected, |this| {
+                                        this.border_color(gpui::transparent_black())
+                                            .text_color(Hsla::from(theme.gray_11))
+                                            .cursor_pointer()
+                                            .hover(|this| {
+                                                this.border_color(Hsla::from(theme.gray_7))
+                                            })
+                                    })
+                                    .child(*label)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.sidebar.wallpaper_theme = index;
+                                        this.ensure_wallpapers(window, cx);
+                                        cx.notify();
+                                    }))
+                            }),
+                    ),
             )
             .child(
                 // `grid grid-cols-7 gap-2 h-auto`, each item `aspect-square
@@ -2849,12 +2955,8 @@ impl EditorWindow {
             ))
             .child(
                 // The 17 presets: `flex flex-wrap gap-2`, `size-8 rounded-lg`.
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(8.))
-                    .children(BACKGROUND_COLORS.iter().enumerate().map(|(index, hex)| {
+                div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+                    BACKGROUND_COLORS.iter().enumerate().map(|(index, hex)| {
                         let rgba = hex_to_rgb(hex).unwrap_or([0, 0, 0, 255]);
                         let color: Color =
                             [u16::from(rgba[0]), u16::from(rgba[1]), u16::from(rgba[2])];
@@ -2889,7 +2991,8 @@ impl EditorWindow {
                                     cx,
                                 );
                             }))
-                    })),
+                    }),
+                ),
             )
     }
 
@@ -2932,9 +3035,11 @@ impl EditorWindow {
                     .when(open, |this| {
                         this.border_2().border_color(Hsla::from(theme.blue_9))
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_color_panel_for(target, window, cx);
-                    })),
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            this.open_color_panel_for(target, event.position(), window, cx);
+                        }),
+                    ),
             )
             .children(input.map(|input| {
                 // `w-[4.60rem] p-1.5 text-[13px] border rounded-lg bg-gray-1`.
@@ -3018,8 +3123,20 @@ impl EditorWindow {
                     .flex_row()
                     .gap(px(12.))
                     .items_end()
-                    .child(self.render_gradient_stop("gradient-from", "From", ColorTarget::GradientFrom, from, cx))
-                    .child(self.render_gradient_stop("gradient-to", "To", ColorTarget::GradientTo, to, cx)),
+                    .child(self.render_gradient_stop(
+                        "gradient-from",
+                        "From",
+                        ColorTarget::GradientFrom,
+                        from,
+                        cx,
+                    ))
+                    .child(self.render_gradient_stop(
+                        "gradient-to",
+                        "To",
+                        ColorTarget::GradientTo,
+                        to,
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -3029,45 +3146,43 @@ impl EditorWindow {
             // Angle: the slider plus the redundant `w-12 text-right
             // tabular-nums` readout the source draws beside it.
             .child(
-                ui::Subfield::plain(&theme, "Angle")
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(12.))
-                            .child(self.slider_flex(SliderKey::Bg(BgSlider::GradientAngle), "deg", cx))
-                            .child(
-                                div()
-                                    .w(px(48.))
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child(format!("{}\u{b0}", angle.round() as i32)),
-                            ),
-                    ),
+                ui::Subfield::plain(&theme, "Angle").gap(px(16.)).child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(self.slider_flex(SliderKey::Bg(BgSlider::GradientAngle), "deg", cx))
+                        .child(
+                            div()
+                                .w(px(48.))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(format!("{}\u{b0}", angle.round() as i32)),
+                        ),
+                ),
             )
             .child(
                 div()
                     .my(px(4.))
                     .child(dashed_divider(Hsla::from(theme.gray_5))),
             )
-            .child(
-                ui::Subfield::plain(&theme, "Noise").child(
-                    div()
-                        .w(px(120.))
-                        .child(self.slider(SliderKey::Bg(BgSlider::GradientNoise), "%", cx)),
-                ),
-            )
+            .child(ui::Subfield::plain(&theme, "Noise").child(
+                div().w(px(120.)).child(self.slider(
+                    SliderKey::Bg(BgSlider::GradientNoise),
+                    "%",
+                    cx,
+                )),
+            ))
             // Grain Scale appears only while noise is on (`:204-221`).
             .children((noise > 0.).then(|| {
                 ui::Subfield::plain(&theme, "Grain Scale")
-                    .child(
-                        div()
-                            .w(px(120.))
-                            .child(self.slider(SliderKey::Bg(BgSlider::GradientGrain), "%", cx)),
-                    )
+                    .child(div().w(px(120.)).child(self.slider(
+                        SliderKey::Bg(BgSlider::GradientGrain),
+                        "%",
+                        cx,
+                    )))
                     .into_any_element()
             }))
             .child(
@@ -3349,11 +3464,8 @@ impl EditorWindow {
                                 this.edit_background(
                                     "notch-enabled",
                                     |project| {
-                                        let mut notch = project
-                                            .background
-                                            .notch
-                                            .clone()
-                                            .unwrap_or(UNPLACED_NOTCH);
+                                        let mut notch =
+                                            project.background.notch.unwrap_or(UNPLACED_NOTCH);
                                         notch.enabled = next;
                                         project.background.notch = Some(notch);
                                         true
@@ -3451,18 +3563,21 @@ impl EditorWindow {
                             .flex_col()
                             .gap(px(24.))
                             .mt(px(16.))
-                            .child(
-                                ui::Field::plain(&theme, "Size")
-                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowSize), "", cx)),
-                            )
-                            .child(
-                                ui::Field::plain(&theme, "Opacity")
-                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowOpacity), "", cx)),
-                            )
-                            .child(
-                                ui::Field::plain(&theme, "Blur")
-                                    .child(self.slider(SliderKey::Bg(BgSlider::ShadowBlur), "", cx)),
-                            )
+                            .child(ui::Field::plain(&theme, "Size").child(self.slider(
+                                SliderKey::Bg(BgSlider::ShadowSize),
+                                "",
+                                cx,
+                            )))
+                            .child(ui::Field::plain(&theme, "Opacity").child(self.slider(
+                                SliderKey::Bg(BgSlider::ShadowOpacity),
+                                "",
+                                cx,
+                            )))
+                            .child(ui::Field::plain(&theme, "Blur").child(self.slider(
+                                SliderKey::Bg(BgSlider::ShadowBlur),
+                                "",
+                                cx,
+                            )))
                             .into_any_element(),
                     )),
             )
@@ -3585,7 +3700,11 @@ impl EditorWindow {
                 .row_height(px(32.))
                 // `h-[0.3rem] bg-gray-4 rounded-full`
                 .track(px(4.8), Hsla::from(theme.gray_4))
-                .fill(Hsla::from(if disabled { theme.gray_8 } else { theme.blue_9 }))
+                .fill(Hsla::from(if disabled {
+                    theme.gray_8
+                } else {
+                    theme.blue_9
+                }))
                 // `bg-gray-1 dark:bg-gray-12 border border-gray-6 size-4`
                 .thumb(
                     px(16.),
@@ -3684,6 +3803,72 @@ impl DashedBorder for gpui::Div {
 impl DashedBorder for gpui::Stateful<gpui::Div> {
     fn border_dashed_1(self, color: Hsla) -> Self {
         self.border_1().border_color(color)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verification hooks
+// ---------------------------------------------------------------------------
+
+impl EditorWindow {
+    /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]`, through the rail's own handler
+    /// so the tab switch is the one a click makes -- selection cleared, menu
+    /// dismissed, body back to the top -- with the scroll applied afterwards.
+    pub(crate) fn auto_select_sidebar_tab(
+        &mut self,
+        name: &str,
+        scroll: Option<f32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = SidebarTab::ALL
+            .iter()
+            .position(|tab| tab.label().eq_ignore_ascii_case(name))
+        else {
+            tracing::warn!(name, "unknown sidebar tab");
+            return;
+        };
+        self.select_sidebar_tab(index, window, cx);
+        if let Some(offset) = scroll {
+            self.sidebar
+                .scroll
+                .set_offset(gpui::point(px(0.), px(-offset)));
+        }
+        tracing::info!(tab = name, scroll = ?scroll, "auto sidebar tab");
+        cx.notify();
+        window.refresh();
+    }
+
+    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`, through `set_selection` so the
+    /// panel opens exactly as a timeline click opens it.
+    pub(crate) fn auto_select_segments(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let Some((track, indices)) = spec.split_once(':') else {
+            tracing::warn!(spec, "auto select needs <track>:<index>");
+            return;
+        };
+        let track = match track.to_ascii_lowercase().as_str() {
+            "zoom" => TrackKind::Zoom,
+            "text" => TrackKind::Text,
+            "caption" => TrackKind::Caption,
+            "mask" => TrackKind::Mask,
+            "audio" => TrackKind::Audio,
+            "keyboard" => TrackKind::Keyboard,
+            "scene" => TrackKind::Scene,
+            "3d" | "three_d" => TrackKind::ThreeD,
+            other => {
+                tracing::warn!(track = other, "unknown track");
+                return;
+            }
+        };
+        let indices: Vec<usize> = indices
+            .split(',')
+            .filter_map(|value| value.trim().parse().ok())
+            .collect();
+        if indices.is_empty() {
+            return;
+        }
+        tracing::info!(?track, ?indices, "auto select segments");
+        self.set_selection(Some(crate::editor_edits::Selection { track, indices }), cx);
     }
 }
 
@@ -3826,74 +4011,5 @@ mod tests {
         let ring = preview_border_color([255, 255, 255]);
         let rgba = gpui::Rgba::from(ring);
         assert_eq!((rgba.r * 255.).round() as u8, 209);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Verification hooks
-// ---------------------------------------------------------------------------
-
-impl EditorWindow {
-    /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]`, through the rail's own handler
-    /// so the tab switch is the one a click makes -- selection cleared, menu
-    /// dismissed, body back to the top -- with the scroll applied afterwards.
-    pub(crate) fn auto_select_sidebar_tab(
-        &mut self,
-        name: &str,
-        scroll: Option<f32>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = SidebarTab::ALL
-            .iter()
-            .position(|tab| tab.label().eq_ignore_ascii_case(name))
-        else {
-            tracing::warn!(name, "unknown sidebar tab");
-            return;
-        };
-        self.select_sidebar_tab(index, window, cx);
-        if let Some(offset) = scroll {
-            self.sidebar
-                .scroll
-                .set_offset(gpui::point(px(0.), px(-offset)));
-        }
-        tracing::info!(tab = name, scroll = ?scroll, "auto sidebar tab");
-        cx.notify();
-        window.refresh();
-    }
-
-    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`, through `set_selection` so the
-    /// panel opens exactly as a timeline click opens it.
-    pub(crate) fn auto_select_segments(&mut self, spec: &str, cx: &mut Context<Self>) {
-        let Some((track, indices)) = spec.split_once(':') else {
-            tracing::warn!(spec, "auto select needs <track>:<index>");
-            return;
-        };
-        let track = match track.to_ascii_lowercase().as_str() {
-            "zoom" => TrackKind::Zoom,
-            "text" => TrackKind::Text,
-            "caption" => TrackKind::Caption,
-            "mask" => TrackKind::Mask,
-            "audio" => TrackKind::Audio,
-            "keyboard" => TrackKind::Keyboard,
-            "scene" => TrackKind::Scene,
-            "3d" | "three_d" => TrackKind::ThreeD,
-            other => {
-                tracing::warn!(track = other, "unknown track");
-                return;
-            }
-        };
-        let indices: Vec<usize> = indices
-            .split(',')
-            .filter_map(|value| value.trim().parse().ok())
-            .collect();
-        if indices.is_empty() {
-            return;
-        }
-        tracing::info!(?track, ?indices, "auto select segments");
-        self.set_selection(
-            Some(crate::editor_edits::Selection { track, indices }),
-            cx,
-        );
     }
 }
