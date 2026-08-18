@@ -125,6 +125,24 @@ impl EditorInstance {
         .await
     }
 
+    pub async fn new_with_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            Arc::new(crate::AudioOutput::new()),
+        )
+        .await
+    }
+
     /// Like [`EditorInstance::new`] but with a caller-provided audio output,
     /// letting harnesses substitute a headless sink while everything else
     /// (decoders, renderer, playback) runs the production path.
@@ -133,6 +151,25 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
+        audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            editor::EditorFrameFormat::Rgba,
+            audio_output,
+        )
+        .await
+    }
+
+    pub async fn new_with_audio_output_and_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
         audio_output: Arc<crate::AudioOutput>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
@@ -337,10 +374,11 @@ impl EditorInstance {
             .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
-        let renderer = Arc::new(editor::Renderer::spawn(
+        let renderer = Arc::new(editor::Renderer::spawn_with_format(
             render_constants.clone(),
             frame_cb,
             layers_rx,
+            frame_format,
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);

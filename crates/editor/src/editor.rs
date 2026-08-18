@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cap_project::{ClipTransitionType, CursorEvents, ProjectConfiguration};
+#[cfg(target_os = "macos")]
+use cap_rendering::SurfaceFrame;
 use cap_rendering::{
     DecodedSegmentFrames, FrameLayout, FrameRenderStageTimings, FrameRenderer, Nv12RenderedFrame,
     ProjectUniforms, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
@@ -45,6 +47,16 @@ pub struct RendererTransitionInput {
 pub enum EditorFrameOutput {
     Rgba(RenderedFrame),
     Nv12(Nv12RenderedFrame),
+    #[cfg(target_os = "macos")]
+    Surface(SurfaceFrame),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorFrameFormat {
+    #[default]
+    Rgba,
+    #[cfg(target_os = "macos")]
+    BgraSurface,
 }
 
 pub type RendererLayersReceiver = oneshot::Receiver<RendererLayers>;
@@ -57,6 +69,7 @@ pub struct Renderer {
     render_constants: Arc<RenderVideoConstants>,
     layers_rx: RendererLayersReceiver,
     telemetry: Option<PlaybackTelemetry>,
+    output_format: EditorFrameFormat,
 }
 
 pub struct RendererHandle {
@@ -103,13 +116,50 @@ impl Renderer {
         frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
     ) -> Result<RendererHandle, String> {
-        Self::spawn_with_telemetry(render_constants, frame_cb, layers_rx, None)
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            EditorFrameFormat::Rgba,
+            None,
+        )
+    }
+
+    pub fn spawn_with_format(
+        render_constants: Arc<RenderVideoConstants>,
+        frame_cb: EditorFrameCallback,
+        layers_rx: RendererLayersReceiver,
+        output_format: EditorFrameFormat,
+    ) -> Result<RendererHandle, String> {
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            output_format,
+            None,
+        )
     }
 
     pub fn spawn_with_telemetry(
         render_constants: Arc<RenderVideoConstants>,
         frame_cb: EditorFrameCallback,
         layers_rx: RendererLayersReceiver,
+        telemetry: Option<PlaybackTelemetry>,
+    ) -> Result<RendererHandle, String> {
+        Self::spawn_with_format_and_telemetry(
+            render_constants,
+            frame_cb,
+            layers_rx,
+            EditorFrameFormat::Rgba,
+            telemetry,
+        )
+    }
+
+    pub fn spawn_with_format_and_telemetry(
+        render_constants: Arc<RenderVideoConstants>,
+        frame_cb: EditorFrameCallback,
+        layers_rx: RendererLayersReceiver,
+        output_format: EditorFrameFormat,
         telemetry: Option<PlaybackTelemetry>,
     ) -> Result<RendererHandle, String> {
         let (tx, rx) = mpsc::channel(64);
@@ -120,6 +170,7 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry: telemetry.clone(),
+            output_format,
         };
 
         tokio::spawn(this.run());
@@ -134,6 +185,7 @@ impl Renderer {
             render_constants,
             layers_rx,
             telemetry,
+            output_format,
         } = self;
 
         let mut frame_renderer = FrameRenderer::new(&render_constants);
@@ -326,24 +378,32 @@ impl Renderer {
             let render_start = Instant::now();
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
-            let render_result = match current.input {
-                PendingRenderInput::Single(input) => {
-                    frame_renderer
-                        .render_immediate_with_timings(
-                            input.segment_frames,
-                            input.uniforms,
-                            &input.cursor,
-                            true,
-                            &mut layers,
+            let render_result = match (output_format, current.input) {
+                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => frame_renderer
+                    .render_immediate_with_timings(
+                        input.segment_frames,
+                        input.uniforms,
+                        &input.cursor,
+                        true,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|(frame, timings)| {
+                        (
+                            EditorFrameOutput::Rgba(frame),
+                            PlaybackRenderOutputFormat::Rgba,
+                            timings,
                         )
-                        .await
-                }
-                PendingRenderInput::Transition {
-                    outgoing,
-                    incoming,
-                    kind,
-                    progress,
-                } => frame_renderer
+                    }),
+                (
+                    EditorFrameFormat::Rgba,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                    },
+                ) => frame_renderer
                     .render_transition_immediate(
                         TransitionRenderInput {
                             segment_frames: outgoing.segment_frames,
@@ -362,15 +422,79 @@ impl Renderer {
                         &mut layers,
                     )
                     .await
-                    .map(|frame| (frame, FrameRenderStageTimings::default())),
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Rgba(frame),
+                            PlaybackRenderOutputFormat::Rgba,
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
+                #[cfg(target_os = "macos")]
+                (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
+                    frame_renderer
+                        .render_immediate_bgra_surface(
+                            input.segment_frames,
+                            input.uniforms,
+                            &input.cursor,
+                            true,
+                            &mut layers,
+                        )
+                        .await
+                        .map(|frame| {
+                            (
+                                EditorFrameOutput::Surface(frame),
+                                PlaybackRenderOutputFormat::Bgra,
+                                FrameRenderStageTimings::default(),
+                            )
+                        })
+                }
+                #[cfg(target_os = "macos")]
+                (
+                    EditorFrameFormat::BgraSurface,
+                    PendingRenderInput::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                    },
+                ) => frame_renderer
+                    .render_transition_bgra_surface(
+                        TransitionRenderInput {
+                            segment_frames: outgoing.segment_frames,
+                            uniforms: outgoing.uniforms,
+                            cursor: &outgoing.cursor,
+                            render_display: true,
+                        },
+                        TransitionRenderInput {
+                            segment_frames: incoming.segment_frames,
+                            uniforms: incoming.uniforms,
+                            cursor: &incoming.cursor,
+                            render_display: true,
+                        },
+                        kind,
+                        progress,
+                        &mut layers,
+                    )
+                    .await
+                    .map(|frame| {
+                        (
+                            EditorFrameOutput::Surface(frame),
+                            PlaybackRenderOutputFormat::Bgra,
+                            FrameRenderStageTimings::default(),
+                        )
+                    }),
             };
             match render_result {
-                Ok((frame, render_stage_timings)) => {
+                Ok((frame, output_format, render_stage_timings)) => {
                     let render_duration = render_start.elapsed();
-                    let frame_number = frame.frame_number;
-                    let output_format = PlaybackRenderOutputFormat::Rgba;
+                    let frame_number = match &frame {
+                        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                        EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                        #[cfg(target_os = "macos")]
+                        EditorFrameOutput::Surface(frame) => frame.frame_number,
+                    };
                     let callback_start = Instant::now();
-                    (frame_cb)(EditorFrameOutput::Rgba(frame), frame_layout);
+                    (frame_cb)(frame, frame_layout);
                     let callback_duration = callback_start.elapsed();
                     if let Some(telemetry) = &telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::RendererFrame {
