@@ -84,12 +84,63 @@ impl Default for CameraWindowState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PersistedState {
     pub camera_window: Option<CameraWindowState>,
+    #[serde(default)]
+    pub export: Option<ExportPrefs>,
+}
+
+/// `export_settings` in the Tauri editor (`ExportPage.tsx` localStorage).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportPrefs {
+    pub format: String,
+    pub fps: u32,
+    pub export_to: String,
+    pub resolution: String,
+    pub compression: String,
+    #[serde(default)]
+    pub optimize_filesize: bool,
+    #[serde(default)]
+    pub cursor_only: bool,
+    pub custom_bpp: Option<f32>,
+    #[serde(default)]
+    pub force_ffmpeg_decoder: bool,
+    #[serde(default)]
+    pub advanced_open: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
+///
+/// Same identifier the Tauri app uses (`so.cap.desktop`), resolved the way
+/// each OS's app-data convention spells it so a recording made on Windows or
+/// Linux lands in the folder both apps already agree on.
 pub fn app_data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-        .join("Library/Application Support/so.cap.desktop")
+    if let Ok(dir) = std::env::var("CAP_GPUI_APP_DATA_DIR")
+        && !dir.trim().is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+            .join("Library/Application Support/so.cap.desktop")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("so.cap.desktop")
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| ".".into()))
+                    .join(".local/share")
+            });
+        base.join("so.cap.desktop")
+    }
 }
 
 fn state_path() -> PathBuf {
@@ -427,6 +478,25 @@ settings_enum! {
     default = Stable
 }
 
+settings_enum! {
+    EditorPreviewQuality {
+        Quarter = "quarter", "Quarter";
+        Half = "half", "Half";
+        Full = "full", "Full";
+    }
+    default = Half
+}
+
+impl EditorPreviewQuality {
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Full => 1.0,
+            Self::Half => 0.65,
+            Self::Quarter => 0.25,
+        }
+    }
+}
+
 /// One entry of `general_settings.excludedWindows` (`WindowExclusion`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WindowExclusion {
@@ -560,6 +630,12 @@ pub struct GeneralSettings {
     pub update_channel: UpdateChannel,
     pub server_url: String,
     pub enable_telemetry: bool,
+    pub editor_preview_quality: EditorPreviewQuality,
+    /// The Experimental page's two toggles. Both default false the way the
+    /// page shows them (`!!settings.enableNativeCameraPreview` /
+    /// `!!settings.outOfProcessMuxer` in experimental.tsx).
+    pub enable_native_camera_preview: bool,
+    pub out_of_process_muxer: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -593,11 +669,41 @@ pub fn recording_mode_slug() -> Option<String> {
 /// settings maps and the rest byte-identical. Strictly the safer half of the
 /// same write, and the two apps read the same key.
 pub fn set_recording_mode_slug(slug: &str) -> bool {
+    set_store_setting(RECORDING_SETTINGS, "mode", Value::String(slug.to_string()))
+}
+
+pub fn has_completed_startup() -> bool {
+    store_section(GENERAL_SETTINGS)
+        .get("hasCompletedStartup")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_has_completed_startup(value: bool) -> bool {
+    set_store_setting(GENERAL_SETTINGS, "hasCompletedStartup", Value::Bool(value))
+}
+
+pub fn has_completed_onboarding() -> bool {
+    store_section(GENERAL_SETTINGS)
+        .get("hasCompletedOnboarding")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_has_completed_onboarding(value: bool) -> bool {
     set_store_setting(
-        RECORDING_SETTINGS,
-        "mode",
-        Value::String(slug.to_string()),
+        GENERAL_SETTINGS,
+        "hasCompletedOnboarding",
+        Value::Bool(value),
     )
+}
+
+/// `should_show_onboarding` (`lib.rs:463-477`): first-run flags or missing
+/// macOS screen-recording + accessibility.
+pub fn should_show_onboarding() -> bool {
+    !has_completed_startup()
+        || !has_completed_onboarding()
+        || !crate::permissions::necessary_granted()
 }
 
 impl Default for GeneralSettings {
@@ -661,6 +767,9 @@ impl GeneralSettings {
             update_channel: enum_at(general, "updateChannel"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
+            editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
+            out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",
@@ -757,6 +866,484 @@ impl Default for TeleprompterState {
     }
 }
 
+// -- The hotkeys section ------------------------------------------------------
+
+/// `hotkeysStore`'s key: `declareStore<HotkeysStore>("hotkeys")` in
+/// `apps/desktop/src/store.ts`. The section is `{ "hotkeys": { action: Hotkey } }`.
+pub const HOTKEYS: &str = "hotkeys";
+
+/// `Hotkey` (`src-tauri/src/hotkeys.rs:22-29`). `code` is a W3C
+/// `KeyboardEvent.code` string, which is how `global_hotkey::Code` serializes
+/// and what hotkeys.tsx captures from the DOM event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hotkey {
+    pub code: String,
+    pub meta: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+/// The raw `hotkeys` map, kept as JSON so bindings for actions this build does
+/// not know about (a newer Tauri's `HotkeyAction`) survive a rewrite.
+pub fn hotkeys_raw() -> Map<String, Value> {
+    store_section(HOTKEYS)
+        .remove("hotkeys")
+        .and_then(|value| match value {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// `hotkeysStore.set({ hotkeys })`: replace the map, leave the rest of the
+/// section (there is none today) alone.
+pub fn set_hotkeys_raw(map: &Map<String, Value>) -> bool {
+    set_store_setting(HOTKEYS, "hotkeys", Value::Object(map.clone()))
+}
+
+pub fn hotkey_from_value(value: &Value) -> Option<Hotkey> {
+    serde_json::from_value(value.clone()).ok()
+}
+
+// -- Transcription hints --------------------------------------------------------
+
+/// `DEFAULT_TRANSCRIPTION_HINTS` (`apps/desktop/src/utils/general-settings.ts`).
+pub const DEFAULT_TRANSCRIPTION_HINTS: &[&str] =
+    &["Cap", "TypeScript", "My Brand Name", "mywebsite.com"];
+
+/// `normalizeTranscriptionHints`: strip NULs, trim, drop empties and
+/// duplicates, first occurrence wins.
+pub fn normalize_transcription_hints<I>(hints: I) -> Vec<String>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let mut normalized: Vec<String> = Vec::new();
+    for hint in hints {
+        let value = hint.as_ref().replace('\0', "");
+        let value = value.trim();
+        if value.is_empty() || normalized.iter().any(|existing| existing == value) {
+            continue;
+        }
+        normalized.push(value.to_string());
+    }
+    normalized
+}
+
+/// `deriveGeneralSettings(store).transcriptionHints ?? []`: the stored array
+/// as-is when the key exists (normalisation happens on write, not read), the
+/// four defaults when it does not.
+pub fn transcription_hints() -> Vec<String> {
+    match store_section(GENERAL_SETTINGS).get("transcriptionHints") {
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(_) => Vec::new(),
+        None => DEFAULT_TRANSCRIPTION_HINTS
+            .iter()
+            .map(|hint| (*hint).to_string())
+            .collect(),
+    }
+}
+
+// -- The auth section -----------------------------------------------------------
+
+/// What the settings pages need from `AuthStore` (`src-tauri/src/auth.rs`):
+/// the bearer token `protectedHeaders()` sends, and `plan.upgraded`.
+#[derive(Debug, Clone, Default)]
+pub struct AuthSnapshot {
+    pub token: Option<String>,
+    pub plan_upgraded: bool,
+}
+
+impl AuthSnapshot {
+    pub fn signed_in(&self) -> bool {
+        self.token.is_some()
+    }
+}
+
+/// `maybeProtectedHeaders` (`utils/web-api.ts:64-75`): `secret.api_key` wins
+/// over `secret.token`, and `plan.upgraded` is the Pro gate.
+pub fn auth_snapshot() -> AuthSnapshot {
+    let auth = store_section("auth");
+    let token = auth
+        .get("secret")
+        .and_then(Value::as_object)
+        .and_then(|secret| {
+            secret
+                .get("api_key")
+                .or_else(|| secret.get("token"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string);
+    let plan_upgraded = auth
+        .get("plan")
+        .and_then(|plan| plan.get("upgraded"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    AuthSnapshot {
+        token,
+        plan_upgraded,
+    }
+}
+
+// -- The commercial license -------------------------------------------------------
+
+/// `CommercialLicense` (`src-tauri/src/general_settings.rs:301-308`), stored
+/// at `general_settings.commercialLicense`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommercialLicense {
+    pub license_key: String,
+    pub expiry_date: Option<f64>,
+    pub refresh: f64,
+    pub activated_on: f64,
+}
+
+pub fn commercial_license() -> Option<CommercialLicense> {
+    store_section(GENERAL_SETTINGS)
+        .get("commercialLicense")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+/// license.tsx deactivates by writing `commercialLicense: undefined`, which
+/// JSON.stringify drops; `null` reads back the same on both sides
+/// (`Option<CommercialLicense>` and the page's falsiness check).
+pub fn set_commercial_license(license: Option<&CommercialLicense>) -> bool {
+    let value = match license {
+        Some(license) => serde_json::to_value(license).unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+    set_store_setting(GENERAL_SETTINGS, "commercialLicense", value)
+}
+
+/// `general_settings.instanceId` -- `#[serde(default = "uuid::Uuid::new_v4")]`
+/// over there, so a store the Tauri app has saved always carries one. When
+/// only this app has ever run, one is minted and persisted the same way the
+/// Tauri default would be on its next save.
+pub fn instance_id_or_create() -> Option<String> {
+    if let Some(id) = opt_string_at(&store_section(GENERAL_SETTINGS), "instanceId") {
+        return Some(id);
+    }
+    let id = new_uuid_v4();
+    set_store_setting(GENERAL_SETTINGS, "instanceId", Value::String(id.clone())).then_some(id)
+}
+
+/// A v4 UUID from std's own entropy (`RandomState` is randomly seeded per
+/// thread) -- no `uuid`/`rand` dependency for two identifiers a year.
+pub fn new_uuid_v4() -> String {
+    use std::hash::{BuildHasher, Hasher};
+
+    let word = |salt: u64| {
+        let mut hasher = std::hash::RandomState::new().build_hasher();
+        hasher.write_u64(salt);
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0),
+        );
+        hasher.finish()
+    };
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&word(0x9e37_79b9).to_le_bytes());
+    bytes[8..].copy_from_slice(&word(0x85eb_ca6b).to_le_bytes());
+    // Version 4, variant 10xx.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
+    )
+}
+
+// -- The automations section --------------------------------------------------------
+
+/// The store key: `automationsStore` in `store.ts`, written wholesale by
+/// `set_automations` (`src-tauri/src/automation.rs:834-837`).
+pub const AUTOMATIONS: &str = "automations";
+
+/// The model, serde-identical to `crates/automation/src/types.rs` (which this
+/// standalone workspace cannot depend on). Every attribute below is copied
+/// from there so the JSON both apps exchange stays byte-compatible.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationsStore {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub rules: Vec<AutomationRule>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationRule {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub trigger: Trigger,
+    #[serde(default)]
+    pub match_mode: MatchMode,
+    #[serde(default)]
+    pub conditions: Vec<Condition>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MatchMode {
+    #[default]
+    All,
+    Any,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum Trigger {
+    ScreenshotTaken,
+    StudioRecordingFinished,
+    InstantRecordingFinished,
+    RecordingStarted,
+    UploadCompleted,
+    VideoImported,
+    RecordingDeleted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum Condition {
+    CaptureTargetIs { target: CaptureTargetKind },
+    RecordingModeIs { mode: AutomationRecordingMode },
+    DurationAtLeast { secs: f64 },
+    DurationAtMost { secs: f64 },
+    WindowTitleContains { pattern: String },
+    OrganizationIs { id: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureTargetKind {
+    Display,
+    Window,
+    Area,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AutomationRecordingMode {
+    Studio,
+    Instant,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum Action {
+    CopyToClipboard {
+        #[serde(default)]
+        source: ClipboardSource,
+    },
+    #[serde(rename_all = "camelCase")]
+    SaveToLocation {
+        dir: String,
+        #[serde(default)]
+        filename_template: Option<String>,
+    },
+    Export {
+        profile: ExportProfile,
+        #[serde(default)]
+        destination: ExportDestination,
+    },
+    #[serde(rename_all = "camelCase")]
+    Upload {
+        #[serde(default)]
+        organization_id: Option<String>,
+        #[serde(default = "default_true")]
+        copy_link: bool,
+        #[serde(default)]
+        open_in_browser: bool,
+    },
+    RevealInFileManager,
+    OpenFile,
+    #[serde(rename_all = "camelCase")]
+    RunCommand {
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+        #[serde(default)]
+        use_shell: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Webhook {
+        url: String,
+        #[serde(default = "default_post")]
+        method: String,
+        #[serde(default)]
+        headers: std::collections::HashMap<String, String>,
+        #[serde(default)]
+        body_template: Option<String>,
+    },
+    RecognizeTextToClipboard,
+    #[serde(rename_all = "camelCase")]
+    Notify {
+        #[serde(default = "default_notify_title")]
+        title_template: String,
+        #[serde(default)]
+        body_template: String,
+    },
+    OpenEditor,
+    SkipEditor,
+    ApplyPreset {
+        name: String,
+    },
+    DeleteLocalFiles,
+}
+
+fn default_post() -> String {
+    "POST".to_string()
+}
+
+fn default_notify_title() -> String {
+    "Cap Automation".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipboardSource {
+    #[default]
+    Raw,
+    Rendered,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportProfile {
+    pub format: ExportFormat,
+    #[serde(default = "default_fps")]
+    pub fps: u32,
+    #[serde(default = "default_resolution")]
+    pub resolution_base: cap_project::XY<u32>,
+    #[serde(default)]
+    pub compression: Option<AutomationExportCompression>,
+    #[serde(default)]
+    pub preset_name: Option<String>,
+}
+
+fn default_fps() -> u32 {
+    30
+}
+
+fn default_resolution() -> cap_project::XY<u32> {
+    cap_project::XY { x: 1920, y: 1080 }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportFormat {
+    Mp4,
+    Gif,
+    Mov,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AutomationExportCompression {
+    Maximum,
+    Social,
+    Web,
+    Potato,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportDestination {
+    #[default]
+    ProjectFolder,
+    CustomPath {
+        dir: String,
+    },
+}
+
+/// `load_automations` (`automation.rs:812-825`): the whole `automations` key,
+/// defaulting -- with a log line -- when absent or unparseable. Same
+/// overwrite-on-next-save semantics as the Tauri app.
+pub fn automations() -> AutomationsStore {
+    let Some(value) =
+        read_store(&tauri_store_path()).and_then(|mut store| store.remove(AUTOMATIONS))
+    else {
+        return AutomationsStore::default();
+    };
+    match serde_json::from_value(value) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::error!("deserializing the automations store: {error}");
+            AutomationsStore::default()
+        }
+    }
+}
+
+/// `set_automations` (`automation.rs:834-837`): `store.set("automations",
+/// json!(store))` -- the key replaced wholesale, unlike the per-key
+/// [`set_store_setting`] writes.
+pub fn set_automations(automations: &AutomationsStore) -> bool {
+    let value = match serde_json::to_value(automations) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!("serializing the automations store: {error}");
+            return false;
+        }
+    };
+    let path = tauri_store_path();
+    let Some(mut store) = read_store(&path) else {
+        return false;
+    };
+    store.insert(AUTOMATIONS.to_string(), value);
+    write_store(&path, &Value::Object(store))
+}
+
+/// The preset names `applyPreset` offers -- `presetsStore.createQuery()` in
+/// automations.tsx, reading `store["presets"].presets[].name`.
+pub fn preset_names() -> Vec<String> {
+    store_section("presets")
+        .get("presets")
+        .and_then(Value::as_array)
+        .map(|presets| {
+            presets
+                .iter()
+                .filter_map(|preset| preset.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,12 +1353,21 @@ mod tests {
     /// one test's store path is read by another's `load()`.
     static STORE_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    struct TempStore(PathBuf, std::sync::MutexGuard<'static, ()>);
+    struct TempStore {
+        path: PathBuf,
+        /// Held for the store's lifetime so no parallel test re-points the
+        /// env var mid-flight; never read, only dropped.
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl TempStore {
         fn new(name: &str, contents: Option<&str>) -> Self {
             let guard = STORE_ENV.lock().unwrap_or_else(|error| error.into_inner());
-            let path = std::env::temp_dir().join(format!("cap-gpui-store-test-{name}"));
+            // Keyed by pid too: the mutex serializes threads, but two test
+            // *processes* (e.g. `cargo test` twice in parallel) sharing one
+            // path race each other's writes and drops.
+            let path = std::env::temp_dir()
+                .join(format!("cap-gpui-store-test-{}-{name}", std::process::id()));
             match contents {
                 Some(contents) => std::fs::write(&path, contents).unwrap(),
                 None => {
@@ -781,17 +1377,20 @@ mod tests {
             // SAFETY: the guard above is the only writer of this var, and no
             // other thread in the test binary reads the environment.
             unsafe { std::env::set_var("CAP_GPUI_TAURI_STORE", &path) };
-            Self(path, guard)
+            Self {
+                path,
+                _guard: guard,
+            }
         }
 
         fn read(&self) -> Value {
-            serde_json::from_slice(&std::fs::read(&self.0).unwrap()).unwrap()
+            serde_json::from_slice(&std::fs::read(&self.path).unwrap()).unwrap()
         }
     }
 
     impl Drop for TempStore {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(&self.path);
             unsafe { std::env::remove_var("CAP_GPUI_TAURI_STORE") };
         }
     }
@@ -873,7 +1472,7 @@ mod tests {
             Value::Bool(true)
         ));
         assert_eq!(
-            std::fs::read_to_string(&store.0).unwrap(),
+            std::fs::read_to_string(&store.path).unwrap(),
             "{ this is not json"
         );
     }
@@ -982,5 +1581,180 @@ mod tests {
             Value::Bool(false)
         ));
         assert!(!GeneralSettings::load().enable_telemetry);
+    }
+
+    /// `normalizeTranscriptionHints`: NULs stripped, whitespace trimmed,
+    /// empties and duplicates dropped, first occurrence wins.
+    #[test]
+    fn transcription_hints_normalize_like_the_web_app() {
+        assert_eq!(
+            normalize_transcription_hints(["  Cap ", "Cap", "", "\0", "Type\0Script", "cap"]),
+            ["Cap", "TypeScript", "cap"]
+        );
+
+        let _store = TempStore::new(
+            "hints",
+            Some(r#"{ "general_settings": { "transcriptionHints": ["Cap", "Acme"] } }"#),
+        );
+        assert_eq!(transcription_hints(), ["Cap", "Acme"]);
+    }
+
+    /// An absent `transcriptionHints` key shows the four defaults
+    /// (`createDefaultGeneralSettings`), an empty array shows none. Scoped
+    /// blocks: each `TempStore` holds the global env lock, so the first must
+    /// drop before the second is created.
+    #[test]
+    fn transcription_hints_default_only_when_absent() {
+        {
+            let _store = TempStore::new("hints-absent", Some(r#"{ "general_settings": {} }"#));
+            assert_eq!(transcription_hints(), DEFAULT_TRANSCRIPTION_HINTS);
+        }
+        {
+            let _store = TempStore::new(
+                "hints-empty",
+                Some(r#"{ "general_settings": { "transcriptionHints": [] } }"#),
+            );
+            assert!(transcription_hints().is_empty());
+        }
+    }
+
+    /// The hotkeys map round-trips through the exact JSON the Tauri app's
+    /// `HotkeysStore` writes, and unknown actions survive a rewrite.
+    #[test]
+    fn hotkeys_round_trip_the_tauri_shape() {
+        let store = TempStore::new(
+            "hotkeys",
+            Some(
+                r#"{ "hotkeys": { "hotkeys": {
+  "stopRecording": { "code": "KeyS", "meta": true, "ctrl": false, "alt": false, "shift": true },
+  "someFutureAction": { "code": "F13", "meta": false, "ctrl": false, "alt": false, "shift": false, "extra": 1 }
+} } }"#,
+            ),
+        );
+
+        let mut map = hotkeys_raw();
+        let stop = hotkey_from_value(map.get("stopRecording").unwrap()).unwrap();
+        assert_eq!(stop.code, "KeyS");
+        assert!(stop.meta && stop.shift && !stop.ctrl && !stop.alt);
+
+        map.insert(
+            "screenshotArea".to_string(),
+            serde_json::to_value(Hotkey {
+                code: "Digit4".into(),
+                meta: true,
+                ctrl: false,
+                alt: false,
+                shift: true,
+            })
+            .unwrap(),
+        );
+        assert!(set_hotkeys_raw(&map));
+
+        let after = store.read();
+        assert_eq!(
+            after["hotkeys"]["hotkeys"]["screenshotArea"]["code"],
+            "Digit4"
+        );
+        // The unknown action's binding -- including the field this build does
+        // not model -- is still there.
+        assert_eq!(after["hotkeys"]["hotkeys"]["someFutureAction"]["extra"], 1);
+    }
+
+    /// The automations model against the JSON `crates/automation/src/types.rs`
+    /// serializes: camelCase everywhere, `type`-tagged conditions/actions, and
+    /// the whole key written wholesale.
+    #[test]
+    fn automations_round_trip_the_tauri_shape() {
+        let store = TempStore::new(
+            "automations",
+            Some(
+                r#"{ "auth": { "user_id": "u_1" }, "automations": { "version": 1, "rules": [ {
+  "id": "r1", "name": "", "enabled": true, "trigger": "screenshotTaken", "matchMode": "all",
+  "conditions": [ { "type": "windowTitleContains", "pattern": "Slack" } ],
+  "actions": [
+    { "type": "copyToClipboard", "source": "raw" },
+    { "type": "export", "profile": { "format": "mp4", "fps": 30, "resolutionBase": { "x": 1920, "y": 1080 }, "compression": "web", "presetName": null }, "destination": "projectFolder" },
+    { "type": "webhook", "url": "https://x.test", "method": "POST", "headers": {}, "bodyTemplate": null }
+  ] } ] } }"#,
+            ),
+        );
+
+        let mut automations = automations();
+        assert_eq!(automations.rules.len(), 1);
+        let rule = &automations.rules[0];
+        assert_eq!(rule.trigger, Trigger::ScreenshotTaken);
+        assert_eq!(rule.match_mode, MatchMode::All);
+        assert_eq!(
+            rule.conditions[0],
+            Condition::WindowTitleContains {
+                pattern: "Slack".into()
+            }
+        );
+        assert!(matches!(
+            &rule.actions[1],
+            Action::Export {
+                profile,
+                destination: ExportDestination::ProjectFolder,
+            } if profile.format == ExportFormat::Mp4 && profile.resolution_base.x == 1920
+        ));
+
+        automations.rules[0].actions.push(Action::SaveToLocation {
+            dir: "/tmp/shots".into(),
+            filename_template: None,
+        });
+        assert!(set_automations(&automations));
+
+        let after = store.read();
+        let actions = &after["automations"]["rules"][0]["actions"];
+        assert_eq!(actions[3]["type"], "saveToLocation");
+        assert_eq!(actions[3]["dir"], "/tmp/shots");
+        assert_eq!(actions[3]["filenameTemplate"], Value::Null);
+        assert_eq!(actions[1]["profile"]["resolutionBase"]["x"], 1920);
+        // The rest of the store is untouched by the wholesale key write.
+        assert_eq!(after["auth"]["user_id"], "u_1");
+    }
+
+    /// The commercial license key, the shape license.tsx writes on activation.
+    #[test]
+    fn commercial_license_round_trips() {
+        let store = TempStore::new(
+            "license",
+            Some(r#"{ "general_settings": { "instanceId": "abc" } }"#),
+        );
+
+        assert_eq!(commercial_license(), None);
+        assert_eq!(instance_id_or_create().as_deref(), Some("abc"));
+
+        let license = CommercialLicense {
+            license_key: "key-1".into(),
+            expiry_date: None,
+            refresh: 123.0,
+            activated_on: 456.0,
+        };
+        assert!(set_commercial_license(Some(&license)));
+        assert_eq!(commercial_license(), Some(license));
+        let written = store.read();
+        assert_eq!(
+            written["general_settings"]["commercialLicense"]["licenseKey"],
+            "key-1"
+        );
+        assert_eq!(
+            written["general_settings"]["commercialLicense"]["activatedOn"],
+            456.0
+        );
+
+        // Deactivation nulls the key, which both apps read as "no license".
+        assert!(set_commercial_license(None));
+        assert_eq!(commercial_license(), None);
+    }
+
+    #[test]
+    fn uuids_are_v4_shaped_and_distinct() {
+        let a = new_uuid_v4();
+        let b = new_uuid_v4();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 36);
+        assert_eq!(a.as_bytes()[14], b'4');
+        assert!(matches!(a.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
     }
 }
