@@ -1,3 +1,4 @@
+import { Button } from "@cap/ui-solid";
 import { invoke } from "@tauri-apps/api/core";
 import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
@@ -11,6 +12,7 @@ import {
 import {
 	Section,
 	SectionRows,
+	SettingItem,
 	SettingsPageContent,
 	ToggleSettingItem,
 } from "./Setting";
@@ -34,6 +36,18 @@ function Inner(props: {
 		deriveGeneralSettings(props.initialStore),
 	);
 
+	const [gpuiAvailable] = createResource(() =>
+		invoke<boolean>("gpui_app_available").catch(() => false),
+	);
+
+	const launchGpuiApp = async () => {
+		try {
+			await invoke("launch_gpui_app");
+		} catch (error) {
+			console.error("Failed to launch Cap GPUI", error);
+		}
+	};
+
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
 		value: (typeof settings)[K],
@@ -48,6 +62,9 @@ function Inner(props: {
 				await generalSettingsStore.set({ [key]: value });
 			} else {
 				await generalSettingsStore.set({ [key]: value });
+			}
+			if (key === "enableGpuiApp" && value === true) {
+				await launchGpuiApp();
 			}
 		} catch (error) {
 			setSettings(key as keyof GeneralSettingsStore, previousValue);
@@ -90,6 +107,29 @@ function Inner(props: {
 						/>
 					</SectionRows>
 				</Section>
+
+				<Show when={gpuiAvailable()}>
+					<Section title="Native app">
+						<SectionRows>
+							<ToggleSettingItem
+								label="Cap GPUI"
+								description="Run the experimental fully-native version of Cap alongside this app. Both apps share your recordings library and settings. Launches now and on future startups."
+								value={!!settings.enableGpuiApp}
+								onChange={(value) => handleChange("enableGpuiApp", value)}
+							/>
+							<Show when={settings.enableGpuiApp}>
+								<SettingItem
+									label="Launch Cap GPUI"
+									description="Open the native app now if it isn't already running."
+								>
+									<Button size="sm" variant="dark" onClick={launchGpuiApp}>
+										Launch
+									</Button>
+								</SettingItem>
+							</Show>
+						</SectionRows>
+					</Section>
+				</Show>
 			</SettingsPageContent>
 		</div>
 	);
