@@ -2514,6 +2514,43 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     screenshot_editor::load_screenshot_project(key, handle, cx);
 }
 
+/// The screenshot editor's Delete finished: drop the window (its pending
+/// write is for a bundle that no longer exists), refresh every surface that
+/// lists screenshots, and run the ordinary closed bookkeeping.
+pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
+    let key = editor_key(bundle);
+    let handle = cx
+        .global::<AppWindows>()
+        .screenshot_editors
+        .iter()
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| *handle);
+    if let Some(handle) = handle {
+        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
+            pending.borrow_mut().discard();
+        }
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    screenshot_editor_closed(&key, cx);
+    refresh_screenshot_surfaces(cx);
+}
+
+/// Every surface that lists screenshots: the tray's Previous, the settings
+/// Screenshots page, and the main window's Recents.
+pub fn refresh_screenshot_surfaces(cx: &mut App) {
+    crate::tray::refresh_previous(cx);
+    if let Some(settings) = cx.global::<AppWindows>().settings {
+        settings
+            .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
+            .ok();
+    }
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+        .ok();
+}
+
 /// A screenshot editor window is going away: flush its pending config write
 /// and bring the main window back once the last editor of either kind closes
 /// -- the same `Destroyed` arm `editor_closed` mirrors.

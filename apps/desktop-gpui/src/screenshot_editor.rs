@@ -131,12 +131,23 @@ pub struct ConfigUpdate {
     pub config: ProjectConfiguration,
 }
 
+/// A one-off render on the loop's GPU device -- `render_screenshot_png` in
+/// the Tauri app, which rebuilds the whole device per export because it is a
+/// stateless command; here the loop already owns one.
+pub enum ExportRequest {
+    Png {
+        config: ProjectConfiguration,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    },
+}
+
 /// The render loop, on the tokio runtime: build the GPU constants, then
-/// re-render the still whenever the config changes. Ends when the window
-/// drops its `config_tx` or the pump drops `frame_rx`.
+/// re-render the still whenever the config changes and serve export requests
+/// on the same device. Ends when the window goes away (both senders drop).
 pub async fn run_still_renderer(
     source: LoadedSource,
     mut config_rx: tokio::sync::watch::Receiver<ConfigUpdate>,
+    mut export_rx: tokio::sync::mpsc::Receiver<ExportRequest>,
     frame_tx: flume::Sender<(RenderedFrame, u64)>,
     setup_tx: flume::Sender<Result<(), String>>,
 ) {
@@ -170,39 +181,67 @@ pub async fn run_still_renderer(
         constants.is_software_adapter,
     );
 
+    let mut dirty = true;
     loop {
-        let update = config_rx.borrow().clone();
-        match render_still(
-            &constants,
-            &mut frame_renderer,
-            &mut layers,
-            &decoded,
-            &update.config,
-        )
-        .await
-        {
-            Ok(frame) => {
-                if frame_tx.send_async((frame, update.revision)).await.is_err() {
+        if dirty {
+            dirty = false;
+            let update = config_rx.borrow_and_update().clone();
+            match render_still(
+                &constants,
+                &mut frame_renderer,
+                &mut layers,
+                &decoded,
+                &update.config,
+                None,
+            )
+            .await
+            {
+                Ok(frame) => {
+                    if frame_tx.send_async((frame, update.revision)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(error) => tracing::error!("screenshot render failed: {error}"),
+            }
+        }
+
+        tokio::select! {
+            changed = config_rx.changed() => {
+                if changed.is_err() {
                     break;
                 }
+                dirty = true;
             }
-            Err(error) => tracing::error!("screenshot render failed: {error}"),
-        }
-        if config_rx.changed().await.is_err() {
-            break;
+            request = export_rx.recv() => {
+                let Some(ExportRequest::Png { config, reply }) = request else {
+                    break;
+                };
+                let result = render_export_png(
+                    &constants,
+                    &mut frame_renderer,
+                    &mut layers,
+                    &decoded,
+                    &config,
+                )
+                .await;
+                let _ = reply.send(result);
+            }
         }
     }
 }
 
 /// One `render_immediate` of the still -- the body of the Tauri loop
 /// (`screenshot_editor.rs:385-430` over there): frame 0 at 30fps, empty
-/// cursor events, a zoom timeline precomputed to one frame.
+/// cursor events, a zoom timeline precomputed to one frame. The preview
+/// renders at the config's base size; an export passes the upscaled
+/// `resolution_base`.
 async fn render_still(
     constants: &RenderVideoConstants,
     frame_renderer: &mut FrameRenderer<'_>,
     layers: &mut RendererLayers,
     source: &DecodedFrame,
     config: &ProjectConfiguration,
+    resolution_base: Option<cap_project::XY<u32>>,
 ) -> Result<RenderedFrame, String> {
     let segment_frames = DecodedSegmentFrames {
         screen_frame: Some(source.clone()),
@@ -212,7 +251,10 @@ async fn render_still(
         segment_has_camera: false,
     };
 
-    let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, config);
+    let resolution_base = resolution_base.unwrap_or_else(|| {
+        let (base_w, base_h) = ProjectUniforms::get_base_size(&constants.options, config);
+        cap_project::XY::new(base_w, base_h)
+    });
     let cursor_events = cap_project::CursorEvents::default();
     let mut zoom_timeline = ZoomTransformTimeline::from_project(
         config,
@@ -227,7 +269,7 @@ async fn render_still(
         config,
         0,
         30,
-        cap_project::XY::new(base_w, base_h),
+        resolution_base,
         &cursor_events,
         &segment_frames,
         0.0,
@@ -238,6 +280,86 @@ async fn render_still(
         .render_immediate(segment_frames, uniforms, &cursor_events, true, layers)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The export render -- `render_screenshot_png`'s upscale + unpad + encode
+/// (`screenshot_editor.rs:1618-1742` over there): scale the output so a crop
+/// is not downsampled, align the dimensions the way the exporter does, strip
+/// the wgpu row padding and encode an RGBA PNG.
+async fn render_export_png(
+    constants: &RenderVideoConstants,
+    frame_renderer: &mut FrameRenderer<'_>,
+    layers: &mut RendererLayers,
+    source: &DecodedFrame,
+    config: &ProjectConfiguration,
+) -> Result<Vec<u8>, String> {
+    use image::ImageEncoder as _;
+
+    let (base_width, base_height) = ProjectUniforms::get_base_size(&constants.options, config);
+    let display_size = ProjectUniforms::display_size(
+        &constants.options,
+        config,
+        cap_project::XY::new(base_width, base_height),
+    )
+    .coord;
+    let crop = ProjectUniforms::get_crop(&constants.options, config);
+    let export_scale = f64::max(
+        f64::max(
+            crop.size.x as f64 / f64::max(display_size.x, 1.0),
+            crop.size.y as f64 / f64::max(display_size.y, 1.0),
+        ),
+        1.0,
+    );
+
+    let resolution_base = cap_project::XY::new(
+        (((base_width as f64 * export_scale).ceil() as u32) + 3) & !3,
+        (((base_height as f64 * export_scale).ceil() as u32) + 1) & !1,
+    );
+    if resolution_base.x > MAX_DIMENSION || resolution_base.y > MAX_DIMENSION {
+        return Err(format!(
+            "Export dimensions exceed maximum: {}x{}",
+            resolution_base.x, resolution_base.y
+        ));
+    }
+
+    let frame = render_still(
+        constants,
+        frame_renderer,
+        layers,
+        source,
+        config,
+        Some(resolution_base),
+    )
+    .await?;
+
+    let row_bytes = frame.width as usize * 4;
+    let padded = frame.padded_bytes_per_row as usize;
+    if padded < row_bytes || frame.data.len() < padded * frame.height as usize {
+        return Err(format!(
+            "Invalid export buffer: {} bytes, stride {} for {}x{}",
+            frame.data.len(),
+            padded,
+            frame.width,
+            frame.height
+        ));
+    }
+    let rgba: Vec<u8> = frame
+        .data
+        .chunks(padded)
+        .take(frame.height as usize)
+        .flat_map(|row| row[..row_bytes].iter().copied())
+        .collect();
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            &rgba,
+            frame.width,
+            frame.height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| format!("Failed to encode screenshot export: {e}"))?;
+    Ok(png.into_inner())
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +376,12 @@ pub struct PendingConfigSave {
 }
 
 impl PendingConfigSave {
+    /// Drop a scheduled write without performing it -- the delete path, where
+    /// the bundle the write would land in is already gone.
+    pub fn discard(&mut self) {
+        self.config = None;
+    }
+
     pub fn flush(&mut self) {
         let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
             return;
@@ -267,6 +395,16 @@ impl PendingConfigSave {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum ExportDestination {
+    Clipboard,
+    File,
+    /// `CAP_GPUI_AUTO_SCREENSHOT_EXPORT=<path>`: the harness destination --
+    /// the same GPU export, written straight to the path (a save panel
+    /// cannot be driven without Accessibility).
+    Harness(PathBuf),
+}
+
 pub struct ScreenshotEditorWindow {
     theme: Theme,
     bundle: PathBuf,
@@ -276,6 +414,10 @@ pub struct ScreenshotEditorWindow {
     project: ProjectConfiguration,
     revision: u64,
     config_tx: Option<tokio::sync::watch::Sender<ConfigUpdate>>,
+    export_tx: Option<tokio::sync::mpsc::Sender<ExportRequest>>,
+    /// One export at a time: the copy/save buttons grey out while the GPU
+    /// renders and the panel is up.
+    exporting: bool,
     /// The latest GPU frame, already BGRA in gpui's atlas format.
     frame: Option<Arc<RenderImage>>,
     frame_size: (f32, f32),
@@ -308,6 +450,8 @@ impl ScreenshotEditorWindow {
             project: ProjectConfiguration::default(),
             revision: 0,
             config_tx: None,
+            export_tx: None,
+            exporting: false,
             frame: None,
             frame_size: (1., 1.),
             pending_save: Rc::new(RefCell::new(PendingConfigSave::default())),
@@ -327,12 +471,20 @@ impl ScreenshotEditorWindow {
         pretty_name: String,
         config: ProjectConfiguration,
         config_tx: tokio::sync::watch::Sender<ConfigUpdate>,
+        export_tx: tokio::sync::mpsc::Sender<ExportRequest>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.pretty_name = pretty_name;
         self.project = config;
         self.config_tx = Some(config_tx);
+        self.export_tx = Some(export_tx);
         self.pending_save.borrow_mut().path = Some(self.bundle.clone());
+        if let Ok(dest) = std::env::var("CAP_GPUI_AUTO_SCREENSHOT_EXPORT")
+            && !dest.trim().is_empty()
+        {
+            self.export_png(ExportDestination::Harness(PathBuf::from(dest)), window, cx);
+        }
         cx.notify();
     }
 
@@ -394,6 +546,142 @@ impl ScreenshotEditorWindow {
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, false);
+    }
+
+    // -- Export actions -------------------------------------------------------
+
+    /// Render at export resolution and hand the PNG to its destination --
+    /// `useScreenshotExport`'s Copy and Save destinations (the canvas
+    /// composite is annotation work, which does not exist here yet).
+    fn export_png(
+        &mut self,
+        destination: ExportDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.exporting {
+            return;
+        }
+        let Some(export_tx) = self.export_tx.clone() else {
+            return;
+        };
+        self.exporting = true;
+        cx.notify();
+
+        let config = self.project.clone();
+        let name = self.pretty_name.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let request = ExportRequest::Png {
+                config,
+                reply: reply_tx,
+            };
+            let result = if export_tx.send(request).await.is_ok() {
+                match reply_rx.await {
+                    Ok(result) => result,
+                    Err(_) => Err("The renderer stopped before the export finished".into()),
+                }
+            } else {
+                Err("The screenshot renderer is not running".into())
+            };
+
+            match result {
+                Ok(bytes) => match destination {
+                    ExportDestination::Clipboard => {
+                        // The clipboard seam this app has is "NSImage from a
+                        // path" (`platform::copy_image_to_clipboard`); a temp
+                        // file bridges the rendered bytes to it.
+                        let path = std::env::temp_dir()
+                            .join(format!("cap-screenshot-copy-{}.png", std::process::id()));
+                        let written =
+                            cx.background_executor()
+                                .spawn({
+                                    let path = path.clone();
+                                    async move {
+                                        std::fs::write(&path, &bytes).map_err(|e| e.to_string())
+                                    }
+                                })
+                                .await;
+                        match written {
+                            Ok(()) => {
+                                let copied = this.update_in(cx, |_, _, _| {
+                                    crate::platform::copy_image_to_clipboard(&path)
+                                });
+                                if let Ok(Err(error)) = copied {
+                                    tracing::error!("copying the screenshot failed: {error}");
+                                }
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        let _ = std::fs::remove_file(&path);
+                                    })
+                                    .detach();
+                            }
+                            Err(error) => {
+                                tracing::error!("writing the clipboard temp file failed: {error}")
+                            }
+                        }
+                    }
+                    ExportDestination::File => {
+                        let dest =
+                            crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+                        if let Some(dest) = dest {
+                            let written = cx
+                                .background_executor()
+                                .spawn(async move { std::fs::write(&dest, &bytes) })
+                                .await;
+                            if let Err(error) = written {
+                                tracing::error!("saving the screenshot failed: {error}");
+                            }
+                        }
+                    }
+                    ExportDestination::Harness(dest) => match std::fs::write(&dest, &bytes) {
+                        Ok(()) => {
+                            tracing::info!(path = %dest.display(), "harness export written")
+                        }
+                        Err(error) => tracing::error!("harness export failed: {error}"),
+                    },
+                },
+                Err(error) => tracing::error!("screenshot export failed: {error}"),
+            }
+
+            this.update_in(cx, |this, _window, cx| {
+                this.exporting = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The header's Delete: confirm, remove the bundle, close this window --
+    /// `Header.tsx`'s delete (`remove(path)` then close).
+    fn delete_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let bundle = self.bundle.clone();
+        cx.spawn_in(window, async move |_this, cx| {
+            if !crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this screenshot?",
+                "Yes",
+                "No",
+                false,
+            ) {
+                return;
+            }
+            let deleted = cx
+                .background_executor()
+                .spawn({
+                    let bundle = bundle.clone();
+                    async move { crate::library::delete_screenshot(&bundle) }
+                })
+                .await;
+            if let Err(error) = deleted {
+                tracing::error!(path = %bundle.display(), "deleting the screenshot failed: {error}");
+                return;
+            }
+            cx.update(|_, cx| crate::app_windows::close_screenshot_editor_after_delete(&bundle, cx))
+                .ok();
+        })
+        .detach();
     }
 
     // -- Aspect ratio -------------------------------------------------------
@@ -463,14 +751,54 @@ impl ScreenshotEditorWindow {
 
     // -- Rendering ----------------------------------------------------------
 
-    /// Traffic-light spacer + name on the left, the aspect menu button on the
-    /// right -- the skeleton of the Tauri editor's `Header.tsx`.
+    /// A small bordered icon button, the aspect button's palette.
+    fn header_action(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        enabled: bool,
+        handler: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(30.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_4)
+            .bg(theme.gray_2)
+            .when(enabled, |this| {
+                this.hover(|style| style.bg(theme.gray_3))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        handler(this, window, cx);
+                    }))
+            })
+            .when(!enabled, |this| this.opacity(0.5))
+            .child(
+                gpui::svg()
+                    .path(icon)
+                    .size(px(14.))
+                    .text_color(theme.gray_11),
+            )
+    }
+
+    /// Traffic-light spacer + name on the left; copy, save, reveal, delete
+    /// and the aspect menu on the right -- the skeleton of the Tauri editor's
+    /// `Header.tsx`.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let ready = self.export_tx.is_some() && self.error.is_none();
+        let exportable = ready && !self.exporting;
         div()
             .flex()
             .flex_row()
             .items_center()
+            .gap(px(8.))
             .h(px(52.))
             .px(px(14.))
             .flex_shrink_0()
@@ -485,6 +813,36 @@ impl ScreenshotEditorWindow {
                     .text_color(theme.gray_12)
                     .child(self.pretty_name.clone()),
             )
+            .child(self.header_action(
+                "screenshot-copy",
+                "icons/copy.svg",
+                exportable,
+                |this, window, cx| this.export_png(ExportDestination::Clipboard, window, cx),
+                cx,
+            ))
+            .child(self.header_action(
+                "screenshot-save",
+                "icons/download.svg",
+                exportable,
+                |this, window, cx| this.export_png(ExportDestination::File, window, cx),
+                cx,
+            ))
+            .child(self.header_action(
+                "screenshot-reveal",
+                "icons/folder-open.svg",
+                true,
+                |this, _window, _cx| {
+                    crate::library::reveal_in_folder(&this.bundle.join("original.png"));
+                },
+                cx,
+            ))
+            .child(self.header_action(
+                "screenshot-delete",
+                "icons/trash.svg",
+                true,
+                |this, window, cx| this.delete_screenshot(window, cx),
+                cx,
+            ))
             .child(
                 div()
                     .id("aspect-button")
@@ -653,17 +1011,20 @@ pub fn load_screenshot_project(
             revision: 0,
             config: source.config.clone(),
         });
+        let (export_tx, export_rx) = tokio::sync::mpsc::channel(1);
         // Bounded and latest-wins like the video pump; stills only re-render
         // on edits, so it never actually fills.
         let (frame_tx, frame_rx) = flume::bounded(2);
         let (setup_tx, setup_rx) = flume::bounded(1);
 
         if handle
-            .update(cx, |view, _window, cx| {
+            .update(cx, |view, window, cx| {
                 view.set_loaded(
                     source.pretty_name.clone(),
                     source.config.clone(),
                     config_tx,
+                    export_tx,
+                    window,
                     cx,
                 )
             })
@@ -675,7 +1036,7 @@ pub fn load_screenshot_project(
         cx.update(|cx| {
             gpui_tokio::Tokio::spawn(
                 cx,
-                run_still_renderer(source, config_rx, frame_tx, setup_tx),
+                run_still_renderer(source, config_rx, export_rx, frame_tx, setup_tx),
             )
             .detach();
         });
