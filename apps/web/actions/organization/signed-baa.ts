@@ -343,7 +343,15 @@ export async function purchaseSignedBaa(
 				status: "processing",
 				userId: user.id,
 				...recordFields,
-				...(isEmailRetry ? {} : { signedAt: null, emailSentAt: null }),
+				// A stale ID from a canceled subscription would stop the
+				// subscription.created webhook from associating the replacement.
+				...(isEmailRetry
+					? {}
+					: {
+							signedAt: null,
+							emailSentAt: null,
+							stripeSubscriptionId: null,
+						}),
 			})
 			.where(
 				and(
@@ -379,10 +387,15 @@ export async function purchaseSignedBaa(
 	}
 
 	const revertToPending = async () => {
+		// The subscription.created webhook can associate and activate the record
+		// mid-flight when Stripe's create response was lost, so the revert must
+		// only touch rows still claimed by this purchase attempt.
 		await db()
 			.update(signedBaas)
 			.set({ status: existing?.status === "canceled" ? "canceled" : "pending" })
-			.where(eq(signedBaas.id, recordId));
+			.where(
+				and(eq(signedBaas.id, recordId), eq(signedBaas.status, "processing")),
+			);
 	};
 
 	const signedAt = (isEmailRetry ? existing?.signedAt : null) ?? new Date();

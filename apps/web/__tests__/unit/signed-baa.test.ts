@@ -339,5 +339,52 @@ describe("Signed BAA Stripe recovery", () => {
 		expect(mockDb.set).toHaveBeenCalledWith(
 			expect.objectContaining({ status: "pending" }),
 		);
+		expect(mockDb.where).toHaveBeenCalledWith([
+			{ field: "signedBaaId", value: "baa-record-1" },
+			{ field: "signedBaaStatus", value: "processing" },
+		]);
+	});
+
+	it("clears the stale subscription id when re-claiming a canceled record", async () => {
+		mockOwner({
+			stripeCustomerId: "cus_1",
+			stripeSubscriptionId: "sub_active",
+			stripeSubscriptionStatus: "active",
+		});
+		mockDb.limit.mockResolvedValueOnce([
+			{
+				id: "baa-record-1",
+				status: "canceled",
+				stripeSubscriptionId: "sub_old",
+				signedAt: null,
+				emailSentAt: null,
+			},
+		]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockReturnValueOnce(mockDb)
+			.mockReturnValueOnce({ affectedRows: 1 });
+		vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1]));
+		vi.mocked(sendEmail).mockResolvedValue(undefined as never);
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_active",
+			status: "active",
+			default_payment_method: "pm_1",
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({ data: [] });
+		mockStripe.subscriptions.create.mockResolvedValue(recoveredSubscription);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		const result = await purchaseSignedBaa("org-1" as never, VALID_INPUT);
+
+		expect(result.success).toBe(true);
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: "processing",
+				stripeSubscriptionId: null,
+			}),
+		);
 	});
 });
