@@ -193,55 +193,81 @@ export async function updateSeatQuantity(
 	}
 
 	const isSeatIncrease = newQuantity > currentQuantity;
-	// Choosing a seat count revokes any scheduled cancellation. Stripe rejects
-	// cancel_at_period_end combined with payment_behavior=pending_if_incomplete,
-	// so it must be cleared in a separate call before the quantity update.
-	if (subscription.cancel_at_period_end) {
-		await stripe().subscriptions.update(subscription.id, {
-			cancel_at_period_end: false,
-		});
-	}
-	// Increases charge the prorated difference immediately; decreases take
-	// effect immediately but never credit or refund the already-paid period —
-	// the next renewal simply bills the lower quantity.
-	const updatedSubscription = await stripe().subscriptions.update(
-		subscription.id,
-		{
-			items: [
-				{
-					id: subscriptionItem.id,
-					quantity: newQuantity,
-				},
-			],
-			proration_behavior: isSeatIncrease ? "always_invoice" : "none",
-			...(isSeatIncrease
-				? { payment_behavior: "pending_if_incomplete" as const }
-				: {}),
-		},
-	);
+	const wasCanceling = subscription.cancel_at_period_end;
+	// Stripe rejects cancel_at_period_end combined with
+	// payment_behavior=pending_if_incomplete, so increases clear cancellation
+	// first. If that later update fails, restore the scheduled cancel.
+	const restoreScheduledCancellation = async () => {
+		try {
+			await stripe().subscriptions.update(subscription.id, {
+				cancel_at_period_end: true,
+			});
+		} catch (restoreError) {
+			console.error(
+				"Failed to restore scheduled Cap Pro cancellation",
+				subscription.id,
+				restoreError,
+			);
+		}
+	};
 
-	if (isSeatIncrease && updatedSubscription.pending_update) {
-		throw new Error(
-			"Payment for the added seats could not be completed. Update your payment method and try again.",
-		);
-	}
-
+	let quantityUpdated = false;
 	try {
-		await db()
-			.update(users)
-			.set({ inviteQuota: newQuantity })
-			.where(eq(users.id, user.id));
-	} catch (dbError) {
-		console.error(
-			"CRITICAL: Stripe updated to quantity",
-			newQuantity,
-			"but DB update failed for user",
-			user.id,
-			dbError,
+		if (isSeatIncrease && wasCanceling) {
+			await stripe().subscriptions.update(subscription.id, {
+				cancel_at_period_end: false,
+			});
+		}
+
+		const updatedSubscription = await stripe().subscriptions.update(
+			subscription.id,
+			{
+				items: [
+					{
+						id: subscriptionItem.id,
+						quantity: newQuantity,
+					},
+				],
+				proration_behavior: isSeatIncrease ? "always_invoice" : "none",
+				...(isSeatIncrease
+					? { payment_behavior: "pending_if_incomplete" as const }
+					: {}),
+				...(!isSeatIncrease && wasCanceling
+					? { cancel_at_period_end: false }
+					: {}),
+			},
 		);
-		throw new Error(
-			"Billing update succeeded but local state could not be saved. Please contact support.",
-		);
+
+		if (isSeatIncrease && updatedSubscription.pending_update) {
+			throw new Error(
+				"Payment for the added seats could not be completed. Update your payment method and try again.",
+			);
+		}
+
+		quantityUpdated = true;
+
+		try {
+			await db()
+				.update(users)
+				.set({ inviteQuota: newQuantity })
+				.where(eq(users.id, user.id));
+		} catch (dbError) {
+			console.error(
+				"CRITICAL: Stripe updated to quantity",
+				newQuantity,
+				"but DB update failed for user",
+				user.id,
+				dbError,
+			);
+			throw new Error(
+				"Billing update succeeded but local state could not be saved. Please contact support.",
+			);
+		}
+	} catch (error) {
+		if (wasCanceling && !quantityUpdated) {
+			await restoreScheduledCancellation();
+		}
+		throw error;
 	}
 
 	revalidatePath("/dashboard/settings/organization");
