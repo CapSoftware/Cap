@@ -25,6 +25,7 @@ mod editor_tabs;
 mod editor_timeline;
 mod editor_window;
 mod feeds;
+mod hotkeys;
 mod import;
 mod library;
 mod main_window;
@@ -210,6 +211,8 @@ fn main() {
         if !std::env::var("CAP_GPUI_NO_TRAY").is_ok_and(|v| v == "1") {
             tray::init(cx);
         }
+        // The store's global shortcuts, after the registry they dispatch into.
+        hotkeys::init(cx);
         // The gate's TCC queries (screen recording preflight, AXIsProcessTrusted)
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
@@ -418,6 +421,23 @@ fn main() {
                 Some(path) => app_windows::open_editor(path, cx),
                 None => tracing::error!(target, "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"),
             }
+        }
+
+        // `CAP_GPUI_AUTO_HOTKEY=<store key>`: run a hotkey action's dispatch
+        // arm (e.g. `screenshotDisplay`) as if the OS shortcut fired.
+        if let Ok(action) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
+            && !action.is_empty()
+        {
+            let action = action.clone();
+            cx.spawn(async move |cx| {
+                // Give enumeration and the first paint the same beat the
+                // other harness hooks give them.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                cx.update(|cx| hotkeys::dispatch_for_harness(&action, cx));
+            })
+            .detach();
         }
 
         // `CAP_GPUI_AUTO_SCREENSHOT_EDITOR=<path-to-.cap>` (or `1` for the

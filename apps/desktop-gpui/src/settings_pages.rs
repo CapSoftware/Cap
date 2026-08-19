@@ -947,15 +947,18 @@ impl SettingsWindow {
         let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
         self.pages.hotkeys.insert(action.to_string(), value);
         // `createEffect` persists on every store change, captures included.
-        self.shortcuts_persist();
+        self.shortcuts_persist(cx);
         cx.notify();
         true
     }
 
-    fn shortcuts_persist(&self) {
+    fn shortcuts_persist(&self, cx: &mut Context<Self>) {
         if !store::set_hotkeys_raw(&self.pages.hotkeys) {
             tracing::warn!("saving the hotkeys store failed");
         }
+        // `commands.setHotkey` re-registers the OS shortcut as it persists;
+        // deferred because the registry swap reads the store this just wrote.
+        cx.defer(crate::hotkeys::reload);
     }
 
     /// The window click listener: an abandoned capture puts the previous
@@ -973,7 +976,7 @@ impl SettingsWindow {
                 self.pages.hotkeys.remove(action);
             }
         }
-        self.shortcuts_persist();
+        self.shortcuts_persist(cx);
         cx.notify();
     }
 
@@ -1136,10 +1139,7 @@ impl SettingsWindow {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.pages.listening = None;
-                        // `commands.setHotkey(action, binding)` also registers
-                        // the OS shortcut; there is no global-shortcut layer
-                        // here, so the persisted binding is the whole commit.
-                        this.shortcuts_persist();
+                        this.shortcuts_persist(cx);
                         cx.notify();
                     })),
             );
@@ -1160,7 +1160,7 @@ impl SettingsWindow {
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.pages.listening = None;
                     this.pages.hotkeys.remove(HOTKEY_ACTIONS[index].0);
-                    this.shortcuts_persist();
+                    this.shortcuts_persist(cx);
                     cx.notify();
                 })),
         );

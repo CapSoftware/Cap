@@ -93,6 +93,10 @@ unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt", "time"] }
 md-5 = "0.10"
+# The same crate `tauri_plugin_global_shortcut` wraps, at the Tauri app's pin:
+# store bindings are W3C `KeyboardEvent.code` strings and this owns the
+# platform mapping (Carbon RegisterEventHotKey on macOS).
+global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
