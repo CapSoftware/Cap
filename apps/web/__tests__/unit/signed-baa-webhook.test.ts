@@ -145,6 +145,31 @@ describe("Stripe webhook — Signed BAA", () => {
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 	});
 
+	it("associates the BAA subscription from its creation event", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.created",
+			data: {
+				object: {
+					id: "sub_baa_new",
+					status: "active",
+					metadata: {
+						type: "signed_baa",
+						organizationId: "org-1",
+					},
+				},
+			},
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockDbChain.set).toHaveBeenCalledWith({
+			status: "active",
+			stripeSubscriptionId: "sub_baa_new",
+		});
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
 	it("cancels Signed BAA when Pro becomes unpaid", async () => {
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "customer.subscription.updated",

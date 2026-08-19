@@ -19,6 +19,7 @@ import { trackServerEvent } from "@/lib/server-analytics";
 const relevantEvents = new Set([
 	"checkout.session.completed",
 	"checkout.session.async_payment_succeeded",
+	"customer.subscription.created",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
 	"invoice.payment_failed",
@@ -441,6 +442,17 @@ export const POST = async (req: Request) => {
 
 				if (session.metadata?.type === "developer_credits") {
 					return await grantDeveloperCredits(session);
+				}
+			}
+
+			if (event.type === "customer.subscription.created") {
+				const subscription = event.data.object as Stripe.Subscription;
+				// Recovers purchases whose create response was lost: the purchase
+				// action may have reverted its record without a subscription ID, and
+				// no updated event fires until the next subscription change, so the
+				// creation event is the only reliable association signal.
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
 				}
 			}
 
