@@ -503,18 +503,16 @@ async function setupWindowsOnnxRuntime() {
 async function setupWindowsDxc() {
 	const asset = {
 		version: "1.9.2607.13",
-		name: "microsoft.direct3d.dxc.1.9.2607.13.nupkg",
+		name: "microsoft.direct3d.dxc.1.9.2607.13.zip",
+		url: "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.dxc/1.9.2607.13/microsoft.direct3d.dxc.1.9.2607.13.nupkg",
 		sha256: "5d6acd23089b2979a3c1d39b7e31227da989a47b5d9f3db57111ad4717ea537e",
 	};
 	const assetArch = { x86_64: "x64", aarch64: "arm64" }[arch];
 	if (!assetArch)
 		throw new Error(`Unsupported Windows architecture for DXC: ${arch}`);
 
-	const archivePath = await downloadVerifiedAsset({
-		...asset,
-		url: `https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.dxc/${asset.version}/${asset.name}`,
-	});
-	const extractDir = path.join(targetDir, asset.name.replace(/\.nupkg$/, ""));
+	const archivePath = await downloadVerifiedAsset(asset);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
 	const outputDir = path.join(targetDir, "native-deps", "dxc");
 	const markerPath = path.join(outputDir, "asset.txt");
 	const marker = `${asset.name}:${assetArch}:${asset.sha256}`;
@@ -594,10 +592,12 @@ async function downloadVerifiedAsset(asset) {
 	const actualHash = createHash("sha256")
 		.update(await fs.readFile(archivePath))
 		.digest("hex");
-	if (actualHash !== asset.sha256)
+	if (actualHash !== asset.sha256) {
+		await fs.rm(archivePath, { force: true });
 		throw new Error(
-			`${asset.name} SHA-256 mismatch: got ${actualHash}, expected ${asset.sha256}`,
+			`${asset.name} SHA-256 mismatch: got ${actualHash}, expected ${asset.sha256}; removed invalid cached archive`,
 		);
+	}
 
 	return archivePath;
 }
