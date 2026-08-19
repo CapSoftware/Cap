@@ -267,7 +267,7 @@ describe("updateSeatQuantity", () => {
 		);
 	});
 
-	it("restores scheduled cancellation when the local quota write fails", async () => {
+	it("does not undo a committed Stripe change when the local write fails", async () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
@@ -284,9 +284,9 @@ describe("updateSeatQuantity", () => {
 		);
 
 		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
-			"scheduled cancellation is still in effect",
+			"Billing was updated to 2 seats",
 		);
-		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
+		expect(mockStripe.subscriptions.update).not.toHaveBeenCalledWith("sub_1", {
 			cancel_at_period_end: true,
 		});
 	});
