@@ -2064,8 +2064,14 @@ impl EditorWindow {
             .stats
             .as_ref()
             .map(|stats| (Instant::now(), stats.snapshot()));
-        // Playhead events land at the preview fps (30Hz); the ticker redraws
-        // at ~60Hz so the interpolated playhead line glides between them.
+        // Playhead events land at the preview fps (`EDITOR_PREVIEW_FPS`,
+        // 60Hz), and each one already repaints the timeline and transport
+        // through `invalidate_playback_chrome`. The ticker exists for render
+        // stalls: when frames stop arriving, it keeps the extrapolated
+        // playhead line (`last_playhead_redraw` in the ruler render) gliding.
+        // In steady state a tick that lands right after a playhead event
+        // would be a duplicate rebuild of both sections, so it only notifies
+        // once an event is overdue.
         self.playback_tick += 1;
         let generation = self.playback_tick;
         cx.spawn(async move |this, cx| {
@@ -2077,6 +2083,9 @@ impl EditorWindow {
                     .update(cx, |this, cx| {
                         if this.playback_tick != generation || !this.playing {
                             return false;
+                        }
+                        if this.last_playhead_redraw.elapsed() < Duration::from_millis(15) {
+                            return true;
                         }
                         this.timeline_view.update(cx, |_, cx| cx.notify());
                         this.transport_controls.update(cx, |_, cx| cx.notify());
@@ -2533,7 +2542,17 @@ impl EditorWindow {
     fn invalidate_playback_chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
         self.transport_controls.update(cx, |_, cx| cx.notify());
-        cx.notify();
+        // While playing, nothing else the parent renders reads the playhead:
+        // the canvas overlay is hidden (`canvas_overlay_visible`) and the
+        // scene-mode pane gates on it too. Notifying the parent here would
+        // rebuild every cached section -- header, toolbar, sidebar included --
+        // at the 60Hz playhead rate, which is the same class of rebuild that
+        // measured 40ms/frame on the text-panel sidebar. Paused paths (hover,
+        // seeks) keep the full invalidation: the overlay's element boxes
+        // appear and disappear as the playhead crosses segments.
+        if !self.playing {
+            cx.notify();
+        }
     }
 
     fn emit_preview_frame(&self) {
