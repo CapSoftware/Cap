@@ -14,8 +14,8 @@
 //! Same seam the editor's overlay panels use for AppKit callbacks.
 //!
 //! Menu strings, order and separators are byte-identical to `build_tray_menu`.
-//! "Take a Screenshot" and "Upload Logs" render disabled because the capture
-//! and log-upload paths do not exist here.
+//! "Upload Logs" renders disabled because the log-upload path does not exist
+//! here.
 
 use std::path::{Path, PathBuf};
 
@@ -61,6 +61,7 @@ pub enum TrayItem {
     RecordDisplay,
     RecordWindow,
     RecordArea,
+    TakeScreenshot,
     ImportMedia,
     ViewAllRecordings,
     ViewAllScreenshots,
@@ -296,9 +297,7 @@ pub fn build_menu(mode: Mode, previous: &[PreviousItem], version: &str) -> Vec<E
         entries.push(Entry::item("Record Display", TrayItem::RecordDisplay));
         entries.push(Entry::item("Record Window", TrayItem::RecordWindow));
         entries.push(Entry::item("Record Area", TrayItem::RecordArea));
-        // `recording::take_screenshot` has no gpui counterpart yet, so the row
-        // is present and greyed rather than silently missing.
-        entries.push(Entry::disabled("Take a Screenshot"));
+        entries.push(Entry::item("Take a Screenshot", TrayItem::TakeScreenshot));
     }
 
     entries.push(Entry::item("Import Media...", TrayItem::ImportMedia));
@@ -363,6 +362,18 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
         TrayItem::RecordDisplay => app_windows::arm_target_mode(TargetType::Display, cx),
         TrayItem::RecordWindow => app_windows::arm_target_mode(TargetType::Window, cx),
         TrayItem::RecordArea => app_windows::arm_target_mode(TargetType::Area, cx),
+        TrayItem::TakeScreenshot => {
+            // `TrayItem::TakeScreenshot` captures the display under the
+            // cursor, primary as the fallback (`tray.rs:816` over there).
+            let display = scap_targets::Display::get_containing_cursor()
+                .unwrap_or_else(scap_targets::Display::primary);
+            crate::screenshot::take_screenshot(
+                cap_recording::sources::screen_capture::ScreenCaptureTarget::Display {
+                    id: display.id(),
+                },
+                cx,
+            );
+        }
         // `TrayItem::ImportVideo` (`src-tauri/src/tray.rs:839-911`): one
         // picker over both media filters, routed by extension.
         TrayItem::ImportMedia => crate::import::pick_and_import_media(cx),
@@ -1286,9 +1297,6 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            disabled,
-            vec!["Take a Screenshot", "Upload Logs", "Cap v0.1.0",]
-        );
+        assert_eq!(disabled, vec!["Upload Logs", "Cap v0.1.0"]);
     }
 }

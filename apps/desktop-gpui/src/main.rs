@@ -35,6 +35,7 @@ mod permissions;
 mod platform;
 mod presets;
 mod recording;
+mod screenshot;
 mod session;
 mod settings_pages;
 mod settings_window;
@@ -63,6 +64,11 @@ const MAIN_WINDOW_HEIGHT: f32 = 395.;
 const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 16.;
 
 fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
+    if spec == "screenshot" {
+        // A capture has no duration; the harness arms the target, captures,
+        // and the stop half of the driver is a no-op on an idle session.
+        return Some((main_window::Mode::Screenshot, 0));
+    }
     let (mode, secs) = spec.split_once(':')?;
     let mode = match mode {
         "studio" => main_window::Mode::Studio,
@@ -399,9 +405,10 @@ fn main() {
             }
         }
 
-        // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4`: arm the primary
-        // display and record for N seconds. The end-to-end check drives the
-        // recorder this way because unprivileged synthetic clicks are dropped.
+        // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm
+        // the primary display and record for N seconds (or capture once). The
+        // end-to-end check drives the recorder this way because unprivileged
+        // synthetic clicks are dropped.
         if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
             && let Some((mode, secs)) = parse_auto_record(&auto)
         {

@@ -52,6 +52,17 @@ const POLL_INTERVAL: Duration = Duration::from_millis(80);
 /// `MIN_SIZE` in the TSX -- the smallest area selection that can be recorded.
 const AREA_MIN_SIZE: f32 = 150.;
 
+/// `MIN_SCREENSHOT_SIZE` in the TSX: a screenshot area only has to be a
+/// pixel, not the 150px a recording needs.
+const SCREENSHOT_MIN_SIZE: f32 = 1.;
+
+fn area_min_size(mode: Mode) -> f32 {
+    match mode {
+        Mode::Screenshot => SCREENSHOT_MIN_SIZE,
+        _ => AREA_MIN_SIZE,
+    }
+}
+
 /// How close to an edge or corner counts as grabbing that handle. The TSX's
 /// corner buttons are 30px boxes hung 12px outside the crop and its edge
 /// buttons are 10px strips straddling the border; this is the same reach
@@ -284,8 +295,8 @@ impl AreaRect {
         self.y + self.height
     }
 
-    fn is_valid(&self) -> bool {
-        self.width >= AREA_MIN_SIZE && self.height >= AREA_MIN_SIZE
+    fn is_valid_for(&self, min: f32) -> bool {
+        self.width >= min && self.height >= min
     }
 
     fn clamped(self, display: (f32, f32)) -> Self {
@@ -477,6 +488,7 @@ impl OverlayWindow {
     /// record yet (no window under the cursor, no valid area drawn).
     pub fn target(&self, cx: &App) -> Option<ScreenCaptureTarget> {
         let select = self.select.read(cx);
+        let min = area_min_size(select.recording_mode);
         match select.mode? {
             TargetType::Display => Some(ScreenCaptureTarget::Display {
                 id: self.display_id.clone(),
@@ -488,14 +500,12 @@ impl OverlayWindow {
                         id: window.id.clone(),
                     })
             }
-            TargetType::Area => {
-                self.crop
-                    .filter(|crop| crop.is_valid())
-                    .map(|crop| ScreenCaptureTarget::Area {
-                        screen: self.display_id.clone(),
-                        bounds: crop.to_bounds(),
-                    })
-            }
+            TargetType::Area => self.crop.filter(|crop| crop.is_valid_for(min)).map(|crop| {
+                ScreenCaptureTarget::Area {
+                    screen: self.display_id.clone(),
+                    bounds: crop.to_bounds(),
+                }
+            }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
         }
     }
@@ -509,8 +519,11 @@ impl OverlayWindow {
         };
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
         if self.select.read(cx).recording_mode == Mode::Screenshot {
-            // Screenshots do not go through the recording actors at all, and
-            // that path does not exist in this app yet.
+            // Screenshots never reach the recording actors: the target goes
+            // straight to the capture path, which closes these overlays
+            // itself (`startRecording`'s screenshot branch,
+            // `target-select-overlay.tsx:1995`).
+            cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
             return;
         }
         // Deferred: this runs inside the overlay's own window update and the
@@ -765,7 +778,8 @@ impl OverlayWindow {
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
         let visible = interacting || self.is_active_display(cx);
         let crop = self.crop;
-        let valid = crop.is_some_and(|crop| crop.is_valid());
+        let min = area_min_size(self.select.read(cx).recording_mode);
+        let valid = crop.is_some_and(|crop| crop.is_valid_for(min));
 
         let mut root = div()
             .id("area-root")
@@ -1104,7 +1118,7 @@ impl OverlayWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let mode = self.select.read(cx).recording_mode;
-        let disabled = disabled || target.is_none() || mode == Mode::Screenshot;
+        let disabled = disabled || target.is_none();
 
         // `flex flex-col gap-2.5 items-stretch my-2.5 w-104`.
         div()
@@ -1430,9 +1444,9 @@ impl OverlayWindow {
     }
 
     fn area_mouse_up(&mut self, cx: &mut Context<Self>) {
-        if self.drag.take().is_none() {
+        let Some(drag) = self.drag.take() else {
             return;
-        }
+        };
         if let Some(crop) = self.crop {
             // A click with no drag is not a selection.
             if crop.width < 2. || crop.height < 2. {
@@ -1440,6 +1454,16 @@ impl OverlayWindow {
             } else {
                 self.crop = Some(crop.clamped(self.display_size));
             }
+        }
+        // Releasing a fresh draw in screenshot mode captures immediately --
+        // the screenshot area picker has no confirm step
+        // (`target-select-overlay.tsx`'s area mouse-up). Move/resize grabs
+        // keep the crop for the Start button, same as recording mode.
+        if matches!(drag, AreaDrag::Draw { .. })
+            && self.select.read(cx).recording_mode == Mode::Screenshot
+            && let Some(target) = self.target(cx)
+        {
+            cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
         }
         cx.notify();
     }
@@ -1473,12 +1497,15 @@ mod tests {
         );
     }
 
-    /// `MIN_SIZE` is 150x150; anything smaller is drawn but not recordable.
+    /// `MIN_SIZE` is 150x150 for a recording; anything smaller is drawn but
+    /// not recordable. A screenshot only needs `MIN_SCREENSHOT_SIZE` (1px).
     #[test]
     fn area_validity_matches_the_min_size() {
-        assert!(rect(0., 0., 150., 150.).is_valid());
-        assert!(!rect(0., 0., 149., 400.).is_valid());
-        assert!(!rect(0., 0., 400., 149.).is_valid());
+        assert!(rect(0., 0., 150., 150.).is_valid_for(area_min_size(Mode::Studio)));
+        assert!(!rect(0., 0., 149., 400.).is_valid_for(area_min_size(Mode::Studio)));
+        assert!(!rect(0., 0., 400., 149.).is_valid_for(area_min_size(Mode::Studio)));
+        assert!(rect(0., 0., 20., 20.).is_valid_for(area_min_size(Mode::Screenshot)));
+        assert!(!rect(0., 0., 0.5, 20.).is_valid_for(area_min_size(Mode::Screenshot)));
     }
 
     /// The `ScreenCaptureTarget::Area` bounds are display-relative logical

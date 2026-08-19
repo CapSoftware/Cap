@@ -893,7 +893,8 @@ impl MainWindow {
         // ffprobe duration < wall time proves the pause reached the engine.
         let pause_wiggle = std::env::var("CAP_GPUI_AUTO_PAUSE").is_ok_and(|v| v == "1");
 
-        let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1");
+        let skip_mic = std::env::var("CAP_GPUI_AUTO_NO_MIC").is_ok_and(|v| v == "1")
+            || mode == Mode::Screenshot;
         let required_window = auto_window_title();
 
         cx.spawn_in(window, async move |this, cx| {
@@ -1105,6 +1106,12 @@ impl MainWindow {
         let Some(target) = self.armed_target() else {
             return;
         };
+        if self.mode == Mode::Screenshot {
+            // Screenshot mode never reaches the recording actors -- the
+            // target goes straight to the capture path (`take_screenshot`).
+            cx.defer(move |cx: &mut gpui::App| crate::screenshot::take_screenshot(target, cx));
+            return;
+        }
         self.start_recording_with_target(target, Vec::new(), window, cx);
     }
 

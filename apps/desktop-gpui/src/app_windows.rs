@@ -2356,6 +2356,47 @@ fn open_controls(
     }
 }
 
+/// Hide the pickers before a screenshot grab, the way `take_screenshot` hides
+/// TargetSelectOverlay / CaptureArea / ModeSelect (`recording.rs:2876-2895`):
+/// an overlay still on screen would be in the shot. Returns whether anything
+/// was up -- the caller's cue to wait the same 150ms the Tauri command waits.
+pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
+    if cx.global::<AppWindows>().overlays.is_empty() {
+        return false;
+    }
+    close_target_overlays(cx);
+    true
+}
+
+/// A screenshot finished (`Some` PNG path) or failed (`None`): reveal the
+/// main window if the picker hid it, and refresh every surface that lists
+/// screenshots -- the `NewScreenshotAdded` listeners in the Tauri app. The
+/// Tauri flow opens the screenshot editor from this seam; until that window
+/// exists, Recents is the completion affordance.
+pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
+    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+    let reveal = hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+
+    if captured.is_some() {
+        crate::tray::refresh_previous(cx);
+        if let Some(settings) = cx.global::<AppWindows>().settings {
+            settings
+                .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
+                .ok();
+        }
+    }
+
+    if reveal {
+        // `show_main_window` rescans Recents on the way up, so the new
+        // screenshot is already in the carousel.
+        show_main_window(cx);
+    } else if captured.is_some() {
+        let main = cx.global::<AppWindows>().main;
+        main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+            .ok();
+    }
+}
+
 pub fn refresh_library_after_delete(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let settings = cx.global::<AppWindows>().settings;
