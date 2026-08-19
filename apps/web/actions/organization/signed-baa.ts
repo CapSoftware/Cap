@@ -293,7 +293,27 @@ export async function purchaseSignedBaa(
 	const priceId = getBaaPriceId();
 
 	const customerId = user.stripeCustomerId;
-	if (!customerId || !ownerCanPurchaseSignedBaa(user)) {
+	if (
+		!customerId ||
+		!user.stripeSubscriptionId ||
+		!ownerCanPurchaseSignedBaa(user)
+	) {
+		throw new Error(
+			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
+		);
+	}
+
+	let liveProSubscription: Stripe.Subscription;
+	try {
+		liveProSubscription = await stripe().subscriptions.retrieve(
+			user.stripeSubscriptionId,
+		);
+	} catch {
+		throw new Error(
+			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
+		);
+	}
+	if (!CAP_PRO_STATUSES.has(liveProSubscription.status)) {
 		throw new Error(
 			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 		);

@@ -214,6 +214,34 @@ describe("Signed BAA entitlement", () => {
 		).rejects.toThrow("active Cap Pro subscription");
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
+
+	it("rejects purchase when Stripe says Cap Pro is no longer entitled", async () => {
+		mockOwner({
+			stripeCustomerId: "cus_1",
+			stripeSubscriptionId: "sub_stale",
+			stripeSubscriptionStatus: "active",
+		});
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_stale",
+			status: "canceled",
+		});
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		await expect(
+			purchaseSignedBaa("org-1" as never, {
+				entityName: "Acme Health, Inc.",
+				entityType: "Delaware corporation",
+				entityAddress: "123 Main St, San Francisco, CA 94105",
+				signerName: "Jane Smith",
+				signerTitle: "CEO",
+				noticesEmail: "legal@acme.com",
+				signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
+			}),
+		).rejects.toThrow("active Cap Pro subscription");
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+	});
 });
 
 const VALID_INPUT = {
@@ -243,6 +271,7 @@ async function setupPurchaseAttempt() {
 	vi.mocked(sendEmail).mockResolvedValue(undefined as never);
 	mockStripe.subscriptions.retrieve.mockResolvedValue({
 		id: "sub_active",
+		status: "active",
 		default_payment_method: "pm_1",
 	});
 }
