@@ -200,6 +200,11 @@ export function AnnotationLayer(props: {
 
 		setIsDrawing(true);
 		const id = crypto.randomUUID();
+		const styleSource =
+			tool === "draw"
+				? (annotations.find((a) => a.id === selectedAnnotationId()) ??
+					[...annotations].reverse().find((a) => a.type === "draw"))
+				: undefined;
 		const newAnn: Annotation = {
 			id,
 			type: tool as AnnotationType,
@@ -207,10 +212,13 @@ export function AnnotationLayer(props: {
 			y: startY,
 			width: 0,
 			height: 0,
-			strokeColor: tool === "mask" ? "transparent" : "#F05656",
-			strokeWidth: tool === "mask" ? 0 : 4,
+			strokeColor:
+				tool === "mask"
+					? "transparent"
+					: (styleSource?.strokeColor ?? "#F05656"),
+			strokeWidth: tool === "mask" ? 0 : (styleSource?.strokeWidth ?? 4),
 			fillColor: "transparent",
-			opacity: 1,
+			opacity: styleSource?.opacity ?? 1,
 			rotation: 0,
 			text: tool === "text" ? "Text" : null,
 			maskType: tool === "mask" ? "pixelate" : null,
@@ -448,7 +456,6 @@ export function AnnotationLayer(props: {
 				setAnnotations((prev) => [...prev, ann]);
 				setTempAnnotation(null);
 				setIsDrawing(false);
-				setActiveTool("select");
 				setSelectedAnnotationId(ann.id);
 				return;
 			}
@@ -559,9 +566,9 @@ export function AnnotationLayer(props: {
 	};
 
 	const startDrag = (e: MouseEvent, id: string, handle?: string) => {
+		if (activeTool() !== "select") return;
 		e.preventDefault();
 		e.stopPropagation();
-		if (activeTool() !== "select") return;
 		window.getSelection()?.removeAllRanges();
 
 		const svg = (e.currentTarget as Element).closest("svg");
