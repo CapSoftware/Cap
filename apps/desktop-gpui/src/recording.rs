@@ -493,12 +493,56 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         _ => Some(read_shareable_content().await?),
     };
 
+    // `desktop_recording_defaults` (`src-tauri/src/recording.rs:1102-1116`):
+    // the user's persisted settings, applied through the same shared
+    // `RecordingDefaults` seam so both apps build recordings identically.
+    let settings = crate::store::GeneralSettings::load();
+    let defaults = cap_recording::RecordingDefaults {
+        custom_cursor_capture: settings.custom_cursor_capture,
+        capture_keyboard_events: settings.capture_keyboard_events,
+        crash_recovery_recording: settings.crash_recovery_recording,
+        max_fps: settings.max_fps,
+        studio_recording_quality: settings.studio_recording_quality.into(),
+        out_of_process_muxer: settings.out_of_process_muxer,
+        instant_mode_max_resolution: cap_recording::DEFAULT_INSTANT_MODE_MAX_RESOLUTION,
+    };
+    // The instant output cap is plan-gated at start time, not at settings
+    // time (`recording.rs:1634-1639`): free stays at the free cap even if a
+    // stale store value says otherwise.
+    let instant_max_resolution = if crate::store::auth_snapshot().is_upgraded() {
+        settings.instant_mode_max_resolution
+    } else {
+        cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    };
+
+    #[cfg(target_os = "macos")]
+    let excluded_windows = {
+        let mut excluded = config.excluded_windows.clone();
+        let mut rules = settings.excluded_windows.clone();
+        if config.mode == RecordingMode::Instant {
+            // `filter_for_instant_mode`: instant has no compositing step,
+            // so the camera bubble stays in the picture there.
+            rules.retain(|rule| rule.window_title.as_deref() != Some("Cap Camera"));
+        }
+        for id in resolve_excluded_window_ids(&rules) {
+            if !excluded.contains(&id) {
+                excluded.push(id);
+            }
+        }
+        excluded
+    };
+    #[cfg(not(target_os = "macos"))]
+    let excluded_windows = config.excluded_windows.clone();
+
     let handle = match config.mode {
         RecordingMode::Studio => {
-            let mut builder =
+            let mut builder = defaults.apply_to_studio_builder(
                 studio_recording::Actor::builder(project_dir.clone(), config.target.clone())
-                    .with_system_audio(config.system_audio)
-                    .with_excluded_windows(config.excluded_windows.clone());
+                    .with_system_audio(config.system_audio),
+                camera_lock.is_some(),
+                None,
+            );
+            builder = builder.with_excluded_windows(excluded_windows.clone());
             if let Some(lock) = camera_lock.clone() {
                 builder = builder.with_camera_feed(lock);
             }
@@ -519,7 +563,8 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
             let mut builder =
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
-                    .with_excluded_windows(config.excluded_windows.clone());
+                    .with_max_output_size(instant_max_resolution)
+                    .with_excluded_windows(excluded_windows.clone());
             if let Some(lock) = camera_lock.clone() {
                 builder = builder.with_camera_feed(lock);
             }
@@ -546,6 +591,47 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         _camera_feed: camera_feed,
         _mic_errors: mic_errors,
     })
+}
+
+/// `window_exclusion::resolve_window_ids`: every on-screen window matching a
+/// configured exclusion rule, by id. Our own windows are excluded by window
+/// number in `begin_recording` before this runs; this resolves the
+/// user-configured (or default) rules -- other apps, other Cap installs.
+#[cfg(target_os = "macos")]
+fn resolve_excluded_window_ids(
+    exclusions: &[crate::store::WindowExclusion],
+) -> Vec<scap_targets::WindowId> {
+    if exclusions.is_empty() {
+        return Vec::new();
+    }
+
+    scap_targets::Window::list()
+        .into_iter()
+        .filter_map(|window| {
+            let owner_name = window.owner_name();
+            let window_title = window.name();
+            let bundle_identifier = window.raw_handle().bundle_identifier();
+            let matches = exclusions.iter().any(|entry| {
+                entry.matches(
+                    bundle_identifier.as_deref(),
+                    owner_name.as_deref(),
+                    window_title.as_deref(),
+                )
+            });
+            if !matches {
+                return None;
+            }
+            let window_id = window.id();
+            tracing::info!(
+                %window_id,
+                ?owner_name,
+                ?window_title,
+                ?bundle_identifier,
+                "excluding window from capture"
+            );
+            Some(window_id)
+        })
+        .collect()
 }
 
 async fn setup_camera(
