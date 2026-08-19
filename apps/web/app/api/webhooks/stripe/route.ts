@@ -470,7 +470,10 @@ export const POST = async (req: Request) => {
 				// Stripe retries the card.
 				const entitledStatuses = new Set(["active", "trialing", "past_due"]);
 				const inviteQuota = subscriptions.data
-					.filter((sub) => entitledStatuses.has(sub.status))
+					.filter(
+						(sub) =>
+							entitledStatuses.has(sub.status) && !isSignedBaaSubscription(sub),
+					)
 					.reduce((total, sub) => {
 						return (
 							total +
@@ -520,6 +523,12 @@ export const POST = async (req: Request) => {
 					invoice.billing_reason !== "subscription_cycle" &&
 					invoice.billing_reason !== "subscription_update"
 				) {
+					return NextResponse.json({ received: true });
+				}
+
+				// Signed BAA renewals must not trigger the Cap Pro dunning email;
+				// its status is tracked via customer.subscription.updated instead.
+				if (invoice.subscription_details?.metadata?.type === "signed_baa") {
 					return NextResponse.json({ received: true });
 				}
 
