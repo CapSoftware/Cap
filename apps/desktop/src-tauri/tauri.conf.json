@@ -57,6 +57,7 @@
 			"icons/icon.ico"
 		],
 		"resources": {
+			"binaries/gpui/*": "gpui/",
 			"assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
 			"assets/backgrounds/blue/*": "assets/backgrounds/blue/",
 			"assets/backgrounds/cities/*": "assets/backgrounds/cities/",
