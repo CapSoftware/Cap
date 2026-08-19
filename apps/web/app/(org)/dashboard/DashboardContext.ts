@@ -40,7 +40,6 @@ export type SharedContext = {
 	isDeveloperSection: boolean;
 	developerApps: DeveloperApp[] | null;
 	setDeveloperApps: (apps: DeveloperApp[] | null) => void;
-	/** Free-plan monthly shareable link usage; null for Pro users. */
 	shareableLinkUsage: { used: number; limit: number } | null;
 };
 
