@@ -2,7 +2,11 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { PaymentFailed } from "@cap/database/emails/payment-failed";
 import { nanoId } from "@cap/database/helpers";
-import { developerCreditTransactions, users } from "@cap/database/schema";
+import {
+	developerCreditTransactions,
+	signedBaas,
+	users,
+} from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
@@ -85,6 +89,32 @@ async function grantDeveloperCredits(
 	});
 
 	console.log("Developer credits added successfully");
+	return NextResponse.json({ received: true });
+}
+
+const BAA_ENTITLED_STATUSES = new Set(["active", "trialing", "past_due"]);
+
+// The Signed BAA add-on lives on its own subscription for the same customer.
+// It must never be treated as the Pro subscription: it would otherwise
+// overwrite users.stripeSubscriptionId/Status and inflate the seat quota.
+function isSignedBaaSubscription(subscription: Stripe.Subscription) {
+	return subscription.metadata?.type === "signed_baa";
+}
+
+async function syncSignedBaaStatus(
+	subscription: Stripe.Subscription,
+): Promise<Response> {
+	const status = BAA_ENTITLED_STATUSES.has(subscription.status)
+		? "active"
+		: "canceled";
+	await db()
+		.update(signedBaas)
+		.set({ status })
+		.where(eq(signedBaas.stripeSubscriptionId, subscription.id));
+	console.log("Signed BAA subscription synced", {
+		subscriptionId: subscription.id,
+		status,
+	});
 	return NextResponse.json({ received: true });
 }
 
@@ -375,6 +405,10 @@ export const POST = async (req: Request) => {
 					customerId: subscription.customer,
 				});
 
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
+				}
+
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
@@ -552,6 +586,11 @@ export const POST = async (req: Request) => {
 
 			if (event.type === "customer.subscription.deleted") {
 				const subscription = event.data.object as Stripe.Subscription;
+
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
+				}
+
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
