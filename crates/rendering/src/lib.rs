@@ -2042,6 +2042,18 @@ impl RenderVideoConstants {
             preserve_screen_alpha: false,
         };
 
+        Self::new_with_options(options, recording_meta, meta).await
+    }
+
+    /// [`Self::new`] with the `RenderOptions` supplied by the caller instead
+    /// of probed from segment videos -- the still-image path (screenshot
+    /// editors), where there is no `SegmentRecordings` to measure and the
+    /// alpha channel must survive (`preserve_screen_alpha`).
+    pub async fn new_with_options(
+        options: RenderOptions,
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
+    ) -> Result<Self, RenderingError> {
         let instance = create_wgpu_instance().await;
 
         let force_software_adapter = force_software_wgpu_adapter();
