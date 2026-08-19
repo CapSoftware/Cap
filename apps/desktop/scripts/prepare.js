@@ -87,6 +87,8 @@ export async function createTauriPlatformConfigs(
 				],
 				resources: {
 					"../../../target/ffmpeg/bin/*.dll": "./",
+					"../../../target/native-deps/dxc/*.dll": "./",
+					"../../../target/native-deps/dxc/LICENSE-*.txt": "licenses/dxc/",
 					"../../../target/native-deps/onnxruntime/lib/*.dll": "./",
 				},
 				windows: {
