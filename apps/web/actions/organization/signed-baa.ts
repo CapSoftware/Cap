@@ -292,12 +292,12 @@ export async function purchaseSignedBaa(
 	const { user } = await getOwnerContext(organizationId);
 	const priceId = getBaaPriceId();
 
-	if (!ownerCanPurchaseSignedBaa(user)) {
+	const customerId = user.stripeCustomerId;
+	if (!customerId || !ownerCanPurchaseSignedBaa(user)) {
 		throw new Error(
 			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 		);
 	}
-	const customerId = user.stripeCustomerId;
 
 	const [existing] = await db()
 		.select()
