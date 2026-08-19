@@ -212,14 +212,25 @@ struct CameraPreviewView {
     /// Bumped by the canvas paint callback; the parent's cadence log reads it
     /// to prove notify-driven repaints actually present.
     paints: Arc<AtomicU32>,
-    /// `camera_error` feeds the placeholder message; the cache only busts on
-    /// this entity's own notify, so observe the source.
+    /// `Feeds::camera_error`, copied on change. The observe must not notify
+    /// unconditionally: `Feeds` also carries the mic meter, which notifies at
+    /// ~20Hz whenever a microphone is selected, and each of those would
+    /// repaint the whole preview for a message that did not change.
+    camera_error: Option<String>,
     _feeds_subscription: Subscription,
 }
 
 impl CameraPreviewView {
     fn new(theme: Theme, radius: f32, paints: Arc<AtomicU32>, cx: &mut Context<Self>) -> Self {
-        let feeds_subscription = cx.observe(&Feeds::global(cx), |_, _, cx| cx.notify());
+        let feeds = Feeds::global(cx);
+        let camera_error = feeds.read(cx).camera_error.clone();
+        let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
+            let error = feeds.read(cx).camera_error.clone();
+            if this.camera_error != error {
+                this.camera_error = error;
+                cx.notify();
+            }
+        });
         Self {
             theme,
             radius,
@@ -227,6 +238,7 @@ impl CameraPreviewView {
             latest_frame: None,
             frame_dims: None,
             paints,
+            camera_error,
             _feeds_subscription: feeds_subscription,
         }
     }
@@ -253,7 +265,7 @@ impl CameraPreviewView {
 }
 
 impl Render for CameraPreviewView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let radius = self.radius;
 
@@ -304,8 +316,7 @@ impl Render for CameraPreviewView {
         let showing_frame = false;
 
         if !showing_frame {
-            let message = Feeds::global(cx)
-                .read(cx)
+            let message = self
                 .camera_error
                 .clone()
                 .unwrap_or_else(|| "Loading camera...".into());
