@@ -750,7 +750,13 @@ export function AnnotationLayer(props: {
 							/>
 						</Show>
 
-						<Show when={selectedAnnotationId() === ann.id && !textEditingId()}>
+						<Show
+							when={
+								selectedAnnotationId() === ann.id &&
+								!textEditingId() &&
+								activeTool() === "select"
+							}
+						>
 							<SelectionHandles
 								annotation={ann}
 								handleSize={handleSize()}
