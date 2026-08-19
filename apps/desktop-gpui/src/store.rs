@@ -459,6 +459,16 @@ settings_enum! {
     default = Balanced
 }
 
+impl From<StudioQuality> for cap_recording::StudioQuality {
+    fn from(quality: StudioQuality) -> Self {
+        match quality {
+            StudioQuality::Compatibility => Self::Compatibility,
+            StudioQuality::Balanced => Self::Balanced,
+            StudioQuality::Ultra => Self::Ultra,
+        }
+    }
+}
+
 settings_enum! {
     /// `MainWindowRecordingStartBehaviour`. British spelling in both the JSON
     /// and the label, as shipped.
@@ -569,6 +579,38 @@ impl WindowExclusion {
             return self.bundle_identifier.as_deref();
         }
         self.bundle_identifier.as_deref()
+    }
+
+    /// `WindowExclusion::matches` in `src-tauri/src/window_exclusion.rs`,
+    /// verbatim: bundle id alone matches; owner+title requires both; owner or
+    /// title alone match on their own.
+    pub fn matches(
+        &self,
+        bundle_identifier: Option<&str>,
+        owner_name: Option<&str>,
+        window_title: Option<&str>,
+    ) -> bool {
+        if let Some(identifier) = self.bundle_identifier.as_deref()
+            && bundle_identifier == Some(identifier)
+        {
+            return true;
+        }
+
+        if let Some(expected_owner) = self.owner_name.as_deref() {
+            let owner_matches = owner_name == Some(expected_owner);
+            if let Some(expected_title) = self.window_title.as_deref() {
+                return owner_matches && window_title == Some(expected_title);
+            }
+            if owner_matches {
+                return true;
+            }
+        }
+
+        if let Some(expected_title) = self.window_title.as_deref() {
+            return window_title == Some(expected_title);
+        }
+
+        false
     }
 }
 
@@ -772,6 +814,9 @@ impl GeneralSettings {
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
             default_project_name_template: opt_string_at(general, "defaultProjectNameTemplate"),
+            // Key absent -> the default exclusion list, matching the Rust
+            // struct's `#[serde(default = "default_excluded_windows")]`. Key
+            // present but empty means the user removed every entry.
             excluded_windows: general
                 .get("excludedWindows")
                 .and_then(Value::as_array)
@@ -781,7 +826,7 @@ impl GeneralSettings {
                         .filter_map(WindowExclusion::from_json)
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_else(default_excluded_windows),
             update_channel: enum_at(general, "updateChannel"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
@@ -1816,5 +1861,72 @@ mod tests {
         assert_eq!(a.len(), 36);
         assert_eq!(a.as_bytes()[14], b'4');
         assert!(matches!(a.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+    }
+
+    /// The `window_exclusion.rs` matching tests, ported with the module: the
+    /// two apps must agree on which windows a rule excludes.
+    #[test]
+    fn exclusion_matches_by_each_field_and_owner_title_requires_both() {
+        let title = WindowExclusion {
+            window_title: Some("Cap Camera".into()),
+            ..Default::default()
+        };
+        assert!(title.matches(None, None, Some("Cap Camera")));
+        assert!(!title.matches(None, None, Some("Other Window")));
+        assert!(!title.matches(None, None, None));
+
+        let bundle = WindowExclusion {
+            bundle_identifier: Some("com.cap.desktop".into()),
+            ..Default::default()
+        };
+        assert!(bundle.matches(Some("com.cap.desktop"), None, None));
+        assert!(!bundle.matches(Some("com.other.app"), None, None));
+
+        let owner = WindowExclusion {
+            owner_name: Some("Cap".into()),
+            ..Default::default()
+        };
+        assert!(owner.matches(None, Some("Cap"), None));
+        assert!(!owner.matches(None, Some("Other"), None));
+
+        let owner_and_title = WindowExclusion {
+            owner_name: Some("Cap".into()),
+            window_title: Some("Cap Camera".into()),
+            ..Default::default()
+        };
+        assert!(owner_and_title.matches(None, Some("Cap"), Some("Cap Camera")));
+        assert!(!owner_and_title.matches(None, Some("Cap"), Some("Wrong Title")));
+        assert!(!owner_and_title.matches(None, Some("Wrong Owner"), Some("Cap Camera")));
+        assert!(!owner_and_title.matches(None, None, Some("Cap Camera")));
+
+        let empty = WindowExclusion::default();
+        assert!(!empty.matches(None, None, None));
+        assert!(!empty.matches(Some("any"), Some("any"), Some("any")));
+
+        let bundle_first = WindowExclusion {
+            bundle_identifier: Some("com.cap.desktop".into()),
+            window_title: Some("Cap Camera".into()),
+            ..Default::default()
+        };
+        assert!(bundle_first.matches(Some("com.cap.desktop"), None, Some("Wrong")));
+    }
+
+    /// Key absent -> the default exclusion list (the Rust struct's serde
+    /// default); key present but empty -> the user cleared every entry.
+    #[test]
+    fn excluded_windows_default_only_when_key_is_absent() {
+        let absent = GeneralSettings::from_sections(&Map::new(), &Map::new());
+        assert_eq!(absent.excluded_windows, default_excluded_windows());
+        assert!(
+            absent
+                .excluded_windows
+                .iter()
+                .any(|e| e.window_title.as_deref() == Some("Cap Camera"))
+        );
+
+        let mut general = Map::new();
+        general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
+        let cleared = GeneralSettings::from_sections(&general, &Map::new());
+        assert!(cleared.excluded_windows.is_empty());
     }
 }
