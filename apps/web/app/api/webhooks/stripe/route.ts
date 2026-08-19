@@ -661,6 +661,48 @@ export const POST = async (req: Request) => {
 					foundUserId,
 					inviteQuota: 1,
 				});
+
+				// The Signed BAA add-on cannot outlive Cap Pro: its terms tie
+				// termination to the services agreement. When the last Pro
+				// subscription is deleted, cancel any active BAA subscription so
+				// the customer isn't billed $99/mo for a service they no longer
+				// have. Skipped when another entitled Pro subscription remains
+				// (e.g. a plan switch that deletes and recreates).
+				const remainingSubscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "all",
+					limit: 100,
+				});
+				const stillEntitled = new Set(["active", "trialing", "past_due"]);
+				const hasOtherProSubscription = remainingSubscriptions.data.some(
+					(sub) =>
+						!isSignedBaaSubscription(sub) && stillEntitled.has(sub.status),
+				);
+				if (!hasOtherProSubscription) {
+					for (const sub of remainingSubscriptions.data) {
+						if (isSignedBaaSubscription(sub) && stillEntitled.has(sub.status)) {
+							try {
+								await stripe().subscriptions.cancel(sub.id);
+								// The cancellation fires its own deleted webhook which
+								// also syncs the row; update eagerly in case that
+								// delivery fails or arrives late.
+								await db()
+									.update(signedBaas)
+									.set({ status: "canceled" })
+									.where(eq(signedBaas.stripeSubscriptionId, sub.id));
+								console.log("Signed BAA subscription canceled alongside Pro", {
+									subscriptionId: sub.id,
+								});
+							} catch (cancelError) {
+								console.error(
+									"Failed to cancel Signed BAA subscription",
+									sub.id,
+									cancelError,
+								);
+							}
+						}
+					}
+				}
 			}
 
 			return NextResponse.json({ received: true });
