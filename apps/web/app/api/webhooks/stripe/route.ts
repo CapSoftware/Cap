@@ -488,6 +488,23 @@ export const POST = async (req: Request) => {
 					foundUserId,
 				);
 
+				const subscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "all",
+					limit: 100,
+				});
+
+				console.log("Retrieved all subscriptions:", {
+					count: subscriptions.data.length,
+				});
+
+				// BAA cleanup depends only on Stripe state, so it must run even
+				// when the customer cannot be mapped to a user; the 202 below is
+				// treated as delivered and the event is never redelivered.
+				if (!hasEntitledProSubscription(subscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(subscriptions.data);
+				}
+
 				if (!dbUser) {
 					console.log(
 						"No user found after all retries. Returning 202 to allow retry.",
@@ -501,16 +518,6 @@ export const POST = async (req: Request) => {
 					userId: dbUser.id,
 					email: dbUser.email,
 					name: dbUser.name,
-				});
-
-				const subscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "all",
-					limit: 100,
-				});
-
-				console.log("Retrieved all subscriptions:", {
-					count: subscriptions.data.length,
 				});
 
 				// Quota follows entitlement: past_due keeps its seats during the
@@ -553,10 +560,6 @@ export const POST = async (req: Request) => {
 					"Successfully updated user in database with new invite quota:",
 					inviteQuota,
 				);
-
-				if (!hasEntitledProSubscription(subscriptions.data)) {
-					await cancelEntitledBaaSubscriptions(subscriptions.data);
-				}
 			}
 
 			if (event.type === "invoice.payment_failed") {
