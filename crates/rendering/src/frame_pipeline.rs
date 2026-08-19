@@ -949,6 +949,11 @@ pub struct RgbaToBgraSurfaceConverter {
     surface_ring: Vec<BgraSurfaceSlot>,
     next_surface: usize,
     pool_size: (u32, u32),
+    /// Bind groups keyed by source-texture identity. The session ping-pongs
+    /// between two render targets, so two entries cover the steady state; a
+    /// resolution change swaps both entries out within two frames, so no
+    /// retired texture is kept alive past that.
+    source_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
 }
 
 #[cfg(target_os = "macos")]
@@ -957,7 +962,10 @@ unsafe impl Send for RgbaToBgraSurfaceConverter {}
 #[cfg(target_os = "macos")]
 struct BgraSurfaceSlot {
     pixel_buffer: arc::R<cv::PixelBuf>,
-    texture: wgpu::Texture,
+    /// Held so the IOSurface-imported texture's lifetime is explicit rather
+    /// than riding on `view`'s internal parent reference.
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
 }
 
 #[cfg(target_os = "macos")]
@@ -1022,7 +1030,37 @@ impl RgbaToBgraSurfaceConverter {
             surface_ring: Vec::new(),
             next_surface: 0,
             pool_size: (0, 0),
+            source_bind_groups: Vec::new(),
         })
+    }
+
+    fn source_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        source_texture: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        if let Some((_, bind_group)) = self
+            .source_bind_groups
+            .iter()
+            .find(|(texture, _)| texture == source_texture)
+        {
+            return bind_group.clone();
+        }
+        let source_view = source_texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to BGRA Surface Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            }],
+        });
+        if self.source_bind_groups.len() >= 2 {
+            self.source_bind_groups.remove(0);
+        }
+        self.source_bind_groups
+            .push((source_texture.clone(), bind_group.clone()));
+        bind_group
     }
 
     fn ensure_pixel_buffer_pool(
@@ -1093,9 +1131,11 @@ impl RgbaToBgraSurfaceConverter {
                 Some("BGRA IOSurface"),
             )
             .map_err(|error| RenderingError::Surface(error.to_string()))?;
+            let view = texture.create_view(&Default::default());
             surface_ring.push(BgraSurfaceSlot {
                 pixel_buffer,
-                texture,
+                _texture: texture,
+                view,
             });
         }
 
@@ -1117,19 +1157,11 @@ impl RgbaToBgraSurfaceConverter {
         frame_rate: u32,
     ) -> Result<PendingSurface, RenderingError> {
         self.ensure_pixel_buffer_pool(device, width, height)?;
+        let bind_group = self.source_bind_group(device, source_texture);
         let slot = &self.surface_ring[self.next_surface];
         let pixel_buffer = slot.pixel_buffer.clone();
+        let dest_view = slot.view.clone();
         self.next_surface = (self.next_surface + 1) % self.surface_ring.len();
-        let source_view = source_texture.create_view(&Default::default());
-        let dest_view = slot.texture.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RGBA to BGRA Surface Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&source_view),
-            }],
-        });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
