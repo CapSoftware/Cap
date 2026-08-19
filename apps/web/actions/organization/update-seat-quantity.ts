@@ -208,6 +208,9 @@ export async function updateSeatQuantity(
 				subscription.id,
 				restoreError,
 			);
+			throw new Error(
+				"We couldn't complete the seat change or keep your scheduled cancellation. Please contact support.",
+			);
 		}
 	};
 

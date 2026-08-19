@@ -290,4 +290,26 @@ describe("updateSeatQuantity", () => {
 			cancel_at_period_end: true,
 		});
 	});
+
+	it("does not claim cancellation remains when restore fails", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockRejectedValueOnce(new Error("card declined"))
+			.mockRejectedValueOnce(new Error("restore failed"));
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"keep your scheduled cancellation",
+		);
+	});
 });
