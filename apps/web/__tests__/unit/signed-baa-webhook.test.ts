@@ -274,6 +274,47 @@ describe("Stripe webhook — Signed BAA", () => {
 		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith("sub_baa");
 	});
 
+	it("cancels Signed BAA on Pro deletion even without a user mapping", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.deleted",
+			data: {
+				object: {
+					id: "sub_pro",
+					status: "canceled",
+					customer: "cus_1",
+					metadata: {},
+				},
+			},
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			email: null,
+			metadata: {},
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [
+				{
+					id: "sub_pro",
+					status: "canceled",
+					metadata: {},
+					items: { data: [{ quantity: 1 }] },
+				},
+				{
+					id: "sub_baa",
+					status: "active",
+					metadata: { type: "signed_baa" },
+					items: { data: [{ quantity: 1 }] },
+				},
+			],
+		});
+		mockStripe.subscriptions.cancel.mockResolvedValue({ id: "sub_baa" });
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(400);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith("sub_baa");
+	});
+
 	it("fails the webhook when Signed BAA cancellation is rejected", async () => {
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "customer.subscription.updated",

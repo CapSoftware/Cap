@@ -658,6 +658,19 @@ export const POST = async (req: Request) => {
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
+
+				// BAA cleanup depends only on Stripe state; it must run before the
+				// user-mapping early returns so an unmappable customer can't keep
+				// an active BAA billing after their last Pro subscription ends.
+				const remainingSubscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "all",
+					limit: 100,
+				});
+				if (!hasEntitledProSubscription(remainingSubscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(remainingSubscriptions.data);
+				}
+
 				let foundUserId: User.UserId | undefined;
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId
@@ -716,15 +729,6 @@ export const POST = async (req: Request) => {
 					foundUserId,
 					inviteQuota: 1,
 				});
-
-				const remainingSubscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "all",
-					limit: 100,
-				});
-				if (!hasEntitledProSubscription(remainingSubscriptions.data)) {
-					await cancelEntitledBaaSubscriptions(remainingSubscriptions.data);
-				}
 			}
 
 			return NextResponse.json({ received: true });
