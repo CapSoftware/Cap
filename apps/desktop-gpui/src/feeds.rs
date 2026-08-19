@@ -325,16 +325,26 @@ impl Feeds {
                     .iter()
                     .map(|(_, db)| *db)
                     .fold(f64::MIN, f64::max);
-                if this
-                    .update(cx, |this: &mut Feeds, cx| {
-                        this.mic_level_db = max;
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    return;
+                // Quantized to 0.5dB -- under a pixel on both level mappings --
+                // so an unchanged level (a silent or absent signal pins at
+                // -96.0) stops waking every `Feeds` observer and the controls
+                // bar at 20Hz for a bar that would not visibly move.
+                let quantized = (max * 2.0).round() / 2.0;
+                let changed = this.update(cx, |this: &mut Feeds, cx| {
+                    if this.mic_level_db == quantized {
+                        return false;
+                    }
+                    this.mic_level_db = quantized;
+                    cx.notify();
+                    true
+                });
+                match changed {
+                    Err(_) => return,
+                    Ok(true) => {
+                        cx.update(app_windows::refresh_controls_window);
+                    }
+                    Ok(false) => {}
                 }
-                cx.update(app_windows::refresh_controls_window);
             }
         });
         self._meter_pump = Some(pump);
