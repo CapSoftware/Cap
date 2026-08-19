@@ -22,6 +22,7 @@ mod fake_window;
 mod flags;
 pub mod frame_ws;
 mod general_settings;
+mod gpui_app;
 mod hotkeys;
 mod http_client;
 mod import;
@@ -4881,6 +4882,8 @@ fn specta_builder() -> tauri_specta::Builder {
             set_mic_input,
             set_camera_input,
             set_native_camera_preview_enabled,
+            gpui_app::gpui_app_available,
+            gpui_app::launch_gpui_app,
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
@@ -5295,6 +5298,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+            gpui_app::launch_at_startup_if_enabled(&app);
             configure_camera_blur_recovery(&app, previous_termination);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
