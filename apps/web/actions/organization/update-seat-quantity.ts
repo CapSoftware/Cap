@@ -193,6 +193,14 @@ export async function updateSeatQuantity(
 	}
 
 	const isSeatIncrease = newQuantity > currentQuantity;
+	// Choosing a seat count revokes any scheduled cancellation. Stripe rejects
+	// cancel_at_period_end combined with payment_behavior=pending_if_incomplete,
+	// so it must be cleared in a separate call before the quantity update.
+	if (subscription.cancel_at_period_end) {
+		await stripe().subscriptions.update(subscription.id, {
+			cancel_at_period_end: false,
+		});
+	}
 	// Increases charge the prorated difference immediately; decreases take
 	// effect immediately but never credit or refund the already-paid period —
 	// the next renewal simply bills the lower quantity.
