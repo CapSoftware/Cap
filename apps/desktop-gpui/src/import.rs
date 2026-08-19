@@ -218,9 +218,13 @@ fn apply_progress(update: ImportProgress, cx: &mut App) {
         // `importVideoPath` opens the editor on the imported bundle; the
         // Tauri version opens it up front and shows `ImportProgress.tsx`
         // inside, this app opens it once the bundle is Complete (deviation:
-        // the gpui editor has no importing screen).
-        if kind == ImportKind::Video && cx.has_global::<crate::app_windows::AppWindows>() {
-            crate::app_windows::open_editor(project_path, cx);
+        // the gpui editor has no importing screen). `importImagePath` ends in
+        // `ShowCapWindow::ScreenshotEditor` the same way.
+        if cx.has_global::<crate::app_windows::AppWindows>() {
+            match kind {
+                ImportKind::Video => crate::app_windows::open_editor(project_path, cx),
+                ImportKind::Image => crate::app_windows::open_screenshot_editor(project_path, cx),
+            }
         }
     }
 

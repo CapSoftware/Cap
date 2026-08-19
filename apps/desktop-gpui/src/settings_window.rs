@@ -2018,7 +2018,10 @@ impl SettingsWindow {
             .child(actions)
             .on_click({
                 let png = item.path.clone();
-                move |_, _, _| library::open_path(&png)
+                move |_, _, cx| {
+                    let png = png.clone();
+                    cx.defer(move |cx| crate::app_windows::open_screenshot_editor(png, cx));
+                }
             })
     }
 

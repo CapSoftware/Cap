@@ -36,6 +36,7 @@ mod platform;
 mod presets;
 mod recording;
 mod screenshot;
+mod screenshot_editor;
 mod session;
 mod settings_pages;
 mod settings_window;
@@ -90,6 +91,20 @@ fn resolve_auto_editor(target: &str) -> Option<std::path::PathBuf> {
     library::recent_media()
         .into_iter()
         .find(|item| item.kind == library::MediaKind::Studio)
+        .map(|item| item.bundle)
+}
+
+/// `CAP_GPUI_AUTO_SCREENSHOT_EDITOR`: a screenshot `.cap` path, or `1` for
+/// the newest screenshot in the library -- [`resolve_auto_editor`]'s shape
+/// for the screenshot editor.
+fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
+    if target != "1" {
+        let path = std::path::PathBuf::from(target);
+        return path.is_dir().then_some(path);
+    }
+    library::recent_media()
+        .into_iter()
+        .find(|item| item.kind == library::MediaKind::Screenshot)
         .map(|item| item.bundle)
 }
 
@@ -402,6 +417,21 @@ fn main() {
             match resolve_auto_editor(&target) {
                 Some(path) => app_windows::open_editor(path, cx),
                 None => tracing::error!(target, "CAP_GPUI_AUTO_EDITOR: no studio .cap to open"),
+            }
+        }
+
+        // `CAP_GPUI_AUTO_SCREENSHOT_EDITOR=<path-to-.cap>` (or `1` for the
+        // newest screenshot): open the screenshot editor the way a Recents
+        // card does.
+        if let Ok(target) = std::env::var("CAP_GPUI_AUTO_SCREENSHOT_EDITOR")
+            && !target.is_empty()
+        {
+            match resolve_auto_screenshot_editor(&target) {
+                Some(path) => app_windows::open_screenshot_editor(path, cx),
+                None => tracing::error!(
+                    target,
+                    "CAP_GPUI_AUTO_SCREENSHOT_EDITOR: no screenshot .cap to open"
+                ),
             }
         }
 

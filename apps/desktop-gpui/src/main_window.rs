@@ -2238,7 +2238,10 @@ impl MainWindow {
             item.pretty_name.clone(),
             None,
             0,
-            move |_, _, _| library::open_path(&png),
+            move |_, _, cx| {
+                let png = png.clone();
+                cx.defer(move |cx| app_windows::open_screenshot_editor(png, cx));
+            },
             actions,
             theme,
         )
@@ -3934,9 +3937,9 @@ impl MainWindow {
 
 /// What a click on a Recents card does -- `openRecentMedia`.
 ///
-/// Studio recordings open the editor. Instant recordings open the share
-/// link when one exists, otherwise the bundle is revealed. Screenshots
-/// open the PNG (the screenshot editor is not in this app yet).
+/// Studio recordings open the editor, screenshots the screenshot editor.
+/// Instant recordings open the share link when one exists, otherwise the
+/// bundle is revealed.
 pub fn activate_recent(item: &RecentItem, cx: &mut gpui::App) {
     match item.kind {
         MediaKind::Studio => {
@@ -3952,11 +3955,8 @@ pub fn activate_recent(item: &RecentItem, cx: &mut gpui::App) {
             }
         }
         MediaKind::Screenshot => {
-            if let Some(path) = &item.thumbnail {
-                library::open_path(path);
-            } else {
-                library::open_path(&item.bundle);
-            }
+            let bundle = item.bundle.clone();
+            cx.defer(move |cx| app_windows::open_screenshot_editor(bundle, cx));
         }
     }
 }

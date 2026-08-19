@@ -424,10 +424,8 @@ fn open_previous_item(path: PathBuf, cx: &mut App) {
             .unwrap_or(false);
 
     if is_screenshot {
-        // `ShowCapWindow::ScreenshotEditor` has no gpui counterpart yet
-        // (deviation): the bundle is revealed in Finder instead, which is what
-        // a Recents screenshot card does in this app.
-        library::open_recording_folder(&path, library::RecordingMode::Studio);
+        app_windows::open_screenshot_editor(path, cx);
+        cx.activate(true);
         return;
     }
 

@@ -29,6 +29,7 @@ use crate::{
     onboarding_window::{self, OnboardingWindow},
     platform,
     recording::{RecordingMode, StartConfig},
+    screenshot_editor::{self, ScreenshotEditorWindow},
     session::{Phase, RecordingSession},
     settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
@@ -58,6 +59,9 @@ pub struct AppWindows {
     /// (`windows.rs:3656-3659`). The Tauri app keys its label off an
     /// incrementing id; the path is the identity in both.
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    /// One screenshot editor per `.cap` bundle -- the gpui spelling of
+    /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
+    pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
     /// `hasHiddenMainWindowForPicker` (`new-main/index.tsx:2016-2059`): the
     /// main window hides while the target picker is up, and comes back only on
     /// a dismissal that reveals ("cancelled" -- Escape, the overlay's close
@@ -83,6 +87,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         teleprompter: None,
         overlays: Vec::new(),
         editors: Vec::new(),
+        screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
     });
 
@@ -155,6 +160,11 @@ pub fn broadcast_theme(cx: &mut App) {
     let camera = windows.camera;
     let overlays: Vec<_> = windows.overlays.iter().map(|(_, handle)| *handle).collect();
     let editors: Vec<_> = windows.editors.iter().map(|(_, handle)| *handle).collect();
+    let screenshot_editors: Vec<_> = windows
+        .screenshot_editors
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
 
     let refresh = |window: &mut gpui::Window, cx: &mut gpui::App| {
         crate::theme::apply_native(window, cx);
@@ -207,6 +217,12 @@ pub fn broadcast_theme(cx: &mut App) {
         });
     }
     for handle in editors {
+        let _ = handle.update(cx, |_, window, cx| {
+            refresh(window, cx);
+            cx.notify();
+        });
+    }
+    for handle in screenshot_editors {
         let _ = handle.update(cx, |_, window, cx| {
             refresh(window, cx);
             cx.notify();
@@ -2175,7 +2191,8 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
         }
     }
 
-    let editors_left = cx.global::<AppWindows>().editors.len();
+    let windows = cx.global::<AppWindows>();
+    let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     tracing::info!(
         path = %key.display(),
         editors_left,
@@ -2368,32 +2385,163 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
     true
 }
 
-/// A screenshot finished (`Some` PNG path) or failed (`None`): reveal the
-/// main window if the picker hid it, and refresh every surface that lists
-/// screenshots -- the `NewScreenshotAdded` listeners in the Tauri app. The
-/// Tauri flow opens the screenshot editor from this seam; until that window
-/// exists, Recents is the completion affordance.
+/// A screenshot finished (`Some` PNG path) or failed (`None`): refresh every
+/// surface that lists screenshots -- the `NewScreenshotAdded` listeners in
+/// the Tauri app -- and open the screenshot editor on the new bundle, the
+/// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
+/// window if the picker had hidden it, since nothing else will.
 pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
-    let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
-    let reveal = hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-
-    if captured.is_some() {
-        crate::tray::refresh_previous(cx);
-        if let Some(settings) = cx.global::<AppWindows>().settings {
-            settings
-                .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
-                .ok();
+    let Some(png) = captured else {
+        let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
+        if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+            show_main_window(cx);
         }
+        return;
+    };
+
+    crate::tray::refresh_previous(cx);
+    if let Some(settings) = cx.global::<AppWindows>().settings {
+        settings
+            .update(cx, |view, window, cx| view.refresh_screenshots(window, cx))
+            .ok();
+    }
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+        .ok();
+
+    // The editor owns the foreground now, the way a stopped studio recording
+    // hands off to the video editor; `screenshot_editor_closed` brings the
+    // main window back.
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    open_screenshot_editor(png, cx);
+}
+
+/// Open (or focus) the screenshot editor for a bundle -- the
+/// `ShowCapWindow::ScreenshotEditor` arm: 1240x800, min 800x600, centered,
+/// reused per path. Accepts the PNG or the `.cap` directory.
+///
+/// Must be reached through `cx.defer` from anything inside an entity update:
+/// opening a window paints it synchronously and would double-lease the caller.
+pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
+    let Some(bundle) = screenshot_editor::resolve_bundle(&path) else {
+        tracing::error!(path = %path.display(), "not a screenshot bundle; not opening the editor");
+        return;
+    };
+    let key = editor_key(&bundle);
+
+    if let Some(handle) = cx
+        .global::<AppWindows>()
+        .screenshot_editors
+        .iter()
+        .find(|(existing, _)| existing == &key)
+        .map(|(_, handle)| *handle)
+    {
+        tracing::info!(
+            path = %key.display(),
+            "screenshot editor already open for this bundle; focusing it"
+        );
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::show_native(native);
+            }
+        })
+        .detach();
+        hide_main_window(cx);
+        return;
     }
 
-    if reveal {
-        // `show_main_window` rescans Recents on the way up, so the new
-        // screenshot is already in the carousel.
+    let bounds = Bounds::centered(
+        None,
+        size(
+            px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
+            px(screenshot_editor::SCREENSHOT_EDITOR_HEIGHT),
+        ),
+        cx,
+    );
+
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Screenshot Editor".into()),
+                appears_transparent: true,
+                traffic_light_position: None,
+            }),
+            kind: WindowKind::Normal,
+            focus: true,
+            show: true,
+            is_resizable: true,
+            is_minimizable: true,
+            window_min_size: Some(size(
+                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
+                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
+            )),
+            ..Default::default()
+        },
+        {
+            let key = key.clone();
+            move |window, cx| cx.new(|cx| ScreenshotEditorWindow::new(key, window, cx))
+        },
+    );
+
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            tracing::error!("screenshot editor window failed to open: {error:#}");
+            return;
+        }
+    };
+
+    cx.global_mut::<AppWindows>()
+        .screenshot_editors
+        .push((key.clone(), handle));
+    handle
+        .update(cx, |_, window, _| {
+            platform::kick_display_link(window);
+            tracing::info!(
+                number = platform::window_number(window),
+                path = %key.display(),
+                "screenshot editor window opened"
+            );
+        })
+        .ok();
+
+    hide_main_window(cx);
+    screenshot_editor::load_screenshot_project(key, handle, cx);
+}
+
+/// A screenshot editor window is going away: flush its pending config write
+/// and bring the main window back once the last editor of either kind closes
+/// -- the same `Destroyed` arm `editor_closed` mirrors.
+pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
+    let key = editor_key(bundle);
+    let handle = {
+        let editors = &mut cx.global_mut::<AppWindows>().screenshot_editors;
+        let index = editors.iter().position(|(path, _)| path == &key);
+        index.map(|index| editors.remove(index).1)
+    };
+
+    if let Some(handle) = handle
+        && let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save())
+    {
+        pending.borrow_mut().flush();
+    }
+
+    let windows = cx.global::<AppWindows>();
+    let editors_left = windows.editors.len() + windows.screenshot_editors.len();
+    tracing::info!(
+        path = %key.display(),
+        editors_left,
+        "screenshot editor window closed"
+    );
+    if editors_left == 0 && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         show_main_window(cx);
-    } else if captured.is_some() {
-        let main = cx.global::<AppWindows>().main;
-        main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
-            .ok();
+    } else {
+        crate::menus::schedule_dock_sync(cx);
     }
 }
 
