@@ -121,6 +121,10 @@ export function SeatManagementCard() {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to update seats",
 			);
+			queryClient.invalidateQueries({
+				queryKey: ["subscription-details", organizationId],
+			});
+			router.refresh();
 		},
 	});
 
