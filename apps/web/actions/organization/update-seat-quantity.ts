@@ -101,6 +101,8 @@ export async function previewSeatChange(
 
 	const currentQuantity = subscriptionItem.quantity ?? 1;
 
+	// Decreases don't prorate: the current period stays fully paid and no
+	// credit is issued, so the preview must not advertise one.
 	const previewParams = {
 		customer: customerId,
 		subscription: subscriptionId,
@@ -110,7 +112,10 @@ export async function previewSeatChange(
 				quantity: newQuantity,
 			},
 		],
-		subscription_proration_behavior: "create_prorations" as const,
+		subscription_proration_behavior:
+			newQuantity > currentQuantity
+				? ("create_prorations" as const)
+				: ("none" as const),
 	};
 
 	const preview = await stripe().invoices.retrieveUpcoming(previewParams);
@@ -162,6 +167,9 @@ export async function updateSeatQuantity(
 	}
 
 	const isSeatIncrease = newQuantity > currentQuantity;
+	// Increases charge the prorated difference immediately; decreases take
+	// effect immediately but never credit or refund the already-paid period —
+	// the next renewal simply bills the lower quantity.
 	const updatedSubscription = await stripe().subscriptions.update(
 		subscription.id,
 		{
@@ -171,9 +179,7 @@ export async function updateSeatQuantity(
 					quantity: newQuantity,
 				},
 			],
-			proration_behavior: isSeatIncrease
-				? "always_invoice"
-				: "create_prorations",
+			proration_behavior: isSeatIncrease ? "always_invoice" : "none",
 			...(isSeatIncrease
 				? { payment_behavior: "pending_if_incomplete" as const }
 				: {}),
