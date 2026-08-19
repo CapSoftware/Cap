@@ -196,7 +196,7 @@ export async function updateSeatQuantity(
 	const wasCanceling = subscription.cancel_at_period_end;
 	// Stripe rejects cancel_at_period_end combined with
 	// payment_behavior=pending_if_incomplete, so increases clear cancellation
-	// first. If that later update fails, restore the scheduled cancel.
+	// first. Restore it if the quantity update or local persistence fails.
 	const restoreScheduledCancellation = async () => {
 		try {
 			await stripe().subscriptions.update(subscription.id, {
@@ -255,6 +255,9 @@ export async function updateSeatQuantity(
 			.set({ inviteQuota: newQuantity })
 			.where(eq(users.id, user.id));
 	} catch (dbError) {
+		if (wasCanceling) {
+			await restoreScheduledCancellation();
+		}
 		console.error(
 			"CRITICAL: Stripe updated to quantity",
 			newQuantity,
@@ -263,7 +266,9 @@ export async function updateSeatQuantity(
 			dbError,
 		);
 		throw new Error(
-			"Billing update succeeded but local state could not be saved. Please contact support.",
+			wasCanceling
+				? "We couldn't save the seat change. Your scheduled cancellation is still in effect. Please try again."
+				: "Billing update succeeded but local state could not be saved. Please contact support.",
 		);
 	}
 
