@@ -294,9 +294,6 @@ export async function purchaseSignedBaa(
 	const { signatureDataUrl, ...contractFields } = details;
 	const recordFields = { ...contractFields, signatureData: signatureDataUrl };
 
-	// Claim the record so concurrent submissions can never both reach Stripe.
-	// A "processing" row blocks other requests until it goes stale (crashed
-	// attempt) or resolves to active/pending.
 	const isEmailRetry = existing?.status === "active";
 	let recordId: string;
 	if (existing) {
