@@ -266,4 +266,28 @@ describe("updateSeatQuantity", () => {
 			},
 		);
 	});
+
+	it("does not restore cancellation after Stripe applies the new quantity", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockDb.set.mockImplementation(() => {
+			throw new Error("db down");
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"local state could not be saved",
+		);
+		expect(mockStripe.subscriptions.update).not.toHaveBeenCalledWith("sub_1", {
+			cancel_at_period_end: true,
+		});
+	});
 });

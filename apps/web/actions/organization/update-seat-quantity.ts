@@ -211,7 +211,6 @@ export async function updateSeatQuantity(
 		}
 	};
 
-	let quantityUpdated = false;
 	try {
 		if (isSeatIncrease && wasCanceling) {
 			await stripe().subscriptions.update(subscription.id, {
@@ -243,31 +242,29 @@ export async function updateSeatQuantity(
 				"Payment for the added seats could not be completed. Update your payment method and try again.",
 			);
 		}
-
-		quantityUpdated = true;
-
-		try {
-			await db()
-				.update(users)
-				.set({ inviteQuota: newQuantity })
-				.where(eq(users.id, user.id));
-		} catch (dbError) {
-			console.error(
-				"CRITICAL: Stripe updated to quantity",
-				newQuantity,
-				"but DB update failed for user",
-				user.id,
-				dbError,
-			);
-			throw new Error(
-				"Billing update succeeded but local state could not be saved. Please contact support.",
-			);
-		}
 	} catch (error) {
-		if (wasCanceling && !quantityUpdated) {
+		if (wasCanceling) {
 			await restoreScheduledCancellation();
 		}
 		throw error;
+	}
+
+	try {
+		await db()
+			.update(users)
+			.set({ inviteQuota: newQuantity })
+			.where(eq(users.id, user.id));
+	} catch (dbError) {
+		console.error(
+			"CRITICAL: Stripe updated to quantity",
+			newQuantity,
+			"but DB update failed for user",
+			user.id,
+			dbError,
+		);
+		throw new Error(
+			"Billing update succeeded but local state could not be saved. Please contact support.",
+		);
 	}
 
 	revalidatePath("/dashboard/settings/organization");
