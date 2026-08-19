@@ -279,8 +279,8 @@ const ShareableLinksMeter = ({
 			</div>
 			{atLimit && (
 				<p className="mt-2 text-[11px] leading-snug text-gray-10">
-					New shareable links are locked until next month. Upgrade for
-					unlimited.
+					Links over the limit stay locked unless you upgrade. You get {limit}{" "}
+					new links on the 1st.
 				</p>
 			)}
 		</div>
