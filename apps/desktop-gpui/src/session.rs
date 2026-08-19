@@ -36,6 +36,10 @@ pub struct RecordingSession {
     /// payloads; the flag itself lives on the live recording's mic lock and
     /// resets with every new session).
     pub mic_muted: bool,
+    /// The project dir of the studio recording that just stopped cleanly.
+    /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
+    /// (`openEditor` by default) the way the Tauri app does.
+    pub finished_studio: Option<std::path::PathBuf>,
     started_at: Option<Instant>,
     paused_accum: Duration,
     paused_since: Option<Instant>,
@@ -53,6 +57,7 @@ impl RecordingSession {
             last_config: None,
             controls_open: false,
             mic_muted: false,
+            finished_studio: None,
             started_at: None,
             paused_accum: Duration::ZERO,
             paused_since: None,
@@ -183,6 +188,9 @@ impl RecordingSession {
                         // never does that, so it goes with the placeholder it
                         // was standing in for.
                         tracing::info!(dir = %project_dir.display(), "recording finished");
+                        if this.mode() == Some(crate::recording::RecordingMode::Studio) {
+                            this.finished_studio = Some(project_dir);
+                        }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");

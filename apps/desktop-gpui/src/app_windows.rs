@@ -109,7 +109,21 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
-            show_main_window(cx);
+            // `postStudioRecordingBehaviour` (`openEditor` is the default):
+            // a cleanly-stopped studio recording goes straight to the editor,
+            // main window staying hidden -- `editor_closed` brings it back
+            // once the last editor goes away. Every other path (instant,
+            // failures, `showOverlay` until an overlay exists) reshows the
+            // main window as before.
+            let finished_studio = session.update(cx, |session, _| session.finished_studio.take());
+            let editor_project = finished_studio.filter(|_| {
+                crate::store::GeneralSettings::load().post_studio_recording_behaviour
+                    == crate::store::PostStudioBehaviour::OpenEditor
+            });
+            match editor_project {
+                Some(project_dir) => open_editor(project_dir, cx),
+                None => show_main_window(cx),
+            }
             // `NewStudioRecordingAdded` -> `add_new_item_to_cache` +
             // `refresh_tray_menu`. The reshow is where the main window's own
             // Recents is rescanned, so the tray's Previous rides the same seam.
