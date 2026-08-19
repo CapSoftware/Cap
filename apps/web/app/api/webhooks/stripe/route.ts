@@ -107,7 +107,9 @@ async function syncSignedBaaStatus(
 	const status = BAA_ENTITLED_STATUSES.has(subscription.status)
 		? "active"
 		: "canceled";
-	const organizationId = subscription.metadata?.organizationId;
+	const organizationId = subscription.metadata?.organizationId
+		? Organisation.OrganisationId.make(subscription.metadata.organizationId)
+		: undefined;
 	await db()
 		.update(signedBaas)
 		.set({
