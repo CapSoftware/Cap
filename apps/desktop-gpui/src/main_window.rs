@@ -340,6 +340,32 @@ pub struct MainWindow {
     /// is open so a large library is not walked on every home paint.
     library: Option<LibraryItems>,
     library_task: Option<gpui::Task<()>>,
+    /// `createLicenseQuery()`'s resolution, cached: reading the store file in
+    /// `render_plan_badge` would be I/O per paint. Refreshed on every Recents
+    /// rescan -- the same seam that already re-reads the library on reshow,
+    /// so a sign-in or license activation in Settings lands here too.
+    plan: PlanBadge,
+}
+
+/// `createLicenseQuery` (`utils/queries.ts:257-273`): pro from the auth
+/// plan first, then a commercial license, then personal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlanBadge {
+    Personal,
+    Pro,
+    Commercial,
+}
+
+impl PlanBadge {
+    fn current() -> Self {
+        if crate::store::auth_snapshot().is_upgraded() {
+            Self::Pro
+        } else if crate::store::commercial_license().is_some() {
+            Self::Commercial
+        } else {
+            Self::Personal
+        }
+    }
 }
 
 /// One `RecentMediaItem` on screen: the scanned entry, plus its thumbnail once
@@ -415,6 +441,7 @@ impl MainWindow {
             recents_task: None,
             library: None,
             library_task: None,
+            plan: PlanBadge::current(),
         }
     }
 
@@ -494,6 +521,7 @@ impl MainWindow {
             return;
         }
 
+        self.plan = PlanBadge::current();
         self.recents_task = Some(cx.spawn_in(window, async move |this, cx| {
             let items = cx
                 .background_executor()
@@ -3067,17 +3095,19 @@ impl MainWindow {
             .child(self.render_mode_pill(cx))
     }
 
-    /// The plan badge: `text-[0.6rem] ml-2 rounded-lg border border-gray-5
-    /// px-1 py-0.5 bg-gray-3 hover:bg-gray-5`.
+    /// The plan badge: Personal is `text-[0.6rem] ml-2 rounded-lg border
+    /// border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5`, a button; Pro and
+    /// Commercial are a non-interactive span on `--blue-400`. Which one
+    /// applies is [`PlanBadge::current`], the license query's resolution.
     ///
-    /// Only the free variant is drawn. The Pro and Commercial badges are a
-    /// non-interactive span on `--blue-400`, and which one applies comes from
-    /// the license query -- there is no auth or license plumbing here yet, so
-    /// claiming a plan would be worse than showing the free one.
+    /// Personal opens the pricing page -- the Tauri button opens the Upgrade
+    /// window (950x850), which has no gpui twin yet, and the integrations
+    /// page's upgrade affordance already goes to `/pricing` for the same
+    /// reason.
     fn render_plan_badge(&self) -> impl IntoElement {
         let theme = self.theme;
 
-        div()
+        let badge = div()
             .id("plan-badge")
             .flex()
             .items_center()
@@ -3086,14 +3116,29 @@ impl MainWindow {
             .px(px(4.))
             .py(px(2.))
             .rounded(px(8.))
-            .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(3))
-            .text_size(px(9.6))
-            .text_color(theme.gray_12)
-            .child("Personal")
-            .hover(|style| style.bg(theme.body_hover_fill(5)))
-        // TODO: opens the Upgrade window (950x850) once that window exists.
+            .text_size(px(9.6));
+
+        match self.plan {
+            PlanBadge::Personal => badge
+                .border_1()
+                .border_color(theme.body_border(5))
+                .bg(theme.body_fill(3))
+                .text_color(theme.gray_12)
+                .child("Personal")
+                .hover(|style| style.bg(theme.body_hover_fill(5)))
+                .on_click(|_, _, cx| {
+                    let url = format!("{}/pricing", crate::auth::server_url());
+                    cx.open_url(&url);
+                }),
+            PlanBadge::Pro | PlanBadge::Commercial => badge
+                .bg(theme.blue_9)
+                .text_color(gpui::white())
+                .child(if self.plan == PlanBadge::Commercial {
+                    "Commercial"
+                } else {
+                    "Pro"
+                }),
+        }
     }
 
     /// `*:w-[92px]` on the logo link, against a 103x40 viewBox, so the lockup
