@@ -232,4 +232,49 @@ describe("Stripe webhook — Signed BAA", () => {
 		expect(res.status).toBe(200);
 		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
 	});
+
+	it("fails the webhook when Signed BAA cancellation is rejected", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: {
+				object: {
+					id: "sub_pro",
+					status: "unpaid",
+					customer: "cus_1",
+					metadata: {},
+				},
+			},
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			email: "owner@example.com",
+			metadata: { userId: "user-1" },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([
+			{ id: "user-1", email: "owner@example.com" },
+		]);
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [
+				{
+					id: "sub_pro",
+					status: "unpaid",
+					metadata: {},
+					items: { data: [{ quantity: 1 }] },
+				},
+				{
+					id: "sub_baa",
+					status: "active",
+					metadata: { type: "signed_baa" },
+					items: { data: [{ quantity: 1 }] },
+				},
+			],
+		});
+		mockStripe.subscriptions.cancel.mockRejectedValue(
+			new Error("stripe unavailable"),
+		);
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(400);
+	});
 });

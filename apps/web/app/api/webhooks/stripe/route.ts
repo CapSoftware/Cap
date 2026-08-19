@@ -119,27 +119,17 @@ async function cancelEntitledBaaSubscriptions(
 	// BAA terms end with the services agreement, so the add-on must stop
 	// billing when no entitled Pro subscription remains.
 	for (const sub of subscriptions) {
-		if (
-			isSignedBaaSubscription(sub) &&
-			ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status)
-		) {
-			try {
-				await stripe().subscriptions.cancel(sub.id);
-				await db()
-					.update(signedBaas)
-					.set({ status: "canceled" })
-					.where(eq(signedBaas.stripeSubscriptionId, sub.id));
-				console.log("Signed BAA subscription canceled alongside Pro", {
-					subscriptionId: sub.id,
-				});
-			} catch (cancelError) {
-				console.error(
-					"Failed to cancel Signed BAA subscription",
-					sub.id,
-					cancelError,
-				);
-			}
+		if (!isSignedBaaSubscription(sub)) continue;
+		if (ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status)) {
+			await stripe().subscriptions.cancel(sub.id);
 		}
+		await db()
+			.update(signedBaas)
+			.set({ status: "canceled" })
+			.where(eq(signedBaas.stripeSubscriptionId, sub.id));
+		console.log("Signed BAA subscription canceled alongside Pro", {
+			subscriptionId: sub.id,
+		});
 	}
 }
 
