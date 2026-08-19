@@ -520,12 +520,24 @@ export function AnnotationLayer(props: {
 		}
 
 		if (dragState()) {
-			// Commit history if changed
-			// We can check if current annotations differ from snapshot, but that's expensive.
-			// Instead, we assume if we dragged, we changed.
-			// We need to know if we actually moved.
-			// But we don't have "current" vs "original" easily without checking.
-			// Simpler: always push if dragSnapshot exists.
+			const state = dragState();
+			if (state?.action === "resize") {
+				const ann = annotations.find((a) => a.id === state.id);
+				if (ann && ann.type === "draw" && ann.points && (ann.width < 0 || ann.height < 0)) {
+					const flipX = ann.width < 0;
+					const flipY = ann.height < 0;
+					setAnnotations((a) => a.id === state.id, {
+						x: flipX ? ann.x + ann.width : ann.x,
+						y: flipY ? ann.y + ann.height : ann.y,
+						width: Math.abs(ann.width),
+						height: Math.abs(ann.height),
+						points: ann.points!.map((p) => [
+							flipX ? 1 - p[0] : p[0],
+							flipY ? 1 - p[1] : p[1],
+						] as [number, number]),
+					});
+				}
+			}
 			if (dragSnapshot) {
 				projectHistory.push(dragSnapshot);
 			}
