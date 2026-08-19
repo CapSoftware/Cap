@@ -196,10 +196,11 @@ export async function updateSeatQuantity(
 	const wasCanceling = subscription.cancel_at_period_end;
 	// Stripe rejects cancel_at_period_end combined with
 	// payment_behavior=pending_if_incomplete, so increases clear cancellation
-	// first. Restore it only when the quantity update itself failed; once
-	// Stripe commits the new quantity the requested change succeeded and
-	// re-scheduling cancellation would undo it.
-	const restoreScheduledCancellation = async () => {
+	// first. Every failure path afterwards must re-schedule it: the committed
+	// quantity self-heals locally via the customer.subscription.updated
+	// webhook, but nothing re-schedules a dropped cancellation, which would
+	// silently resume renewal.
+	const restoreScheduledCancellation = async (failureMessage: string) => {
 		try {
 			await stripe().subscriptions.update(subscription.id, {
 				cancel_at_period_end: true,
@@ -210,9 +211,7 @@ export async function updateSeatQuantity(
 				subscription.id,
 				restoreError,
 			);
-			throw new Error(
-				"We couldn't complete the seat change or keep your scheduled cancellation. Please contact support.",
-			);
+			throw new Error(failureMessage);
 		}
 	};
 
@@ -249,7 +248,9 @@ export async function updateSeatQuantity(
 		}
 	} catch (error) {
 		if (wasCanceling) {
-			await restoreScheduledCancellation();
+			await restoreScheduledCancellation(
+				"We couldn't complete the seat change or keep your scheduled cancellation. Please contact support.",
+			);
 		}
 		throw error;
 	}
@@ -260,9 +261,6 @@ export async function updateSeatQuantity(
 			.set({ inviteQuota: newQuantity })
 			.where(eq(users.id, user.id));
 	} catch (dbError) {
-		// Stripe already committed the change; the customer.subscription.updated
-		// webhook recomputes inviteQuota from Stripe, so local state self-heals
-		// without compensating in Stripe.
 		console.error(
 			"CRITICAL: Stripe updated to quantity",
 			newQuantity,
@@ -270,6 +268,17 @@ export async function updateSeatQuantity(
 			user.id,
 			dbError,
 		);
+		// The committed quantity stays: the customer.subscription.updated
+		// webhook recomputes inviteQuota from Stripe, so local state
+		// self-heals. Only the cleared cancellation needs compensating here.
+		if (wasCanceling) {
+			await restoreScheduledCancellation(
+				`Billing was updated to ${newQuantity} seats, but we couldn't save it locally or keep your scheduled cancellation. Please contact support.`,
+			);
+			throw new Error(
+				`Billing was updated to ${newQuantity} seats and your scheduled cancellation was kept. Saving it locally failed; it will sync automatically shortly.`,
+			);
+		}
 		throw new Error(
 			`Billing was updated to ${newQuantity} seats, but saving it locally failed. It will sync automatically shortly; refresh to confirm before retrying.`,
 		);

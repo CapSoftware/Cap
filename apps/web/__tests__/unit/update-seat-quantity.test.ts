@@ -267,7 +267,7 @@ describe("updateSeatQuantity", () => {
 		);
 	});
 
-	it("does not undo a committed Stripe change when the local write fails", async () => {
+	it("restores scheduled cancellation without undoing the committed Stripe change when the local write fails", async () => {
 		mockSeatLookup({ currentQuantity: 1 });
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_1",
@@ -284,11 +284,41 @@ describe("updateSeatQuantity", () => {
 		);
 
 		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
-			"Billing was updated to 2 seats",
+			"your scheduled cancellation was kept",
 		);
-		expect(mockStripe.subscriptions.update).not.toHaveBeenCalledWith("sub_1", {
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(3);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			3,
+			"sub_1",
+			{
+				cancel_at_period_end: true,
+			},
+		);
+	});
+
+	it("reports when neither the local save nor the cancellation restore succeeded", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
 			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
 		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockRejectedValueOnce(new Error("restore failed"));
+		mockDb.set.mockImplementation(() => {
+			throw new Error("db down");
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"couldn't save it locally or keep your scheduled cancellation",
+		);
 	});
 
 	it("does not claim cancellation remains when restore fails", async () => {
