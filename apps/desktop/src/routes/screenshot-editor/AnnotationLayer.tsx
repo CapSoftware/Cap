@@ -244,7 +244,10 @@ export function AnnotationLayer(props: {
 				const dx2 = point.x - last[0];
 				const dy2 = point.y - last[1];
 				if (dx2 * dx2 + dy2 * dy2 < 4) return;
-				const newPoints: [number, number][] = [...temp.points, [point.x, point.y]];
+				const newPoints: [number, number][] = [
+					...temp.points,
+					[point.x, point.y],
+				];
 				const xs = newPoints.map((p) => p[0]);
 				const ys = newPoints.map((p) => p[1]);
 				const minX = Math.min(...xs);
@@ -437,10 +440,9 @@ export function AnnotationLayer(props: {
 				}
 				const w = ann.width || 1;
 				const h = ann.height || 1;
-				ann.points = ann.points.map((p) => [
-					(p[0] - ann.x) / w,
-					(p[1] - ann.y) / h,
-				] as [number, number]);
+				ann.points = ann.points.map(
+					(p) => [(p[0] - ann.x) / w, (p[1] - ann.y) / h] as [number, number],
+				);
 				if (drawSnapshot) projectHistory.push(drawSnapshot);
 				drawSnapshot = null;
 				setAnnotations((prev) => [...prev, ann]);
@@ -523,18 +525,27 @@ export function AnnotationLayer(props: {
 			const state = dragState();
 			if (state?.action === "resize") {
 				const ann = annotations.find((a) => a.id === state.id);
-				if (ann && ann.type === "draw" && ann.points && (ann.width < 0 || ann.height < 0)) {
+				if (
+					ann &&
+					ann.type === "draw" &&
+					ann.points &&
+					(ann.width < 0 || ann.height < 0)
+				) {
 					const flipX = ann.width < 0;
 					const flipY = ann.height < 0;
+					const points = ann.points;
 					setAnnotations((a) => a.id === state.id, {
 						x: flipX ? ann.x + ann.width : ann.x,
 						y: flipY ? ann.y + ann.height : ann.y,
 						width: Math.abs(ann.width),
 						height: Math.abs(ann.height),
-						points: ann.points!.map((p) => [
-							flipX ? 1 - p[0] : p[0],
-							flipY ? 1 - p[1] : p[1],
-						] as [number, number]),
+						points: points.map(
+							(p) =>
+								[flipX ? 1 - p[0] : p[0], flipY ? 1 - p[1] : p[1]] as [
+									number,
+									number,
+								],
+						),
 					});
 				}
 			}
@@ -743,22 +754,26 @@ export function AnnotationLayer(props: {
 				)}
 			</For>
 			<Show when={tempAnnotation()}>
-				{(ann) => (
-					<Show
-						when={ann().type === "draw" && ann().points && ann().points!.length >= 2}
-						fallback={<RenderAnnotation annotation={ann()} />}
-					>
-						<path
-							d={smoothPathFromPoints(ann().points!)}
-							fill="none"
-							stroke={ann().strokeColor}
-							stroke-width={ann().strokeWidth}
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							opacity={ann().opacity}
-						/>
-					</Show>
-				)}
+				{(ann) => {
+					const livePoints = () =>
+						ann().type === "draw" ? (ann().points ?? []) : [];
+					return (
+						<Show
+							when={livePoints().length >= 2}
+							fallback={<RenderAnnotation annotation={ann()} />}
+						>
+							<path
+								d={smoothPathFromPoints(livePoints())}
+								fill="none"
+								stroke={ann().strokeColor}
+								stroke-width={ann().strokeWidth}
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								opacity={ann().opacity}
+							/>
+						</Show>
+					);
+				}}
 			</Show>
 		</svg>
 	);
@@ -879,20 +894,27 @@ function RenderAnnotation(props: { annotation: Annotation }) {
 					style={{ "pointer-events": "all" }}
 				/>
 			)}
-			{props.annotation.type === "draw" && props.annotation.points && props.annotation.points.length >= 2 && (
-				<path
-					d={smoothPathFromPoints(props.annotation.points.map((p) => [
-						props.annotation.x + p[0] * (props.annotation.width || 1),
-						props.annotation.y + p[1] * (props.annotation.height || 1),
-					] as [number, number]))}
-					fill="none"
-					stroke={props.annotation.strokeColor}
-					stroke-width={props.annotation.strokeWidth}
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					opacity={props.annotation.opacity}
-				/>
-			)}
+			{props.annotation.type === "draw" &&
+				props.annotation.points &&
+				props.annotation.points.length >= 2 && (
+					<path
+						d={smoothPathFromPoints(
+							props.annotation.points.map(
+								(p) =>
+									[
+										props.annotation.x + p[0] * (props.annotation.width || 1),
+										props.annotation.y + p[1] * (props.annotation.height || 1),
+									] as [number, number],
+							),
+						)}
+						fill="none"
+						stroke={props.annotation.strokeColor}
+						stroke-width={props.annotation.strokeWidth}
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						opacity={props.annotation.opacity}
+					/>
+				)}
 		</>
 	);
 }

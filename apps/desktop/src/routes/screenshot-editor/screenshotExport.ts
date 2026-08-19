@@ -94,7 +94,9 @@ const drawAnnotations = (
 			ctx.lineJoin = "round";
 			const w = ann.width || 1;
 			const h = ann.height || 1;
-			const pts = ann.points.map((p) => [ann.x + p[0] * w, ann.y + p[1] * h] as [number, number]);
+			const pts = ann.points.map(
+				(p) => [ann.x + p[0] * w, ann.y + p[1] * h] as [number, number],
+			);
 			ctx.moveTo(pts[0][0], pts[0][1]);
 			if (pts.length === 2) {
 				ctx.lineTo(pts[1][0], pts[1][1]);
