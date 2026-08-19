@@ -109,6 +109,7 @@ function mockSeatLookup({
 		.mockResolvedValueOnce([]);
 	mockStripe.subscriptions.retrieve.mockResolvedValue({
 		id: "sub_1",
+		cancel_at_period_end: false,
 		items: {
 			data: [{ id: "si_1", quantity: currentQuantity }],
 		},
@@ -133,7 +134,11 @@ describe("updateSeatQuantity", () => {
 
 		const result = await updateSeatQuantity("org-1" as never, 2);
 
-		expect(result).toEqual({ success: true, newQuantity: 2 });
+		expect(result).toEqual({
+			success: true,
+			newQuantity: 2,
+			cancelAtPeriodEnd: false,
+		});
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
 			items: [{ id: "si_1", quantity: 2 }],
 			payment_behavior: "pending_if_incomplete",
@@ -158,7 +163,7 @@ describe("updateSeatQuantity", () => {
 		expect(mockDb.set).not.toHaveBeenCalled();
 	});
 
-	it("keeps prorated credits for seat reductions on the next invoice", async () => {
+	it("does not credit the current period when seats decrease", async () => {
 		mockSeatLookup({ currentQuantity: 3 });
 		const { updateSeatQuantity } = await import(
 			"@/actions/organization/update-seat-quantity"
@@ -168,7 +173,173 @@ describe("updateSeatQuantity", () => {
 
 		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
 			items: [{ id: "si_1", quantity: 2 }],
-			proration_behavior: "create_prorations",
+			proration_behavior: "none",
 		});
+	});
+
+	it("clears scheduled cancellation in the same decrease update", async () => {
+		mockSeatLookup({ currentQuantity: 3 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 3 }],
+			},
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await updateSeatQuantity("org-1" as never, 2);
+
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(1);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledWith("sub_1", {
+			items: [{ id: "si_1", quantity: 2 }],
+			proration_behavior: "none",
+			cancel_at_period_end: false,
+		});
+	});
+
+	it("restores scheduled cancellation when a seat increase fails", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockRejectedValueOnce(new Error("card declined"));
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"card declined",
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			1,
+			"sub_1",
+			{
+				cancel_at_period_end: false,
+			},
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			3,
+			"sub_1",
+			{
+				cancel_at_period_end: true,
+			},
+		);
+		expect(mockDb.set).not.toHaveBeenCalled();
+	});
+
+	it("restores scheduled cancellation when added seats stay pending", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockResolvedValueOnce({
+				id: "sub_1",
+				pending_update: { expires_at: 123 },
+			});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"Payment for the added seats could not be completed.",
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			3,
+			"sub_1",
+			{
+				cancel_at_period_end: true,
+			},
+		);
+	});
+
+	it("restores scheduled cancellation without undoing the committed Stripe change when the local write fails", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockDb.set.mockImplementation(() => {
+			throw new Error("db down");
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"your scheduled cancellation was kept",
+		);
+		expect(mockStripe.subscriptions.update).toHaveBeenCalledTimes(3);
+		expect(mockStripe.subscriptions.update).toHaveBeenNthCalledWith(
+			3,
+			"sub_1",
+			{
+				cancel_at_period_end: true,
+			},
+		);
+	});
+
+	it("reports when neither the local save nor the cancellation restore succeeded", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockRejectedValueOnce(new Error("restore failed"));
+		mockDb.set.mockImplementation(() => {
+			throw new Error("db down");
+		});
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"couldn't save it locally or keep your scheduled cancellation",
+		);
+	});
+
+	it("does not claim cancellation remains when restore fails", async () => {
+		mockSeatLookup({ currentQuantity: 1 });
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			id: "sub_1",
+			cancel_at_period_end: true,
+			items: {
+				data: [{ id: "si_1", quantity: 1 }],
+			},
+		});
+		mockStripe.subscriptions.update
+			.mockResolvedValueOnce({ id: "sub_1", pending_update: null })
+			.mockRejectedValueOnce(new Error("card declined"))
+			.mockRejectedValueOnce(new Error("restore failed"));
+		const { updateSeatQuantity } = await import(
+			"@/actions/organization/update-seat-quantity"
+		);
+
+		await expect(updateSeatQuantity("org-1" as never, 2)).rejects.toThrow(
+			"keep your scheduled cancellation",
+		);
 	});
 });

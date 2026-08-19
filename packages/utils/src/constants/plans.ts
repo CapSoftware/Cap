@@ -16,6 +16,13 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
+export const STRIPE_SIGNED_BAA_PRICE_IDS: Record<string, string> = {
+	development: "price_1U5xKIFJxA1XpeSsdg4Q8H3Z",
+	production: "price_REPLACE_BEFORE_PRODUCTION",
+};
+
+export const SIGNED_BAA_PRICE_PER_MONTH = 99;
+
 export const userIsPro = (
 	user?: {
 		stripeSubscriptionStatus?: string | null;
