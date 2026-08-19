@@ -155,10 +155,36 @@ export async function updateSeatQuantity(
 	organizationId: Organisation.OrganisationId,
 	newQuantity: number,
 ) {
-	validateQuantity(newQuantity);
+	if (
+		!Number.isInteger(newQuantity) ||
+		newQuantity < 0 ||
+		newQuantity > MAX_SEATS
+	) {
+		throw new Error(`Quantity must be an integer between 0 and ${MAX_SEATS}`);
+	}
 	const { subscription, subscriptionItem, proSeatsUsed, user } =
 		await getOwnerSubscription(organizationId);
 	const currentQuantity = subscriptionItem.quantity ?? 1;
+
+	// Zero seats means canceling Cap Pro. The paid period stays active until
+	// it expires (no refund); the deletion webhook then downgrades the account
+	// and cancels any Signed BAA subscription.
+	if (newQuantity === 0) {
+		if (proSeatsUsed > 1) {
+			throw new Error(
+				"Remove Pro seats from your members before canceling the subscription",
+			);
+		}
+		await stripe().subscriptions.update(subscription.id, {
+			cancel_at_period_end: true,
+		});
+		revalidatePath("/dashboard/settings/organization");
+		return {
+			success: true,
+			newQuantity: currentQuantity,
+			cancelAtPeriodEnd: true,
+		};
+	}
 
 	if (newQuantity < proSeatsUsed) {
 		throw new Error(
@@ -212,5 +238,5 @@ export async function updateSeatQuantity(
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, newQuantity };
+	return { success: true, newQuantity, cancelAtPeriodEnd: false };
 }
