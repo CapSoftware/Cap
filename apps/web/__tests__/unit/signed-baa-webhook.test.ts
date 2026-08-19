@@ -144,4 +144,92 @@ describe("Stripe webhook — Signed BAA", () => {
 		});
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 	});
+
+	it("cancels Signed BAA when Pro becomes unpaid", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: {
+				object: {
+					id: "sub_pro",
+					status: "unpaid",
+					customer: "cus_1",
+					metadata: {},
+				},
+			},
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			email: "owner@example.com",
+			metadata: { userId: "user-1" },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([
+			{ id: "user-1", email: "owner@example.com" },
+		]);
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [
+				{
+					id: "sub_pro",
+					status: "unpaid",
+					metadata: {},
+					items: { data: [{ quantity: 1 }] },
+				},
+				{
+					id: "sub_baa",
+					status: "active",
+					metadata: { type: "signed_baa" },
+					items: { data: [{ quantity: 1 }] },
+				},
+			],
+		});
+		mockStripe.subscriptions.cancel.mockResolvedValue({ id: "sub_baa" });
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith("sub_baa");
+		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+	});
+
+	it("keeps Signed BAA while Pro is past_due", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: {
+				object: {
+					id: "sub_pro",
+					status: "past_due",
+					customer: "cus_1",
+					metadata: {},
+				},
+			},
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			email: "owner@example.com",
+			metadata: { userId: "user-1" },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([
+			{ id: "user-1", email: "owner@example.com" },
+		]);
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [
+				{
+					id: "sub_pro",
+					status: "past_due",
+					metadata: {},
+					items: { data: [{ quantity: 1 }] },
+				},
+				{
+					id: "sub_baa",
+					status: "active",
+					metadata: { type: "signed_baa" },
+					items: { data: [{ quantity: 1 }] },
+				},
+			],
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+	});
 });

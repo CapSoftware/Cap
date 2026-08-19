@@ -92,7 +92,11 @@ async function grantDeveloperCredits(
 	return NextResponse.json({ received: true });
 }
 
-const BAA_ENTITLED_STATUSES = new Set(["active", "trialing", "past_due"]);
+const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
+	"active",
+	"trialing",
+	"past_due",
+]);
 
 // The Signed BAA add-on lives on its own subscription for the same customer.
 // It must never be treated as the Pro subscription: it would otherwise
@@ -101,10 +105,48 @@ function isSignedBaaSubscription(subscription: Stripe.Subscription) {
 	return subscription.metadata?.type === "signed_baa";
 }
 
+function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
+	return subscriptions.some(
+		(sub) =>
+			!isSignedBaaSubscription(sub) &&
+			ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+	);
+}
+
+async function cancelEntitledBaaSubscriptions(
+	subscriptions: Stripe.Subscription[],
+) {
+	// BAA terms end with the services agreement, so the add-on must stop
+	// billing when no entitled Pro subscription remains.
+	for (const sub of subscriptions) {
+		if (
+			isSignedBaaSubscription(sub) &&
+			ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status)
+		) {
+			try {
+				await stripe().subscriptions.cancel(sub.id);
+				await db()
+					.update(signedBaas)
+					.set({ status: "canceled" })
+					.where(eq(signedBaas.stripeSubscriptionId, sub.id));
+				console.log("Signed BAA subscription canceled alongside Pro", {
+					subscriptionId: sub.id,
+				});
+			} catch (cancelError) {
+				console.error(
+					"Failed to cancel Signed BAA subscription",
+					sub.id,
+					cancelError,
+				);
+			}
+		}
+	}
+}
+
 async function syncSignedBaaStatus(
 	subscription: Stripe.Subscription,
 ): Promise<Response> {
-	const status = BAA_ENTITLED_STATUSES.has(subscription.status)
+	const status = ENTITLED_SUBSCRIPTION_STATUSES.has(subscription.status)
 		? "active"
 		: "canceled";
 	const organizationId = subscription.metadata?.organizationId
@@ -484,11 +526,11 @@ export const POST = async (req: Request) => {
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
 				// Stripe retries the card.
-				const entitledStatuses = new Set(["active", "trialing", "past_due"]);
 				const inviteQuota = subscriptions.data
 					.filter(
 						(sub) =>
-							entitledStatuses.has(sub.status) && !isSignedBaaSubscription(sub),
+							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
+							!isSignedBaaSubscription(sub),
 					)
 					.reduce((total, sub) => {
 						return (
@@ -521,6 +563,10 @@ export const POST = async (req: Request) => {
 					"Successfully updated user in database with new invite quota:",
 					inviteQuota,
 				);
+
+				if (!hasEntitledProSubscription(subscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(subscriptions.data);
+				}
 			}
 
 			if (event.type === "invoice.payment_failed") {
@@ -678,46 +724,13 @@ export const POST = async (req: Request) => {
 					inviteQuota: 1,
 				});
 
-				// The Signed BAA add-on cannot outlive Cap Pro: its terms tie
-				// termination to the services agreement. When the last Pro
-				// subscription is deleted, cancel any active BAA subscription so
-				// the customer isn't billed $99/mo for a service they no longer
-				// have. Skipped when another entitled Pro subscription remains
-				// (e.g. a plan switch that deletes and recreates).
 				const remainingSubscriptions = await stripe().subscriptions.list({
 					customer: customer.id,
 					status: "all",
 					limit: 100,
 				});
-				const stillEntitled = new Set(["active", "trialing", "past_due"]);
-				const hasOtherProSubscription = remainingSubscriptions.data.some(
-					(sub) =>
-						!isSignedBaaSubscription(sub) && stillEntitled.has(sub.status),
-				);
-				if (!hasOtherProSubscription) {
-					for (const sub of remainingSubscriptions.data) {
-						if (isSignedBaaSubscription(sub) && stillEntitled.has(sub.status)) {
-							try {
-								await stripe().subscriptions.cancel(sub.id);
-								// The cancellation fires its own deleted webhook which
-								// also syncs the row; update eagerly in case that
-								// delivery fails or arrives late.
-								await db()
-									.update(signedBaas)
-									.set({ status: "canceled" })
-									.where(eq(signedBaas.stripeSubscriptionId, sub.id));
-								console.log("Signed BAA subscription canceled alongside Pro", {
-									subscriptionId: sub.id,
-								});
-							} catch (cancelError) {
-								console.error(
-									"Failed to cancel Signed BAA subscription",
-									sub.id,
-									cancelError,
-								);
-							}
-						}
-					}
+				if (!hasEntitledProSubscription(remainingSubscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(remainingSubscriptions.data);
 				}
 			}
 
