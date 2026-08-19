@@ -14,22 +14,31 @@
 //! grow on this seam.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cap_project::{ProjectConfiguration, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+use cap_project::{
+    BackgroundSource, BorderConfiguration, CornerStyle, ProjectConfiguration, RecordingMeta,
+    RecordingMetaInner, StudioRecordingMeta,
+};
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderOptions,
     RenderVideoConstants, RenderedFrame, RendererLayers, ZoomTransformTimeline,
 };
 use gpui::{
-    App, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    RenderImage, StatefulInteractiveElement as _, Styled, Window, WindowHandle, div,
-    prelude::FluentBuilder as _, px,
+    App, Context, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseDownEvent,
+    MouseMoveEvent, ParentElement as _, Point, Render, RenderImage,
+    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, WindowHandle, div, img,
+    linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
 };
 
+use crate::editor_sidebar::{
+    self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, GRADIENT_PRESETS,
+    color_to_hsla, hex_to_rgb,
+};
 use crate::theme::Theme;
 use crate::ui;
 
@@ -395,6 +404,134 @@ impl PendingConfigSave {
     }
 }
 
+/// The background popover's source tabs (`BackgroundSettingsPopover.tsx`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BgTab {
+    Color,
+    Gradient,
+    Wallpaper,
+    Image,
+}
+
+impl BgTab {
+    const ALL: [(Self, &'static str); 4] = [
+        (Self::Color, "Color"),
+        (Self::Gradient, "Gradient"),
+        (Self::Wallpaper, "Wallpaper"),
+        (Self::Image, "Image"),
+    ];
+
+    fn for_source(source: &BackgroundSource) -> Self {
+        match source {
+            BackgroundSource::Color { .. } => Self::Color,
+            BackgroundSource::Gradient { .. } => Self::Gradient,
+            BackgroundSource::Wallpaper { .. } => Self::Wallpaper,
+            BackgroundSource::Image { .. } => Self::Image,
+        }
+    }
+}
+
+/// The screenshot editor's border fallback -- `BorderPopover.tsx:42-45`,
+/// black at 50%, not `BorderConfiguration::default()`'s white at 80%.
+const BORDER_FALLBACK: BorderConfiguration = BorderConfiguration {
+    enabled: false,
+    width: 5.0,
+    color: [0, 0, 0],
+    opacity: 50.0,
+};
+
+/// Every slider in the styling panel, with the popovers' exact ranges.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum StyleSlider {
+    Blur,
+    Padding,
+    Rounding,
+    Shadow,
+    BorderWidth,
+    BorderOpacity,
+}
+
+impl StyleSlider {
+    /// `(min, max, step)` -- `BackgroundSettingsPopover` blur,
+    /// `PaddingPopover`, `RoundingPopover`, `ShadowPopover`, `BorderPopover`.
+    fn range(self) -> (f32, f32, f32) {
+        match self {
+            Self::Blur | Self::Padding | Self::Rounding | Self::Shadow => (0., 100., 1.),
+            Self::BorderWidth => (1., 20., 0.1),
+            Self::BorderOpacity => (0., 100., 0.1),
+        }
+    }
+
+    fn value(self, project: &ProjectConfiguration) -> f32 {
+        let background = &project.background;
+        match self {
+            Self::Blur => background.blur as f32,
+            Self::Padding => background.padding as f32,
+            Self::Rounding => background.rounding as f32,
+            Self::Shadow => background.shadow,
+            Self::BorderWidth => background
+                .border
+                .as_ref()
+                .map_or(BORDER_FALLBACK.width, |border| border.width),
+            Self::BorderOpacity => background
+                .border
+                .as_ref()
+                .map_or(BORDER_FALLBACK.opacity, |border| border.opacity),
+        }
+    }
+
+    fn apply(self, project: &mut ProjectConfiguration, value: f32) -> bool {
+        let background = &mut project.background;
+        match self {
+            Self::Blur => {
+                if background.blur == value as f64 {
+                    return false;
+                }
+                background.blur = value as f64;
+            }
+            Self::Padding => {
+                if background.padding == value as f64 {
+                    return false;
+                }
+                background.padding = value as f64;
+            }
+            Self::Rounding => {
+                if background.rounding == value as f64 {
+                    return false;
+                }
+                background.rounding = value as f64;
+            }
+            Self::Shadow => {
+                if background.shadow == value {
+                    return false;
+                }
+                background.shadow = value;
+            }
+            Self::BorderWidth => {
+                let border = background.border.get_or_insert(BorderConfiguration {
+                    enabled: true,
+                    ..BORDER_FALLBACK
+                });
+                if border.width == value {
+                    return false;
+                }
+                border.width = value;
+            }
+            Self::BorderOpacity => {
+                let border = background.border.get_or_insert(BorderConfiguration {
+                    enabled: true,
+                    ..BORDER_FALLBACK
+                });
+                if border.opacity == value {
+                    return false;
+                }
+                border.opacity = value;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum ExportDestination {
     Clipboard,
@@ -424,6 +561,12 @@ pub struct ScreenshotEditorWindow {
     pending_save: Rc<RefCell<PendingConfigSave>>,
     save_task: Option<gpui::Task<()>>,
     aspect_menu: Option<ui::MenuState>,
+    bg_tab: BgTab,
+    wallpaper_theme: usize,
+    wallpapers: HashMap<&'static str, Arc<RenderImage>>,
+    wallpaper_task: Option<gpui::Task<()>>,
+    slider_tracks: HashMap<StyleSlider, ui::SliderTrack>,
+    active_slider: Option<StyleSlider>,
     focus: gpui::FocusHandle,
 }
 
@@ -457,6 +600,12 @@ impl ScreenshotEditorWindow {
             pending_save: Rc::new(RefCell::new(PendingConfigSave::default())),
             save_task: None,
             aspect_menu: None,
+            bg_tab: BgTab::Color,
+            wallpaper_theme: 0,
+            wallpapers: HashMap::new(),
+            wallpaper_task: None,
+            slider_tracks: HashMap::new(),
+            active_slider: None,
             focus: cx.focus_handle(),
         }
     }
@@ -476,10 +625,14 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) {
         self.pretty_name = pretty_name;
+        self.bg_tab = BgTab::for_source(&config.background.source);
         self.project = config;
         self.config_tx = Some(config_tx);
         self.export_tx = Some(export_tx);
         self.pending_save.borrow_mut().path = Some(self.bundle.clone());
+        if self.bg_tab == BgTab::Wallpaper {
+            self.ensure_wallpapers(cx);
+        }
         if let Ok(dest) = std::env::var("CAP_GPUI_AUTO_SCREENSHOT_EXPORT")
             && !dest.trim().is_empty()
         {
@@ -546,6 +699,81 @@ impl ScreenshotEditorWindow {
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, false);
+    }
+
+    // -- Styling ----------------------------------------------------------------
+
+    /// A slider press or drag move: map the pointer to the slider's value and
+    /// apply it.
+    fn apply_slider(
+        &mut self,
+        slider: StyleSlider,
+        position: Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(track) = self.slider_tracks.get(&slider) else {
+            return;
+        };
+        let (min, max, step) = slider.range();
+        let Some(value) = ui::slider_value_at(track, position, min, max, step) else {
+            return;
+        };
+        self.edit_project(move |project| slider.apply(project, value), window, cx);
+    }
+
+    /// Decode the current theme's wallpaper tiles that are not cached yet --
+    /// `ensure_wallpapers` on the video editor, against this window's own map.
+    fn ensure_wallpapers(&mut self, cx: &mut Context<Self>) {
+        let theme_name = BACKGROUND_THEMES[self.wallpaper_theme].0;
+        let wanted: Vec<&'static str> = editor_sidebar::wallpapers_for_theme(theme_name)
+            .into_iter()
+            .filter(|id| !self.wallpapers.contains_key(id))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        self.wallpaper_task = Some(cx.spawn(async move |this, cx| {
+            let decoded = cx
+                .background_executor()
+                .spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|id| {
+                            editor_sidebar::decode_wallpaper_thumbnail(id).map(|image| (id, image))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                for (id, image) in decoded {
+                    this.wallpapers.insert(id, image);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn pick_background_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(path) = crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS) else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                let path = path.to_string_lossy().to_string();
+                this.edit_project(
+                    move |project| {
+                        project.background.source = BackgroundSource::Image { path: Some(path) };
+                        true
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- Export actions -------------------------------------------------------
@@ -872,6 +1100,457 @@ impl ScreenshotEditorWindow {
             )
     }
 
+    // -- Styling panel ----------------------------------------------------------
+
+    fn section_label(&self, label: &'static str) -> impl IntoElement {
+        div()
+            .text_size(px(11.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(self.theme.gray_10)
+            .child(label)
+    }
+
+    fn slider_row(
+        &mut self,
+        label: &'static str,
+        slider: StyleSlider,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let (min, max, _) = slider.range();
+        let value = slider.value(&self.project);
+        let fraction = ((value - min) / (max - min)).clamp(0., 1.);
+        let track = self.slider_tracks.entry(slider).or_default().clone();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(theme.gray_11)
+                    .child(label)
+                    .child(format!("{}", value.round() as i64)),
+            )
+            .child(
+                ui::Slider::new(
+                    gpui::SharedString::from(format!("style-slider-{label}")),
+                    fraction,
+                    track,
+                )
+                .flex()
+                .track(px(4.), theme.gray_4.into())
+                .fill(theme.blue_9.into())
+                .thumb(px(14.), gpui::white(), Some(theme.gray_6.into()))
+                .on_drag_start(cx.listener(
+                    move |this, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.active_slider = Some(slider);
+                        this.apply_slider(slider, event.position, window, cx);
+                        cx.notify();
+                    },
+                )),
+            )
+    }
+
+    fn render_bg_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let current = self.bg_tab;
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .gap(px(4.))
+            .p(px(2.))
+            .rounded(px(8.))
+            .bg(theme.gray_3);
+        for (tab, label) in BgTab::ALL {
+            let selected = tab == current;
+            row = row.child(
+                div()
+                    .id(gpui::SharedString::from(format!("bg-tab-{label}")))
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .text_color(if selected {
+                        theme.gray_12
+                    } else {
+                        theme.gray_10
+                    })
+                    .when(selected, |this| this.bg(theme.gray_1))
+                    .when(!selected, |this| this.hover(|style| style.bg(theme.gray_4)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        cx.stop_propagation();
+                        this.bg_tab = tab;
+                        if tab == BgTab::Wallpaper {
+                            this.ensure_wallpapers(cx);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        row
+    }
+
+    fn render_color_pane(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let current = match &self.project.background.source {
+            BackgroundSource::Color { value, alpha } => Some((*value, *alpha)),
+            _ => None,
+        };
+        let mut grid = div().flex().flex_row().flex_wrap().gap(px(6.));
+        for (index, hex) in BACKGROUND_COLORS.iter().enumerate() {
+            let Some(rgba) = hex_to_rgb(hex) else {
+                continue;
+            };
+            let value = [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16];
+            let alpha = rgba[3];
+            let selected = current == Some((value, alpha));
+            let mut fill: Hsla = color_to_hsla(value);
+            fill.a = alpha as f32 / 255.;
+            grid = grid.child(
+                div()
+                    .id(("bg-color", index))
+                    .size(px(24.))
+                    .rounded(px(6.))
+                    .border_2()
+                    .border_color(if selected { theme.blue_9 } else { theme.gray_4 })
+                    .bg(fill)
+                    .hover(|style| style.border_color(theme.gray_8))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.edit_project(
+                            move |project| {
+                                project.background.source =
+                                    BackgroundSource::Color { value, alpha };
+                                true
+                            },
+                            window,
+                            cx,
+                        );
+                    })),
+            );
+        }
+        grid
+    }
+
+    fn render_gradient_pane(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let current = match &self.project.background.source {
+            BackgroundSource::Gradient { from, to, .. } => Some((*from, *to)),
+            _ => None,
+        };
+        let angle = match &self.project.background.source {
+            BackgroundSource::Gradient { angle, .. } => *angle,
+            _ => 90,
+        };
+        let mut grid = div().flex().flex_row().flex_wrap().gap(px(6.));
+        for (index, (from, to)) in GRADIENT_PRESETS.iter().enumerate() {
+            let (from, to) = (*from, *to);
+            let selected = current == Some((from, to));
+            grid = grid.child(
+                div()
+                    .id(("bg-gradient", index))
+                    .size(px(24.))
+                    .rounded(px(6.))
+                    .border_2()
+                    .border_color(if selected { theme.blue_9 } else { theme.gray_4 })
+                    .bg(linear_gradient(
+                        135.,
+                        linear_color_stop(color_to_hsla(from), 0.),
+                        linear_color_stop(color_to_hsla(to), 1.),
+                    ))
+                    .hover(|style| style.border_color(theme.gray_8))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.edit_project(
+                            move |project| {
+                                project.background.source = BackgroundSource::Gradient {
+                                    from,
+                                    to,
+                                    angle,
+                                    noise_intensity: None,
+                                    noise_scale: None,
+                                    animated: None,
+                                    animation_speed: None,
+                                };
+                                true
+                            },
+                            window,
+                            cx,
+                        );
+                    })),
+            );
+        }
+        grid
+    }
+
+    fn render_wallpaper_pane(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        // The config stores the wallpaper's absolute path (the render layer
+        // opens it as a file); selection matches by catalogue id the way the
+        // Tauri sidebar's `path.includes(w.id)` does.
+        let current = match &self.project.background.source {
+            BackgroundSource::Wallpaper { path: Some(path) } => {
+                editor_sidebar::wallpaper_id_for_path(path)
+            }
+            _ => None,
+        };
+
+        let mut theme_row = div().flex().flex_row().flex_wrap().gap(px(4.));
+        for (index, (_, label)) in BACKGROUND_THEMES.iter().enumerate() {
+            let selected = index == self.wallpaper_theme;
+            theme_row = theme_row.child(
+                div()
+                    .id(("wallpaper-theme", index))
+                    .px(px(8.))
+                    .py(px(3.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .text_color(if selected {
+                        theme.gray_12
+                    } else {
+                        theme.gray_10
+                    })
+                    .bg(if selected { theme.gray_4 } else { theme.gray_2 })
+                    .hover(|style| style.bg(theme.gray_4))
+                    .child(*label)
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        cx.stop_propagation();
+                        this.wallpaper_theme = index;
+                        this.ensure_wallpapers(cx);
+                        cx.notify();
+                    })),
+            );
+        }
+
+        let theme_name = BACKGROUND_THEMES[self.wallpaper_theme].0;
+        let mut grid = div().flex().flex_row().flex_wrap().gap(px(6.));
+        for (index, id) in editor_sidebar::wallpapers_for_theme(theme_name)
+            .into_iter()
+            .enumerate()
+        {
+            let selected = current == Some(id);
+            let tile = div()
+                .id(("wallpaper-tile", index))
+                .size(px(56.))
+                .rounded(px(8.))
+                .border_2()
+                .border_color(if selected { theme.blue_9 } else { theme.gray_4 })
+                .overflow_hidden()
+                .bg(theme.gray_3)
+                .hover(|style| style.border_color(theme.gray_8))
+                .when_some(self.wallpapers.get(id).cloned(), |this, image| {
+                    this.child(img(image).size_full().object_fit(gpui::ObjectFit::Cover))
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    let Some(path) = editor_sidebar::wallpaper_path(id) else {
+                        tracing::error!(id, "wallpaper asset not found");
+                        return;
+                    };
+                    let path = path.to_string_lossy().into_owned();
+                    this.edit_project(
+                        move |project| {
+                            project.background.source =
+                                BackgroundSource::Wallpaper { path: Some(path) };
+                            true
+                        },
+                        window,
+                        cx,
+                    );
+                }));
+            grid = grid.child(tile);
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(theme_row)
+            .child(grid)
+    }
+
+    fn render_image_pane(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let current = match &self.project.background.source {
+            BackgroundSource::Image { path } => path.clone(),
+            _ => None,
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .id("bg-image-pick")
+                    .flex()
+                    .justify_center()
+                    .py(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(theme.gray_4)
+                    .bg(theme.gray_2)
+                    .hover(|style| style.bg(theme.gray_3))
+                    .text_size(px(12.))
+                    .text_color(theme.gray_12)
+                    .child("Choose Image...")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.pick_background_image(window, cx);
+                    })),
+            )
+            .when_some(current, |this, path| {
+                this.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.gray_10)
+                        .overflow_hidden()
+                        .child(path),
+                )
+            })
+    }
+
+    fn render_corner_style(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let squircle = matches!(self.project.background.rounding_type, CornerStyle::Squircle);
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .gap(px(4.))
+            .p(px(2.))
+            .rounded(px(8.))
+            .bg(theme.gray_3);
+        for (label, style, selected) in [
+            ("Squircle", CornerStyle::Squircle, squircle),
+            ("Rounded", CornerStyle::Rounded, !squircle),
+        ] {
+            row = row.child(
+                div()
+                    .id(gpui::SharedString::from(format!("corner-style-{label}")))
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .text_color(if selected {
+                        theme.gray_12
+                    } else {
+                        theme.gray_10
+                    })
+                    .when(selected, |this| this.bg(theme.gray_1))
+                    .when(!selected, |this| this.hover(|style| style.bg(theme.gray_4)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.edit_project(
+                            move |project| {
+                                if project.background.rounding_type == style {
+                                    return false;
+                                }
+                                project.background.rounding_type = style;
+                                true
+                            },
+                            window,
+                            cx,
+                        );
+                    })),
+            );
+        }
+        row
+    }
+
+    fn render_border_section(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let enabled = self
+            .project
+            .background
+            .border
+            .as_ref()
+            .is_some_and(|border| border.enabled);
+
+        let mut section = div().flex().flex_col().gap(px(10.)).child(
+            div()
+                .flex()
+                .flex_row()
+                .justify_between()
+                .items_center()
+                .child(self.section_label("Border"))
+                .child(
+                    ui::Toggle::plain(&theme, "border-toggle", enabled).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.edit_project(
+                                move |project| {
+                                    let border =
+                                        project.background.border.get_or_insert(BORDER_FALLBACK);
+                                    border.enabled = !enabled;
+                                    true
+                                },
+                                window,
+                                cx,
+                            );
+                        },
+                    )),
+                ),
+        );
+        if enabled {
+            section = section
+                .child(self.slider_row("Width", StyleSlider::BorderWidth, cx))
+                .child(self.slider_row("Opacity", StyleSlider::BorderOpacity, cx));
+        }
+        section
+    }
+
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let bg_pane = match self.bg_tab {
+            BgTab::Color => self.render_color_pane(cx),
+            BgTab::Gradient => self.render_gradient_pane(cx),
+            BgTab::Wallpaper => self.render_wallpaper_pane(cx),
+            BgTab::Image => self.render_image_pane(cx),
+        };
+
+        div()
+            .id("screenshot-style-panel")
+            .w(px(280.))
+            .flex_shrink_0()
+            .m(px(14.))
+            .mt(px(0.))
+            .ml(px(0.))
+            .p(px(14.))
+            .rounded(px(12.))
+            .border_1()
+            .border_color(theme.gray_4)
+            .bg(if theme.is_dark() {
+                theme.gray_2
+            } else {
+                theme.gray_1
+            })
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(self.section_label("Background"))
+            .child(self.render_bg_tabs(cx))
+            .child(bg_pane)
+            .child(self.slider_row("Blur", StyleSlider::Blur, cx))
+            .child(self.slider_row("Padding", StyleSlider::Padding, cx))
+            .child(self.slider_row("Rounding", StyleSlider::Rounding, cx))
+            .child(self.render_corner_style(cx))
+            .child(self.slider_row("Shadow", StyleSlider::Shadow, cx))
+            .child(self.render_border_section(cx))
+    }
+
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let frame = self.frame.clone();
@@ -976,7 +1655,27 @@ impl Render for ScreenshotEditorWindow {
             })
             .text_color(theme.gray_12)
             .child(self.render_header(cx))
-            .child(self.render_preview(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_preview(cx))
+                    .child(self.render_sidebar(cx)),
+            )
+            .when_some(self.active_slider, |root, slider| {
+                root.child(ui::Slider::drag_layer(
+                    "style-slider-drag",
+                    cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                        this.apply_slider(slider, event.position, window, cx);
+                    }),
+                    cx.listener(|this, _: &gpui::MouseUpEvent, _window, cx| {
+                        this.active_slider = None;
+                        cx.notify();
+                    }),
+                ))
+            })
     }
 }
 
