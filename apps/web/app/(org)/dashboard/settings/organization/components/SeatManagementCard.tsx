@@ -7,11 +7,15 @@ import { Minus, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { SubscriptionDetails } from "@/actions/organization/get-subscription-details";
+import {
+	getSignedBaaStatus,
+	type SignedBaaStatus,
+} from "@/actions/organization/signed-baa";
 import {
 	previewSeatChange,
 	updateSeatQuantity,
 } from "@/actions/organization/update-seat-quantity";
+import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { formatAmount } from "@/utils/currency";
 import { calculateSeats } from "@/utils/organization";
@@ -32,8 +36,19 @@ export function SeatManagementCard() {
 
 	const [desiredQuantity, setDesiredQuantity] = useState(proSeatsTotal);
 	const [debouncedQuantity, setDebouncedQuantity] = useState(proSeatsTotal);
+	const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 	const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const prevProSeatsTotal = useRef(proSeatsTotal);
+
+	const { data: baa } = useQuery<SignedBaaStatus | null>({
+		queryKey: ["signed-baa", organizationId],
+		queryFn: () => {
+			if (!organizationId) return null;
+			return getSignedBaaStatus(organizationId);
+		},
+		enabled: !!organizationId,
+		staleTime: 60 * 1000,
+	});
 
 	useEffect(() => {
 		if (prevProSeatsTotal.current !== proSeatsTotal) {
@@ -78,7 +93,7 @@ export function SeatManagementCard() {
 			if (!organizationId) return null;
 			return previewSeatChange(organizationId, debouncedQuantity);
 		},
-		enabled: !!organizationId && debouncedHasChanges,
+		enabled: !!organizationId && debouncedHasChanges && debouncedQuantity >= 1,
 		staleTime: 30 * 1000,
 	});
 
@@ -88,14 +103,21 @@ export function SeatManagementCard() {
 			return updateSeatQuantity(organizationId, desiredQuantity);
 		},
 		onSuccess: (result) => {
-			toast.success(`Seat quantity updated to ${result.newQuantity}`);
-			queryClient.setQueriesData<SubscriptionDetails | null>(
-				{ queryKey: ["subscription-details", organizationId] },
-				(old) => (old ? { ...old, currentQuantity: result.newQuantity } : old),
-			);
+			setCancelDialogOpen(false);
+			if (result.cancelAtPeriodEnd) {
+				toast.success("Cap Pro will cancel at the end of the billing period");
+				setDesiredQuantity(proSeatsTotal);
+				setDebouncedQuantity(proSeatsTotal);
+			} else {
+				toast.success(`Seat quantity updated to ${result.newQuantity}`);
+			}
+			queryClient.invalidateQueries({
+				queryKey: ["subscription-details", organizationId],
+			});
 			router.refresh();
 		},
 		onError: (error) => {
+			setCancelDialogOpen(false);
 			toast.error(
 				error instanceof Error ? error.message : "Failed to update seats",
 			);
@@ -103,8 +125,13 @@ export function SeatManagementCard() {
 	});
 
 	const MAX_SEATS = 500;
-	const canDecrease = desiredQuantity > Math.max(1, proSeatsUsed);
+	// With no member seats assigned (only the owner's), stepping to 0 is
+	// allowed and means canceling the subscription entirely.
+	const minQuantity = proSeatsUsed > 1 ? proSeatsUsed : 0;
+	const canDecrease = desiredQuantity > minQuantity;
 	const canIncrease = desiredQuantity < MAX_SEATS;
+	const isCancelRequest = desiredQuantity === 0;
+	const baaActive = baa?.status === "active";
 
 	return (
 		<Card>
@@ -160,7 +187,13 @@ export function SeatManagementCard() {
 
 					{hasChanges && (
 						<div className="flex items-center gap-3">
-							{debounceInFlight || previewLoading ? (
+							{debounceInFlight ? (
+								<span className="text-sm text-gray-10">Calculating...</span>
+							) : isCancelRequest ? (
+								<span className="text-sm text-amber-700">
+									Cancels Cap Pro at the end of the billing period
+								</span>
+							) : previewLoading ? (
 								<span className="text-sm text-gray-10">Calculating...</span>
 							) : previewError ? (
 								<span className="text-sm text-red-500">
@@ -176,13 +209,15 @@ export function SeatManagementCard() {
 							<Button
 								type="button"
 								size="sm"
-								variant="primary"
-								onClick={() => updateMutation.mutate()}
+								variant={isCancelRequest ? "destructive" : "primary"}
+								onClick={() => {
+									if (isCancelRequest) setCancelDialogOpen(true);
+									else updateMutation.mutate();
+								}}
 								disabled={
 									updateMutation.isPending ||
-									previewLoading ||
-									previewError ||
-									debounceInFlight
+									debounceInFlight ||
+									(!isCancelRequest && (previewLoading || previewError))
 								}
 								spinner={updateMutation.isPending}
 							>
@@ -207,6 +242,23 @@ export function SeatManagementCard() {
 					)}
 				</div>
 			</div>
+			<ConfirmationDialog
+				open={cancelDialogOpen}
+				title="Cancel Cap Pro?"
+				description={`You'll lose your Pro seat and your organization's Pro features at the end of the current billing period.${
+					baaActive
+						? " Your Signed BAA will also be canceled when the subscription ends."
+						: ""
+				} You can resume anytime before then by adding seats back.`}
+				confirmLabel="Cancel subscription"
+				cancelLabel="Keep Cap Pro"
+				confirmVariant="destructive"
+				loading={updateMutation.isPending}
+				onConfirm={() => updateMutation.mutate()}
+				onCancel={() => {
+					if (!updateMutation.isPending) setCancelDialogOpen(false);
+				}}
+			/>
 		</Card>
 	);
 }
