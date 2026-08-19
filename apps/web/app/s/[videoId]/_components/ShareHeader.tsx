@@ -735,7 +735,7 @@ export const ShareHeader = ({
 						size="sm"
 						variant="blue"
 					>
-						Upgrade To Cap Pro
+						Upgrade to Cap Pro
 					</Button>
 				</div>
 			)}
