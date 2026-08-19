@@ -10,7 +10,7 @@ import {
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
@@ -107,10 +107,24 @@ async function syncSignedBaaStatus(
 	const status = BAA_ENTITLED_STATUSES.has(subscription.status)
 		? "active"
 		: "canceled";
+	const organizationId = subscription.metadata?.organizationId;
 	await db()
 		.update(signedBaas)
-		.set({ status })
-		.where(eq(signedBaas.stripeSubscriptionId, subscription.id));
+		.set({
+			status,
+			stripeSubscriptionId: subscription.id,
+		})
+		.where(
+			organizationId
+				? or(
+						eq(signedBaas.stripeSubscriptionId, subscription.id),
+						and(
+							eq(signedBaas.organizationId, organizationId),
+							isNull(signedBaas.stripeSubscriptionId),
+						),
+					)
+				: eq(signedBaas.stripeSubscriptionId, subscription.id),
+		);
 	console.log("Signed BAA subscription synced", {
 		subscriptionId: subscription.id,
 		status,

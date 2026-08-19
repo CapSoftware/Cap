@@ -209,6 +209,63 @@ async function findExistingBaaSubscription(
 	);
 }
 
+function throwSignedBaaStripeError(error: unknown): never {
+	const stripeError = error as { type?: string; message?: string };
+	if (stripeError.type === "StripeCardError") {
+		throw new Error(
+			`Your card was declined: ${stripeError.message ?? "payment failed"}. No subscription was started.`,
+		);
+	}
+	if (error instanceof Error && error.message.includes("payment method")) {
+		throw error;
+	}
+	console.error("Signed BAA: subscription creation failed", error);
+	throw new Error(
+		"We couldn't confirm the Signed BAA subscription. Please try again or contact support if you were charged.",
+	);
+}
+
+async function createBaaSubscription({
+	customerId,
+	organizationId,
+	userId,
+	recordId,
+	proSubscriptionId,
+	priceId,
+}: {
+	customerId: string;
+	organizationId: string;
+	userId: string;
+	recordId: string;
+	proSubscriptionId: string | null;
+	priceId: string;
+}): Promise<Stripe.Subscription> {
+	const existing = await findExistingBaaSubscription(
+		customerId,
+		organizationId,
+	);
+	if (existing) return existing;
+
+	const { paymentMethod } = await resolvePaymentMethod(
+		customerId,
+		proSubscriptionId,
+	);
+	return stripe().subscriptions.create(
+		{
+			customer: customerId,
+			items: [{ price: priceId, quantity: 1 }],
+			...(paymentMethod ? { default_payment_method: paymentMethod } : {}),
+			payment_behavior: "error_if_incomplete",
+			metadata: {
+				type: "signed_baa",
+				organizationId,
+				userId,
+			},
+		},
+		{ idempotencyKey: `signed-baa-${recordId}` },
+	);
+}
+
 export async function purchaseSignedBaa(
 	organizationId: Organisation.OrganisationId,
 	input: SignedBaaInput,
@@ -314,44 +371,34 @@ export async function purchaseSignedBaa(
 
 	let subscription: Stripe.Subscription | null = null;
 	try {
-		subscription = await findExistingBaaSubscription(
+		subscription = await createBaaSubscription({
 			customerId,
 			organizationId,
-		);
-		if (!subscription) {
-			const { paymentMethod } = await resolvePaymentMethod(
-				customerId,
-				user.stripeSubscriptionId,
-			);
-			subscription = await stripe().subscriptions.create(
-				{
-					customer: customerId,
-					items: [{ price: priceId, quantity: 1 }],
-					...(paymentMethod ? { default_payment_method: paymentMethod } : {}),
-					payment_behavior: "error_if_incomplete",
-					metadata: {
-						type: "signed_baa",
-						organizationId,
-						userId: user.id,
-					},
-				},
-				{ idempotencyKey: `signed-baa-${recordId}-${nanoId()}` },
-			);
-		}
+			userId: user.id,
+			recordId,
+			proSubscriptionId: user.stripeSubscriptionId,
+			priceId,
+		});
 	} catch (error) {
+		try {
+			subscription = await createBaaSubscription({
+				customerId,
+				organizationId,
+				userId: user.id,
+				recordId,
+				proSubscriptionId: user.stripeSubscriptionId,
+				priceId,
+			});
+		} catch (retryError) {
+			await revertToPending();
+			throwSignedBaaStripeError(retryError ?? error);
+		}
+	}
+
+	if (!subscription) {
 		await revertToPending();
-		const stripeError = error as { type?: string; message?: string };
-		if (stripeError.type === "StripeCardError") {
-			throw new Error(
-				`Your card was declined: ${stripeError.message ?? "payment failed"}. No subscription was started.`,
-			);
-		}
-		if (error instanceof Error && error.message.includes("payment method")) {
-			throw error;
-		}
-		console.error("Signed BAA: subscription creation failed", error);
 		throw new Error(
-			"We couldn't start the Signed BAA subscription. You have not been charged. Please try again.",
+			"We couldn't confirm the Signed BAA subscription. Please try again or contact support if you were charged.",
 		);
 	}
 

@@ -1,5 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
+import { sendEmail } from "@cap/database/emails/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { generateSignedBaaPdf } from "@/lib/baa/generate-signed-baa-pdf";
 
 const mockDb = {
 	select: vi.fn(),
@@ -176,5 +178,102 @@ describe("Signed BAA entitlement", () => {
 			}),
 		).rejects.toThrow("active Cap Pro subscription");
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+	});
+});
+
+const VALID_INPUT = {
+	entityName: "Acme Health, Inc.",
+	entityType: "Delaware corporation",
+	entityAddress: "123 Main St, San Francisco, CA 94105",
+	signerName: "Jane Smith",
+	signerTitle: "CEO",
+	noticesEmail: "legal@acme.com",
+	signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
+};
+
+const recoveredSubscription = {
+	id: "sub_baa_1",
+	status: "active",
+	metadata: { type: "signed_baa", organizationId: "org-1" },
+};
+
+async function setupPurchaseAttempt() {
+	mockOwner({
+		stripeCustomerId: "cus_1",
+		stripeSubscriptionId: "sub_active",
+		stripeSubscriptionStatus: "active",
+	});
+	mockDb.limit.mockResolvedValueOnce([]);
+	vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1, 2, 3]));
+	vi.mocked(sendEmail).mockResolvedValue(undefined as never);
+	mockStripe.subscriptions.retrieve.mockResolvedValue({
+		id: "sub_active",
+		default_payment_method: "pm_1",
+	});
+}
+
+describe("Signed BAA Stripe recovery", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		resetMockDb();
+	});
+
+	it("uses a stable Stripe idempotency key for the record", async () => {
+		await setupPurchaseAttempt();
+		mockStripe.subscriptions.list.mockResolvedValue({ data: [] });
+		mockStripe.subscriptions.create.mockResolvedValue(recoveredSubscription);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		await purchaseSignedBaa("org-1" as never, VALID_INPUT);
+
+		expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customer: "cus_1",
+			}),
+			{ idempotencyKey: "signed-baa-baa-record-1" },
+		);
+	});
+
+	it("activates an existing Stripe subscription after a lost create response", async () => {
+		await setupPurchaseAttempt();
+		mockStripe.subscriptions.list
+			.mockResolvedValueOnce({ data: [] })
+			.mockResolvedValueOnce({ data: [recoveredSubscription] });
+		mockStripe.subscriptions.create.mockRejectedValueOnce(
+			new Error("socket hang up"),
+		);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		const result = await purchaseSignedBaa("org-1" as never, VALID_INPUT);
+
+		expect(result.success).toBe(true);
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({
+				status: "active",
+				stripeSubscriptionId: "sub_baa_1",
+			}),
+		);
+	});
+
+	it("does not claim the customer was not charged when Stripe is ambiguous", async () => {
+		await setupPurchaseAttempt();
+		mockStripe.subscriptions.list.mockResolvedValue({ data: [] });
+		mockStripe.subscriptions.create.mockRejectedValue(
+			new Error("socket hang up"),
+		);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		await expect(
+			purchaseSignedBaa("org-1" as never, VALID_INPUT),
+		).rejects.toThrow("couldn't confirm the Signed BAA subscription");
+		expect(mockDb.set).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "pending" }),
+		);
 	});
 });
