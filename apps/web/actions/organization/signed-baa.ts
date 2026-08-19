@@ -7,7 +7,7 @@ import { SignedBaa } from "@cap/database/emails/signed-baa";
 import { nanoId } from "@cap/database/helpers";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe, userIsPro } from "@cap/utils";
+import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, lt, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -20,6 +20,24 @@ import {
 const BAA_NOTICE_EMAIL = "hello@cap.so";
 const PROCESSING_STALE_MS = 2 * 60 * 1000;
 const ENTITLED_STATUSES = new Set(["active", "trialing", "past_due"]);
+const CAP_PRO_STATUSES = new Set([
+	"active",
+	"trialing",
+	"complete",
+	"paid",
+	"past_due",
+]);
+
+function ownerCanPurchaseSignedBaa(user: {
+	stripeCustomerId?: string | null;
+	stripeSubscriptionStatus?: string | null;
+}) {
+	return Boolean(
+		user.stripeCustomerId &&
+			user.stripeSubscriptionStatus &&
+			CAP_PRO_STATUSES.has(user.stripeSubscriptionStatus),
+	);
+}
 
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
@@ -106,7 +124,7 @@ export async function getSignedBaaStatus(
 			status === "active" && record?.emailSentAt
 				? record.emailSentAt.toISOString()
 				: null,
-		canPurchase: Boolean(user.stripeCustomerId && userIsPro(user)),
+		canPurchase: ownerCanPurchaseSignedBaa(user),
 	};
 }
 
@@ -274,7 +292,7 @@ export async function purchaseSignedBaa(
 	const { user } = await getOwnerContext(organizationId);
 	const priceId = getBaaPriceId();
 
-	if (!user.stripeCustomerId || !userIsPro(user)) {
+	if (!ownerCanPurchaseSignedBaa(user)) {
 		throw new Error(
 			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 		);

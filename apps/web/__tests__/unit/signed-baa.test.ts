@@ -179,6 +179,41 @@ describe("Signed BAA entitlement", () => {
 		).rejects.toThrow("active Cap Pro subscription");
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
+
+	it("does not treat a leftover third-party subscription id as Cap Pro", async () => {
+		mockOwner({
+			stripeCustomerId: "cus_1",
+			stripeSubscriptionId: "sub_canceled",
+			stripeSubscriptionStatus: "canceled",
+			thirdPartyStripeSubscriptionId: "sub_other_org",
+		});
+		mockDb.limit.mockResolvedValueOnce([]);
+		const { getSignedBaaStatus, purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+
+		const status = await getSignedBaaStatus("org-1" as never);
+		expect(status.canPurchase).toBe(false);
+
+		mockOwner({
+			stripeCustomerId: "cus_1",
+			stripeSubscriptionId: "sub_canceled",
+			stripeSubscriptionStatus: "canceled",
+			thirdPartyStripeSubscriptionId: "sub_other_org",
+		});
+		await expect(
+			purchaseSignedBaa("org-1" as never, {
+				entityName: "Acme Health, Inc.",
+				entityType: "Delaware corporation",
+				entityAddress: "123 Main St, San Francisco, CA 94105",
+				signerName: "Jane Smith",
+				signerTitle: "CEO",
+				noticesEmail: "legal@acme.com",
+				signatureDataUrl: `data:image/png;base64,${"A".repeat(200)}`,
+			}),
+		).rejects.toThrow("active Cap Pro subscription");
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+	});
 });
 
 const VALID_INPUT = {
