@@ -7,7 +7,7 @@ import { SignedBaa } from "@cap/database/emails/signed-baa";
 import { nanoId } from "@cap/database/helpers";
 import { organizations, signedBaas } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
+import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe, userIsPro } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { and, eq, lt, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -106,7 +106,7 @@ export async function getSignedBaaStatus(
 			status === "active" && record?.emailSentAt
 				? record.emailSentAt.toISOString()
 				: null,
-		canPurchase: Boolean(user.stripeCustomerId && user.stripeSubscriptionId),
+		canPurchase: Boolean(user.stripeCustomerId && userIsPro(user)),
 	};
 }
 
@@ -217,7 +217,7 @@ export async function purchaseSignedBaa(
 	const { user } = await getOwnerContext(organizationId);
 	const priceId = getBaaPriceId();
 
-	if (!user.stripeCustomerId) {
+	if (!user.stripeCustomerId || !userIsPro(user)) {
 		throw new Error(
 			"Your organization needs an active Cap Pro subscription before adding the Signed BAA add-on.",
 		);
