@@ -25,6 +25,7 @@ type OrganizationSettingsInput = {
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
 	defaultPlaybackSpeed?: number;
+	defaultVideoPublic?: boolean;
 };
 
 const proOrganizationSettingKeys = [
