@@ -9,7 +9,7 @@ import { usePathname } from "next/navigation";
 export function SettingsNav() {
 	const pathname = usePathname();
 	const tabs = [
-		{ label: "General", href: "/dashboard/settings/organization" },
+		{ label: "Settings", href: "/dashboard/settings/organization" },
 		{
 			label: "Preferences",
 			href: "/dashboard/settings/organization/preferences",
