@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import { useCurrency } from "hooks/useCurrency";
+import { usePromoCode } from "hooks/usePromoCode";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
@@ -18,6 +19,7 @@ const copy = homepageCopy.pricing.pro;
 
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();
+	const { promoCode, promoLabel } = usePromoCode();
 	const { symbol } = useCurrency();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(false);
@@ -37,7 +39,7 @@ export const ProCard = () => {
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: users }),
+				body: JSON.stringify({ priceId: planId, quantity: users, promoCode }),
 			});
 			const data = await response.json();
 
@@ -61,7 +63,7 @@ export const ProCard = () => {
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: users }),
+				body: JSON.stringify({ priceId: planId, quantity: users, promoCode }),
 			});
 			const data = await response.json();
 
@@ -113,6 +115,13 @@ export const ProCard = () => {
 			<p className="mt-1 text-sm text-gray-10">
 				billed {isAnnually ? "annually" : "monthly"}
 			</p>
+
+			{promoLabel && (
+				<div className="inline-flex gap-2 items-center self-start px-3 py-1 mt-3 text-xs font-medium text-blue-600 rounded-full border border-blue-500/30 bg-blue-500/10">
+					<span className="font-mono font-semibold">{promoCode}</span>
+					<span>{promoLabel}, applied at checkout</span>
+				</div>
+			)}
 
 			<div className="mt-6 space-y-3 min-h-[120px]">
 				<BillingToggle

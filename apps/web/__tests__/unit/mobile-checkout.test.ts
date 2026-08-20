@@ -10,6 +10,7 @@ const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
 	rateLimited: vi.fn(() => Promise.resolve(false)),
+	listPromotionCodes: vi.fn(),
 }));
 
 // Matches STRIPE_PLAN_IDS.development, which is what the allowlist resolves to
@@ -27,6 +28,7 @@ vi.mock("@cap/utils", () => ({
 		checkout: {
 			sessions: { create: checkoutMocks.create },
 		},
+		promotionCodes: { list: checkoutMocks.listPromotionCodes },
 	}),
 	STRIPE_PLAN_IDS: {
 		development: {
@@ -64,6 +66,9 @@ describe("checkout redirects", () => {
 			url: "https://pay.cap.so/session",
 		});
 		checkoutMocks.rateLimited.mockResolvedValue(false);
+		checkoutMocks.listPromotionCodes.mockResolvedValue({
+			data: [{ id: "promo_migrate20" }],
+		});
 	});
 
 	it("preserves the existing desktop checkout redirects", () => {
@@ -153,6 +158,62 @@ describe("checkout redirects", () => {
 
 		expect(response.status).toBe(429);
 		expect(checkoutMocks.create).not.toHaveBeenCalled();
+	});
+
+	it("applies an allowlisted campaign code from the URL", async () => {
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: DEV_MONTHLY,
+				quantity: 1,
+				promoCode: "MIGRATE20",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.listPromotionCodes).toHaveBeenCalledWith({
+			code: "MIGRATE20",
+			active: true,
+			limit: 1,
+		});
+		const params = checkoutMocks.create.mock.calls[0]?.[0];
+		expect(params.discounts).toEqual([{ promotion_code: "promo_migrate20" }]);
+		// Stripe rejects discounts and allow_promotion_codes together.
+		expect(params.allow_promotion_codes).toBeUndefined();
+	});
+
+	it("ignores promo codes that are not on the allowlist", async () => {
+		// The account carries active unrestricted 100%-off codes, so honouring an
+		// arbitrary ?promo= would hand out free Cap Pro.
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: DEV_MONTHLY,
+				quantity: 1,
+				promoCode: "RICHIEGIFT",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.listPromotionCodes).not.toHaveBeenCalled();
+		const params = checkoutMocks.create.mock.calls[0]?.[0];
+		expect(params.discounts).toBeUndefined();
+		expect(params.allow_promotion_codes).toBe(true);
+	});
+
+	it("falls back to manual entry when the campaign code is no longer active", async () => {
+		checkoutMocks.listPromotionCodes.mockResolvedValue({ data: [] });
+
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: DEV_MONTHLY,
+				quantity: 1,
+				promoCode: "migrate20",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		const params = checkoutMocks.create.mock.calls[0]?.[0];
+		expect(params.discounts).toBeUndefined();
+		expect(params.allow_promotion_codes).toBe(true);
 	});
 
 	it("sends mobile checkout results through the HTTPS completion route", () => {

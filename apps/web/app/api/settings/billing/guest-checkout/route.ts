@@ -1,6 +1,10 @@
 import { serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
+import {
+	checkoutDiscountParams,
+	resolveUrlPromotionCodeId,
+} from "@/lib/checkout-promos";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { trackServerEvent } from "@/lib/server-analytics";
@@ -25,7 +29,7 @@ function allowedPriceIds(): Set<string> {
 }
 
 export async function POST(request: NextRequest) {
-	const { priceId, quantity, platform } = await request.json();
+	const { priceId, quantity, platform, promoCode } = await request.json();
 	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 
 	if (!priceId || typeof priceId !== "string") {
@@ -62,6 +66,7 @@ export async function POST(request: NextRequest) {
 	}
 
 	try {
+		const promotionCodeId = await resolveUrlPromotionCodeId(promoCode);
 		const redirects = getCheckoutRedirectUrls(
 			checkoutPlatform,
 			serverEnv().WEB_URL,
@@ -71,7 +76,7 @@ export async function POST(request: NextRequest) {
 			mode: "subscription",
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
-			allow_promotion_codes: true,
+			...checkoutDiscountParams(promotionCodeId),
 			// Lets `checkout.session.expired` carry a recovery URL so abandoned
 			// checkouts can be emailed back to people who already have an account.
 			after_expiration: {
@@ -82,6 +87,7 @@ export async function POST(request: NextRequest) {
 				guestCheckout: "true",
 				// Read back on `checkout.session.expired` to tailor the recovery email.
 				priceId,
+				...(promotionCodeId ? { promoCode: String(promoCode) } : {}),
 			},
 		});
 
