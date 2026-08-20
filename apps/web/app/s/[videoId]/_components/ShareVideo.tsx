@@ -28,6 +28,7 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
@@ -96,6 +97,7 @@ export const ShareVideo = forwardRef<
 		isEditProcessing: boolean;
 		recordingStopped?: boolean;
 		defaultPlaybackSpeed?: number;
+		viewerIsOwner?: boolean;
 	}
 >(
 	(
@@ -115,6 +117,7 @@ export const ShareVideo = forwardRef<
 			isEditProcessing,
 			recordingStopped = false,
 			defaultPlaybackSpeed,
+			viewerIsOwner = false,
 		},
 		ref,
 	) => {
@@ -324,6 +327,7 @@ export const ShareVideo = forwardRef<
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		const isSegmentsSource = data.source.type === "desktopSegments";
+		const isOverShareLimit = data.ownerIsOverShareLimit === true;
 		const previousSegmentUploadProgressRef = useRef(segmentUploadProgress);
 		const isActivelyRecording =
 			isSegmentsSource &&
@@ -541,6 +545,19 @@ export const ShareVideo = forwardRef<
 						</div>
 					) : isProcessingInProgress ? (
 						<PreparingVideoOverlay className="h-full" />
+					) : isOverShareLimit ? (
+						// Quota gate: the player is never mounted, so the video is not
+						// fetched or playable until the owner upgrades (server recomputes
+						// the flag on the next load). Recording/processing branches above
+						// keep priority so in-flight uploads always finalize.
+						<ShareableLinkLimitOverlay
+							isOwner={viewerIsOwner}
+							onUpgrade={openUpgradeModal}
+							onUpgradeHover={() => {
+								void importUpgradeModal();
+							}}
+							className="h-full"
+						/>
 					) : isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}
@@ -654,7 +671,7 @@ export const ShareVideo = forwardRef<
 					)}
 				</div>
 
-				{!data.owner.isPro && (
+				{!data.owner.isPro && !isOverShareLimit && (
 					<div className="absolute top-4 left-4 z-30">
 						<button
 							type="button"

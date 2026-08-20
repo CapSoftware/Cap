@@ -15,6 +15,14 @@ export type VideoId = typeof VideoId.Type;
 
 export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
 
+export const FREE_PLAN_SHAREABLE_LINKS_PER_MONTH = 25;
+
+// Quota is not retroactive: videos created before this date never count
+// toward, nor get gated by, the monthly shareable-link limit.
+export const SHAREABLE_LINK_LIMIT_ENFORCED_FROM = new Date(
+	"2026-08-19T00:00:00.000Z",
+);
+
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
