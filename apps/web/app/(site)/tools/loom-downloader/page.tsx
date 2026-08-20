@@ -146,6 +146,26 @@ const pageContent: ToolPageContent = {
 				'Cap is the <a href="/">open source alternative to Loom</a>. It\'s a privacy-focused screen recorder that lets you record, edit, and share videos instantly — with unlimited storage, custom domains, and a built-in Loom video importer. <a href="/download">Download Cap for free</a>.',
 		},
 	],
+	howTo: {
+		name: "How to download a Loom video",
+		description:
+			"Download any public Loom video as an MP4 in your browser, for free and without an account.",
+		totalTime: "PT1M",
+		steps: [
+			{
+				name: "Copy the Loom video link",
+				text: "Open the Loom video and click the share button, then copy the video URL.",
+			},
+			{
+				name: "Paste the link into the downloader",
+				text: "Paste the Loom URL into the input box on this page.",
+			},
+			{
+				name: "Download the MP4",
+				text: 'Click "Download Video" and the MP4 saves straight to your device. No signup, no watermark, no limit on how many you download.',
+			},
+		],
+	},
 	cta: {
 		title: "Ready to leave Loom for good?",
 		description:
