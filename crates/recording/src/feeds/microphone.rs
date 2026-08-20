@@ -987,10 +987,29 @@ fn stream_config_with_latency(
     let buffer_size_frames = desired_buffer_size_frames(config, device_name);
 
     if let Some(frames) = buffer_size_frames {
-        stream_config.buffer_size = BufferSize::Fixed(frames);
+        if uses_pulse_backend(device_name) {
+            stream_config.buffer_size = BufferSize::Default;
+        } else {
+            stream_config.buffer_size = BufferSize::Fixed(frames);
+        }
     }
 
     (stream_config, buffer_size_frames)
+}
+
+#[cfg(target_os = "linux")]
+fn uses_pulse_backend(device_name: Option<&str>) -> bool {
+    device_name
+        .map(|n| {
+            let lower = n.to_ascii_lowercase();
+            lower == "default" || lower == "pulse" || lower == "pipewire"
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn uses_pulse_backend(_device_name: Option<&str>) -> bool {
+    false
 }
 
 fn desired_buffer_size_frames(
