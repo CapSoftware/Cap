@@ -68,6 +68,8 @@ const Top = () => {
 		"/dashboard/settings/organization/content": "Organization Settings",
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
+		"/dashboard/settings/organization/integrations": "Organization Settings",
+		"/dashboard/settings/organization/security": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/settings/notifications": "Notification Settings",
 		"/dashboard/spaces": "Spaces",
