@@ -2106,6 +2106,7 @@ pub enum AnnotationType {
     Rectangle,
     Text,
     Mask,
+    Draw,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -2178,6 +2179,8 @@ pub struct Annotation {
     pub mask_type: Option<MaskType>,
     #[serde(default)]
     pub mask_level: Option<f64>,
+    #[serde(default)]
+    pub points: Option<Vec<[f64; 2]>>,
 }
 
 impl Annotation {

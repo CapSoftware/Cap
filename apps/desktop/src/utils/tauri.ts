@@ -569,8 +569,8 @@ videoImportProgress: "video-import-progress"
 /** user-defined types **/
 
 export type Action = { type: "copyToClipboard"; source?: ClipboardSource } | { type: "saveToLocation"; dir: string; filenameTemplate?: string | null } | { type: "export"; profile: ExportProfile; destination?: ExportDestination } | { type: "upload"; organizationId?: string | null; copyLink?: boolean; openInBrowser?: boolean } | { type: "revealInFileManager" } | { type: "openFile" } | { type: "runCommand"; program: string; args?: string[]; cwd?: string | null; env?: { [key in string]: string }; useShell?: boolean } | { type: "webhook"; url: string; method?: string; headers?: { [key in string]: string }; bodyTemplate?: string | null } | { type: "recognizeTextToClipboard" } | { type: "notify"; titleTemplate?: string; bodyTemplate?: string } | { type: "openEditor" } | { type: "skipEditor" } | { type: "applyPreset"; name: string } | { type: "deleteLocalFiles" }
-export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null }
-export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
+export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null; points?: ([number, number])[] | null }
+export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask" | "draw"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
