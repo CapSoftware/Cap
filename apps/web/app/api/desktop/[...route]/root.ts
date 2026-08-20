@@ -782,7 +782,17 @@ app.post(
 			success_url: redirects.successUrl,
 			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
-			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
+			// Attaches a recovery URL to `checkout.session.expired` so abandoned
+			// upgrades can be emailed back (handled in the Stripe webhook).
+			after_expiration: {
+				recovery: { enabled: true, allow_promotion_codes: true },
+			},
+			// `priceId` is read back on `checkout.session.expired` for the recovery email.
+			metadata: {
+				platform: checkoutPlatform,
+				dubCustomerId: user.id,
+				priceId,
+			},
 		});
 
 		if (checkoutSession.url) {

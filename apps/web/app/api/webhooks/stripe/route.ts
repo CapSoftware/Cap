@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { CheckoutRecovery } from "@cap/database/emails/checkout-recovery";
 import { sendEmail } from "@cap/database/emails/config";
 import { PaymentFailed } from "@cap/database/emails/payment-failed";
 import { nanoId } from "@cap/database/helpers";
@@ -8,7 +9,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
+import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -18,6 +19,7 @@ import { trackServerEvent } from "@/lib/server-analytics";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",
+	"checkout.session.expired",
 	"checkout.session.async_payment_succeeded",
 	"customer.subscription.created",
 	"customer.subscription.updated",
@@ -658,6 +660,116 @@ export const POST = async (req: Request) => {
 					userId: dbUser.id,
 					finalAttempt,
 				});
+			}
+
+			if (event.type === "checkout.session.expired") {
+				const session = event.data.object as Stripe.Checkout.Session;
+
+				// Only sessions created with `after_expiration.recovery` carry a URL.
+				const recoveryUrl = session.after_expiration?.recovery?.url;
+				if (!recoveryUrl) {
+					return NextResponse.json({ received: true });
+				}
+
+				// Cap Pro upgrades only. Developer credits, Signed BAA and licence
+				// checkouts have their own flows and must not get an upgrade nudge.
+				if (
+					session.mode !== "subscription" ||
+					session.metadata?.type === "developer_credits" ||
+					session.metadata?.type === "signed_baa"
+				) {
+					return NextResponse.json({ received: true });
+				}
+
+				let foundUserId: User.UserId | undefined;
+				let customerEmail: string | null | undefined =
+					session.customer_details?.email;
+
+				if (typeof session.customer === "string") {
+					const customer = await stripe().customers.retrieve(session.customer);
+					if ("metadata" in customer && customer.metadata.userId) {
+						foundUserId = User.UserId.make(customer.metadata.userId);
+					}
+					if ("email" in customer && customer.email) {
+						customerEmail = customer.email;
+					}
+				}
+
+				// Never cold-email. Only people who already have a Cap account get a
+				// nudge, which keeps this a transactional reminder about their own
+				// account rather than an unsolicited marketing send. No retry: an
+				// expired checkout is not a race with account creation.
+				const dbUser = await findUserWithRetry(
+					customerEmail ?? "",
+					foundUserId,
+					1,
+				);
+				if (!dbUser?.email) {
+					console.log("Abandoned checkout has no Cap account; skipping email");
+					return NextResponse.json({ received: true });
+				}
+
+				// They may have completed a different session, or already be on a
+				// plan via a licence or an organisation seat.
+				if (userIsPro(dbUser)) {
+					return NextResponse.json({ received: true });
+				}
+
+				const plans =
+					process.env.VERCEL_ENV === "production"
+						? STRIPE_PLAN_IDS.production
+						: STRIPE_PLAN_IDS.development;
+				const priceId = session.metadata?.priceId;
+				const interval =
+					priceId === plans.monthly
+						? "month"
+						: priceId === plans.yearly
+							? "year"
+							: null;
+
+				// One recovery email per user per day: a person who opens checkout
+				// three times generates three expired sessions, and Resend keys are
+				// retained for 24h, so the day bucket collapses them.
+				const dayBucket = new Date(event.created * 1000)
+					.toISOString()
+					.slice(0, 10);
+
+				try {
+					const sendResult = await sendEmail({
+						email: dbUser.email,
+						subject: "You didn't finish upgrading to Cap Pro",
+						react: CheckoutRecovery({
+							email: dbUser.email,
+							recoveryUrl,
+							interval,
+						}),
+						idempotencyKey: `checkout-recovery-${dbUser.id}-${dayBucket}`,
+					});
+
+					// Resend reports a reused idempotency key in the response body
+					// rather than throwing, so the send has to be confirmed before
+					// tracking or the readout counts emails that never went out.
+					const sendError = sendResult?.error;
+					if (sendError) {
+						console.log("Checkout recovery email suppressed", {
+							userId: dbUser.id,
+							reason: sendError.message,
+						});
+					} else {
+						trackServerEvent(dbUser.id, "checkout_recovery_email_sent", {
+							session_id: session.id,
+							price_id: priceId ?? null,
+							interval,
+							platform: session.metadata?.platform ?? null,
+						});
+
+						console.log("Checkout recovery email sent", { userId: dbUser.id });
+					}
+				} catch (error) {
+					// Swallowed so Stripe does not retry the whole webhook (and re-run
+					// the lookups) over a transient email-provider failure.
+					console.warn("Checkout recovery email not sent", error);
+				}
 			}
 
 			if (event.type === "customer.subscription.deleted") {

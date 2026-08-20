@@ -74,10 +74,17 @@ export async function POST(request: NextRequest) {
 				? `${serverEnv().WEB_URL}/onboarding`
 				: `${serverEnv().WEB_URL}/pricing`,
 			allow_promotion_codes: true,
+			// Attaches a recovery URL to `checkout.session.expired` so abandoned
+			// upgrades can be emailed back (handled in the Stripe webhook).
+			after_expiration: {
+				recovery: { enabled: true, allow_promotion_codes: true },
+			},
 			metadata: {
 				platform: "web",
 				dubCustomerId: user.id,
 				isOnBoarding: isOnBoarding ? "true" : "false",
+				// Read back on `checkout.session.expired` to tailor the recovery email.
+				priceId,
 			},
 		});
 

@@ -86,6 +86,18 @@ const mockStripe = {
 
 vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
+	userIsPro: (user?: { stripeSubscriptionStatus?: string | null } | null) =>
+		user?.stripeSubscriptionStatus === "active",
+	STRIPE_PLAN_IDS: {
+		development: {
+			yearly: "price_dev_yearly",
+			monthly: "price_dev_monthly",
+		},
+		production: {
+			yearly: "price_prod_yearly",
+			monthly: "price_prod_monthly",
+		},
+	},
 }));
 
 vi.mock("drizzle-orm", () => ({
