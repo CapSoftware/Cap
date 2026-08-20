@@ -1,14 +1,6 @@
 "use client";
 
-import {
-	Button,
-	Card,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-	Input,
-	Switch,
-} from "@cap/ui";
+import { Button, Input, Switch } from "@cap/ui";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	AI_GENERATION_LANGUAGES,
@@ -18,8 +10,6 @@ import {
 } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
-import clsx from "clsx";
-import { ChevronDown, Eye, Gauge, Globe, Lock } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -31,6 +21,7 @@ import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../../Contexts";
 import type { OrganizationSettings } from "../../../dashboard-data";
+import { type SelectOption, SettingRow, SettingSelect } from "./SettingsRows";
 
 const defaultSettings: OrganizationSettings = {
 	disableComments: false,
@@ -57,42 +48,42 @@ const options: Array<{
 	pro?: boolean;
 }> = [
 	{
-		label: "Enable comments",
+		label: "Comments",
 		value: "disableComments",
-		description: "Allow viewers to comment on caps",
+		description: "Allow viewers to comment",
 	},
 	{
-		label: "Enable summary",
-		value: "disableSummary",
-		description: "Show AI-generated summary (requires transcript)",
-		pro: true,
-	},
-	{
-		label: "Enable captions",
-		value: "disableCaptions",
-		description: "Allow viewers to use captions for caps",
-	},
-	{
-		label: "Enable chapters",
-		value: "disableChapters",
-		description: "Show AI-generated chapters (requires transcript)",
-		pro: true,
-	},
-	{
-		label: "Enable reactions",
+		label: "Reactions",
 		value: "disableReactions",
-		description: "Allow viewers to react to caps",
+		description: "Allow viewers to react",
 	},
 	{
-		label: "Enable transcript",
+		label: "Transcript",
 		value: "disableTranscript",
-		description: "Enabling this also allows chapters and summary",
+		description: "Also required for chapters and summary",
 		pro: true,
 	},
 	{
-		label: "Show Cap logo",
+		label: "Chapters",
+		value: "disableChapters",
+		description: "AI generated, requires transcript",
+		pro: true,
+	},
+	{
+		label: "Summary",
+		value: "disableSummary",
+		description: "AI generated, requires transcript",
+		pro: true,
+	},
+	{
+		label: "Captions",
+		value: "disableCaptions",
+		description: "Let viewers turn on captions",
+	},
+	{
+		label: "Cap logo",
 		value: "hideShareableLinkCapLogo",
-		description: "Show Cap branding at the top of shareable links",
+		description: "Show Cap branding on share pages",
 		pro: true,
 	},
 ];
@@ -102,10 +93,22 @@ const languageOptions = Object.entries(AI_GENERATION_LANGUAGES) as [
 	string,
 ][];
 
-const visibilityOptions: Array<{ label: string; value: boolean }> = [
+const languageSelectOptions: SelectOption<AiGenerationLanguage>[] =
+	languageOptions.map(([code], index) => ({
+		label: getAiGenerationLanguageName(code),
+		value: code,
+		separatorBefore: index === 1,
+	}));
+
+const visibilityOptions: SelectOption<boolean>[] = [
 	{ label: "Anyone with the link", value: true },
 	{ label: "Private", value: false },
 ];
+
+const speedOptions: SelectOption<number>[] = PLAYBACK_SPEEDS.map((speed) => ({
+	label: `${speed}x`,
+	value: speed,
+}));
 
 const mergeSettings = (
 	settings?: OrganizationSettings | null,
@@ -123,12 +126,12 @@ const CapSettingsCard = () => {
 		organizationSettings,
 		activeOrganization,
 		instanceVideoDefaultPublic,
+		setUpgradeModalOpen,
 	} = useDashboardContext();
 	const router = useRouter();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
 		useState<OrganizationSettings>(initialSettings);
-	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
 	const hasDefaultVideoPassword = Boolean(
 		activeOrganization?.organization.hasDefaultVideoPassword,
 	);
@@ -140,7 +143,6 @@ const CapSettingsCard = () => {
 	const [defaultPassword, setDefaultPassword] = useState("");
 
 	const lastSavedSettings = useRef<OrganizationSettings>(initialSettings);
-	const languageMenuRef = useRef<HTMLDivElement>(null);
 
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
 	const selectedLanguage =
@@ -157,20 +159,6 @@ const CapSettingsCard = () => {
 		setIsChangingDefaultPassword(false);
 		setDefaultPassword("");
 	}, [hasDefaultVideoPassword]);
-
-	useEffect(() => {
-		const handleClickOutside = (event: MouseEvent) => {
-			if (
-				languageMenuRef.current &&
-				!languageMenuRef.current.contains(event.target as Node)
-			) {
-				setShowLanguageMenu(false);
-			}
-		};
-
-		document.addEventListener("mousedown", handleClickOutside);
-		return () => document.removeEventListener("mousedown", handleClickOutside);
-	}, []);
 
 	useEffect(() => {
 		if (
@@ -221,26 +209,25 @@ const CapSettingsCard = () => {
 								`Default playback speed set to ${
 									debouncedUpdateSettings.defaultPlaybackSpeed ??
 									DEFAULT_PLAYBACK_SPEED
-								}×`,
+								}x`,
 							);
 							return;
 						}
 
-						const option = options.find((opt) => opt.value === changedKey);
 						if (changedKey === "hideShareableLinkCapLogo") {
 							toast.success(
 								debouncedUpdateSettings[changedKey]
 									? "Cap logo hidden"
 									: "Cap logo shown",
 							);
-						} else {
-							const isDisabled = Boolean(debouncedUpdateSettings[changedKey]);
-							const action = isDisabled ? "disabled" : "enabled";
-							const label = option?.label.split(" ")[1] || changedKey;
-							toast.success(
-								`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
-							);
+							return;
 						}
+
+						const option = options.find((opt) => opt.value === changedKey);
+						const action = debouncedUpdateSettings[changedKey]
+							? "disabled"
+							: "enabled";
+						toast.success(`${option?.label ?? changedKey} ${action}`);
 					});
 
 					lastSavedSettings.current = debouncedUpdateSettings;
@@ -356,263 +343,184 @@ const CapSettingsCard = () => {
 			return;
 		}
 
-		setShowLanguageMenu(false);
 		setSettings((prev) => ({
 			...prev,
 			aiGenerationLanguage: language,
 		}));
 	};
 
+	const requireProInterceptor = user.isPro
+		? undefined
+		: () => setUpgradeModalOpen(true);
+
 	return (
-		<Card className="flex relative flex-col flex-1 gap-6 w-full min-h-fit">
-			<CardHeader>
-				<CardTitle>Cap Settings</CardTitle>
-				<CardDescription>
-					Enable or disable specific settings for your organization. These
-					settings will be applied as defaults for new caps.
-				</CardDescription>
-			</CardHeader>
-
-			<div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-				{options.map((option) => (
-					<div
-						key={option.value}
-						className="flex gap-10 justify-between items-center p-4 text-left rounded-xl border transition-colors bg-gray-2 min-w-fit border-gray-3"
-					>
-						<div
-							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
-						>
-							<div className="flex gap-1.5 items-center">
-								<p className="text-sm text-gray-12">{option.label}</p>
-								{option.pro && (
-									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-										Pro
-									</p>
-								)}
-							</div>
-							<p className="text-xs text-gray-10">{option.description}</p>
-						</div>
-						<Switch
-							disabled={
-								(option.pro && !user.isPro) ||
-								((option.value === "disableSummary" ||
-									option.value === "disableChapters") &&
-									settings?.disableTranscript)
-							}
-							onCheckedChange={() => {
-								handleToggle(option.value);
-							}}
-							checked={!settings?.[option.value]}
-						/>
-					</div>
-				))}
-			</div>
-
-			<div className="flex flex-col gap-3">
-				<p className="text-sm font-medium text-gray-12">Default sharing</p>
-
-				<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
-					<div className="flex flex-col flex-1 gap-1">
-						<div className="flex gap-1.5 items-center">
-							<Eye className="w-3.5 h-3.5 text-gray-9" />
-							<p className="text-sm text-gray-12">Who can view new caps</p>
-						</div>
-						<p className="text-xs text-gray-10">
-							Applies to new caps. Sharing can still be changed on each cap.
-						</p>
-					</div>
-					<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
-						{visibilityOptions.map((option) => (
-							<button
-								key={option.label}
-								type="button"
-								onClick={() => handleVisibilityChange(option.value)}
-								aria-pressed={defaultVideoPublic === option.value}
-								className={clsx(
-									"rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-									defaultVideoPublic === option.value
-										? "text-white bg-blue-11"
-										: "text-gray-11 hover:bg-gray-3",
-								)}
-							>
-								{option.label}
-							</button>
-						))}
-					</div>
-				</div>
-
-				<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3">
-					<div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-						<div className="flex flex-col flex-1 gap-1">
-							<div className="flex gap-1.5 items-center">
-								<Lock className="w-3.5 h-3.5 text-gray-9" />
-								<p className="text-sm text-gray-12">
-									Password protect new caps
-								</p>
-							</div>
-							<p className="text-xs text-gray-10">
-								New caps get this password automatically. Viewers need it to
-								open the link.
-							</p>
-						</div>
-						<Switch
-							checked={defaultPasswordEnabled}
-							disabled={defaultPasswordPending}
-							onCheckedChange={handleDefaultPasswordToggle}
-						/>
-					</div>
-
-					{defaultPasswordEnabled &&
-						(hasDefaultVideoPassword && !isChangingDefaultPassword ? (
-							<div className="flex flex-wrap gap-2 justify-between items-center">
-								<p className="text-xs text-gray-10">
-									A default password is set. It cannot be shown again.
-								</p>
-								<div className="flex gap-2 items-center">
-									<Button
-										size="xs"
-										variant="gray"
-										disabled={defaultPasswordPending}
-										onClick={() => setIsChangingDefaultPassword(true)}
-									>
-										Change
-									</Button>
-									<Button
-										size="xs"
-										variant="destructive"
-										disabled={defaultPasswordPending}
-										spinner={removeDefaultPassword.isPending}
-										onClick={() => removeDefaultPassword.mutate()}
-									>
-										Remove
-									</Button>
-								</div>
-							</div>
-						) : (
-							<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-								<Input
-									type="password"
-									autoComplete="new-password"
-									maxLength={255}
-									className="sm:flex-1"
-									placeholder="New default password"
-									value={defaultPassword}
-									onChange={(e) => setDefaultPassword(e.target.value)}
+		<div className="flex flex-col w-full max-w-2xl">
+			<section>
+				<h2 className="text-sm font-medium text-gray-12">Sharing</h2>
+				<div className="mt-3 rounded-xl border divide-y shadow-xs border-gray-3 divide-gray-3 bg-gray-1">
+					<SettingRow
+						label="Who can view new caps"
+						description="Anyone with the link, or private until the creator shares it."
+						control={
+							<SettingSelect
+								ariaLabel="Who can view new caps"
+								value={defaultVideoPublic}
+								options={visibilityOptions}
+								onChange={handleVisibilityChange}
+							/>
+						}
+					/>
+					<div>
+						<SettingRow
+							label="Password protect new caps"
+							description="New caps get this password automatically. Viewers need it to open the link."
+							control={
+								<Switch
+									aria-label="Password protect new caps"
+									checked={defaultPasswordEnabled}
+									disabled={defaultPasswordPending}
+									onCheckedChange={handleDefaultPasswordToggle}
 								/>
-								<div className="flex gap-2 items-center">
-									<Button
-										size="sm"
-										variant="dark"
-										spinner={saveDefaultPassword.isPending}
-										disabled={
-											defaultPasswordPending ||
-											defaultPassword.trim().length === 0
-										}
-										onClick={() => saveDefaultPassword.mutate()}
-									>
-										Save
-									</Button>
-									{hasDefaultVideoPassword && (
+							}
+						/>
+						{defaultPasswordEnabled &&
+							(hasDefaultVideoPassword && !isChangingDefaultPassword ? (
+								<div className="flex flex-wrap gap-4 items-center px-4 pb-4">
+									<p className="text-[13px] text-gray-10">
+										A default password is set.
+									</p>
+									<div className="flex gap-4 items-center">
+										<Button
+											size="xs"
+											variant="transparent"
+											className="px-0 h-auto text-[13px]"
+											disabled={defaultPasswordPending}
+											onClick={() => setIsChangingDefaultPassword(true)}
+										>
+											Change
+										</Button>
+										<Button
+											size="xs"
+											variant="transparent"
+											className="px-0 h-auto text-[13px]"
+											disabled={defaultPasswordPending}
+											spinner={removeDefaultPassword.isPending}
+											spinnerColor="var(--gray-12)"
+											onClick={() => removeDefaultPassword.mutate()}
+										>
+											Remove
+										</Button>
+									</div>
+								</div>
+							) : (
+								<div className="flex flex-col gap-2 px-4 pb-4 sm:flex-row sm:items-center">
+									<Input
+										type="password"
+										autoComplete="new-password"
+										maxLength={255}
+										className="sm:max-w-xs"
+										placeholder="New default password"
+										value={defaultPassword}
+										onChange={(e) => setDefaultPassword(e.target.value)}
+									/>
+									<div className="flex gap-2 items-center">
 										<Button
 											size="sm"
-											variant="gray"
-											disabled={defaultPasswordPending}
-											onClick={() => {
-												setIsChangingDefaultPassword(false);
-												setDefaultPassword("");
-											}}
+											variant="dark"
+											spinner={saveDefaultPassword.isPending}
+											disabled={
+												defaultPasswordPending ||
+												defaultPassword.trim().length === 0
+											}
+											onClick={() => saveDefaultPassword.mutate()}
 										>
-											Cancel
+											Save
 										</Button>
-									)}
-								</div>
-							</div>
-						))}
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
-				<div className="flex flex-col flex-1 gap-1">
-					<div className="flex gap-1.5 items-center">
-						<Gauge className="w-3.5 h-3.5 text-gray-9" />
-						<p className="text-sm text-gray-12">Default playback speed</p>
-					</div>
-					<p className="text-xs text-gray-10">
-						The speed caps start playing at on shareable links. Viewers can
-						still change it.
-					</p>
-				</div>
-				<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
-					{PLAYBACK_SPEEDS.map((speed) => (
-						<button
-							key={speed}
-							type="button"
-							onClick={() => handleSpeedChange(speed)}
-							aria-pressed={selectedSpeed === speed}
-							className={clsx(
-								"min-w-10 rounded-md px-2 py-1 text-xs font-medium tabular-nums transition-colors",
-								selectedSpeed === speed
-									? "text-white bg-blue-11"
-									: "text-gray-11 hover:bg-gray-3",
-							)}
-						>
-							{speed}×
-						</button>
-					))}
-				</div>
-			</div>
-
-			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
-				<div className="flex flex-col flex-1 gap-1">
-					<div className="flex gap-1.5 items-center">
-						<p className="text-sm text-gray-12">AI generation language</p>
-						<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
-							Pro
-						</p>
-					</div>
-					<p className="text-xs text-gray-10">
-						Set the language used for transcripts, titles, summaries, and
-						chapters.
-					</p>
-				</div>
-				<div className="relative w-full sm:w-auto" ref={languageMenuRef}>
-					<button
-						onClick={() => setShowLanguageMenu((value) => !value)}
-						disabled={!user.isPro}
-						className="flex items-center gap-1.5 px-2.5 py-1.5 w-full justify-between text-xs font-medium rounded-lg border border-gray-3 bg-gray-1 hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors sm:min-w-40"
-						type="button"
-					>
-						<span className="flex items-center gap-1.5 text-gray-12">
-							<Globe className="w-3 h-3 text-gray-9" />
-							{getAiGenerationLanguageName(selectedLanguage)}
-						</span>
-						<ChevronDown className="w-3 h-3 text-gray-9" />
-					</button>
-					{showLanguageMenu && (
-						<div className="absolute right-0 top-full mt-1 z-50 w-full py-1 bg-gray-1 border border-gray-3 rounded-lg shadow-lg max-h-64 overflow-y-auto sm:w-56">
-							{languageOptions.map(([code, name], index) => (
-								<div key={code}>
-									{index === 1 && (
-										<div className="my-1 border-t border-gray-3" />
-									)}
-									<button
-										onClick={() => handleLanguageChange(code)}
-										className={`w-full px-3 py-1.5 text-left text-xs hover:bg-gray-2 transition-colors ${
-											selectedLanguage === code
-												? "text-blue-500 font-medium"
-												: "text-gray-12"
-										}`}
-										type="button"
-									>
-										{name}
-									</button>
+										{hasDefaultVideoPassword && (
+											<Button
+												size="sm"
+												variant="gray"
+												disabled={defaultPasswordPending}
+												onClick={() => {
+													setIsChangingDefaultPassword(false);
+													setDefaultPassword("");
+												}}
+											>
+												Cancel
+											</Button>
+										)}
+									</div>
 								</div>
 							))}
-						</div>
-					)}
+					</div>
 				</div>
-			</div>
-		</Card>
+			</section>
+
+			<section className="mt-10">
+				<h2 className="text-sm font-medium text-gray-12">Playback</h2>
+				<div className="mt-3 rounded-xl border divide-y shadow-xs border-gray-3 divide-gray-3 bg-gray-1">
+					<SettingRow
+						label="Default playback speed"
+						description="Starting speed on share pages."
+						control={
+							<SettingSelect
+								ariaLabel="Default playback speed"
+								value={selectedSpeed}
+								options={speedOptions}
+								onChange={handleSpeedChange}
+							/>
+						}
+					/>
+					<SettingRow
+						label="AI generation language"
+						pro
+						description="Used for transcripts, titles, summaries, and chapters."
+						control={
+							<SettingSelect
+								ariaLabel="AI generation language"
+								value={selectedLanguage}
+								options={languageSelectOptions}
+								onChange={handleLanguageChange}
+								onInterceptOpen={requireProInterceptor}
+							/>
+						}
+					/>
+				</div>
+			</section>
+
+			<section className="mt-10">
+				<h2 className="text-sm font-medium text-gray-12">Share page</h2>
+				<div className="mt-3 rounded-xl border divide-y shadow-xs border-gray-3 divide-gray-3 bg-gray-1">
+					{options.map((option) => (
+						<SettingRow
+							key={option.value}
+							label={option.label}
+							description={option.description}
+							pro={option.pro}
+							control={
+								<Switch
+									aria-label={option.label}
+									disabled={
+										(option.value === "disableSummary" ||
+											option.value === "disableChapters") &&
+										Boolean(settings?.disableTranscript)
+									}
+									onCheckedChange={() => {
+										if (option.pro && !user.isPro) {
+											setUpgradeModalOpen(true);
+											return;
+										}
+
+										handleToggle(option.value);
+									}}
+									checked={!settings?.[option.value]}
+								/>
+							}
+						/>
+					))}
+				</div>
+			</section>
+		</div>
 	);
 };
 
