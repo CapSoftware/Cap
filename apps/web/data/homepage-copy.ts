@@ -334,7 +334,7 @@ export const homepageCopy: HomePageCopy = {
 				"Everything in Desktop License",
 				"Unlimited cloud storage & bandwidth",
 				"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording",
-				"SOC 2 Type II & ISO 27001 compliant",
+				"SOC 2 Type II, ISO 27001 & HIPAA compliant",
 				"Custom domain (cap.yourdomain.com)",
 				"Password protected shares",
 				"Viewer analytics & engagement",
