@@ -332,7 +332,7 @@ export function OrganizationStorageIntegrations({
 				</div>
 			)}
 
-			<div className="rounded-xl border border-gray-3 overflow-hidden">
+			<div className="rounded-xl border border-gray-3 overflow-hidden bg-gray-1 shadow-xs">
 				<button
 					type="button"
 					onClick={() => toggleExpand("s3")}
@@ -509,7 +509,7 @@ export function OrganizationStorageIntegrations({
 				)}
 			</div>
 
-			<div className="rounded-xl border border-gray-3 overflow-hidden">
+			<div className="rounded-xl border border-gray-3 overflow-hidden bg-gray-1 shadow-xs">
 				<button
 					type="button"
 					onClick={() => toggleExpand("googleDrive")}
