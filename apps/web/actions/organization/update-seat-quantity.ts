@@ -101,6 +101,8 @@ export async function previewSeatChange(
 
 	const currentQuantity = subscriptionItem.quantity ?? 1;
 
+	// Decreases don't prorate: the current period stays fully paid and no
+	// credit is issued, so the preview must not advertise one.
 	const previewParams = {
 		customer: customerId,
 		subscription: subscriptionId,
@@ -110,7 +112,10 @@ export async function previewSeatChange(
 				quantity: newQuantity,
 			},
 		],
-		subscription_proration_behavior: "create_prorations" as const,
+		subscription_proration_behavior:
+			newQuantity > currentQuantity
+				? ("create_prorations" as const)
+				: ("none" as const),
 	};
 
 	const preview = await stripe().invoices.retrieveUpcoming(previewParams);
@@ -150,10 +155,36 @@ export async function updateSeatQuantity(
 	organizationId: Organisation.OrganisationId,
 	newQuantity: number,
 ) {
-	validateQuantity(newQuantity);
+	if (
+		!Number.isInteger(newQuantity) ||
+		newQuantity < 0 ||
+		newQuantity > MAX_SEATS
+	) {
+		throw new Error(`Quantity must be an integer between 0 and ${MAX_SEATS}`);
+	}
 	const { subscription, subscriptionItem, proSeatsUsed, user } =
 		await getOwnerSubscription(organizationId);
 	const currentQuantity = subscriptionItem.quantity ?? 1;
+
+	// Zero seats means canceling Cap Pro. The paid period stays active until
+	// it expires (no refund); the deletion webhook then downgrades the account
+	// and cancels any Signed BAA subscription.
+	if (newQuantity === 0) {
+		if (proSeatsUsed > 1) {
+			throw new Error(
+				"Remove Pro seats from your members before canceling the subscription",
+			);
+		}
+		await stripe().subscriptions.update(subscription.id, {
+			cancel_at_period_end: true,
+		});
+		revalidatePath("/dashboard/settings/organization");
+		return {
+			success: true,
+			newQuantity: currentQuantity,
+			cancelAtPeriodEnd: true,
+		};
+	}
 
 	if (newQuantity < proSeatsUsed) {
 		throw new Error(
@@ -162,28 +193,66 @@ export async function updateSeatQuantity(
 	}
 
 	const isSeatIncrease = newQuantity > currentQuantity;
-	const updatedSubscription = await stripe().subscriptions.update(
-		subscription.id,
-		{
-			items: [
-				{
-					id: subscriptionItem.id,
-					quantity: newQuantity,
-				},
-			],
-			proration_behavior: isSeatIncrease
-				? "always_invoice"
-				: "create_prorations",
-			...(isSeatIncrease
-				? { payment_behavior: "pending_if_incomplete" as const }
-				: {}),
-		},
-	);
+	const wasCanceling = subscription.cancel_at_period_end;
+	// Stripe rejects cancel_at_period_end combined with
+	// payment_behavior=pending_if_incomplete, so increases clear cancellation
+	// first. Every failure path afterwards must re-schedule it: the committed
+	// quantity self-heals locally via the customer.subscription.updated
+	// webhook, but nothing re-schedules a dropped cancellation, which would
+	// silently resume renewal.
+	const restoreScheduledCancellation = async (failureMessage: string) => {
+		try {
+			await stripe().subscriptions.update(subscription.id, {
+				cancel_at_period_end: true,
+			});
+		} catch (restoreError) {
+			console.error(
+				"Failed to restore scheduled Cap Pro cancellation",
+				subscription.id,
+				restoreError,
+			);
+			throw new Error(failureMessage);
+		}
+	};
 
-	if (isSeatIncrease && updatedSubscription.pending_update) {
-		throw new Error(
-			"Payment for the added seats could not be completed. Update your payment method and try again.",
+	try {
+		if (isSeatIncrease && wasCanceling) {
+			await stripe().subscriptions.update(subscription.id, {
+				cancel_at_period_end: false,
+			});
+		}
+
+		const updatedSubscription = await stripe().subscriptions.update(
+			subscription.id,
+			{
+				items: [
+					{
+						id: subscriptionItem.id,
+						quantity: newQuantity,
+					},
+				],
+				proration_behavior: isSeatIncrease ? "always_invoice" : "none",
+				...(isSeatIncrease
+					? { payment_behavior: "pending_if_incomplete" as const }
+					: {}),
+				...(!isSeatIncrease && wasCanceling
+					? { cancel_at_period_end: false }
+					: {}),
+			},
 		);
+
+		if (isSeatIncrease && updatedSubscription.pending_update) {
+			throw new Error(
+				"Payment for the added seats could not be completed. Update your payment method and try again.",
+			);
+		}
+	} catch (error) {
+		if (wasCanceling) {
+			await restoreScheduledCancellation(
+				"We couldn't complete the seat change or keep your scheduled cancellation. Please contact support.",
+			);
+		}
+		throw error;
 	}
 
 	try {
@@ -199,12 +268,23 @@ export async function updateSeatQuantity(
 			user.id,
 			dbError,
 		);
+		// The committed quantity stays: the customer.subscription.updated
+		// webhook recomputes inviteQuota from Stripe, so local state
+		// self-heals. Only the cleared cancellation needs compensating here.
+		if (wasCanceling) {
+			await restoreScheduledCancellation(
+				`Billing was updated to ${newQuantity} seats, but we couldn't save it locally or keep your scheduled cancellation. Please contact support.`,
+			);
+			throw new Error(
+				`Billing was updated to ${newQuantity} seats and your scheduled cancellation was kept. Saving it locally failed; it will sync automatically shortly.`,
+			);
+		}
 		throw new Error(
-			"Billing update succeeded but local state could not be saved. Please contact support.",
+			`Billing was updated to ${newQuantity} seats, but saving it locally failed. It will sync automatically shortly; refresh to confirm before retrying.`,
 		);
 	}
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, newQuantity };
+	return { success: true, newQuantity, cancelAtPeriodEnd: false };
 }

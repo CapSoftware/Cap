@@ -57,6 +57,7 @@ import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
+import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
 	isIframelyCrawlerUserAgent,
 	isSocialCrawlerUserAgent,
@@ -494,6 +495,24 @@ async function AuthorizedContent({
 
 	const sharedSpacesPromise = getSharedSpacesForVideo(videoId);
 
+	const ownerIsPro = userIsPro(video.owner);
+
+	// Fail-open: a broken count must never take the share page down.
+	const overShareLimitPromise = ownerIsPro
+		? Promise.resolve(false)
+		: isVideoOverShareableLinkLimit({
+				id: videoId,
+				ownerId: video.owner.id,
+				createdAt: video.createdAt,
+				isScreenshot: video.isScreenshot,
+			}).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Shareable link quota check failed for ${videoId}:`,
+					error,
+				);
+				return false;
+			});
+
 	const aiGenerationEnabledPromise = db()
 		.select({
 			email: users.email,
@@ -737,6 +756,7 @@ async function AuthorizedContent({
 		canManageSharePageBranding,
 		canDownloadVideo,
 		videoHasEdits,
+		ownerIsOverShareLimit,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -749,6 +769,7 @@ async function AuthorizedContent({
 		canManageSharePageBrandingPromise,
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
+		overShareLimitPromise,
 	]);
 
 	const rules = resolveEffectiveVideoRules({
@@ -799,10 +820,11 @@ async function AuthorizedContent({
 		return {
 			...video,
 			hasActiveUpload,
+			ownerIsOverShareLimit,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
-				isPro: userIsPro(video.owner),
+				isPro: ownerIsPro,
 				image: video.owner.image
 					? yield* imageUploads.resolveImageUrl(video.owner.image)
 					: null,

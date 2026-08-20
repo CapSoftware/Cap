@@ -19,6 +19,7 @@ export type VideoData = Omit<typeof videos.$inferSelect, "ownerId"> & {
 	shareableLinkIconUrl?: ImageUpload.ImageUrl | null;
 	hasActiveUpload?: boolean;
 	activeUploadRawFileKey?: string | null;
+	ownerIsOverShareLimit?: boolean;
 };
 
 export type VideoOwner = {

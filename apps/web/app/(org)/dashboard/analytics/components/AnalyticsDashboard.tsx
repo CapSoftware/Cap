@@ -240,7 +240,7 @@ export function AnalyticsDashboard() {
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+										You can cancel anytime.
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">

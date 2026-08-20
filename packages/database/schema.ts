@@ -23,6 +23,7 @@ import {
 	index,
 	int,
 	json,
+	longtext,
 	mysqlTable,
 	primaryKey,
 	text,
@@ -666,6 +667,38 @@ export const messengerSupportEmails = mysqlTable(
 		conversationCreatedAtIndex: index(
 			"support_email_conversation_created_at_idx",
 		).on(table.conversationId, table.createdAt),
+	}),
+);
+
+export const signedBaas = mysqlTable(
+	"signed_baas",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		status: varchar("status", { length: 255 }).notNull().default("pending"),
+		stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+		entityName: varchar("entityName", { length: 255 }).notNull(),
+		entityType: varchar("entityType", { length: 255 }).notNull(),
+		entityAddress: varchar("entityAddress", { length: 500 }).notNull(),
+		signerName: varchar("signerName", { length: 255 }).notNull(),
+		signerTitle: varchar("signerTitle", { length: 255 }).notNull(),
+		noticesEmail: varchar("noticesEmail", { length: 255 }).notNull(),
+		signatureData: longtext("signatureData").notNull(),
+		signedAt: timestamp("signedAt"),
+		emailSentAt: timestamp("emailSentAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		organizationIdIndex: uniqueIndex("signed_baa_organization_id_idx").on(
+			table.organizationId,
+		),
+		stripeSubscriptionIdIndex: index("signed_baa_stripe_subscription_idx").on(
+			table.stripeSubscriptionId,
+		),
 	}),
 );
 

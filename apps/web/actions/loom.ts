@@ -24,11 +24,9 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { checkRateLimit } from "@vercel/firewall";
 import { and, eq } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { start } from "workflow/api";
 import {
 	getOrganizationAccess,
@@ -90,42 +88,9 @@ export interface LoomCsvImportResult {
 
 const MAX_LOOM_CSV_ROWS = 500;
 const MAX_LOOM_SPACE_NAME_LENGTH = 255;
-const LOOM_IMPORT_RATE_LIMIT_ID = "rl_loom_import_per_user";
-const LOOM_IMPORT_RATE_LIMIT_ERROR =
-	"Too many Loom imports started. Please wait a few minutes, then try again.";
 const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} rows at a time. Contact support to raise this limit.`;
 const LOOM_CSV_PERMISSION_ERROR =
 	"Only organization admins and owners can import Loom videos from a CSV.";
-
-async function createLoomImportRateLimitCheck(userId: User.UserId) {
-	if (NODE_ENV !== "production") return async () => false;
-
-	return async () => {
-		try {
-			// Built inside the try: a header value that fails the Fetch spec's
-			// Headers validation (raw HTTP allows byte values that WHATWG
-			// Headers.set rejects) throws here, before checkRateLimit ever runs.
-			const headersList = await headers();
-			const request = new Request("https://cap.so/api/loom-import-rate-limit", {
-				method: "POST",
-				headers: headersList,
-			});
-
-			const { rateLimited } = await checkRateLimit(LOOM_IMPORT_RATE_LIMIT_ID, {
-				request,
-				rateLimitKey: `loom-import:${userId}`,
-			});
-			return rateLimited;
-		} catch (error) {
-			// Fail open: a firewall/edge outage must never block Loom imports.
-			console.error(
-				`Rate limit check failed for "${LOOM_IMPORT_RATE_LIMIT_ID}":`,
-				error,
-			);
-			return false;
-		}
-	};
-}
 
 function extractLoomVideoId(url: string): string | null {
 	try {
@@ -329,12 +294,10 @@ async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
 	ownerId,
-	isRateLimited,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
-	isRateLimited?: () => Promise<boolean>;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -369,13 +332,6 @@ async function importLoomVideoForOwner({
 		return {
 			success: false,
 			error: "This Loom video has already been imported.",
-		};
-	}
-
-	if (isRateLimited && (await isRateLimited())) {
-		return {
-			success: false,
-			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
 		};
 	}
 
@@ -506,14 +462,6 @@ export async function importFromLoom({
 	}
 
 	await requireOrganizationAccess(user.id, orgId);
-
-	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
-	if (await isRateLimited()) {
-		return {
-			success: false,
-			error: LOOM_IMPORT_RATE_LIMIT_ERROR,
-		};
-	}
 
 	return importLoomVideoForOwner({
 		loomUrl,
@@ -767,7 +715,6 @@ export async function importFromLoomCsv({
 	const results: LoomCsvImportRowResult[] = [];
 	const spaceCache = new Map<string, ImportSpaceCacheValue>();
 	const touchedSpaceIds = new Set<Space.SpaceIdOrOrganisationId>();
-	const isRateLimited = await createLoomImportRateLimitCheck(user.id);
 
 	for (const row of normalizedRows) {
 		if (!row.loomUrl) {
@@ -834,7 +781,6 @@ export async function importFromLoomCsv({
 				loomUrl: row.loomUrl,
 				orgId,
 				ownerId: member.userId,
-				isRateLimited,
 			});
 
 			let spaceName = row.spaceName || undefined;

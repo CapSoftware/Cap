@@ -34,6 +34,7 @@ export function DashboardContexts({
 	initialTheme,
 	initialSidebarCollapsed,
 	referClicked,
+	shareableLinkUsage,
 }: {
 	children: React.ReactNode;
 	organizationData: SharedContext["organizationData"];
@@ -46,6 +47,7 @@ export function DashboardContexts({
 	initialTheme: ITheme;
 	initialSidebarCollapsed: boolean;
 	referClicked: boolean;
+	shareableLinkUsage: SharedContext["shareableLinkUsage"];
 }) {
 	const user = useCurrentUser();
 	if (!user) redirect("/login");
@@ -164,6 +166,7 @@ export function DashboardContexts({
 					isDeveloperSection,
 					developerApps,
 					setDeveloperApps,
+					shareableLinkUsage,
 				}}
 			>
 				{children}

@@ -2,11 +2,15 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { PaymentFailed } from "@cap/database/emails/payment-failed";
 import { nanoId } from "@cap/database/helpers";
-import { developerCreditTransactions, users } from "@cap/database/schema";
+import {
+	developerCreditTransactions,
+	signedBaas,
+	users,
+} from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { addCreditsToAccount } from "@/lib/developer-credits";
@@ -15,6 +19,7 @@ import { trackServerEvent } from "@/lib/server-analytics";
 const relevantEvents = new Set([
 	"checkout.session.completed",
 	"checkout.session.async_payment_succeeded",
+	"customer.subscription.created",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
 	"invoice.payment_failed",
@@ -85,6 +90,80 @@ async function grantDeveloperCredits(
 	});
 
 	console.log("Developer credits added successfully");
+	return NextResponse.json({ received: true });
+}
+
+const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
+	"active",
+	"trialing",
+	"past_due",
+]);
+
+// The Signed BAA add-on lives on its own subscription for the same customer.
+// It must never be treated as the Pro subscription: it would otherwise
+// overwrite users.stripeSubscriptionId/Status and inflate the seat quota.
+function isSignedBaaSubscription(subscription: Stripe.Subscription) {
+	return subscription.metadata?.type === "signed_baa";
+}
+
+function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
+	return subscriptions.some(
+		(sub) =>
+			!isSignedBaaSubscription(sub) &&
+			ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+	);
+}
+
+async function cancelEntitledBaaSubscriptions(
+	subscriptions: Stripe.Subscription[],
+) {
+	// BAA terms end with the services agreement, so the add-on must stop
+	// billing when no entitled Pro subscription remains.
+	for (const sub of subscriptions) {
+		if (!isSignedBaaSubscription(sub)) continue;
+		if (ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status)) {
+			await stripe().subscriptions.cancel(sub.id);
+		}
+		await db()
+			.update(signedBaas)
+			.set({ status: "canceled" })
+			.where(eq(signedBaas.stripeSubscriptionId, sub.id));
+		console.log("Signed BAA subscription canceled alongside Pro", {
+			subscriptionId: sub.id,
+		});
+	}
+}
+
+async function syncSignedBaaStatus(
+	subscription: Stripe.Subscription,
+): Promise<Response> {
+	const status = ENTITLED_SUBSCRIPTION_STATUSES.has(subscription.status)
+		? "active"
+		: "canceled";
+	const organizationId = subscription.metadata?.organizationId
+		? Organisation.OrganisationId.make(subscription.metadata.organizationId)
+		: undefined;
+	await db()
+		.update(signedBaas)
+		.set({
+			status,
+			stripeSubscriptionId: subscription.id,
+		})
+		.where(
+			organizationId
+				? or(
+						eq(signedBaas.stripeSubscriptionId, subscription.id),
+						and(
+							eq(signedBaas.organizationId, organizationId),
+							isNull(signedBaas.stripeSubscriptionId),
+						),
+					)
+				: eq(signedBaas.stripeSubscriptionId, subscription.id),
+		);
+	console.log("Signed BAA subscription synced", {
+		subscriptionId: subscription.id,
+		status,
+	});
 	return NextResponse.json({ received: true });
 }
 
@@ -366,6 +445,17 @@ export const POST = async (req: Request) => {
 				}
 			}
 
+			if (event.type === "customer.subscription.created") {
+				const subscription = event.data.object as Stripe.Subscription;
+				// Recovers purchases whose create response was lost: the purchase
+				// action may have reverted its record without a subscription ID, and
+				// no updated event fires until the next subscription change, so the
+				// creation event is the only reliable association signal.
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
+				}
+			}
+
 			if (event.type === "customer.subscription.updated") {
 				console.log("Processing customer.subscription.updated event");
 				const subscription = event.data.object as Stripe.Subscription;
@@ -374,6 +464,10 @@ export const POST = async (req: Request) => {
 					status: subscription.status,
 					customerId: subscription.customer,
 				});
+
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
+				}
 
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
@@ -406,6 +500,23 @@ export const POST = async (req: Request) => {
 					foundUserId,
 				);
 
+				const subscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "all",
+					limit: 100,
+				});
+
+				console.log("Retrieved all subscriptions:", {
+					count: subscriptions.data.length,
+				});
+
+				// BAA cleanup depends only on Stripe state, so it must run even
+				// when the customer cannot be mapped to a user; the 202 below is
+				// treated as delivered and the event is never redelivered.
+				if (!hasEntitledProSubscription(subscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(subscriptions.data);
+				}
+
 				if (!dbUser) {
 					console.log(
 						"No user found after all retries. Returning 202 to allow retry.",
@@ -421,22 +532,15 @@ export const POST = async (req: Request) => {
 					name: dbUser.name,
 				});
 
-				const subscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "all",
-					limit: 100,
-				});
-
-				console.log("Retrieved all subscriptions:", {
-					count: subscriptions.data.length,
-				});
-
 				// Quota follows entitlement: past_due keeps its seats during the
 				// dunning window instead of collapsing the org to zero while
 				// Stripe retries the card.
-				const entitledStatuses = new Set(["active", "trialing", "past_due"]);
 				const inviteQuota = subscriptions.data
-					.filter((sub) => entitledStatuses.has(sub.status))
+					.filter(
+						(sub) =>
+							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
+							!isSignedBaaSubscription(sub),
+					)
 					.reduce((total, sub) => {
 						return (
 							total +
@@ -486,6 +590,12 @@ export const POST = async (req: Request) => {
 					invoice.billing_reason !== "subscription_cycle" &&
 					invoice.billing_reason !== "subscription_update"
 				) {
+					return NextResponse.json({ received: true });
+				}
+
+				// Signed BAA renewals must not trigger the Cap Pro dunning email;
+				// its status is tracked via customer.subscription.updated instead.
+				if (invoice.subscription_details?.metadata?.type === "signed_baa") {
 					return NextResponse.json({ received: true });
 				}
 
@@ -552,9 +662,27 @@ export const POST = async (req: Request) => {
 
 			if (event.type === "customer.subscription.deleted") {
 				const subscription = event.data.object as Stripe.Subscription;
+
+				if (isSignedBaaSubscription(subscription)) {
+					return await syncSignedBaaStatus(subscription);
+				}
+
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
+
+				// BAA cleanup depends only on Stripe state; it must run before the
+				// user-mapping early returns so an unmappable customer can't keep
+				// an active BAA billing after their last Pro subscription ends.
+				const remainingSubscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "all",
+					limit: 100,
+				});
+				if (!hasEntitledProSubscription(remainingSubscriptions.data)) {
+					await cancelEntitledBaaSubscriptions(remainingSubscriptions.data);
+				}
+
 				let foundUserId: User.UserId | undefined;
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId
