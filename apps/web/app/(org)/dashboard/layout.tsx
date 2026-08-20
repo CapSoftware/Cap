@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationInvites } from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -96,6 +97,7 @@ export default async function DashboardLayout({
 			<UploadingProvider>
 				<DashboardContexts
 					organizationSettings={organizationSettings}
+					instanceVideoDefaultPublic={serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC}
 					userCapsCount={userCapsCount}
 					organizationData={organizationSelect}
 					activeOrganization={activeOrganization || null}

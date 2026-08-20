@@ -118,8 +118,12 @@ const mergeSettings = (
 });
 
 const CapSettingsCard = () => {
-	const { user, organizationSettings, activeOrganization } =
-		useDashboardContext();
+	const {
+		user,
+		organizationSettings,
+		activeOrganization,
+		instanceVideoDefaultPublic,
+	} = useDashboardContext();
 	const router = useRouter();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
@@ -287,7 +291,8 @@ const CapSettingsCard = () => {
 		}));
 	};
 
-	const defaultVideoPublic = settings.defaultVideoPublic !== false;
+	const defaultVideoPublic =
+		settings.defaultVideoPublic ?? instanceVideoDefaultPublic;
 
 	const saveDefaultPassword = useMutation({
 		mutationFn: async () => {

@@ -29,6 +29,7 @@ export function DashboardContexts({
 	spacesData,
 	userCapsCount,
 	organizationSettings,
+	instanceVideoDefaultPublic,
 	userPreferences,
 	anyNewNotifications,
 	initialTheme,
@@ -41,6 +42,7 @@ export function DashboardContexts({
 	spacesData: SharedContext["spacesData"];
 	userCapsCount: SharedContext["userCapsCount"];
 	organizationSettings: SharedContext["organizationSettings"];
+	instanceVideoDefaultPublic: SharedContext["instanceVideoDefaultPublic"];
 	userPreferences: SharedContext["userPreferences"];
 	anyNewNotifications: boolean;
 	initialTheme: ITheme;
@@ -149,6 +151,7 @@ export function DashboardContexts({
 					anyNewNotifications,
 					userPreferences,
 					organizationSettings,
+					instanceVideoDefaultPublic,
 					userSpaces,
 					sharedSpaces,
 					activeSpace,

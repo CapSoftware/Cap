@@ -21,6 +21,7 @@ export type SharedContext = {
 	organizationData: Organization[] | null;
 	activeOrganization: Organization | null;
 	organizationSettings: OrganizationSettings | null;
+	instanceVideoDefaultPublic: boolean;
 	spacesData: Spaces[] | null;
 	userSpaces: Spaces[] | null;
 	sharedSpaces: Spaces[] | null;
