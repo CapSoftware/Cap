@@ -65,6 +65,7 @@ export const agentOrganizationSettings = (
 		shareableLinkUseOrganizationIcon?: boolean;
 		aiGenerationLanguage?: (typeof Agent.AgentAiGenerationLanguage)["Type"];
 		defaultPlaybackSpeed?: number;
+		defaultVideoPublic?: boolean;
 	} | null,
 ): (typeof Agent.AgentOrganizationSettings)["Type"] => ({
 	disableSummary: settings?.disableSummary ?? null,
@@ -78,6 +79,7 @@ export const agentOrganizationSettings = (
 		settings?.shareableLinkUseOrganizationIcon ?? null,
 	aiGenerationLanguage: settings?.aiGenerationLanguage ?? null,
 	defaultPlaybackSpeed: settings?.defaultPlaybackSpeed ?? null,
+	defaultVideoPublic: settings?.defaultVideoPublic ?? null,
 });
 
 const scopedAction = (

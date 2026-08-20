@@ -591,6 +591,7 @@ export const AgentOrganizationSettings = Schema.Struct({
 	shareableLinkUseOrganizationIcon: Schema.NullOr(Schema.Boolean),
 	aiGenerationLanguage: Schema.NullOr(AgentAiGenerationLanguage),
 	defaultPlaybackSpeed: Schema.NullOr(Schema.Number),
+	defaultVideoPublic: Schema.NullOr(Schema.Boolean),
 });
 
 export const AgentOrganization = Schema.Struct({
@@ -656,6 +657,7 @@ export const AgentOrganizationSettingsInput = Schema.Struct({
 	shareableLinkUseOrganizationIcon: Schema.optional(Schema.Boolean),
 	aiGenerationLanguage: Schema.optional(AgentAiGenerationLanguage),
 	defaultPlaybackSpeed: Schema.optional(Schema.Number),
+	defaultVideoPublic: Schema.optional(Schema.Boolean),
 });
 
 export const AgentOrganizationInviteInput = Schema.Struct({
