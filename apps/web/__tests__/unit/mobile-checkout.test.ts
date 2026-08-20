@@ -9,7 +9,13 @@ import {
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
+	rateLimited: vi.fn(() => Promise.resolve(false)),
 }));
+
+// Matches STRIPE_PLAN_IDS.development, which is what the allowlist resolves to
+// when VERCEL_ENV is unset (as it is under test).
+const DEV_MONTHLY = "price_1P9C1DFJxA1XpeSsTwwuddnq";
+const DEV_YEARLY = "price_1Q3esrFJxA1XpeSsFwp486RN";
 
 vi.mock("@cap/env", () => ({
 	buildEnv: {},
@@ -22,6 +28,21 @@ vi.mock("@cap/utils", () => ({
 			sessions: { create: checkoutMocks.create },
 		},
 	}),
+	STRIPE_PLAN_IDS: {
+		development: {
+			yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
+			monthly: "price_1P9C1DFJxA1XpeSsTwwuddnq",
+		},
+		production: {
+			yearly: "price_1S2al7FJxA1XpeSsJCI5Z2UD",
+			monthly: "price_1S2akxFJxA1XpeSsfoAUUbpJ",
+		},
+	},
+}));
+
+vi.mock("@/lib/rate-limit", () => ({
+	isRateLimited: checkoutMocks.rateLimited,
+	RATE_LIMIT_IDS: { GUEST_CHECKOUT: "rl_guest_checkout" },
 }));
 
 vi.mock("@/lib/server-analytics", () => ({
@@ -42,6 +63,7 @@ describe("checkout redirects", () => {
 			id: "cs_test",
 			url: "https://pay.cap.so/session",
 		});
+		checkoutMocks.rateLimited.mockResolvedValue(false);
 	});
 
 	it("preserves the existing desktop checkout redirects", () => {
@@ -61,22 +83,76 @@ describe("checkout redirects", () => {
 
 	it("keeps existing guest checkout requests on the web flow", async () => {
 		const response = await startGuestCheckout(
-			makeGuestCheckoutRequest({ priceId: "price_pro", quantity: 1 }),
+			makeGuestCheckoutRequest({ priceId: DEV_MONTHLY, quantity: 1 }),
 		);
 
 		expect(response.status).toBe(200);
 		expect(checkoutMocks.create).toHaveBeenCalledWith({
-			line_items: [{ price: "price_pro", quantity: 1 }],
+			line_items: [{ price: DEV_MONTHLY, quantity: 1 }],
 			mode: "subscription",
 			success_url:
 				"https://cap.so/dashboard/caps?upgrade=true&guest=true&session_id={CHECKOUT_SESSION_ID}",
 			cancel_url: "https://cap.so/pricing",
 			allow_promotion_codes: true,
+			after_expiration: {
+				recovery: { enabled: true, allow_promotion_codes: true },
+			},
 			metadata: {
 				platform: "web",
 				guestCheckout: "true",
+				priceId: DEV_MONTHLY,
 			},
 		});
+	});
+
+	it("refuses price ids the pricing page does not offer", async () => {
+		// The account still carries retired cheaper plans (legacy $9/mo, $72/yr);
+		// an unauthenticated caller must not be able to subscribe at one.
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: "price_1Q29mcFJxA1XpeSsbti0xJpZ",
+				quantity: 1,
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
+	});
+
+	it("rejects quantities outside the supported seat range", async () => {
+		for (const quantity of [0, -1, 101, 2.5]) {
+			const response = await startGuestCheckout(
+				makeGuestCheckoutRequest({ priceId: DEV_MONTHLY, quantity }),
+			);
+
+			expect(response.status).toBe(400);
+		}
+
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
+	});
+
+	it("defaults a missing quantity to a single seat", async () => {
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({ priceId: DEV_MONTHLY }),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				line_items: [{ price: DEV_MONTHLY, quantity: 1 }],
+			}),
+		);
+	});
+
+	it("stops minting Stripe sessions once the caller is rate limited", async () => {
+		checkoutMocks.rateLimited.mockResolvedValue(true);
+
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({ priceId: DEV_MONTHLY, quantity: 1 }),
+		);
+
+		expect(response.status).toBe(429);
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
 	});
 
 	it("sends mobile checkout results through the HTTPS completion route", () => {
@@ -89,7 +165,7 @@ describe("checkout redirects", () => {
 	it("uses the app return only when guest checkout is explicitly mobile", async () => {
 		const response = await startGuestCheckout(
 			makeGuestCheckoutRequest({
-				priceId: "price_pro",
+				priceId: DEV_YEARLY,
 				quantity: 1,
 				platform: "mobile",
 			}),
@@ -104,6 +180,7 @@ describe("checkout redirects", () => {
 				metadata: {
 					platform: "mobile",
 					guestCheckout: "true",
+					priceId: DEV_YEARLY,
 				},
 			}),
 		);
