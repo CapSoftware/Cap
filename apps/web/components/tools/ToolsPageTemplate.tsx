@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import Link from "next/link";
 import { type ReactNode, useEffect } from "react";
 import type { ToolPageContent } from "@/components/tools/types";
+import { createFAQSchema, createHowToSchema } from "@/utils/web-schema";
 
 const renderHTML = (content: string) => {
 	const styledContent = content.replace(
@@ -117,6 +118,24 @@ export const ToolsPageTemplate = ({
 
 	return (
 		<>
+			{content.faqs && content.faqs.length > 0 && (
+				<script
+					type="application/ld+json"
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD payload built from static page content
+					dangerouslySetInnerHTML={{
+						__html: JSON.stringify(createFAQSchema(content.faqs)),
+					}}
+				/>
+			)}
+			{content.howTo && (
+				<script
+					type="application/ld+json"
+					// biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD payload built from static page content
+					dangerouslySetInnerHTML={{
+						__html: JSON.stringify(createHowToSchema(content.howTo)),
+					}}
+				/>
+			)}
 			<div className="overflow-hidden relative pt-24 pb-8 md:py-40">
 				<div className="relative z-20 px-4 pt-4 text-center wrapper sm:px-5">
 					<div className="flex justify-center items-center text-sm">

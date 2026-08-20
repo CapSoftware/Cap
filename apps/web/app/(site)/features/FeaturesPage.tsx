@@ -262,7 +262,8 @@ const features: Feature[] = [
 	{
 		icon: faMobileAlt,
 		title: "Cross-Platform",
-		description: "Native apps for macOS (Apple Silicon & Intel) and Windows",
+		description:
+			"Native apps for macOS (Apple Silicon & Intel), Windows and Linux, plus a Chrome extension and web recorder",
 		category: "platform",
 		size: "medium",
 	},

@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import {
 	getLoomBrowserConversionErrorMessage,
 	getLoomBrowserConversionSupport,
@@ -67,6 +68,7 @@ function PromoCodeChip() {
 		try {
 			await navigator.clipboard.writeText(MIGRATE_PROMO_CODE);
 			setCopied(true);
+			trackEvent("loom_downloader_promo_copied", { code: MIGRATE_PROMO_CODE });
 			toast.success(`Code ${MIGRATE_PROMO_CODE} copied to clipboard`);
 			setTimeout(() => setCopied(false), 2000);
 		} catch {
@@ -116,6 +118,12 @@ function MigrationBanner() {
 					size="sm"
 					href={MIGRATE_CHECKOUT_HREF}
 					className="whitespace-nowrap"
+					onClick={() =>
+						trackEvent("loom_downloader_cta_clicked", {
+							target: "migrate",
+							placement: "banner",
+						})
+					}
 				>
 					Switch to Cap
 				</Button>
@@ -210,6 +218,12 @@ function MigrationSuccessState({
 							size="lg"
 							href={MIGRATE_CHECKOUT_HREF}
 							className="w-full sm:w-auto"
+							onClick={() =>
+								trackEvent("loom_downloader_cta_clicked", {
+									target: "migrate",
+									placement: "success",
+								})
+							}
 						>
 							Migrate with Cap Pro — save 20%
 						</Button>
@@ -218,6 +232,12 @@ function MigrationSuccessState({
 							size="lg"
 							href="/download"
 							className="w-full sm:w-auto"
+							onClick={() =>
+								trackEvent("loom_downloader_cta_clicked", {
+									target: "download-app",
+									placement: "success",
+								})
+							}
 						>
 							Download Cap free
 						</Button>
@@ -331,6 +351,9 @@ export function LoomDownloader() {
 				setLastCompletionKind("ready");
 				setLastDownloadedName(conversion.videoName);
 				setStatus("success");
+				trackEvent("loom_downloader_completed", {
+					mode: "browser-conversion",
+				});
 			} catch (err) {
 				if (
 					(err instanceof DOMException && err.name === "AbortError") ||
@@ -340,6 +363,7 @@ export function LoomDownloader() {
 					return;
 				}
 
+				trackEvent("loom_downloader_failed", { stage: "conversion" });
 				setStatus("error");
 				setErrorMessage(
 					getLoomBrowserConversionErrorMessage(err) ??
@@ -355,6 +379,7 @@ export function LoomDownloader() {
 	const handleDownload = useCallback(async () => {
 		if (!url.trim()) return;
 
+		trackEvent("loom_downloader_submitted");
 		setStatus("fetching");
 		setErrorMessage("");
 		setConvertProgress(0);
@@ -363,6 +388,7 @@ export function LoomDownloader() {
 			const result = await resolveLoomBrowserDownload(url.trim());
 
 			if (!result.success || !result.videoId) {
+				trackEvent("loom_downloader_failed", { stage: "resolve" });
 				setStatus("error");
 				setErrorMessage(result.error || "Something went wrong.");
 				return;
@@ -374,6 +400,7 @@ export function LoomDownloader() {
 			);
 
 			if (!result.downloadUrl) {
+				trackEvent("loom_downloader_failed", { stage: "no-download-url" });
 				setStatus("error");
 				setErrorMessage("Could not retrieve a video download URL.");
 				return;
@@ -386,11 +413,13 @@ export function LoomDownloader() {
 				setLastCompletionKind("download-started");
 				setLastDownloadedName(result.videoName ?? "");
 				setStatus("success");
+				trackEvent("loom_downloader_completed", { mode: "direct-download" });
 				return;
 			}
 
 			const support = getLoomBrowserConversionSupport();
 			if (!support.supported) {
+				trackEvent("loom_downloader_failed", { stage: "browser-unsupported" });
 				setStatus("error");
 				setErrorMessage(
 					support.message ??
@@ -424,6 +453,7 @@ export function LoomDownloader() {
 	}, [runBrowserConversion, updateDownloadObjectUrl, url]);
 
 	const handleDownloadAnother = useCallback(() => {
+		trackEvent("loom_downloader_reset");
 		setUrl("");
 		setStatus("idle");
 		setErrorMessage("");
