@@ -231,6 +231,36 @@ describe("GET /create", () => {
 		});
 	});
 
+	it("applies the org's sharing defaults to the created video", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		(resolveNewVideoDefaults as ReturnType<typeof vi.fn>).mockResolvedValue({
+			public: false,
+			password: "org-default-hash",
+		});
+
+		const response = await app.request("https://cap.test/create");
+
+		expect(response.status).toBe(200);
+		expect(resolveNewVideoDefaults).toHaveBeenCalledWith(mockDb, "org-1");
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-1",
+			ownerId: "user-1",
+			public: false,
+			password: "org-default-hash",
+		});
+	});
+
 	it("heals a dangling defaultOrgId when the user has no remaining orgs", async () => {
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-1",
@@ -345,5 +375,6 @@ describe("GET /create", () => {
 			orgId: "org-2",
 			ownerId: "user-1",
 		});
+		expect(resolveNewVideoDefaults).toHaveBeenCalledWith(mockDb, "org-2");
 	});
 });

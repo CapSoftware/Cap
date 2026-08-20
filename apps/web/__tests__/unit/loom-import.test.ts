@@ -488,6 +488,69 @@ describe("importFromLoom", () => {
 		expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard/caps");
 	});
 
+	it("applies the org's sharing defaults to the imported video", async () => {
+		whereMock.mockResolvedValueOnce([]).mockResolvedValueOnce(undefined);
+
+		resolveNewVideoDefaultsMock.mockResolvedValue({
+			public: false,
+			password: "org-default-hash",
+		});
+
+		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			}
+
+			if (url === "https://www.loom.com/graphql") {
+				return {
+					ok: true,
+					json: async () => ({
+						data: { getVideo: { name: "Imported video" } },
+					}),
+				} as Response;
+			}
+
+			if (url.includes("/v1/oembed")) {
+				return {
+					ok: true,
+					json: async () => ({ duration: 42, width: 1920, height: 1080 }),
+				} as Response;
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
+		const { importFromLoom } = await import("@/actions/loom");
+
+		const result = await importFromLoom({
+			loomUrl: "https://www.loom.com/share/loom-abc1234567",
+			orgId: "org-1" as never,
+		});
+
+		expect(result).toEqual({
+			success: true,
+			videoId: "video-123",
+		});
+		expect(resolveNewVideoDefaultsMock).toHaveBeenCalledWith(
+			expect.anything(),
+			"org-1",
+		);
+		expect(valuesMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				public: false,
+				password: "org-default-hash",
+			}),
+		);
+	});
+
 	it("rejects a CSV import when the current user is not an organization admin or owner", async () => {
 		getOrganizationAccessMock.mockResolvedValueOnce({
 			id: "org-1",
