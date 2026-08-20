@@ -9,6 +9,7 @@ import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import { Tinybird } from "../Tinybird/index.ts";
+import { resolveNewVideoDefaults } from "./NewVideoDefaults.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
@@ -477,11 +478,16 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						},
 					)} ${now.getFullYear()}`;
 
+					const videoDefaults = yield* db.use((db) =>
+						resolveNewVideoDefaults(db, input.orgId),
+					);
+
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
-						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						public: videoDefaults.public,
+						password: videoDefaults.password ?? undefined,
 						source: { type: "webMP4" },
 						bucketId,
 						storageIntegrationId,

@@ -6,6 +6,7 @@ const valuesMock = vi.fn();
 const startMock = vi.fn();
 const revalidatePathMock = vi.fn();
 const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
+const resolveNewVideoDefaultsMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
@@ -125,6 +126,7 @@ vi.mock("@cap/web-backend", () => ({
 	Storage: {
 		getWritableAccessForUser: storageGetWritableAccessForUserMock,
 	},
+	resolveNewVideoDefaults: resolveNewVideoDefaultsMock,
 }));
 
 vi.mock("@cap/web-domain", () => ({
@@ -230,6 +232,10 @@ describe("importFromLoom", () => {
 				storageIntegrationId: Option.none(),
 			}),
 		);
+		resolveNewVideoDefaultsMock.mockResolvedValue({
+			public: true,
+			password: null,
+		});
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-123",
 		});

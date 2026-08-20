@@ -4,9 +4,11 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { Storage as StorageService } from "@cap/web-backend";
+import {
+	resolveNewVideoDefaults,
+	Storage as StorageService,
+} from "@cap/web-backend";
 import {
 	type Folder,
 	type Organisation,
@@ -212,6 +214,8 @@ export async function createVideoAndGetUploadUrl({
 				organizationId: orgId,
 			});
 
+		const videoDefaults = await resolveNewVideoDefaults(db(), orgId);
+
 		const videoData = {
 			id: idToUse,
 			name: `Cap ${
@@ -223,7 +227,8 @@ export async function createVideoAndGetUploadUrl({
 			isScreenshot,
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: videoDefaults.public,
+			password: videoDefaults.password,
 			...(folderId ? { folderId } : {}),
 		};
 
