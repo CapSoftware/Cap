@@ -941,6 +941,14 @@ fn select_system_audio_monitor() -> anyhow::Result<SelectedSystemAudioInput> {
         return Ok(selected);
     }
 
+    if !pactl_available() {
+        return Err(anyhow!(
+            "Linux system audio capture needs `pactl` to discover monitor sources, but it was not found on PATH. \
+            Install it (e.g. `apt install pulseaudio-utils`, `dnf install pulseaudio-utils`, `pacman -S libpulse`) and try again. \
+            Available cpal input devices: {available:?}."
+        ));
+    }
+
     Err(anyhow!(
         "No PulseAudio/PipeWire monitor input was found for Linux system audio. \
         Available input devices: {available:?}. Select a monitor source with --mic, or enable a monitor source in your audio server."
@@ -1027,6 +1035,14 @@ fn pactl_monitor_rank(name: &str) -> Option<u8> {
     } else {
         None
     }
+}
+
+fn pactl_available() -> bool {
+    Command::new("pactl")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn pactl_default_source() -> Option<String> {
