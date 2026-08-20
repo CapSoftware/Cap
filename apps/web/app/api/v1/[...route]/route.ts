@@ -28,6 +28,7 @@ import {
 	getGoogleDriveUserEmail,
 	ImageUploads,
 	resolveEffectiveVideoRules,
+	resolveNewVideoDefaults,
 	Storage,
 	Videos,
 } from "@cap/web-backend";
@@ -2349,6 +2350,9 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 					);
 					const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
 					const now = new Date();
+					const videoDefaults = yield* database.use((db) =>
+						resolveNewVideoDefaults(db, input.organizationId),
+					);
 					const importState = yield* database.use((db) =>
 						db.transaction(async (tx) => {
 							const [existingImport] = await tx
@@ -2385,7 +2389,8 @@ const queueAgentLoomImport = Effect.fn("Agent.queueLoomImport")(
 										storageIntegrationId: Option.getOrNull(
 											writable.storageIntegrationId,
 										),
-										public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+										public: videoDefaults.public,
+										password: videoDefaults.password,
 										duration: download.durationSeconds,
 										width: download.width,
 										height: download.height,
@@ -6578,6 +6583,9 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						if (title.length > 255) {
 							return yield* badRequest(requestId, "Upload title is too long");
 						}
+						const videoDefaults = yield* database.use((db) =>
+							resolveNewVideoDefaults(db, organizationId),
+						);
 						const state = yield* runAgentMutation({
 							principal,
 							operation: "create_upload",
@@ -6598,7 +6606,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										writable.storageIntegrationId,
 									),
 									folderId: payload.folderId ?? null,
-									public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+									public: videoDefaults.public,
+									password: videoDefaults.password,
 									duration: payload.durationSeconds,
 									width: payload.width,
 									height: payload.height,

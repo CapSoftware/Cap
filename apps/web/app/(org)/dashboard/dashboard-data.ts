@@ -30,10 +30,11 @@ import { selectProSeatProvider } from "@/utils/organization";
 export type Organization = {
 	organization: Omit<
 		typeof organizations.$inferSelect,
-		"iconUrl" | "shareableLinkIconUrl"
+		"iconUrl" | "shareableLinkIconUrl" | "defaultVideoPassword"
 	> & {
 		iconUrl: ImageUpload.ImageUrl | null;
 		shareableLinkIconUrl: ImageUpload.ImageUrl | null;
+		hasDefaultVideoPassword: boolean;
 	};
 	members: (typeof organizationMembers.$inferSelect & {
 		user: Pick<
@@ -427,9 +428,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						(memberCountResult[0]?.value || 0) +
 						(inviteCountResult[0]?.value || 0);
 
+					const { defaultVideoPassword, ...clientOrganization } = organization;
+
 					return {
 						organization: {
-							...organization,
+							...clientOrganization,
+							hasDefaultVideoPassword: defaultVideoPassword !== null,
 							iconUrl: organization.iconUrl
 								? yield* iconImages.resolveImageUrl(organization.iconUrl)
 								: null,

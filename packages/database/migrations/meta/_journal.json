@@ -281,6 +281,13 @@
 			"when": 1787096888361,
 			"tag": "0039_magical_vermin",
 			"breakpoints": true
+		},
+		{
+			"idx": 40,
+			"version": "5",
+			"when": 1787217975605,
+			"tag": "0040_crazy_champions",
+			"breakpoints": true
 		}
 	]
 }

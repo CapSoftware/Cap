@@ -13,6 +13,7 @@ import {
 	findScreenshotObjectKey,
 	getCurrentUser,
 	ImageUploads,
+	resolveNewVideoDefaults,
 	Storage,
 	Videos,
 	VideosRepo,
@@ -2338,6 +2339,9 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 	);
 	const videoId = Video.VideoId.make(nanoId());
 	const now = new Date();
+	const videoDefaults = yield* database.use((db) =>
+		resolveNewVideoDefaults(db, user.activeOrganizationId),
+	);
 	const importState = yield* database.use((db) =>
 		db.transaction(async (tx) => {
 			const [existing] = await tx
@@ -2384,7 +2388,8 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 				source: { type: "webMP4" },
 				bucket: Option.getOrNull(writable.bucketId),
 				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: videoDefaults.public,
+				password: videoDefaults.password,
 				duration: download.durationSeconds,
 				width: download.width,
 				height: download.height,
@@ -2467,11 +2472,15 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
+	const videoDefaults = yield* database.use((db) =>
+		resolveNewVideoDefaults(db, organizationId),
+	);
 	const videoId = yield* repo.create({
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: videoDefaults.public,
+		password: videoDefaults.password ?? undefined,
 		source: { type: "webMP4" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
@@ -2562,11 +2571,15 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		user.id,
 		organizationId,
 	);
+	const videoDefaults = yield* database.use((db) =>
+		resolveNewVideoDefaults(db, organizationId),
+	);
 	const videoId = yield* repo.create({
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: videoDefaults.public,
+		password: videoDefaults.password ?? undefined,
 		source: { type: "desktopSegments" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,

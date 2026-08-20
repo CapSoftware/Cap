@@ -211,7 +211,9 @@ export const organizations = mysqlTable(
 			shareableLinkUseOrganizationIcon?: boolean;
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
+			defaultVideoPublic?: boolean;
 		}>(),
+		defaultVideoPassword: encryptedTextNullable("defaultVideoPassword"),
 		iconUrl: varchar("iconUrl", {
 			length: 1024,
 		}).$type<ImageUpload.ImageUrlOrKey>(),

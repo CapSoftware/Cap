@@ -1,6 +1,14 @@
 "use client";
 
-import { Card, CardDescription, CardHeader, CardTitle, Switch } from "@cap/ui";
+import {
+	Button,
+	Card,
+	CardDescription,
+	CardHeader,
+	CardTitle,
+	Input,
+	Switch,
+} from "@cap/ui";
 import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	AI_GENERATION_LANGUAGES,
@@ -8,11 +16,17 @@ import {
 	getAiGenerationLanguageName,
 	isAiGenerationLanguage,
 } from "@cap/web-domain";
+import { useMutation } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
-import { ChevronDown, Gauge, Globe } from "lucide-react";
+import { ChevronDown, Eye, Gauge, Globe, Lock } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+	removeOrganizationDefaultVideoPassword,
+	setOrganizationDefaultVideoPassword,
+} from "@/actions/organization/default-video-password";
 import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../../Contexts";
@@ -88,6 +102,11 @@ const languageOptions = Object.entries(AI_GENERATION_LANGUAGES) as [
 	string,
 ][];
 
+const visibilityOptions: Array<{ label: string; value: boolean }> = [
+	{ label: "Anyone with the link", value: true },
+	{ label: "Private", value: false },
+];
+
 const mergeSettings = (
 	settings?: OrganizationSettings | null,
 ): OrganizationSettings => ({
@@ -99,11 +118,22 @@ const mergeSettings = (
 });
 
 const CapSettingsCard = () => {
-	const { user, organizationSettings } = useDashboardContext();
+	const { user, organizationSettings, activeOrganization } =
+		useDashboardContext();
+	const router = useRouter();
 	const initialSettings = mergeSettings(organizationSettings);
 	const [settings, setSettings] =
 		useState<OrganizationSettings>(initialSettings);
 	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+	const hasDefaultVideoPassword = Boolean(
+		activeOrganization?.organization.hasDefaultVideoPassword,
+	);
+	const [defaultPasswordEnabled, setDefaultPasswordEnabled] = useState(
+		hasDefaultVideoPassword,
+	);
+	const [isChangingDefaultPassword, setIsChangingDefaultPassword] =
+		useState(false);
+	const [defaultPassword, setDefaultPassword] = useState("");
 
 	const lastSavedSettings = useRef<OrganizationSettings>(initialSettings);
 	const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -117,6 +147,12 @@ const CapSettingsCard = () => {
 		setSettings(next);
 		lastSavedSettings.current = next;
 	}, [organizationSettings]);
+
+	useEffect(() => {
+		setDefaultPasswordEnabled(hasDefaultVideoPassword);
+		setIsChangingDefaultPassword(false);
+		setDefaultPassword("");
+	}, [hasDefaultVideoPassword]);
 
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
@@ -163,6 +199,15 @@ const CapSettingsCard = () => {
 								AI_GENERATION_LANGUAGE_AUTO;
 							toast.success(
 								`AI language set to ${getAiGenerationLanguageName(language)}`,
+							);
+							return;
+						}
+
+						if (changedKey === "defaultVideoPublic") {
+							toast.success(
+								debouncedUpdateSettings.defaultVideoPublic === false
+									? "New caps will be private"
+									: "New caps will be shared with anyone with the link",
 							);
 							return;
 						}
@@ -235,6 +280,72 @@ const CapSettingsCard = () => {
 
 	const selectedSpeed = settings.defaultPlaybackSpeed ?? DEFAULT_PLAYBACK_SPEED;
 
+	const handleVisibilityChange = (isPublic: boolean) => {
+		setSettings((prev) => ({
+			...prev,
+			defaultVideoPublic: isPublic,
+		}));
+	};
+
+	const defaultVideoPublic = settings.defaultVideoPublic !== false;
+
+	const saveDefaultPassword = useMutation({
+		mutationFn: async () => {
+			const result = await setOrganizationDefaultVideoPassword(defaultPassword);
+			if (!result.success)
+				throw new Error(result.error ?? "Failed to update default password");
+			return result.value;
+		},
+		onSuccess: () => {
+			toast.success("Default password updated");
+			setDefaultPassword("");
+			setIsChangingDefaultPassword(false);
+			router.refresh();
+		},
+		onError: (error) => {
+			toast.error(error.message);
+		},
+	});
+
+	const removeDefaultPassword = useMutation({
+		mutationFn: async () => {
+			const result = await removeOrganizationDefaultVideoPassword();
+			if (!result.success)
+				throw new Error(result.error ?? "Failed to remove default password");
+			return result.value;
+		},
+		onSuccess: () => {
+			toast.success("Default password removed");
+			setDefaultPassword("");
+			setIsChangingDefaultPassword(false);
+			setDefaultPasswordEnabled(false);
+			router.refresh();
+		},
+		onError: (error) => {
+			toast.error(error.message);
+			setDefaultPasswordEnabled(hasDefaultVideoPassword);
+		},
+	});
+
+	const defaultPasswordPending =
+		saveDefaultPassword.isPending || removeDefaultPassword.isPending;
+
+	const handleDefaultPasswordToggle = (checked: boolean) => {
+		if (checked) {
+			setDefaultPasswordEnabled(true);
+			return;
+		}
+
+		if (hasDefaultVideoPassword) {
+			removeDefaultPassword.mutate();
+			return;
+		}
+
+		setDefaultPasswordEnabled(false);
+		setIsChangingDefaultPassword(false);
+		setDefaultPassword("");
+	};
+
 	const handleLanguageChange = (language: AiGenerationLanguage) => {
 		if (!isAiGenerationLanguage(language)) {
 			return;
@@ -290,6 +401,129 @@ const CapSettingsCard = () => {
 						/>
 					</div>
 				))}
+			</div>
+
+			<div className="flex flex-col gap-3">
+				<p className="text-sm font-medium text-gray-12">Default sharing</p>
+
+				<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">
+					<div className="flex flex-col flex-1 gap-1">
+						<div className="flex gap-1.5 items-center">
+							<Eye className="w-3.5 h-3.5 text-gray-9" />
+							<p className="text-sm text-gray-12">Who can view new caps</p>
+						</div>
+						<p className="text-xs text-gray-10">
+							Applies to new caps. Sharing can still be changed on each cap.
+						</p>
+					</div>
+					<div className="flex flex-wrap gap-1 items-center p-1 rounded-lg border bg-gray-1 border-gray-3">
+						{visibilityOptions.map((option) => (
+							<button
+								key={option.label}
+								type="button"
+								onClick={() => handleVisibilityChange(option.value)}
+								aria-pressed={defaultVideoPublic === option.value}
+								className={clsx(
+									"rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+									defaultVideoPublic === option.value
+										? "text-white bg-blue-11"
+										: "text-gray-11 hover:bg-gray-3",
+								)}
+							>
+								{option.label}
+							</button>
+						))}
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3">
+					<div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+						<div className="flex flex-col flex-1 gap-1">
+							<div className="flex gap-1.5 items-center">
+								<Lock className="w-3.5 h-3.5 text-gray-9" />
+								<p className="text-sm text-gray-12">
+									Password protect new caps
+								</p>
+							</div>
+							<p className="text-xs text-gray-10">
+								New caps get this password automatically. Viewers need it to
+								open the link.
+							</p>
+						</div>
+						<Switch
+							checked={defaultPasswordEnabled}
+							disabled={defaultPasswordPending}
+							onCheckedChange={handleDefaultPasswordToggle}
+						/>
+					</div>
+
+					{defaultPasswordEnabled &&
+						(hasDefaultVideoPassword && !isChangingDefaultPassword ? (
+							<div className="flex flex-wrap gap-2 justify-between items-center">
+								<p className="text-xs text-gray-10">
+									A default password is set. It cannot be shown again.
+								</p>
+								<div className="flex gap-2 items-center">
+									<Button
+										size="xs"
+										variant="gray"
+										disabled={defaultPasswordPending}
+										onClick={() => setIsChangingDefaultPassword(true)}
+									>
+										Change
+									</Button>
+									<Button
+										size="xs"
+										variant="destructive"
+										disabled={defaultPasswordPending}
+										spinner={removeDefaultPassword.isPending}
+										onClick={() => removeDefaultPassword.mutate()}
+									>
+										Remove
+									</Button>
+								</div>
+							</div>
+						) : (
+							<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+								<Input
+									type="password"
+									autoComplete="new-password"
+									maxLength={255}
+									className="sm:flex-1"
+									placeholder="New default password"
+									value={defaultPassword}
+									onChange={(e) => setDefaultPassword(e.target.value)}
+								/>
+								<div className="flex gap-2 items-center">
+									<Button
+										size="sm"
+										variant="dark"
+										spinner={saveDefaultPassword.isPending}
+										disabled={
+											defaultPasswordPending ||
+											defaultPassword.trim().length === 0
+										}
+										onClick={() => saveDefaultPassword.mutate()}
+									>
+										Save
+									</Button>
+									{hasDefaultVideoPassword && (
+										<Button
+											size="sm"
+											variant="gray"
+											disabled={defaultPasswordPending}
+											onClick={() => {
+												setIsChangingDefaultPassword(false);
+												setDefaultPassword("");
+											}}
+										>
+											Cancel
+										</Button>
+									)}
+								</div>
+							</div>
+						))}
+				</div>
 			</div>
 
 			<div className="flex flex-col gap-3 p-4 text-left rounded-xl border transition-colors bg-gray-2 border-gray-3 sm:flex-row sm:justify-between sm:items-center">

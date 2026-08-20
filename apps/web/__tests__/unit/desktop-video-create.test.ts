@@ -64,6 +64,7 @@ vi.mock("@cap/web-backend", () => ({
 		getOrganizationWritableAccess: vi.fn(),
 		getS3WritableAccessForUser: vi.fn(),
 	},
+	resolveNewVideoDefaults: vi.fn(),
 }));
 
 vi.mock("@/lib/server", () => ({
@@ -92,7 +93,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
-const { Storage } = await import("@cap/web-backend");
+const { Storage, resolveNewVideoDefaults } = await import("@cap/web-backend");
 
 const effectLike = <T>(value: T) => ({
 	pipe: (fn: (value: T) => unknown) => fn(value),
@@ -140,6 +141,10 @@ function stubStorage() {
 			storageIntegrationId: Option.none(),
 		}),
 	);
+	(resolveNewVideoDefaults as ReturnType<typeof vi.fn>).mockResolvedValue({
+		public: true,
+		password: null,
+	});
 }
 
 describe("GET /create", () => {

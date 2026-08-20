@@ -13,7 +13,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { Storage } from "@cap/web-backend";
+import { resolveNewVideoDefaults, Storage } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
@@ -262,6 +262,7 @@ app.get(
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
+			const videoDefaults = await resolveNewVideoDefaults(db(), videoOrgId);
 
 			const videoName =
 				name ??
@@ -311,7 +312,8 @@ app.get(
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					public: videoDefaults.public,
+					password: videoDefaults.password,
 					duration: durationInSecs,
 					width,
 					height,
