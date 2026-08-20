@@ -21,5 +21,6 @@ export function usePromoCode() {
 	return {
 		promoCode: code,
 		promoLabel: code ? URL_PROMO_CODES[code]?.label : undefined,
+		promoPercentOff: code ? (URL_PROMO_CODES[code]?.percentOff ?? 0) : 0,
 	};
 }

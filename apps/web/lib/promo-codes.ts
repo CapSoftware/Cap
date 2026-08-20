@@ -7,8 +7,11 @@
  * 100%-off codes (staff gifts, internal tests), so honouring whatever a query
  * string asks for would hand out free Cap Pro to anyone who guessed one.
  */
-export const URL_PROMO_CODES: Record<string, { label: string }> = {
-	MIGRATE20: { label: "20% off Cap Pro" },
+export const URL_PROMO_CODES: Record<
+	string,
+	{ label: string; percentOff: number }
+> = {
+	MIGRATE20: { label: "20% off Cap Pro", percentOff: 20 },
 };
 
 export function normalizeUrlPromoCode(value: unknown): string | null {
