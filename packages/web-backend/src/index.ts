@@ -40,6 +40,10 @@ export {
 } from "./Videos/EffectiveVideoRules.ts";
 export { findScreenshotObjectKey, Videos } from "./Videos/index.ts";
 export {
+	type NewVideoDefaults,
+	resolveNewVideoDefaults,
+} from "./Videos/NewVideoDefaults.ts";
+export {
 	buildCanView,
 	VideosPolicy,
 	type VideosPolicyDeps,
