@@ -45,6 +45,7 @@ mod tray;
 mod update_project_names;
 mod updates;
 mod upload;
+mod upload_health;
 pub mod web_api;
 mod window_exclusion;
 mod window_position_persistence;
@@ -4896,6 +4897,8 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            upload_health::get_upload_health_status,
+            upload_health::refresh_upload_health_status,
             recording::import_current_desktop_background,
             recording::list_cameras,
             recording::get_camera_formats,
@@ -5311,6 +5314,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(FinalizingRecordings::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
+            app.manage(upload_health::UploadHealthCache::default());
 
             #[cfg(unix)]
             {

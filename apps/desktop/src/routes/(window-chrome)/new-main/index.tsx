@@ -86,6 +86,12 @@ import {
 	type UploadProgress,
 } from "~/utils/tauri";
 import { openTeleprompter } from "~/utils/teleprompter";
+import {
+	describeUploadHealth,
+	getUploadHealthStatus,
+	refreshUploadHealthStatus,
+	type UploadHealthStatus,
+} from "~/utils/upload-health";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -96,6 +102,7 @@ import IconLucideImage from "~icons/lucide/image";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideMaximize2 from "~icons/lucide/maximize-2";
 import IconLucideMinimize2 from "~icons/lucide/minimize-2";
+import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideScanText from "~icons/lucide/scan-text";
 import IconLucideSearch from "~icons/lucide/search";
 import IconLucideSettings from "~icons/lucide/settings";
@@ -1849,6 +1856,47 @@ function MainWindowHelpButton() {
 	);
 }
 
+function UploadHealthPill(props: {
+	status: UploadHealthStatus | null;
+	refreshing: boolean;
+	disabled: boolean;
+	onRefresh: () => void;
+}) {
+	const presentation = createMemo(() => describeUploadHealth(props.status));
+	const toneClass = createMemo(() => {
+		switch (presentation().tone) {
+			case "good":
+				return "border-green-6 bg-green-3 text-green-12";
+			case "warning":
+				return "border-amber-6 bg-amber-3 text-amber-12";
+			case "danger":
+				return "border-red-6 bg-red-3 text-red-12";
+			default:
+				return "border-gray-5 bg-gray-3 text-gray-11";
+		}
+	});
+
+	return (
+		<Tooltip content={<span>{props.status?.message ?? "Upload health"}</span>}>
+			<button
+				type="button"
+				disabled={props.disabled}
+				onClick={props.onRefresh}
+				class={cx(
+					"flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] leading-none transition hover:opacity-80 disabled:pointer-events-none disabled:opacity-70",
+					toneClass(),
+				)}
+			>
+				<span class="truncate font-medium">{presentation().label}</span>
+				<span class="truncate opacity-75">{presentation().detail}</span>
+				<IconLucideRefreshCw
+					class={cx("size-3 shrink-0", props.refreshing && "animate-spin")}
+				/>
+			</button>
+		</Tooltip>
+	);
+}
+
 function Page() {
 	const queryClient = useQueryClient();
 	const { rawOptions, setOptions } = useRecordingOptions();
@@ -1871,7 +1919,6 @@ function Page() {
 	const compatibilityStudioMode = () =>
 		rawOptions.mode === "studio" &&
 		generalSettings.data?.studioRecordingQuality === "compatibility";
-
 	const toggleMainWindowExpanded = async () => {
 		if (isWindowResizing()) return;
 		const previousExpanded = isExpanded();
@@ -1891,6 +1938,69 @@ function Page() {
 			setIsWindowResizing(false);
 		}
 	};
+	const [uploadHealth, setUploadHealth] =
+		createSignal<UploadHealthStatus | null>(null);
+	const [isRefreshingUploadHealth, setIsRefreshingUploadHealth] =
+		createSignal(false);
+
+	const loadUploadHealth = async (refresh: boolean) => {
+		const shouldRefresh = refresh && !isRecording();
+		if (shouldRefresh && isRefreshingUploadHealth()) return;
+		if (shouldRefresh) setIsRefreshingUploadHealth(true);
+		try {
+			const status = shouldRefresh
+				? await refreshUploadHealthStatus()
+				: await getUploadHealthStatus();
+			setUploadHealth(status);
+		} catch (error) {
+			console.error("Failed to load upload health:", error);
+		} finally {
+			if (shouldRefresh) setIsRefreshingUploadHealth(false);
+		}
+	};
+
+	onMount(() => {
+		void loadUploadHealth(false);
+
+		const startupProbe = window.setTimeout(() => {
+			void loadUploadHealth(true);
+		}, 800);
+
+		const interval = window.setInterval(
+			() => {
+				void loadUploadHealth(true);
+			},
+			5 * 60 * 1000,
+		);
+
+		onCleanup(() => {
+			window.clearTimeout(startupProbe);
+			window.clearInterval(interval);
+		});
+	});
+
+	createTauriEventListener(events.recordingStarted, () => {
+		void loadUploadHealth(false);
+	});
+
+	let recordingStoppedUploadHealthTimeout: number | undefined;
+	onCleanup(() => {
+		if (recordingStoppedUploadHealthTimeout !== undefined) {
+			window.clearTimeout(recordingStoppedUploadHealthTimeout);
+		}
+	});
+
+	createTauriEventListener(events.recordingStopped, () => {
+		if (recordingStoppedUploadHealthTimeout !== undefined) {
+			window.clearTimeout(recordingStoppedUploadHealthTimeout);
+		}
+
+		recordingStoppedUploadHealthTimeout = window.setTimeout(() => {
+			recordingStoppedUploadHealthTimeout = undefined;
+			void loadUploadHealth(true);
+		}, 1_000);
+	});
+
 	let cancelScheduledTargetListPrewarm: (() => void) | undefined;
 	onCleanup(() => cancelScheduledTargetListPrewarm?.());
 
@@ -3507,6 +3617,18 @@ function Page() {
 					</Show>
 				</Show>
 			</div>
+			<Show when={!activeMenu() && !isActivelyRecording()}>
+				<div class="flex min-w-0 justify-start">
+					<UploadHealthPill
+						status={uploadHealth()}
+						refreshing={isRefreshingUploadHealth()}
+						disabled={isRefreshingUploadHealth()}
+						onRefresh={() => {
+							void loadUploadHealth(true);
+						}}
+					/>
+				</div>
+			</Show>
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">
