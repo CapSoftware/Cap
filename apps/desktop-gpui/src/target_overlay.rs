@@ -446,6 +446,26 @@ pub struct OverlayWindow {
     focus: gpui::FocusHandle,
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
+    /// The mode menu the start pill's caret drops down -- `menuModes()`
+    /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
+    /// 2206-2210`). `Some` while it is open.
+    mode_menu: Option<crate::ui::MenuState>,
+}
+
+/// `menuModes` (`target-select-overlay.tsx:2064-2090`): three check items, in
+/// this order, checked on the current mode. Picking one switches the mode and
+/// never starts a recording.
+const MODE_MENU: [(&str, Mode); 3] = [
+    ("Studio Mode", Mode::Studio),
+    ("Instant Mode", Mode::Instant),
+    ("Screenshot Mode", Mode::Screenshot),
+];
+
+fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
+    MODE_MENU
+        .into_iter()
+        .map(|(label, mode)| crate::ui::MenuItem::new(label, mode == current))
+        .collect()
 }
 
 impl OverlayWindow {
@@ -479,6 +499,7 @@ impl OverlayWindow {
             focus: cx.focus_handle(),
             crop: None,
             drag: None,
+            mode_menu: None,
         }
     }
 
@@ -571,7 +592,15 @@ impl Render for OverlayWindow {
                     // overlay that has focus (see the README deviation).
                     tracing::debug!(key = %event.keystroke.key, "overlay key");
                     if event.keystroke.key.as_str() == "escape" {
-                        this.dismiss(cx);
+                        // An open mode menu takes the Escape before the
+                        // overlay does -- the native menu in the Tauri app
+                        // eats it the same way during menu tracking.
+                        if this.mode_menu.is_some() {
+                            this.mode_menu = None;
+                            cx.notify();
+                        } else {
+                            this.dismiss(cx);
+                        }
                     }
                 }),
             )
@@ -582,23 +611,53 @@ impl Render for OverlayWindow {
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
 
-        match mode {
-            Some(TargetType::Display) => root
-                .child(self.render_display_variant(cx))
-                .into_any_element(),
-            Some(TargetType::Window) => root
-                .child(self.render_window_variant(cx))
-                .into_any_element(),
-            Some(TargetType::Area) => root.child(self.render_area_variant(cx)).into_any_element(),
-            Some(TargetType::CameraOnly) => root
-                .child(self.render_camera_variant(cx))
-                .into_any_element(),
-            None => root.into_any_element(),
-        }
+        let root = match mode {
+            Some(TargetType::Display) => root.child(self.render_display_variant(cx)),
+            Some(TargetType::Window) => root.child(self.render_window_variant(cx)),
+            Some(TargetType::Area) => root.child(self.render_area_variant(cx)),
+            Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
+            None => root,
+        };
+        // Painted after the variant so the dropdown sits above the start
+        // cluster it drops from.
+        root.children(self.render_mode_menu(cx)).into_any_element()
     }
 }
 
 impl OverlayWindow {
+    /// The caret's dropdown while it is open -- `Menu.popup` in the source,
+    /// rendered with the app's own menu component here (the closest thing to
+    /// a native context menu this side of AppKit; check state, outside-click
+    /// dismissal and Escape behave the same).
+    fn render_mode_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let state = self.mode_menu.as_ref()?;
+        let items = mode_menu_items(self.select.read(cx).recording_mode);
+        Some(
+            crate::ui::Menu::plain(&self.theme, "overlay-mode-menu", items, state)
+                .on_select(cx.listener(|this, index: &usize, _window, cx| {
+                    this.choose_mode(*index, cx);
+                }))
+                .on_dismiss(cx.listener(|this, _, _window, cx| {
+                    this.mode_menu = None;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// A `CheckMenuItem` action: `setOptions("mode", ..)` +
+    /// `commands.setRecordingMode(..)` -- the app's single mode funnel
+    /// (`app_windows::set_recording_mode` -> `MainWindow::set_mode`), which
+    /// writes the shared store key, relabels every open overlay through
+    /// `TargetSelect::set_recording_mode`, and refreshes the tray.
+    fn choose_mode(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.mode_menu = None;
+        if let Some((_, mode)) = MODE_MENU.get(index).copied() {
+            app_windows::set_recording_mode(mode, cx);
+        }
+        cx.notify();
+    }
+
     /// `data-[over='true']:bg-blue-600/40` over `bg-black/60`, centered
     /// monitor art, name, resolution.
     fn render_display_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1267,6 +1326,12 @@ impl OverlayWindow {
                     .py(px(4.))
                     .pl(px(16.))
                     .min_w_0()
+                    // The pill's `overflow-hidden rounded-full` clips these
+                    // fills in the Tauri app; gpui masks are rectangles, so
+                    // the halves round their own outer caps (h-11 -> 22px) or
+                    // they paint square corners past the pill onto the glass
+                    // card behind it.
+                    .rounded_l(px(22.))
                     // `opacity-60 cursor-not-allowed hover:bg-transparent`.
                     .when(disabled, |this| this.opacity(0.6))
                     .when(!disabled, |this| {
@@ -1312,14 +1377,35 @@ impl OverlayWindow {
                     ),
             )
             .child(
-                // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`.
-                // The mode menu it drops down is deferred (README).
+                // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
+                // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
+                // pops the mode menu at the press location and must never arm
+                // the pill's start click -- gpui arms clicks on mouse-down per
+                // hitbox, so the stop has to happen here, not on a click
+                // handler. Active even while start is disabled, same as the
+                // source (the disabled styling only wraps the leading half).
                 div()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            let current = this.select.read(cx).recording_mode;
+                            this.mode_menu = Some(crate::ui::MenuState::new(
+                                event.position,
+                                &mode_menu_items(current),
+                            ));
+                            cx.notify();
+                        }),
+                    )
                     .flex()
                     .items_center()
                     .pl(px(10.))
                     .pr(px(12.))
                     .py(px(6.))
+                    // The right cap of the pill, for the same reason the
+                    // leading half takes `rounded_l`: its `bg-white/5` panel
+                    // otherwise pokes square corners past `rounded-full`.
+                    .rounded_r(px(22.))
                     .border_l_1()
                     .border_color(gpui::hsla(0., 0., 1., 0.2))
                     .bg(gpui::hsla(0., 0., 1., 0.05))
@@ -1485,6 +1571,25 @@ impl OverlayWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_menu_matches_menu_modes() {
+        // `menuModes` order (`target-select-overlay.tsx:2064-2090`) with the
+        // check on the current mode.
+        let items = mode_menu_items(Mode::Instant);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| (item.label.to_string(), item.checked))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Studio Mode".to_string(), false),
+                ("Instant Mode".to_string(), true),
+                ("Screenshot Mode".to_string(), false),
+            ],
+        );
+        assert_eq!(MODE_MENU[2].1, Mode::Screenshot);
+    }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> AreaRect {
         AreaRect {
