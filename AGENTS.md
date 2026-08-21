@@ -11,7 +11,7 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 
 ### Post-edit checks (run before you say "done")
 - Prefer scoped, fast checks over full workspace gates. Do not run long full-repo checks by default.
-- Touched any Rust file → `cargo fmt --all` and `cargo check -p <crate>`. On macOS, if `cinder` is on `PATH`, use `cinder` instead of `cargo` for `check`, `build`, `test`, and `run` (not `fmt` or `clippy`). Add `--all-targets`, `--workspace`, or clippy only when explicitly requested, when preparing CI/PR final validation, or when the change needs broader coverage. Never use Cinder in CI or release builds.
+- Touched any Rust file → `cargo fmt --all` and `cargo check -p <crate>`. Add `--all-targets`, `--workspace`, or clippy only when explicitly requested, when preparing CI/PR final validation, or when the change needs broader coverage.
 - Touched any TS / JS / JSON / CSS / MD file → run the narrowest applicable formatter/linter on touched files first, such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change spans shared types/packages.
 - Touched DB schema → `pnpm db:generate` before relying on it.
 
@@ -61,7 +61,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - Build: `pnpm build` (Turbo). Desktop release: `pnpm tauri:build`.
 - DB: `pnpm db:generate` → `pnpm db:push` → `pnpm db:studio`.
 - Docker: `pnpm docker:up | docker:stop | docker:clean`.
-- Quality: `pnpm lint`, `pnpm format`, `pnpm typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`. On macOS, prefer `cinder` over `cargo` for those local `build` / `test` / `check` / `run` commands when it is installed.
+- Quality: `pnpm lint`, `pnpm format`, `pnpm typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`.
 
 ## Coding Style & Naming
 - TypeScript / JS / JSON / CSS: **tab indent** and **double-quoted** strings, enforced by Biome (see `biome.json`). Do not configure per-file overrides.
@@ -73,7 +73,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Testing
 - TS/JS: Vitest where present (e.g., desktop). Name tests `*.test.ts(x)` near sources.
-- Rust: `cargo test` per crate; tests in `src` or `tests`. On macOS, use `cinder test` when Cinder is installed.
+- Rust: `cargo test` per crate; tests in `src` or `tests`.
 - Prefer unit tests for logic and light smoke tests for flows; no strict coverage yet.
 
 ## Commits & PRs
@@ -111,6 +111,6 @@ Prefer the smallest correct fix, but only after checking whether the narrow fix 
 ## Code Formatting & Lint Checks
 Before declaring any task complete, the agent should run the fastest useful check for every file type it touched and report anything skipped.
 
-- **Rust**: `cargo fmt --all` and `cargo check -p <crate>` for the touched crate. On macOS, if `cinder` is on `PATH`, run that check as `cinder check -p <crate>`. Add `--all-targets`, `--workspace`, or `cargo clippy -p <crate> --all-targets -- -D warnings` only for explicit requests, CI/PR final validation, or changes that need broader coverage.
+- **Rust**: `cargo fmt --all` and `cargo check -p <crate>` for the touched crate. Add `--all-targets`, `--workspace`, or `cargo clippy -p <crate> --all-targets -- -D warnings` only for explicit requests, CI/PR final validation, or changes that need broader coverage.
 - **TS / JS / JSON / CSS / MD**: prefer scoped checks such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change is broad enough to justify it.
 - If a scoped check fails, fix the violation in the source (do NOT suppress with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved). The Pre-Generation Invariants show the correct form for every denied lint.

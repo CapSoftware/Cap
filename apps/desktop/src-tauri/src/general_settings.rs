@@ -249,8 +249,9 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
-    /// Launch the experimental gpui-native app (`cap-gpui`) alongside this
-    /// one at startup, when its binary is bundled or discoverable.
+    /// Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+    /// while enabled, startup hands off to it and exits, and the native app's
+    /// own Experimental page hands back. See `gpui_app.rs`.
     #[serde(default)]
     pub enable_gpui_app: bool,
 }

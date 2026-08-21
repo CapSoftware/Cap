@@ -43,11 +43,7 @@ done
 
 if [[ "${CAP_GPUI_BUNDLE_SKIP_BUILD:-0}" != "1" ]]; then
 	pushd "$gpui_dir" >/dev/null
-	if command -v cinder >/dev/null 2>&1; then
-		cinder build --release
-	else
-		cargo build --release
-	fi
+	cargo build --release
 	popd >/dev/null
 fi
 

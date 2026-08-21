@@ -2,7 +2,7 @@
 	"name": "@cap/desktop",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm -w cap-setup && pnpm build:sidecar && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- node ../../scripts/local-cargo.mjs pnpm tauri dev",
+		"dev": "pnpm -w cap-setup && pnpm build:sidecar && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- node ../../scripts/dev-desktop.mjs",
 		"build:tauri": "pnpm build:sidecar && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri build",
 		"build:sidecar": "node ../../scripts/build-desktop-binaries.mjs",
 		"preparescript": "node scripts/prepare.js",
