@@ -705,9 +705,11 @@ pub fn hit_annotation(annotation: &Annotation, point: (f64, f64), handle_size: f
             dx * dx + dy * dy <= 1.
         }
         AnnotationType::Text => {
-            // The invisible hover rect, which is what a press actually lands on
-            // (`:738-750`).
-            let rect = selection_rect(annotation, handle_size);
+            // The hover rect's box (`:738-750`), grown to Figma's feel by
+            // `text_hit_rect` -- the measured overload in
+            // `ScreenshotEditorWindow::hit_annotation_measured` also folds in
+            // the glyph run.
+            let rect = text_hit_rect(annotation, handle_size, None);
             point.0 >= rect.x
                 && point.0 <= rect.x + rect.width
                 && point.1 >= rect.y
@@ -739,6 +741,67 @@ pub fn hit_annotation(annotation: &Annotation, point: (f64, f64), handle_size: f
                     <= tolerance
             }) || point_in_polygon(point, &points)
         }
+    }
+}
+
+/// The extent of the glyph run [`paint_text`] draws, in frame units: the
+/// run's advance width, and the ascent/descent around the baseline it hangs
+/// from (`y + height`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextExtent {
+    pub width: f64,
+    pub ascent: f64,
+    pub descent: f64,
+}
+
+/// The rect a pointer selects a text annotation from. This is Figma's feel
+/// rather than the SVG's: the source's hover rect is the stored box alone,
+/// but its `<text>` element also took clicks across every glyph cell through
+/// `pointer-events: all` -- and the glyph run overflows the stored box freely
+/// (typing never widens `width`), so the box alone goes dead past
+/// `x + width`. The hit rect is therefore the stored box unioned with the
+/// measured glyph run, padded by the hover overlay's `handleSize * 0.3` slop,
+/// and never thinner than two handles on a side so a tiny label is not
+/// miss-prone. Selection and hover *visuals* still draw [`selection_rect`],
+/// exactly like the source.
+pub fn text_hit_rect(
+    annotation: &Annotation,
+    handle_size: f64,
+    glyphs: Option<TextExtent>,
+) -> Rect {
+    let rect = selection_rect(annotation, handle_size);
+    let (mut left, mut top) = (rect.x, rect.y);
+    let (mut right, mut bottom) = (rect.x + rect.width, rect.y + rect.height);
+
+    if let Some(glyphs) = glyphs {
+        let padding = handle_size * 0.3;
+        // `paint_text` anchors the baseline at the raw `y + height`, so the
+        // glyph box does too.
+        let baseline = annotation.y + annotation.height;
+        right = right.max(annotation.x + glyphs.width + padding);
+        top = top.min(baseline - glyphs.ascent - padding);
+        bottom = bottom.max(baseline + glyphs.descent + padding);
+    }
+
+    // The generous floor: 2x `handleSize` (20 screen px) per side, centred,
+    // so text scaled down to a sliver still takes the press.
+    let min_side = handle_size * 2.;
+    if right - left < min_side {
+        let center = (left + right) / 2.;
+        left = center - min_side / 2.;
+        right = center + min_side / 2.;
+    }
+    if bottom - top < min_side {
+        let center = (top + bottom) / 2.;
+        top = center - min_side / 2.;
+        bottom = center + min_side / 2.;
+    }
+
+    Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
     }
 }
 
@@ -985,6 +1048,10 @@ struct Dragging {
     /// `dragState.original` -- every frame of the drag is computed from the
     /// state the press found, never from the previous frame.
     original: Annotation,
+    /// Whether a move gesture has crossed the promote threshold -- the editor
+    /// canvas's `state.moved` (`editor_canvas.rs`), which the source layer
+    /// does not have. Sticky: once a drag, always a drag.
+    moved: bool,
 }
 
 /// The inline text editor's bracket: which annotation, and what it said when
@@ -1216,6 +1283,83 @@ impl ScreenshotEditorWindow {
         HANDLE_SCREEN_SIZE / self.annotation_scale().unwrap_or(1.).max(0.001) as f64
     }
 
+    /// The glyph run [`paint_text`] will draw for `annotation`, shaped through
+    /// the window's text system exactly as the paint does and mapped back into
+    /// frame units. `None` for anything that is not a text annotation with
+    /// content, or before the layer has painted once.
+    fn text_extent(&self, annotation: &Annotation, window: &Window) -> Option<TextExtent> {
+        if annotation.annotation_type != AnnotationType::Text {
+            return None;
+        }
+        let text = annotation.text.as_deref().filter(|text| !text.is_empty())?;
+        let scale = self.annotation_scale()?;
+        let font_size = px((annotation.height as f32 * scale).max(1.));
+        // Mirror `paint_text`'s newline guard so the measure matches the paint.
+        let text = if text.contains('\n') {
+            text.replace('\n', " ")
+        } else {
+            text.to_string()
+        };
+        let run = TextRun {
+            len: text.len(),
+            font: gpui::font(TEXT_FONT),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = window
+            .text_system()
+            .shape_line(text.into(), font_size, &[run], None);
+        let scale = f64::from(scale);
+        Some(TextExtent {
+            width: f64::from(f32::from(line.width)) / scale,
+            ascent: f64::from(f32::from(line.ascent)) / scale,
+            descent: f64::from(f32::from(line.descent)) / scale,
+        })
+    }
+
+    /// [`hit_annotation`], with text upgraded to the measured glyph box
+    /// ([`text_hit_rect`]) -- the Figma-feel half of the hit test lives here
+    /// because measuring the run needs a window.
+    fn hit_annotation_measured(
+        &self,
+        annotation: &Annotation,
+        point: (f64, f64),
+        handle_size: f64,
+        window: &Window,
+    ) -> bool {
+        if annotation.annotation_type == AnnotationType::Text {
+            let rect = text_hit_rect(
+                annotation,
+                handle_size,
+                self.text_extent(annotation, window),
+            );
+            return point.0 >= rect.x
+                && point.0 <= rect.x + rect.width
+                && point.1 >= rect.y
+                && point.1 <= rect.y + rect.height;
+        }
+        hit_annotation(annotation, point, handle_size)
+    }
+
+    /// [`hit_test`] through [`Self::hit_annotation_measured`].
+    fn hit_test_measured(
+        &self,
+        point: (f64, f64),
+        handle_size: f64,
+        window: &Window,
+    ) -> Option<usize> {
+        (0..self.project.annotations.len()).rev().find(|index| {
+            self.hit_annotation_measured(
+                &self.project.annotations[*index],
+                point,
+                handle_size,
+                window,
+            )
+        })
+    }
+
     /// `getSvgPoint` (`:144-156`). The viewBox's origin is always `0 0` here,
     /// so the mapping is the layer's rect and the scale.
     fn frame_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
@@ -1391,11 +1535,12 @@ impl ScreenshotEditorWindow {
                     handle: Some(handle),
                     start: point,
                     original,
+                    moved: false,
                 }));
                 cx.notify();
                 return true;
             }
-            if !hit_annotation(annotation, point, handle_size) {
+            if !self.hit_annotation_measured(annotation, point, handle_size, window) {
                 continue;
             }
 
@@ -1405,14 +1550,25 @@ impl ScreenshotEditorWindow {
                 self.begin_text_edit(annotation.id, window, cx);
                 return true;
             }
+            // Selection and the move arm in one press -- `startDrag` (`:568`):
+            // a not-yet-selected shape drags in the same motion, no
+            // select-then-drag two-step.
             self.annotation_state.gesture = Some(Gesture::Move(Dragging {
                 id: annotation.id.clone(),
                 handle: None,
                 start: point,
                 original: annotation,
+                moved: false,
             }));
             cx.notify();
             return true;
+        }
+
+        // `e.target === e.currentTarget` (`:168-173`): a press on bare canvas
+        // drops the selection. The `false` then lets the caller start the pan,
+        // which is `onBackgroundMouseDown` over there.
+        if self.selected_annotation.take().is_some() {
+            cx.notify();
         }
         false
     }
@@ -1517,8 +1673,8 @@ impl ScreenshotEditorWindow {
         };
         let gesture = match gesture {
             Gesture::Create(creating) => Gesture::Create(self.drag_create(creating, point, shift)),
-            Gesture::Move(dragging) => {
-                self.drag_move(&dragging, point);
+            Gesture::Move(mut dragging) => {
+                self.drag_move(&mut dragging, point);
                 Gesture::Move(dragging)
             }
             Gesture::Resize(dragging) => {
@@ -1612,8 +1768,20 @@ impl ScreenshotEditorWindow {
     }
 
     /// `dragState.action === "move"` (`:328-354`).
-    fn drag_move(&mut self, dragging: &Dragging, point: (f64, f64)) {
+    fn drag_move(&mut self, dragging: &mut Dragging, point: (f64, f64)) {
         let (dx, dy) = (point.0 - dragging.start.0, point.1 - dragging.start.1);
+        // The editor canvas's promote threshold (`editor_canvas.rs`, the
+        // source's `if (!state.moved && Math.hypot(...) < 2)`): a click with a
+        // wobble in it selects, it does not nudge. 2 screen px, in frame units
+        // at the scale in force; sticky once crossed so the shape does not
+        // snap home when a real drag passes back over its origin.
+        if !dragging.moved {
+            let threshold = 2. / self.annotation_scale().unwrap_or(1.).max(0.001) as f64;
+            if dx.hypot(dy) < threshold {
+                return;
+            }
+            dragging.moved = true;
+        }
         let rect = self.annotation_image_rect();
         let Some(annotation) = self.annotation_mut(&dragging.id) else {
             return;
@@ -1855,7 +2023,7 @@ impl ScreenshotEditorWindow {
     fn annotation_hover(
         &mut self,
         event: &MouseMoveEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.annotation_state.gesture.is_some() {
@@ -1873,7 +2041,8 @@ impl ScreenshotEditorWindow {
             .selected()
             .and_then(|annotation| hit_handle(annotation, point, handle_size))
             .map(Handle::cursor);
-        let hover = hit_test(&self.project.annotations, point, handle_size)
+        let hover = self
+            .hit_test_measured(point, handle_size, window)
             .map(|index| self.project.annotations[index].id.clone());
         if hover != self.annotation_state.hover || cursor != self.annotation_state.hover_cursor {
             self.annotation_state.hover = hover;
@@ -1961,7 +2130,17 @@ impl ScreenshotEditorWindow {
         };
         input.update(cx, |input, cx| {
             input.set_text(original.clone(), cx);
-            input.focus_and_select_all(window, cx);
+            input.select_all_text(cx);
+        });
+        // The double-click that opens the editor is still mid-dispatch, and
+        // the root's `track_focus` click-to-focus runs *after* this listener:
+        // focusing here would be stolen right back, leaving a field that
+        // paints a selection but hears no keys (Escape and typing fall
+        // through to the window's shortcut handler). Focus once the event
+        // settles instead.
+        let focus = input.read(cx).focus_handle();
+        window.defer(cx, move |window, cx| {
+            window.focus(&focus, cx);
         });
         self.annotation_state.editing = Some(TextEdit { id, original });
         cx.notify();
@@ -4142,6 +4321,57 @@ mod tests {
         assert!(hit_annotation(&text, (98., 98.), 10.));
         assert!(!hit_annotation(&text, (96., 98.), 10.));
         assert!(hit_annotation(&text, (252., 142.), 10.));
+    }
+
+    /// Typing never widens `width`, so the glyph run overflows the stored box
+    /// freely; the measured hit rect follows the run so the visible glyphs are
+    /// always clickable, descenders included.
+    #[test]
+    fn a_measured_text_hit_follows_the_glyph_run() {
+        let mut text = shape(AnnotationType::Text, 100., 100., 150., 40.);
+        text.text = Some("A caption that runs long".into());
+        let glyphs = TextExtent {
+            width: 400.,
+            ascent: 30.,
+            descent: 8.,
+        };
+        let rect = text_hit_rect(&text, 10., Some(glyphs));
+        // The run's far end, padded: 100 + 400 + 3.
+        assert_eq!(rect.x + rect.width, 503.);
+        // Descenders hang below the baseline at y + height: 140 + 8 + 3.
+        assert_eq!(rect.y + rect.height, 151.);
+        // The left/top edges keep the hover overlay's padding.
+        assert_eq!(rect.x, 97.);
+        assert_eq!(rect.y, 97.);
+        // A run that stays inside the stored box changes nothing.
+        let short = text_hit_rect(
+            &text,
+            10.,
+            Some(TextExtent {
+                width: 40.,
+                ascent: 30.,
+                descent: 0.,
+            }),
+        );
+        assert_eq!(short, selection_rect(&text, 10.));
+        // And so does no measurement at all.
+        assert_eq!(text_hit_rect(&text, 10., None), selection_rect(&text, 10.));
+    }
+
+    /// The hit rect never collapses below two handles on a side, so a text
+    /// scaled down to a sliver still takes the press.
+    #[test]
+    fn a_tiny_text_still_takes_a_generous_press() {
+        let mut text = shape(AnnotationType::Text, 100., 100., 6., 5.);
+        text.text = Some(".".into());
+        let rect = text_hit_rect(&text, 10., None);
+        assert!(rect.width >= 20.);
+        assert!(rect.height >= 20.);
+        // Centred on the box it grew from.
+        assert_eq!(rect.x + rect.width / 2., 103.);
+        assert_eq!(rect.y + rect.height / 2., 102.5);
+        // And the pure hit test agrees.
+        assert!(hit_annotation(&text, (95., 95.), 10.));
     }
 
     /// A stroke is `fill="none"`, but the `<g>` around it sets

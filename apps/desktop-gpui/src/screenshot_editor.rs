@@ -864,6 +864,23 @@ struct PreviewGeometry {
     content: (f32, f32),
 }
 
+/// `handleWheel`'s pan arm (`Preview.tsx:317-320`), in gpui's sign convention.
+/// The webview's `deltaY` is AppKit's `scrollingDeltaY` negated, so the
+/// source's `pan - delta` is `pan + delta` here: an AppKit-positive delta --
+/// fingers sweeping down/right on a natural-scroll trackpad -- carries the
+/// content down/right with them.
+fn wheel_pan(pan: (f32, f32), delta: (f32, f32)) -> (f32, f32) {
+    (pan.0 + delta.0, pan.1 + delta.1)
+}
+
+/// The ctrl+wheel arm's zoom step (`Preview.tsx:303-315`), sign-flipped for
+/// the same reason: wheel-up is DOM-negative but AppKit-positive, and either
+/// way it zooms in. The 8px floor keeps a gentle tick moving, and 0.005 is
+/// the source's `zoomStep`.
+fn ctrl_wheel_zoom_step(delta_y: f32) -> f32 {
+    delta_y.signum() * delta_y.abs().max(8.) * 0.005
+}
+
 type BoundsCell = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 pub struct ScreenshotEditorWindow {
@@ -1746,7 +1763,10 @@ impl ScreenshotEditorWindow {
 
     /// `handleWheel` (`Preview.tsx:300-322`): a plain scroll pans, ctrl+scroll
     /// zooms at the pointer. gpui's `Lines` delta is the browser's
-    /// `deltaMode === 1`, so it takes the same x16.
+    /// `deltaMode === 1`, so it takes the same x16 -- but gpui hands AppKit's
+    /// `scrollingDelta` through unchanged, and AppKit's sign convention is the
+    /// DOM's negated, so both of the source's uses of `delta` flip sign here
+    /// ([`wheel_pan`], [`ctrl_wheel_zoom_step`]).
     fn preview_wheel(
         &mut self,
         event: &gpui::ScrollWheelEvent,
@@ -1761,13 +1781,12 @@ impl ScreenshotEditorWindow {
             if delta_y == 0. {
                 return;
             }
-            let delta = -delta_y.signum() * delta_y.abs().max(8.);
-            let zoom = Self::clamp_zoom(self.zoom + delta * 0.005);
+            let zoom = Self::clamp_zoom(self.zoom + ctrl_wheel_zoom_step(delta_y));
             let pointer = self.viewport_pointer(event.position);
             self.zoom_at_point(pointer, zoom, cx);
             return;
         }
-        self.pan = (self.pan.0 - delta_x, self.pan.1 - delta_y);
+        self.pan = wheel_pan(self.pan, (delta_x, delta_y));
         cx.notify();
     }
 
@@ -4839,5 +4858,27 @@ mod tests {
     fn the_zoom_slider_never_writes_the_project() {
         let mut project = ProjectConfiguration::default();
         assert!(!StyleSlider::Zoom.apply(&mut project, 2.));
+    }
+
+    /// gpui hands AppKit's `scrollingDelta` through unchanged, and AppKit's
+    /// sign convention is the DOM's negated -- so the source's `pan - delta`
+    /// has to be `pan + delta` here for the content to follow the fingers.
+    #[test]
+    fn a_wheel_pan_carries_the_content_with_the_fingers() {
+        // Fingers sweep down-right on a natural-scroll trackpad: AppKit
+        // reports positive deltas, and the content moves down-right too.
+        assert_eq!(wheel_pan((0., 0.), (12., 7.)), (12., 7.));
+        assert_eq!(wheel_pan((100., -20.), (-4., -6.)), (96., -26.));
+    }
+
+    /// The same flip on the ctrl+wheel arm: wheel-up is DOM-negative but
+    /// AppKit-positive, and either way it zooms in.
+    #[test]
+    fn ctrl_wheel_up_zooms_in() {
+        assert!(ctrl_wheel_zoom_step(10.) > 0.);
+        assert!(ctrl_wheel_zoom_step(-10.) < 0.);
+        // The 8px floor keeps a gentle tick moving (`Preview.tsx:306`).
+        assert_eq!(ctrl_wheel_zoom_step(1.), 8. * 0.005);
+        assert_eq!(ctrl_wheel_zoom_step(-1.), -8. * 0.005);
     }
 }
