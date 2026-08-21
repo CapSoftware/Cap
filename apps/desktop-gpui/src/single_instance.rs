@@ -13,6 +13,14 @@
 //!
 //! The pidfile lives in [`crate::store::app_data_dir`], so a harness run
 //! pointed at a `CAP_GPUI_APP_DATA_DIR` sandbox never kills the dev app.
+//!
+//! Deep links need no forwarding under this polarity. The Tauri plugin's
+//! callback relays a second launch's `cap-desktop://` argv to the surviving
+//! old instance (`src-tauri/src/lib.rs:5193-5204`); here the launch that
+//! carries the URL *is* the survivor, and [`crate::deeplink::init`] reads its
+//! own argv. A URL opened while the app is already running never launches a
+//! second instance on macOS at all -- the GURL AppleEvent goes straight to
+//! the running process (`crate::platform::install_url_scheme_handler`).
 
 use std::path::PathBuf;
 

@@ -1276,7 +1276,13 @@ mod mac {
         ) -> OsErr {
             let mut actual_type = 0u32;
             let mut actual_size = 0isize;
-            let mut buffer = [0u8; 4096];
+            // Heap, and 64 KiB rather than the old 4 KiB stack array: an
+            // `action` deep link carries a URL-encoded JSON payload (window
+            // titles, screen names -- see `crate::deeplink`), and the Tauri
+            // deep-link plugin it mirrors imposes no length cap. Anything
+            // longer still is truncated to a URL that fails to parse and is
+            // dropped, never mis-executed.
+            let mut buffer = vec![0u8; 64 * 1024];
             let status = unsafe {
                 AEGetParamPtr(
                     event,
@@ -1291,7 +1297,10 @@ mod mac {
             if status == 0 && actual_size > 0 {
                 let len = (actual_size as usize).min(buffer.len());
                 if let Ok(url) = std::str::from_utf8(&buffer[..len]) {
-                    crate::auth::submit_deep_link(url.trim_end_matches('\0'));
+                    // Auth callbacks and `action` URLs both come through this
+                    // one AppleEvent; `deeplink` forwards to the sign-in flow
+                    // and parses actions itself.
+                    crate::deeplink::submit_deep_link(url.trim_end_matches('\0'));
                 }
             }
             0
