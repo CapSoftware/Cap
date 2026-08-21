@@ -1137,6 +1137,19 @@ pub struct EditorWindow {
     /// `editorState.playbackTime`, in seconds.
     playhead: f64,
     last_playhead_redraw: Instant,
+    /// Whether the current play epoch has applied at least one engine sample.
+    /// Every path that (re)starts the engine clears it -- `start_playback`,
+    /// and `seek_to_time` while playing, which is a stop/seek/restart round
+    /// trip in the driver -- and the first sample past the epoch's start
+    /// frame sets it. Until then the drawn line must not extrapolate, because
+    /// `last_playhead_redraw` still dates from the previous epoch. See
+    /// [`playhead_extrapolation`].
+    playhead_epoch_live: bool,
+    /// The frame the current epoch's engine was told to start from. The
+    /// driver's own seek echo and the engine's first tick both report exactly
+    /// this frame, and neither proves frames are flowing yet -- only a sample
+    /// past it arms extrapolation.
+    playhead_epoch_start: u32,
     /// `totalDuration()`. Taken from the instance's own timeline once it
     /// exists, because that is the number the playback engine stops at
     /// (`playback.rs:560-570`, `TimelineConfiguration::duration`).
@@ -1495,6 +1508,8 @@ impl EditorWindow {
             playing: false,
             playhead: 0.0,
             last_playhead_redraw: Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+            playhead_epoch_live: false,
+            playhead_epoch_start: 0,
             total: 0.0,
             transport: None,
             scrub: None,
@@ -2020,6 +2035,14 @@ impl EditorWindow {
         self.playhead = next;
         self.view.playhead = next;
         self.view.playing = self.playing;
+        if self.playing && frame != self.playhead_epoch_start {
+            // The first sample past the epoch's start frame is what proves
+            // the engine is live. Samples *at* the start frame are the play
+            // command's own seek echo and the engine's first tick -- both can
+            // arrive long before frames actually flow, and anchoring the
+            // extrapolation on them would re-create the jump.
+            self.playhead_epoch_live = true;
+        }
 
         // `createEffect(() => { if (isAtEnd() && editorState.playing) {
         // commands.stopPlayback(); setEditorState("playing", false); } })`
@@ -2058,6 +2081,13 @@ impl EditorWindow {
         transport.play_from(frame);
         self.playhead = from.max(0.0);
         self.view.playhead = self.playhead;
+        // A new play epoch: `last_playhead_redraw` still points at the
+        // previous epoch's final sample, so extrapolating from it would draw
+        // the playhead ahead of where it stands and snap back when the
+        // engine's first frame lands. Parked until `playhead_changed` applies
+        // a sample from this epoch.
+        self.playhead_epoch_live = false;
+        self.playhead_epoch_start = frame;
         self.playing = true;
         self.view.playing = true;
         self.play_mark = self
@@ -2141,6 +2171,12 @@ impl EditorWindow {
         // off-by-one drift".
         let frame = (time * EDITOR_PREVIEW_FPS as f64).round() as u32;
         if self.playing {
+            // A seek during playback restarts the engine, so it opens a new
+            // play epoch exactly like pressing play does: extrapolation is
+            // parked until the restarted engine's frames flow (see
+            // `start_playback` and `playhead_extrapolation`).
+            self.playhead_epoch_live = false;
+            self.playhead_epoch_start = frame;
             transport.play_from(frame);
         } else {
             transport.seek(frame);
@@ -7528,13 +7564,18 @@ impl EditorWindow {
         let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
 
-        // Playhead events arrive at 30Hz; while playing, the drawn line runs
-        // ahead by the wall-clock elapsed since the last one so the 60Hz
-        // ticker's redraws land between events instead of on them.
+        // While playing, the drawn line runs ahead by the wall-clock elapsed
+        // since the last applied sample so the 60Hz ticker's redraws land
+        // between events instead of on them -- but only once this play epoch
+        // has actually produced a sample (`playhead_extrapolation`).
         let playhead_view = {
             let mut view = self.view;
-            if self.playing {
-                let ahead = self.last_playhead_redraw.elapsed().as_secs_f64().min(0.25);
+            let ahead = playhead_extrapolation(
+                self.playing,
+                self.playhead_epoch_live,
+                self.last_playhead_redraw.elapsed().as_secs_f64(),
+            );
+            if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
             }
             view
@@ -8093,6 +8134,34 @@ fn render_split_preview(theme: &Theme, x: f32, snapped: bool) -> impl IntoElemen
 /// `isAtEnd()` (`Player.tsx:156-159`).
 fn is_at_end(total: f64, playhead: f64) -> bool {
     total > 0.0 && total - playhead <= 0.1
+}
+
+/// The most the drawn playhead may run ahead of the last applied engine
+/// sample. Big enough to bridge a render stall, small enough that a wrongly
+/// anchored extrapolation cannot wander far.
+const MAX_PLAYHEAD_EXTRAPOLATION: f64 = 0.25;
+
+/// How far ahead of the last applied playhead sample the *drawn* line may
+/// extrapolate, in seconds.
+///
+/// The Tauri editor draws `editorState.playbackTime` exactly where the last
+/// engine event put it (`TL/index.tsx:1288`); this port extrapolates by the
+/// wall clock between events so the 60Hz ticker's repaints land between them.
+/// That extrapolation is only honest once the *current* play epoch has
+/// produced a sample: pressing play flips `playing` immediately, but the
+/// engine takes hundreds of milliseconds to come up (`start_playback` decodes
+/// music tracks and warms the decoders), and the anchor instant still dates
+/// from the previous epoch -- a seek echo or the last run's final frame. Off
+/// a stale anchor the first paint after play drew the playhead up to 0.25s
+/// ahead of where it stood, and the engine's first real sample snapped it
+/// back: the "playhead jumps on play, then goes back" glitch. So: no epoch
+/// sample yet, no extrapolation -- the line holds still, which is exactly
+/// what the engine is doing.
+fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_sample: f64) -> f64 {
+    if !playing || !epoch_has_sample {
+        return 0.0;
+    }
+    since_last_sample.max(0.0).min(MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
 impl Render for EditorWindow {
@@ -8681,6 +8750,35 @@ mod tests {
         assert!(is_at_end(10.0, 10.0));
         // Overshoot -- the engine can report a frame past the timeline end.
         assert!(is_at_end(10.0, 10.4));
+    }
+
+    /// The play-press glitch: `playing` flips immediately, but the anchor
+    /// instant still dates from the *previous* epoch (a seek echo, or the last
+    /// run's final frame -- measured at 206ms and 1081ms in the probe run).
+    /// Extrapolating from it drew the playhead up to 0.25s ahead and the
+    /// engine's first sample snapped it back. A sample from a previous epoch
+    /// must never anchor the drawn line.
+    #[test]
+    fn playhead_never_extrapolates_before_the_epochs_first_sample() {
+        // Freshly pressed play, stale anchor: hold the line still.
+        assert_eq!(playhead_extrapolation(true, false, 0.206), 0.0);
+        assert_eq!(playhead_extrapolation(true, false, 1.081), 0.0);
+        // Paused, no matter what the anchor says.
+        assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
+        assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
+    }
+
+    /// Once the epoch is live the line glides by the wall clock between
+    /// samples, capped so a render stall cannot run it far ahead.
+    #[test]
+    fn playhead_extrapolation_tracks_the_wall_clock_and_caps() {
+        assert_eq!(playhead_extrapolation(true, true, 0.016), 0.016);
+        assert_eq!(
+            playhead_extrapolation(true, true, 3.0),
+            MAX_PLAYHEAD_EXTRAPOLATION
+        );
+        // A clock hiccup must not pull the playhead backwards.
+        assert_eq!(playhead_extrapolation(true, true, -0.01), 0.0);
     }
 
     /// The perf gate's line. `frames` is what reached the window, `dropped`

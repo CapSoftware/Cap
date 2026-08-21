@@ -2920,10 +2920,26 @@ async fn drive_auto_playback(
     }
 }
 
+/// Whether closing an editor window should bring the main window back.
+///
+/// `restore_main_windows_if_no_editors` (`lib.rs:6242-6262`), transcribed:
+/// the main window is reshown only once the last editor of either kind is
+/// gone **and no Settings window exists** -- the Tauri arm is
+/// `if CapWindowId::Settings.get(app).is_none() { main.show() }`. Closing an
+/// editor opened from the Settings recordings page therefore leaves Settings
+/// as the frontmost surface (AppKit hands it key status as the editor goes
+/// away) rather than revealing main over it. The idle gate is this port's
+/// own: during a recording the main window is deliberately hidden and the
+/// session observer restores it when the recording ends.
+fn reveal_main_after_editor_close(editors_left: usize, settings_open: bool, idle: bool) -> bool {
+    editors_left == 0 && !settings_open && idle
+}
+
 /// An editor window is going away. `CapWindowId::Editor`'s `Destroyed` arm
 /// drops it from `EditorWindowIds`, disposes the instance, and calls
 /// `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`) -- so the main
-/// window comes back only once the last editor has closed.
+/// window comes back only once the last editor has closed, and never over an
+/// open Settings window ([`reveal_main_after_editor_close`]).
 pub fn editor_closed(project_path: &Path, cx: &mut App) {
     let key = editor_key(project_path);
     let handle = {
@@ -2950,12 +2966,15 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
 
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
+    let settings_open = windows.settings.is_some();
     tracing::info!(
         path = %key.display(),
         editors_left,
+        settings_open,
         "editor window closed"
     );
-    if editors_left == 0 && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
         show_main_window(cx);
     } else {
         // A dock-activating window closed; the policy has to be recomputed
@@ -3477,12 +3496,15 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
 
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
+    let settings_open = windows.settings.is_some();
     tracing::info!(
         path = %key.display(),
         editors_left,
+        settings_open,
         "screenshot editor window closed"
     );
-    if editors_left == 0 && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
         show_main_window(cx);
     } else {
         crate::menus::schedule_dock_sync(cx);
@@ -3514,6 +3536,23 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    /// `restore_main_windows_if_no_editors` (`lib.rs:6242-6262`): the main
+    /// window comes back only when the closing editor was the last one of
+    /// either kind *and* no Settings window exists. Settings -> Recordings ->
+    /// open studio editor -> close must land back on Settings, not main.
+    #[test]
+    fn main_window_never_returns_over_an_open_settings_window() {
+        // The reported flow: last editor closes while Settings is open.
+        assert!(!reveal_main_after_editor_close(0, true, true));
+        // No Settings: the last editor closing reveals main.
+        assert!(reveal_main_after_editor_close(0, false, true));
+        // Other editors still open keep main hidden either way.
+        assert!(!reveal_main_after_editor_close(1, false, true));
+        assert!(!reveal_main_after_editor_close(1, true, true));
+        // Mid-recording the session observer owns the reveal, not this path.
+        assert!(!reveal_main_after_editor_close(0, false, false));
+    }
 
     fn title_rule(title: &str) -> WindowExclusion {
         WindowExclusion {
