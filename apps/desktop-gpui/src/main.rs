@@ -50,6 +50,7 @@ mod settings_window;
 mod single_instance;
 mod store;
 mod target_overlay;
+mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
 mod transcription;

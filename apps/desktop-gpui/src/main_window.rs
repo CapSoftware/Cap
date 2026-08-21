@@ -14,17 +14,18 @@ use gpui::{
 };
 
 use crate::{
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows, devices,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
     library::{self, MediaKind, RecentItem, RecordingItem, ScreenshotItem},
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
+    target_thumbnails,
     theme::Theme,
     ui,
 };
-use gpui::Entity;
+use gpui::{Entity, Task};
 
 /// `MAIN_WINDOW_SIZE.expanded` in index.tsx.
 const EXPANDED_WIDTH: f32 = 600.;
@@ -345,6 +346,20 @@ pub struct MainWindow {
     /// rescan -- the same seam that already re-reads the library on reshow,
     /// so a sign-in or license activation in Settings lands here too.
     plan: PlanBadge,
+    /// Display/window thumbnails and app icons for the target cards. See
+    /// `target_thumbnails::ThumbnailCache` for why this is per-view rather
+    /// than an app global.
+    thumbnails: target_thumbnails::ThumbnailCache,
+    /// The in-flight capture sweep for each kind. Assigning over one drops the
+    /// previous, which aborts its tokio task; the `*_inflight` flags on the
+    /// cache are what actually stop refreshes stacking.
+    display_thumbnail_task: Option<gpui::Task<()>>,
+    window_thumbnail_task: Option<gpui::Task<()>>,
+    /// The `staleTime: 5_000` re-read of the cheap target list that runs while
+    /// a target panel is open, and nothing else. Dropped by `close_panel`.
+    target_poll_task: Option<gpui::Task<()>>,
+    /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
+    prewarm_task: Option<gpui::Task<()>>,
 }
 
 /// `createLicenseQuery` (`utils/queries.ts:257-273`): pro from the auth
@@ -442,6 +457,11 @@ impl MainWindow {
             library: None,
             library_task: None,
             plan: PlanBadge::current(),
+            thumbnails: target_thumbnails::ThumbnailCache::default(),
+            display_thumbnail_task: None,
+            window_thumbnail_task: None,
+            target_poll_task: None,
+            prewarm_task: None,
         }
     }
 
@@ -461,7 +481,7 @@ impl MainWindow {
                 .spawn(async { DeviceSnapshot::enumerate() })
                 .await;
 
-            this.update_in(cx, |this, _window, cx| {
+            this.update_in(cx, |this, window, cx| {
                 tracing::info!(
                     cameras = snapshot.cameras.len(),
                     microphones = snapshot.microphones.len(),
@@ -491,11 +511,332 @@ impl MainWindow {
                         )
                     });
                 }
+                // `if (!targetMode) scheduleTargetListPrewarm()` on
+                // `main-window-ready` (`new-main/index.tsx:2528`) -- the point
+                // where the window has its lists and can afford background
+                // work. Here that point is enumeration landing.
+                this.schedule_target_prewarm(window, cx);
                 cx.notify();
             })
             .unwrap_or_else(|error| tracing::error!("device enumeration update failed: {error:#}"));
         })
         .detach();
+    }
+
+    // -- Target thumbnails (`thumbnails/mod.rs` + the queries around it) -----
+
+    /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`): once,
+    /// shortly after the window is up, walk the cheap target lists and then
+    /// both thumbnail sweeps, sequentially, so the first time the user opens a
+    /// picker the cards are already warm.
+    ///
+    /// gpui has no `requestIdleCallback`, so this takes the source's fallback
+    /// branch verbatim -- a 250ms timer. Dropping `prewarm_task` is the
+    /// `cancelScheduledTargetListPrewarm` half; a recording starting is the
+    /// one thing that suppresses it, exactly as `if (isRecording()) return`
+    /// does.
+    fn schedule_target_prewarm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session.read(cx).phase != Phase::Idle || !self.thumbnails.take_prewarm() {
+            return;
+        }
+
+        self.prewarm_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(target_thumbnails::PREWARM_DELAY)
+                .await;
+
+            // Displays first, then windows -- the source's two awaited
+            // `prefetchQuery` calls, in that order. Each sweep re-lists, so the
+            // separate cheap-list prefetch it opens with is already covered.
+            for kind in [TargetType::Display, TargetType::Window] {
+                let Ok(sweep) =
+                    this.update_in(cx, |this, window, cx| this.start_capture(kind, window, cx))
+                else {
+                    return;
+                };
+                if let Some(sweep) = sweep {
+                    sweep.await;
+                }
+            }
+        }));
+    }
+
+    /// Install a fresh cheap list without disturbing the thumbnails already on
+    /// screen: reconciliation is by id, so a target that is still there keeps
+    /// its image and only targets that went away are evicted. Blanking the
+    /// cache on every 5s tick would make the grid flicker once per poll.
+    fn install_target_lists(
+        &mut self,
+        targets: devices::TargetSnapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_displays(targets.displays, window, cx);
+        self.install_windows(targets.windows, window, cx);
+    }
+
+    fn install_displays(
+        &mut self,
+        displays: Vec<DisplayOption>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for image in self.thumbnails.retain_displays(&displays) {
+            let _ = window.drop_image(image);
+        }
+        self.devices.displays = displays;
+        cx.notify();
+    }
+
+    fn install_windows(
+        &mut self,
+        windows: Vec<WindowOption>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for image in self.thumbnails.retain_windows(&windows) {
+            let _ = window.drop_image(image);
+        }
+        self.devices.windows = windows;
+        cx.notify();
+    }
+
+    /// Start one capture sweep, or return `None` because one is already in
+    /// flight -- the `fetchStatus !== "idle"` guard on the source's refetch
+    /// effects (`new-main/index.tsx:2626, 2635`). Refreshes never stack.
+    ///
+    /// The returned task is handed to the caller rather than stored, because
+    /// the prewarm has to *await* the display sweep before starting the window
+    /// sweep (`prefetchQuery` displays, then `prefetchQuery` windows) while the
+    /// panel poll just parks it in a field.
+    ///
+    /// Everything expensive happens off the main thread: the enumeration, the
+    /// ScreenCaptureKit capture (tokio, because the cidre future needs a
+    /// reactor) and the RGBA-to-`RenderImage` swap all run inside the spawned
+    /// task; the entity update only swaps `Arc`s.
+    fn start_capture(
+        &mut self,
+        kind: TargetType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<()>> {
+        match kind {
+            TargetType::Display => {
+                if self.thumbnails.display_inflight() {
+                    return None;
+                }
+                self.thumbnails.set_display_inflight(true);
+
+                let (events_tx, events) = flume::unbounded();
+                // The tokio handle rides along in the returned task so that
+                // dropping the task tears the sweep down: the `flume` receiver
+                // goes with it and the sweep's next `send` fails, which is what
+                // actually stops it (see `run_capture` -- the capture itself is
+                // on a blocking thread and cannot be aborted mid-screenshot).
+                let capture = gpui_tokio::Tokio::spawn(cx, async move {
+                    target_thumbnails::capture_displays(events_tx).await;
+                });
+
+                Some(cx.spawn_in(window, async move |this, cx| {
+                    let _capture = capture;
+                    let mut swept = None;
+                    while let Ok(first) = events.recv_async().await {
+                        let mut batch = vec![first];
+                        batch.extend(events.try_iter());
+                        for event in &batch {
+                            if let target_thumbnails::DisplayEvent::Listed(list) = event {
+                                swept = Some(target_thumbnails::display_signature(list));
+                            }
+                        }
+                        if this
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_display_events(batch, window, cx)
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    // The channel closing is the sweep finishing, which is when
+                    // the Tauri query resolves and
+                    // `setDisplayThumbnailsSignature` runs
+                    // (`new-main/index.tsx:2617-2620`). Committing the
+                    // signature at `Listed` time instead would mark a sweep
+                    // that never landed as up to date.
+                    this.update(cx, |this, cx| {
+                        if let Some(signature) = swept {
+                            this.thumbnails.set_display_signature(signature);
+                        }
+                        this.thumbnails.set_display_inflight(false);
+                        // In-process SCK screenshot sweeps can provoke the
+                        // macOS 26 style-mask mutation on the main window
+                        // while it is visible (prewarm at launch, panel-open
+                        // refreshes) -- re-assert the borderless mask.
+                        crate::app_windows::heal_main_window_style(cx);
+                    })
+                    .ok();
+                }))
+            }
+            TargetType::Window => {
+                if self.thumbnails.window_inflight() {
+                    return None;
+                }
+                self.thumbnails.set_window_inflight(true);
+
+                let (events_tx, events) = flume::unbounded();
+                let capture = gpui_tokio::Tokio::spawn(cx, async move {
+                    target_thumbnails::capture_windows(events_tx).await;
+                });
+
+                Some(cx.spawn_in(window, async move |this, cx| {
+                    let _capture = capture;
+                    let mut swept = None;
+                    while let Ok(first) = events.recv_async().await {
+                        let mut batch = vec![first];
+                        batch.extend(events.try_iter());
+                        for event in &batch {
+                            if let target_thumbnails::WindowEvent::Listed(list) = event {
+                                swept = Some(target_thumbnails::window_signature(list));
+                            }
+                        }
+                        if this
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_window_events(batch, window, cx)
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    this.update(cx, |this, cx| {
+                        if let Some(signature) = swept {
+                            this.thumbnails.set_window_signature(signature);
+                        }
+                        this.thumbnails.set_window_inflight(false);
+                        // Same macOS 26 style-mask heal as the display sweep.
+                        crate::app_windows::heal_main_window_style(cx);
+                    })
+                    .ok();
+                }))
+            }
+            // Area and Camera Only have no cards to fill.
+            TargetType::Area | TargetType::CameraOnly => None,
+        }
+    }
+
+    /// The while-a-picker-is-open loop.
+    ///
+    /// (a) an immediate cheap re-list, which is what makes opening the panel
+    /// show windows opened since launch; (b) every `CAPTURE_LIST_STALE_TIME`,
+    /// another cheap re-list plus the signature comparison from
+    /// `new-main/index.tsx:2621-2639` -- refetch the thumbnails when the list
+    /// they were captured from no longer matches the live one; (c) for
+    /// displays only, a `CAPTURE_THUMBNAIL_STALE_TIME` floor as well, the
+    /// `refetchInterval: 10_000` that `listDisplaysWithThumbnails`
+    /// (`utils/queries.ts:75`) carries and the editor sidebar inherits.
+    ///
+    /// Nothing here runs while no target panel is open: `close_panel` drops the
+    /// task, which is the `enabled:` on every one of those queries.
+    fn start_target_poll(&mut self, kind: TargetType, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(kind, TargetType::Area | TargetType::CameraOnly) {
+            self.target_poll_task = None;
+            return;
+        }
+
+        self.target_poll_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let mut last_display_capture: Option<std::time::Instant> = None;
+            loop {
+                let list = cx
+                    .background_executor()
+                    .spawn(async { devices::TargetSnapshot::enumerate() })
+                    .await;
+
+                let Ok(()) = this.update_in(cx, |this, window, cx| {
+                    this.install_target_lists(list, window, cx);
+
+                    let stale = match kind {
+                        TargetType::Display => {
+                            this.thumbnails.displays_stale(&this.devices.displays)
+                                || last_display_capture.is_none_or(|at| {
+                                    at.elapsed() >= target_thumbnails::THUMBNAIL_STALE_TIME
+                                })
+                        }
+                        _ => this.thumbnails.windows_stale(&this.devices.windows),
+                    };
+                    if !stale {
+                        return;
+                    }
+                    if let Some(task) = this.start_capture(kind, window, cx) {
+                        if kind == TargetType::Display {
+                            last_display_capture = Some(std::time::Instant::now());
+                            this.display_thumbnail_task = Some(task);
+                        } else {
+                            this.window_thumbnail_task = Some(task);
+                        }
+                    }
+                }) else {
+                    return;
+                };
+
+                cx.background_executor()
+                    .timer(target_thumbnails::LIST_STALE_TIME)
+                    .await;
+            }
+        }));
+    }
+
+    fn apply_display_events(
+        &mut self,
+        batch: Vec<target_thumbnails::DisplayEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for event in batch {
+            match event {
+                target_thumbnails::DisplayEvent::Listed(list) => {
+                    self.install_displays(list, window, cx);
+                }
+                target_thumbnails::DisplayEvent::Captured(id, image) => {
+                    if let Some(old) = self.thumbnails.insert_display(&id, image) {
+                        let _ = window.drop_image(old);
+                    }
+                }
+            }
+        }
+        cx.notify();
+        // The main window is not necessarily active while a sweep lands (the
+        // prewarm runs at launch, behind whatever the user was doing), and an
+        // inactive window only repaints when asked.
+        window.refresh();
+    }
+
+    fn apply_window_events(
+        &mut self,
+        batch: Vec<target_thumbnails::WindowEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for event in batch {
+            match event {
+                target_thumbnails::WindowEvent::Listed(list) => {
+                    self.install_windows(list, window, cx);
+                }
+                target_thumbnails::WindowEvent::Captured {
+                    id,
+                    image,
+                    app_icon,
+                } => {
+                    let icon = app_icon.map(|bytes| {
+                        std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
+                    });
+                    if let Some(old) = self.thumbnails.insert_window(&id, image, icon) {
+                        let _ = window.drop_image(old);
+                    }
+                }
+            }
+        }
+        cx.notify();
+        window.refresh();
     }
 
     /// Re-run the Recents scan and re-decode its thumbnails.
@@ -1182,6 +1523,31 @@ impl MainWindow {
         cx.defer(move |cx: &mut gpui::App| app_windows::begin_recording(config, cx));
     }
 
+    /// `await commands.focusWindow(target.id)` at the end of
+    /// `selectWindowTarget` (`new-main/index.tsx:2431-2450`): picking a
+    /// *window* from the list brings that window's application forward, so the
+    /// thing about to be recorded is the thing on screen behind the overlay.
+    /// `selectDisplayTarget` (`:2416-2429`) has no such call, and neither has a
+    /// click on the overlay itself -- so this is wired to the window rows only.
+    ///
+    /// Deferred (so the overlays this selection opens go up first, the order
+    /// the source awaits its calls in) and then run on the background executor:
+    /// the Tauri command is an async command, and an AppKit activation inside
+    /// this update would re-enter gpui's window callbacks.
+    fn focus_selected_window(&self, cx: &mut Context<Self>) {
+        let Some(window) = self.selected_window.as_ref() else {
+            return;
+        };
+        let id = window.id.clone();
+        cx.defer(move |cx: &mut gpui::App| {
+            cx.background_executor()
+                .spawn(async move {
+                    crate::platform::focus_capture_target_window(&id);
+                })
+                .detach();
+        });
+    }
+
     // -- The editor record modal's device seams ------------------------------
     //
     // The Tauri editor modal reads and writes the *same* recording-options
@@ -1725,6 +2091,10 @@ impl MainWindow {
         self.search_input
             .update(cx, |input, cx| input.set_text("", cx));
         self.library_task = None;
+        // `enabled: displayMenuOpen()` / `windowMenuOpen()` -- nothing polls
+        // and nothing captures while no picker is on screen. A sweep already in
+        // flight is left to land, the way a TanStack refetch is.
+        self.target_poll_task = None;
         cx.notify();
     }
 
@@ -1744,6 +2114,13 @@ impl MainWindow {
             self.refresh_library(kind, window, cx);
         } else {
             self.library_task = None;
+        }
+        // Opening a target picker re-reads the list immediately and then keeps
+        // it fresh -- until this, the grid showed whatever `start_enumeration`
+        // found at launch, so a window opened since was simply missing.
+        match panel {
+            Panel::Target(kind) => self.start_target_poll(kind, window, cx),
+            _ => self.target_poll_task = None,
         }
         cx.notify();
     }
@@ -2759,12 +3136,25 @@ impl MainWindow {
         list.children(rows)
     }
 
+    /// The width one target card gets, computed rather than flexed.
+    ///
+    /// Two columns inside `render_body`'s `px-[13px]` and the panel body's
+    /// `px-2`, with an 8px gutter: `(W - 26 - 16 - 8) / 2`. A `flex_1` card
+    /// carrying three lines of text re-measures its children every layout pass,
+    /// which is fine for four cards and catastrophic for the forty a window
+    /// picker routinely holds, so the grid states the width and the cards take
+    /// it with `flex_none`.
+    fn target_card_width(&self) -> f32 {
+        let (window_width, _) = self.window_size();
+        (window_width - 50.) / 2.
+    }
+
     /// `TargetMenuGrid`: two columns of cards.
     ///
-    /// The real cards lead with a live thumbnail of the display or window; that
-    /// needs the capture pipeline, so these render the same fallback the Tauri
-    /// card falls back to when no thumbnail has arrived -- the target's icon on
-    /// `gray-4`.
+    /// Each card leads with a live 320x180 capture of the display or window
+    /// (`target_thumbnails`), falling back to the target's icon on `gray-4` --
+    /// which is exactly what the Tauri card does before its thumbnail arrives
+    /// or when the `<img>` errors (`TargetCard.tsx:367-374`).
     fn render_target_grid(&self, target: TargetType, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let grid = div().flex().flex_col().gap(px(8.)).w_full();
@@ -2799,6 +3189,7 @@ impl MainWindow {
                     cards.push(
                         self.render_target_card(
                             SharedString::from(format!("display-{}", display.id)),
+                            self.thumbnails.display(&display.id),
                             "icons/screen.svg",
                             display.label.clone(),
                             None,
@@ -2831,6 +3222,7 @@ impl MainWindow {
                     cards.push(
                         self.render_target_card(
                             SharedString::from(format!("window-{}", window.id)),
+                            self.thumbnails.window(&window.id),
                             "icons/window.svg",
                             window.label.clone(),
                             Some(window.app.clone()),
@@ -2841,6 +3233,7 @@ impl MainWindow {
                                 this.target = Some(TargetType::Window);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
+                                this.focus_selected_window(cx);
                             }),
                         )
                         .into_any_element(),
@@ -2862,7 +3255,9 @@ impl MainWindow {
             );
         }
 
-        // Two columns, laid out as rows of two so the cards stretch evenly.
+        // Two columns, laid out as rows of two. The cards carry their own
+        // width (`target_card_width`), so a lone trailing card keeps half the
+        // row without needing a spacer to hold the other half open.
         grid.children(
             cards
                 .into_iter()
@@ -2872,11 +3267,6 @@ impl MainWindow {
                     let mut row = div().flex().flex_row().gap(px(8.)).w_full().items_stretch();
                     for card in pair.iter_mut() {
                         row = row.child(std::mem::replace(card, div().into_any_element()));
-                    }
-                    // Keep a lone trailing card at half width rather than
-                    // letting it span the grid.
-                    if pair.len() == 1 {
-                        row = row.child(div().flex_1());
                     }
                     row
                 })
@@ -2889,6 +3279,7 @@ impl MainWindow {
     fn render_target_card(
         &self,
         id: SharedString,
+        thumb: target_thumbnails::TargetThumb,
         icon: &'static str,
         label: String,
         subtitle: Option<String>,
@@ -2902,7 +3293,8 @@ impl MainWindow {
             .id(id)
             .flex()
             .flex_col()
-            .flex_1()
+            .w(px(self.target_card_width()))
+            .flex_none()
             .min_w_0()
             .overflow_hidden()
             .rounded(px(8.))
@@ -2913,16 +3305,7 @@ impl MainWindow {
                 gpui::transparent_black()
             })
             .bg(theme.body_fill(3))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w_full()
-                    .h(px(76.))
-                    .bg(theme.body_fill(4))
-                    .child(svg().path(icon).size(px(24.)).text_color(theme.gray_9)),
-            )
+            .child(target_thumbnails::render_thumbnail_slot(thumb, icon, theme))
             .child(
                 div()
                     .flex()

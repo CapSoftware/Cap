@@ -24,9 +24,10 @@
 //!   uses, followed by the recording directory's deletion and an editor
 //!   reload -- the `EditorRecordingAdded` listener (`Editor.tsx:312-335`),
 //!   transcribed. The Display/Window chevron menus list the same enumeration
-//!   the main window's pickers use, icon cards standing in for the live
-//!   thumbnails for the same capture-pipeline reason documented on
-//!   `MainWindow::render_target_grid`.
+//!   the main window's pickers use, with the same live ScreenCaptureKit
+//!   thumbnails and app icons -- `ClipsSidebar.tsx:378-385` runs the same two
+//!   `*WithThumbnails` queries the main window does, through the same
+//!   `TargetCard`.
 
 use std::{
     cell::RefCell,
@@ -46,7 +47,7 @@ use gpui::{
     AnyElement, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, RenderImage, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, div, img,
+    StatefulInteractiveElement as _, Styled, StyledImage as _, Task, Window, div, img,
     prelude::FluentBuilder, px, svg,
 };
 
@@ -58,9 +59,20 @@ use crate::{
     editor_window::EditorWindow,
     main_window::{Mode, TargetType},
     session::{Phase, RecordingSession},
+    target_thumbnails,
     theme::Theme,
     ui,
 };
+
+/// The width one target card gets in the record modal, computed rather than
+/// flexed.
+///
+/// The modal is `w-full max-w-[460px]` and the editor's minimum window width is
+/// 1275, so 460 is always what it gets; its body is `p-5`, and the grid has an
+/// 8px gutter: `(460 - 40 - 8) / 2`. Stating the width keeps `flex_1` off a
+/// text-bearing card in a grid that can hold every window on the machine --
+/// the same reason `MainWindow::target_card_width` exists.
+const RECORD_TARGET_CARD_WIDTH: f32 = 206.;
 
 // ---------------------------------------------------------------------------
 // Naming (`ClipsSidebar.tsx:558-609`)
@@ -332,6 +344,15 @@ pub(crate) struct ClipsState {
     /// `createDevicesQuery` (`:365`): enumerated when the modal opens, `None`
     /// while the scan is in flight so the menus can say "Loading...".
     record_devices: Option<DeviceSnapshot>,
+    /// Thumbnails and app icons for the record modal's target cards.
+    /// `ClipsSidebar.tsx:378-385` runs the same
+    /// `listDisplaysWithThumbnails`/`listWindowsWithThumbnails` queries the
+    /// main window does, so the cards look the same -- but on this route's own
+    /// `QueryClient`, which is why this cache is per-view too.
+    record_thumbnails: target_thumbnails::ThumbnailCache,
+    /// The in-flight sweep for whichever target menu is open. Dropping it
+    /// stops the loop; the loop also stops itself the moment the menu closes.
+    record_thumbnail_task: Option<Task<()>>,
     /// The import menu's anchor, while it is up. A native `Menu.popup()` in
     /// the Tauri app (`:541-556`); here the `ui::Menu` shape -- full-window
     /// backdrop, panel at the click position.
@@ -362,6 +383,8 @@ impl Default for ClipsState {
             record_device_menu: None,
             target_search_input: None,
             record_devices: None,
+            record_thumbnails: target_thumbnails::ThumbnailCache::default(),
+            record_thumbnail_task: None,
             import_menu: None,
             importing: false,
             editing: None,
@@ -834,8 +857,8 @@ impl EditorWindow {
                             .font_weight(FontWeight::MEDIUM)
                             .full_width()
                             .on_click(cx.listener(
-                                |this, _, _window, cx| {
-                                    this.open_record_modal(cx);
+                                |this, _, window, cx| {
+                                    this.open_record_modal(window, cx);
                                 },
                             )),
                         ),
@@ -1219,12 +1242,227 @@ impl EditorWindow {
     /// The action row's blue button: open the modal and refresh the device
     /// enumeration behind it (`createDevicesQuery` is enabled by
     /// `props.open && recordOpen()`, so the lists are re-read per opening).
-    fn open_record_modal(&mut self, cx: &mut Context<Self>) {
+    fn open_record_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clips.record_open = true;
         self.clips.record_target_menu = None;
         self.clips.record_device_menu = None;
+        // Whatever the last session cached is stale by now (and the queries
+        // would refetch on mount anyway), so release the sprite-atlas tiles
+        // rather than carry them for the life of the editor window.
+        for image in self.clips.record_thumbnails.reset() {
+            let _ = window.drop_image(image);
+        }
+        self.clips.record_thumbnail_task = None;
         self.refresh_record_devices(cx);
         cx.notify();
+    }
+
+    /// The record modal's thumbnail loop.
+    ///
+    /// `ClipsSidebar.tsx:378-385` enables each thumbnail query on
+    /// `props.open && recordOpen() && <kind>MenuOpen()` and takes the query's
+    /// own `refetchInterval` -- 10s for displays (`utils/queries.ts:75`),
+    /// none for windows (`:66`). So: capture once when the menu opens, and for
+    /// displays keep re-capturing every `THUMBNAIL_STALE_TIME` until it closes.
+    ///
+    /// Unlike the main window there is no cheap-list poll and no signature
+    /// comparison, because the sidebar does not run `listScreens`/`listWindows`
+    /// at all. Each sweep re-enumerates, so the target rows still refresh.
+    fn start_record_thumbnails(
+        &mut self,
+        kind: TargetType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(kind, TargetType::Area | TargetType::CameraOnly) {
+            self.clips.record_thumbnail_task = None;
+            return;
+        }
+
+        self.clips.record_thumbnail_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let mut captured = false;
+            loop {
+                // The loop owns its own lifetime: every path that closes the
+                // modal or the menu is a state change, so reading the state
+                // here beats hunting down six call sites to cancel a task.
+                let Ok(open) = this.update(cx, |this, _| {
+                    this.clips.record_open && this.clips.record_target_menu == Some(kind)
+                }) else {
+                    return;
+                };
+                if !open {
+                    // Closing the modal releases the atlas tiles; closing just
+                    // the menu keeps them, the way a 60s `gcTime` would.
+                    this.update_in(cx, |this, window, _| {
+                        if !this.clips.record_open {
+                            for image in this.clips.record_thumbnails.reset() {
+                                let _ = window.drop_image(image);
+                            }
+                        }
+                    })
+                    .ok();
+                    return;
+                }
+
+                // Displays re-capture on every tick (`refetchInterval:
+                // 10_000`); windows capture once and the loop stays only to
+                // notice the menu closing (`refetchInterval: false`).
+                if kind == TargetType::Display || !captured {
+                    let Ok(sweep) = this.update_in(cx, |this, window, cx| {
+                        this.start_record_capture(kind, window, cx)
+                    }) else {
+                        return;
+                    };
+                    if let Some(sweep) = sweep {
+                        sweep.await;
+                        captured = true;
+                    }
+                }
+
+                cx.background_executor()
+                    .timer(target_thumbnails::THUMBNAIL_STALE_TIME)
+                    .await;
+            }
+        }));
+    }
+
+    /// One sweep, the editor twin of `MainWindow::start_capture` -- same
+    /// in-flight guard, same off-thread split, same reconcile-by-id install.
+    fn start_record_capture(
+        &mut self,
+        kind: TargetType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<()>> {
+        match kind {
+            TargetType::Display => {
+                if self.clips.record_thumbnails.display_inflight() {
+                    return None;
+                }
+                self.clips.record_thumbnails.set_display_inflight(true);
+
+                let (events_tx, events) = flume::unbounded();
+                let capture = gpui_tokio::Tokio::spawn(cx, async move {
+                    target_thumbnails::capture_displays(events_tx).await;
+                });
+
+                Some(cx.spawn_in(window, async move |this, cx| {
+                    let _capture = capture;
+                    while let Ok(first) = events.recv_async().await {
+                        let mut batch = vec![first];
+                        batch.extend(events.try_iter());
+                        if this
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_record_display_events(batch, window, cx)
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    this.update(cx, |this, _| {
+                        this.clips.record_thumbnails.set_display_inflight(false)
+                    })
+                    .ok();
+                }))
+            }
+            TargetType::Window => {
+                if self.clips.record_thumbnails.window_inflight() {
+                    return None;
+                }
+                self.clips.record_thumbnails.set_window_inflight(true);
+
+                let (events_tx, events) = flume::unbounded();
+                let capture = gpui_tokio::Tokio::spawn(cx, async move {
+                    target_thumbnails::capture_windows(events_tx).await;
+                });
+
+                Some(cx.spawn_in(window, async move |this, cx| {
+                    let _capture = capture;
+                    while let Ok(first) = events.recv_async().await {
+                        let mut batch = vec![first];
+                        batch.extend(events.try_iter());
+                        if this
+                            .update_in(cx, |this, window, cx| {
+                                this.apply_record_window_events(batch, window, cx)
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    this.update(cx, |this, _| {
+                        this.clips.record_thumbnails.set_window_inflight(false)
+                    })
+                    .ok();
+                }))
+            }
+            TargetType::Area | TargetType::CameraOnly => None,
+        }
+    }
+
+    fn apply_record_display_events(
+        &mut self,
+        batch: Vec<target_thumbnails::DisplayEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for event in batch {
+            match event {
+                target_thumbnails::DisplayEvent::Listed(list) => {
+                    for image in self.clips.record_thumbnails.retain_displays(&list) {
+                        let _ = window.drop_image(image);
+                    }
+                    if let Some(devices) = self.clips.record_devices.as_mut() {
+                        devices.displays = list;
+                    }
+                }
+                target_thumbnails::DisplayEvent::Captured(id, image) => {
+                    if let Some(old) = self.clips.record_thumbnails.insert_display(&id, image) {
+                        let _ = window.drop_image(old);
+                    }
+                }
+            }
+        }
+        cx.notify();
+        // The editor is not necessarily the active window while a sweep lands,
+        // and an inactive window only repaints when asked.
+        window.refresh();
+    }
+
+    fn apply_record_window_events(
+        &mut self,
+        batch: Vec<target_thumbnails::WindowEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for event in batch {
+            match event {
+                target_thumbnails::WindowEvent::Listed(list) => {
+                    for image in self.clips.record_thumbnails.retain_windows(&list) {
+                        let _ = window.drop_image(image);
+                    }
+                    if let Some(devices) = self.clips.record_devices.as_mut() {
+                        devices.windows = list;
+                    }
+                }
+                target_thumbnails::WindowEvent::Captured {
+                    id,
+                    image,
+                    app_icon,
+                } => {
+                    let icon = app_icon.map(|bytes| {
+                        Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
+                    });
+                    if let Some(old) = self.clips.record_thumbnails.insert_window(&id, image, icon)
+                    {
+                        let _ = window.drop_image(old);
+                    }
+                }
+            }
+        }
+        cx.notify();
+        window.refresh();
     }
 
     /// The enumeration hits AVFoundation and the window server, so it runs on
@@ -1311,6 +1549,10 @@ impl EditorWindow {
             }
             self.clips.record_target_menu = Some(kind);
             self.clips.record_device_menu = None;
+            // `enabled: props.open && recordOpen() && <kind>MenuOpen()` --
+            // the thumbnail query only runs while this menu is up, and each
+            // sweep re-enumerates, so the list refreshes with it.
+            self.start_record_thumbnails(kind, window, cx);
         }
         cx.notify();
     }
@@ -1397,14 +1639,16 @@ impl EditorWindow {
     }
 
     /// `selectWindowTarget` (`:481-501`): the overlays pinned to the picked
-    /// window. The source's trailing `commands.focusWindow(target.id)` has no
-    /// counterpart -- the app's own window-dropdown flow pins without
-    /// focusing, and the overlay highlight carries the selection either way.
+    /// window, and then the picked window's app brought forward -- the
+    /// trailing `commands.focusWindow(target.id)` (`:497`), which the main
+    /// window's own window list does too. Only windows: `selectDisplayTarget`
+    /// has no such call, and neither has a click on the overlay itself.
     fn select_record_window(&mut self, target: WindowOption, cx: &mut Context<Self>) {
         if !self.begin_editor_recording(cx) {
             return;
         }
         let project_path = self.project_path.clone();
+        let focus = target.id.clone();
         let request = app_windows::OverlayRequest {
             mode: TargetType::Window,
             recording_mode: Mode::Studio,
@@ -1412,7 +1656,16 @@ impl EditorWindow {
             pinned_window: Some(target.id),
         };
         cx.defer(move |cx: &mut gpui::App| {
-            app_windows::open_editor_target_overlays(project_path, request, cx)
+            app_windows::open_editor_target_overlays(project_path, request, cx);
+            // After the overlays, the way the source awaits `focusWindow` last,
+            // and off the main thread: the Tauri command runs on an async
+            // command thread, and activating another application inside this
+            // update would re-enter gpui's window callbacks.
+            cx.background_executor()
+                .spawn(async move {
+                    crate::platform::focus_capture_target_window(&focus);
+                })
+                .detach();
         });
     }
 
@@ -2090,9 +2343,8 @@ impl EditorWindow {
     }
 
     /// A chevron menu's body (`:1128-1216`): back, search, and the concrete
-    /// targets -- `TargetMenuGrid` as two columns of cards, with the icon
-    /// block standing in for the live thumbnail for the capture-pipeline
-    /// reason `MainWindow::render_target_grid` documents.
+    /// targets -- `TargetMenuGrid` as two columns of cards, each leading with
+    /// the live ScreenCaptureKit thumbnail `target_thumbnails` captures.
     fn render_record_target_menu(&self, kind: TargetType, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let query = self.target_search_text(cx);
@@ -2112,6 +2364,7 @@ impl EditorWindow {
                         cards.push(
                             self.record_target_card(
                                 SharedString::from(format!("record-display-{}", display.id)),
+                                self.clips.record_thumbnails.display(&display.id),
                                 "icons/monitor.svg",
                                 display.label.clone(),
                                 None,
@@ -2134,6 +2387,7 @@ impl EditorWindow {
                         cards.push(
                             self.record_target_card(
                                 SharedString::from(format!("record-window-{}", target.id)),
+                                self.clips.record_thumbnails.window(&target.id),
                                 "icons/app-window-mac.svg",
                                 target.label.clone(),
                                 Some(target.app.clone()),
@@ -2173,8 +2427,9 @@ impl EditorWindow {
             )
             .into_any_element()
         } else {
-            // Two columns as rows of two, the `render_target_grid` layout; a
-            // lone trailing card keeps half width.
+            // Two columns as rows of two, the `render_target_grid` layout. The
+            // cards carry their own width, so a lone trailing card keeps half
+            // the row without a spacer holding the other half open.
             let mut grid = div().flex().flex_col().gap(px(8.)).w_full();
             let mut cards = cards.into_iter();
             while let Some(first) = cards.next() {
@@ -2185,10 +2440,9 @@ impl EditorWindow {
                     .w_full()
                     .items_stretch()
                     .child(first);
-                row = match cards.next() {
-                    Some(second) => row.child(second),
-                    None => row.child(div().flex_1()),
-                };
+                if let Some(second) = cards.next() {
+                    row = row.child(second);
+                }
                 grid = grid.child(row);
             }
             grid.into_any_element()
@@ -2232,11 +2486,13 @@ impl EditorWindow {
             )
     }
 
-    /// `TargetCard`, icon-fallback form.
+    /// `TargetCard`: the live thumbnail block over three 11px lines, the same
+    /// component the main window's picker renders.
     #[allow(clippy::too_many_arguments)]
     fn record_target_card(
         &self,
         id: SharedString,
+        thumb: target_thumbnails::TargetThumb,
         icon: &'static str,
         label: String,
         subtitle: Option<String>,
@@ -2248,27 +2504,14 @@ impl EditorWindow {
             .id(id)
             .flex()
             .flex_col()
-            .flex_1()
+            .w(px(RECORD_TARGET_CARD_WIDTH))
+            .flex_none()
             .min_w_0()
             .overflow_hidden()
             .rounded(px(8.))
             .bg(theme.body_fill(3))
             .cursor(CursorStyle::PointingHand)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w_full()
-                    .h(px(76.))
-                    .bg(theme.body_fill(4))
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(24.))
-                            .text_color(Hsla::from(theme.gray_9)),
-                    ),
-            )
+            .child(target_thumbnails::render_thumbnail_slot(thumb, icon, theme))
             .child(
                 div()
                     .flex()
