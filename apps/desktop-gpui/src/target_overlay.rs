@@ -226,7 +226,7 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok(icon_wanted) = this.update(cx, |this: &mut Self, cx| {
+                let Ok((icon_wanted, active)) = this.update(cx, |this: &mut Self, cx| {
                     let (display, window) = probe;
                     let changed = this.cursor_display != display || this.hovered_window != window;
                     this.cursor_display = display;
@@ -235,15 +235,24 @@ impl TargetSelect {
                         cx.notify();
                     }
 
-                    this.active_window()
-                        .map(|window| window.id.clone())
-                        .filter(|id| !this.icons.contains_key(&id.to_string()))
+                    (
+                        this.active_window()
+                            .map(|window| window.id.clone())
+                            .filter(|id| !this.icons.contains_key(&id.to_string())),
+                        this.active_window().cloned(),
+                    )
                 }) else {
                     return;
                 };
                 if let Some(id) = icon_wanted {
                     Self::fetch_icon(id, &this, cx).await;
                 }
+
+                // The overlay's camera-parking effect runs off the same signal
+                // as the highlight (`target-select-overlay.tsx:518-545`), and
+                // like the repaint below it has to happen with no entity borrow
+                // held -- it moves a native window.
+                cx.update(|cx| app_windows::sync_camera_park(active, cx));
 
                 // Repaint the overlays explicitly: none of them is the active
                 // window while the user hovers another app, and an inactive
@@ -684,6 +693,10 @@ impl OverlayWindow {
             // cursor, exactly as the TSX's two click handlers add up to.
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.select.update(cx, |select, cx| select.pin_hovered(cx));
+                // `setOriginalCameraBounds(null)` on the first click
+                // (`target-select-overlay.tsx:609-617`): committing a pick
+                // leaves the camera bubble parked in the picked window.
+                cx.defer(app_windows::release_camera_park);
             }))
             .child(
                 div()

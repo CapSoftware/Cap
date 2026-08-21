@@ -1229,6 +1229,57 @@ mod mac {
         }
     }
 
+    /// `commands.focusWindow(id)` -- the macOS body of the `focus_window`
+    /// command (`src-tauri/src/target_select_overlay.rs:377-399`): the picked
+    /// window's owning pid, its `NSRunningApplication`, and
+    /// `activateWithOptions:ActivateIgnoringOtherApps`. Activating the *app*
+    /// is all the Tauri command does on this platform -- no un-minimize, no
+    /// per-window raise (that half is the `cfg(windows)` arm, which this app
+    /// has no counterpart for yet).
+    ///
+    /// Spelled with `msg_send!` rather than `objc2_app_kit::NSRunningApplication`
+    /// on purpose: the typed binding needs the `NSRunningApplication` feature
+    /// on `objc2-app-kit`, and that crate version is shared with
+    /// `accesskit_macos` -> `gpui_macos` -> `gpui`, so widening its feature set
+    /// rebuilds the whole gpui stack for one selector.
+    ///
+    /// Called from a background task, never inside a gpui update: the Tauri
+    /// command runs on an async command thread, and cross-process activation
+    /// must not happen with the App RefCell held.
+    pub fn focus_capture_target_window(id: &scap_targets::WindowId) -> bool {
+        use objc2::{class, msg_send};
+
+        /// `NSApplicationActivationOptions::ActivateIgnoringOtherApps`. An
+        /// `NSUInteger`, so `usize` -- a signedness mismatch here aborts the
+        /// process rather than unwinding.
+        const ACTIVATE_IGNORING_OTHER_APPS: usize = 1 << 1;
+
+        let Some(window) = scap_targets::Window::from_id(id) else {
+            tracing::warn!(%id, "focus target window: window not found");
+            return false;
+        };
+        // `pid_t` -- `i32`, which is what `owner_pid` hands back.
+        let Some(pid) = window.raw_handle().owner_pid() else {
+            tracing::warn!(%id, "focus target window: no owner pid");
+            return false;
+        };
+
+        unsafe {
+            let running: *mut AnyObject = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            if running.is_null() {
+                tracing::warn!(%id, pid, "focus target window: no running application");
+                return false;
+            }
+            let activated: bool =
+                msg_send![running, activateWithOptions: ACTIVATE_IGNORING_OTHER_APPS];
+            tracing::info!(%id, pid, activated, "focused the picked capture target");
+            activated
+        }
+    }
+
     pub fn install_url_scheme_handler() {
         install_get_url_handler();
     }
@@ -1638,6 +1689,13 @@ mod stub {
     }
 
     pub fn activate_app() {}
+
+    /// No-op off macOS: the Tauri command's other arm is `SetForegroundWindow`
+    /// (+ a conditional `SW_RESTORE`) on an `HWND`, and this app has no Windows
+    /// window layer yet.
+    pub fn focus_capture_target_window(_id: &scap_targets::WindowId) -> bool {
+        false
+    }
 
     pub fn install_url_scheme_handler() {}
 

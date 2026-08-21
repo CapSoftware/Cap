@@ -78,6 +78,30 @@ pub struct AppWindows {
     /// clears the flag without revealing, because the editor stays hidden
     /// until the finish path hands it the foreground.
     pub editor_hidden_for_picker: Option<PathBuf>,
+    /// Where the camera bubble sat before a window picker parked it inside the
+    /// highlighted window -- see [`CameraPark`].
+    pub camera_park: CameraPark,
+}
+
+/// `originalCameraBounds` / `lastRepositionedWindowId` in the window variant of
+/// the target-select overlay (`target-select-overlay.tsx:478-563`).
+///
+/// The overlay parks the camera bubble 16px inside the bottom-right corner of
+/// whatever window it is highlighting, and puts it back when the picker goes
+/// away *unless* the pick was committed -- a click that locks the highlight, or
+/// a recording/screenshot start, both of which null the saved bounds over
+/// there so the bubble stays where the user will see it in the capture.
+#[derive(Default)]
+pub struct CameraPark {
+    /// The bubble's gpui-space logical top-left before the first park. `None`
+    /// while nothing has been moved, and cleared outright once the pick is
+    /// committed (`setOriginalCameraBounds(null)`).
+    origin: Option<(f32, f32)>,
+    /// `lastRepositionedWindowId`: the park runs once per highlighted window,
+    /// not once per poll tick.
+    last_window: Option<scap_targets::WindowId>,
+    /// The pick was committed; no further parking and no revert.
+    released: bool,
 }
 
 impl Global for AppWindows {}
@@ -98,6 +122,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         editor_hidden_for_picker: None,
+        camera_park: CameraPark::default(),
     });
 
     // The global-Escape drain: the Carbon hotkey (registered only while the
@@ -155,10 +180,18 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // `refresh_tray_menu`. The reshow is where the main window's own
             // Recents is rescanned, so the tray's Previous rides the same seam.
             crate::tray::refresh_previous(cx);
-            // `apply_content_protection(app, false)` when the recording ends:
-            // an always-excluded window is invisible on capture-based displays,
-            // so the protection only holds while a capture is running.
-            set_teleprompter_content_protection(false, cx);
+            // `apply_content_protection(app, false)` in `clear_recording_state`
+            // (`lib.rs:896-912`) when the recording ends: an always-excluded
+            // window is invisible on capture-based displays, so the protection
+            // only holds while a capture is running. This is the one seam every
+            // ending passes through -- a clean stop, the bar's delete, and a
+            // start that failed all land on `Phase::Idle`. (A *restart* does
+            // not: it goes `Recording -> Starting -> Idle -> Starting` inside a
+            // single entity update, so the observer never sees `Idle` and the
+            // protection carries into the new recording -- which is the Tauri
+            // net effect too, where `restart_recording` clears it and the
+            // immediately-following `start_recording` puts it straight back.)
+            restore_content_protection(cx);
         }
         last_phase = phase;
     })
@@ -311,6 +344,38 @@ pub fn show_main_window(cx: &mut App) {
         cx.update(crate::menus::schedule_dock_sync);
     })
     .detach();
+}
+
+/// Re-assert the main window's borderless style mask after an operation that
+/// can provoke the macOS 26 mutation (`platform::restore_borderless_style`:
+/// AppKit adds `NSMiniaturizableWindowMask` on its own, materializing native
+/// buttons over the hand-drawn lights). The reveal path heals in
+/// [`show_main_window`], but two flows can re-trigger the mutation while the
+/// window is already visible or after that heal ran: the content-protection
+/// sharing-type flips around a recording, and the in-process ScreenCaptureKit
+/// screenshot sweeps behind the target-picker thumbnails. Idempotent (a read
+/// plus a conditional write), so calling it on every such seam is free.
+///
+/// Deferred, then spawned: callers include the main window's own entity
+/// updates, and both the handle probe and the AppKit write must run outside
+/// that lease.
+pub fn heal_main_window_style(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    let main = cx.global::<AppWindows>().main;
+    cx.defer(move |cx| {
+        let native = main
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::restore_borderless_style(native);
+            }
+        })
+        .detach();
+    });
 }
 
 /// `getCurrentWindow().hide()` -- same rule, same reason.
@@ -883,6 +948,14 @@ pub fn open_teleprompter(cx: &mut App) {
 
     cx.global_mut::<AppWindows>().teleprompter = Some(handle);
 
+    // `commands.refreshWindowContentProtection()` on open
+    // (`src/utils/teleprompter.ts:26,38,64`): a window that appears *after* the
+    // capture started missed `begin_recording`'s pass, and its id can no longer
+    // join the content filter -- the sharing type is the only lever left.
+    if RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+        set_teleprompter_content_protection(true, cx);
+    }
+
     let opened = handle
         .update(cx, |view, window, cx| {
             // `commands.setTeleprompterWindowLevel(true)` -- level 101, and the
@@ -1101,6 +1174,12 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) {
         select.arm(Some(request.mode), request.recording_mode, pinned, cx)
     });
 
+    // Only the window variant parks the camera bubble; the display/area/camera
+    // variants have no window to park it in.
+    if request.mode == TargetType::Window {
+        arm_camera_park(cx);
+    }
+
     let displays = match &display {
         Some(id) => scap_targets::Display::from_id(id)
             .map(|display| vec![display])
@@ -1259,6 +1338,10 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
+    // `onRecordingStart` nulls the saved camera bounds before the dismissal
+    // (`target-select-overlay.tsx:687-690`): a bubble parked inside the picked
+    // window stays there for the recording.
+    release_camera_park(cx);
     close_target_overlays(cx);
     // A "recordingStudio" dismissal does not reveal the main window -- the bar
     // owns the foreground now, and the stop flow's reshow brings it back.
@@ -1415,12 +1498,330 @@ fn close_overlay_windows(cx: &mut App) {
     // The Tauri unregister lives next to the close for the same reason: a
     // global Escape may only be swallowed while a picker is actually up.
     platform::unregister_escape_hotkey();
+    // The window-variant overlay's `onCleanup`: the camera bubble goes back
+    // where the picker found it, unless the pick was committed first.
+    revert_camera_park(cx);
     let overlays = std::mem::take(&mut cx.global_mut::<AppWindows>().overlays);
     for (_, handle) in overlays {
         handle
             .update(cx, |_, window, _| window.remove_window())
             .ok();
     }
+}
+
+// -- Our own windows, for capture exclusion and content protection ----------
+//
+// Window recording on macOS is *display* capture cropped to the target
+// window's bounds, with `excluded_windows` removed from the `SCContentFilter`:
+// anything overlapping the recorded window is in the frame unless it is
+// excluded by id or content-protected. The Tauri app keeps Cap's own windows
+// out with two mechanisms, ported below -- ids into the filter
+// (`window_exclusion::append_matching_webview_window_ids`) and
+// `NSWindowSharingType.None` on the windows themselves
+// (`windows::apply_content_protection`).
+
+/// `CapWindowId::title()` (`src-tauri/src/windows.rs:1030-1046`) for the
+/// windows this app owns.
+///
+/// The exclusion rules the user edits in Settings match on *window titles*, and
+/// gpui windows are created with `titlebar: None` and never get an `NSWindow`
+/// title at all -- so a `CGWindowList` walk (`resolve_excluded_window_ids`)
+/// cannot see one of our windows by name, and the rules could never match them.
+/// The Tauri app has the same gap and closes it the same way: it never asks the
+/// window list about its own windows, it asks `CapWindowId::title()` and takes
+/// the `NSWindow.windowNumber()` directly (`window_exclusion.rs:120-193`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnWindow {
+    Main,
+    Settings,
+    Controls,
+    Camera,
+    ModeSelect,
+    Teleprompter,
+    TargetSelect,
+    Editor,
+    ScreenshotEditor,
+    Onboarding,
+}
+
+impl OwnWindow {
+    /// Every kind [`own_windows`] can produce. `CapWindowId`'s other variants
+    /// (`WindowCaptureOccluder`, `CaptureArea`, `RecordingsOverlay`, `Upgrade`,
+    /// `Debug`) have no counterpart in this app; their default rules are still
+    /// honoured for *other* processes by `resolve_excluded_window_ids`.
+    pub const ALL: [Self; 10] = [
+        Self::Main,
+        Self::Settings,
+        Self::Controls,
+        Self::Camera,
+        Self::ModeSelect,
+        Self::Teleprompter,
+        Self::TargetSelect,
+        Self::Editor,
+        Self::ScreenshotEditor,
+        Self::Onboarding,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Main => "Cap",
+            Self::Settings => "Cap Settings",
+            Self::Controls => "Cap Recording Controls",
+            Self::Camera => "Cap Camera",
+            Self::ModeSelect => "Cap Mode Selection",
+            Self::Teleprompter => "Cap Teleprompter",
+            Self::TargetSelect => "Cap Target Select",
+            Self::Editor => "Cap Editor",
+            Self::ScreenshotEditor => "Cap Screenshot Editor",
+            Self::Onboarding => "Welcome to Cap",
+        }
+    }
+}
+
+/// The rule list a recording matches our own windows against
+/// (`src-tauri/src/recording.rs:1879-1904`): the configured -- or default --
+/// exclusions, minus the camera rule in Instant mode (`filter_for_instant_mode`,
+/// `window_exclusion.rs:104-111`: instant has no compositing step, so the
+/// bubble belongs in the picture), plus a teleprompter rule that is always
+/// present whatever the settings say.
+fn own_window_exclusion_rules(
+    configured: Vec<crate::store::WindowExclusion>,
+    mode: RecordingMode,
+) -> Vec<crate::store::WindowExclusion> {
+    let mut rules = configured;
+    if mode == RecordingMode::Instant {
+        rules.retain(|rule| rule.window_title.as_deref() != Some(OwnWindow::Camera.title()));
+    }
+    let teleprompter = crate::store::WindowExclusion {
+        bundle_identifier: None,
+        owner_name: None,
+        window_title: Some(OwnWindow::Teleprompter.title().to_string()),
+    };
+    if !rules.contains(&teleprompter) {
+        rules.push(teleprompter);
+    }
+    rules
+}
+
+/// `matches_window_title` (`window_exclusion.rs:175-181`): `WindowExclusion::
+/// matches` with only a title to offer, so a bundle-id rule or an owner-name
+/// rule cannot match one of our windows -- exactly the Tauri behaviour, since
+/// it feeds the same `None, None, Some(title)`.
+fn matches_own_title(rules: &[crate::store::WindowExclusion], title: &str) -> bool {
+    rules
+        .iter()
+        .any(|rule| rule.matches(None, None, Some(title)))
+}
+
+/// Which of our own windows a rule list covers.
+fn excluded_own_windows(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindow> {
+    OwnWindow::ALL
+        .into_iter()
+        .filter(|kind| matches_own_title(rules, kind.title()))
+        .collect()
+}
+
+/// `apply_content_protection` (`windows.rs:3382-3407`): the same set, minus the
+/// camera window, which that loop skips outright (`:3393-3398`) because its
+/// protection is mode-driven from the start path instead
+/// (`recording.rs:1617-1624`).
+fn content_protection_targets(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindow> {
+    excluded_own_windows(rules)
+        .into_iter()
+        .filter(|kind| *kind != OwnWindow::Camera)
+        .collect()
+}
+
+/// `window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio))`
+/// on the camera window at `recording.rs:1617-1624` -- the one window whose
+/// protection is decided by the mode and not by the rules.
+fn camera_content_protected(mode: RecordingMode) -> bool {
+    mode == RecordingMode::Studio
+}
+
+/// One of our windows, with everything the two mechanisms need: the canonical
+/// title's kind, the `CGWindowID` to exclude, whether it is on screen, and a
+/// retained `NSWindow` for the sharing-type flip.
+struct OwnWindowHandle {
+    kind: OwnWindow,
+    number: Option<isize>,
+    visible: bool,
+    native: Option<platform::NativeWindow>,
+}
+
+fn probe_own_window<V: 'static + gpui::Render>(
+    kind: OwnWindow,
+    handle: WindowHandle<V>,
+    cx: &mut App,
+) -> Option<OwnWindowHandle> {
+    handle
+        .update(cx, |_, window, _| OwnWindowHandle {
+            kind,
+            number: platform::window_number(window),
+            visible: platform::window_is_visible(window),
+            native: platform::native_window(window),
+        })
+        .ok()
+}
+
+/// Every window this app owns -- `app.webview_windows()` in both Tauri
+/// mechanisms.
+///
+/// The destructure is deliberate: a new `AppWindows` field stops compiling here
+/// until it is either walked or explicitly skipped, which is what keeps the
+/// canonical-title table exhaustive as windows are added.
+fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
+    let AppWindows {
+        main,
+        controls,
+        camera,
+        settings,
+        onboarding,
+        mode_select,
+        teleprompter,
+        overlays,
+        editors,
+        screenshot_editors,
+        main_hidden_for_picker: _,
+        editor_hidden_for_picker: _,
+        camera_park: _,
+    } = cx.global::<AppWindows>();
+    let main = *main;
+    let controls = *controls;
+    let camera = *camera;
+    let settings = *settings;
+    let onboarding = *onboarding;
+    let mode_select = *mode_select;
+    let teleprompter = *teleprompter;
+    let overlays: Vec<_> = overlays.iter().map(|(_, handle)| *handle).collect();
+    let editors: Vec<_> = editors.iter().map(|(_, handle)| *handle).collect();
+    let screenshot_editors: Vec<_> = screenshot_editors
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+
+    let mut windows = Vec::new();
+    windows.extend(probe_own_window(OwnWindow::Main, main, cx));
+    windows.extend(controls.and_then(|handle| probe_own_window(OwnWindow::Controls, handle, cx)));
+    windows.extend(camera.and_then(|handle| probe_own_window(OwnWindow::Camera, handle, cx)));
+    windows.extend(settings.and_then(|handle| probe_own_window(OwnWindow::Settings, handle, cx)));
+    windows
+        .extend(onboarding.and_then(|handle| probe_own_window(OwnWindow::Onboarding, handle, cx)));
+    windows
+        .extend(mode_select.and_then(|handle| probe_own_window(OwnWindow::ModeSelect, handle, cx)));
+    windows.extend(
+        teleprompter.and_then(|handle| probe_own_window(OwnWindow::Teleprompter, handle, cx)),
+    );
+    for handle in overlays {
+        windows.extend(probe_own_window(OwnWindow::TargetSelect, handle, cx));
+    }
+    for handle in editors {
+        windows.extend(probe_own_window(OwnWindow::Editor, handle, cx));
+    }
+    for handle in screenshot_editors {
+        windows.extend(probe_own_window(OwnWindow::ScreenshotEditor, handle, cx));
+    }
+    windows
+}
+
+/// `append_matching_webview_window_ids` (`window_exclusion.rs:120-193`), step
+/// for step: our own windows whose canonical title a rule covers, by native
+/// window number, the ones `CGWindowList` cannot see skipped (an id the capture
+/// filter would not recognise anyway) and duplicates dropped.
+fn append_own_excluded_window_ids(
+    excluded: &mut Vec<scap_targets::WindowId>,
+    windows: &[OwnWindowHandle],
+    rules: &[crate::store::WindowExclusion],
+) {
+    for window in windows {
+        let title = window.kind.title();
+        if !matches_own_title(rules, title) {
+            continue;
+        }
+        let Some(number) = window.number else {
+            tracing::warn!(title, "excluded Cap window has no native window id");
+            continue;
+        };
+        let Ok(id) = number.to_string().parse::<scap_targets::WindowId>() else {
+            tracing::warn!(title, number, "excluded Cap window has no usable window id");
+            continue;
+        };
+        // `Window::from_id(&native_id).is_none()` (`:144-166`): a window that is
+        // not in the window list has nothing for the content filter to exclude.
+        // Loud when the window believes it is on screen, quiet when it is
+        // merely hidden -- the same two log levels.
+        if scap_targets::Window::from_id(&id).is_none() {
+            if window.visible {
+                tracing::warn!(
+                    title,
+                    number,
+                    "excluded Cap window is not visible to CGWindowList"
+                );
+            } else {
+                tracing::debug!(title, number, "skipping a hidden excluded Cap window");
+            }
+            continue;
+        }
+        if excluded.contains(&id) {
+            tracing::debug!(title, number, "excluded Cap window id already resolved");
+            continue;
+        }
+        tracing::info!(title, number, "excluding a Cap window from the capture");
+        excluded.push(id);
+    }
+}
+
+/// `set_content_protected(..)` on a batch of our windows.
+///
+/// AppKit mutations re-enter gpui's own window callbacks, so the sharing-type
+/// flips run from a spawned task on the retained handles -- the
+/// [`platform::place_overlay_panel`] rule that
+/// [`set_teleprompter_content_protection`] already follows.
+fn apply_content_protection(
+    windows: Vec<OwnWindowHandle>,
+    hidden_for: impl Fn(OwnWindow) -> bool,
+    cx: &mut App,
+) {
+    let work: Vec<_> = windows
+        .into_iter()
+        .filter_map(|window| {
+            let hidden = hidden_for(window.kind);
+            Some((window.kind, window.native?, hidden))
+        })
+        .collect();
+    if work.is_empty() {
+        return;
+    }
+    cx.spawn(async move |_| {
+        for (kind, native, hidden) in &work {
+            let sharing = platform::set_window_capture_hidden(native, *hidden);
+            tracing::info!(?kind, hidden, sharing, "content protection");
+        }
+        // The sharing-type flips are one of the operations that provoke the
+        // macOS 26 style-mask mutation on the main window (native buttons
+        // materialize over the hand-drawn lights), and on the recording-end
+        // path they race `show_main_window`'s own heal -- so heal again after
+        // the flips, in the same task, where the ordering is certain.
+        if let Some((_, native, _)) = work.iter().find(|(kind, _, _)| *kind == OwnWindow::Main) {
+            platform::restore_borderless_style(native);
+        }
+    })
+    .detach();
+}
+
+/// `apply_content_protection(&app, false)` in `clear_recording_state`
+/// (`src-tauri/src/lib.rs:896-912`): every window back to
+/// `NSWindowSharingType.ReadOnly` when the recording ends, the camera included
+/// (that loop only ever *clears* the camera, `windows.rs:3393-3398`).
+///
+/// A permanently protected window is invisible on capture-based displays, which
+/// is why the protection is scoped to a live recording in the first place.
+/// Idempotent: a second call re-writes the same sharing type, so the overlap
+/// with [`set_teleprompter_content_protection`] and
+/// [`set_editor_content_protection`] is harmless.
+pub fn restore_content_protection(cx: &mut App) {
+    let windows = own_windows(cx);
+    apply_content_protection(windows, |_| false, cx);
 }
 
 /// The whole start flow: bar up (in its Starting state), main window hidden,
@@ -1473,13 +1874,57 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     }
     set_teleprompter_content_protection(true, cx);
 
+    // `crate::target_select_overlay::close_target_select_overlay_windows(&app)`
+    // at `recording.rs:1758`: the pickers come down at *every* recording start,
+    // not just the ones the overlay's own Start button drove. The overlay path
+    // hands its ids in already (`start_recording_from_overlay`), but the
+    // hotkey, deeplink and tile paths pass an empty list, and an overlay that
+    // has not finished closing is still on screen when the capture opens.
+    for id in overlay_window_ids(cx) {
+        if !excluded.contains(&id) {
+            excluded.push(id);
+        }
+    }
+    close_target_overlays(cx);
+
+    // The user-configurable half. `resolve_excluded_window_ids` (in
+    // `recording::start`) walks `CGWindowList` for *other* processes' windows;
+    // our own carry no native title for it to match, so they are resolved from
+    // the canonical-title table here -- `append_matching_webview_window_ids`
+    // (`recording.rs:1905-1910`). The hard number-gates above are the same
+    // defaults spelled out twice on purpose: they hold even if the user has
+    // emptied the rule list.
+    let rules = own_window_exclusion_rules(
+        crate::store::GeneralSettings::load().excluded_windows,
+        config.mode,
+    );
+    let own = own_windows(cx);
+    append_own_excluded_window_ids(&mut excluded, &own, &rules);
+    // `crate::windows::apply_content_protection(&app, true)` at
+    // `recording.rs:1773`, camera at `:1617-1624`. The second half of the same
+    // job: an excluded id keeps a window out of *our* capture, the sharing type
+    // keeps it out of everyone else's.
+    let camera_hidden = camera_content_protected(config.mode);
+    let protected = content_protection_targets(&rules);
+    apply_content_protection(
+        own,
+        move |kind| match kind {
+            OwnWindow::Camera => camera_hidden,
+            kind => protected.contains(&kind),
+        },
+        cx,
+    );
+
     let bar_open = cx.global::<AppWindows>().controls.is_some();
     session.update(cx, |session, cx| {
         session.set_controls_open(bar_open, cx);
     });
-    if bar_open {
-        hide_main_window(cx);
-    }
+    // `general_settings.main_window_recording_start_behaviour.perform(&window)`
+    // at `recording.rs:1766-1771`, whose default (`Close`) is `window.hide()`
+    // on macOS: the main window goes away at every recording start, whatever
+    // else happened. Gating this on the bar having opened left the window in
+    // the frame on any start that never got a bar.
+    hide_main_window(cx);
 
     let config = StartConfig {
         excluded_windows: excluded,
@@ -1567,6 +2012,203 @@ pub fn close_camera_window(cx: &mut App) {
             .update(cx, |_, window, _| window.remove_window())
             .ok();
     }
+}
+
+// -- The camera bubble parked inside a picked window -------------------------
+//
+// `repositionCameraForWindow` (`target-select-overlay.tsx:125-162`) and its
+// caller (`:507-563`): while the window picker is up and nothing has been
+// committed yet, the bubble sits 16px inside the bottom-right corner of the
+// window the overlay is highlighting, so the camera is *in* the recording of
+// that window rather than floating somewhere outside it. It goes back where it
+// came from when the picker is dismissed, and stays parked when the pick is
+// committed (a click that locks the highlight, or a start).
+
+/// The 16px inset `repositionCameraForWindow` uses on both axes; a window that
+/// cannot hold the bubble plus two of these is left alone (`:147-153`).
+const CAMERA_PARK_PADDING: f32 = 16.;
+
+/// The camera bubble's geometry, in the two coordinate spaces the move needs.
+struct CameraFrame {
+    native: platform::NativeWindow,
+    /// gpui-space logical top-left -- the space the overlay's window bounds and
+    /// the persisted `cameraWindowPosition` both live in (global, y down).
+    origin: (f32, f32),
+    /// The AppKit frame (bottom-left origin, points), for `setFrame:`.
+    frame: (f64, f64, f64, f64),
+}
+
+fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |_, window, _| {
+            let native = platform::native_window(window)?;
+            let frame = platform::window_frame(&native);
+            let origin = window.bounds().origin;
+            Some(CameraFrame {
+                native,
+                origin: (f32::from(origin.x), f32::from(origin.y)),
+                frame,
+            })
+        })
+        .ok()
+        .flatten()
+}
+
+/// `win.setPosition(new LogicalPosition(x, y))` on the camera window, spelled
+/// as the delta on its AppKit frame the way `CameraWindow::apply_window_size`
+/// does -- gpui's own origin math disagrees with AppKit's, and the delta is
+/// exact in both. Runs from a task: `setFrame:` re-enters gpui's window
+/// callbacks.
+fn move_camera_window(camera: CameraFrame, to: (f32, f32), cx: &mut App) {
+    let dx = f64::from(to.0 - camera.origin.0);
+    let dy = f64::from(to.1 - camera.origin.1);
+    if dx.abs() < 0.5 && dy.abs() < 0.5 {
+        return;
+    }
+    let (frame_x, frame_y, width, height) = camera.frame;
+    // gpui +y is down, AppKit +y is up.
+    let (x, y) = (frame_x + dx, frame_y - dy);
+    let native = camera.native;
+    cx.spawn(async move |_| {
+        platform::set_window_frame(&native, x, y, width, height);
+    })
+    .detach();
+}
+
+/// `onMount` of the window-variant overlay (`target-select-overlay.tsx:507-517`):
+/// remember where the bubble was before the picker touches it. Only for a fresh
+/// picker -- re-pointing an open picker at another window does not remount the
+/// overlay over there, so the *original* original is what a dismissal restores.
+fn arm_camera_park(cx: &mut App) {
+    {
+        let park = &cx.global::<AppWindows>().camera_park;
+        if park.origin.is_some() || park.released || park.last_window.is_some() {
+            return;
+        }
+    }
+    let origin = camera_frame(cx).map(|camera| camera.origin);
+    cx.global_mut::<AppWindows>().camera_park = CameraPark {
+        origin,
+        last_window: None,
+        released: false,
+    };
+}
+
+/// The reposition effect (`target-select-overlay.tsx:518-545`), driven by the
+/// same cursor poll that feeds the highlight: park the bubble in the window the
+/// overlay is highlighting, once per window, and stop entirely once the pick is
+/// committed.
+pub fn sync_camera_park(active: Option<HoveredWindow>, cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    let Some(target) = active else {
+        // `lastRepositionedWindowId = null`: nothing highlighted, so the next
+        // window to be highlighted parks again even if it is the same one.
+        cx.global_mut::<AppWindows>().camera_park.last_window = None;
+        return;
+    };
+    {
+        let park = &cx.global::<AppWindows>().camera_park;
+        if park.released || park.last_window.as_ref() == Some(&target.id) {
+            return;
+        }
+    }
+    cx.global_mut::<AppWindows>().camera_park.last_window = Some(target.id.clone());
+    park_camera_in_window(&target, cx);
+}
+
+/// The bubble's new top-left, in the global logical space its own position
+/// lives in -- `repositionCameraForWindow`'s arithmetic
+/// (`target-select-overlay.tsx:141-160`), verbatim: the window's
+/// display-relative bounds made absolute with the display origin, the bubble
+/// tucked into the bottom-right corner one padding in, rounded. `None` when the
+/// window cannot hold the bubble plus a padding on each side, which is that
+/// function's early return (`:147-153`) -- the bubble stays where it is.
+fn camera_park_position(
+    display_origin: (f32, f32),
+    window: AreaRect,
+    camera: (f32, f32),
+) -> Option<(f32, f32)> {
+    let (camera_width, camera_height) = camera;
+    if camera_width + CAMERA_PARK_PADDING * 2. > window.width
+        || camera_height + CAMERA_PARK_PADDING * 2. > window.height
+    {
+        return None;
+    }
+    let absolute_x = window.x + display_origin.0;
+    let absolute_y = window.y + display_origin.1;
+    Some((
+        (absolute_x + window.width - camera_width - CAMERA_PARK_PADDING).round(),
+        (absolute_y + window.height - camera_height - CAMERA_PARK_PADDING).round(),
+    ))
+}
+
+fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) {
+    let Some(display) = scap_targets::Display::from_id(&target.display_id) else {
+        return;
+    };
+    let Some(display_bounds) = display.raw_handle().logical_bounds() else {
+        return;
+    };
+    let Some(camera) = camera_frame(cx) else {
+        return;
+    };
+
+    let (_, _, width, height) = camera.frame;
+    let display_origin = (
+        display_bounds.position().x() as f32,
+        display_bounds.position().y() as f32,
+    );
+    let Some(to) =
+        camera_park_position(display_origin, target.bounds, (width as f32, height as f32))
+    else {
+        tracing::debug!(
+            camera_width = width,
+            camera_height = height,
+            window_width = target.bounds.width,
+            window_height = target.bounds.height,
+            "target window is too small for the camera bubble; leaving it where it is"
+        );
+        return;
+    };
+
+    // A camera opened *after* the picker went up has no remembered position
+    // yet; the effect over there picks it up the same way (`getCameraWindow()`
+    // starts returning a window and the reposition runs).
+    if cx.global::<AppWindows>().camera_park.origin.is_none() {
+        cx.global_mut::<AppWindows>().camera_park.origin = Some(camera.origin);
+    }
+    tracing::info!(window = %target.id, x = to.0, y = to.1, "parking the camera bubble in the picked window");
+    move_camera_window(camera, to, cx);
+}
+
+/// `setOriginalCameraBounds(null)`: the pick was committed -- a click that
+/// locks the highlight (`:609-617`), a recording start or a screenshot start
+/// (`:687-690`) -- so the bubble stays where the picker put it and no dismissal
+/// puts it back.
+pub fn release_camera_park(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    park.origin = None;
+    park.released = true;
+}
+
+/// `onCleanup` (`:558-563`): the picker went away without a commit, so the
+/// bubble goes back to where it was.
+fn revert_camera_park(cx: &mut App) {
+    let park = std::mem::take(&mut cx.global_mut::<AppWindows>().camera_park);
+    let Some(origin) = park.origin else {
+        return;
+    };
+    let Some(camera) = camera_frame(cx) else {
+        return;
+    };
+    tracing::info!(x = origin.0, y = origin.1, "restoring the camera bubble");
+    move_camera_window(camera, origin, cx);
 }
 
 /// Hand a camera frame to the preview window. Returns false when no window is
@@ -2643,6 +3285,9 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
     if cx.global::<AppWindows>().overlays.is_empty() {
         return false;
     }
+    // The screenshot branch of `onRecordingStart` nulls the saved camera bounds
+    // just like the recording branch does, so a parked bubble stays parked.
+    release_camera_park(cx);
     close_target_overlays(cx);
     true
 }
@@ -2863,4 +3508,257 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
             .ok();
     }
     session.update(cx, |session, cx| session.set_controls_open(false, cx));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    fn title_rule(title: &str) -> WindowExclusion {
+        WindowExclusion {
+            window_title: Some(title.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The canonical titles are `CapWindowId::title()`
+    /// (`src-tauri/src/windows.rs:1030-1046`), verbatim. Getting one wrong is
+    /// silent: the rule simply never matches and the window lands in the
+    /// recording.
+    ///
+    /// The table's *coverage* of every `AppWindows` handle is enforced by the
+    /// compiler instead -- [`own_windows`] destructures the struct, so a new
+    /// window field does not compile until it is walked or explicitly skipped.
+    #[test]
+    fn own_window_titles_match_cap_window_id() {
+        let expected = [
+            (OwnWindow::Main, "Cap"),
+            (OwnWindow::Settings, "Cap Settings"),
+            (OwnWindow::Controls, "Cap Recording Controls"),
+            (OwnWindow::Camera, "Cap Camera"),
+            (OwnWindow::ModeSelect, "Cap Mode Selection"),
+            (OwnWindow::Teleprompter, "Cap Teleprompter"),
+            (OwnWindow::TargetSelect, "Cap Target Select"),
+            (OwnWindow::Editor, "Cap Editor"),
+            (OwnWindow::ScreenshotEditor, "Cap Screenshot Editor"),
+            (OwnWindow::Onboarding, "Welcome to Cap"),
+        ];
+        assert_eq!(OwnWindow::ALL.len(), expected.len());
+        for (kind, title) in expected {
+            assert_eq!(kind.title(), title, "{kind:?}");
+            assert!(OwnWindow::ALL.contains(&kind), "{kind:?} missing from ALL");
+        }
+    }
+
+    /// How the table lines up with `DEFAULT_EXCLUDED_WINDOW_TITLES`
+    /// (`general_settings.rs:104-114`): the defaults name three windows this
+    /// app does not have, and four of ours are deliberately not in the defaults
+    /// -- "Cap Target Select" carries a comment over there explaining why it
+    /// must not be added (a Windows ghost-overlay bug), and the editors and
+    /// onboarding are simply not excluded by default.
+    #[test]
+    fn default_exclusion_titles_line_up_with_the_table() {
+        let ours: Vec<&str> = OwnWindow::ALL.iter().map(|kind| kind.title()).collect();
+
+        let shared: Vec<&&str> = DEFAULT_EXCLUDED_WINDOW_TITLES
+            .iter()
+            .filter(|title| ours.contains(title))
+            .collect();
+        assert_eq!(
+            shared,
+            vec![
+                &"Cap",
+                &"Cap Settings",
+                &"Cap Recording Controls",
+                &"Cap Camera",
+                &"Cap Mode Selection",
+                &"Cap Teleprompter",
+            ]
+        );
+
+        let defaults_without_a_window: Vec<&&str> = DEFAULT_EXCLUDED_WINDOW_TITLES
+            .iter()
+            .filter(|title| !ours.contains(title))
+            .collect();
+        assert_eq!(
+            defaults_without_a_window,
+            vec![
+                &"Cap Window Capture Occluder",
+                &"Cap Capture Area",
+                &"Cap Recordings Overlay",
+            ]
+        );
+
+        let windows_without_a_default: Vec<OwnWindow> = OwnWindow::ALL
+            .into_iter()
+            .filter(|kind| !DEFAULT_EXCLUDED_WINDOW_TITLES.contains(&kind.title()))
+            .collect();
+        assert_eq!(
+            windows_without_a_default,
+            vec![
+                OwnWindow::TargetSelect,
+                OwnWindow::Editor,
+                OwnWindow::ScreenshotEditor,
+                OwnWindow::Onboarding,
+            ]
+        );
+    }
+
+    /// The rule list a start builds (`recording.rs:1879-1904`) resolved against
+    /// our own windows: the defaults cover main, settings, the bar, mode select
+    /// and the teleprompter in both modes, and the camera bubble in Studio only
+    /// -- `filter_for_instant_mode` drops that rule for Instant, where the
+    /// bubble has to be burned into the capture.
+    #[test]
+    fn defaults_exclude_our_windows_with_the_instant_camera_carve_out() {
+        let studio = own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Studio);
+        assert_eq!(
+            excluded_own_windows(&studio),
+            vec![
+                OwnWindow::Main,
+                OwnWindow::Settings,
+                OwnWindow::Controls,
+                OwnWindow::Camera,
+                OwnWindow::ModeSelect,
+                OwnWindow::Teleprompter,
+            ]
+        );
+
+        let instant =
+            own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Instant);
+        assert_eq!(
+            excluded_own_windows(&instant),
+            vec![
+                OwnWindow::Main,
+                OwnWindow::Settings,
+                OwnWindow::Controls,
+                OwnWindow::ModeSelect,
+                OwnWindow::Teleprompter,
+            ]
+        );
+    }
+
+    /// `teleprompter_exclusion` is appended whatever the settings say
+    /// (`recording.rs:1891-1900`), and never twice.
+    #[test]
+    fn the_teleprompter_rule_is_always_present_and_never_duplicated() {
+        let from_nothing = own_window_exclusion_rules(Vec::new(), RecordingMode::Instant);
+        assert_eq!(from_nothing, vec![title_rule("Cap Teleprompter")]);
+        assert_eq!(
+            excluded_own_windows(&from_nothing),
+            vec![OwnWindow::Teleprompter]
+        );
+
+        let already_configured =
+            own_window_exclusion_rules(vec![title_rule("Cap Teleprompter")], RecordingMode::Studio);
+        assert_eq!(already_configured, vec![title_rule("Cap Teleprompter")]);
+    }
+
+    /// Our own windows are matched on title *alone*
+    /// (`matches_window_title` feeds `None, None, Some(title)`), so rules that
+    /// need a bundle id or an owner name can only ever match another process's
+    /// windows -- including the owner+title pairing, which requires both halves.
+    #[test]
+    fn rules_that_need_more_than_a_title_never_match_our_windows() {
+        let by_identity = vec![
+            WindowExclusion {
+                bundle_identifier: Some("so.cap.desktop".to_string()),
+                ..Default::default()
+            },
+            WindowExclusion {
+                owner_name: Some("Cap".to_string()),
+                ..Default::default()
+            },
+            WindowExclusion {
+                owner_name: Some("Cap".to_string()),
+                window_title: Some("Cap".to_string()),
+                ..Default::default()
+            },
+        ];
+        assert!(excluded_own_windows(&by_identity).is_empty());
+    }
+
+    /// `apply_content_protection` walks the same rules but skips the camera
+    /// window outright (`windows.rs:3393-3398`); the camera's protection is the
+    /// mode's business instead (`recording.rs:1617-1624`).
+    #[test]
+    fn content_protection_skips_the_camera_and_follows_the_mode() {
+        let studio = own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Studio);
+        assert_eq!(
+            content_protection_targets(&studio),
+            vec![
+                OwnWindow::Main,
+                OwnWindow::Settings,
+                OwnWindow::Controls,
+                OwnWindow::ModeSelect,
+                OwnWindow::Teleprompter,
+            ]
+        );
+
+        let instant =
+            own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Instant);
+        assert_eq!(
+            content_protection_targets(&instant),
+            content_protection_targets(&studio),
+            "the instant carve-out only ever concerns the camera window"
+        );
+
+        assert!(camera_content_protected(RecordingMode::Studio));
+        assert!(!camera_content_protected(RecordingMode::Instant));
+
+        // A user who empties the list still gets the teleprompter protected,
+        // the way `window_capture_excluded` short-circuits on its title.
+        let emptied = own_window_exclusion_rules(Vec::new(), RecordingMode::Studio);
+        assert_eq!(
+            content_protection_targets(&emptied),
+            vec![OwnWindow::Teleprompter]
+        );
+    }
+
+    /// `repositionCameraForWindow` (`target-select-overlay.tsx:125-162`): the
+    /// bubble lands one 16px padding in from the window's bottom-right corner,
+    /// in global coordinates, and a window that cannot hold it plus a padding
+    /// on each side is left alone.
+    #[test]
+    fn the_camera_parks_in_the_window_corner() {
+        let window = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 800.,
+            height: 600.,
+        };
+
+        // Primary display (origin 0,0): 100+800-320-16, 50+600-240-16.
+        assert_eq!(
+            camera_park_position((0., 0.), window, (320., 240.)),
+            Some((564., 394.))
+        );
+
+        // A window on a display to the right carries that display's origin.
+        assert_eq!(
+            camera_park_position((1920., 0.), window, (320., 240.)),
+            Some((2484., 394.))
+        );
+
+        // Fractional geometry is rounded, the way `Math.round` rounds it.
+        assert_eq!(
+            camera_park_position((0.4, 0.), window, (320.3, 240.)),
+            Some((564., 394.))
+        );
+
+        // Exactly one padding on each side still fits; one point more does not.
+        let snug = AreaRect {
+            x: 0.,
+            y: 0.,
+            width: 352.,
+            height: 272.,
+        };
+        assert_eq!(
+            camera_park_position((0., 0.), snug, (320., 240.)),
+            Some((16., 16.))
+        );
+        assert_eq!(camera_park_position((0., 0.), snug, (321., 240.)), None);
+        assert_eq!(camera_park_position((0., 0.), snug, (320., 241.)), None);
+    }
 }
