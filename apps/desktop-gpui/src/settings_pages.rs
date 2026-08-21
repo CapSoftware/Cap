@@ -9,7 +9,7 @@
 //! two apps keep reading each other's state. Web calls run on the gpui_tokio
 //! runtime (reqwest needs tokio); persistence goes through [`crate::store`].
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, str::FromStr as _, time::Duration};
 
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -273,6 +273,12 @@ pub(crate) struct PagesState {
     s3: S3Page,
     gdrive: GDrivePage,
 
+    // Experimental (experimental.tsx). The Native app row's hand-back takes the
+    // whole settings window over, so its clock and the ticker that repaints the
+    // sequence live here and the overlay renders from the window root.
+    switch_back: Option<SwitchBack>,
+    switch_back_ticker: Option<gpui::Task<()>>,
+
     // Automations (automations.tsx)
     automations: AutomationsStore,
     automations_loaded: bool,
@@ -377,6 +383,8 @@ impl PagesState {
                 error: None,
                 poll: None,
             },
+            switch_back: None,
+            switch_back_ticker: None,
             automations: AutomationsStore::default(),
             automations_loaded: false,
             expanded_rule: None,
@@ -933,6 +941,13 @@ impl SettingsWindow {
         let Some(code) = hotkey_code_for_key(&keystroke.key) else {
             return true;
         };
+        // A code the Tauri app cannot parse must never reach the store: its
+        // `HotkeysStore` deserializes the whole `hotkeys` map strictly
+        // (`serde_json::from_value` in `HotkeysStore::get`), so one bad entry
+        // would silently drop every binding over there.
+        if global_hotkey::hotkey::Code::from_str(&code).is_err() {
+            return true;
+        }
         let Some(listening) = self.pages.listening.as_ref() else {
             return true;
         };
@@ -946,23 +961,35 @@ impl SettingsWindow {
         };
         let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
         self.pages.hotkeys.insert(action.to_string(), value);
-        // `createEffect` persists on every store change, captures included.
-        self.shortcuts_persist(cx);
+        // `createEffect` persists on every store change, captures included --
+        // but the OS registration waits for the confirm, exactly as
+        // `commands.setHotkey` only runs from the buttons over there. Pressing
+        // the candidate combo again keeps re-capturing it instead of firing
+        // the action.
+        self.shortcuts_save();
         cx.notify();
         true
     }
 
-    fn shortcuts_persist(&self, cx: &mut Context<Self>) {
+    /// The `createEffect` half: write the map to the shared store, touch
+    /// nothing at the OS.
+    fn shortcuts_save(&self) {
         if !store::set_hotkeys_raw(&self.pages.hotkeys) {
             tracing::warn!("saving the hotkeys store failed");
         }
-        // `commands.setHotkey` re-registers the OS shortcut as it persists;
-        // deferred because the registry swap reads the store this just wrote.
+    }
+
+    /// The `commands.setHotkey` half: persist and swap the OS registrations.
+    /// Deferred because the registry swap reads the store this just wrote.
+    fn shortcuts_commit(&self, cx: &mut Context<Self>) {
+        self.shortcuts_save();
         cx.defer(crate::hotkeys::reload);
     }
 
     /// The window click listener: an abandoned capture puts the previous
-    /// binding back.
+    /// binding back. Store only -- the capture never touched the OS
+    /// registration, so there is nothing to swap back (the TSX cancel path
+    /// never calls `setHotkey` either).
     fn shortcuts_restore_prev(&mut self, cx: &mut Context<Self>) {
         let Some(listening) = self.pages.listening.take() else {
             return;
@@ -976,7 +1003,7 @@ impl SettingsWindow {
                 self.pages.hotkeys.remove(action);
             }
         }
-        self.shortcuts_persist(cx);
+        self.shortcuts_save();
         cx.notify();
     }
 
@@ -1139,7 +1166,7 @@ impl SettingsWindow {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.pages.listening = None;
-                        this.shortcuts_persist(cx);
+                        this.shortcuts_commit(cx);
                         cx.notify();
                     })),
             );
@@ -1160,7 +1187,7 @@ impl SettingsWindow {
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     this.pages.listening = None;
                     this.pages.hotkeys.remove(HOTKEY_ACTIONS[index].0);
-                    this.shortcuts_persist(cx);
+                    this.shortcuts_commit(cx);
                     cx.notify();
                 })),
         );
@@ -1805,6 +1832,104 @@ impl SettingsWindow {
 // Experimental (experimental.tsx)
 // ---------------------------------------------------------------------------
 
+/// The hand-back takeover, mirroring `experimental.tsx`'s overlay: the toggle
+/// is the confirmation, and the sequence is what the user reads while Cancel is
+/// on screen.
+pub(crate) enum SwitchBack {
+    /// The sequence, timed from its start. One clock drives the sentence, its
+    /// fade and the countdown, so nothing can drift apart.
+    Running(std::time::Instant),
+    /// Dev only: the switch is committed and the supervisor is rebuilding the
+    /// classic app; this app stays up until the classic one deletes the
+    /// pending file to say it is on screen (`store::classic_pending_path`).
+    WaitingForClassic,
+    /// The switch was refused; the overlay stays up with the reason and the
+    /// toggle goes back to on, because nothing was switched.
+    Failed(String),
+}
+
+/// A cold dev build can genuinely take this long; past it, assume the build
+/// failed and hand the user back their app with a pointer at the terminal.
+const CLASSIC_WAIT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// One line at a time, fading between them, underneath the countdown rather
+/// than ahead of it: the numeral is on screen from the first frame.
+const SWITCH_SENTENCES: &[&str] = &[
+    "Switching back to the classic Cap app.",
+    "Your recordings and settings stay exactly where they are.",
+];
+const SWITCH_SENTENCE_MS: u64 = 2000;
+const SWITCH_FADE_MS: f32 = 400.;
+const SWITCH_COUNTDOWN_FROM: u32 = 5;
+const SWITCH_TAKEOVER_MS: u64 = SWITCH_COUNTDOWN_FROM as u64 * 1000;
+
+/// The overlay's whole appearance at one instant: which sentence, how opaque,
+/// and the number.
+fn takeover_frame(elapsed_ms: f32) -> (usize, f32, u32) {
+    let last = SWITCH_SENTENCES.len() - 1;
+    let index = ((elapsed_ms / SWITCH_SENTENCE_MS as f32) as usize).min(last);
+    let within = elapsed_ms - index as f32 * SWITCH_SENTENCE_MS as f32;
+    let fade_in = (within / SWITCH_FADE_MS).clamp(0., 1.);
+    // The last line holds rather than fading out; blanking the column while the
+    // countdown finishes would read as a stall.
+    let alpha = if index == last {
+        fade_in
+    } else {
+        fade_in.min(((SWITCH_SENTENCE_MS as f32 - within) / SWITCH_FADE_MS).clamp(0., 1.))
+    };
+    // Five on the first frame down to one in the last second; the switch fires
+    // rather than ever showing zero.
+    let left = SWITCH_TAKEOVER_MS as f32 - elapsed_ms;
+    let remaining = (left / 1000.)
+        .ceil()
+        .clamp(1., SWITCH_COUNTDOWN_FROM as f32) as u32;
+    (index, alpha, remaining)
+}
+
+/// Where the classic app lives when this build was not started from inside its
+/// bundle and is not a dev build either.
+const CLASSIC_APP_FALLBACK: &str = "/Applications/Cap.app";
+
+/// What "the classic app" means for this process -- decided from where its
+/// binary lives, so dev sessions reopen the dev app and installed ones the
+/// installed app.
+#[derive(Debug, PartialEq)]
+enum ClassicTarget {
+    /// `open` this bundle: the shipped layout is
+    /// `.../Cap.app/Contents/Resources/gpui/cap-gpui`, so the nearest `.app`
+    /// ancestor is the classic app this binary shipped inside.
+    Bundle(std::path::PathBuf),
+    /// A cargo-built binary (an ancestor directory literally named `target`):
+    /// the classic app here is the `tauri dev` harness, which cannot be
+    /// `open`ed -- ask the dev-session supervisor to restart it instead
+    /// (`store::request_classic_reopen`).
+    DevSupervisor,
+}
+
+fn classic_target_for_exe(exe: &std::path::Path) -> Option<ClassicTarget> {
+    if let Some(bundle) = exe
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))
+    {
+        return Some(ClassicTarget::Bundle(bundle.to_path_buf()));
+    }
+    if exe
+        .components()
+        .any(|component| component.as_os_str() == "target")
+    {
+        return Some(ClassicTarget::DevSupervisor);
+    }
+    let fallback = std::path::PathBuf::from(CLASSIC_APP_FALLBACK);
+    fallback.is_dir().then_some(ClassicTarget::Bundle(fallback))
+}
+
+fn classic_target() -> Option<ClassicTarget> {
+    std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(classic_target_for_exe)
+}
+
 impl SettingsWindow {
     pub(crate) fn render_experimental(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let theme = self.theme;
@@ -1887,7 +2012,276 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
+            self.section(
+                "Native app",
+                None,
+                None,
+                vec![self.rows(vec![self.native_app_row(cx)]).into_any_element()],
+            )
+            .into_any_element(),
         ]
+    }
+
+    /// The mirror of the Tauri page's Native app row: it hands the session over
+    /// to this app, this one hands it back.
+    fn native_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // Being in this app is what the toggle means, so it reads on even when
+        // the stored flag does not -- a `cargo run` or `dev.sh` launch never
+        // went through the hand-off. The flag only routes the Tauri app's
+        // startup.
+        let checked = !matches!(self.pages.switch_back, Some(SwitchBack::Running(_)));
+        self.setting_row(
+            "Cap GPUI",
+            Some(
+                "You are using the native version of Cap. Turning this off closes it and reopens \
+                 the classic app. Your recordings and settings are shared.",
+            ),
+            self.toggle("enable-gpui-app", checked, cx, |this, cx| {
+                match this.pages.switch_back {
+                    Some(SwitchBack::Running(_)) => this.cancel_switch_back(cx),
+                    // Committed: the classic app is already being brought up.
+                    Some(SwitchBack::WaitingForClassic) => {}
+                    _ => this.start_switch_back(cx),
+                }
+            })
+            .into_any_element(),
+        )
+    }
+
+    /// The full-window takeover, painted from `SettingsWindow::render` so it
+    /// covers the sidebar and the menus too.
+    pub(crate) fn render_switch_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let switch = self.pages.switch_back.as_ref()?;
+        let white = gpui::white();
+        let mut column = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            // Nothing behind the takeover is clickable while it runs.
+            .occlude()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(28.))
+            .bg(gpui::hsla(0., 0., 0., 0.92));
+
+        match switch {
+            SwitchBack::Running(started) => {
+                let (index, alpha, remaining) =
+                    takeover_frame(started.elapsed().as_secs_f32() * 1000.);
+                column = column
+                    .child(
+                        div()
+                            .text_size(px(72.))
+                            .line_height(px(76.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(white)
+                            .child(SharedString::from(remaining.to_string())),
+                    )
+                    .child(
+                        div()
+                            .h(px(40.))
+                            .max_w(px(380.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(15.))
+                            .text_center()
+                            .text_color(gpui::hsla(0., 0., 1., alpha))
+                            .child(SWITCH_SENTENCES[index]),
+                    );
+            }
+            SwitchBack::WaitingForClassic => {
+                column = column
+                    .child(
+                        div()
+                            .max_w(px(380.))
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_center()
+                            .text_color(white)
+                            .child("Opening the classic Cap app"),
+                    )
+                    .child(
+                        div()
+                            .max_w(px(380.))
+                            .text_size(px(14.))
+                            .text_center()
+                            .text_color(gpui::hsla(0., 0., 1., 0.7))
+                            .child(
+                                "The dev build is compiling. This window closes by itself when \
+                                 the classic app is on screen; a cold build can take a few \
+                                 minutes.",
+                            ),
+                    );
+            }
+            SwitchBack::Failed(error) => {
+                column = column.child(
+                    div()
+                        .max_w(px(380.))
+                        .text_size(px(14.))
+                        .text_center()
+                        .text_color(rgb(0xf87171))
+                        .child(SharedString::from(error.clone())),
+                );
+            }
+        }
+
+        // Committed states have nothing to cancel.
+        if matches!(switch, SwitchBack::WaitingForClassic) {
+            return Some(column.into_any_element());
+        }
+
+        Some(
+            column
+                .child(
+                    div()
+                        .id("switch-back-cancel")
+                        .flex()
+                        .items_center()
+                        .px(px(16.))
+                        .h(px(32.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(gpui::hsla(0., 0., 1., 0.25))
+                        .text_size(px(13.))
+                        .text_color(white)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.12)))
+                        .on_click(cx.listener(|this, _, _window, cx| this.cancel_switch_back(cx)))
+                        .child("Cancel"),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn start_switch_back(&mut self, cx: &mut Context<Self>) {
+        self.pages.switch_back = Some(SwitchBack::Running(std::time::Instant::now()));
+        // gpui only renders on invalidation, so the fades and the countdown
+        // need a pulse to run at all -- the `toggle_placeholders` shape.
+        // Assigning over the previous task drops it, which is how Cancel and a
+        // restart stop the one already in flight.
+        self.pages.switch_back_ticker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let running = this
+                    .update(cx, |this, cx| {
+                        let started = match &this.pages.switch_back {
+                            Some(SwitchBack::Running(started)) => *started,
+                            _ => return false,
+                        };
+                        if started.elapsed() >= Duration::from_millis(SWITCH_TAKEOVER_MS) {
+                            this.finish_switch_back(cx);
+                            return false;
+                        }
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    return;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    fn cancel_switch_back(&mut self, cx: &mut Context<Self>) {
+        self.pages.switch_back = None;
+        self.pages.switch_back_ticker = None;
+        cx.notify();
+    }
+
+    /// Write the flag, start the classic app, then quit -- in that order, so
+    /// the app that comes up already owns the session. Nothing is written when
+    /// there is no way to start one: the flag would strand the user in an app
+    /// that redirects to one that is not installed.
+    fn finish_switch_back(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = classic_target() else {
+            self.pages.switch_back = Some(SwitchBack::Failed(
+                "Couldn't find the Cap app to switch back to.".to_string(),
+            ));
+            cx.notify();
+            return;
+        };
+
+        self.settings.enable_gpui_app = false;
+        self.write_bool("enableGpuiApp", false, cx);
+
+        let started = match &target {
+            ClassicTarget::Bundle(bundle) => std::process::Command::new("/usr/bin/open")
+                .arg(bundle)
+                .spawn()
+                .map(drop)
+                .map_err(|error| format!("Couldn't open the Cap app: {error}")),
+            ClassicTarget::DevSupervisor => store::mark_classic_pending()
+                .and_then(|()| store::request_classic_reopen())
+                .map_err(|error| format!("Couldn't request the dev app restart: {error}")),
+        };
+
+        match (started, target) {
+            // An installed bundle opens in a moment; quit right away.
+            (Ok(()), ClassicTarget::Bundle(_)) => {
+                tracing::info!("handing back to the classic app");
+                crate::menus::quit(cx);
+            }
+            // The dev harness has to rebuild first, which can take minutes.
+            // Stay up until the classic app deletes the pending file to say
+            // it is on screen, so the user is never staring at no app at all.
+            (Ok(()), ClassicTarget::DevSupervisor) => {
+                tracing::info!("handing back to the classic app; waiting for the dev build");
+                self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
+                cx.notify();
+                // Occupies the ticker slot so starting or cancelling another
+                // sequence drops this waiter with it.
+                self.pages.switch_back_ticker = Some(cx.spawn(async move |this, cx| {
+                    let started = std::time::Instant::now();
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(500))
+                            .await;
+                        let waiting = this
+                            .update(cx, |this, _| {
+                                matches!(
+                                    this.pages.switch_back,
+                                    Some(SwitchBack::WaitingForClassic)
+                                )
+                            })
+                            .unwrap_or(false);
+                        if !waiting {
+                            break;
+                        }
+                        if !store::classic_pending_path().exists() {
+                            tracing::info!("classic app is up; quitting");
+                            cx.update(|cx| crate::menus::quit(cx));
+                            break;
+                        }
+                        if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
+                            this.update(cx, |this, cx| {
+                                this.pages.switch_back = Some(SwitchBack::Failed(
+                                    "The classic app hasn't come up. Check the dev terminal for \
+                                     build errors, then toggle again."
+                                        .to_string(),
+                                ));
+                                cx.notify();
+                            })
+                            .ok();
+                            break;
+                        }
+                    }
+                }));
+            }
+            (Err(message), _) => {
+                tracing::error!("{message}");
+                self.settings.enable_gpui_app = true;
+                self.write_bool("enableGpuiApp", true, cx);
+                self.pages.switch_back = Some(SwitchBack::Failed(message));
+                cx.notify();
+            }
+        }
     }
 }
 
@@ -7319,6 +7713,56 @@ mod tests {
         assert_eq!(hotkey_code_for_key("escape"), None);
     }
 
+    /// Every code the capture can produce parses as a `global_hotkey` `Code`.
+    /// This is the shared-store guarantee: the Tauri `HotkeysStore` fails to
+    /// deserialize wholesale on one unknown code, losing every binding, so a
+    /// code this page writes must always be one that side can read back.
+    #[test]
+    fn every_producible_code_parses_for_the_tauri_app() {
+        let mut keys: Vec<String> = Vec::new();
+        for c in 'a'..='z' {
+            keys.push(c.to_string());
+        }
+        for c in '0'..='9' {
+            keys.push(c.to_string());
+        }
+        for c in [',', '.', '/', ';', '\'', '[', ']', '\\', '-', '=', '`'] {
+            keys.push(c.to_string());
+        }
+        // gpui function keys stop at f19 on Apple keyboards; f20 is the
+        // largest either side can see.
+        for n in 1..=20 {
+            keys.push(format!("f{n}"));
+        }
+        for named in [
+            "space",
+            "enter",
+            "tab",
+            "backspace",
+            "delete",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+        ] {
+            keys.push(named.to_string());
+        }
+
+        for key in keys {
+            let Some(code) = hotkey_code_for_key(&key) else {
+                panic!("{key} should map to a code");
+            };
+            assert!(
+                global_hotkey::hotkey::Code::from_str(&code).is_ok(),
+                "{key} produced {code}, which global_hotkey cannot parse"
+            );
+        }
+    }
+
     #[test]
     fn hotkey_chips_render_in_macos_modifier_order() {
         let hotkey = Hotkey {
@@ -7332,6 +7776,59 @@ mod tests {
             hotkey_display_keys(&hotkey),
             ["meta", "alt", "shift", "KeyS"]
         );
+    }
+
+    /// The switch-back target matches how this binary was started: the `.app`
+    /// it is staged inside beats everything, a cargo `target/` path means the
+    /// dev harness (never the installed app), and only a bare binary from
+    /// neither falls through to `/Applications`.
+    #[test]
+    fn the_classic_target_matches_the_launch_context() {
+        assert_eq!(
+            classic_target_for_exe(std::path::Path::new(
+                "/Applications/Cap.app/Contents/Resources/gpui/cap-gpui"
+            )),
+            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
+                "/Applications/Cap.app"
+            )))
+        );
+        assert_eq!(
+            classic_target_for_exe(std::path::Path::new(
+                "/Users/x/Cap/apps/desktop-gpui/target/debug/cap-gpui"
+            )),
+            Some(ClassicTarget::DevSupervisor)
+        );
+        // A dev binary staged inside a bundle is still that bundle's.
+        assert_eq!(
+            classic_target_for_exe(std::path::Path::new(
+                "/Users/x/Cap/target/debug/bundle/osx/Cap.app/Contents/Resources/gpui/cap-gpui"
+            )),
+            Some(ClassicTarget::Bundle(std::path::PathBuf::from(
+                "/Users/x/Cap/target/debug/bundle/osx/Cap.app"
+            )))
+        );
+    }
+
+    /// The takeover's whole timeline, read off its one clock.
+    #[test]
+    fn the_takeover_counts_down_while_the_lines_fade() {
+        // The number is up from the first frame and never reaches zero.
+        assert_eq!(takeover_frame(0.).2, SWITCH_COUNTDOWN_FROM);
+        assert_eq!(takeover_frame(1000.).2, SWITCH_COUNTDOWN_FROM - 1);
+        assert_eq!(takeover_frame(SWITCH_TAKEOVER_MS as f32 - 1.).2, 1);
+        assert_eq!(takeover_frame(SWITCH_TAKEOVER_MS as f32).2, 1);
+
+        // First line, faded in over its lead, and out again as its slot ends.
+        let (index, alpha, _) = takeover_frame(0.);
+        assert_eq!(index, 0);
+        assert_eq!(alpha, 0.);
+        assert_eq!(takeover_frame(SWITCH_FADE_MS).1, 1.);
+        assert_eq!(takeover_frame(SWITCH_SENTENCE_MS as f32 - 1.).1.round(), 0.);
+
+        // The last line holds rather than blanking while the number finishes.
+        let (index, alpha, _) = takeover_frame(SWITCH_TAKEOVER_MS as f32 - 1.);
+        assert_eq!(index, SWITCH_SENTENCES.len() - 1);
+        assert_eq!(alpha, 1.);
     }
 
     /// `conditionAppliesToTrigger` / `actionAppliesToTrigger` against the

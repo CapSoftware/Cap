@@ -26,8 +26,8 @@ use crate::{
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
-        GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, PostStudioBehaviour,
-        RECORDING_START_SAFETY, SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
+        GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
+        SettingsEnum, StudioQuality, UpdateChannel, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -184,7 +184,6 @@ impl Page {
 pub(crate) enum MenuKind {
     Countdown,
     MainWindowStart,
-    PostStudio,
     PostDeletion,
     MaxFps,
     /// The excluded-windows card's Add button, whose menu is the live window
@@ -1185,7 +1184,6 @@ impl SettingsWindow {
             MenuKind::MainWindowStart => {
                 enum_items(self.settings.main_window_recording_start_behaviour)
             }
-            MenuKind::PostStudio => enum_items(self.settings.post_studio_recording_behaviour),
             MenuKind::PostDeletion => enum_items(self.settings.post_deletion_behaviour),
             MenuKind::AddWindow => self
                 .available_windows()
@@ -1221,12 +1219,6 @@ impl SettingsWindow {
                 if let Some(value) = MainWindowStartBehaviour::ALL.get(index) {
                     self.settings.main_window_recording_start_behaviour = *value;
                     self.write_enum("mainWindowRecordingStartBehaviour", *value, cx);
-                }
-            }
-            MenuKind::PostStudio => {
-                if let Some(value) = PostStudioBehaviour::ALL.get(index) {
-                    self.settings.post_studio_recording_behaviour = *value;
-                    self.write_enum("postStudioRecordingBehaviour", *value, cx);
                 }
             }
             MenuKind::PostDeletion => {
@@ -1388,6 +1380,9 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
+            // Over everything, including the menus: the Experimental page's
+            // hand-back takes the whole window while it counts down.
+            .children(self.render_switch_overlay(cx))
     }
 }
 
@@ -2868,17 +2863,16 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    self.setting_row(
-                        "After a Studio recording",
-                        Some("What happens once you stop a Studio recording."),
-                        self.select(
-                            "post-studio",
-                            settings.post_studio_recording_behaviour.label(),
-                            MenuKind::PostStudio,
-                            cx,
-                        )
-                        .into_any_element(),
-                    ),
+                    // Deviation: general.tsx puts an "After a Studio
+                    // recording" select here (Open editor / Show in overlay).
+                    // The post-capture recordings overlay does not exist in
+                    // this app -- a product decision, not a gap -- so a
+                    // one-option select would be noise and the row is omitted.
+                    // The stored `postStudioRecordingBehaviour` is left
+                    // exactly as the Tauri app wrote it (this page never
+                    // writes the key), and the stop flow treats a stored
+                    // `showOverlay` as "reshow the main window"
+                    // (`app_windows.rs`).
                     self.setting_row(
                         "After deleting a recording",
                         Some("Whether the recording window should reopen."),
