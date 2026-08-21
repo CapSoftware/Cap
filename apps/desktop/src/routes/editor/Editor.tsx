@@ -54,6 +54,7 @@ import {
 import { EditorErrorScreen } from "./EditorErrorScreen";
 import { Header } from "./Header";
 import { ImportProgress } from "./ImportProgress";
+import { deriveImportStatus, deriveRawImportStatus } from "./import-status";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
@@ -155,20 +156,12 @@ export function Editor() {
 		refetchOnReconnect: false,
 	}));
 
-	const rawImportStatus = createMemo(() => {
-		const meta = rawMetaQuery.data;
-		if (!meta) return "loading" as const;
-		if (
-			"status" in meta &&
-			meta.status &&
-			typeof meta.status === "object" &&
-			"status" in meta.status &&
-			meta.status.status === "InProgress"
-		) {
-			return "importing" as const;
-		}
-		return "ready" as const;
-	});
+	const rawImportStatus = createMemo(() =>
+		deriveRawImportStatus({
+			data: rawMetaQuery.data,
+			isError: rawMetaQuery.isError,
+		}),
+	);
 
 	const [lockedToImporting, setLockedToImporting] = createSignal(false);
 
@@ -178,10 +171,8 @@ export function Editor() {
 		}
 	});
 
-	const importStatus = () => {
-		if (lockedToImporting()) return "importing" as const;
-		return rawImportStatus();
-	};
+	const importStatus = () =>
+		deriveImportStatus(rawImportStatus(), lockedToImporting());
 
 	const [importAborted, setImportAborted] = createSignal(false);
 
@@ -218,6 +209,12 @@ export function Editor() {
 				</div>
 			}
 		>
+			<Match when={importStatus() === "error"}>
+				<EditorErrorScreen
+					error={getEditorErrorMessage(rawMetaQuery.error)}
+					projectPath={projectPath() ?? ""}
+				/>
+			</Match>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
