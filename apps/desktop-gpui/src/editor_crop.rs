@@ -920,7 +920,7 @@ pub enum CropDrag {
 }
 
 impl CropDrag {
-    fn cursor(&self) -> CursorStyle {
+    pub(crate) fn cursor(&self) -> CursorStyle {
         match self {
             // `cursorStyle()` (`:290-294`): both the region and the draw drag
             // show `grabbing`.
@@ -1177,7 +1177,7 @@ impl CropState {
 
     /// `setRawBounds` -- the drag path, which skips the constraint pass
     /// because the solver has already applied it.
-    fn set_raw(&mut self, bounds: CropBounds) {
+    pub(crate) fn set_raw(&mut self, bounds: CropBounds) {
         self.raw = bounds;
         if self.anim.is_none() {
             self.display_raw = bounds;
@@ -2103,7 +2103,7 @@ fn crop_log(bounds: CropBounds) -> String {
 }
 
 /// Window coordinates -> container-local container pixels.
-fn crop_local(area: Option<gpui::Bounds<Pixels>>, position: Point<Pixels>) -> Vec2 {
+pub(crate) fn crop_local(area: Option<gpui::Bounds<Pixels>>, position: Point<Pixels>) -> Vec2 {
     let origin = area.map(|bounds| bounds.origin).unwrap_or_default();
     Vec2::new(
         f64::from(f32::from(position.x - origin.x)),
@@ -2717,7 +2717,7 @@ impl EditorWindow {
 }
 
 /// The four `bg-black/45` quads around the region (`:1124-1133`).
-fn occluders(bounds: CropBounds, w: f32, h: f32) -> Vec<gpui::Div> {
+pub(crate) fn occluders(bounds: CropBounds, w: f32, h: f32) -> Vec<gpui::Div> {
     let fill = gpui::hsla(0., 0., 0., OCCLUDER_ALPHA);
     let (x, y, bw, bh) = (
         bounds.x as f32,
@@ -2762,7 +2762,7 @@ fn occluders(bounds: CropBounds, w: f32, h: f32) -> Vec<gpui::Div> {
 }
 
 /// The rule-of-thirds cross drawn inside the region during a drag.
-fn thirds_grid(bounds: CropBounds) -> gpui::Div {
+pub(crate) fn thirds_grid(bounds: CropBounds) -> gpui::Div {
     let line = gpui::hsla(0., 0., 1., 0.4);
     let (w, h) = (bounds.width as f32, bounds.height as f32);
     div()
@@ -2811,7 +2811,7 @@ fn thirds_grid(bounds: CropBounds) -> gpui::Div {
 /// button that starts 12px outside the corner -- which resolves to two 24x6
 /// bars whose inner edges sit exactly on the region's corner. `size-1` when
 /// the region is under 30px (`:1208-1211`).
-fn corner_glyph(handle: Handle, bounds: CropBounds, too_small: bool) -> Vec<gpui::Div> {
+pub(crate) fn corner_glyph(handle: Handle, bounds: CropBounds, too_small: bool) -> Vec<gpui::Div> {
     let scale = if too_small { 4. / 24. } else { 1. };
     let arm = 24. * scale;
     let thickness = 6. * scale;
@@ -2850,7 +2850,11 @@ fn corner_glyph(handle: Handle, bounds: CropBounds, too_small: bool) -> Vec<gpui
 }
 
 /// A handle's transparent hit zone, carrying its cursor.
-fn handle_zone(handle: Handle, bounds: CropBounds, drag_cursor: Option<CursorStyle>) -> gpui::Div {
+pub(crate) fn handle_zone(
+    handle: Handle,
+    bounds: CropBounds,
+    drag_cursor: Option<CursorStyle>,
+) -> gpui::Div {
     handle_zone_with_cursor(
         handle,
         bounds,
@@ -2858,7 +2862,11 @@ fn handle_zone(handle: Handle, bounds: CropBounds, drag_cursor: Option<CursorSty
     )
 }
 
-fn handle_zone_with_cursor(handle: Handle, bounds: CropBounds, cursor: CursorStyle) -> gpui::Div {
+pub(crate) fn handle_zone_with_cursor(
+    handle: Handle,
+    bounds: CropBounds,
+    cursor: CursorStyle,
+) -> gpui::Div {
     let rect = handle_rect(handle, bounds);
     div()
         .absolute()

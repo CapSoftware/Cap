@@ -174,9 +174,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "sparkles.svg",
     "timer.svg",
     "volume-2.svg",
-    "volume-x.svg",
     "diamond.svg",
-    "fast-forward.svg",
     "x-mark.svg",
     "zap.svg",
     "zoom-in.svg",
@@ -203,6 +201,14 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // integrations/index.tsx's inline multi-colour logo flattened to one fill
     // (gpui's `svg()` keeps only the alpha).
     "circle-check.svg",
+    // The screenshot editor's annotation toolbar, layers panel and header
+    // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
+    // originals, matching the `~icons/lucide/*` imports over there.
+    "pencil.svg",
+    "arrow-up-right.svg",
+    "more-horizontal.svg",
+    "save.svg",
+    "grip-vertical.svg",
     "chevron-up.svg",
     "arrow-left.svg",
     "film.svg",
@@ -318,6 +324,12 @@ mod tests {
         include_str!("editor_crop.rs"),
         // The clips sidebar's cards, import menu and record modal.
         include_str!("editor_clips.rs"),
+        // The export page's destination cards and share-status glyphs.
+        include_str!("editor_export.rs"),
+        // The screenshot editor's toolbar, popovers and zoom HUD; the
+        // annotation module names the tool and layer glyphs.
+        include_str!("screenshot_editor.rs"),
+        include_str!("screenshot_annotations.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
     ];

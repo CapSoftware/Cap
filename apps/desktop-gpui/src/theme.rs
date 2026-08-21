@@ -361,11 +361,19 @@ pub struct Theme {
     pub blue_9: Rgba,
     pub blue_10: Rgba,
     pub blue_11: Rgba,
+    /// The screenshot editor's layers panel selected-row label
+    /// (`text-blue-12`). Stock Radix -- `theme.css` overrides no blue-12.
+    pub blue_12: Rgba,
 
     pub red_2: Rgba,
+    /// The layers panel's delete-hover wash (`hover:bg-red-3`). Stock Radix.
+    pub red_3: Rgba,
     pub red_4: Rgba,
     pub red_9: Rgba,
     pub red_10: Rgba,
+    /// The layers panel's delete-hover glyph (`hover:text-red-11`). Stock
+    /// Radix.
+    pub red_11: Rgba,
 
     /// The settings page's one non-gray, non-blue accent: the "recommended Cap
     /// windows are not excluded" warning is `border-amber-6 bg-amber-3/30
@@ -468,11 +476,14 @@ impl Theme {
             blue_9: rgb(0x0090ff),
             blue_10: rgb(0x0588f0),
             blue_11: rgb(0x0d74ce),
+            blue_12: rgb(0x113264),
 
             red_2: rgb(0xfff7f7),
+            red_3: rgb(0xfeebec),
             red_4: rgb(0xffdbdc),
             red_9: rgb(0xe5484d),
             red_10: rgb(0xdc3e42),
+            red_11: rgb(0xce2c31),
 
             amber_3: rgb(0xfff7c2),
             amber_6: rgb(0xf3d673),
@@ -520,11 +531,14 @@ impl Theme {
             blue_9: rgb(0x0090ff),
             blue_10: rgb(0x3b9eff),
             blue_11: rgb(0x70b8ff),
+            blue_12: rgb(0xc2e6ff),
 
             red_2: rgb(0x201314),
+            red_3: rgb(0x3b1219),
             red_4: rgb(0x500f1c),
             red_9: rgb(0xe5484d),
             red_10: rgb(0xec5d5e),
+            red_11: rgb(0xff9592),
 
             amber_3: rgb(0x302008),
             amber_6: rgb(0x5c3d05),
