@@ -1946,41 +1946,12 @@ impl SettingsWindow {
             ];
         }
 
+        // No "Native camera preview" toggle here: in this app the native
+        // camera path is the only implementation, so the Tauri page's
+        // experimental switch has nothing to switch. The store key
+        // (`enableNativeCameraPreview`) stays readable in `store.rs` and is
+        // left untouched in the shared store -- the Tauri app still uses it.
         vec![
-            self.section(
-                "Preview",
-                None,
-                None,
-                vec![
-                    self.rows(vec![
-                        self.setting_row(
-                            "Native camera preview",
-                            Some(
-                                "Render the camera preview using a native GPU surface instead of \
-                             through the webview. Experimental and off by default.",
-                            ),
-                            self.toggle(
-                                "native-camera-preview",
-                                self.settings.enable_native_camera_preview,
-                                cx,
-                                |this, cx| {
-                                    // The Tauri handler also invokes
-                                    // `set_native_camera_preview_enabled`; this app
-                                    // has no webview preview to swap, so the store
-                                    // write is the whole change.
-                                    this.settings.enable_native_camera_preview =
-                                        !this.settings.enable_native_camera_preview;
-                                    let value = this.settings.enable_native_camera_preview;
-                                    this.write_bool("enableNativeCameraPreview", value, cx);
-                                },
-                            )
-                            .into_any_element(),
-                        ),
-                    ])
-                    .into_any_element(),
-                ],
-            )
-            .into_any_element(),
             self.section(
                 "Reliability",
                 None,

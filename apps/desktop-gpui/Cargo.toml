@@ -9,7 +9,7 @@ members = ["."]
 
 [package]
 name = "cap-desktop-gpui"
-version = "0.1.0"
+version = "0.6.0"
 edition = "2024"
 license = "AGPL-3.0"
 publish = false

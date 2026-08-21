@@ -1033,14 +1033,24 @@ impl CameraWindow {
             .when(pressed, |this| {
                 this.bg(theme.gray_3).text_color(theme.gray_12)
             })
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
+            // No `.occlude()` here: an occluding hitbox breaks gpui's hit
+            // test at the button (`hit_test` stops at `BlockMouse`), which
+            // drops `camera-root` from the hover set -- the chrome would
+            // vanish the moment the cursor reached a control, before it could
+            // be clicked. The Tauri page keeps its chrome up while the
+            // pointer is anywhere over the window, controls included
+            // (`camera.tsx:781-783`). Keeping the press out of the root's
+            // window-move listener is stop_propagation's job instead; the
+            // button's own click tracker dispatches before this listener
+            // (deepest-first bubble order), so the click still lands.
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
                 window.prevent_default();
+                cx.stop_propagation();
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 on_click(this, window, cx);
             }))
-            .occlude()
             .child(
                 div()
                     .relative()
@@ -1246,12 +1256,12 @@ impl CameraWindow {
                     .rounded_br(px(6.)),
             };
 
-            let mut handle = div()
-                .id(id)
-                .absolute()
-                .size(px(28.))
-                .occlude()
-                .child(bracket);
+            // Like the toolbar buttons, no `.occlude()`: it would knock the
+            // root's hover flag false over the 28px corner hit areas (even
+            // while the brackets are invisible) and hide the chrome mid-
+            // travel. The handle's own on_mouse_down stops propagation, which
+            // is what keeps a resize press from starting a window move.
+            let mut handle = div().id(id).absolute().size(px(28.)).child(bracket);
             // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx:306-317`).
             handle = match corner {
                 ResizeCorner::NorthWest => handle
@@ -1352,6 +1362,14 @@ impl Render for CameraWindow {
             .font_family("Geist")
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
+            // One hover region for the whole window -- bubble, toolbar and
+            // resize handles alike -- matching the Tauri page's container
+            // (`onPointerMove={chrome.show}` / `onPointerLeave={chrome.hide}`,
+            // `camera.tsx:781-783`, no linger timeout). This only holds while
+            // no descendant occludes: `hitbox.is_hovered` walks the hit test
+            // top-down and stops at the first `BlockMouse` hitbox, so an
+            // `.occlude()` on any control would flip this false while the
+            // cursor is over that control and hide the chrome under it.
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.chrome_visible != *hovered {
                     this.chrome_visible = *hovered;
