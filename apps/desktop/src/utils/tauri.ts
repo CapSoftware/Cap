@@ -14,6 +14,17 @@ async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | nul
 async setNativeCameraPreviewEnabled(enabled: boolean) : Promise<null> {
     return await TAURI_INVOKE("set_native_camera_preview_enabled", { enabled });
 },
+async gpuiAppAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("gpui_app_available");
+},
+/**
+ * Close this app and open the native one. The setting has already been written
+ * by the caller, so a failure here has to be reported rather than swallowed:
+ * the page reverts it.
+ */
+async switchToGpuiApp() : Promise<null> {
+    return await TAURI_INVOKE("switch_to_gpui_app");
+},
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });
 },
@@ -976,7 +987,13 @@ previousRecordingsPaths?: string[];
  * Cleared automatically when the app version changes (one retry per
  * update, since a new ort/wgpu/driver stack may have fixed the crash).
  */
-cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel }
+cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel; 
+/**
+ * Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+ * while enabled, startup hands off to it and exits, and the native app's
+ * own Experimental page hands back. See `gpui_app.rs`.
+ */
+enableGpuiApp?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**

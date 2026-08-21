@@ -22,6 +22,7 @@ mod fake_window;
 mod flags;
 pub mod frame_ws;
 mod general_settings;
+mod gpui_app;
 mod hotkeys;
 mod http_client;
 mod import;
@@ -4881,6 +4882,8 @@ fn specta_builder() -> tauri_specta::Builder {
             set_mic_input,
             set_camera_input,
             set_native_camera_preview_enabled,
+            gpui_app::gpui_app_available,
+            gpui_app::switch_to_gpui_app,
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
@@ -5295,6 +5298,19 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+            // Before anything shows a window or initialises further state: when
+            // the native app owns the session, this one only exists to start it.
+            if gpui_app::redirect_at_startup_if_enabled(&app) {
+                // Nothing is managed yet, so `ExitRequested` would otherwise
+                // spawn a cleanup with no `AppExitState` to guard it. Marking
+                // the exit as already begun takes the plain runtime-exit path.
+                let exit_state = AppExitState::default();
+                exit_state.begin();
+                app.manage(exit_state);
+                crash_sentinel::mark_clean_exit();
+                app.exit(0);
+                return Ok(());
+            }
             configure_camera_blur_recovery(&app, previous_termination);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());

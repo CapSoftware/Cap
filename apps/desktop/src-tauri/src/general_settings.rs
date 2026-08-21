@@ -249,6 +249,11 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+    /// while enabled, startup hands off to it and exits, and the native app's
+    /// own Experimental page hands back. See `gpui_app.rs`.
+    #[serde(default)]
+    pub enable_gpui_app: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -353,6 +358,7 @@ impl Default for GeneralSettingsStore {
             previous_recordings_paths: Vec::new(),
             camera_blur_disabled_by_crash: None,
             update_channel: UpdateChannel::Stable,
+            enable_gpui_app: false,
         }
     }
 }

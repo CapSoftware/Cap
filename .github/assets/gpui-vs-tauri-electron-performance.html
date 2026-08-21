@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta
+			name="description"
+			content="Animated Cap desktop performance benchmark comparing Tauri, Electron, and GPUI."
+		/>
+		<title>Cap desktop performance benchmark</title>
+		<script>
+			document.documentElement.classList.add("js");
+		</script>
+		<style>
+			:root {
+				color-scheme: light;
+				--ink: #17191f;
+				--ink-strong: #12161f;
+				--muted: #68748d;
+				--line: #dfe4ec;
+				--cell: #f7f8fb;
+				--blue: #4785ff;
+				--blue-bright: #5b91ff;
+				--blue-soft: #e8f0ff;
+				--blue-pale: #f4f7ff;
+				--canvas-width: 1180px;
+				--canvas-height: 829px;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			html,
+			body {
+				min-width: 100%;
+				min-height: 100%;
+				margin: 0;
+			}
+
+			body {
+				display: grid;
+				min-height: 100svh;
+				place-items: center;
+				overflow: hidden;
+				background:
+					radial-gradient(circle at 78% 44%, #dfe9ff 0, transparent 31%),
+					#f2f5fa;
+				color: var(--ink);
+				font-family:
+					Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				-webkit-font-smoothing: antialiased;
+			}
+
+			.frame {
+				position: relative;
+				width: var(--canvas-width);
+				height: var(--canvas-height);
+			}
+
+			.stage {
+				position: relative;
+				width: var(--canvas-width);
+				height: var(--canvas-height);
+				overflow: hidden;
+				border: 1px solid rgb(23 25 31 / 7%);
+				border-radius: 20px;
+				background: #ffffff;
+				box-shadow:
+					0 34px 90px rgb(27 42 72 / 14%),
+					0 4px 18px rgb(27 42 72 / 7%);
+				transform-origin: top left;
+			}
+
+			.stage::before {
+				position: absolute;
+				inset: 0;
+				background: linear-gradient(
+					112deg,
+					transparent 54%,
+					rgb(91 145 255 / 4%) 78%,
+					transparent 95%
+				);
+				content: "";
+				pointer-events: none;
+			}
+
+			main {
+				position: relative;
+				z-index: 1;
+				width: 1074px;
+				margin: 55px auto 0;
+			}
+
+			.brand {
+				display: flex;
+				align-items: center;
+				height: 40px;
+			}
+
+			.brand-logo {
+				display: block;
+				width: 103px;
+				height: 40px;
+			}
+
+			h1 {
+				margin: 27px 0 3px;
+				font-size: 26px;
+				font-weight: 650;
+				letter-spacing: -1.1px;
+				line-height: 1.15;
+			}
+
+			.subtitle {
+				margin: 0;
+				color: var(--muted);
+				font-size: 15px;
+				font-weight: 450;
+			}
+
+			.facts {
+				margin-top: 20px;
+				color: var(--muted);
+				font-size: 12.5px;
+				line-height: 1.45;
+			}
+
+			.facts p {
+				margin: 0 0 6px;
+			}
+
+			.facts strong {
+				margin-right: 8px;
+				color: #252830;
+				font-weight: 650;
+			}
+
+			.table-wrap {
+				position: relative;
+				margin-top: 17px;
+				overflow: hidden;
+				border-top: 1px solid var(--line);
+			}
+
+			.gpui-wash {
+				position: absolute;
+				z-index: 0;
+				top: -1px;
+				right: 0;
+				bottom: 0;
+				width: 23%;
+				background:
+					linear-gradient(
+						180deg,
+						rgb(255 255 255 / 35%),
+						transparent 22%,
+						rgb(71 133 255 / 5%) 100%
+					),
+					var(--blue-soft);
+				pointer-events: none;
+				transform-origin: top;
+			}
+
+			.gpui-wash::after {
+				position: absolute;
+				right: 0;
+				bottom: 0;
+				left: 0;
+				height: 76px;
+				background: linear-gradient(180deg, transparent, rgb(91 145 255 / 12%));
+				content: "";
+				transform: translateY(100%);
+			}
+
+			table {
+				position: relative;
+				z-index: 1;
+				width: 100%;
+				border-collapse: collapse;
+				table-layout: fixed;
+				font-size: 15px;
+			}
+
+			col.metric {
+				width: 31%;
+			}
+
+			col.result {
+				width: 23%;
+			}
+
+			th,
+			td {
+				position: relative;
+				height: 47px;
+				border-bottom: 1px solid var(--line);
+				text-align: center;
+			}
+
+			thead th {
+				height: 65px;
+				background: var(--cell);
+				font-weight: 650;
+				line-height: 1.25;
+			}
+
+			thead th:first-child {
+				background: #ffffff;
+			}
+
+			th span {
+				display: block;
+				margin-top: 2px;
+				color: #69758e;
+				font-size: 11.5px;
+				font-weight: 450;
+			}
+
+			tbody th {
+				padding-left: 12px;
+				background: #ffffff;
+				color: var(--muted);
+				font-size: 14px;
+				font-weight: 450;
+				text-align: left;
+			}
+
+			tbody td {
+				background: var(--cell);
+				font-size: 15px;
+				font-weight: 500;
+			}
+
+			.gpui {
+				background: transparent !important;
+				font-weight: 700 !important;
+			}
+
+			thead .gpui::before {
+				position: absolute;
+				top: -1px;
+				left: 0;
+				width: 100%;
+				height: 4px;
+				background: var(--blue-bright);
+				content: "";
+				transform-origin: left;
+			}
+
+			.value {
+				display: inline-block;
+				font-variant-numeric: tabular-nums;
+				white-space: nowrap;
+			}
+
+			.footnote {
+				margin-top: 13px;
+				color: var(--muted);
+				font-size: 10.5px;
+				letter-spacing: 0.02px;
+				white-space: nowrap;
+			}
+
+			.replay {
+				position: fixed;
+				right: 18px;
+				bottom: 18px;
+				z-index: 10;
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				height: 36px;
+				padding: 0 14px;
+				border: 1px solid rgb(23 25 31 / 10%);
+				border-radius: 999px;
+				background: rgb(255 255 255 / 90%);
+				box-shadow: 0 8px 30px rgb(27 42 72 / 12%);
+				color: #394258;
+				cursor: pointer;
+				font: 600 12px/1 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+					sans-serif;
+				opacity: 0.72;
+				transition:
+					opacity 160ms ease,
+					transform 160ms ease,
+					background 160ms ease;
+				backdrop-filter: blur(12px);
+			}
+
+			.replay:hover {
+				background: #ffffff;
+				opacity: 1;
+				transform: translateY(-1px);
+			}
+
+			.replay:focus-visible {
+				outline: 3px solid rgb(71 133 255 / 35%);
+				outline-offset: 3px;
+			}
+
+			.replay svg {
+				width: 14px;
+				height: 14px;
+			}
+
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip: rect(0, 0, 0, 0);
+				white-space: nowrap;
+				border: 0;
+			}
+
+			.js .brand,
+			.js .title-block,
+			.js .facts,
+			.js .table-wrap,
+			.js .footnote {
+				opacity: 0;
+			}
+
+			.js .gpui-wash {
+				transform: scaleY(0);
+			}
+
+			.js thead .gpui::before {
+				transform: scaleX(0);
+			}
+
+			.js .gpui .value,
+			.js thead .gpui {
+				opacity: 0;
+			}
+
+			.stage.running .brand {
+				animation: enter-left 520ms 100ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			}
+
+			.stage.running .title-block {
+				animation: enter-up 560ms 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			}
+
+			.stage.running .facts {
+				animation: enter-up 540ms 660ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			}
+
+			.stage.running .table-wrap {
+				animation: table-enter 620ms 980ms cubic-bezier(0.2, 0.8, 0.2, 1)
+					both;
+			}
+
+			.stage.running tbody tr {
+				animation: row-enter 460ms
+					calc(1320ms + var(--row) * 92ms)
+					cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			}
+
+			.stage.running .gpui-wash {
+				animation: column-scan 1080ms 2420ms cubic-bezier(0.65, 0, 0.2, 1)
+					both;
+			}
+
+			.stage.running .gpui-wash::after {
+				animation: sheen 900ms 2500ms ease-out both;
+			}
+
+			.stage.running thead .gpui {
+				animation: metric-pop 500ms 2640ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running thead .gpui::before {
+				animation: accent-line 640ms 2770ms cubic-bezier(0.2, 0.8, 0.2, 1)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(1) .gpui .value {
+				animation: metric-pop 500ms 2830ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(2) .gpui .value {
+				animation: metric-pop 500ms 2950ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(3) .gpui .value {
+				animation: metric-pop 500ms 3070ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(4) .gpui .value {
+				animation: metric-pop 500ms 3190ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(5) .gpui .value {
+				animation: metric-pop 500ms 3310ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(6) .gpui .value {
+				animation: metric-pop 500ms 3430ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(7) .gpui .value {
+				animation: metric-pop 500ms 3550ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(8) .gpui .value {
+				animation: metric-pop 500ms 3670ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running tbody tr:nth-child(9) .gpui .value {
+				animation: metric-pop 500ms 3790ms cubic-bezier(0.18, 0.9, 0.22, 1.35)
+					both;
+			}
+
+			.stage.running .footnote {
+				animation: enter-up 520ms 4150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			}
+
+			@keyframes enter-left {
+				from {
+					opacity: 0;
+					transform: translateX(-18px);
+				}
+				to {
+					opacity: 1;
+					transform: translateX(0);
+				}
+			}
+
+			@keyframes enter-up {
+				from {
+					opacity: 0;
+					transform: translateY(12px);
+				}
+				to {
+					opacity: 1;
+					transform: translateY(0);
+				}
+			}
+
+			@keyframes table-enter {
+				from {
+					opacity: 0;
+					transform: translateY(12px) scale(0.995);
+				}
+				to {
+					opacity: 1;
+					transform: translateY(0) scale(1);
+				}
+			}
+
+			@keyframes row-enter {
+				from {
+					opacity: 0;
+					transform: translateX(-10px);
+				}
+				to {
+					opacity: 1;
+					transform: translateX(0);
+				}
+			}
+
+			@keyframes column-scan {
+				0% {
+					opacity: 0;
+					transform: scaleY(0);
+				}
+				10% {
+					opacity: 1;
+				}
+				100% {
+					opacity: 1;
+					transform: scaleY(1);
+				}
+			}
+
+			@keyframes sheen {
+				from {
+					opacity: 0;
+					transform: translateY(-660px);
+				}
+				35% {
+					opacity: 1;
+				}
+				to {
+					opacity: 0;
+					transform: translateY(100%);
+				}
+			}
+
+			@keyframes metric-pop {
+				from {
+					opacity: 0;
+					transform: translateY(7px) scale(0.94);
+				}
+				to {
+					opacity: 1;
+					transform: translateY(0) scale(1);
+				}
+			}
+
+			@keyframes accent-line {
+				from {
+					transform: scaleX(0);
+				}
+				to {
+					transform: scaleX(1);
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				*,
+				*::before,
+				*::after {
+					animation-duration: 1ms !important;
+					animation-delay: 0ms !important;
+					scroll-behavior: auto !important;
+					transition-duration: 1ms !important;
+				}
+
+				.replay {
+					display: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div class="frame" id="frame">
+			<div class="stage" id="stage">
+				<main>
+					<div class="brand">
+						<svg
+							class="brand-logo"
+							viewBox="0 0 103 40"
+							fill="none"
+							role="img"
+							aria-label="Cap"
+						>
+							<rect
+								x="0.25"
+								y="0.25"
+								width="39.5"
+								height="39.5"
+								rx="7.75"
+								fill="white"
+							/>
+							<rect
+								x="0.25"
+								y="0.25"
+								width="39.5"
+								height="39.5"
+								rx="7.75"
+								stroke="#E7EAF0"
+								stroke-width="0.5"
+							/>
+							<path
+								d="M20 36C28.8365 36 36 28.8365 36 20C36 11.1635 28.8365 4 20 4C11.1635 4 4 11.1635 4 20C4 28.8365 11.1635 36 20 36Z"
+								fill="#4785FF"
+							/>
+							<path
+								d="M20.0001 33C27.1797 33 33 27.1797 33 20.0001C33 12.8203 27.1797 7 20.0001 7C12.8203 7 7 12.8204 7 20.0001C7 27.1797 12.8204 33 20.0001 33Z"
+								fill="#ADC9FF"
+							/>
+							<path
+								d="M20.0001 30.0002C25.5229 30.0002 30.0002 25.5229 30.0002 20.0001C30.0002 14.4773 25.5229 10.0002 20.0001 10.0002C14.4773 10.0002 10.0002 14.4773 10.0002 20.0001C10.0002 25.5229 14.4773 30.0002 20.0001 30.0002Z"
+								fill="white"
+							/>
+							<path
+								d="M58.416 30.448C53.012 30.448 49.204 26.584 49.204 20.088C49.204 13.704 52.872 9.672 58.472 9.672C63.54 9.672 66.256 12.332 67.096 16.84L63.288 17.036C62.812 14.432 61.216 12.836 58.472 12.836C55.084 12.836 52.984 15.664 52.984 20.088C52.984 24.568 55.14 27.284 58.444 27.284C61.384 27.284 62.952 25.576 63.4 22.72L67.208 22.916C66.424 27.592 63.456 30.448 58.416 30.448ZM74.6451 30.336C71.5091 30.336 69.4371 28.852 69.4371 26.248C69.4371 23.672 71.0331 22.3 74.3091 21.656L79.2651 20.676C79.2651 18.576 78.2851 17.484 76.4091 17.484C74.6451 17.484 73.6931 18.296 73.3571 19.808L69.6891 19.64C70.2771 16.504 72.6851 14.712 76.4091 14.712C80.6651 14.712 82.8491 16.952 82.8491 20.928V26.36C82.8491 27.172 83.1291 27.396 83.6891 27.396H84.1651V30C83.9411 30.056 83.3531 30.112 82.8771 30.112C81.2531 30.112 80.0491 29.524 79.7411 27.676C79.0131 29.272 77.1091 30.336 74.6451 30.336ZM75.3731 27.732C77.7531 27.732 79.2651 26.22 79.2651 23.952V23.112L75.4011 23.896C73.8051 24.204 73.1611 24.876 73.1611 25.912C73.1611 27.088 73.9451 27.732 75.3731 27.732ZM86.8741 34.2V15.048H90.3181L90.3741 17.26C91.2421 15.608 92.8941 14.712 94.8541 14.712C99.1101 14.712 101.21 18.212 101.21 22.524C101.21 26.836 99.0821 30.336 94.8261 30.336C92.9221 30.336 91.2701 29.412 90.4581 27.956V34.2H86.8741ZM93.9861 27.424C96.1701 27.424 97.4861 25.604 97.4861 22.524C97.4861 19.444 96.1701 17.624 93.9861 17.624C91.8021 17.624 90.4581 19.276 90.4581 22.524C90.4581 25.772 91.7741 27.424 93.9861 27.424Z"
+								fill="#12161F"
+							/>
+						</svg>
+					</div>
+
+					<div class="title-block">
+						<h1>Desktop performance benchmark</h1>
+						<p class="subtitle">Current Tauri release vs Electron vs GPUI</p>
+					</div>
+
+					<div class="facts">
+						<p>
+							<strong>Benchmark hardware</strong>
+							Mac16,6 · Apple M4 Max · 16 logical CPUs · 128 GB RAM · macOS
+							26.2
+						</p>
+						<p>
+							<strong>Workload</strong>
+							29.95 sec 2560×1440 playback sampled for 15 sec · 20 sec Studio
+							recording of an animated 1280×720 window at 2560×1440, 60 fps,
+							without mic, camera or system audio · 29.95 sec export at
+							1920×1080, 60 fps, 1,797 frames, Social quality
+						</p>
+					</div>
+
+					<div class="table-wrap">
+						<div class="gpui-wash" aria-hidden="true"></div>
+						<table>
+							<caption class="sr-only">
+								Cap desktop performance results for Tauri, Electron, and GPUI
+							</caption>
+							<colgroup>
+								<col class="metric" />
+								<col class="result" />
+								<col class="result" />
+								<col class="result" />
+							</colgroup>
+							<thead>
+								<tr>
+									<th scope="col"></th>
+									<th scope="col">Tauri<span>Current</span></th>
+									<th scope="col">Electron</th>
+									<th scope="col" class="gpui">GPUI</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr style="--row: 0">
+									<th scope="row">Playback CPU</th>
+									<td>
+										<span class="value" data-value="76.6" data-decimals="1" data-suffix="%"
+											>76.6%</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="53.2" data-decimals="1" data-suffix="%"
+											>53.2%</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="17.5" data-decimals="1" data-suffix="%"
+											>17.5%</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 1">
+									<th scope="row">Playback memory</th>
+									<td>
+										<span class="value" data-value="3724" data-suffix=" MiB"
+											>3,724 MiB</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="1035" data-suffix=" MiB"
+											>1,035 MiB</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="440" data-suffix=" MiB"
+											>440 MiB</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 2">
+									<th scope="row">Playback frame rate</th>
+									<td>
+										<span class="value" data-value="56.4" data-decimals="1" data-suffix=" fps"
+											>56.4 fps</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="60" data-decimals="2" data-suffix=" fps"
+											>60.00 fps</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="59.98" data-decimals="2" data-suffix=" fps"
+											>59.98 fps</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 3">
+									<th scope="row">Recording CPU</th>
+									<td>
+										<span class="value" data-value="37.6" data-decimals="1" data-suffix="%"
+											>37.6%</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="31.7" data-decimals="1" data-suffix="%"
+											>31.7%</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="20.3" data-decimals="1" data-suffix="%"
+											>20.3%</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 4">
+									<th scope="row">Recording memory</th>
+									<td>
+										<span class="value" data-value="1983" data-suffix=" MiB"
+											>1,983 MiB</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="805" data-suffix=" MiB"
+											>805 MiB</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="256" data-suffix=" MiB"
+											>256 MiB</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 5">
+									<th scope="row">Captured frame rate</th>
+									<td>
+										<span class="value" data-value="59.61" data-decimals="2" data-suffix=" fps"
+											>59.61 fps</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="59.52" data-decimals="2" data-suffix=" fps"
+											>59.52 fps</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="59.93" data-decimals="2" data-suffix=" fps"
+											>59.93 fps</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 6">
+									<th scope="row">Export time</th>
+									<td>
+										<span class="value" data-value="8.32" data-decimals="2" data-suffix=" sec"
+											>8.32 sec</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="6.96" data-decimals="2" data-suffix=" sec"
+											>6.96 sec</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="6.95" data-decimals="2" data-suffix=" sec"
+											>6.95 sec</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 7">
+									<th scope="row">Export CPU</th>
+									<td>
+										<span class="value" data-value="38.1" data-decimals="1" data-suffix="%"
+											>38.1%</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="28.4" data-decimals="1" data-suffix="%"
+											>28.4%</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="27.4" data-decimals="1" data-suffix="%"
+											>27.4%</span
+										>
+									</td>
+								</tr>
+								<tr style="--row: 8">
+									<th scope="row">Packaged app size</th>
+									<td>
+										<span class="value" data-value="204" data-suffix=" MiB"
+											>204 MiB</span
+										>
+									</td>
+									<td>
+										<span class="value" data-value="410" data-suffix=" MiB"
+											>410 MiB</span
+										>
+									</td>
+									<td class="gpui">
+										<span class="value" data-value="162" data-suffix=" MiB"
+											>162 MiB</span
+										>
+									</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+
+					<p class="footnote">
+						Release builds · one warm-up + four trials · 100% CPU = one logical
+						core · memory = average summed RSS · export = shared Rust CLI · GPUI
+						bundle includes resources and native runtimes
+					</p>
+				</main>
+			</div>
+		</div>
+
+		<button class="replay" id="replay" type="button" aria-label="Replay animation">
+			<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+				<path
+					d="M13.25 5.25V1.75M13.25 1.75H9.75M13.25 1.75L10.9 4.1A5.5 5.5 0 1 0 13.35 9"
+					stroke="currentColor"
+					stroke-width="1.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				/>
+			</svg>
+			Replay
+		</button>
+
+		<script>
+			const canvasWidth = 1180;
+			const canvasHeight = 829;
+			const frame = document.getElementById("frame");
+			const stage = document.getElementById("stage");
+			const replayButton = document.getElementById("replay");
+			const values = [...document.querySelectorAll(".value[data-value]")];
+			const timers = new Set();
+			const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+			const loop = new URLSearchParams(window.location.search).get("loop") === "1";
+			let animationRun = 0;
+
+			function fitStage() {
+				const padding = window.innerWidth < 720 ? 12 : 36;
+				const availableWidth = Math.max(1, window.innerWidth - padding * 2);
+				const availableHeight = Math.max(1, window.innerHeight - padding * 2);
+				const scale = Math.min(
+					1,
+					availableWidth / canvasWidth,
+					availableHeight / canvasHeight,
+				);
+				frame.style.width = `${canvasWidth * scale}px`;
+				frame.style.height = `${canvasHeight * scale}px`;
+				stage.style.transform = `scale(${scale})`;
+			}
+
+			function formatValue(element, value) {
+				const decimals = Number(element.dataset.decimals ?? 0);
+				const suffix = element.dataset.suffix ?? "";
+				return `${value.toLocaleString("en-US", {
+					minimumFractionDigits: decimals,
+					maximumFractionDigits: decimals,
+				})}${suffix}`;
+			}
+
+			function showFinalValues() {
+				for (const element of values) {
+					element.textContent = formatValue(element, Number(element.dataset.value));
+				}
+			}
+
+			function resetValues() {
+				for (const element of values) {
+					element.textContent = formatValue(element, 0);
+				}
+			}
+
+			function animateValue(element, delay, run) {
+				const target = Number(element.dataset.value);
+				const duration = element.closest(".gpui") ? 760 : 620;
+				const timer = window.setTimeout(() => {
+					timers.delete(timer);
+					const startedAt = performance.now();
+
+					function tick(now) {
+						if (run !== animationRun) return;
+						const progress = Math.min(1, (now - startedAt) / duration);
+						const eased = 1 - (1 - progress) ** 3;
+						element.textContent = formatValue(element, target * eased);
+						if (progress < 1) {
+							requestAnimationFrame(tick);
+						}
+					}
+
+					requestAnimationFrame(tick);
+				}, delay);
+				timers.add(timer);
+			}
+
+			function stopTimers() {
+				for (const timer of timers) {
+					clearTimeout(timer);
+				}
+				timers.clear();
+			}
+
+			function play() {
+				animationRun += 1;
+				const run = animationRun;
+				stopTimers();
+				stage.classList.remove("running");
+
+				if (reduceMotion.matches) {
+					document.documentElement.classList.remove("js");
+					showFinalValues();
+					return;
+				}
+
+				document.documentElement.classList.add("js");
+				resetValues();
+				void stage.offsetWidth;
+				stage.classList.add("running");
+
+				for (const element of values) {
+					const row = element.closest("tr");
+					const rowIndex = row?.rowIndex ? row.rowIndex - 1 : 0;
+					const isGpui = element.closest("td")?.classList.contains("gpui");
+					const delay = isGpui
+						? 2760 + rowIndex * 120
+						: 1370 + rowIndex * 92;
+					animateValue(element, delay, run);
+				}
+
+				if (loop) {
+					const timer = window.setTimeout(play, 7200);
+					timers.add(timer);
+				}
+			}
+
+			replayButton.addEventListener("click", play);
+			window.addEventListener("resize", fitStage);
+			window.addEventListener("keydown", (event) => {
+				if (event.key.toLowerCase() === "r") {
+					play();
+				}
+			});
+			reduceMotion.addEventListener("change", play);
+
+			fitStage();
+			requestAnimationFrame(play);
+		</script>
+	</body>
+</html>
