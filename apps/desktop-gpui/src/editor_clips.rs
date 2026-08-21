@@ -14,9 +14,19 @@
 //!   copied into this bundle, the metas and the timeline extended, and the
 //!   editor reloaded -- `window.location.reload()`'s native spelling is
 //!   [`crate::app_windows::reload_editor`].
-//! * **"Record a new clip"** opens the modal 1:1, but the start actions are
-//!   disabled: `setEditorRecordingTarget` -- recording *into* an open editor
-//!   project -- has no backend in this app yet.
+//! * **"Record a new clip"** is the whole `setEditorRecordingTarget` flow,
+//!   natively: the modal's start actions arm the session's editor recording
+//!   target (`EditorRecordingTarget`, `src-tauri/src/windows.rs:3679-3697`)
+//!   and open the target-select overlays with the editor hidden for the
+//!   picker; the capture is forced into Studio mode; and when it stops
+//!   cleanly the session observer reveals this editor and hands it the
+//!   bundle, which lands through the same whole-segment-copy the import path
+//!   uses, followed by the recording directory's deletion and an editor
+//!   reload -- the `EditorRecordingAdded` listener (`Editor.tsx:312-335`),
+//!   transcribed. The Display/Window chevron menus list the same enumeration
+//!   the main window's pickers use, icon cards standing in for the live
+//!   thumbnails for the same capture-pipeline reason documented on
+//!   `MainWindow::render_target_grid`.
 
 use std::{
     cell::RefCell,
@@ -41,9 +51,13 @@ use gpui::{
 };
 
 use crate::{
+    app_windows,
+    devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     editor_edits::{self as edits, TrackSegmentOps},
     editor_timeline::clip_timeline_offsets,
     editor_window::EditorWindow,
+    main_window::{Mode, TargetType},
+    session::{Phase, RecordingSession},
     theme::Theme,
     ui,
 };
@@ -288,6 +302,16 @@ pub(crate) struct ClipDrag {
     active: bool,
 }
 
+/// Which of the record modal's device selects is unfolded --
+/// `CameraSelectBase` / `MicrophoneSelectBase`'s open dropdown
+/// (`ClipsSidebar.tsx:1084-1122`), drawn here as an in-modal list the way the
+/// chevron target menus are (a KSelect popover has no gpui counterpart).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecordDeviceMenu {
+    Camera,
+    Microphone,
+}
+
 /// Everything the clips layout mode owns. Lives on [`EditorWindow`] so the
 /// mode is hidden, not destroyed, while closed -- the Tauri sidebar stays
 /// mounted with `class="hidden"` (`Editor.tsx:739-746`).
@@ -296,6 +320,18 @@ pub(crate) struct ClipsState {
     pub(crate) open: bool,
     /// `recordOpen`.
     record_open: bool,
+    /// `displayMenuOpen` / `windowMenuOpen` (`:292-296`) -- which chevron
+    /// target menu the modal body is showing. Only `Display` and `Window`
+    /// ever land here.
+    record_target_menu: Option<TargetType>,
+    /// Which device select is unfolded.
+    record_device_menu: Option<RecordDeviceMenu>,
+    /// `targetSearch`, as the shared text-input entity (created on first use,
+    /// like the rename field -- it needs a window).
+    target_search_input: Option<Entity<ui::TextInputState>>,
+    /// `createDevicesQuery` (`:365`): enumerated when the modal opens, `None`
+    /// while the scan is in flight so the menus can say "Loading...".
+    record_devices: Option<DeviceSnapshot>,
     /// The import menu's anchor, while it is up. A native `Menu.popup()` in
     /// the Tauri app (`:541-556`); here the `ui::Menu` shape -- full-window
     /// backdrop, panel at the click position.
@@ -322,6 +358,10 @@ impl Default for ClipsState {
         Self {
             open: false,
             record_open: false,
+            record_target_menu: None,
+            record_device_menu: None,
+            target_search_input: None,
+            record_devices: None,
             import_menu: None,
             importing: false,
             editing: None,
@@ -406,18 +446,28 @@ impl EditorWindow {
     }
 
     /// `backToEditor` and the close half of the `createEffect(on(open))`
-    /// cleanup (`ClipsSidebar.tsx:278, 343-363`) -- the recording-target
-    /// resets in the source have no backend here. A live rename commits
-    /// first: hiding the DOM input blurs it, and blur commits.
+    /// cleanup (`ClipsSidebar.tsx:278, 343-363`), `resetRecordingTarget`
+    /// included: a target armed by the modal but never recorded is cleared so
+    /// it cannot redirect a later capture. Guarded on Idle -- mid-recording
+    /// the target belongs to the live capture and must survive (the Tauri
+    /// effect runs unguarded, but its editor window is hidden then, so the
+    /// guard only closes a hole rather than changing behaviour). A live
+    /// rename commits first: hiding the DOM input blurs it, and blur commits.
     pub(crate) fn close_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.editing.is_some() {
             self.commit_clip_rename(window, cx);
         }
         self.clips.open = false;
         self.clips.record_open = false;
+        self.clips.record_target_menu = None;
+        self.clips.record_device_menu = None;
         self.clips.import_menu = None;
         self.clips.drag = None;
         self.clips.drop_index = None;
+        let session = RecordingSession::global(cx);
+        if session.read(cx).phase == Phase::Idle {
+            session.update(cx, |session, _| session.set_editor_recording_target(None));
+        }
         cx.notify();
     }
 
@@ -430,7 +480,14 @@ impl EditorWindow {
             return true;
         }
         if self.clips.record_open {
-            self.clips.record_open = false;
+            // The modal's own Escape ladder (`ClipsSidebar.tsx:764-775`): an
+            // open target or device menu closes first, the modal second.
+            if self.clips.record_target_menu.is_some() || self.clips.record_device_menu.is_some() {
+                self.clips.record_target_menu = None;
+                self.clips.record_device_menu = None;
+            } else {
+                self.clips.record_open = false;
+            }
             cx.notify();
             return true;
         }
@@ -778,8 +835,7 @@ impl EditorWindow {
                             .full_width()
                             .on_click(cx.listener(
                                 |this, _, _window, cx| {
-                                    this.clips.record_open = true;
-                                    cx.notify();
+                                    this.open_record_modal(cx);
                                 },
                             )),
                         ),
@@ -1158,6 +1214,297 @@ impl EditorWindow {
             .into_any_element()
     }
 
+    // -- Record a new clip (`ClipsSidebar.tsx:434-501`, `Editor.tsx:312-335`) --
+
+    /// The action row's blue button: open the modal and refresh the device
+    /// enumeration behind it (`createDevicesQuery` is enabled by
+    /// `props.open && recordOpen()`, so the lists are re-read per opening).
+    fn open_record_modal(&mut self, cx: &mut Context<Self>) {
+        self.clips.record_open = true;
+        self.clips.record_target_menu = None;
+        self.clips.record_device_menu = None;
+        self.refresh_record_devices(cx);
+        cx.notify();
+    }
+
+    /// The enumeration hits AVFoundation and the window server, so it runs on
+    /// the background executor -- the `start_enumeration` rule from the main
+    /// window, which shares `DeviceSnapshot`.
+    fn refresh_record_devices(&mut self, cx: &mut Context<Self>) {
+        self.clips.record_devices = None;
+        cx.spawn(async move |this, cx| {
+            let snapshot = cx
+                .background_executor()
+                .spawn(async move { DeviceSnapshot::enumerate() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.clips.record_devices = Some(snapshot);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The chevron menus' search field, created on first use like the rename
+    /// input. Escape with text clears it (the source input's own
+    /// `onKeyDown`, `:1155-1161`); Escape empty falls back to closing the
+    /// menu, which is what bubbling to the window handler would do.
+    fn ensure_target_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.clips.target_search_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, input, event: &ui::TextInputEvent, _window, cx| match event {
+                ui::TextInputEvent::Changed => cx.notify(),
+                ui::TextInputEvent::Cancelled => {
+                    if input.read(cx).text().is_empty() {
+                        this.clips.record_target_menu = None;
+                        this.clips.record_device_menu = None;
+                    } else {
+                        input.update(cx, |input, cx| input.set_text("", cx));
+                    }
+                    cx.notify();
+                }
+                ui::TextInputEvent::Confirmed | ui::TextInputEvent::Blurred => {}
+            },
+        );
+        self.push_text_subscription(subscription);
+        self.clips.target_search_input = Some(input);
+    }
+
+    fn target_search_text(&self, cx: &Context<Self>) -> String {
+        self.clips
+            .target_search_input
+            .as_ref()
+            .map(|input| input.read(cx).text().trim().to_lowercase())
+            .unwrap_or_default()
+    }
+
+    /// Toggle a chevron target menu open (`:1029-1035, 1062-1068`), focusing
+    /// the search field the way the Tauri menu's `Input` autofocuses.
+    fn toggle_record_target_menu(
+        &mut self,
+        kind: TargetType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.clips.record_target_menu == Some(kind) {
+            self.clips.record_target_menu = None;
+        } else {
+            self.ensure_target_search_input(window, cx);
+            if let Some(input) = self.clips.target_search_input.clone() {
+                input.update(cx, |input, cx| {
+                    // `placeholder={... ? "Search windows" : "Search displays"}`
+                    // (`:1162-1166`).
+                    input.set_placeholder(if kind == TargetType::Window {
+                        "Search windows"
+                    } else {
+                        "Search displays"
+                    });
+                    input.set_text("", cx);
+                    input.focus_and_select_all(window, cx);
+                });
+            }
+            self.clips.record_target_menu = Some(kind);
+            self.clips.record_device_menu = None;
+        }
+        cx.notify();
+    }
+
+    /// `beginEditorRecording` (`ClipsSidebar.tsx:434-445`): close the modal,
+    /// stop playback, persist the live project config (the `setProjectConfig`
+    /// call -- the finish-time append merges into what is on disk), and arm
+    /// the session's editor recording target. Studio mode is forced app-side
+    /// (`begin_recording`), so the persisted recording-mode setting is left
+    /// alone -- the sidebar's `previousMode` save/restore dance nets out to
+    /// exactly that.
+    ///
+    /// Returns false without arming when a recording is already live: the
+    /// Tauri backend refuses the second start in `set_pending_recording`, and
+    /// refusing *before* the target write means the modal cannot re-point a
+    /// live recording's append at a different project.
+    fn begin_editor_recording(&mut self, cx: &mut Context<Self>) -> bool {
+        let session = RecordingSession::global(cx);
+        if session.read(cx).phase != Phase::Idle {
+            tracing::warn!("a recording is already live; not starting another from the editor");
+            return false;
+        }
+        self.clips.record_open = false;
+        self.clips.record_target_menu = None;
+        self.clips.record_device_menu = None;
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.pending_save().borrow_mut().flush();
+        if let Err(error) = self.project.write(&self.project_path) {
+            tracing::error!("failed to persist the project config before recording: {error}");
+        }
+        session.update(cx, |session, _| {
+            session.set_editor_recording_target(Some(self.project_path.clone()))
+        });
+        cx.notify();
+        true
+    }
+
+    /// `openTargetMode` (`:447-463`): arm the target, then the picker
+    /// overlays with the editor hidden behind them.
+    fn open_editor_target_mode(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        if !self.begin_editor_recording(cx) {
+            return;
+        }
+        if kind == TargetType::CameraOnly {
+            // `setOptions("captureSystemAudio", false)` (`:452-458`): a
+            // camera-only capture records no system audio, and the option is
+            // the shared one the main window owns.
+            let main = cx.global::<app_windows::AppWindows>().main;
+            cx.defer(move |cx: &mut gpui::App| {
+                main.update(cx, |view, _window, cx| view.set_system_audio(false, cx))
+                    .ok();
+            });
+        }
+        let project_path = self.project_path.clone();
+        let request = app_windows::OverlayRequest {
+            mode: kind,
+            recording_mode: Mode::Studio,
+            display: None,
+            pinned_window: None,
+        };
+        cx.defer(move |cx: &mut gpui::App| {
+            app_windows::open_editor_target_overlays(project_path, request, cx)
+        });
+    }
+
+    /// `selectDisplayTarget` (`:465-479`): the overlays narrowed to the
+    /// picked display, editor hidden.
+    fn select_record_display(&mut self, display: DisplayOption, cx: &mut Context<Self>) {
+        if !self.begin_editor_recording(cx) {
+            return;
+        }
+        let project_path = self.project_path.clone();
+        let request = app_windows::OverlayRequest {
+            mode: TargetType::Display,
+            recording_mode: Mode::Studio,
+            display: Some(display.id),
+            pinned_window: None,
+        };
+        cx.defer(move |cx: &mut gpui::App| {
+            app_windows::open_editor_target_overlays(project_path, request, cx)
+        });
+    }
+
+    /// `selectWindowTarget` (`:481-501`): the overlays pinned to the picked
+    /// window. The source's trailing `commands.focusWindow(target.id)` has no
+    /// counterpart -- the app's own window-dropdown flow pins without
+    /// focusing, and the overlay highlight carries the selection either way.
+    fn select_record_window(&mut self, target: WindowOption, cx: &mut Context<Self>) {
+        if !self.begin_editor_recording(cx) {
+            return;
+        }
+        let project_path = self.project_path.clone();
+        let request = app_windows::OverlayRequest {
+            mode: TargetType::Window,
+            recording_mode: Mode::Studio,
+            display: None,
+            pinned_window: Some(target.id),
+        };
+        cx.defer(move |cx: &mut gpui::App| {
+            app_windows::open_editor_target_overlays(project_path, request, cx)
+        });
+    }
+
+    /// The picker was cancelled while this editor was hidden for it
+    /// (`rawOptions.targetMode == null && hiddenForPicker`,
+    /// `ClipsSidebar.tsx:413-426`): the reveal and the target clear happen in
+    /// `app_windows::dismiss_target_overlays`; this is the modal-state half
+    /// (`restoreMode(); closeRecord()`).
+    pub(crate) fn editor_picker_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.clips.record_open = false;
+        self.clips.record_target_menu = None;
+        self.clips.record_device_menu = None;
+        cx.notify();
+    }
+
+    /// `appendRecordedClip` (`Editor.tsx:319-335`), driven by the session
+    /// observer where the Tauri app has the `EditorRecordingAdded` event:
+    /// stop playback, persist the live config, append the finished bundle
+    /// through the same whole-segment-copy the import path uses, delete the
+    /// recording directory (best-effort, the `.catch(() => {})`), and reload
+    /// the editor. On failure the recording directory is left alone -- it
+    /// stays a standalone library project, exactly what an errored append
+    /// leaves behind over there.
+    pub(crate) fn append_recorded_clip(
+        &mut self,
+        recording_dir: PathBuf,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.clips.importing {
+            // A concurrent import owns the bundle merge; the capture stays in
+            // the library and can be pulled in through "Existing recording".
+            tracing::warn!(
+                recording = %recording_dir.display(),
+                "an import is already running; leaving the recording in the library"
+            );
+            return;
+        }
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.pending_save().borrow_mut().flush();
+        if let Err(error) = self.project.write(&self.project_path) {
+            tracing::error!("failed to persist the project config before append: {error}");
+        }
+        self.clips.importing = true;
+        cx.notify();
+
+        let target = self.project_path.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn({
+                    let target = target.clone();
+                    let recording_dir = recording_dir.clone();
+                    async move {
+                        let count = append_cap_project_to_editor(&target, &recording_dir)?;
+                        if let Err(error) =
+                            crate::recording::delete_recording_directory(&recording_dir)
+                        {
+                            tracing::warn!(
+                                recording = %recording_dir.display(),
+                                "could not delete the appended recording: {error}"
+                            );
+                        }
+                        Ok::<usize, String>(count)
+                    }
+                })
+                .await;
+            match result {
+                Ok(count) => {
+                    tracing::info!(
+                        count,
+                        path = %target.display(),
+                        "recorded clip appended to the editor project"
+                    );
+                    cx.update(|cx| crate::app_windows::reload_editor(&target, cx));
+                }
+                Err(error) => {
+                    tracing::error!("failed to add the recorded clip: {error}");
+                    this.update(cx, |this, cx| {
+                        this.clips.importing = false;
+                        cx.notify();
+                    })
+                    .ok();
+                    show_append_error(&error);
+                }
+            }
+        })
+        .detach();
+    }
+
     // -- Overlays: import menu, record modal, drag ghost -----------------------
 
     pub(crate) fn render_clips_overlays(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1301,101 +1648,26 @@ impl EditorWindow {
         )
     }
 
-    /// The record modal (`:969-1222`), chrome 1:1. The pickers are drawn
-    /// disabled: starting a recording that lands back in this project is
-    /// `setEditorRecordingTarget`, which has no backend in this app yet.
+    /// The record modal (`:969-1222`), chrome 1:1 and live: the four target
+    /// actions arm the session's editor recording target and open the picker
+    /// overlays, the chevron menus unfold the concrete display/window lists,
+    /// and the device selects read and write the shared recording options on
+    /// the main window (the gpui home of `rawOptions`).
     fn render_clips_record_modal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.clips.record_open {
             return None;
         }
         let theme = self.theme;
 
-        // `TargetTypeButton` (`new-main/TargetTypeButton.tsx:28-48`), the
-        // name-only variant: `flex flex-col items-center gap-1 rounded-lg
-        // border py-2 justify-end`, icon `size-5 text-gray-10`, text-xs.
-        let target_button = |icon: &'static str, name: &'static str, bordered: bool| {
-            div()
-                .flex()
-                .flex_1()
-                .flex_col()
-                .items_center()
-                .justify_end()
-                .gap(px(4.))
-                .py(px(8.))
-                .when(bordered, |this| {
-                    this.rounded(px(8.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.gray_6))
-                        .bg(Hsla::from(theme.gray_2))
-                })
-                .text_color(Hsla::from(theme.gray_12))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(20.))
-                        .flex_shrink_0()
-                        .text_color(Hsla::from(theme.gray_10)),
-                )
-                .child(div().text_size(px(12.)).child(name))
-        };
-
-        // The Display/Window split buttons (`:1006-1072`): a shared
-        // `rounded-lg border border-gray-5 bg-gray-3` shell around the type
-        // button and a `border-l border-gray-6` chevron.
-        let split_target = |icon: &'static str, name: &'static str| {
-            div()
-                .flex()
-                .flex_1()
-                .overflow_hidden()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(Hsla::from(theme.gray_5))
-                .bg(Hsla::from(theme.gray_3))
-                .child(target_button(icon, name, false))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .px(px(8.))
-                        .border_l_1()
-                        .border_color(Hsla::from(theme.gray_6))
-                        .child(
-                            svg()
-                                .path("icons/chevron-down.svg")
-                                .size(px(14.))
-                                .text_color(Hsla::from(theme.gray_10)),
-                        ),
-                )
-        };
-
-        // `CameraSelectBase` / `MicrophoneSelectBase`'s shell (`:1106,
-        // 1119`): `h-[42px] rounded-lg border border-gray-5 bg-gray-3 px-2
-        // gap-2`, at the source's `disabled:opacity-70 disabled:text-gray-11`.
-        let select_row = |icon: &'static str, label: &'static str| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.))
-                .px(px(8.))
-                .w_full()
-                .h(px(42.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(Hsla::from(theme.gray_5))
-                .bg(Hsla::from(theme.gray_3))
-                .opacity(0.7)
-                .text_size(px(13.))
-                .text_color(Hsla::from(theme.gray_11))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .text_color(Hsla::from(theme.gray_10)),
-                )
-                .child(label)
+        // `activeTargetMenu()` swaps the whole body (`:1001-1217`); the
+        // device selects reuse the same swap where the Tauri KSelect floats a
+        // popover, which has no gpui counterpart here.
+        let body: AnyElement = if let Some(kind) = self.clips.record_target_menu {
+            self.render_record_target_menu(kind, cx).into_any_element()
+        } else if let Some(menu) = self.clips.record_device_menu {
+            self.render_record_device_menu(menu, cx).into_any_element()
+        } else {
+            self.render_record_modal_home(cx).into_any_element()
         };
 
         Some(
@@ -1510,7 +1782,8 @@ impl EditorWindow {
                                         })),
                                 ),
                         )
-                        // The body (`:1000-1124`), disabled wholesale.
+                        // The body container (`:1000`): `flex flex-col flex-1
+                        // p-5 min-h-0`.
                         .child(
                             div()
                                 .flex()
@@ -1518,67 +1791,709 @@ impl EditorWindow {
                                 .flex_1()
                                 .p(px(20.))
                                 .min_h_0()
-                                .gap(px(16.))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(8.))
-                                        .w_full()
-                                        .opacity(0.6)
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .gap(px(8.))
-                                                .w_full()
-                                                .child(split_target("icons/monitor.svg", "Display"))
-                                                .child(split_target(
-                                                    "icons/app-window-mac.svg",
-                                                    "Window",
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_row()
-                                                .gap(px(8.))
-                                                .w_full()
-                                                .child(target_button(
-                                                    "icons/area.svg",
-                                                    "Area",
-                                                    true,
-                                                ))
-                                                .child(target_button(
-                                                    "icons/video.svg",
-                                                    "Camera Only",
-                                                    true,
-                                                )),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(8.))
-                                        .child(select_row("icons/camera.svg", "No Camera"))
-                                        .child(select_row("icons/microphone.svg", "No Microphone"))
-                                        .child(select_row("icons/volume-2.svg", "System Audio")),
-                                )
-                                .child(
-                                    div()
-                                        .mt_auto()
-                                        .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_10))
-                                        .child(
-                                            "Recording into an open project isn't wired up \
-                                             in the native editor yet.",
-                                        ),
-                                ),
+                                .child(body),
                         ),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The modal's home body (`:1004-1125`): the target grid over the device
+    /// selects.
+    fn render_record_modal_home(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (camera, microphone, system_audio) = record_input_snapshot(cx);
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .w_full()
+                            .child(self.record_split_target(
+                                "clips-record-display",
+                                "icons/monitor.svg",
+                                "Display",
+                                TargetType::Display,
+                                cx,
+                            ))
+                            .child(self.record_split_target(
+                                "clips-record-window",
+                                "icons/app-window-mac.svg",
+                                "Window",
+                                TargetType::Window,
+                                cx,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .w_full()
+                            .child(self.record_type_button(
+                                "clips-record-area",
+                                "icons/area.svg",
+                                "Area",
+                                TargetType::Area,
+                                true,
+                                cx,
+                            ))
+                            .child(self.record_type_button(
+                                "clips-record-camera-only",
+                                "icons/video.svg",
+                                "Camera Only",
+                                TargetType::CameraOnly,
+                                true,
+                                cx,
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(self.record_select_row(
+                        "clips-record-camera",
+                        "icons/camera.svg",
+                        camera.unwrap_or_else(|| "No Camera".to_string()),
+                        true,
+                        cx.listener(|this, _, _window, cx| {
+                            this.clips.record_device_menu = Some(RecordDeviceMenu::Camera);
+                            this.clips.record_target_menu = None;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(self.record_select_row(
+                        "clips-record-mic",
+                        "icons/microphone.svg",
+                        microphone.unwrap_or_else(|| "No Microphone".to_string()),
+                        true,
+                        cx.listener(|this, _, _window, cx| {
+                            this.clips.record_device_menu = Some(RecordDeviceMenu::Microphone);
+                            this.clips.record_target_menu = None;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(self.record_select_row(
+                        "clips-record-system-audio",
+                        "icons/volume-2.svg",
+                        if system_audio {
+                            "Record System Audio".to_string()
+                        } else {
+                            "No System Audio".to_string()
+                        },
+                        false,
+                        cx.listener(|_this, _, _window, cx| {
+                            // A plain toggle, like the main window's own
+                            // system-audio row -- on the shared option, so it
+                            // goes through that window's entity, deferred.
+                            let main = cx.global::<app_windows::AppWindows>().main;
+                            cx.defer(move |cx: &mut gpui::App| {
+                                main.update(cx, |view, _window, cx| {
+                                    let next = !view.system_audio_enabled();
+                                    view.set_system_audio(next, cx);
+                                })
+                                .ok();
+                            });
+                            cx.notify();
+                        }),
+                    )),
+            )
+    }
+
+    /// `TargetTypeButton` (`new-main/TargetTypeButton.tsx:28-48`), the
+    /// name-only variant: `flex flex-col items-center gap-1 rounded-lg
+    /// border py-2 justify-end`, icon `size-5 text-gray-10`, text-xs.
+    fn record_type_button(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        name: &'static str,
+        kind: TargetType,
+        bordered: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .flex_1()
+            .flex_col()
+            .items_center()
+            .justify_end()
+            .gap(px(4.))
+            .py(px(8.))
+            .when(bordered, |this| {
+                this.rounded(px(8.))
+                    .border_1()
+                    .border_color(Hsla::from(theme.gray_6))
+                    .bg(Hsla::from(theme.gray_2))
+            })
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
+            .text_color(Hsla::from(theme.gray_12))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(20.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(theme.gray_10)),
+            )
+            .child(div().text_size(px(12.)).child(name))
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.open_editor_target_mode(kind, cx);
+            }))
+    }
+
+    /// The Display/Window split buttons (`:1006-1072`): a shared `rounded-lg
+    /// border border-gray-5 bg-gray-3` shell -- the type half opens the
+    /// picker across every display, the `border-l border-gray-6` chevron
+    /// unfolds the concrete list.
+    fn record_split_target(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        name: &'static str,
+        kind: TargetType,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        div()
+            .flex()
+            .flex_1()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(Hsla::from(theme.gray_5))
+            .bg(Hsla::from(theme.gray_3))
+            .child(self.record_type_button(id, icon, name, kind, false, cx))
+            .child(
+                div()
+                    .id(SharedString::from(format!("{id}-menu")))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(8.))
+                    .border_l_1()
+                    .border_color(Hsla::from(theme.gray_6))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |style| style.bg(Hsla::from(theme.gray_5)))
+                    .child(
+                        svg()
+                            .path("icons/chevron-down.svg")
+                            .size(px(14.))
+                            .text_color(Hsla::from(theme.gray_10)),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_record_target_menu(kind, window, cx);
+                    })),
+            )
+    }
+
+    /// `CameraSelectBase` / `MicrophoneSelectBase`'s shell (`:1106, 1119`):
+    /// `h-[42px] rounded-lg border border-gray-5 bg-gray-3 px-2 gap-2`, live.
+    /// `chevron` marks the two pickers; the system-audio toggle goes without.
+    fn record_select_row(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        label: String,
+        chevron: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .w_full()
+            .h(px(42.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(Hsla::from(theme.gray_5))
+            .bg(Hsla::from(theme.gray_3))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
+            .text_size(px(13.))
+            .text_color(Hsla::from(theme.gray_12))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(theme.gray_10)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .when(chevron, |this| {
+                this.child(
+                    svg()
+                        .path("icons/chevron-down.svg")
+                        .size(px(12.))
+                        .flex_shrink_0()
+                        .text_color(Hsla::from(theme.gray_10)),
+                )
+            })
+            .on_click(on_click)
+    }
+
+    /// The back row shared by the unfolded menus (`:1129-1145`).
+    fn record_menu_back(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        div()
+            .id("clips-record-menu-back")
+            .flex()
+            .flex_none()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .h(px(36.))
+            .px(px(8.))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .text_color(Hsla::from(theme.gray_11))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
+            .child(
+                svg()
+                    .path("icons/move-left.svg")
+                    .size(px(12.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(theme.gray_11)),
+            )
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.gray_12))
+                    .child("Back"),
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.clips.record_target_menu = None;
+                this.clips.record_device_menu = None;
+                cx.notify();
+            }))
+    }
+
+    /// A chevron menu's body (`:1128-1216`): back, search, and the concrete
+    /// targets -- `TargetMenuGrid` as two columns of cards, with the icon
+    /// block standing in for the live thumbnail for the capture-pipeline
+    /// reason `MainWindow::render_target_grid` documents.
+    fn render_record_target_menu(&self, kind: TargetType, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let query = self.target_search_text(cx);
+        let matches = |value: &str| query.is_empty() || value.to_lowercase().contains(&query);
+
+        let loading = self.clips.record_devices.is_none();
+        let mut cards: Vec<AnyElement> = Vec::new();
+        if let Some(devices) = &self.clips.record_devices {
+            match kind {
+                TargetType::Display => {
+                    for display in devices
+                        .displays
+                        .iter()
+                        .filter(|display| matches(&display.label))
+                    {
+                        let chosen = display.clone();
+                        cards.push(
+                            self.record_target_card(
+                                SharedString::from(format!("record-display-{}", display.id)),
+                                "icons/monitor.svg",
+                                display.label.clone(),
+                                None,
+                                display.describe_refresh_rate(),
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.select_record_display(chosen.clone(), cx);
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                }
+                TargetType::Window => {
+                    for target in devices
+                        .windows
+                        .iter()
+                        .filter(|window| matches(&window.label) || matches(&window.app))
+                    {
+                        let chosen = target.clone();
+                        cards.push(
+                            self.record_target_card(
+                                SharedString::from(format!("record-window-{}", target.id)),
+                                "icons/app-window-mac.svg",
+                                target.label.clone(),
+                                Some(target.app.clone()),
+                                target.describe_metadata(),
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.select_record_window(chosen.clone(), cx);
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                }
+                TargetType::Area | TargetType::CameraOnly => {}
+            }
+        }
+
+        let empty_message = |theme: &Theme, message: &'static str| {
+            div()
+                .py(px(24.))
+                .w_full()
+                .text_size(px(13.))
+                .text_color(Hsla::from(theme.gray_11))
+                .child(message)
+        };
+
+        let content: AnyElement = if loading {
+            empty_message(&theme, "Loading...").into_any_element()
+        } else if cards.is_empty() {
+            empty_message(
+                &theme,
+                match (kind, query.is_empty()) {
+                    (TargetType::Display, true) => "No displays found",
+                    (TargetType::Display, false) => "No matching displays",
+                    (_, true) => "No windows found",
+                    (_, false) => "No matching windows",
+                },
+            )
+            .into_any_element()
+        } else {
+            // Two columns as rows of two, the `render_target_grid` layout; a
+            // lone trailing card keeps half width.
+            let mut grid = div().flex().flex_col().gap(px(8.)).w_full();
+            let mut cards = cards.into_iter();
+            while let Some(first) = cards.next() {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .w_full()
+                    .items_stretch()
+                    .child(first);
+                row = match cards.next() {
+                    Some(second) => row.child(second),
+                    None => row.child(div().flex_1()),
+                };
+                grid = grid.child(row);
+            }
+            grid.into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(12.))
+                    .min_h(px(36.))
+                    .child(self.record_menu_back(cx))
+                    .children(self.clips.target_search_input.as_ref().map(|input| {
+                        div().flex_1().min_w_0().child(
+                            ui::TextInput::plain(&theme, "clips-record-target-search", input)
+                                .height(px(36.))
+                                .text_size(px(13.))
+                                .padding_x(px(8.))
+                                .radius(px(6.))
+                                .bg(Hsla::from(theme.gray_3))
+                                .border(Hsla::from(theme.gray_5))
+                                .flex(true),
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .id("clips-record-menu-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .pt(px(16.))
+                    .overflow_y_scroll()
+                    .child(content),
+            )
+    }
+
+    /// `TargetCard`, icon-fallback form.
+    #[allow(clippy::too_many_arguments)]
+    fn record_target_card(
+        &self,
+        id: SharedString,
+        icon: &'static str,
+        label: String,
+        subtitle: Option<String>,
+        metadata: Option<String>,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .bg(theme.body_fill(3))
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w_full()
+                    .h(px(76.))
+                    .bg(theme.body_fill(4))
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size(px(24.))
+                            .text_color(Hsla::from(theme.gray_9)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_w_0()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(theme.gray_12))
+                            .child(label),
+                    )
+                    .children(subtitle.map(|subtitle| {
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(Hsla::from(theme.gray_11))
+                            .child(subtitle)
+                    }))
+                    .children(metadata.map(|metadata| {
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(Hsla::from(theme.gray_10))
+                            .child(metadata)
+                    })),
+            )
+            .hover(move |style| style.bg(theme.body_hover_fill(4)))
+            .on_click(on_click)
+    }
+
+    /// A device select unfolded (`:1084-1122`): the "none" row first --
+    /// turning the device off is not a search result -- then the enumerated
+    /// options, exactly the main window panel's ordering. The selection
+    /// lands on the shared options through the same setters that window's
+    /// own rows use, deferred because it is another window's entity.
+    fn render_record_device_menu(
+        &self,
+        menu: RecordDeviceMenu,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        let (camera, microphone, _) = record_input_snapshot(cx);
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+
+        let none_selected = match menu {
+            RecordDeviceMenu::Camera => camera.is_none(),
+            RecordDeviceMenu::Microphone => microphone.is_none(),
+        };
+        rows.push(
+            self.record_device_row(
+                SharedString::from("clips-record-device-none"),
+                "icons/circle-x.svg",
+                match menu {
+                    RecordDeviceMenu::Camera => "No Camera",
+                    RecordDeviceMenu::Microphone => "No Microphone",
+                }
+                .to_string(),
+                none_selected,
+                cx.listener(move |this, _, _window, cx| match menu {
+                    RecordDeviceMenu::Camera => this.set_record_camera(None, cx),
+                    RecordDeviceMenu::Microphone => this.set_record_microphone(None, cx),
+                }),
+            )
+            .into_any_element(),
+        );
+
+        match &self.clips.record_devices {
+            None => rows.push(
+                div()
+                    .py(px(16.))
+                    .w_full()
+                    .text_size(px(13.))
+                    .text_color(Hsla::from(theme.gray_11))
+                    .child("Loading...")
+                    .into_any_element(),
+            ),
+            Some(devices) => match menu {
+                RecordDeviceMenu::Camera => {
+                    for option in &devices.cameras {
+                        let selected = camera.as_deref() == Some(option.label.as_str());
+                        let chosen = option.clone();
+                        rows.push(
+                            self.record_device_row(
+                                SharedString::from(format!(
+                                    "clips-record-camera-{}",
+                                    option.device_id
+                                )),
+                                "icons/camera.svg",
+                                option.label.clone(),
+                                selected,
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.set_record_camera(Some(chosen.clone()), cx);
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                }
+                RecordDeviceMenu::Microphone => {
+                    for option in &devices.microphones {
+                        let selected = microphone.as_deref() == Some(option.name.as_str());
+                        let chosen = option.clone();
+                        rows.push(
+                            self.record_device_row(
+                                SharedString::from(format!("clips-record-mic-{}", option.name)),
+                                "icons/microphone.svg",
+                                option.name.clone(),
+                                selected,
+                                cx.listener(move |this, _, _window, cx| {
+                                    this.set_record_microphone(Some(chosen.clone()), cx);
+                                }),
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                }
+            },
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .flex_row()
+                    .items_center()
+                    .min_h(px(36.))
+                    .child(self.record_menu_back(cx)),
+            )
+            .child(
+                div()
+                    .id("clips-record-device-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .pt(px(16.))
+                    .overflow_y_scroll()
+                    .child(div().flex().flex_col().gap(px(8.)).children(rows)),
+            )
+    }
+
+    /// One row of a device select.
+    fn record_device_row(
+        &self,
+        id: SharedString,
+        icon: &'static str,
+        label: String,
+        selected: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .w_full()
+            .h(px(42.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if selected {
+                Hsla::from(theme.blue_9)
+            } else {
+                Hsla::from(theme.gray_5)
+            })
+            .bg(Hsla::from(theme.gray_3))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
+            .text_size(px(13.))
+            .text_color(Hsla::from(theme.gray_12))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(Hsla::from(theme.gray_10)),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .on_click(on_click)
+    }
+
+    /// `createCameraMutation` from the modal (`:1089-1103`), routed through
+    /// the main window's setter (state plus the app-scoped feed, preview
+    /// bubble included). The `skipCameraWindow: isCameraOnly` refinement has
+    /// no seam here -- the bubble opens either way, as it does for every
+    /// other selection path in this app.
+    fn set_record_camera(&mut self, camera: Option<CameraOption>, cx: &mut Context<Self>) {
+        self.clips.record_device_menu = None;
+        let main = cx.global::<app_windows::AppWindows>().main;
+        cx.defer(move |cx: &mut gpui::App| {
+            main.update(cx, |view, _window, cx| {
+                view.set_camera_selection(camera, cx)
+            })
+            .ok();
+        });
+        cx.notify();
+    }
+
+    /// `setOptions("micName", ...) + commands.setMicInput` (`:1113-1116`).
+    fn set_record_microphone(
+        &mut self,
+        microphone: Option<MicrophoneOption>,
+        cx: &mut Context<Self>,
+    ) {
+        self.clips.record_device_menu = None;
+        let main = cx.global::<app_windows::AppWindows>().main;
+        cx.defer(move |cx: &mut gpui::App| {
+            main.update(cx, |view, _window, cx| {
+                view.set_microphone_selection(microphone, cx)
+            })
+            .ok();
+        });
+        cx.notify();
     }
 
     // -- Import (`ClipsSidebar.tsx:503-539`) -----------------------------------
@@ -1684,6 +2599,33 @@ fn show_import_error(message: &str) {
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
+}
+
+/// `toast.error(\`Failed to add clip: ...\`)` (`Editor.tsx:332-333`), same
+/// stand-in.
+fn show_append_error(message: &str) {
+    let _ = rfd::MessageDialog::new()
+        .set_title("Recording Error")
+        .set_description(format!("Failed to add clip: {message}"))
+        .set_level(rfd::MessageLevel::Error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+/// The shared recording options, read off the main window -- the gpui home of
+/// `rawOptions`: the selected camera's label, the microphone name, and the
+/// system-audio flag, in that order.
+fn record_input_snapshot(cx: &gpui::App) -> (Option<String>, Option<String>, bool) {
+    let main = cx.global::<app_windows::AppWindows>().main;
+    main.read(cx)
+        .map(|view| {
+            (
+                view.camera_selection().map(|camera| camera.label.clone()),
+                view.microphone_selection().map(|mic| mic.name.clone()),
+                view.system_audio_enabled(),
+            )
+        })
+        .unwrap_or((None, None, false))
 }
 
 // ---------------------------------------------------------------------------

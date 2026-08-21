@@ -724,6 +724,43 @@ pub fn recordings_dir() -> PathBuf {
     crate::store::app_data_dir().join("recordings")
 }
 
+/// `delete_recording_directory` (`src-tauri/src/lib.rs:4006-4051`), for the
+/// clip the editor-append flow just copied out of: reject `..` components,
+/// require the path to live inside the recordings library (canonically, so a
+/// symlink cannot escape it), then `remove_dir_all`. The Tauri command accepts
+/// every known storage folder; this app resolves exactly one
+/// ([`recordings_dir`]), so that one is the whole allow-list.
+pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Invalid path".to_string());
+    }
+
+    let recordings = recordings_dir();
+    if !path.starts_with(&recordings) {
+        return Err("Path is not inside the recordings directory".to_string());
+    }
+
+    if path.exists() {
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve recording path: {e}"))?;
+        let inside = recordings
+            .canonicalize()
+            .map(|dir| canonical.starts_with(&dir))
+            .unwrap_or(false);
+        if !inside {
+            return Err("Path is not inside the recordings directory".to_string());
+        }
+        std::fs::remove_dir_all(&canonical)
+            .map_err(|e| format!("Failed to delete recording: {e}"))?;
+    }
+
+    Ok(())
+}
+
 /// `format_project_name` with the default template
 /// (`{target_name} ({target_kind}) {date} {time}`), then the same `:` -> `.`
 /// replacement and uniquing the Tauri app applies.
@@ -871,6 +908,22 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    /// The delete guard refuses anything that could reach outside the
+    /// recordings library -- `..` components before any IO at all, and a path
+    /// that is not under the library root. (The happy path is exercised by
+    /// the editor-append flow; it depends on the user's configured library
+    /// location, which a unit test must not touch.)
+    #[test]
+    fn recording_delete_guards_the_library_root() {
+        assert!(delete_recording_directory(std::path::Path::new("/tmp/../etc")).is_err());
+        assert!(
+            delete_recording_directory(std::path::Path::new(
+                "/System/definitely-not-the-cap-library.cap"
+            ))
+            .is_err()
+        );
     }
 
     /// The spelling has to match `BackgroundBlurMode`'s serde exactly or the

@@ -1133,14 +1133,30 @@ impl MainWindow {
         if self.session.read(cx).phase != Phase::Idle {
             return;
         }
-        let Some(mode) = self.recording_mode() else {
-            return;
+        // An armed editor recording target forces Studio before this window's
+        // own mode is consulted -- the front half of the same rule
+        // `start_recording` applies (`src-tauri/src/recording.rs:1492-1494`),
+        // needed here because a Screenshot-mode pill maps to no recording
+        // mode at all and would otherwise bail out of an editor-flow start.
+        let editor_flow = self.session.read(cx).editor_recording_target().is_some();
+        let mode = if editor_flow {
+            recording::RecordingMode::Studio
+        } else {
+            match self.recording_mode() {
+                Some(mode) => mode,
+                None => return,
+            }
         };
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
             self.session.update(cx, |session, cx| {
                 session.error = Some("Camera-only recording requires a selected camera.".into());
                 cx.notify();
             });
+            if editor_flow {
+                // No session phase transition is coming; restore the hidden
+                // editor the way a cancelled picker would.
+                cx.defer(app_windows::abort_editor_recording_flow);
+            }
             return;
         }
 
@@ -1164,6 +1180,62 @@ impl MainWindow {
         };
 
         cx.defer(move |cx: &mut gpui::App| app_windows::begin_recording(config, cx));
+    }
+
+    // -- The editor record modal's device seams ------------------------------
+    //
+    // The Tauri editor modal reads and writes the *same* recording-options
+    // store the main window uses (`useRecordingOptions` + `createCameraMutation`
+    // + `setMicInput`, `ClipsSidebar.tsx:1084-1123`); in this app that store is
+    // this window's state, so the modal reaches it through these.
+
+    /// The camera the next recording will use, for whoever else renders it.
+    pub fn camera_selection(&self) -> Option<&CameraOption> {
+        self.camera.as_ref()
+    }
+
+    /// The microphone the next recording will use.
+    pub fn microphone_selection(&self) -> Option<&MicrophoneOption> {
+        self.microphone.as_ref()
+    }
+
+    /// Whether the next recording captures system audio.
+    pub fn system_audio_enabled(&self) -> bool {
+        self.system_audio
+    }
+
+    /// Select (or clear) the camera -- the same wiring as the camera panel's
+    /// rows: this window's state plus the app-scoped feed, which opens or
+    /// closes the preview bubble.
+    pub fn set_camera_selection(&mut self, camera: Option<CameraOption>, cx: &mut Context<Self>) {
+        let selection = camera.as_ref().map(|camera| feeds::SelectedCamera {
+            id: recording::DeviceOrModelID::DeviceID(camera.device_id.clone()),
+            label: camera.label.clone(),
+        });
+        self.camera = camera;
+        Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(selection, cx));
+        cx.notify();
+    }
+
+    /// Select (or clear) the microphone -- state plus the app-scoped feed, the
+    /// mic panel rows' wiring.
+    pub fn set_microphone_selection(
+        &mut self,
+        microphone: Option<MicrophoneOption>,
+        cx: &mut Context<Self>,
+    ) {
+        let label = microphone.as_ref().map(|mic| mic.name.clone());
+        self.microphone = microphone;
+        Feeds::global(cx).update(cx, |feeds, cx| feeds.set_microphone(label, cx));
+        cx.notify();
+    }
+
+    /// Toggle system audio capture -- the system-audio row is a plain flag.
+    pub fn set_system_audio(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.system_audio != enabled {
+            self.system_audio = enabled;
+            cx.notify();
+        }
     }
 }
 

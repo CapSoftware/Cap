@@ -40,6 +40,16 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
+    /// open editor project a "Record a new clip" capture must land back in.
+    /// Set by the editor's record modal (`setEditorRecordingTarget`,
+    /// `ClipsSidebar.tsx:444`), cleared when its picker is cancelled, and
+    /// *taken* -- never merely read -- by the phase observer when the session
+    /// comes back to rest, exactly the way `apply_post_studio_editor_behaviour`
+    /// and the stop-cleanup fallback both `take()` it
+    /// (`src-tauri/src/recording.rs:3231-3287`) so a stale target can never
+    /// leak into the next recording.
+    editor_recording_target: Option<std::path::PathBuf>,
     started_at: Option<Instant>,
     paused_accum: Duration,
     paused_since: Option<Instant>,
@@ -58,6 +68,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            editor_recording_target: None,
             started_at: None,
             paused_accum: Duration::ZERO,
             paused_since: None,
@@ -114,6 +125,25 @@ impl RecordingSession {
         self.mic_muted = !self.mic_muted;
         mute.store(self.mic_muted, std::sync::atomic::Ordering::Relaxed);
         cx.notify();
+    }
+
+    /// `set_editor_recording_target` (`src-tauri/src/lib.rs:3166-3172`):
+    /// arm (or disarm) the editor project the next studio recording appends
+    /// into. No phase guard here -- the guard lives at the call sites, the way
+    /// the Tauri command is a bare state write.
+    pub fn set_editor_recording_target(&mut self, target: Option<std::path::PathBuf>) {
+        self.editor_recording_target = target;
+    }
+
+    /// `EditorRecordingTarget::current`.
+    pub fn editor_recording_target(&self) -> Option<std::path::PathBuf> {
+        self.editor_recording_target.clone()
+    }
+
+    /// `EditorRecordingTarget::take` -- the consuming read both finish paths
+    /// use, so the target clears no matter how the recording ended.
+    pub fn take_editor_recording_target(&mut self) -> Option<std::path::PathBuf> {
+        self.editor_recording_target.take()
     }
 
     pub fn set_controls_open(&mut self, open: bool, cx: &mut Context<Self>) {
