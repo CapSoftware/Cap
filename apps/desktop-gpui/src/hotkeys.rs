@@ -268,13 +268,17 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
                 cx,
             );
         }
-        HotkeyAction::ScreenshotWindow => match scap_targets::Window::get_topmost_at_cursor() {
-            Some(window) => crate::screenshot::take_screenshot(
-                ScreenCaptureTarget::Window { id: window.id() },
-                cx,
-            ),
-            None => tracing::warn!("no window under the cursor to screenshot"),
-        },
+        // Falls through our own windows to the one beneath, like the picker
+        // list and the overlay hover (`devices::topmost_foreign_window_at_cursor`).
+        HotkeyAction::ScreenshotWindow => {
+            match crate::devices::topmost_foreign_window_at_cursor() {
+                Some(window) => crate::screenshot::take_screenshot(
+                    ScreenCaptureTarget::Window { id: window.id() },
+                    cx,
+                ),
+                None => tracing::warn!("no window under the cursor to screenshot"),
+            }
+        }
         HotkeyAction::ScreenshotArea => {
             // `set_mode(Screenshot)` + the area picker (`hotkeys.rs:311-323`):
             // the grab happens when the drawn area is released.

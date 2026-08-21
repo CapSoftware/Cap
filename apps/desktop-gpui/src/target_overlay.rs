@@ -218,7 +218,7 @@ impl TargetSelect {
                         let display = scap_targets::Display::get_containing_cursor()
                             .map(|display| display.id());
                         let window = want_window
-                            .then(scap_targets::Window::get_topmost_at_cursor)
+                            .then(crate::devices::topmost_foreign_window_at_cursor)
                             .flatten()
                             .as_ref()
                             .and_then(HoveredWindow::from_window);

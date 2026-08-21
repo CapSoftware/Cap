@@ -233,6 +233,38 @@ fn list_microphones() -> Vec<MicrophoneOption> {
     mics
 }
 
+/// `Window::get_topmost_at_cursor`, minus this process's own windows: the
+/// same level-≤5 filter and descending-level (stable, so front-to-back within
+/// a level) pick, transcribed from `scap-targets/src/platform/macos.rs`, with
+/// an owner-pid skip added. The overlay's hover highlight and the
+/// window-screenshot hotkey fall *through* a cap window to whatever sits
+/// beneath it -- the Tauri poll gets the same effect from
+/// `should_skip_window` (`target_select_overlay.rs:186-196`).
+#[cfg(target_os = "macos")]
+pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
+    let own_pid = std::process::id() as i32;
+    let mut candidates = Window::list_containing_cursor()
+        .into_iter()
+        .filter_map(|window| {
+            let level = window.raw_handle().level()?;
+            if level > 5 {
+                return None;
+            }
+            if window.raw_handle().owner_pid() == Some(own_pid) {
+                return None;
+            }
+            Some((window, level))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, level)| std::cmp::Reverse(*level));
+    candidates.into_iter().next().map(|(window, _)| window)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn topmost_foreign_window_at_cursor() -> Option<Window> {
+    Window::get_topmost_at_cursor()
+}
+
 pub fn list_displays() -> Vec<DisplayOption> {
     list_display_targets()
         .into_iter()
@@ -293,6 +325,19 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
             let app = window.owner_name()?;
 
             if app == "Window Server" {
+                return None;
+            }
+
+            // Our own windows never belong in the picker: the recording flow
+            // excludes them from the capture filter anyway
+            // (`app_windows::begin_recording`), so offering one as a target
+            // records a hole. Matched by owner pid rather than title or
+            // bundle id -- the dev binary is unbundled, and most of our
+            // windows carry no CG title at all. (The shared
+            // `screen_capture::list_windows` has no such filter; the Tauri
+            // main window only escapes it by being a level>0 panel.)
+            #[cfg(target_os = "macos")]
+            if window.raw_handle().owner_pid() == Some(std::process::id() as i32) {
                 return None;
             }
 
