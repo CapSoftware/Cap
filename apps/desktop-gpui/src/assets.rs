@@ -135,6 +135,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
+    // The onboarding permissions surface's header badge.
+    "shield.svg",
     "stop-circle.svg",
     "search.svg",
     "settings.svg",
@@ -332,6 +334,10 @@ mod tests {
         include_str!("screenshot_annotations.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
+        // The onboarding window's welcome cards and permissions surface; the
+        // per-permission row glyphs are named on `OSPermission::icon`.
+        include_str!("onboarding_window.rs"),
+        include_str!("permissions.rs"),
     ];
 
     /// Every icon a window asks for must be in the table. gpui draws

@@ -36,6 +36,7 @@ mod menus;
 mod mode_select_window;
 mod onboarding_window;
 mod permissions;
+mod permissions_ui;
 mod platform;
 mod presets;
 mod recording;
@@ -376,6 +377,8 @@ fn main() {
                 settings_window::Page::from_slug(&page).unwrap_or(settings_window::Page::General);
             app_windows::open_settings(page, cx);
         }
+
+        permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
