@@ -1,6 +1,7 @@
 // @ts-check
 
 import { exec as execCb, execFile as execFileCb } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { env } from "node:process";
@@ -203,6 +204,8 @@ async function main() {
 			},
 		);
 		console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+
+		await setupWindowsDxc();
 
 		const onnxRuntimePath = await setupWindowsOnnxRuntime();
 		cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
@@ -495,6 +498,108 @@ async function setupWindowsOnnxRuntime() {
 	console.log("Copied ONNX Runtime DLLs to target/debug and target/release");
 
 	return outputPath;
+}
+
+async function setupWindowsDxc() {
+	const asset = {
+		version: "1.9.2607.13",
+		name: "microsoft.direct3d.dxc.1.9.2607.13.zip",
+		url: "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.dxc/1.9.2607.13/microsoft.direct3d.dxc.1.9.2607.13.nupkg",
+		sha256: "5d6acd23089b2979a3c1d39b7e31227da989a47b5d9f3db57111ad4717ea537e",
+	};
+	const assetArch = { x86_64: "x64", aarch64: "arm64" }[arch];
+	if (!assetArch)
+		throw new Error(`Unsupported Windows architecture for DXC: ${arch}`);
+
+	const archivePath = await downloadVerifiedAsset(asset);
+	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "dxc");
+	const markerPath = path.join(outputDir, "asset.txt");
+	const marker = `${asset.name}:${assetArch}:${asset.sha256}`;
+	const currentMarker = await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+	const files = [
+		{
+			name: "dxcompiler.dll",
+			source: ["build", "native", "bin", assetArch, "dxcompiler.dll"],
+			runtime: true,
+		},
+		{
+			name: "dxil.dll",
+			source: ["build", "native", "bin", assetArch, "dxil.dll"],
+			runtime: true,
+		},
+		{ name: "LICENSE-LLVM.txt", source: ["LICENSE-LLVM.txt"] },
+		{ name: "LICENSE-MS.txt", source: ["LICENSE-MS.txt"] },
+	];
+	const missingAssets = await missingFiles(
+		outputDir,
+		files.map((file) => file.name),
+	);
+
+	if (currentMarker !== marker || missingAssets.length > 0) {
+		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+		await exec(
+			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
+			{ shell: "powershell.exe" },
+		);
+		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+		await fs.mkdir(outputDir, { recursive: true });
+		for (const file of files)
+			await fs.copyFile(
+				path.join(extractDir, ...file.source),
+				path.join(outputDir, file.name),
+			);
+		await fs.writeFile(markerPath, marker);
+		console.log(`Prepared DXC ${asset.version} for ${assetArch}`);
+	} else console.log(`Using cached DXC ${asset.version} for ${assetArch}`);
+
+	const profileDirs = [
+		path.join(targetDir, "debug"),
+		path.join(targetDir, "release"),
+	];
+	if (process.env.RUST_TARGET_TRIPLE)
+		for (const profile of ["debug", "release"])
+			profileDirs.push(
+				path.join(targetDir, process.env.RUST_TARGET_TRIPLE, profile),
+			);
+
+	for (const profileDir of profileDirs) {
+		await fs.mkdir(profileDir, { recursive: true });
+		for (const file of files.filter((file) => file.runtime))
+			await fs.copyFile(
+				path.join(outputDir, file.name),
+				path.join(profileDir, file.name),
+			);
+	}
+	console.log("Copied DXC DLLs to target profile directories");
+}
+
+async function downloadVerifiedAsset(asset) {
+	const archivePath = path.join(targetDir, asset.name);
+	if (!(await fileExists(archivePath))) {
+		const response = await fetch(asset.url);
+		if (!response.ok)
+			throw new Error(
+				`Failed to download ${asset.name}: HTTP ${response.status}`,
+			);
+		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+		console.log(`Downloaded ${asset.name}`);
+	} else console.log(`Using cached ${asset.name}`);
+
+	const actualHash = createHash("sha256")
+		.update(await fs.readFile(archivePath))
+		.digest("hex");
+	if (actualHash !== asset.sha256) {
+		await fs.rm(archivePath, { force: true });
+		throw new Error(
+			`${asset.name} SHA-256 mismatch: got ${actualHash}, expected ${asset.sha256}; removed invalid cached archive`,
+		);
+	}
+
+	return archivePath;
 }
 
 async function writeFileIfChanged(filePath, contents) {
