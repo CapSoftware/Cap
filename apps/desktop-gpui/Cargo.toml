@@ -64,6 +64,15 @@ cap-project = { path = "../../crates/project" }
 # playback, and hands frames back through a plain `FnMut` callback. It carries
 # no tauri types -- the websocket lives in the Tauri binary, not in the crate.
 cap-rendering = { path = "../../crates/rendering" }
+# The camera bubble's live background blur (`src/camera_blur.rs`): the same
+# `BlurProcessor` the Tauri preview and the editor's camera layer run.
+# Already in this lockfile through cap-rendering, so naming it only makes the
+# edge direct.
+cap-camera-effects = { path = "../../crates/camera-effects" }
+# The blur worker's device/queue/texture types. Must stay on cap-rendering's
+# wgpu 25 line (the vendored wgpu-hal `[patch.crates-io]` below applies to
+# it); gpui's own wgpu 29 is a separate tree and never touches these types.
+wgpu = "25.0.0"
 cap-editor = { path = "../../crates/editor" }
 # In-process export. Only the `ExporterBase` + settings surface is used; the
 # export *page* can also drive the `cap-exporter` subprocess protocol, so this
@@ -107,6 +116,15 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 base64 = "0.22"
 rfd = "0.15"
+# The screenshot export compositor (`src/screenshot_export.rs`): the canvas-2d
+# work `renderScreenshotExportCanvas` does in the webview -- shape rasterizing,
+# text, and the share fingerprint. All three are already in this lockfile
+# (tiny-skia through resvg, cosmic-text through glyphon, sha2 through half the
+# tree), so these lines make existing build units direct rather than adding
+# dependency trees.
+tiny-skia = "0.11"
+cosmic-text = "0.14"
+sha2 = "0.10"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

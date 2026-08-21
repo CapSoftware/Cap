@@ -8,8 +8,11 @@ mod assets;
 mod auth;
 #[cfg(target_os = "macos")]
 mod camera_bench;
+#[cfg(target_os = "macos")]
+mod camera_blur;
 mod camera_window;
 mod controls_window;
+mod deeplink;
 mod dev_restore;
 mod devices;
 mod editor_audio;
@@ -37,7 +40,10 @@ mod platform;
 mod presets;
 mod recording;
 mod screenshot;
+mod screenshot_annotations;
+mod screenshot_crop;
 mod screenshot_editor;
+mod screenshot_export;
 mod session;
 mod settings_pages;
 mod settings_window;
@@ -226,6 +232,18 @@ fn main() {
             if show_onboarding {
                 cx.update(app_windows::open_onboarding);
             }
+        })
+        .detach();
+        // The other half of the Tauri app's hand-off protocol
+        // (`store::handoff_marker_path`): staying up this long is what proves
+        // to it that redirecting here was not a mistake.
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(10))
+                .await;
+            cx.background_executor()
+                .spawn(async { crate::store::clear_handoff_marker() })
+                .await;
         })
         .detach();
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.

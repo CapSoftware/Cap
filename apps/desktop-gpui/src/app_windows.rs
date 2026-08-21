@@ -70,6 +70,14 @@ pub struct AppWindows {
     /// tray path): the Tauri effect does the same, which is why cancelling a
     /// tray-opened picker reveals the main window.
     pub main_hidden_for_picker: bool,
+    /// `hiddenForPicker` in the editor's record modal
+    /// (`ClipsSidebar.tsx:311-341, 413-426`): the editor window that hid
+    /// itself for an editor-owned target picker ("Record a new clip"). A
+    /// cancelled dismissal reveals *that* editor -- never the main window --
+    /// and clears the session's editor recording target; a recording start
+    /// clears the flag without revealing, because the editor stays hidden
+    /// until the finish path hands it the foreground.
+    pub editor_hidden_for_picker: Option<PathBuf>,
 }
 
 impl Global for AppWindows {}
@@ -89,6 +97,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         editors: Vec::new(),
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
+        editor_hidden_for_picker: None,
     });
 
     // The global-Escape drain: the Carbon hotkey (registered only while the
@@ -114,20 +123,33 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             close_controls(&session, cx);
-            // `postStudioRecordingBehaviour` (`openEditor` is the default):
-            // a cleanly-stopped studio recording goes straight to the editor,
-            // main window staying hidden -- `editor_closed` brings it back
-            // once the last editor goes away. Every other path (instant,
-            // failures, `showOverlay` until an overlay exists) reshows the
-            // main window as before.
             let finished_studio = session.update(cx, |session, _| session.finished_studio.take());
-            let editor_project = finished_studio.filter(|_| {
-                crate::store::GeneralSettings::load().post_studio_recording_behaviour
-                    == crate::store::PostStudioBehaviour::OpenEditor
-            });
-            match editor_project {
-                Some(project_dir) => open_editor(project_dir, cx),
-                None => show_main_window(cx),
+            // The in-editor re-record target is consumed first, before
+            // `postStudioRecordingBehaviour` is even consulted -- the order
+            // `apply_post_studio_editor_behaviour` checks them
+            // (`src-tauri/src/recording.rs:3268-3287`). `take` on every path,
+            // clean or not: the fallback at `recording.rs:3225-3237` does the
+            // same so a cancelled or failed recording still restores the
+            // editor and cannot leak its target into the next session.
+            let editor_target =
+                session.update(cx, |session, _| session.take_editor_recording_target());
+            if let Some(editor_path) = editor_target {
+                editor_recording_finished(editor_path, finished_studio, cx);
+            } else {
+                // `postStudioRecordingBehaviour` (`openEditor` is the
+                // default): a cleanly-stopped studio recording goes straight
+                // to the editor, main window staying hidden --
+                // `editor_closed` brings it back once the last editor goes
+                // away. Every other path (instant, failures, `showOverlay`
+                // until an overlay exists) reshows the main window as before.
+                let editor_project = finished_studio.filter(|_| {
+                    crate::store::GeneralSettings::load().post_studio_recording_behaviour
+                        == crate::store::PostStudioBehaviour::OpenEditor
+                });
+                match editor_project {
+                    Some(project_dir) => open_editor(project_dir, cx),
+                    None => show_main_window(cx),
+                }
             }
             // `NewStudioRecordingAdded` -> `add_new_item_to_cache` +
             // `refresh_tray_menu`. The reshow is where the main window's own
@@ -141,6 +163,12 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         last_phase = phase;
     })
     .detach();
+
+    // The `cap-desktop://action` executor (see `crate::deeplink`): started
+    // here because the actions dispatch into this registry, which now exists.
+    // The Tauri app orders it the same way -- `DeepLinkActionExecutor::new` in
+    // `setup`, before `on_open_url` is wired (`lib.rs:5449`).
+    crate::deeplink::init(cx);
 }
 
 /// `createThemeListener` + `commands.setTheme`: persist is already done; this
@@ -1018,6 +1046,45 @@ fn resolve_window(id: &scap_targets::WindowId) -> Option<HoveredWindow> {
 /// cheaper to reason about and what the Tauri flow does (the webviews are
 /// recreated with a new `targetMode` query parameter).
 pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
+    open_overlays_core(request, cx);
+
+    // `pickerActive && !hasHidden && !recording` -> `getCurrentWindow().hide()`
+    // (`new-main/index.tsx:2024-2028`): the picker owns the screen; the main
+    // window would otherwise float above the overlays at level 100.
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = true;
+        hide_main_window(cx);
+    }
+}
+
+/// The editor's record modal opening the same picker
+/// (`openTargetMode` / `selectDisplayTarget` / `selectWindowTarget`,
+/// `ClipsSidebar.tsx:447-501`): identical overlays, but the window that hides
+/// for them is the *editor* -- `hideEditorForPicker` -- and the dismissal
+/// bookkeeping runs against [`AppWindows::editor_hidden_for_picker`] instead
+/// of the main window's flag, so cancelling reveals the editor and starting
+/// hands the foreground to the bar.
+///
+/// Must be reached through `cx.defer` from anything inside an entity update,
+/// same as [`open_target_overlays`].
+pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest, cx: &mut App) {
+    // A live recording keeps its own picker semantics; the modal's actions
+    // are guarded on Idle already, so this is the belt-and-braces the Tauri
+    // backend has in `set_pending_recording`.
+    if RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+        return;
+    }
+
+    open_overlays_core(request, cx);
+
+    let key = editor_key(&editor_path);
+    if cx.global::<AppWindows>().editor_hidden_for_picker.as_ref() != Some(&key) {
+        cx.global_mut::<AppWindows>().editor_hidden_for_picker = Some(key.clone());
+        hide_editor_window(&key, cx);
+    }
+}
+
+fn open_overlays_core(request: OverlayRequest, cx: &mut App) {
     let select = TargetSelect::global(cx);
     let mode_changed = select.read(cx).mode != Some(request.mode);
     if mode_changed {
@@ -1087,14 +1154,6 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
     // and the overlays non-activating, a plain key handler has nothing to be
     // delivered to.
     platform::register_escape_hotkey();
-
-    // `pickerActive && !hasHidden && !recording` -> `getCurrentWindow().hide()`
-    // (`new-main/index.tsx:2024-2028`): the picker owns the screen; the main
-    // window would otherwise float above the overlays at level 100.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
-        cx.global_mut::<AppWindows>().main_hidden_for_picker = true;
-        hide_main_window(cx);
-    }
 }
 
 /// Close the overlays and clear the main window's armed target -- Escape, the
@@ -1108,6 +1167,32 @@ pub fn dismiss_target_overlays(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, _window, cx| view.clear_target(cx))
         .ok();
+
+    // An editor-owned picker cancelled: clear the editor recording target and
+    // reveal that editor with focus, record modal closed -- the non-
+    // "editorRecording" branch of the `targetMode == null && hiddenForPicker`
+    // effect (`ClipsSidebar.tsx:413-426`). The main window stays wherever it
+    // was; the editor owns the foreground again.
+    if let Some(editor_path) = cx
+        .global_mut::<AppWindows>()
+        .editor_hidden_for_picker
+        .take()
+    {
+        RecordingSession::global(cx)
+            .update(cx, |session, _| session.set_editor_recording_target(None));
+        tracing::info!(path = %editor_path.display(), "editor picker dismissed");
+        if let Some(handle) = editor_window_handle(&editor_path, cx) {
+            handle
+                .update(cx, |view, _window, cx| view.editor_picker_dismissed(cx))
+                .ok();
+            reveal_editor_window(&editor_path, cx);
+            return;
+        }
+        // The editor went away under the picker; reveal the main window so
+        // the app is not left with no visible window at all.
+        show_main_window(cx);
+        return;
+    }
 
     let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
@@ -1178,6 +1263,12 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     // A "recordingStudio" dismissal does not reveal the main window -- the bar
     // owns the foreground now, and the stop flow's reshow brings it back.
     cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    // Same for an editor-owned picker (`targetModeSource === "editorRecording"`
+    // in the `ClipsSidebar` effect, `:416-419`): the editor stays hidden for
+    // the whole recording, and the session observer's finish path reveals it.
+    // The session's editor recording target survives -- that is what routes
+    // the finished capture back into the project.
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
 
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, window, cx| {
@@ -1340,6 +1431,24 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
         return;
     }
 
+    // `start_recording`'s first act (`src-tauri/src/recording.rs:1492-1494`):
+    // an armed editor recording target forces Studio, whatever mode the main
+    // window is in -- the finished capture has to append as an editable clip.
+    let mut config = config;
+    let editor_target = session.read(cx).editor_recording_target();
+    if editor_target.is_some() {
+        config.mode = RecordingMode::Studio;
+    }
+    // `recording.rs:1775-1780`: the target editor gets content protection for
+    // the recording's duration (it is hidden-for-picker already, but a dock
+    // click can bring it back mid-capture, and a protected window stays out of
+    // the frame when it does). The Tauri arm also `minimize()`s it; here the
+    // picker's hide already took it off screen, and the finish path's reveal
+    // is the same un-hiding either way.
+    if let Some(editor_path) = &editor_target {
+        set_editor_content_protection(editor_path, true, cx);
+    }
+
     let mut excluded: Vec<scap_targets::WindowId> = config.excluded_windows.clone();
     excluded.extend(open_controls(&config, session.clone(), cx));
     // The camera bubble is excluded from studio captures (the camera is its own
@@ -1379,10 +1488,12 @@ pub fn begin_recording(config: StartConfig, cx: &mut App) {
     session.update(cx, |session, cx| session.start(config, cx));
 }
 
-/// Open the camera preview bubble (idempotent). Placement mirrors the Tauri
-/// default: bottom-right of the main window's display, 100px in from the
-/// corner. Position is not persisted yet (deviation; the Tauri app remembers it
-/// per monitor).
+/// Open the camera preview bubble (idempotent). Placement is the Tauri
+/// decision (`windows.rs:2278-2345`): the persisted position from the shared
+/// store's `cameraWindowPosition` keys when it is still on the preferred
+/// monitor -- the main window's, falling back to the cursor's, like
+/// `CursorMonitorInfo::from_window(main)` over there -- else the default
+/// bottom-right slot (see `camera_window::opening_position`).
 pub fn open_camera_window(cx: &mut App) {
     if cx.global::<AppWindows>().camera.is_some() {
         return;
@@ -1391,15 +1502,19 @@ pub fn open_camera_window(cx: &mut App) {
     let state = crate::store::load().camera_window.unwrap_or_default();
     let (width, height) = camera_window::window_size(&state, None);
 
-    let display = scap_targets::Display::get_containing_cursor()
+    let main = cx.global::<AppWindows>().main;
+    let display = main
+        .update(cx, |_, window, _| window.bounds())
+        .ok()
+        .and_then(|bounds| {
+            camera_window::display_for_point(
+                f64::from(f32::from(bounds.origin.x + bounds.size.width / 2.)),
+                f64::from(f32::from(bounds.origin.y + bounds.size.height / 2.)),
+            )
+        })
+        .or_else(scap_targets::Display::get_containing_cursor)
         .unwrap_or_else(scap_targets::Display::primary);
-    let (x, y) = match display.raw_handle().logical_bounds() {
-        Some(bounds) => (
-            (bounds.position().x() + bounds.size().width() - width as f64 - 100.) as f32,
-            (bounds.position().y() + bounds.size().height() - height as f64 - 100.) as f32,
-        ),
-        None => (100., 100.),
-    };
+    let (x, y) = camera_window::opening_position(&display);
 
     let handle = cx.open_window(
         WindowOptions {
@@ -2241,6 +2356,153 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
 
     tracing::info!(path = %key.display(), "reloading editor after import");
     open_editor(key, cx);
+}
+
+/// `editor_window_for_path` (`src-tauri/src/windows.rs:3699-3706`): the live
+/// editor window for a `.cap` bundle, by the same path identity the registry
+/// keys on.
+fn editor_window_handle(project_path: &Path, cx: &App) -> Option<WindowHandle<EditorWindow>> {
+    let key = editor_key(project_path);
+    cx.global::<AppWindows>()
+        .editors
+        .iter()
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| *handle)
+}
+
+/// `hideEditorForPicker` (`ClipsSidebar.tsx:337-341`) --
+/// `getCurrentWindow().hide()` on the editor, with the same detached-task rule
+/// every other native show/hide in this file follows.
+fn hide_editor_window(project_path: &Path, cx: &mut App) {
+    let Some(handle) = editor_window_handle(project_path, cx) else {
+        return;
+    };
+    let native = handle
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            platform::hide_native(native);
+            tracing::info!("editor window hidden for picker");
+        }
+        cx.update(crate::menus::schedule_dock_sync);
+    })
+    .detach();
+}
+
+/// The `unminimize()/show()/set_focus()` triple both Tauri finish paths run on
+/// the target editor (`src-tauri/src/recording.rs:3231-3237, 3268-3274`) --
+/// `makeKeyAndOrderFront:` covers all three here, plus the display-link kick
+/// every reshow in this app needs.
+fn reveal_editor_window(project_path: &Path, cx: &mut App) {
+    let Some(handle) = editor_window_handle(project_path, cx) else {
+        return;
+    };
+    let native = handle
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |cx| {
+        if let Some(native) = &native {
+            platform::show_native(native);
+        }
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    platform::kick_display_link(window);
+                    cx.notify();
+                    window.refresh();
+                })
+                .ok();
+            crate::menus::schedule_dock_sync(cx);
+        });
+    })
+    .detach();
+}
+
+/// `editor_window.set_content_protected(...)` around a recording
+/// (`src-tauri/src/recording.rs:1775-1780`), released with the same
+/// end-of-recording timing as [`set_teleprompter_content_protection`] and for
+/// the same reason: a permanently excluded window is invisible on
+/// capture-based displays.
+fn set_editor_content_protection(project_path: &Path, hidden: bool, cx: &mut App) {
+    let Some(handle) = editor_window_handle(project_path, cx) else {
+        return;
+    };
+    let native = handle
+        .update(cx, |_, window, _| platform::native_window(window))
+        .ok()
+        .flatten();
+    cx.spawn(async move |_| {
+        if let Some(native) = &native {
+            let sharing = platform::set_window_capture_hidden(native, hidden);
+            tracing::info!(hidden, sharing, "editor content protection");
+        }
+    })
+    .detach();
+}
+
+/// A recording that carried an editor target came to rest --
+/// `apply_post_studio_editor_behaviour`'s editor arm plus the cancelled/failed
+/// fallback (`src-tauri/src/recording.rs:3225-3287`), fused because the gpui
+/// session observer is the one place both outcomes land.
+///
+/// * Clean studio stop (`recording` is `Some`): reveal the target editor and
+///   hand it the finished bundle -- the native spelling of the
+///   `EditorRecordingAdded` event whose editor-side listener runs
+///   `addExistingRecordingToEditor` + `deleteRecordingDirectory` + reload
+///   (`Editor.tsx:312-335`).
+/// * Cancelled, deleted or failed (`None`): just reveal the editor, exactly
+///   what the stop-cleanup fallback does.
+/// * Editor window already closed: the Tauri event fires into a torn-down
+///   webview and the capture stays in the library as its own project; same
+///   here, except the main window is reshown (rescanning Recents on the way,
+///   so the orphaned capture is visible) rather than left suppressed -- over
+///   there the window merely stays minimized, here it was hidden outright and
+///   leaving it hidden would leave the app with no window at all.
+fn editor_recording_finished(editor_path: PathBuf, recording: Option<PathBuf>, cx: &mut App) {
+    set_editor_content_protection(&editor_path, false, cx);
+
+    let Some(handle) = editor_window_handle(&editor_path, cx) else {
+        tracing::warn!(
+            editor = %editor_path.display(),
+            recording = ?recording.as_ref().map(|path| path.display().to_string()),
+            "editor recording finished but its editor window is gone; \
+             the capture stays in the library"
+        );
+        show_main_window(cx);
+        return;
+    };
+
+    reveal_editor_window(&editor_path, cx);
+
+    if let Some(recording_dir) = recording {
+        handle
+            .update(cx, |view, window, cx| {
+                view.append_recorded_clip(recording_dir, window, cx)
+            })
+            .ok();
+    }
+}
+
+/// An editor-flow start that never reached the session (the pre-flight bails
+/// in `start_recording_with_target`): put everything back the way a cancelled
+/// picker would -- target cleared, editor revealed. Without this the editor
+/// would stay hidden forever, since no phase transition is coming.
+pub fn abort_editor_recording_flow(cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    let Some(editor_path) = session.update(cx, |session, _| session.take_editor_recording_target())
+    else {
+        return;
+    };
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    tracing::info!(path = %editor_path.display(), "editor recording flow aborted before start");
+    if editor_window_handle(&editor_path, cx).is_some() {
+        reveal_editor_window(&editor_path, cx);
+    } else {
+        show_main_window(cx);
+    }
 }
 
 /// The tray's Record Display / Record Window / Record Area.

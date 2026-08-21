@@ -29,8 +29,8 @@ pub enum CameraShape {
     Full,
 }
 
-/// `BackgroundBlurMode`. Cycled and persisted for parity; the effects pipeline
-/// itself is not wired yet.
+/// `BackgroundBlurMode`. Cycled and persisted like the Tauri bubble's, and
+/// processed live by the preview (`camera_blur.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BlurMode {
@@ -60,8 +60,7 @@ impl BlurMode {
     }
 }
 
-/// `CameraWindowState` from `CameraPreviewChrome.tsx`, minus `mirrored` (no
-/// flip transform exists in this gpui rev; see README).
+/// `CameraWindowState` from `CameraPreviewChrome.tsx`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CameraWindowState {
     pub size: f32,
@@ -86,6 +85,16 @@ pub struct PersistedState {
     pub camera_window: Option<CameraWindowState>,
     #[serde(default)]
     pub export: Option<ExportPrefs>,
+    /// `screenshotEditorLayersPanelOpen` -- the Tauri screenshot editor keeps
+    /// it in `localStorage` (`makePersisted` in
+    /// `screenshot-editor/context.tsx`); no webview here, so it lives in this
+    /// file.
+    #[serde(default)]
+    pub screenshot_layers_panel_open: Option<bool>,
+    /// `editorCropSnapToRatio` -- the crop dialog's persisted snap toggle,
+    /// also `localStorage` over there.
+    #[serde(default)]
+    pub screenshot_crop_snap_to_ratio: Option<bool>,
 }
 
 /// `export_settings` in the Tauri editor (`ExportPage.tsx` localStorage).
@@ -143,6 +152,66 @@ pub fn app_data_dir() -> PathBuf {
             });
         base.join("so.cap.desktop")
     }
+}
+
+/// The Tauri app's hand-off marker (`gpui_app.rs`).
+///
+/// It writes this file immediately before spawning this app and never deletes
+/// it; this app deletes it once it has been alive long enough to count as
+/// healthy (`main.rs`) or on a clean quit (`menus::quit`). A marker the Tauri
+/// app still finds at startup therefore means the build it handed off to never
+/// came up, so it clears `enableGpuiApp` and takes the session back rather than
+/// bouncing the user into an app that does not start.
+pub fn handoff_marker_path() -> PathBuf {
+    app_data_dir().join("cap-gpui.handoff")
+}
+
+/// Best-effort: a marker that cannot be removed only costs one fallback to the
+/// Tauri app on the next launch.
+pub fn clear_handoff_marker() {
+    let path = handoff_marker_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => tracing::info!("cleared the hand-off marker"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
+    }
+}
+
+/// A dev-checkout switch-back has no `Cap.app` to `open`: the classic app only
+/// runs inside its `tauri dev` harness, which exited with the hand-off. This
+/// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
+/// watches for it) to start that harness again; with no supervisor listening it
+/// is inert, and the flag written alongside it still routes the next
+/// `pnpm dev:desktop` to the classic app.
+pub fn classic_reopen_path() -> PathBuf {
+    app_data_dir().join("cap-classic.reopen")
+}
+
+pub fn request_classic_reopen() -> std::io::Result<()> {
+    let path = classic_reopen_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, std::process::id().to_string())
+}
+
+/// The dev switch-back's readiness handshake. A dev rebuild of the classic app
+/// takes anywhere from seconds to many minutes, and quitting immediately
+/// leaves the user with no app and no feedback for all of it. So the
+/// switch-back writes this file next to the reopen sentinel and stays up
+/// "waiting for the classic app"; the Tauri app deletes it when it starts and
+/// decides to keep the session (`gpui_app.rs`), and only then does this app
+/// quit.
+pub fn classic_pending_path() -> PathBuf {
+    app_data_dir().join("cap-classic.pending")
+}
+
+pub fn mark_classic_pending() -> std::io::Result<()> {
+    let path = classic_pending_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, std::process::id().to_string())
 }
 
 fn state_path() -> PathBuf {
@@ -696,6 +765,10 @@ pub struct GeneralSettings {
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
     pub enable_native_camera_preview: bool,
     pub out_of_process_muxer: bool,
+    /// Whether this app, rather than the Tauri one, owns the session. Reads
+    /// true for anyone who arrived here through the Tauri app's hand-off; the
+    /// Experimental page's Native app row turns it back off.
+    pub enable_gpui_app: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -833,6 +906,7 @@ impl GeneralSettings {
             editor_preview_quality: enum_at(general, "editorPreviewQuality"),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
+            enable_gpui_app: bool_at(general, "enableGpuiApp", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",
@@ -1686,6 +1760,32 @@ mod tests {
             Value::Bool(false)
         ));
         assert!(!GeneralSettings::load().enable_telemetry);
+    }
+
+    /// The Tauri app hands off by setting `enableGpuiApp`, so this app has to
+    /// read the same key -- and default it off, since the vast majority of
+    /// stores predate it.
+    #[test]
+    fn the_hand_off_flag_reads_from_general_settings() {
+        let _store = TempStore::new("gpui-flag", None);
+        assert!(!GeneralSettings::load().enable_gpui_app);
+
+        assert!(super::set_store_setting(
+            GENERAL_SETTINGS,
+            "enableGpuiApp",
+            Value::Bool(true)
+        ));
+        assert!(GeneralSettings::load().enable_gpui_app);
+    }
+
+    /// Both apps have to name the same file, and it has to sit next to the
+    /// store rather than in a per-app dir.
+    #[test]
+    fn the_hand_off_marker_sits_beside_the_store() {
+        assert_eq!(
+            super::handoff_marker_path(),
+            super::app_data_dir().join("cap-gpui.handoff")
+        );
     }
 
     /// `normalizeTranscriptionHints`: NULs stripped, whitespace trimmed,

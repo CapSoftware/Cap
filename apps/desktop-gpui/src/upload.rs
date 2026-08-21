@@ -86,6 +86,7 @@ pub async fn upload_exported_video(
     }
 
     let s3_config = match create_or_get_video(
+        false,
         matches!(mode, UploadMode::Reupload)
             .then(|| {
                 meta.sharing
@@ -166,7 +167,12 @@ fn store_auth_missing() -> bool {
     !crate::store::auth_snapshot().signed_in()
 }
 
+/// `create_or_get_video` (`src-tauri/upload.rs:340-436`): passing an existing
+/// `video_id` re-uses that server record (which is what keeps a share link
+/// stable across re-uploads), and `is_screenshot` marks the record the way the
+/// screenshot share flow needs (`isScreenshot=true` on the create URL).
 async fn create_or_get_video(
+    is_screenshot: bool,
     video_id: Option<String>,
     name: Option<String>,
     meta: Option<&VideoMeta>,
@@ -175,6 +181,9 @@ async fn create_or_get_video(
     let mut path = "/api/desktop/video/create?recordingMode=desktopMP4".to_string();
     if let Some(id) = video_id {
         path.push_str(&format!("&videoId={id}"));
+    }
+    if is_screenshot {
+        path.push_str("&isScreenshot=true");
     }
     if let Some(name) = name {
         path.push_str(&format!("&name={}", urlencoding(&name)));
@@ -530,6 +539,19 @@ async fn put_part(
 }
 
 async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiError> {
+    let bytes = compress_image(path)?;
+    presigned_put_bytes(video_id, "screenshot/screen-capture.jpg", bytes).await
+}
+
+/// One presigned single-part PUT under a video's subpath -- `/api/upload/
+/// signed` for the URL, then the raw body. The thumbnail upload and the
+/// rendered-screenshot upload are both this shape (`singlepart_uploader` +
+/// `PresignedS3PutRequest` in the Tauri binary).
+async fn presigned_put_bytes(
+    video_id: &str,
+    subpath: &str,
+    bytes: Vec<u8>,
+) -> Result<(), AuthApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Response {
@@ -542,13 +564,12 @@ async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiErr
         headers: HashMap<String, String>,
     }
 
-    let bytes = compress_image(path)?;
     let response = auth::authed_request(
         reqwest::Method::POST,
         "/api/upload/signed",
         Some(json!({
             "videoId": video_id,
-            "subpath": "screenshot/screen-capture.jpg",
+            "subpath": subpath,
             "method": "put",
         })),
     )
@@ -578,11 +599,84 @@ async fn upload_screenshot(video_id: &str, path: &Path) -> Result<(), AuthApiErr
         .map_err(|error| AuthApiError::Other(error.to_string()))?;
     if !response.status().is_success() {
         return Err(AuthApiError::Other(format!(
-            "thumbnail upload failed: {}",
+            "upload failed: {}",
             response.status()
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot share upload
+// ---------------------------------------------------------------------------
+
+/// A created-or-reused server video record, with the share link derived from
+/// its id -- `UploadedItem` in the Tauri binary.
+pub struct UploadedItem {
+    pub link: String,
+    pub id: String,
+}
+
+/// What the screenshot share flow's upload step resolved to. The two
+/// non-success arms carry the exact toasts `shareLinkFromUploadResult` maps
+/// them to on the window side.
+pub enum ScreenshotShareOutcome {
+    Uploaded(UploadedItem),
+    NotAuthenticated,
+    UpgradeRequired,
+}
+
+/// `screenshot_upload_subpath` (`src-tauri/upload.rs:259-265`): the composited
+/// image lands under the record's screenshot key, extension by content type.
+fn screenshot_upload_subpath(content_type: &str) -> &'static str {
+    if content_type.eq_ignore_ascii_case("image/png") {
+        "screenshot/screen-capture.png"
+    } else {
+        "screenshot/screen-capture.jpg"
+    }
+}
+
+/// `upload_rendered_screenshot` (`src-tauri/lib.rs:3761-3796`), minus the
+/// clipboard/meta halves the window owns: gate on auth exactly as the Tauri
+/// command does, create-or-get the screenshot video record (re-using the
+/// sharing id when the caller has one, so the link survives re-uploads), and
+/// presigned-PUT the encoded bytes to the screenshot subpath.
+pub async fn upload_rendered_screenshot(
+    image_bytes: Vec<u8>,
+    content_type: &str,
+    video_id: Option<String>,
+) -> Result<ScreenshotShareOutcome, String> {
+    let auth = crate::store::auth_snapshot();
+    if !auth.signed_in() {
+        // The Tauri command resets a corrupt/absent auth store on this path.
+        let _ = crate::store::set_auth(None);
+        return Ok(ScreenshotShareOutcome::NotAuthenticated);
+    }
+    if !auth.is_upgraded() {
+        return Ok(ScreenshotShareOutcome::UpgradeRequired);
+    }
+
+    match upload_screenshot_bytes(image_bytes, content_type, video_id).await {
+        Ok(item) => Ok(ScreenshotShareOutcome::Uploaded(item)),
+        Err(AuthApiError::InvalidAuthentication) => Ok(ScreenshotShareOutcome::NotAuthenticated),
+        Err(AuthApiError::UpgradeRequired) => Ok(ScreenshotShareOutcome::UpgradeRequired),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// `upload_screenshot_bytes` (`src-tauri/upload.rs:279-307`).
+async fn upload_screenshot_bytes(
+    image_bytes: Vec<u8>,
+    content_type: &str,
+    video_id: Option<String>,
+) -> Result<UploadedItem, AuthApiError> {
+    let s3_config = create_or_get_video(true, video_id, None, None, None).await?;
+    let subpath = screenshot_upload_subpath(content_type);
+    presigned_put_bytes(&s3_config.id, subpath, image_bytes).await?;
+    Ok(UploadedItem {
+        link: format!("{}/s/{}", auth::server_url(), s3_config.id),
+        id: s3_config.id,
+    })
 }
 
 fn compress_image(path: &Path) -> Result<Vec<u8>, AuthApiError> {
@@ -704,7 +798,11 @@ mod tests {
     #[test]
     fn chunk_size_clamps() {
         assert_eq!(chunk_size_for(1), MIN_CHUNK_SIZE);
-        assert_eq!(chunk_size_for(MIN_CHUNK_SIZE * 200), MAX_CHUNK_SIZE);
+        // A hundredth of the file, clamped: the upper assertion needs a file
+        // whose hundredth actually exceeds the cap (1.5 GiB does; the old
+        // `MIN_CHUNK_SIZE * 200` = 1000 MiB sat below it and asserted the
+        // wrong side of the clamp).
+        assert_eq!(chunk_size_for(MAX_CHUNK_SIZE * 200), MAX_CHUNK_SIZE);
         assert_eq!(chunk_size_for(MIN_CHUNK_SIZE * 50), MIN_CHUNK_SIZE);
     }
 

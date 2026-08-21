@@ -35,6 +35,10 @@ one (see the editor's measurements below).
 ./dev.sh
 ```
 
+`pnpm dev:desktop` (from the repo root) starts this loop automatically next
+to the Tauri app, output prefixed `[gpui]`; set `CAP_GPUI_DEV=0` to opt out
+(`scripts/dev-desktop.mjs`).
+
 Native Rust cannot hot-reload, so this is the Solid-dev-server feel rebuilt
 from its observable parts. The script watches the app's sources, the `cap-*`
 crates the editor depends on and the local gpui checkout, rebuilds on save,
@@ -541,7 +545,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Window | Size | Status |
 |---|---|---|
 | Main | 330×395 / 600×660 | **Done** — layout, devices, pickers, modes, recording, Recents with real thumbnails, level-100 panel behavior, native Liquid Glass / vibrancy material |
-| Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar, corner resize, drag, persisted chrome state, capture-excluded in studio / included in instant |
+| Camera preview | size×(size+56), 150–600 | **Done** — live frames, round/square/full shapes, S/L sizes, hover toolbar with all five controls live (close, size, shape, mirror, blur), live background-blur preview via `camera_blur.rs`, hardware mirroring, corner resize with the bracket visuals, drag, camera-issue overlay, position persisted to the shared store per monitor, persisted chrome state, always-dark like `camera.tsx`, capture-excluded in studio / included in instant |
 | Recording controls | 320×150 | **Done** — live timer, pause/resume, restart, delete, live mic level, instant-mode mute, drag; capture-excluded, non-activating |
 | Target select overlay | per display | **Done** — all four variants (display / window / area / camera-only), one transparent non-activating panel per display at the Tauri-verbatim level 7, cursor-following highlight, click-to-pin windows with app icons, draw/move/resize area selection with min-size validation, the real Start Recording flow (overlays close, bar opens, overlays excluded from capture), Escape/close dismiss |
 | Window capture occluder | per display | Not started |
@@ -553,7 +557,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 11) — the Tauri `(14, 14)` is a `position_window_controls` inset, not a top-left, auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
 | Editor | 1275×800 | **E1–E5 done — window, shell, playback, timeline, editing, config sidebar.** The real 1275×800 window with the traffic lights at (20, 20) — the Tauri `(20, 32)` is a `position_window_controls` inset, not a top-left, the header, the letterboxed player, the 260px timeline strip and the 416px config sidebar with its six-tab rail; a real project through `EditorInstance`; play/pause (button + Space), a 60fps live playhead and clock, real audio, click/drag seeking, end-of-media stop; the timeline at 1:1 — all nine track types from the project's own config, waveforms, the ruler's resolution ladder, minimap, edge fade, hover ghost, zoom (keys, buttons, slider, wheel, pinch) and pan; and **timeline editing**: selection (single, ⌘-multi, ⇧-range, ⌘A), trim, move, split (S + C, with snapping), zoom-segment create/resize/move, delete, undo/redo and the debounced write back to `project-config.json`. and **the config sidebar in full**: the six-tab rail, the scroll body, selection routing, all six tabs at 1:1, the shared colour-correction section on both its targets, and the eight per-segment panels with multi-select where the source has it. Crop and export are the remaining units |
-| Screenshot editor | 1240×800 (min 800×600) | **Done, with deviations** — the real window (native traffic lights, resizable to the 800×600 floor), one editor per bundle keyed like the video editor's registry, opened from capture, Recents, the settings Screenshots page, the tray's Previous and image import. The still renders through the same GPU path the Tauri instance uses (`FrameRenderer::render_immediate`, `preserve_screen_alpha`, no camera) on a config watch, painted with `paint_image` instead of shipped over the frame websocket. Styling panel: background source tabs (color swatches, gradient presets, wallpaper grid with theme tabs and cached thumbnails, image picker), blur/padding/rounding/shadow sliders at the popovers' ranges, squircle/rounded corner style, border toggle + width/opacity, aspect-ratio menu; edits publish to the renderer live and ride a 250ms debounced `project-config.json` write. Header: copy (GPU export → clipboard), save PNG (the `render_screenshot_png` upscale + unpad + encode, on the live renderer's device), reveal, delete behind a native confirm. Deviations: no annotations/OCR/layers, no share/upload, no crop dialog, no undo history, no border color picker, no advanced-shadow or gradient angle/noise controls, no `PendingScreenshots` in-memory hand-off (the PNG is on disk before the editor opens) |
+| Screenshot editor | 1240×800 (min 800×600) | **Done, with deviations** — the real window (native traffic lights, resizable to the 800×600 floor), one editor per bundle keyed like the video editor's registry, opened from capture, Recents, the settings Screenshots page, the tray's Previous and image import. The still renders through the same GPU path the Tauri instance uses (`FrameRenderer::render_immediate`, `preserve_screen_alpha`, no camera) on a config watch, painted with `paint_image` instead of shipped over the frame websocket; edits publish to the renderer live, ride the 1000ms debounced `project-config.json` write, and walk a real undo history (⌘Z / ⌘⇧Z / ⌘Y, a drag's sixty intermediate values collapsed into one entry). Styling: background source tabs (color swatches, gradient presets, wallpaper grid with theme tabs and cached thumbnails, image picker), hex fields, blur/padding/rounding/shadow sliders at the popovers' ranges plus the advanced-shadow collapsible, squircle/rounded corner style, border toggle + width/color/opacity, aspect-ratio menu. Annotations: the full engine — all seven tools with their single-key shortcuts, the frame-space geometry of `layout.ts`/`arrow.ts` verbatim, selection handles, the per-type config bar (stroke/fill swatches with the colour popover, width/opacity/mask-level/text-size sliders), the layers panel with drag reorder, blur/pixelate masks resampled live off the rendered frame, inline text editing, ⌘C/⌘V duplicate, delete. Crop dialog: the `editor_crop` engine wholesale over `original.png` (`screenshot_crop.rs`) — Size/Position number boxes, the round ratio button and its options menu (right-click opens the same one at the cursor) with the snap-to-ratio toggle persisted in the shared store, Full/Reset, arrow-key nudges, one history entry on Save, Escape/backdrop cancel. Export: Copy/Save/Share all bake the annotations in (`screenshot_export.rs` — the `renderScreenshotExportCanvas` pass: masks re-filtered at export scale from an unmodified copy, shapes via tiny-skia, text via cosmic-text at the preview's Helvetica baseline, the output expanded to the union of image and annotation boxes with the source's white-fill rules); Copy composites over white and lands PNG on the clipboard, Save writes PNG, Share fingerprints the config (`sha256` over recursively key-sorted JSON), short-circuits to the stored link on a hash match, and otherwise uploads JPEG-0.9 (PNG when transparency is actually needed) through create-or-get + presigned PUT — reusing `sharing.id` so the link survives edits — then persists `SharingMeta { id, link, content_hash }`, with Tauri's exact auth gates and toast ladder; reveal, delete behind a native confirm. Deviations: no OCR text-selection overlay (Vision OCR feeding an invisible DOM-style selectable text layer has no gpui equivalent yet; the layer is invisible in the Tauri editor too, so zero visual impact); the colour swatches are inert — no native colour panel is wired to this window, the hex fields are the input; the skeleton's Cap logo is drawn still (the app ships no bare glyph to spin, only the full lockup); the crop options menu has no separator row (`ui::Menu` has none, so its two groups sit adjacent); no `PendingScreenshots` in-memory hand-off (the PNG is on disk before the editor opens) |
 | Tray (status item) | menu bar | **Done, with deviations** — a native `NSStatusItem` (no gpui API exists for one; built on AppKit with the color-panel channel discipline), menu byte-identical to `build_tray_menu`: Open Main Window, Record Display/Window/Area (screenshot-mode relabels), Select Mode ▸ with the ✓, Previous ▸ with 32px cover-cropped thumbnails and the 🎬⚡📷 prefixes, View all recordings / screenshots, Settings, version row, Quit Cap. The icon follows the mode and becomes the stop icon while recording, when clicking the item stops the capture (the menu is detached so the button's action can fire). Select Mode writes the same `recording_settings.mode` store key the Tauri app reads. Take a Screenshot captures the display under the cursor and Import Media… routes video/image imports; a Previous screenshot opens the screenshot editor. Deviations: Upload Logs renders disabled (no log-upload infrastructure yet) |
 | App menu + shortcuts | menu bar | **Done** — the `build_macos_app_menu` structure (Cap / File / Edit / View / Window / Help) via `cx.set_menus`, with ⌘W closing the key window through each window's own close path (main hides, Tauri's `CloseRequested` arm transcribed: camera bubble closed, overlays closed, feeds released when idle), ⌘M / Zoom / ⌃⌘F on the key window, ⌘H / ⌥⌘H, ⌘Q, and Edit items dispatching the text-input actions. Dock-icon policy (Regular ↔ Accessory per `hideDockIcon` + visible windows) synced on every window show/hide seam |
 
@@ -705,20 +709,50 @@ uploads on the frame path (`camera-preview-convert-benchmark` measures the
 conversion at 137µs vs the old path's 196µs per 720p frame, byte-identical
 output, before counting the atlas upload the new path deletes; the fork
 originally hard-asserted `420f` and had no surface clipping, which is what the
-`cap/bgra-surface` patches add). Camera-window deviations: no mirroring (the
-toolbar button is present but disabled), background blur does not process
-*preview* frames yet (the `cap-camera-effects` segmentation pipeline needs a
-`wgpu::Device` this app does not have — it is its own unit), the window
-position is not persisted per-monitor, and chrome state persists to
-`gpui-state.json` next to the Tauri store rather than `localStorage`.
+`cap/bgra-surface` patches add).
 
-The blur toggle is no longer preview-only state, though: its value is copied
-into every studio recording's `project-config.json` at finalize time, the way
+Mirroring is a second VideoToolbox pass on the same path: a
+`VTPixelRotationSession` with `FlipHorizontalOrientation` flips the converted
+BGRA surface into a sibling ring — hardware, no CPU pixels — which is the
+preview-only mirror both Tauri paths have (the native shader flips the
+sampling UV, the legacy page flips the canvas with `scaleX(-1)`; neither app
+ever mirrors the recorded camera track).
+
+Background blur runs live on preview frames through `src/camera_blur.rs`: a
+dedicated `camera-blur` thread owns its own wgpu device (requested the way the
+Tauri preview requests one — LowPower, downlevel limits) and runs the exact
+`cap_camera_effects::BlurProcessor` the recording's project config points the
+editor at, with the Tauri preview's 640×360 input cap and 150ms inference
+interval. The converter downscales to the cap inside the same hardware
+transfer, the worker imports the surface zero-copy through `cap-rendering`'s
+`iosurface_texture` seam, and the blurred output comes back as a BGRA
+IOSurface CVPixelBuffer (via `RgbaToBgraSurfaceConverter`) that the window
+paints on the normal surface path. Blur off never touches any of this — the
+direct-IOSurface fast path is byte-identical to before — and a failed
+bring-up (no ONNX runtime, no device) degrades to raw frames with the toggle
+still cycling, the `ensure_blur_processor` contract. Low-spec machines (≤8GB,
+the Tauri RAM gate) never start the worker at all.
+
+The window position is persisted the Tauri way too: moves land, debounced,
+in the shared store's `cameraWindowPosition` /
+`cameraWindowPositionsByMonitorName` keys, and opening restores the saved
+spot when it is still on the preferred monitor — so the two apps remember one
+bubble position between them. Remaining camera-window deviations: no 150ms
+opacity/translate transitions on the toolbar and resize brackets (no
+animation pass in this port), no `backdrop-blur-xs` behind the camera-issue
+overlay (no per-element backdrop blur hook), no "Camera disconnected" overlay
+on recording input loss (the Tauri `recordingEvent` InputLost seam has no
+counterpart here yet), and chrome state persists to `gpui-state.json` next to
+the Tauri store rather than `localStorage`.
+
+The blur toggle's value is also copied into every studio recording's
+`project-config.json` at finalize time, the way
 `project_config_from_recording` copies the Tauri preview's (see Recording
 above). Blur was always non-destructive in both apps — the recorded camera
 track is raw and the editor re-runs the pipeline over it from that field — so
 a project recorded here with the bubble set to Light opens Light in the
-shipping editor, whether or not the bubble itself ever painted the blur.
+shipping editor, and now the bubble shows the same blur those frames will
+open with.
 
 ### The macOS 26 display-link fix
 
@@ -940,7 +974,7 @@ Teleprompter-specific deviations:
 | | |
 |---|---|
 | **The script editor keeps its own selection wash** | It is `ui::TextInput` in its multi-line shape now (see [Text input](#text-input)) — wrapping, click-to-position, arrow and word motion, selection, the clipboard, undo. The one deliberate difference from the rest of the app is the selection colour: bare glass takes `gray-12` at 25 % rather than the macOS-blue accent the settings fields use, because there is no accent token on this surface. `state.script` stays the mirror the word count, the auto-scroll maths and the debounced store write read. |
-| **Mirror is persisted but inert** | `scale-x-[-1]` needs a flip transform, and this gpui rev has none — the same finding that leaves the camera bubble's mirror button disabled. The toggle stores `mirror` so the setting survives for the shipping app; nothing on screen changes. |
+| **Mirror is persisted but inert** | `scale-x-[-1]` needs a flip transform on painted *text*, and this gpui rev has none. (The camera bubble solved its version of this with a `VTPixelRotationSession` on the pixel buffers, but the teleprompter mirrors glyphs, not a surface.) The toggle stores `mirror` so the setting survives for the shipping app; nothing on screen changes. |
 | **The vignette is a wash, not a mask** | The script area's `mask-image` fades the *glyphs'* alpha to 0.4 at the top and bottom. With no mask hook, two `gray-1` gradient layers over the same 34% / 66% stops stand in. Over vibrancy that is nearly the same picture; over Liquid Glass it tints the backdrop instead of the text. |
 | **No backdrop blur** | The settings popover is `bg-gray-1/80` *plus* `backdrop-blur-2xl`, and the footer pills add their own `backdrop-blur-xl`. The washes are here, the blur is not — the same missing hook as the header's `backdrop-filter` and the recording overlay's `backdrop-blur-xs`. |
 | **No letter-spacing** | The script is `tracking-[-0.025em]` in the TSX; this gpui rev exposes no letter-spacing, so it renders at the font's own tracking. |

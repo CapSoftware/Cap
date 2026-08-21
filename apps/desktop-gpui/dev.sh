@@ -9,7 +9,6 @@ cd "$(dirname "$0")"
 STATE_FILE="$PWD/target/dev-restore.json"
 BIN="$PWD/target/debug/cap-gpui"
 BUILD=cargo
-command -v cinder >/dev/null 2>&1 && BUILD=cinder
 
 # Cargo.toml turns incremental off to keep the dep tree's caches off a full
 # disk, but deps never rebuild in this loop -- the cache this creates is the
@@ -32,6 +31,22 @@ fingerprint() {
 }
 
 APP_PID=""
+
+SHARED_DIR="$HOME/Library/Application Support/so.cap.desktop"
+
+# Launching unconditionally would put this app on screen next to the classic
+# one every session: under the experimental switch the two share ownership of
+# the session (`enableGpuiApp` in the shared store), so a build only launches
+# when this app owns it or an instance is already running (a rebuild swap).
+gpui_owns_session() {
+	grep -Eq '"enableGpuiApp":[[:space:]]*true' "$SHARED_DIR/store" 2>/dev/null
+}
+
+instance_live() {
+	local pid
+	pid=$(cat "$SHARED_DIR/cap-gpui.pid" 2>/dev/null) || return 1
+	[ -n "$pid" ] && ps -p "$pid" -o comm= 2>/dev/null | grep -q cap-gpui
+}
 
 stop_app() {
 	[ -n "$APP_PID" ] || return 0
@@ -70,8 +85,12 @@ while true; do
 		LAST="$CURRENT"
 		echo "[dev] building..."
 		if "$BUILD" build; then
-			stop_app
-			start_app
+			if [ -n "$APP_PID" ] || gpui_owns_session || instance_live; then
+				stop_app
+				start_app
+			else
+				echo "[dev] built; not launching (the classic app owns the session)"
+			fi
 		else
 			echo "[dev] build failed; keeping the previous app running"
 		fi
