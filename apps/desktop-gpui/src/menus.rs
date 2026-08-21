@@ -220,11 +220,36 @@ fn with_key_native(cx: &mut App, action: fn(&platform::NativeWindow)) {
 /// `api.prevent_close()` and hides the window instead
 /// (`apps/desktop/src-tauri/src/lib.rs:5644-5697`).
 pub fn close_key_window(cx: &mut App) {
-    let Some(handle) = cx.active_window() else {
-        tracing::info!("close window: no key window");
+    if let Some(handle) = cx.active_window() {
+        close_window_by_handle(handle, cx);
         return;
-    };
-    close_window_by_handle(handle, cx);
+    }
+    // The main window is a non-activating panel: the app can be active with
+    // the main window frontmost while gpui tracks NO key window at all, and
+    // the ⌘W that reached the menu then had nothing to route to (observed
+    // live: this log line firing while the main window sat visible). The
+    // Tauri app never meets this state -- its main webview window is a
+    // regular key window -- so match its observable contract instead: ⌘W
+    // with the app active and the main window up hides the main window.
+    // Everything below is deferred: the keystroke still arrived THROUGH the
+    // main window's dispatch (its lease is held even when gpui says no window
+    // is active), so even the visibility probe's `main.update` would silently
+    // Err here -- the with_key_native trap, again.
+    cx.defer(|cx| {
+        if !cx.has_global::<app_windows::AppWindows>() {
+            return;
+        }
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let visible = main
+            .update(cx, |_, window, _| platform::window_is_visible(window))
+            .unwrap_or(false);
+        if visible {
+            tracing::info!("close window: no key window; routing to the visible main window");
+            app_windows::request_close_main(cx);
+        } else {
+            tracing::info!("close window: no key window and no visible main window");
+        }
+    });
 }
 
 /// The ⌘W body, keyed by handle -- split out so the harness can close a
