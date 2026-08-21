@@ -511,6 +511,17 @@ impl MainWindow {
                         )
                     });
                 }
+                // `CAP_GPUI_AUTO_PANEL=display|window`: open that target
+                // picker panel the way the chevron click does. Same reason as
+                // `CAP_GPUI_AUTO_CAMERA` above -- the chrome screenshots need
+                // the card grid on screen and synthetic clicks are dropped.
+                match std::env::var("CAP_GPUI_AUTO_PANEL").as_deref() {
+                    Ok("display") => {
+                        this.open_panel(Panel::Target(TargetType::Display), window, cx)
+                    }
+                    Ok("window") => this.open_panel(Panel::Target(TargetType::Window), window, cx),
+                    _ => {}
+                }
                 // `if (!targetMode) scheduleTargetListPrewarm()` on
                 // `main-window-ready` (`new-main/index.tsx:2528`) -- the point
                 // where the window has its lists and can afford background

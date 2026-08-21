@@ -290,6 +290,14 @@ impl ThumbnailCache {
 ///   keeps a pale thumbnail from bleeding into the card.
 /// * `absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/40` — the
 ///   scrim under the labels.
+///
+/// The card's `overflow-hidden rounded-lg` does the corner clipping in the
+/// Tauri app. gpui content masks are rectangles — a child's paint (and an
+/// `img()` above all) is *not* clipped to the parent's rounded corners — so
+/// every full-bleed layer here carries the card's top rounding itself: 7px,
+/// the card's 8px radius minus the 1px border the slot sits inside. The
+/// slot's bottom edge is mid-card and stays square, exactly like the `h-19`
+/// block over there.
 pub fn render_thumbnail_slot(
     thumb: TargetThumb,
     icon: &'static str,
@@ -302,23 +310,28 @@ pub fn render_thumbnail_slot(
     };
 
     let black = |alpha: f32| hsla(0., 0., 0., alpha);
+    // The inner corner radius: the card is `rounded(8.)` with a 1px border.
+    const TOP_RADIUS: f32 = 7.;
 
     div()
         .relative()
         .w_full()
         .h(px(76.))
         .overflow_hidden()
+        .rounded_t(px(TOP_RADIUS))
         .bg(theme.body_fill(4))
         .child(match thumb.image {
             Some(image) => img(image)
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
+                .rounded_t(px(TOP_RADIUS))
                 .into_any_element(),
             None => div()
                 .flex()
                 .size_full()
                 .items_center()
                 .justify_center()
+                .rounded_t(px(TOP_RADIUS))
                 .bg(theme.body_fill(4))
                 .child(
                     // `svg()` does not inherit `text_color`; the fallback icon
@@ -338,6 +351,7 @@ pub fn render_thumbnail_slot(
                     .flex()
                     .items_center()
                     .justify_center()
+                    .rounded_t(px(TOP_RADIUS))
                     .bg(black(0.45))
                     .child(
                         img(app_icon)
@@ -356,6 +370,7 @@ pub fn render_thumbnail_slot(
             div()
                 .absolute()
                 .inset_0()
+                .rounded_t(px(TOP_RADIUS))
                 .border_1()
                 // `border-black/5` under `opacity-60`.
                 .border_color(black(0.03)),
@@ -411,6 +426,33 @@ pub fn display_signature(list: &[DisplayOption]) -> String {
         .map(|display| format!("{}:{}:{}", display.id, display.label, display.refresh_rate))
         .collect::<Vec<_>>()
         .join("|")
+}
+
+/// The content rect inside ScreenCaptureKit's 320x180 screenshot buffer: the
+/// source's aspect ratio fitted inside 320x180.
+///
+/// `SCScreenshotManager` scales the content to FIT the flat 320x180 request,
+/// anchors it at the buffer's top-left, and pads the right/bottom with opaque
+/// black; since the buffer comes back exactly 320x180,
+/// [`normalize_thumbnail_dimensions`]'s early return would keep that padding
+/// where SCK put it -- on a card the black bar reads as a broken corner
+/// radius down the right side. The capture path crops the buffer to this rect
+/// before normalizing, so the letterbox bars end up transparent and centred
+/// (the card's slot background shows through, as in the Tauri picker).
+/// Requesting this size FROM SCK instead is not an option: for some sizes
+/// `capture_sample_buf` never resolves -- no error, the future hangs.
+pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
+    let Some((width, height)) = source else {
+        return (THUMBNAIL_WIDTH as usize, THUMBNAIL_HEIGHT as usize);
+    };
+    if width <= 0. || height <= 0. {
+        return (THUMBNAIL_WIDTH as usize, THUMBNAIL_HEIGHT as usize);
+    }
+    let scale = (THUMBNAIL_WIDTH as f64 / width).min(THUMBNAIL_HEIGHT as f64 / height);
+    (
+        (width * scale).round().clamp(1., THUMBNAIL_WIDTH as f64) as usize,
+        (height * scale).round().clamp(1., THUMBNAIL_HEIGHT as f64) as usize,
+    )
 }
 
 /// `normalize_thumbnail_dimensions` (`thumbnails/mod.rs:44-87`), verbatim.
@@ -513,10 +555,14 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
         return;
     };
 
+    let total = targets.len();
+    let mut captured = 0usize;
     for (option, display) in targets {
         let Some(rgba) = capture_display_thumbnail(&display, content.retained()).await else {
+            tracing::debug!(id = %option.id, "display thumbnail capture missed");
             continue;
         };
+        captured += 1;
         if events
             .send(DisplayEvent::Captured(
                 option.id,
@@ -527,10 +573,13 @@ async fn capture_displays_inner(events: flume::Sender<DisplayEvent>) {
             return;
         }
     }
+    tracing::debug!(captured, total, "display thumbnail sweep finished");
 }
 
 async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
     let targets = crate::devices::list_window_targets();
+    let total = targets.len();
+    let mut captured = 0usize;
     if events
         .send(WindowEvent::Listed(
             targets.iter().map(|(option, _)| option.clone()).collect(),
@@ -549,7 +598,11 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
             .await
             .map(crate::library::rgba_to_render_image);
         let app_icon = window.app_icon().filter(|bytes| !bytes.is_empty());
+        if image.is_some() {
+            captured += 1;
+        }
         if image.is_none() && app_icon.is_none() {
+            tracing::debug!(id = %option.id, app = %option.app, "window thumbnail capture missed");
             continue;
         }
         if events
@@ -563,6 +616,7 @@ async fn capture_windows_inner(events: flume::Sender<WindowEvent>) {
             return;
         }
     }
+    tracing::debug!(captured, total, "window thumbnail sweep finished");
 }
 
 // -- macOS capture ---------------------------------------------------------
@@ -573,7 +627,7 @@ mod platform {
     use image::RgbaImage;
     use tracing::warn;
 
-    use super::{THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, normalize_thumbnail_dimensions};
+    use super::normalize_thumbnail_dimensions;
 
     /// The shareable content one capture batch shares, the way
     /// `capture_*_thumbnail` in `thumbnails/mac.rs:7-20` shares the Tauri app's
@@ -586,10 +640,26 @@ mod platform {
     /// empty display list.
     pub async fn shareable_content() -> Option<arc::R<sc::ShareableContent>> {
         match sc::ShareableContent::current().await {
-            Ok(content) if !content.displays().is_empty() => Some(content),
+            Ok(content) if !content.displays().is_empty() => {
+                tracing::debug!(
+                    displays = content.displays().len(),
+                    windows = content.windows().len(),
+                    "thumbnail sweep shareable content"
+                );
+                Some(content)
+            }
             Ok(content) => match sc::ShareableContent::current_process().await {
                 Ok(process) if !process.displays().is_empty() => Some(process),
-                _ => Some(content),
+                // Empty content resolves every capture to a silent `None`;
+                // say so once per sweep or a permission gap looks like a
+                // rendering bug.
+                _ => {
+                    warn!(
+                        "shareable content came back empty; thumbnail captures will all miss \
+                         (screen-recording permission?)"
+                    );
+                    Some(content)
+                }
             },
             Err(error) => {
                 warn!(error = ?error, "could not read shareable content for thumbnails");
@@ -607,8 +677,11 @@ mod platform {
         display: &scap_targets::Display,
         content: arc::R<sc::ShareableContent>,
     ) -> Option<RgbaImage> {
+        let size = display
+            .physical_size()
+            .map(|size| (size.width(), size.height()));
         let filter = display.raw_handle().as_content_filter(content)?;
-        capture_thumbnail_from_filter(filter).await
+        capture_thumbnail_from_filter(filter, super::fitted_capture_size(size)).await
     }
 
     /// `capture_window_thumbnail` (`mac.rs:14-20`).
@@ -616,17 +689,35 @@ mod platform {
         window: &scap_targets::Window,
         content: arc::R<sc::ShareableContent>,
     ) -> Option<RgbaImage> {
+        let size = window
+            .physical_size()
+            .map(|size| (size.width(), size.height()));
         let sc_window = window.raw_handle().as_sc(content)?;
         let filter = sc::ContentFilter::with_desktop_independent_window(&sc_window);
-        capture_thumbnail_from_filter(filter).await
+        capture_thumbnail_from_filter(filter, super::fitted_capture_size(size)).await
     }
 
     /// `capture_thumbnail_from_filter` (`mac.rs:22-109`) minus the PNG/base64
     /// tail, which only existed to cross the IPC boundary into a webview.
-    async fn capture_thumbnail_from_filter(filter: arc::R<sc::ContentFilter>) -> Option<RgbaImage> {
+    ///
+    /// The request is always the flat 320x180 the Tauri code asks for.
+    /// `SCScreenshotManager` scales the content to FIT that buffer, anchors
+    /// it top-left, and pads the rest with opaque black -- which is where the
+    /// picker's black-bar-over-the-card-corner artifact came from. Asking SCK
+    /// for the aspect-fitted size instead looked cleaner but capture_sample_buf
+    /// NEVER RESOLVES for some sizes (no error, the future just hangs; every
+    /// sweep in the app silently froze) -- so the padding is cropped off after
+    /// conversion instead: the content rect is exactly
+    /// [`fitted_capture_size`]'s dims at the buffer's top-left, and
+    /// [`normalize_thumbnail_dimensions`] then letterboxes the cropped image
+    /// onto the transparent canvas, centred.
+    async fn capture_thumbnail_from_filter(
+        filter: arc::R<sc::ContentFilter>,
+        (content_width, content_height): (usize, usize),
+    ) -> Option<RgbaImage> {
         let mut config = sc::StreamCfg::new();
-        config.set_width(THUMBNAIL_WIDTH as usize);
-        config.set_height(THUMBNAIL_HEIGHT as usize);
+        config.set_width(super::THUMBNAIL_WIDTH as usize);
+        config.set_height(super::THUMBNAIL_HEIGHT as usize);
         config.set_shows_cursor(false);
 
         let sample_buf =
@@ -711,6 +802,16 @@ mod platform {
         let Some(img) = RgbaImage::from_raw(width as u32, height as u32, rgba_data) else {
             warn!("Failed to construct RGBA image for thumbnail");
             return None;
+        };
+        // Crop SCK's top-left-anchored content out of the padded buffer (see
+        // the function doc). Bounded to the buffer so a surprise SCK size can
+        // never panic the crop.
+        let crop_width = (content_width as u32).min(img.width()).max(1);
+        let crop_height = (content_height as u32).min(img.height()).max(1);
+        let img = if crop_width < img.width() || crop_height < img.height() {
+            image::imageops::crop_imm(&img, 0, 0, crop_width, crop_height).to_image()
+        } else {
+            img
         };
         Some(normalize_thumbnail_dimensions(&img))
     }
@@ -1116,6 +1217,22 @@ mod tests {
 
     fn solid(width: u32, height: u32, colour: [u8; 4]) -> RgbaImage {
         RgbaImage::from_pixel(width, height, image::Rgba(colour))
+    }
+
+    #[test]
+    fn fitted_capture_size_keeps_the_source_aspect_inside_320x180() {
+        // Exact 16:9 fills the whole request.
+        assert_eq!(fitted_capture_size(Some((3200., 1800.))), (320, 180));
+        // Squarer than 16:9 (the 1706x1410 Chrome window from the probe):
+        // height binds, width shrinks -- no right-hand padding for SCK to add.
+        assert_eq!(fitted_capture_size(Some((1706., 1410.))), (218, 180));
+        // Wider than 16:9: width binds.
+        assert_eq!(fitted_capture_size(Some((3440., 1440.))), (320, 134));
+        // Tiny sources upscale, same as normalize's locked-in behaviour.
+        assert_eq!(fitted_capture_size(Some((100., 50.))), (320, 160));
+        // Unknown or degenerate sizes fall back to the flat request.
+        assert_eq!(fitted_capture_size(None), (320, 180));
+        assert_eq!(fitted_capture_size(Some((0., 1410.))), (320, 180));
     }
 
     #[test]

@@ -172,27 +172,40 @@ mod mac {
         let mtm = MainThreadMarker::new()?;
         let content_view = native.0.contentView()?;
 
-        // Clip the content view itself to the same continuous (squircle) curve
-        // the material below gets. Without it the material renders a square
-        // corner outside the shell's own `rounded(16.)` quad. The Tauri app
-        // applies this on *both* paths for the same reason, and it is plain
-        // Core Animation -- no private SPI.
+        // Clip the content view to the window's corner radius so the material
+        // below cannot paint a square corner outside the shell's own rounded
+        // quad. The curve must stay CIRCULAR (the layer default): gpui quads
+        // round with circular arcs, and a `continuous` (squircle) clip bulges
+        // outside a circular arc of the same radius along the corner
+        // diagonals -- the material showed through that crescent as the
+        // settings window's white bleed at every corner in dark mode (worst
+        // at the bottom, where nothing overlaps it). Radius must match what
+        // the window's root element draws, not what looks close.
         content_view.setWantsLayer(true);
         unsafe {
             let layer: *mut AnyObject = msg_send![&*content_view, layer];
             if !layer.is_null() {
                 let _: () = msg_send![layer, setCornerRadius: radius];
                 let _: () = msg_send![layer, setMasksToBounds: true];
-                let continuous = NSString::from_str("continuous");
-                let _: () = msg_send![layer, setCornerCurve: &*continuous];
             }
         }
 
         let bounds = content_view.bounds();
 
+        // `CAP_GPUI_MATERIAL=none|vibrancy`: bisect hooks for the chrome
+        // screenshots -- `none` keeps only the squircle clip (no material
+        // view), `vibrancy` skips the glass branch and takes the pre-26
+        // fallback. Unset means the real recipe.
+        let material_override = std::env::var("CAP_GPUI_MATERIAL").ok();
+        if material_override.as_deref() == Some("none") {
+            return None;
+        }
+
         // `NSGlassEffectView` exists only on macOS 26+; its absence is what
         // sends `macos-window-material.ts` down the vibrancy branch.
-        if let Some(glass_class) = AnyClass::get("NSGlassEffectView") {
+        if material_override.as_deref() != Some("vibrancy")
+            && let Some(glass_class) = AnyClass::get("NSGlassEffectView")
+        {
             unsafe {
                 let glass: *mut AnyObject = msg_send![glass_class, alloc];
                 let glass: *mut AnyObject = msg_send![glass, initWithFrame: bounds];
