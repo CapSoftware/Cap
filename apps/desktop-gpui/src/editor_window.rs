@@ -799,13 +799,14 @@ pub fn make_state_callback(
 /// The transport as a *desired state* rather than a command stream.
 ///
 /// Every UI action writes this and pokes the driver; the driver applies the
-/// difference between it and what the engine is actually doing. That is what
-/// makes scrubbing during playback survivable: each seek is a
-/// stop/seek/restart round trip (`Timeline/index.tsx:829-853`), and the source
-/// coalesces them to one in-flight seek with the newest position applied
-/// afterwards (`beginRulerScrub`'s `seekInFlight`/`seekQueued`,
-/// `Timeline/index.tsx:890-909`). Latest-wins state gives that for free and
-/// cannot queue up a backlog of stale positions.
+/// difference between it and what the engine is actually doing. Latest-wins
+/// state cannot queue up a backlog of stale positions, which is the property
+/// the source built by hand with `beginRulerScrub`'s
+/// `seekInFlight`/`seekQueued` (`Timeline/index.tsx:890-909`). Where the
+/// source then pays a stop/seek/restart round trip per applied seek
+/// (`Timeline/index.tsx:829-853`), the driver seeks the running engine in
+/// place (`PlaybackHandle::seek`) and restarts only when the engine is not
+/// running.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Desired {
     pub playing: bool,
@@ -836,20 +837,33 @@ pub struct TransportHandle {
 }
 
 /// The driver half, handed to [`run_transport`] on the tokio runtime.
+///
+/// `engine_stopped` is the driver's one message back to the window: the
+/// engine went away on its own -- end of timeline, warmup abort, error --
+/// while the desired state still said playing. The UI answers by running its
+/// ordinary pause path, so `Desired` stays written by the UI alone and the
+/// driver never mutates it.
 pub struct TransportDriver {
     desired: Arc<Mutex<Desired>>,
     wake: flume::Receiver<()>,
+    engine_stopped: flume::Sender<()>,
 }
 
-pub fn transport() -> (TransportHandle, TransportDriver) {
+pub fn transport() -> (TransportHandle, TransportDriver, flume::Receiver<()>) {
     let desired = Arc::new(Mutex::new(Desired::default()));
     let (tx, rx) = flume::bounded(1);
+    let (stopped_tx, stopped_rx) = flume::bounded(1);
     (
         TransportHandle {
             desired: desired.clone(),
             wake: tx,
         },
-        TransportDriver { desired, wake: rx },
+        TransportDriver {
+            desired,
+            wake: rx,
+            engine_stopped: stopped_tx,
+        },
+        stopped_rx,
     )
 }
 
@@ -907,18 +921,51 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
     let fps = EDITOR_PREVIEW_FPS;
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
+    // The engine's own liveness, epoch-guarded inside `EditorInstance` so a
+    // deliberate stop/start transition can never masquerade as a death.
+    let mut active_rx = instance.playback_watch();
+    active_rx.mark_unchanged();
 
-    while driver.wake.recv_async().await.is_ok() {
+    loop {
+        tokio::select! {
+            wake = driver.wake.recv_async() => {
+                if wake.is_err() {
+                    break;
+                }
+            }
+            changed = active_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let active = *active_rx.borrow_and_update();
+                // A false while this driver believes it is playing is an
+                // engine-initiated stop: the driver marks the engine gone and
+                // tells the window, which answers through its ordinary pause
+                // path (so `Desired` remains UI-owned). A deliberate stop
+                // below flips `applied_playing` first, so it never lands here.
+                if !active && applied_playing {
+                    tracing::debug!("engine stopped without a pause request");
+                    applied_playing = false;
+                    let _ = driver.engine_stopped.try_send(());
+                }
+                continue;
+            }
+        }
+
         let want = *driver
             .desired
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let seeking = want.seek_gen != applied_gen;
 
-        // `stopPlayback` first, always: the source stops before it seeks
-        // (`seekPlayheadTo`, `Timeline/index.tsx:829-845`) and before it
-        // restarts at the end (`handlePlayPauseClick`'s at-end arm).
-        if applied_playing && (!want.playing || seeking) {
+        // A pause stops the engine outright. A seek no longer does: the
+        // engine holds a live-seek input (`PlaybackHandle::seek`), so
+        // scrubbing during playback re-anchors the running engine in place
+        // instead of paying stop/warmup/audio-attach per tick -- the round
+        // trip the source pays in `seekPlayheadTo`
+        // (`Timeline/index.tsx:829-853`).
+        if applied_playing && !want.playing {
+            applied_playing = false;
             let handle = {
                 let mut state = instance.state.lock().await;
                 state.playback_task.take()
@@ -926,22 +973,41 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             if let Some(handle) = handle {
                 handle.stop();
             }
-            applied_playing = false;
         }
 
         if seeking {
             applied_gen = want.seek_gen;
             if let Some(frame) = want.seek {
-                // `seek_to` (`lib.rs:4230`) -- moves the playhead the next
-                // `start_playback` will begin from, and renders nothing.
-                instance
-                    .modify_and_emit_state(|state| state.playhead_position = frame)
-                    .await;
-                if !want.playing {
-                    // The repaint half, which `seek_to` does not do: the
-                    // frontend emits `RenderFrameEvent` and Rust forwards it
-                    // into `preview_tx` (`lib.rs:3009-3014, 6603-6614`).
-                    request_frame(&instance, frame, want.resolution);
+                if want.playing && applied_playing {
+                    if !instance.seek_playback(frame).await {
+                        // The engine died between the UI's write and this
+                        // apply. Clean up the dead handle and fall through to
+                        // the restart below, which begins from this playhead.
+                        applied_playing = false;
+                        let handle = {
+                            let mut state = instance.state.lock().await;
+                            state.playback_task.take()
+                        };
+                        if let Some(handle) = handle {
+                            handle.stop();
+                        }
+                        instance
+                            .modify_and_emit_state(|state| state.playhead_position = frame)
+                            .await;
+                    }
+                } else {
+                    // `seek_to` (`lib.rs:4230`) -- moves the playhead the next
+                    // `start_playback` will begin from, and renders nothing.
+                    instance
+                        .modify_and_emit_state(|state| state.playhead_position = frame)
+                        .await;
+                    if !want.playing {
+                        // The repaint half, which `seek_to` does not do: the
+                        // frontend emits `RenderFrameEvent` and Rust forwards
+                        // it into `preview_tx` (`lib.rs:3009-3014,
+                        // 6603-6614`).
+                        request_frame(&instance, frame, want.resolution);
+                    }
                 }
             }
         }
@@ -2072,6 +2138,20 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// The engine stopped without being asked -- end of timeline under a live
+    /// seek, the warmup's no-frames abort, or an error. Without this the
+    /// window would keep showing Pause over a dead engine until the user
+    /// pressed it twice. Runs the ordinary pause path so `Desired` stays
+    /// UI-owned and the run's stats still get reported.
+    pub fn engine_stopped(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.playing {
+            return;
+        }
+        tracing::info!("playback engine stopped on its own; resetting transport UI");
+        self.stop_playback(cx);
+        window.refresh();
+    }
+
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
         let Some(transport) = &self.transport else {
             return;
@@ -2159,9 +2239,10 @@ impl EditorWindow {
         }
     }
 
-    /// `seekPlayheadTo` (`Timeline/index.tsx:829-853`). Seeking while playing
-    /// is a stop/seek/restart round trip in the source too -- expressed here
-    /// as one desired-state write, which the driver applies in that order.
+    /// `seekPlayheadTo` (`Timeline/index.tsx:829-853`), minus the source's
+    /// stop/seek/restart round trip: the driver live-seeks the running engine
+    /// (`PlaybackHandle::seek`), so a scrub during playback holds the last
+    /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
         let Some(transport) = &self.transport else {
             return;
@@ -2171,10 +2252,11 @@ impl EditorWindow {
         // off-by-one drift".
         let frame = (time * EDITOR_PREVIEW_FPS as f64).round() as u32;
         if self.playing {
-            // A seek during playback restarts the engine, so it opens a new
-            // play epoch exactly like pressing play does: extrapolation is
-            // parked until the restarted engine's frames flow (see
-            // `start_playback` and `playhead_extrapolation`).
+            // A live seek re-anchors the engine's clock at the target, and
+            // the drawn line re-anchors with it: the engine's immediate
+            // `Frame(target)` echo lands at exactly `playhead_epoch_start`,
+            // and only a sample past it proves frames are flowing again (see
+            // `playhead_extrapolation`).
             self.playhead_epoch_live = false;
             self.playhead_epoch_start = frame;
             transport.play_from(frame);
@@ -4647,6 +4729,13 @@ impl EditorWindow {
     /// A frame off the pump. `refresh` as well as `notify`: this window may be
     /// inactive when the first frame lands, and an inactive window repaints
     /// only when explicitly asked (the unit-2 finding).
+    ///
+    /// The refresh covers **every** frame delivered while inactive, not just
+    /// the first: a deactivated editor measured 259 paints against 292
+    /// delivered frames, because a plain `notify` on the preview entity leaves
+    /// gpui free to coalesce. The engine-side half of the same finding is the
+    /// fork's `will_draw` bypass -- a pending next-frame callback used to arm
+    /// the inactive-window energy saver and cap fresh frames at 30fps.
     pub fn frame_arrived(
         &mut self,
         frame: EditorFrame,
@@ -4691,6 +4780,13 @@ impl EditorWindow {
         if layout_changed || cleared_drag_rect {
             cx.notify();
         }
+        // `refresh()` is a whole-window invalidation, so calling it per frame on
+        // an inactive window rebuilds the sidebar, timeline and panels at 60Hz:
+        // measured, that saturates the main thread and the pump drops 224 of 298
+        // frames. The preview entity's own `notify` already marks the frame
+        // dirty, and the fork's `will_draw` bypass is what lets a dirty frame
+        // through the inactive-window throttle -- so the cheap half is enough
+        // and this stays scoped to the first frame and the paused re-render.
         if !window.is_window_active() && (first_frame || !self.playing) {
             window.refresh();
         }
@@ -8828,7 +8924,7 @@ mod tests {
     /// still re-renders), and a pause moves nothing else.
     #[test]
     fn transport_desired_state_tracks_the_sources_call_order() {
-        let (handle, driver) = transport();
+        let (handle, driver, _engine_stopped_rx) = transport();
         let read = || {
             *driver
                 .desired

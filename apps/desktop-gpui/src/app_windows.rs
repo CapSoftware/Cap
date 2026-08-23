@@ -2558,7 +2558,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The transport driver: one task, applying the window's desired
         // transport state to the instance. Everything it calls locks
         // `instance.state`, so none of it may run on the UI thread.
-        let (transport, driver) = editor_window::transport();
+        let (transport, driver, engine_stopped_rx) = editor_window::transport();
         let driver_instance = instance.clone();
         cx.update(|cx| {
             gpui_tokio::Tokio::spawn(cx, async move {
@@ -2566,6 +2566,21 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
             })
             .detach();
         });
+
+        // The engine-stop drain: the driver's message that the engine died on
+        // its own (end of timeline under a live seek, warmup abort, error),
+        // delivered on the main thread like every other foreign-thread seam.
+        cx.spawn(async move |cx| {
+            while engine_stopped_rx.recv_async().await.is_ok() {
+                if handle
+                    .update(cx, |view, window, cx| view.engine_stopped(window, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
 
         // `totalDuration()` (`context.ts:1374-1380`). Read off the instance
         // rather than the pre-flight, because `EditorInstance::new`
@@ -2804,7 +2819,14 @@ async fn drive_auto_playback(
     let seek = std::env::var("CAP_GPUI_AUTO_SEEK")
         .ok()
         .and_then(|value| value.parse::<f64>().ok());
-    if play_secs.is_none() && torture.is_none() && seek.is_none() {
+    // `CAP_GPUI_AUTO_SCRUB_PLAYING=<n>`: a synthetic ruler drag during
+    // playback -- n seeks at 33ms intervals sweeping 20% to 70% of the
+    // timeline. This is the live-seek path's perf gate: every seek lands on a
+    // RUNNING engine through `seek_to_time`, exactly as a real drag does.
+    let scrub_playing = std::env::var("CAP_GPUI_AUTO_SCRUB_PLAYING")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    if play_secs.is_none() && torture.is_none() && seek.is_none() && scrub_playing.is_none() {
         return;
     }
 
@@ -2857,6 +2879,34 @@ async fn drive_auto_playback(
             })
             .ok();
         tracing::info!(fraction, "auto seek");
+    }
+
+    if let Some(n) = scrub_playing {
+        if handle
+            .update(cx, |view, window, cx| view.toggle_play(window, cx))
+            .is_err()
+        {
+            return;
+        }
+        sleep(cx, 800).await;
+        tracing::info!(n, "auto scrub-while-playing: start");
+        for i in 0..n {
+            let fraction = 0.2 + 0.5 * (i as f64 / n.max(1) as f64);
+            if handle
+                .update(cx, |view, window, cx| {
+                    view.seek_fraction(fraction, window, cx)
+                })
+                .is_err()
+            {
+                return;
+            }
+            sleep(cx, 33).await;
+        }
+        tracing::info!("auto scrub-while-playing: drag done");
+        sleep(cx, 2000).await;
+        handle
+            .update(cx, |view, _window, cx| view.stop_for_measurement(cx))
+            .ok();
     }
 
     // `CAP_GPUI_AUTO_EDITOR_CLOSE=<secs>`: close the editor that many seconds

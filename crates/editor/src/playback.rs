@@ -13,7 +13,7 @@ use std::{
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc as std_mpsc,
     },
     time::{Duration, Instant},
@@ -35,10 +35,17 @@ const INITIAL_PREFETCH_BUFFER_SIZE: usize = 10;
 const MAX_PREFETCH_BUFFER_SIZE: usize = 90;
 const PREFETCH_CHANNEL_SIZE: usize = 4;
 const MAX_PREFETCH_BUFFER_BYTES: usize = 128 * 1024 * 1024;
+// Starvation boost: when the playback loop skips because decode fell behind,
+// the runway temporarily widens (2x frames, byte budget below) and decays back
+// after BOOST_CLEAN_WINDOW without another starvation skip. Steady-state
+// memory is unchanged; the boost only spends memory while it is earning
+// smoothness back.
+const BOOSTED_PREFETCH_BUFFER_BYTES: usize = 192 * 1024 * 1024;
+const BOOST_CLEAN_WINDOW: Duration = Duration::from_secs(6);
 const PARALLEL_DECODE_TASKS: usize = 4;
 const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
-const FRAME_CACHE_SIZE: usize = 1;
-const MAX_FRAME_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const FRAME_CACHE_SIZE: usize = 4;
+const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 #[cfg(target_os = "windows")]
@@ -126,6 +133,8 @@ pub enum PlaybackEvent {
 pub struct PlaybackHandle {
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
+    seek_tx: Arc<watch::Sender<(u64, u32)>>,
+    seek_generation: Arc<AtomicU64>,
 }
 
 struct PrefetchedFrame {
@@ -209,18 +218,50 @@ fn prefetch_frame_limit(frame_bytes: usize) -> usize {
         .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
 }
 
-fn observe_prefetched_frame(
-    frame: &PrefetchedFrame,
-    largest_frame_bytes: &mut usize,
-    frame_limit: &AtomicUsize,
-) {
-    let frame_bytes = frame.byte_len();
-    if frame_bytes <= *largest_frame_bytes {
-        return;
+// The boosted limit is capped both by 2x the base and by the boosted byte
+// budget, but never drops below base: on Retina-sized frames the byte quotient
+// alone would land under the base floor and silently disable the boost.
+fn boosted_prefetch_frame_limit(frame_bytes: usize) -> usize {
+    let base = prefetch_frame_limit(frame_bytes);
+    if frame_bytes == 0 {
+        return base;
     }
 
-    *largest_frame_bytes = frame_bytes;
-    frame_limit.store(prefetch_frame_limit(frame_bytes), Ordering::Relaxed);
+    (base * 2)
+        .min((BOOSTED_PREFETCH_BUFFER_BYTES / frame_bytes).max(base + 6))
+        .clamp(base, MAX_PREFETCH_BUFFER_SIZE)
+}
+
+fn effective_prefetch_limit(frame_bytes: usize, boosted: bool) -> usize {
+    if boosted {
+        boosted_prefetch_frame_limit(frame_bytes)
+    } else {
+        prefetch_frame_limit(frame_bytes)
+    }
+}
+
+fn observe_prefetched_frame(frame: &PrefetchedFrame, largest_frame_bytes: &mut usize) {
+    let frame_bytes = frame.byte_len();
+    if frame_bytes > *largest_frame_bytes {
+        *largest_frame_bytes = frame_bytes;
+    }
+}
+
+// Until a frame has been observed the atomic keeps its INITIAL value; storing
+// the zero-bytes result here would open the runway to MAX before the first
+// frame's size is known.
+fn refresh_prefetch_limit(
+    limit: &AtomicUsize,
+    largest_frame_bytes: usize,
+    boost_until: Option<Instant>,
+) -> usize {
+    if largest_frame_bytes == 0 {
+        return limit.load(Ordering::Relaxed);
+    }
+    let boosted = boost_until.is_some_and(|until| Instant::now() < until);
+    let value = effective_prefetch_limit(largest_frame_bytes, boosted);
+    limit.store(value, Ordering::Relaxed);
+    value
 }
 
 struct FrameCache {
@@ -449,9 +490,14 @@ impl Playback {
         let (event_tx, mut event_rx) = watch::channel(PlaybackEvent::Start);
         event_rx.borrow_and_update();
 
+        let (seek_tx, mut seek_rx) = watch::channel((0u64, self.start_frame_number));
+        seek_rx.borrow_and_update();
+
         let handle = PlaybackHandle {
             stop_tx: stop_tx.clone(),
             event_rx,
+            seek_tx: Arc::new(seek_tx),
+            seek_generation: Arc::new(AtomicU64::new(0)),
         };
 
         let (prefetch_tx, prefetch_rx) =
@@ -709,6 +755,7 @@ impl Playback {
             let mut prefetch_hits = 0u64;
             let sync_decodes = 0u64;
             let mut last_stats_time = Instant::now();
+            let mut frames_at_last_stats = 0u64;
             let stats_interval = Duration::from_secs(2);
 
             let is_mid_start = self.start_frame_number > 0;
@@ -721,8 +768,31 @@ impl Playback {
             let warmup_no_frames_timeout = Duration::from_secs(5);
             let warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
+            let mut boost_until: Option<Instant> = None;
+            let mut starvation_skips = 0u64;
 
             while !*stop_rx.borrow() {
+                refresh_prefetch_limit(
+                    &prefetch_frame_limit,
+                    largest_prefetched_frame_bytes,
+                    boost_until,
+                );
+
+                // A seek that lands during warmup retargets the warmup itself:
+                // the buffer keeps only frames at or past the target and the
+                // producer re-anchors through the same watch a mid-playback
+                // seek uses.
+                if seek_rx.has_changed().unwrap_or(false) {
+                    let (_, target) = *seek_rx.borrow_and_update();
+                    if target != frame_number {
+                        frame_number = target;
+                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                        event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+                    }
+                }
+
                 let should_start = if let Some(first_time) = first_frame_time {
                     prefetch_buffer
                         .iter()
@@ -744,6 +814,9 @@ impl Playback {
                         "Playback warmup timed out waiting for first frame after {:?}",
                         warmup_start.elapsed()
                     );
+                    // Without the stop signal the prefetch producer task keeps
+                    // decoding forever after an aborted warmup.
+                    stop_tx.send(true).ok();
                     let _ = event_tx.send(PlaybackEvent::Stop);
                     return;
                 }
@@ -754,7 +827,6 @@ impl Playback {
                             observe_prefetched_frame(
                                 &prefetched,
                                 &mut largest_prefetched_frame_bytes,
-                                &prefetch_frame_limit,
                             );
                             prefetch_buffer.push_back(prefetched);
                             if first_frame_time.is_none() {
@@ -770,7 +842,6 @@ impl Playback {
                                         observe_prefetched_frame(
                                             &p,
                                             &mut largest_prefetched_frame_bytes,
-                                            &prefetch_frame_limit,
                                         );
                                         prefetch_buffer.push_back(p);
                                     }
@@ -985,7 +1056,6 @@ impl Playback {
                             observe_prefetched_frame(
                                 &prefetched,
                                 &mut largest_prefetched_frame_bytes,
-                                &prefetch_frame_limit,
                             );
                             prefetch_buffer.push_back(prefetched);
                         }
@@ -1036,9 +1106,42 @@ impl Playback {
                     elapsed: start_call.elapsed(),
                 });
             }
-            let start = Instant::now();
+            let mut start = Instant::now();
+            let mut clock_anchor_frame = self.start_frame_number;
 
             'playback: loop {
+                let limit_now = refresh_prefetch_limit(
+                    &prefetch_frame_limit,
+                    largest_prefetched_frame_bytes,
+                    boost_until,
+                );
+
+                // A live seek re-anchors the clock in place instead of tearing
+                // the engine down: the producer resets through the same watch
+                // its skip paths use, the last rendered picture holds until
+                // the target's frames arrive, and audio reseats itself off the
+                // playhead watch (>50ms jumps re-seat in render_source_block).
+                if seek_rx.has_changed().unwrap_or(false) {
+                    let (_, target) = *seek_rx.borrow_and_update();
+                    if target != frame_number {
+                        tracing::debug!(from = frame_number, to = target, "playback live seek");
+                        frame_number = target;
+                        clock_anchor_frame = target;
+                        start = Instant::now();
+                        let keep_until = target.saturating_add(limit_now as u32);
+                        prefetch_buffer
+                            .retain(|p| p.frame_number >= target && p.frame_number <= keep_until);
+                        frame_cache.evict_far_from(target, limit_now as u32);
+                        let _ = frame_request_tx.send(target);
+                        let _ = playback_position_tx.send(target);
+                        event_tx.send(PlaybackEvent::Frame(target)).ok();
+                        if has_audio && audio_playhead_tx.send(target as f64 / fps_f64).is_err() {
+                            break 'playback;
+                        }
+                        continue;
+                    }
+                }
+
                 if self.project.has_changed().unwrap_or(false) {
                     cached_project = self.project.borrow_and_update().clone();
                     cursor_timelines = build_cursor_timelines(&cached_project);
@@ -1046,7 +1149,7 @@ impl Playback {
                     outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
                 }
 
-                let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
+                let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
                 let next_deadline = start + frame_duration.mul_f64(frame_offset);
 
                 precision_sleep_sync(next_deadline);
@@ -1105,7 +1208,6 @@ impl Playback {
                                 observe_prefetched_frame(
                                     &prefetched,
                                     &mut largest_prefetched_frame_bytes,
-                                    &prefetch_frame_limit,
                                 );
                                 prefetch_buffer.push_back(prefetched);
                             }
@@ -1164,7 +1266,6 @@ impl Playback {
                                 observe_prefetched_frame(
                                     &prefetched,
                                     &mut largest_prefetched_frame_bytes,
-                                    &prefetch_frame_limit,
                                 );
                                 if prefetched.frame_number == frame_number {
                                     frame_source = PlaybackFrameSource::PrefetchWaitExact;
@@ -1174,6 +1275,8 @@ impl Playback {
                                     let skipped_from = frame_number;
                                     frame_number = prefetched.frame_number;
                                     total_frames_skipped += 1;
+                                    starvation_skips += 1;
+                                    boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                                     if let Some(telemetry) = &self.telemetry {
                                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
                                             frame_number: skipped_from,
@@ -1188,6 +1291,8 @@ impl Playback {
                                     let skipped_from = frame_number;
                                     frame_number = frame_number.saturating_add(1);
                                     total_frames_skipped += 1;
+                                    starvation_skips += 1;
+                                    boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                                     if let Some(telemetry) = &self.telemetry {
                                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
                                             frame_number: skipped_from,
@@ -1203,6 +1308,8 @@ impl Playback {
                                 let skipped_from = frame_number;
                                 frame_number = frame_number.saturating_add(1);
                                 total_frames_skipped += 1;
+                                starvation_skips += 1;
+                                boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                                 let _ = frame_request_tx.send(frame_number);
                                 let _ = playback_position_tx.send(frame_number);
                                 if let Some(telemetry) = &self.telemetry {
@@ -1254,7 +1361,6 @@ impl Playback {
                                         observe_prefetched_frame(
                                             &p,
                                             &mut largest_prefetched_frame_bytes,
-                                            &prefetch_frame_limit,
                                         );
                                         prefetch_buffer.push_back(p);
                                     }
@@ -1280,6 +1386,8 @@ impl Playback {
                                 let skipped_from = frame_number;
                                 frame_number = next_available_frame;
                                 total_frames_skipped += jumped as u64;
+                                starvation_skips += jumped as u64;
+                                boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                                 let _ = playback_position_tx.send(frame_number);
                                 if let Some(telemetry) = &self.telemetry {
                                     telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
@@ -1301,6 +1409,8 @@ impl Playback {
                             let skipped_from = frame_number;
                             frame_number = frame_number.saturating_add(1);
                             total_frames_skipped += 1;
+                            starvation_skips += 1;
+                            boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
                             let _ = playback_position_tx.send(frame_number);
                             if let Some(telemetry) = &self.telemetry {
                                 telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
@@ -1446,17 +1556,25 @@ impl Playback {
                 }
 
                 if last_stats_time.elapsed() >= stats_interval {
-                    let effective_fps =
-                        total_frames_rendered as f64 / start.elapsed().as_secs_f64().max(0.001);
+                    // Rate over the reporting window, not since `start`: a live
+                    // seek re-anchors `start`, so a lifetime average would read
+                    // thousands of fps right after a scrub.
+                    let window_secs = last_stats_time.elapsed().as_secs_f64().max(0.001);
+                    let effective_fps = total_frames_rendered.saturating_sub(frames_at_last_stats)
+                        as f64
+                        / window_secs;
+                    frames_at_last_stats = total_frames_rendered;
                     let buffer_len = prefetch_buffer.len();
                     info!(
                         effective_fps = format!("{:.1}", effective_fps),
                         total_rendered = total_frames_rendered,
                         total_skipped = total_frames_skipped,
+                        starved = starvation_skips,
                         cache_hits = cache_hits,
                         prefetch_hits = prefetch_hits,
                         sync_decodes = sync_decodes,
                         prefetch_buffer = buffer_len,
+                        prefetch_limit = prefetch_frame_limit.load(Ordering::Relaxed),
                         "Playback stats"
                     );
                     last_stats_time = Instant::now();
@@ -1474,8 +1592,8 @@ impl Playback {
                     break 'playback;
                 }
 
-                let expected_frame = self.start_frame_number
-                    + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+                let expected_frame =
+                    clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
@@ -1542,6 +1660,14 @@ impl PlaybackHandle {
         self.stop_tx.send(true).ok();
     }
 
+    /// Seek the running playback in place: no teardown, no warmup, no audio
+    /// re-attach. Returns false once the playback thread is gone, which is the
+    /// caller's cue to fall back to a full restart.
+    pub fn seek(&self, frame: u32) -> bool {
+        let generation = self.seek_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.seek_tx.send((generation, frame)).is_ok()
+    }
+
     pub async fn receive_event(&mut self) -> watch::Ref<'_, PlaybackEvent> {
         self.event_rx.changed().await.ok();
         self.event_rx.borrow_and_update()
@@ -1601,6 +1727,36 @@ mod tests {
         assert_eq!(cache.cache.len(), 1);
         assert_eq!(cache.cache_bytes, 10);
         assert!(cache.get(1).is_some());
+    }
+
+    #[test]
+    fn frame_cache_holds_multiple_frames_within_byte_budget() {
+        let retina_frame = 24 * 1024 * 1024;
+        let mut cache = FrameCache::new(FRAME_CACHE_SIZE, MAX_FRAME_CACHE_BYTES);
+        cache.insert(1, Arc::new(decoded_frames(retina_frame)), 0, None);
+        cache.insert(2, Arc::new(decoded_frames(retina_frame)), 0, None);
+        assert!(cache.get(1).is_some());
+        assert!(cache.get(2).is_some());
+
+        cache.insert(3, Arc::new(decoded_frames(retina_frame)), 0, None);
+        assert_eq!(cache.cache.len(), 2);
+        assert!(cache.cache_bytes <= MAX_FRAME_CACHE_BYTES);
+        assert!(cache.get(3).is_some());
+    }
+
+    #[test]
+    fn boosted_limit_widens_and_never_shrinks_below_base() {
+        let retina_frame = 24 * 1024 * 1024;
+        let base = prefetch_frame_limit(retina_frame);
+        let boosted = boosted_prefetch_frame_limit(retina_frame);
+        assert_eq!(base, INITIAL_PREFETCH_BUFFER_SIZE);
+        assert!(boosted > base);
+        assert!(boosted <= base * 2);
+
+        let small_frame = 2 * 1024 * 1024;
+        assert!(boosted_prefetch_frame_limit(small_frame) >= prefetch_frame_limit(small_frame));
+        assert!(boosted_prefetch_frame_limit(small_frame) <= MAX_PREFETCH_BUFFER_SIZE);
+        assert_eq!(boosted_prefetch_frame_limit(0), prefetch_frame_limit(0));
     }
 
     #[test]
