@@ -2772,7 +2772,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn muting_a_1x_clip_sets_speed_audio_mode() {
         let mut project = zoom_fixture();
         let timeline = project.timeline.as_mut().unwrap();
@@ -2788,6 +2787,7 @@ mod tests {
         assert_eq!(timeline.segments[0].speed_audio_mode, None);
     }
 
+    #[test]
     fn setting_clip_speed_audio_mode_writes_the_segment() {
         let mut project = zoom_fixture();
         let timeline = project.timeline.as_mut().unwrap();

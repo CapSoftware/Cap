@@ -1575,10 +1575,6 @@ mod tests {
         assert!(!cache.take_prewarm());
     }
 
-    /// The wedge this guards against: resetting the cache drops the tasks that
-    /// own the in-flight flags, so a reset that left one set would block that
-    /// kind's refresh for the life of the view.
-    #[test]
     /// The nested-runtime trick `run_capture` leans on: a blocking-pool thread
     /// is allowed to stand up its own current-thread runtime and `block_on`,
     /// where a worker thread would panic with "cannot start a runtime from
