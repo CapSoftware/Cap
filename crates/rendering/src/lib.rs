@@ -208,10 +208,50 @@ pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     #[cfg(target_os = "windows")]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: bundled_dxc_compiler(),
+            },
+            ..Default::default()
+        },
         ..Default::default()
     });
 
     instance
+}
+
+#[cfg(target_os = "windows")]
+fn bundled_dxc_compiler() -> wgpu::Dx12Compiler {
+    let Some((dxc_path, dxil_path)) = bundled_dxc_paths() else {
+        tracing::debug!("Bundled DXC unavailable; using FXC for DX12 shader compilation");
+        return wgpu::Dx12Compiler::Fxc;
+    };
+
+    tracing::info!(
+        dxc_path = %dxc_path.display(),
+        dxil_path = %dxil_path.display(),
+        "Using bundled DXC for DX12 shader compilation"
+    );
+    wgpu::Dx12Compiler::DynamicDxc {
+        dxc_path: dxc_path.to_string_lossy().into_owned(),
+        dxil_path: dxil_path.to_string_lossy().into_owned(),
+        max_shader_model: wgpu::DxcShaderModel::V6_7,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn bundled_dxc_paths() -> Option<(PathBuf, PathBuf)> {
+    let executable = std::env::current_exe().ok()?;
+    let executable_dir = executable.parent()?;
+    let profile_dir = (executable_dir.file_name()? == "deps")
+        .then(|| executable_dir.parent())
+        .flatten();
+
+    [Some(executable_dir), profile_dir]
+        .into_iter()
+        .flatten()
+        .map(|dir| (dir.join("dxcompiler.dll"), dir.join("dxil.dll")))
+        .find(|(dxc_path, dxil_path)| dxc_path.is_file() && dxil_path.is_file())
 }
 
 pub async fn create_wgpu_instance() -> wgpu::Instance {
