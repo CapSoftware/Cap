@@ -948,6 +948,14 @@ pub struct RgbaToBgraSurfaceConverter {
     texture_cache: IOSurfaceTextureCache,
     surface_ring: Vec<BgraSurfaceSlot>,
     next_surface: usize,
+    pool: Option<arc::R<cv::PixelBufPool>>,
+    /// Both liveness signals are calibrated against a slot the ring alone owns
+    /// rather than hardcoded: the pool's own bookkeeping and the Metal import
+    /// each add a fixed retain, and if a never-displayed surface already
+    /// reported in-use, that half of the test would starve every frame, so it
+    /// is disabled instead.
+    baseline_retain: isize,
+    honor_use_count: bool,
     pool_size: (u32, u32),
     /// Bind groups keyed by source-texture identity. The session ping-pongs
     /// between two render targets, so two entries cover the steady state; a
@@ -960,12 +968,34 @@ pub struct RgbaToBgraSurfaceConverter {
 unsafe impl Send for RgbaToBgraSurfaceConverter {}
 
 #[cfg(target_os = "macos")]
+const BGRA_SURFACE_RING_SIZE: usize = 8;
+
+#[cfg(target_os = "macos")]
+const BGRA_SURFACE_RING_MAX: usize = 12;
+
+#[cfg(target_os = "macos")]
 struct BgraSurfaceSlot {
     pixel_buffer: arc::R<cv::PixelBuf>,
     /// Held so the IOSurface-imported texture's lifetime is explicit rather
     /// than riding on `view`'s internal parent reference.
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
+}
+
+#[cfg(target_os = "macos")]
+impl BgraSurfaceSlot {
+    fn is_free(&self, baseline_retain: isize, honor_use_count: bool) -> bool {
+        if self.pixel_buffer.retain_count() > baseline_retain {
+            return false;
+        }
+        if honor_use_count
+            && let Some(surface) = self.pixel_buffer.io_surf()
+            && surface.is_in_use()
+        {
+            return false;
+        }
+        true
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1029,6 +1059,9 @@ impl RgbaToBgraSurfaceConverter {
             texture_cache,
             surface_ring: Vec::new(),
             next_surface: 0,
+            pool: None,
+            baseline_retain: 0,
+            honor_use_count: false,
             pool_size: (0, 0),
             source_bind_groups: Vec::new(),
         })
@@ -1107,42 +1140,94 @@ impl RgbaToBgraSurfaceConverter {
             Some(pixel_buffer_attributes.as_ref()),
         )
         .map_err(|error| RenderingError::Surface(error.to_string()))?;
-        let metal_usage = mtl::TextureUsage::SHADER_READ | mtl::TextureUsage::RENDER_TARGET;
-        let texture_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let mut surface_ring = Vec::with_capacity(8);
-        for _ in 0..8 {
-            let pixel_buffer = pool
-                .pixel_buf()
-                .map_err(|error| RenderingError::Surface(error.to_string()))?;
-            let io_surface = pixel_buffer.io_surf().ok_or_else(|| {
-                RenderingError::Surface("Pixel buffer has no IOSurface".to_string())
-            })?;
-            let metal_texture = self
-                .texture_cache
-                .create_bgra_texture_with_usage(io_surface, width, height, metal_usage)
-                .map_err(|error| RenderingError::Surface(error.to_string()))?;
-            let texture = import_metal_texture_to_wgpu_with_usage(
-                device,
-                &metal_texture,
-                wgpu::TextureFormat::Bgra8Unorm,
-                width,
-                height,
-                texture_usage,
-                Some("BGRA IOSurface"),
-            )
-            .map_err(|error| RenderingError::Surface(error.to_string()))?;
-            let view = texture.create_view(&Default::default());
-            surface_ring.push(BgraSurfaceSlot {
-                pixel_buffer,
-                _texture: texture,
-                view,
-            });
+        let mut surface_ring = Vec::with_capacity(BGRA_SURFACE_RING_SIZE);
+        for _ in 0..BGRA_SURFACE_RING_SIZE {
+            surface_ring.push(self.build_slot(device, &pool, width, height)?);
         }
 
+        self.baseline_retain = surface_ring
+            .first()
+            .map(|slot| slot.pixel_buffer.retain_count())
+            .unwrap_or(1);
+        self.honor_use_count = surface_ring
+            .first()
+            .and_then(|slot| slot.pixel_buffer.io_surf())
+            .is_some_and(|surface| !surface.is_in_use());
         self.surface_ring = surface_ring;
+        self.pool = Some(pool);
         self.next_surface = 0;
         self.pool_size = (width, height);
         Ok(())
+    }
+
+    fn build_slot(
+        &mut self,
+        device: &wgpu::Device,
+        pool: &cv::PixelBufPool,
+        width: u32,
+        height: u32,
+    ) -> Result<BgraSurfaceSlot, RenderingError> {
+        let metal_usage = mtl::TextureUsage::SHADER_READ | mtl::TextureUsage::RENDER_TARGET;
+        let pixel_buffer = pool
+            .pixel_buf()
+            .map_err(|error| RenderingError::Surface(error.to_string()))?;
+        let io_surface = pixel_buffer
+            .io_surf()
+            .ok_or_else(|| RenderingError::Surface("Pixel buffer has no IOSurface".to_string()))?;
+        let metal_texture = self
+            .texture_cache
+            .create_bgra_texture_with_usage(io_surface, width, height, metal_usage)
+            .map_err(|error| RenderingError::Surface(error.to_string()))?;
+        let texture = import_metal_texture_to_wgpu_with_usage(
+            device,
+            &metal_texture,
+            wgpu::TextureFormat::Bgra8Unorm,
+            width,
+            height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            Some("BGRA IOSurface"),
+        )
+        .map_err(|error| RenderingError::Surface(error.to_string()))?;
+        let view = texture.create_view(&Default::default());
+        Ok(BgraSurfaceSlot {
+            pixel_buffer,
+            _texture: texture,
+            view,
+        })
+    }
+
+    fn acquire_slot(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> Result<usize, RenderingError> {
+        let len = self.surface_ring.len();
+        for offset in 0..len {
+            let index = (self.next_surface + offset) % len;
+            if self.surface_ring[index].is_free(self.baseline_retain, self.honor_use_count) {
+                self.next_surface = (index + 1) % len;
+                return Ok(index);
+            }
+        }
+
+        if len < BGRA_SURFACE_RING_MAX
+            && let Some(pool) = self.pool.clone()
+        {
+            let slot = self.build_slot(device, &pool, width, height)?;
+            self.surface_ring.push(slot);
+            self.next_surface = 0;
+            return Ok(self.surface_ring.len() - 1);
+        }
+
+        if len == 0 {
+            return Err(RenderingError::Surface(
+                "BGRA surface ring is empty".to_string(),
+            ));
+        }
+        let index = self.next_surface % len;
+        self.next_surface = (index + 1) % len;
+        Ok(index)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1158,10 +1243,10 @@ impl RgbaToBgraSurfaceConverter {
     ) -> Result<PendingSurface, RenderingError> {
         self.ensure_pixel_buffer_pool(device, width, height)?;
         let bind_group = self.source_bind_group(device, source_texture);
-        let slot = &self.surface_ring[self.next_surface];
+        let slot_index = self.acquire_slot(device, width, height)?;
+        let slot = &self.surface_ring[slot_index];
         let pixel_buffer = slot.pixel_buffer.clone();
         let dest_view = slot.view.clone();
-        self.next_surface = (self.next_surface + 1) % self.surface_ring.len();
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
