@@ -32,6 +32,7 @@ impl CameraInfo {
             let desc = format.format_desc();
             let width = desc.dims().width as u32;
             let height = desc.dims().height as u32;
+            let pixel_format = fourcc_display(desc.media_sub_type());
 
             for fr_range in format.video_supported_frame_rate_ranges().iter() {
                 // SAFETY: trust me bro it crashes on intel mac otherwise
@@ -49,6 +50,7 @@ impl CameraInfo {
                         height,
                         frame_rate: min.timescale as f32 / min.value as f32,
                     },
+                    pixel_format: Some(pixel_format.clone()),
                 })
             }
         }

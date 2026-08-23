@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::{
     DecodedSegmentFrames, PixelFormat,
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+    decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
@@ -68,6 +69,7 @@ pub struct DisplayLayer {
     pipeline: std::sync::Arc<CompositeVideoFramePipeline>,
     bind_groups: [Option<wgpu::BindGroup>; 2],
     last_recording_time: Option<f32>,
+    last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
     pending_copy: Option<PendingTextureCopy>,
     prefer_cpu_conversion: bool,
@@ -120,6 +122,7 @@ impl DisplayLayer {
             pipeline: composite_pipeline,
             bind_groups: [bind_group_0, bind_group_1],
             last_recording_time: None,
+            last_frame_storage: None,
             yuv_converter,
             pending_copy: None,
             prefer_cpu_conversion,
@@ -194,17 +197,21 @@ impl DisplayLayer {
             return (false, frame_size.x, frame_size.y);
         };
 
-        let frame_data = screen_frame.data();
         let actual_width = screen_frame.width();
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let uniforms = uniforms_for_source_frame(uniforms, frame_size, source_size);
         let format = screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
+        let frame_storage = screen_frame.storage_identity();
 
         let skipped = self
-            .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
 
         let mut frame_uploaded = false;
 
@@ -232,6 +239,7 @@ impl DisplayLayer {
 
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
+                    let frame_data = screen_frame.data();
                     let src_bytes_per_row = source_size.x * 4;
 
                     queue.write_texture(
@@ -258,7 +266,22 @@ impl DisplayLayer {
                 PixelFormat::Nv12 => {
                     #[cfg(target_os = "macos")]
                     if !self.prefer_cpu_conversion {
-                        if let (Some(y_data), Some(uv_data)) =
+                        let iosurface_converted = screen_frame
+                            .with_image_buf(|image_buf| {
+                                self.yuv_converter
+                                    .convert_nv12_from_iosurface(device, queue, image_buf)
+                                    .is_ok()
+                            })
+                            .unwrap_or(false);
+
+                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: source_size.x,
+                                height: source_size.y,
+                                dst_texture_index: next_texture,
+                            });
+                            true
+                        } else if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
@@ -523,6 +546,7 @@ impl DisplayLayer {
 
             if frame_uploaded {
                 self.last_recording_time = Some(current_recording_time);
+                self.last_frame_storage = Some(frame_storage);
                 self.current_texture = next_texture;
                 self.has_valid_frame = true;
             } else {
@@ -569,10 +593,15 @@ impl DisplayLayer {
         let uniforms = uniforms_for_source_frame(uniforms, frame_size, source_size);
         let format = screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
+        let frame_storage = screen_frame.storage_identity();
 
         let skipped = self
-            .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+            .last_frame_storage
+            .as_ref()
+            .is_some_and(|last| last.matches(&frame_storage))
+            || self
+                .last_recording_time
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
 
         let mut frame_uploaded = false;
 
@@ -748,7 +777,27 @@ impl DisplayLayer {
 
                     #[cfg(not(target_os = "windows"))]
                     if !self.prefer_cpu_conversion {
-                        if let (Some(y_data), Some(uv_data)) =
+                        #[cfg(target_os = "macos")]
+                        let iosurface_converted = screen_frame
+                            .with_image_buf(|image_buf| {
+                                self.yuv_converter
+                                    .convert_nv12_from_iosurface_to_encoder(
+                                        device, encoder, image_buf,
+                                    )
+                                    .is_ok()
+                            })
+                            .unwrap_or(false);
+                        #[cfg(not(target_os = "macos"))]
+                        let iosurface_converted = false;
+
+                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: source_size.x,
+                                height: source_size.y,
+                                dst_texture_index: next_texture,
+                            });
+                            true
+                        } else if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
@@ -876,6 +925,7 @@ impl DisplayLayer {
 
             if frame_uploaded {
                 self.last_recording_time = Some(current_recording_time);
+                self.last_frame_storage = Some(frame_storage);
                 self.current_texture = next_texture;
                 self.has_valid_frame = true;
             } else {

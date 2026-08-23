@@ -50,6 +50,16 @@ impl IOSurfaceTextureCache {
         width: u32,
         height: u32,
     ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
+        self.create_y_texture_with_usage(io_surface, width, height, mtl::TextureUsage::SHADER_READ)
+    }
+
+    pub fn create_y_texture_with_usage(
+        &self,
+        io_surface: &io::Surf,
+        width: u32,
+        height: u32,
+        usage: mtl::TextureUsage,
+    ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
         let mut desc = mtl::TextureDesc::new_2d(
             mtl::PixelFormat::R8UNorm,
             width as usize,
@@ -57,7 +67,7 @@ impl IOSurfaceTextureCache {
             false,
         );
         desc.set_storage_mode(mtl::StorageMode::Shared);
-        desc.set_usage(mtl::TextureUsage::SHADER_READ);
+        desc.set_usage(usage);
 
         self.metal_device
             .new_texture_with_surf(&desc, io_surface, 0)
@@ -70,6 +80,16 @@ impl IOSurfaceTextureCache {
         width: u32,
         height: u32,
     ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
+        self.create_uv_texture_with_usage(io_surface, width, height, mtl::TextureUsage::SHADER_READ)
+    }
+
+    pub fn create_uv_texture_with_usage(
+        &self,
+        io_surface: &io::Surf,
+        width: u32,
+        height: u32,
+        usage: mtl::TextureUsage,
+    ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
         let mut desc = mtl::TextureDesc::new_2d(
             mtl::PixelFormat::Rg8UNorm,
             (width / 2) as usize,
@@ -77,7 +97,7 @@ impl IOSurfaceTextureCache {
             false,
         );
         desc.set_storage_mode(mtl::StorageMode::Shared);
-        desc.set_usage(mtl::TextureUsage::SHADER_READ);
+        desc.set_usage(usage);
 
         self.metal_device
             .new_texture_with_surf(&desc, io_surface, 1)
@@ -90,6 +110,21 @@ impl IOSurfaceTextureCache {
         width: u32,
         height: u32,
     ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
+        self.create_bgra_texture_with_usage(
+            io_surface,
+            width,
+            height,
+            mtl::TextureUsage::SHADER_READ,
+        )
+    }
+
+    pub fn create_bgra_texture_with_usage(
+        &self,
+        io_surface: &io::Surf,
+        width: u32,
+        height: u32,
+        usage: mtl::TextureUsage,
+    ) -> Result<R<mtl::Texture>, IOSurfaceTextureError> {
         let mut desc = mtl::TextureDesc::new_2d(
             mtl::PixelFormat::Bgra8UNorm,
             width as usize,
@@ -97,7 +132,7 @@ impl IOSurfaceTextureCache {
             false,
         );
         desc.set_storage_mode(mtl::StorageMode::Shared);
-        desc.set_usage(mtl::TextureUsage::SHADER_READ);
+        desc.set_usage(usage);
 
         self.metal_device
             .new_texture_with_surf(&desc, io_surface, 0)
@@ -167,6 +202,27 @@ pub fn import_metal_texture_to_wgpu(
     height: u32,
     label: Option<&str>,
 ) -> Result<wgpu::Texture, IOSurfaceTextureError> {
+    import_metal_texture_to_wgpu_with_usage(
+        device,
+        metal_texture,
+        format,
+        width,
+        height,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        label,
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub fn import_metal_texture_to_wgpu_with_usage(
+    device: &wgpu::Device,
+    metal_texture: &mtl::Texture,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    usage: wgpu::TextureUsages,
+    label: Option<&str>,
+) -> Result<wgpu::Texture, IOSurfaceTextureError> {
     let desc = wgpu::TextureDescriptor {
         label,
         size: wgpu::Extent3d {
@@ -178,7 +234,7 @@ pub fn import_metal_texture_to_wgpu(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        usage,
         view_formats: &[],
     };
 

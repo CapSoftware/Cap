@@ -12,7 +12,7 @@ pub use audio_output::{
 };
 pub use cap_rendering::FrameLayout;
 pub use editor::{
-    EditorFrameCallback, EditorFrameOutput, Renderer, RendererHandle,
+    EditorFrameCallback, EditorFrameFormat, EditorFrameOutput, Renderer, RendererHandle,
     finish_renderer_layers_creation, start_renderer_layers_creation,
 };
 pub use editor_instance::{

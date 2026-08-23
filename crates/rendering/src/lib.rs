@@ -11,6 +11,8 @@ use cursor_interpolation::{
     InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
+#[cfg(target_os = "macos")]
+use frame_pipeline::finish_encoder_bgra_surface;
 use frame_pipeline::{
     NV12BufferPool, RenderSession, finish_encoder_nv12_pooled, finish_encoder_timed,
     flush_pending_readback,
@@ -57,7 +59,13 @@ mod zoom_spring;
 
 pub use coord::*;
 pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
+#[cfg(target_os = "macos")]
+pub use frame_pipeline::Nv12Surface;
+#[cfg(target_os = "macos")]
+pub use frame_pipeline::SurfaceFrame;
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
+#[cfg(target_os = "macos")]
+pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use layers::{BackgroundTextureCache, clean_background_path};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 use transition::{TransitionCompositor, TransitionParameters};
@@ -591,6 +599,8 @@ pub enum RenderingError {
         frame_number: u32,
         recording_time: f32,
     },
+    #[error("Failed to create preview surface: {0}")]
+    Surface(String),
     #[error(
         "Failed to decode video frames. The recording may be corrupted or incomplete. Try re-recording or contact support if the issue persists."
     )]
@@ -1039,6 +1049,20 @@ pub async fn render_video_to_channel(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Escape hatch for the export zero-copy VideoToolbox path: when set, the
+/// renderer reads NV12 frames back to CPU and the encoder consumes software
+/// frames, exactly as before the IOSurface path existed.
+#[cfg(target_os = "macos")]
+pub fn zero_copy_export_disabled() -> bool {
+    std::env::var("CAP_EXPORT_DISABLE_ZERO_COPY").is_ok_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel_nv12(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
@@ -1129,6 +1153,10 @@ pub async fn render_video_to_channel_nv12(
 
     let renderer_setup_start = Instant::now();
     let mut frame_renderer = FrameRenderer::new(constants);
+    #[cfg(target_os = "macos")]
+    if !zero_copy_export_disabled() {
+        frame_renderer.enable_nv12_surface_output();
+    }
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -2054,6 +2082,18 @@ impl RenderVideoConstants {
             preserve_screen_alpha: false,
         };
 
+        Self::new_with_options(options, recording_meta, meta).await
+    }
+
+    /// [`Self::new`] with the `RenderOptions` supplied by the caller instead
+    /// of probed from segment videos -- the still-image path (screenshot
+    /// editors), where there is no `SegmentRecordings` to measure and the
+    /// alpha channel must survive (`preserve_screen_alpha`).
+    pub async fn new_with_options(
+        options: RenderOptions,
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
+    ) -> Result<Self, RenderingError> {
         let instance = create_wgpu_instance().await;
 
         let force_software_adapter = force_software_wgpu_adapter();
@@ -2119,6 +2159,12 @@ impl RenderVideoConstants {
         let mut required_features = wgpu::Features::empty();
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             required_features |= wgpu::Features::PIPELINE_CACHE;
+        }
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+        {
+            required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
         }
 
         let device_descriptor = wgpu::DeviceDescriptor {
@@ -4849,6 +4895,10 @@ pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
+    #[cfg(target_os = "macos")]
+    nv12_surface_output: bool,
+    #[cfg(target_os = "macos")]
+    bgra_surface_converter: Option<RgbaToBgraSurfaceConverter>,
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
 }
@@ -4861,9 +4911,37 @@ impl<'a> FrameRenderer<'a> {
             constants,
             session: None,
             nv12_converter: None,
+            #[cfg(target_os = "macos")]
+            nv12_surface_output: false,
+            #[cfg(target_os = "macos")]
+            bgra_surface_converter: None,
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
         }
+    }
+
+    /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
+    /// CPU readbacks, for zero-copy VideoToolbox encoding. Only meaningful on
+    /// macOS with a hardware adapter; the converter falls back to readback
+    /// output on its own if the surface machinery is unavailable.
+    #[cfg(target_os = "macos")]
+    pub fn enable_nv12_surface_output(&mut self) {
+        if !self.constants.is_software_adapter {
+            self.nv12_surface_output = true;
+        }
+    }
+
+    fn new_nv12_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
+        #[cfg(target_os = "macos")]
+        {
+            let mut converter = frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
+            if self.nv12_surface_output {
+                converter.enable_surface_output();
+            }
+            converter
+        }
+        #[cfg(not(target_os = "macos"))]
+        frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
     }
 
     pub fn reset_session(&mut self) {
@@ -5128,6 +5206,96 @@ impl<'a> FrameRenderer<'a> {
             .unwrap_or(Err(RenderingError::BufferMapWaitingFailed))
     }
 
+    #[cfg(target_os = "macos")]
+    pub async fn render_immediate_bgra_surface(
+        &mut self,
+        segment_frames: DecodedSegmentFrames,
+        uniforms: ProjectUniforms,
+        cursor: &CursorEvents,
+        render_display: bool,
+        layers: &mut RendererLayers,
+    ) -> Result<SurfaceFrame, RenderingError> {
+        let mut last_error = None;
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying BGRA surface frame render after GPU error"
+                );
+                self.reset_session();
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+            if self.bgra_surface_converter.is_none() {
+                self.bgra_surface_converter =
+                    Some(RgbaToBgraSurfaceConverter::new(&self.constants.device)?);
+            }
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                )
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                uniforms.output_size.0,
+                uniforms.output_size.1,
+            );
+            let mut encoder = self.constants.device.create_command_encoder(
+                &(wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder (NV12 Surface)"),
+                }),
+            );
+
+            if let Err(error) = layers
+                .prepare_with_encoder(
+                    self.constants,
+                    &uniforms,
+                    &segment_frames,
+                    cursor,
+                    &mut encoder,
+                    render_display,
+                )
+                .await
+            {
+                last_error = Some(error);
+                continue;
+            }
+            layers.render(
+                &self.constants.device,
+                &self.constants.queue,
+                &mut encoder,
+                session,
+                &uniforms,
+                render_display,
+            );
+            let converter = self
+                .bgra_surface_converter
+                .as_mut()
+                .expect("BGRA surface converter initialized");
+            match finish_encoder_bgra_surface(
+                session,
+                converter,
+                &self.constants.device,
+                &self.constants.queue,
+                &uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
     pub async fn flush_pipeline_nv12(
         &mut self,
     ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
@@ -5187,6 +5355,9 @@ impl<'a> FrameRenderer<'a> {
                     .await;
             }
 
+            if self.nv12_converter.is_none() {
+                self.nv12_converter = Some(self.new_nv12_converter());
+            }
             let session = self.session.get_or_insert_with(|| {
                 RenderSession::new(
                     &self.constants.device,
@@ -5217,9 +5388,10 @@ impl<'a> FrameRenderer<'a> {
                 compositor,
             )
             .await?;
-            let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
-                frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
-            });
+            let nv12_converter = self
+                .nv12_converter
+                .as_mut()
+                .expect("nv12 converter initialized above");
 
             match finish_encoder_nv12_pooled(
                 session,
@@ -5238,6 +5410,93 @@ impl<'a> FrameRenderer<'a> {
                 }
                 Err(RenderingError::BufferMapFailed(error)) => {
                     last_error = Some(RenderingError::BufferMapFailed(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(RenderingError::BufferMapWaitingFailed))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn render_transition_bgra_surface(
+        &mut self,
+        outgoing: TransitionRenderInput<'_>,
+        incoming: TransitionRenderInput<'_>,
+        kind: ClipTransitionType,
+        progress: f32,
+        layers: &mut RendererLayers,
+    ) -> Result<SurfaceFrame, RenderingError> {
+        let mut last_error = None;
+        for attempt in 0..Self::MAX_RENDER_RETRIES {
+            if attempt > 0 {
+                tracing::warn!(
+                    frame_number = incoming.uniforms.frame_number,
+                    attempt = attempt + 1,
+                    "Retrying BGRA surface transition frame after GPU error"
+                );
+                self.reset_session();
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)))
+                    .await;
+            }
+            if self.bgra_surface_converter.is_none() {
+                self.bgra_surface_converter =
+                    Some(RgbaToBgraSurfaceConverter::new(&self.constants.device)?);
+            }
+            let session = self.session.get_or_insert_with(|| {
+                RenderSession::new(
+                    &self.constants.device,
+                    incoming.uniforms.output_size.0,
+                    incoming.uniforms.output_size.1,
+                )
+            });
+            session.update_texture_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let compositor = self
+                .transition_compositor
+                .get_or_insert_with(|| TransitionCompositor::new(&self.constants.device));
+            compositor.ensure_size(
+                &self.constants.device,
+                incoming.uniforms.output_size.0,
+                incoming.uniforms.output_size.1,
+            );
+            let encoder = match produce_transition_texture(
+                self.constants,
+                &outgoing,
+                &incoming,
+                (kind, progress),
+                layers,
+                session,
+                compositor,
+            )
+            .await
+            {
+                Ok(encoder) => encoder,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+            let converter = self
+                .bgra_surface_converter
+                .as_mut()
+                .expect("BGRA surface converter initialized");
+            match finish_encoder_bgra_surface(
+                session,
+                converter,
+                &self.constants.device,
+                &self.constants.queue,
+                &incoming.uniforms,
+                encoder,
+            )
+            .await
+            {
+                Ok(frame) => return Ok(frame),
+                Err(RenderingError::BufferMapWaitingFailed) => {
+                    last_error = Some(RenderingError::BufferMapWaitingFailed);
                 }
                 Err(error) => return Err(error),
             }
@@ -5346,6 +5605,8 @@ impl<'a> FrameRenderer<'a> {
             frame_number,
             target_time_ns,
             format: frame_pipeline::GpuOutputFormat::Nv12,
+            #[cfg(target_os = "macos")]
+            surface: None,
         }
     }
 
@@ -5372,6 +5633,9 @@ impl<'a> FrameRenderer<'a> {
                     .await;
             }
 
+            if self.nv12_converter.is_none() {
+                self.nv12_converter = Some(self.new_nv12_converter());
+            }
             let session = self.session.get_or_insert_with(|| {
                 RenderSession::new(
                     &self.constants.device,
@@ -5386,9 +5650,10 @@ impl<'a> FrameRenderer<'a> {
                 uniforms.output_size.1,
             );
 
-            let nv12_converter = self.nv12_converter.get_or_insert_with(|| {
-                frame_pipeline::RgbaToNv12Converter::new(&self.constants.device)
-            });
+            let nv12_converter = self
+                .nv12_converter
+                .as_mut()
+                .expect("nv12 converter initialized above");
 
             let mut encoder = self.constants.device.create_command_encoder(
                 &(wgpu::CommandEncoderDescriptor {

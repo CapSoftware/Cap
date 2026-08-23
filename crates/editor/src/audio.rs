@@ -499,6 +499,9 @@ impl AudioRenderer {
         out: &mut [f32],
     ) -> usize {
         if source.segment.timescale == 1.0 {
+            if source.segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
+                return 0;
+            }
             let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
             return self.render_chunk_at_cursor(project, cursor, samples, out_offset, out);
         }

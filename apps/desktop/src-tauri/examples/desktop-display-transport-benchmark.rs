@@ -296,6 +296,8 @@ async fn main() {
                 let _ = frame_tx.send(bytes);
                 ws_frame
             }
+            #[cfg(target_os = "macos")]
+            EditorFrameOutput::Surface(_) => return,
         };
         frame_watch_tx.send(Some(Arc::new(ws_frame))).ok();
     });

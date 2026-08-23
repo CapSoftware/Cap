@@ -74,11 +74,22 @@ impl FormatInfo {
 pub struct Format {
     native: NativeFormat,
     info: FormatInfo,
+    /// Captured when the format is enumerated: the native handle does not
+    /// expose it uniformly across platforms (DirectShow formats lose it once
+    /// the owning `VideoFormat` is dropped).
+    pixel_format: Option<String>,
 }
 
 impl Format {
     pub fn native(&self) -> &NativeFormat {
         &self.native
+    }
+
+    /// The device's native pixel format for this capture format: a fourcc on
+    /// macOS and Linux, the MediaFoundation/DirectShow subtype name on
+    /// Windows. `None` where the platform does not report one.
+    pub fn pixel_format_name(&self) -> Option<String> {
+        self.pixel_format.clone()
     }
 }
 

@@ -469,12 +469,12 @@ impl Drop for ExportSessionGuard {
 }
 
 #[cfg(windows)]
-fn configure_exporter_command(command: &mut tokio::process::Command) {
+pub(crate) fn configure_exporter_command(command: &mut tokio::process::Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn configure_exporter_command(_command: &mut tokio::process::Command) {}
+pub(crate) fn configure_exporter_command(_command: &mut tokio::process::Command) {}
 
 async fn run_out_of_process_export(
     project_path: &Path,
@@ -688,7 +688,7 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     tail
 }
 
-fn resolve_exporter_binary() -> Result<PathBuf, String> {
+pub(crate) fn resolve_exporter_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     if let Some(dir) = exe.parent() {
         for candidate in adjacent_exporter_binary_candidates(dir) {

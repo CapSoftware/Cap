@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1884,6 +1884,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
  "x11rb",

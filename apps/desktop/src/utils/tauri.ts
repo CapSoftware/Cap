@@ -14,6 +14,17 @@ async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | nul
 async setNativeCameraPreviewEnabled(enabled: boolean) : Promise<null> {
     return await TAURI_INVOKE("set_native_camera_preview_enabled", { enabled });
 },
+async gpuiAppAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("gpui_app_available");
+},
+/**
+ * Close this app and open the native one. The setting has already been written
+ * by the caller, so a failure here has to be reported rather than swallowed:
+ * the page reverts it.
+ */
+async switchToGpuiApp() : Promise<null> {
+    return await TAURI_INVOKE("switch_to_gpui_app");
+},
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });
 },
@@ -22,6 +33,15 @@ async uploadLogs() : Promise<null> {
 },
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
+},
+async runDiagnostic(options: DiagnosticOptions) : Promise<DiagnosticRunResult> {
+    return await TAURI_INVOKE("run_diagnostic", { options });
+},
+async uploadDiagnosticReport(reportPath: string) : Promise<null> {
+    return await TAURI_INVOKE("upload_diagnostic_report", { reportPath });
+},
+async revealDiagnosticReport(reportPath: string) : Promise<null> {
+    return await TAURI_INVOKE("reveal_diagnostic_report", { reportPath });
 },
 async getCliInstallStatus() : Promise<CliInstallStatus> {
     return await TAURI_INVOKE("get_cli_install_status");
@@ -502,6 +522,7 @@ export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
 currentRecordingChanged: CurrentRecordingChanged,
 devicesUpdated: DevicesUpdated,
+diagnosticProgress: DiagnosticProgress,
 downloadProgress: DownloadProgress,
 editorRecordingAdded: EditorRecordingAdded,
 editorStateChanged: EditorStateChanged,
@@ -533,6 +554,7 @@ videoImportProgress: VideoImportProgress
 audioInputLevelChange: "audio-input-level-change",
 currentRecordingChanged: "current-recording-changed",
 devicesUpdated: "devices-updated",
+diagnosticProgress: "diagnostic-progress",
 downloadProgress: "download-progress",
 editorRecordingAdded: "editor-recording-added",
 editorStateChanged: "editor-state-changed",
@@ -886,6 +908,17 @@ export type CursorType = "auto" | "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DevicesUpdated = { cameras: CameraInfo[]; microphones: string[]; permissions: OSPermissionsCheck }
+export type DiagnosticOptions = { includeSyncTest: boolean; 
+/**
+ * `studio`, `instant` or `both`.
+ */
+mode: string; durationSecs: number | null; includeMicrophone: boolean; micName: string | null; skipExport: boolean }
+/**
+ * `phase` is `sync-test`, `collecting` or `done`; `stage`/`mode` are only set
+ * for `sync-test` and carry the CLI's stage names verbatim.
+ */
+export type DiagnosticProgress = { phase: string; stage: string | null; mode: string | null }
+export type DiagnosticRunResult = { reportPath: string; verdict: string | null; summary: string | null; syncTestError: string | null; reportJson: string }
 export type DisplayId = string
 export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; logical_bounds: LogicalBounds | null; refresh_rate: string }
 /**
@@ -976,7 +1009,13 @@ previousRecordingsPaths?: string[];
  * Cleared automatically when the app version changes (one retry per
  * update, since a new ort/wgpu/driver stack may have fixed the crash).
  */
-cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel }
+cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel; 
+/**
+ * Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+ * while enabled, startup hands off to it and exits, and the native app's
+ * own Experimental page hands back. See `gpui_app.rs`.
+ */
+enableGpuiApp?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
