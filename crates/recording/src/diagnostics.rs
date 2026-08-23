@@ -1,7 +1,14 @@
-use serde::Serialize;
+use std::path::{Path, PathBuf};
+
+use cpal::traits::{DeviceTrait, HostTrait};
+use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Debug, Clone, Serialize, Type)]
+/// Bumped whenever the shape of [`DiagnosticReport`] changes incompatibly.
+/// Additive fields do not bump it; consumers must tolerate unknown keys.
+pub const DIAGNOSTIC_REPORT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HardwareInfo {
     pub cpu_brand: String,
@@ -11,7 +18,7 @@ pub struct HardwareInfo {
     pub architecture: String,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayDiagnostics {
     pub id: String,
@@ -21,9 +28,13 @@ pub struct DisplayDiagnostics {
     pub refresh_rate: u32,
     pub scale_factor: f64,
     pub is_primary: bool,
+    /// Logical top-left of the display in the desktop coordinate space, so a
+    /// multi-monitor arrangement can be reconstructed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(f64, f64)>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraDiagnostics {
     pub device_id: String,
@@ -32,24 +43,60 @@ pub struct CameraDiagnostics {
     pub formats: Vec<CameraFormatInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraFormatInfo {
     pub width: u32,
     pub height: u32,
     pub frame_rate: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_format: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MicrophoneDiagnostics {
     pub name: String,
     pub sample_rate: u32,
     pub channels: u16,
     pub sample_format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_bluetooth: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_usb: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_builtin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_configs: Option<Vec<AudioConfigRange>>,
 }
 
-#[derive(Debug, Clone, Serialize, Type)]
+/// One capability range a device advertises. Sample rates are a range rather
+/// than a list because that is what CoreAudio/WASAPI/ALSA report.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioConfigRange {
+    pub min_sample_rate: u32,
+    pub max_sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffer_size: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioOutputDiagnostics {
+    pub name: String,
+    pub is_default: bool,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: String,
+    pub supported_configs: Vec<AudioConfigRange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageInfo {
     pub recordings_path: String,
@@ -102,16 +149,649 @@ pub fn collect_displays() -> Vec<DisplayDiagnostics> {
                 refresh_rate: cap_display.refresh_rate,
                 scale_factor,
                 is_primary: idx == 0,
+                position: display
+                    .raw_handle()
+                    .logical_bounds()
+                    .map(|bounds| (bounds.position().x(), bounds.position().y())),
             }
         })
         .collect()
+}
+
+pub fn collect_cameras() -> Vec<CameraDiagnostics> {
+    cap_camera::list_cameras()
+        .map(|camera| {
+            let formats = camera
+                .formats()
+                .unwrap_or_default()
+                .into_iter()
+                .take(10)
+                .map(|f| CameraFormatInfo {
+                    width: f.width(),
+                    height: f.height(),
+                    frame_rate: f.frame_rate(),
+                    pixel_format: f.pixel_format_name(),
+                })
+                .collect();
+
+            CameraDiagnostics {
+                device_id: camera.device_id().to_string(),
+                display_name: camera.display_name().to_string(),
+                model_id: camera.model_id().map(|m| m.to_string()),
+                formats,
+            }
+        })
+        .collect()
+}
+
+fn config_ranges<I: Iterator<Item = cpal::SupportedStreamConfigRange>>(
+    configs: I,
+) -> Vec<AudioConfigRange> {
+    configs
+        .map(|config| AudioConfigRange {
+            min_sample_rate: config.min_sample_rate().0,
+            max_sample_rate: config.max_sample_rate().0,
+            channels: config.channels(),
+            sample_format: format!("{:?}", config.sample_format()),
+            buffer_size: match config.buffer_size() {
+                cpal::SupportedBufferSize::Range { min, max } => Some((*min, *max)),
+                cpal::SupportedBufferSize::Unknown => None,
+            },
+        })
+        .collect()
+}
+
+/// Name heuristics, matching `cap-test`'s device discovery so reports and the
+/// test harness classify the same device the same way.
+fn is_bluetooth_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("bluetooth")
+        || lower.contains("airpods")
+        || lower.contains("beats")
+        || lower.contains("bose")
+        || lower.contains("sony wh")
+        || lower.contains("sony wf")
+        || lower.contains("jabra")
+        || lower.contains("jbl")
+}
+
+fn is_usb_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("usb")
+        || lower.contains("blue yeti")
+        || lower.contains("snowball")
+        || lower.contains("rode")
+        || lower.contains("focusrite")
+        || lower.contains("scarlett")
+        || lower.contains("audio-technica")
+        || lower.contains("shure")
+        || lower.contains("elgato wave")
+}
+
+fn is_builtin_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("macbook")
+        || lower.contains("built-in")
+        || lower.contains("builtin")
+        || lower.contains("internal")
+        || lower.contains("realtek")
+        || lower.contains("conexant")
+}
+
+pub fn collect_microphones() -> Vec<MicrophoneDiagnostics> {
+    let host = cpal::default_host();
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
+
+    let Ok(devices) = host.input_devices() else {
+        return Vec::new();
+    };
+
+    devices
+        .filter_map(|device| {
+            let name = device.name().ok()?;
+            let config = device.default_input_config().ok()?;
+            let supported = device
+                .supported_input_configs()
+                .ok()
+                .map(config_ranges)
+                .filter(|ranges: &Vec<AudioConfigRange>| !ranges.is_empty());
+
+            Some(MicrophoneDiagnostics {
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+                sample_format: format!("{:?}", config.sample_format()),
+                is_default: Some(default_name.as_deref() == Some(name.as_str())),
+                is_bluetooth: Some(is_bluetooth_device(&name)),
+                is_usb: Some(is_usb_device(&name)),
+                is_builtin: Some(is_builtin_device(&name)),
+                supported_configs: supported,
+                name,
+            })
+        })
+        .collect()
+}
+
+pub fn collect_audio_outputs() -> Vec<AudioOutputDiagnostics> {
+    let host = cpal::default_host();
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+
+    devices
+        .filter_map(|device| {
+            let name = device.name().ok()?;
+            let config = device.default_output_config().ok()?;
+
+            Some(AudioOutputDiagnostics {
+                is_default: default_name.as_deref() == Some(name.as_str()),
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+                sample_format: format!("{:?}", config.sample_format()),
+                supported_configs: device
+                    .supported_output_configs()
+                    .ok()
+                    .map(config_ranges)
+                    .unwrap_or_default(),
+                name,
+            })
+        })
+        .collect()
+}
+
+pub fn collect_storage_info(recordings_path: &Path) -> Option<StorageInfo> {
+    // Only free/total space is read, so skip the per-disk I/O counters a full
+    // refresh would also collect. Enumerating mounts is still slow (seconds on
+    // a machine with network or cloud volumes) — call this off the UI thread.
+    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
+        sysinfo::DiskRefreshKind::nothing().with_storage(),
+    );
+
+    let mut best_match: Option<(&sysinfo::Disk, usize)> = None;
+
+    for disk in disks.iter() {
+        if recordings_path.starts_with(disk.mount_point()) {
+            let mount_point_len = disk.mount_point().as_os_str().len();
+            if best_match.is_none_or(|(_, len)| mount_point_len > len) {
+                best_match = Some((disk, mount_point_len));
+            }
+        }
+    }
+
+    best_match.map(|(disk, _)| StorageInfo {
+        recordings_path: redact_home_paths(&recordings_path.display().to_string()),
+        available_space_mb: disk.available_space() / (1024 * 1024),
+        total_space_mb: disk.total_space() / (1024 * 1024),
+    })
+}
+
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let raw = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let raw = std::env::var_os("HOME");
+
+    raw.map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+/// Replaces the user's home directory with `~` anywhere it appears. Reports
+/// are shared with the Cap team, and paths are the main place a real name
+/// leaks out of an otherwise anonymous machine description.
+pub fn redact_home_paths(value: &str) -> String {
+    let Some(home) = home_dir() else {
+        return value.to_string();
+    };
+    redact_prefix(value, &home.to_string_lossy())
+}
+
+fn redact_prefix(value: &str, home: &str) -> String {
+    let home = home.trim_end_matches(['/', '\\']);
+    if home.is_empty() {
+        return value.to_string();
+    }
+    if cfg!(windows) {
+        // Windows paths are case-insensitive, so `c:\users\bob` is the same
+        // directory as the `C:\Users\Bob` the environment reports.
+        return replace_ignore_ascii_case(value, home);
+    }
+    value.replace(home, "~")
+}
+
+/// `str::replace` with an ASCII-case-insensitive needle, substituting `~`.
+fn replace_ignore_ascii_case(value: &str, needle: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+
+    while rest.len() >= needle.len() {
+        // Only char boundaries can start a match, and the needle is a path
+        // prefix, so a byte-wise scan is safe as long as slicing is guarded.
+        let found = (0..=rest.len() - needle.len()).find(|&index| {
+            rest.is_char_boundary(index)
+                && rest.is_char_boundary(index + needle.len())
+                && rest[index..index + needle.len()].eq_ignore_ascii_case(needle)
+        });
+        match found {
+            Some(index) => {
+                out.push_str(&rest[..index]);
+                out.push('~');
+                rest = &rest[index + needle.len()..];
+            }
+            None => break,
+        }
+    }
+
+    out.push_str(rest);
+    out
+}
+
+/// One `.cap` directory reduced to the timing facts that explain a sync
+/// complaint: which devices produced each track, at what rate, and how far
+/// apart the tracks started.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentRecordingDigest {
+    /// Deliberately NOT the directory name. A `.cap` folder is named from the
+    /// capture target's title (`recording.rs` -> `ScreenCaptureTarget::title`),
+    /// so for a window recording that name IS the window title -- document
+    /// names, client names, chat subjects. `created` identifies the entry well
+    /// enough for support to correlate it with what the reporter describes.
+    pub index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(default)]
+    pub segments: Vec<RecentRecordingSegment>,
+    /// A corrupt or unreadable entry reports itself here instead of taking
+    /// the whole collection down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentRecordingSegment {
+    pub display_fps: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_fps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic_start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mic_gap_summary: Option<cap_project::AudioGapSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_audio_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_audio_start_time: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_audio_gap_summary: Option<cap_project::AudioGapSummary>,
+}
+
+fn file_created_rfc3339(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let time = metadata.created().or_else(|_| metadata.modified()).ok()?;
+    Some(chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339())
+}
+
+fn segment_from_studio(
+    display: &cap_project::VideoMeta,
+    camera: Option<&cap_project::VideoMeta>,
+    mic: Option<&cap_project::AudioMeta>,
+    system_audio: Option<&cap_project::AudioMeta>,
+) -> RecentRecordingSegment {
+    RecentRecordingSegment {
+        display_fps: display.fps,
+        display_device_id: display.device_id.clone(),
+        display_start_time: display.start_time,
+        camera_fps: camera.map(|c| c.fps),
+        camera_device_id: camera.and_then(|c| c.device_id.clone()),
+        camera_start_time: camera.and_then(|c| c.start_time),
+        mic_device_id: mic.and_then(|m| m.device_id.clone()),
+        mic_start_time: mic.and_then(|m| m.start_time),
+        mic_gap_summary: mic.and_then(|m| m.gap_summary),
+        system_audio_device_id: system_audio.and_then(|a| a.device_id.clone()),
+        system_audio_start_time: system_audio.and_then(|a| a.start_time),
+        system_audio_gap_summary: system_audio.and_then(|a| a.gap_summary),
+    }
+}
+
+fn digest_recording(index: usize, path: &Path) -> RecentRecordingDigest {
+    use cap_project::{
+        InstantRecordingMeta, RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus,
+    };
+
+    let mut digest = RecentRecordingDigest {
+        index,
+        mode: None,
+        status: None,
+        created: file_created_rfc3339(path),
+        segments: Vec::new(),
+        error: None,
+    };
+
+    let meta = match cap_project::RecordingMeta::load_for_project(path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            digest.error = Some(redact_home_paths(&e.to_string()));
+            return digest;
+        }
+    };
+
+    match &meta.inner {
+        RecordingMetaInner::Studio(studio) => {
+            digest.mode = Some("studio".to_string());
+            let (status, failure) = match studio.status() {
+                StudioRecordingStatus::InProgress => ("in_progress", None),
+                StudioRecordingStatus::NeedsRemux => ("needs_remux", None),
+                StudioRecordingStatus::Failed { error } => {
+                    ("failed", Some(redact_home_paths(&error)))
+                }
+                StudioRecordingStatus::Complete => ("complete", None),
+            };
+            digest.status = Some(status.to_string());
+            digest.error = failure;
+
+            match &**studio {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    digest.segments.push(segment_from_studio(
+                        &segment.display,
+                        segment.camera.as_ref(),
+                        segment.audio.as_ref(),
+                        None,
+                    ));
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    for segment in &inner.segments {
+                        digest.segments.push(segment_from_studio(
+                            &segment.display,
+                            segment.camera.as_ref(),
+                            segment.mic.as_ref(),
+                            segment.system_audio.as_ref(),
+                        ));
+                    }
+                }
+            }
+        }
+        RecordingMetaInner::Instant(instant) => {
+            digest.mode = Some("instant".to_string());
+            match instant {
+                InstantRecordingMeta::InProgress { .. } => {
+                    digest.status = Some("in_progress".to_string())
+                }
+                InstantRecordingMeta::Failed { error } => {
+                    digest.status = Some("failed".to_string());
+                    digest.error = Some(redact_home_paths(error));
+                }
+                InstantRecordingMeta::Complete { fps, .. } => {
+                    digest.status = Some("complete".to_string());
+                    // Instant recordings mux one output; the fps is the only
+                    // per-track fact the meta carries.
+                    digest.segments.push(RecentRecordingSegment {
+                        display_fps: *fps,
+                        display_device_id: None,
+                        display_start_time: None,
+                        camera_fps: None,
+                        camera_device_id: None,
+                        camera_start_time: None,
+                        mic_device_id: None,
+                        mic_start_time: None,
+                        mic_gap_summary: None,
+                        system_audio_device_id: None,
+                        system_audio_start_time: None,
+                        system_audio_gap_summary: None,
+                    });
+                }
+            }
+        }
+    }
+
+    digest
+}
+
+/// The newest `limit` `.cap` directories under `recordings_dir`, newest first.
+pub fn collect_recent_recordings(
+    recordings_dir: &Path,
+    limit: usize,
+) -> Vec<RecentRecordingDigest> {
+    let Ok(entries) = std::fs::read_dir(recordings_dir) else {
+        return Vec::new();
+    };
+
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if !path.is_dir() || path.extension().is_none_or(|ext| ext != "cap") {
+                return None;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(index, (_, path))| digest_recording(index, &path))
+        .collect()
+}
+
+/// The machine's capture shapes expressed as `sync_matrix` case parameters,
+/// so a report can be replayed as a synthetic matrix run
+/// (`CAP_SYNC_MATRIX_FROM_REPORT`).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncMatrixHints {
+    pub video: Vec<VideoHint>,
+    pub audio_inputs: Vec<AudioHint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoHint {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_max_fps: Option<u32>,
+    pub fragmented: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioHint {
+    pub rate: u32,
+    pub channels: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffer_range: Option<(u32, u32)>,
+}
+
+fn video_hints_from_displays(
+    displays: &[DisplayDiagnostics],
+    configured_max_fps: Option<u32>,
+    fragmented: bool,
+) -> Vec<VideoHint> {
+    displays
+        .iter()
+        .map(|display| VideoHint {
+            width: display.width,
+            height: display.height,
+            refresh_rate: display.refresh_rate,
+            configured_max_fps,
+            fragmented,
+        })
+        .collect()
+}
+
+fn audio_hints_from_microphones(microphones: &[MicrophoneDiagnostics]) -> Vec<AudioHint> {
+    microphones
+        .iter()
+        .map(|mic| AudioHint {
+            rate: mic.sample_rate,
+            channels: mic.channels,
+            buffer_range: mic
+                .supported_configs
+                .as_ref()
+                .and_then(|configs| configs.iter().find_map(|c| c.buffer_size)),
+        })
+        .collect()
+}
+
+/// Probes the machine and derives the hints from it. [`collect_report`] builds
+/// its hints from the displays and microphones it already probed instead; this
+/// is for callers that have neither.
+pub fn collect_matrix_hints(configured_max_fps: Option<u32>, fragmented: bool) -> SyncMatrixHints {
+    SyncMatrixHints {
+        video: video_hints_from_displays(&collect_displays(), configured_max_fps, fragmented),
+        audio_inputs: audio_hints_from_microphones(&collect_microphones()),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    /// Which desktop shell produced the report: `tauri` or `gpui`.
+    pub flavor: String,
+    pub version: String,
+}
+
+/// Inputs the caller owns (app identity, settings, permissions, an already-run
+/// sync test). Everything else the report contains is probed here.
+#[derive(Debug, Clone, Default)]
+pub struct DiagnosticReportArgs<'a> {
+    pub flavor: &'a str,
+    pub app_version: &'a str,
+    pub settings: Option<serde_json::Value>,
+    pub permissions: Option<serde_json::Value>,
+    pub recordings_dir: Option<&'a Path>,
+    pub configured_max_fps: Option<u32>,
+    pub fragmented_recording: bool,
+    pub sync_test: Option<serde_json::Value>,
+    pub sync_test_error: Option<String>,
+}
+
+/// The full environment snapshot uploaded from the Feedback page. Additive
+/// only: consumers validate leniently and must tolerate unknown keys.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticReport {
+    pub schema_version: u32,
+    pub report_id: String,
+    pub generated_at: String,
+    pub app: AppInfo,
+    pub hardware: HardwareInfo,
+    pub system: SystemDiagnostics,
+    pub displays: Vec<DisplayDiagnostics>,
+    pub cameras: Vec<CameraDiagnostics>,
+    pub microphones: Vec<MicrophoneDiagnostics>,
+    pub audio_outputs: Vec<AudioOutputDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<serde_json::Value>,
+    #[serde(default)]
+    pub recent_recordings: Vec<RecentRecordingDigest>,
+    pub matrix_hints: SyncMatrixHints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_test: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_test_error: Option<String>,
+}
+
+pub fn collect_report(args: DiagnosticReportArgs<'_>) -> DiagnosticReport {
+    // Display enumeration is the expensive probe here and microphone
+    // enumeration re-walks every device's supported configs, so both run once
+    // and feed the report and its matrix hints. Probing twice also let the two
+    // disagree when hardware changed in between, breaking the invariant that
+    // there is one video hint per display.
+    let displays = collect_displays();
+    let microphones = collect_microphones();
+    let matrix_hints = SyncMatrixHints {
+        video: video_hints_from_displays(
+            &displays,
+            args.configured_max_fps,
+            args.fragmented_recording,
+        ),
+        audio_inputs: audio_hints_from_microphones(&microphones),
+    };
+
+    DiagnosticReport {
+        schema_version: DIAGNOSTIC_REPORT_SCHEMA_VERSION,
+        report_id: uuid::Uuid::new_v4().to_string(),
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        app: AppInfo {
+            flavor: args.flavor.to_string(),
+            version: args.app_version.to_string(),
+        },
+        hardware: collect_hardware_info(),
+        system: collect_diagnostics(),
+        displays,
+        cameras: collect_cameras(),
+        microphones,
+        audio_outputs: collect_audio_outputs(),
+        storage: args.recordings_dir.and_then(collect_storage_info),
+        permissions: args.permissions,
+        settings: args.settings,
+        recent_recordings: args
+            .recordings_dir
+            .map(|dir| collect_recent_recordings(dir, 5))
+            .unwrap_or_default(),
+        matrix_hints,
+        // The sync test is produced by a separate process, so its paths and
+        // error strings never passed through the redaction the rest of this
+        // report applies. `syncTestError` also reaches the Discord message
+        // body, not just the attachment.
+        sync_test: args.sync_test.map(redact_json_strings),
+        sync_test_error: args.sync_test_error.as_deref().map(redact_home_paths),
+    }
+}
+
+/// Applies [`redact_home_paths`] to every string leaf of a JSON document.
+///
+/// Redacting the *serialized* text instead would be backslash-blind: once
+/// serialized, a Windows path is `C:\\Users\\Bob`, which no longer matches the
+/// `C:\Users\Bob` the home directory reports.
+pub fn redact_json_strings(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+
+    match value {
+        Value::String(text) => Value::String(redact_home_paths(&text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_json_strings).collect()),
+        Value::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key, redact_json_strings(value)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::*;
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct WindowsVersionInfo {
         pub major: u32,
@@ -122,7 +802,7 @@ mod windows_impl {
         pub is_windows_11: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct GpuInfoDiag {
         pub vendor: String,
@@ -134,7 +814,7 @@ mod windows_impl {
         pub supports_hardware_encoding: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct AllGpusInfo {
         pub gpus: Vec<GpuInfoDiag>,
@@ -143,7 +823,7 @@ mod windows_impl {
         pub has_discrete_gpu: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct RenderingStatus {
         pub is_using_software_rendering: bool,
@@ -152,7 +832,7 @@ mod windows_impl {
         pub warning_message: Option<String>,
     }
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct SystemDiagnostics {
         pub windows_version: Option<WindowsVersionInfo>,
@@ -385,7 +1065,7 @@ mod windows_impl {
 mod macos_impl {
     use super::*;
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct MacOSVersionInfo {
         pub major: u32,
@@ -396,7 +1076,7 @@ mod macos_impl {
         pub is_apple_silicon: bool,
     }
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct SystemDiagnostics {
         pub macos_version: Option<MacOSVersionInfo>,
@@ -540,7 +1220,7 @@ mod macos_impl {
 mod linux_impl {
     use super::*;
 
-    #[derive(Debug, Clone, Serialize, Type)]
+    #[derive(Debug, Clone, Serialize, Deserialize, Type)]
     #[serde(rename_all = "camelCase")]
     pub struct SystemDiagnostics {
         pub kernel_version: Option<String>,
@@ -624,3 +1304,423 @@ pub use macos_impl::*;
 
 #[cfg(target_os = "linux")]
 pub use linux_impl::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_recording(dir: &Path, name: &str, meta: &str) {
+        let project = dir.join(name);
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("recording-meta.json"), meta).unwrap();
+    }
+
+    #[test]
+    fn redacts_every_string_leaf_of_a_json_document() {
+        let home = home_dir().expect("a home directory");
+        let home = home.to_string_lossy().to_string();
+        let value = serde_json::json!({
+            "summary": format!("kept at {home}/Movies/a.cap"),
+            "nested": { "paths": [format!("{home}/one"), "/opt/two".to_string()] },
+            "count": 7,
+            "flag": true,
+            "nothing": serde_json::Value::Null,
+        });
+
+        let redacted = redact_json_strings(value);
+
+        assert_eq!(redacted["summary"], "kept at ~/Movies/a.cap");
+        assert_eq!(redacted["nested"]["paths"][0], "~/one");
+        // Non-home paths and non-string leaves are left exactly as they were.
+        assert_eq!(redacted["nested"]["paths"][1], "/opt/two");
+        assert_eq!(redacted["count"], 7);
+        assert_eq!(redacted["flag"], true);
+        assert!(redacted["nothing"].is_null());
+    }
+
+    #[test]
+    fn windows_home_matching_ignores_case() {
+        // Windows paths are case-insensitive, so a lowercased spelling of the
+        // home directory still has to redact.
+        assert_eq!(
+            replace_ignore_ascii_case(r"c:\users\bob\Movies\a.cap", r"C:\Users\Bob"),
+            r"~\Movies\a.cap"
+        );
+        assert_eq!(
+            replace_ignore_ascii_case("nothing to do here", r"C:\Users\Bob"),
+            "nothing to do here"
+        );
+        // Multibyte content around the match must survive intact.
+        assert_eq!(
+            replace_ignore_ascii_case(r"café C:\Users\Bob\x ✅", r"c:\users\bob"),
+            r"café ~\x ✅"
+        );
+    }
+
+    #[test]
+    fn redacts_home_paths() {
+        // The env var is read, never written: another test thread reading
+        // HOME concurrently must not see it change.
+        assert_eq!(
+            redact_prefix("/Users/someone/Movies/Cap/a.cap", "/Users/someone"),
+            "~/Movies/Cap/a.cap"
+        );
+        assert_eq!(
+            redact_prefix(
+                "failed to open /Users/someone/x and /Users/someone/y",
+                "/Users/someone/"
+            ),
+            "failed to open ~/x and ~/y"
+        );
+        assert_eq!(redact_prefix("/opt/cap", "/Users/someone"), "/opt/cap");
+        assert_eq!(
+            redact_prefix(r"C:\Users\someone\Videos", r"C:\Users\someone\"),
+            r"~\Videos"
+        );
+        // No home means no redaction rather than a mangled string.
+        assert_eq!(redact_prefix("/opt/cap", ""), "/opt/cap");
+
+        if let Some(home) = home_dir() {
+            let home = home.to_string_lossy().to_string();
+            if !home.trim_end_matches(['/', '\\']).is_empty() {
+                assert_eq!(redact_home_paths(&format!("{home}/x")), "~/x");
+            }
+        }
+    }
+
+    #[test]
+    fn digests_recent_recordings_and_survives_corrupt_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+
+        write_recording(
+            dir,
+            "studio.cap",
+            r#"{
+                "pretty_name": "Studio",
+                "segments": [
+                    {
+                        "display": {
+                            "path": "content/segments/segment-0/display.mp4",
+                            "fps": 60,
+                            "start_time": 1.5,
+                            "device_id": "display-1"
+                        },
+                        "mic": {
+                            "path": "content/segments/segment-0/audio-input.ogg",
+                            "start_time": 1.75,
+                            "device_id": "Built-in Microphone",
+                            "gap_summary": {
+                                "total_overlap_trimmed_ms": 12,
+                                "overlap_dropped_frames": 2,
+                                "startup_overlap_drops": 1
+                            }
+                        },
+                        "system_audio": {
+                            "path": "content/segments/segment-0/system_audio.ogg",
+                            "start_time": 1.4
+                        }
+                    }
+                ]
+            }"#,
+        );
+        write_recording(
+            dir,
+            "instant.cap",
+            r#"{ "pretty_name": "Instant", "fps": 30, "sample_rate": 48000 }"#,
+        );
+        write_recording(dir, "broken.cap", "{ not json");
+        std::fs::create_dir_all(dir.join("not-a-recording")).unwrap();
+
+        let digests = collect_recent_recordings(dir, 5);
+        assert_eq!(digests.len(), 3, "only .cap directories are digested");
+
+        // Entries are identified by mode now: the digest deliberately carries
+        // no name, because a .cap directory is named from the capture
+        // target's title.
+        let studio = digests
+            .iter()
+            .find(|d| d.mode.as_deref() == Some("studio"))
+            .expect("studio digest");
+        assert_eq!(studio.mode.as_deref(), Some("studio"));
+        assert_eq!(studio.status.as_deref(), Some("complete"));
+        assert_eq!(studio.segments.len(), 1);
+        let segment = &studio.segments[0];
+        assert_eq!(segment.display_fps, 60);
+        assert_eq!(segment.display_device_id.as_deref(), Some("display-1"));
+        assert_eq!(segment.display_start_time, Some(1.5));
+        assert_eq!(
+            segment.mic_device_id.as_deref(),
+            Some("Built-in Microphone")
+        );
+        assert_eq!(segment.system_audio_start_time, Some(1.4));
+        assert_eq!(
+            segment
+                .mic_gap_summary
+                .map(|summary| summary.total_overlap_trimmed_ms),
+            Some(12)
+        );
+        assert!(studio.error.is_none());
+
+        let instant = digests
+            .iter()
+            .find(|d| d.mode.as_deref() == Some("instant"))
+            .expect("instant digest");
+        assert_eq!(instant.mode.as_deref(), Some("instant"));
+        assert_eq!(instant.segments.first().map(|s| s.display_fps), Some(30));
+
+        let broken = digests
+            .iter()
+            .find(|d| d.error.is_some())
+            .expect("broken digest");
+        assert!(broken.mode.is_none(), "a corrupt entry has no mode");
+    }
+
+    #[test]
+    fn recent_recordings_respects_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        for i in 0..4 {
+            write_recording(
+                temp.path(),
+                &format!("r{i}.cap"),
+                r#"{ "pretty_name": "R", "fps": 30, "sample_rate": 48000 }"#,
+            );
+        }
+        assert_eq!(collect_recent_recordings(temp.path(), 2).len(), 2);
+        assert_eq!(
+            collect_recent_recordings(&temp.path().join("missing"), 2).len(),
+            0
+        );
+    }
+
+    #[test]
+    fn matrix_hints_map_devices_onto_case_parameters() {
+        let displays = vec![DisplayDiagnostics {
+            id: "1".to_string(),
+            name: "Built-in".to_string(),
+            width: 3456,
+            height: 2234,
+            refresh_rate: 120,
+            scale_factor: 2.0,
+            is_primary: true,
+            position: Some((0.0, 0.0)),
+        }];
+        let hints = video_hints_from_displays(&displays, Some(60), true);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].width, 3456);
+        assert_eq!(hints[0].refresh_rate, 120);
+        assert_eq!(hints[0].configured_max_fps, Some(60));
+        assert!(hints[0].fragmented);
+
+        let microphones = vec![MicrophoneDiagnostics {
+            name: "Mic".to_string(),
+            sample_rate: 44_100,
+            channels: 1,
+            sample_format: "F32".to_string(),
+            is_default: Some(true),
+            is_bluetooth: Some(false),
+            is_usb: Some(true),
+            is_builtin: Some(false),
+            supported_configs: Some(vec![AudioConfigRange {
+                min_sample_rate: 44_100,
+                max_sample_rate: 48_000,
+                channels: 1,
+                sample_format: "F32".to_string(),
+                buffer_size: Some((15, 4096)),
+            }]),
+        }];
+        let audio = audio_hints_from_microphones(&microphones);
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].rate, 44_100);
+        assert_eq!(audio[0].channels, 1);
+        assert_eq!(audio[0].buffer_range, Some((15, 4096)));
+
+        // A device that reports no ranges still produces a usable hint.
+        let bare = audio_hints_from_microphones(&[MicrophoneDiagnostics {
+            name: "Bare".to_string(),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_format: "I16".to_string(),
+            is_default: None,
+            is_bluetooth: None,
+            is_usb: None,
+            is_builtin: None,
+            supported_configs: None,
+        }]);
+        assert_eq!(bare[0].buffer_range, None);
+    }
+
+    #[test]
+    fn device_name_heuristics() {
+        assert!(is_bluetooth_device("Richie's AirPods Pro"));
+        assert!(is_usb_device("Blue Yeti Nano"));
+        assert!(is_builtin_device("MacBook Pro Microphone"));
+        assert!(!is_bluetooth_device("Blue Yeti Nano"));
+    }
+
+    /// A populated envelope without touching capture hardware. `collect_displays`
+    /// goes through ScreenCaptureKit, which blocks for ~35s in a test binary that
+    /// has no screen-recording permission; the serde contract is what this file
+    /// needs to guard, so it is asserted on a report built from parts.
+    fn sample_report(recordings_dir: &Path) -> DiagnosticReport {
+        let displays = vec![DisplayDiagnostics {
+            id: "1".to_string(),
+            name: "Built-in".to_string(),
+            width: 3456,
+            height: 2234,
+            refresh_rate: 120,
+            scale_factor: 2.0,
+            is_primary: true,
+            position: Some((0.0, -1080.0)),
+        }];
+        let microphones = vec![MicrophoneDiagnostics {
+            name: "MacBook Pro Microphone".to_string(),
+            sample_rate: 48_000,
+            channels: 1,
+            sample_format: "F32".to_string(),
+            is_default: Some(true),
+            is_bluetooth: Some(false),
+            is_usb: Some(false),
+            is_builtin: Some(true),
+            supported_configs: Some(vec![AudioConfigRange {
+                min_sample_rate: 48_000,
+                max_sample_rate: 48_000,
+                channels: 1,
+                sample_format: "F32".to_string(),
+                buffer_size: Some((15, 4096)),
+            }]),
+        }];
+
+        DiagnosticReport {
+            schema_version: DIAGNOSTIC_REPORT_SCHEMA_VERSION,
+            report_id: uuid::Uuid::new_v4().to_string(),
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            app: AppInfo {
+                flavor: "gpui".to_string(),
+                version: "0.6.0".to_string(),
+            },
+            hardware: collect_hardware_info(),
+            system: collect_diagnostics(),
+            cameras: vec![CameraDiagnostics {
+                device_id: "cam-1".to_string(),
+                display_name: "FaceTime HD Camera".to_string(),
+                model_id: None,
+                formats: vec![CameraFormatInfo {
+                    width: 1920,
+                    height: 1080,
+                    frame_rate: 30.0,
+                    pixel_format: Some("420v".to_string()),
+                }],
+            }],
+            audio_outputs: vec![AudioOutputDiagnostics {
+                name: "MacBook Pro Speakers".to_string(),
+                is_default: true,
+                sample_rate: 48_000,
+                channels: 2,
+                sample_format: "F32".to_string(),
+                supported_configs: Vec::new(),
+            }],
+            // Not the real probe: enumerating mounts takes seconds on a machine
+            // with network volumes attached.
+            storage: Some(StorageInfo {
+                recordings_path: redact_home_paths(&recordings_dir.display().to_string()),
+                available_space_mb: 128_000,
+                total_space_mb: 512_000,
+            }),
+            permissions: Some(serde_json::json!({ "screenRecording": "granted" })),
+            settings: Some(serde_json::json!({ "recordingFps": 60 })),
+            recent_recordings: collect_recent_recordings(recordings_dir, 5),
+            matrix_hints: SyncMatrixHints {
+                video: video_hints_from_displays(&displays, Some(60), true),
+                audio_inputs: audio_hints_from_microphones(&microphones),
+            },
+            sync_test: Some(serde_json::json!({ "verdict": "pass" })),
+            sync_test_error: None,
+            displays,
+            microphones,
+        }
+    }
+
+    #[test]
+    fn report_envelope_round_trips() {
+        let temp = tempfile::tempdir().unwrap();
+        write_recording(
+            temp.path(),
+            "one.cap",
+            r#"{ "pretty_name": "One", "fps": 30, "sample_rate": 48000 }"#,
+        );
+
+        let report = sample_report(temp.path());
+        assert_eq!(report.schema_version, DIAGNOSTIC_REPORT_SCHEMA_VERSION);
+        assert_eq!(report.recent_recordings.len(), 1);
+        assert!(!report.report_id.is_empty());
+
+        let json = serde_json::to_string(&report).unwrap();
+        // The web validator reads camelCase, like every other diagnostics type.
+        for key in [
+            "\"schemaVersion\"",
+            "\"reportId\"",
+            "\"generatedAt\"",
+            "\"matrixHints\"",
+            "\"recentRecordings\"",
+            "\"audioOutputs\"",
+            "\"syncTest\"",
+            "\"pixelFormat\"",
+            "\"configuredMaxFps\"",
+        ] {
+            assert!(json.contains(key), "missing {key} in {json}");
+        }
+
+        let parsed: DiagnosticReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.report_id, report.report_id);
+        assert_eq!(parsed.generated_at, report.generated_at);
+        assert_eq!(parsed.app.version, "0.6.0");
+        assert_eq!(parsed.app.flavor, "gpui");
+        assert_eq!(parsed.sync_test_error, None);
+        assert_eq!(parsed.displays[0].position, Some((0.0, -1080.0)));
+        assert_eq!(parsed.matrix_hints.video.len(), 1);
+        assert_eq!(parsed.matrix_hints.audio_inputs[0].rate, 48_000);
+        assert_eq!(parsed.recent_recordings[0].index, 0);
+        assert_eq!(
+            parsed.cameras[0].formats[0].pixel_format.as_deref(),
+            Some("420v")
+        );
+        assert_eq!(
+            parsed
+                .sync_test
+                .and_then(|t| t["verdict"].as_str().map(str::to_string)),
+            Some("pass".to_string())
+        );
+    }
+
+    /// Exercises the real probe end to end. Ignored by default because it is
+    /// slow in a headless process: the first `refresh_rate()`/`name()` call
+    /// pays a one-time WindowServer connection cost (measured 40-110s here,
+    /// varying with machine load). It is a per-process cost, not per-call —
+    /// the second call in the same process measures 0.000s — so a GUI app,
+    /// which connects to WindowServer at launch, never pays it. Do not
+    /// "optimize" `collect_displays` on the strength of this test's runtime.
+    #[test]
+    #[ignore = "probes real capture devices; slow only in a headless process"]
+    fn collect_report_probes_the_machine() {
+        let temp = tempfile::tempdir().unwrap();
+        let report = collect_report(DiagnosticReportArgs {
+            flavor: "gpui",
+            app_version: "0.6.0",
+            recordings_dir: Some(temp.path()),
+            configured_max_fps: Some(60),
+            fragmented_recording: true,
+            ..Default::default()
+        });
+
+        assert_eq!(report.schema_version, DIAGNOSTIC_REPORT_SCHEMA_VERSION);
+        assert_eq!(report.app.flavor, "gpui");
+        assert_eq!(report.matrix_hints.video.len(), report.displays.len());
+        assert_eq!(
+            report.matrix_hints.audio_inputs.len(),
+            report.microphones.len()
+        );
+        assert!(report.recent_recordings.is_empty());
+        serde_json::from_str::<DiagnosticReport>(&serde_json::to_string(&report).unwrap()).unwrap();
+    }
+}

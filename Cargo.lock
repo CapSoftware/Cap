@@ -1884,6 +1884,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
  "x11rb",
