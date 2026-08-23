@@ -553,6 +553,7 @@ Sizes are the Tauri app's, from `apps/desktop/src-tauri/src/windows.rs`.
 | Recordings overlay | per display | Not started |
 | Mode select | 580×340 | **Done** — the real fixed-size window, opaque `bg-gray-1` with the native traffic lights at their default position, three cards with the selected one's blue border / tint / check badge, main window hidden while it is up and restored on close |
 | Settings | 782×775 (min 780×560) | **Done — General, Recordings** — window shell on the `"settings"` material (radius 26), native traffic lights at (22, 15) — the Tauri `(22, 22)` is a `position_window_controls` inset, not a top-left, resizable with the real min size, sidebar with all twelve pages, the General page in full against the shared Tauri store, and the Recordings page at 1:1: the library scan with real thumbnails, the three tab pills, the search field, mode / clip-count / in-progress / failed badges, the per-row action buttons, `PAGE_SIZE` pagination, both empty states, the 2s poll while a recording is still being written, click-through into the gpui editor, and delete behind a native confirm. The other ten pages are placeholder bodies |
+| Settings → Feedback → Diagnostic Report | — | **Done, with deviations** — the A/V sync self-test driven as a `cap selftest av-sync --progress-json` subprocess (it needs the process main thread gpui owns), a mode segmented control and a Test microphone toggle, live per-stage progress and Cancel, a PASS/WARN/FAIL/INCONCLUSIVE verdict chip with the run's summary, the full `cap_recording::diagnostics` environment report written to `<app data>/diagnostics/` and pruned to five, and Send to Cap / Show File. Upload Logs under Debug Information is live too, now that the app writes a rolling `cap-gpui.log`. Deviations: fixed 20s duration, no `--mic-name`, no in-flight-recording guard, inline status instead of a toast — see below |
 | Upgrade | 950×850 | Not started |
 | Onboarding | dynamic, 860–1080 wide | Not started |
 | Teleprompter | 560×320 | **Done, with deviations** — resizable to the 420×220 floor, level 101 on all Spaces, the `"teleprompter"` material at radius 22, traffic lights at (14, 11) — the Tauri `(14, 14)` is a `position_window_controls` inset, not a top-left, auto-scroll from the ported `teleprompter-utils` maths, the full footer and settings popover, native window opacity, the `teleprompter` store section, capture exclusion + content protection. The script editor is a real multi-line field and Mirror is inert — see below |
@@ -884,11 +885,75 @@ therefore runs first in the bubble phase. Verified both ways: clicking a row's
 folder button opens Finder and no editor, clicking the row body opens the
 editor.
 
+### The Diagnostic Report
+
+The Feedback page's third section (`diagnostics.rs` plus `render_diagnostic`
+in `settings_pages.rs`), built on the same foundation the Tauri app's
+diagnostic uses: the `cap selftest av-sync` NDJSON protocol and
+`cap_recording::diagnostics::collect_report`.
+
+**The sync test cannot run in-process here.** `cap selftest av-sync` builds
+its own winit `EventLoop` for the flashing test pattern and needs the process
+main thread, which gpui owns for the life of the app. So the app runs the
+`cap` CLI as a subprocess and drives its `--progress-json` stream: one
+`{"type":"Stage",..}` line per stage transition, then one `{"type":"Report",..}`.
+The exit code is deliberately ignored — the CLI exits non-zero for a `fail` or
+`inconclusive` verdict, both of which are successful *runs* — and the verdict
+is read off the `Report` line instead.
+
+Sidecar resolution (`resolve_selftest_binary`), in order, with
+`CAP_GPUI_SELFTEST_BIN` winning over all of it:
+
+1. Next to the running executable — `cap-exporter`, `cap-exporter-<triple>`,
+   then `cap`. This is where the sidecar sits for an app-staged build and
+   where a dev `cargo build` leaves the CLI.
+2. `../Resources` and `../MacOS` relative to it, the two places Tauri puts an
+   `externalBin` inside a bundle.
+3. `/Applications/Cap.app/Contents/{Resources,MacOS}`. The gpui dev binary is
+   unbundled and carries no sidecar of its own, so it borrows the installed
+   app's — the same fallback the editor's wallpaper lookup makes.
+4. `target/{debug,release}/cap`, walking up from the working directory.
+
+Nothing found is not an error: the page says so up front, and Run Diagnostic
+still produces the environment half of the report with the reason recorded in
+`syncTestError`.
+
+Everything runs on `cx.background_executor()`. `collect_report` alone can
+block for the better part of a minute (display enumeration is ~37s without
+screen-recording permission, the recordings walk another ~15s), so the run
+reports stage transitions back over a `flume` channel that the foreground task
+polls at 100ms — the same shape the editor's export progress uses — and the
+Settings window stays live throughout. Cancel flips an `AtomicBool` that a
+watchdog thread polls at 100ms and kills the child with; polling the flag
+between stdout lines instead would have made Cancel take as long as a
+recording leg.
+
+Reports are written to `<app data>/diagnostics/cap-diagnostic-<unix-ts>.json`
+— beside the shared `store`, not inside it — and pruned to the newest five,
+ordered by the timestamp in the file name rather than by mtime, because two
+reports written in the same second have indistinguishable mtimes.
+
+### File logging
+
+`main.rs` now installs a `tracing_appender::rolling::daily` layer alongside
+the existing stdout one, into `~/Library/Logs/so.cap.desktop` on macOS (the
+directory the Tauri app already writes into) and
+`<local data>/so.cap.desktop/logs` elsewhere. The filename prefix is
+**`cap-gpui.log`**, deliberately not the Tauri app's `cap-desktop.log`: the
+two apps share the directory, and a shared prefix would interleave two
+processes' lines into one file and make either app's "newest log" lookup pick
+up the other's. Both apps' lookups match on their own prefix, so neither sees
+the other's files. Losing the directory is not fatal — the stdout layer is
+installed either way.
+
 Settings-specific deviations:
 
 | | |
 |---|---|
 | **Placeholder pages** | CLI, Automations, Transcription, Integrations, License, Experimental, Feedback and Changelog render their name, a one-line description and a card saying they are not part of the rewrite yet. The sidebar is real; those bodies are not. Shortcuts and Screenshots have since grown real bodies: the Shortcuts page edits the shared `hotkeys` store **and** re-registers the OS shortcuts through `crate::hotkeys` (the `global-hotkey` crate `tauri_plugin_global_shortcut` wraps, same pin), and the Screenshots page is the full library. |
+| **Diagnostics: subprocess, not a command** | The Tauri app runs the sync test from a Tauri command and streams progress to the webview as an event; here it is a spawned `cap` subprocess and a `flume` channel, because the test needs the process main thread that gpui owns. The stage names, the `AvSyncReport` shape, the `DiagnosticReport` envelope, the `/api/desktop/logs` form fields and the "newest five on disk" rule are identical. Deviations: **fixed 20s duration** (no duration control — the Tauri page's is not worth a second row here), **no `--mic-name`** (the Test microphone toggle always uses the default mic), and **no in-flight recording guard** — the Tauri command refuses to start while a recording is active, which this page does not check. |
+| **Diagnostics: no toast layer** | There is none in this window, so the upload result is an inline line under the button (`upload_note`) rather than a toast, the same stand-in the CLI page's errors use. |
+| **Upload Logs is live; the tray's is still disabled** | `commands.uploadLogs()` now has a counterpart: the app writes a rolling `cap-gpui.log` and the Feedback page's button posts the same multipart form the Tauri app posts (`log`, `os`, `version`, `diagnostics`), with the report attached only from the Diagnostic Report section's own button. Auth is optional on that route, so it works signed-out. The tray's Upload Logs item is unchanged and still renders disabled. |
 | **Import and Reupload are disabled** | `importVideoFromPicker` remuxes the picked file through `commands.importVideoToProject`, and Reupload is `commands.uploadExportedVideo(path, "Reupload", ..)`. Neither has a counterpart in this app — no import remux, no upload infrastructure — so both buttons are drawn in their disabled state, the same precedent as the editor sidebar's transcription buttons. |
 | **No upload progress on a recording row** | The Tauri row draws a `ProgressCircle` while `uploadProgressEvent` is arriving for that video, and `hasActiveRecording` also keeps polling while `upload.state` is `MultipartUpload` / `SinglePartUpload`. There are no uploads here, so the ring is not drawn and the poll's upload half is not reproduced — only `InProgress` / `NeedsRemux` keep it running. |
 | **An instant bundle with no `content` directory is revealed, not opened** | `openRecordingFolder` treats *spawning* `open` as success, so an instant bundle missing its `content` directory opens nothing at all. Here the directory is stat'd first and the bundle is revealed instead. |
