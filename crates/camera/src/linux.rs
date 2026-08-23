@@ -132,6 +132,8 @@ impl CameraInfo {
                 continue;
             }
 
+            let pixel_format = fourcc_name(desc.fourcc.repr);
+
             for (width, height) in frame_sizes(&device, desc.fourcc) {
                 for (frame_rate, interval) in frame_rates(&device, desc.fourcc, width, height) {
                     formats.push(Format {
@@ -147,6 +149,7 @@ impl CameraInfo {
                             frame_rate,
                             interval,
                         },
+                        pixel_format: Some(pixel_format.clone()),
                     });
                 }
             }
@@ -288,6 +291,12 @@ fn video_index(path: &Path) -> Option<u32> {
 
 fn open_device(camera: &CameraInfo) -> Result<Device, StartCapturingError> {
     Device::with_path(camera.device_id()).map_err(|e| StartCapturingError::Native(e.to_string()))
+}
+
+fn fourcc_name(fourcc: [u8; 4]) -> String {
+    String::from_utf8_lossy(&fourcc)
+        .trim_end_matches(['\0', ' '])
+        .to_string()
 }
 
 fn fourcc_rank(fourcc: [u8; 4]) -> Option<u32> {
