@@ -81,6 +81,14 @@ impl RecordingSession {
         cx.global::<SessionGlobal>().0.clone()
     }
 
+    /// True while a recording is in flight. Tolerates the global not being
+    /// installed yet (reporting idle) so callers can gate on it from windows
+    /// that may open before the session exists.
+    pub fn recording_in_flight(cx: &App) -> bool {
+        cx.has_global::<SessionGlobal>()
+            && cx.global::<SessionGlobal>().0.read(cx).phase != Phase::Idle
+    }
+
     /// Elapsed recording time, excluding paused stretches -- what the bar's
     /// timer shows.
     pub fn elapsed(&self) -> Duration {
