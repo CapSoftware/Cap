@@ -143,8 +143,9 @@ pub async fn upload_exported_video(
             }
 
             meta.upload = Some(UploadMeta::Complete);
-            meta.save_for_project()
-                .map_err(|error| format!("Failed to persist completed upload: {error}"))?;
+            if let Err(error) = meta.save_for_project() {
+                tracing::warn!(%error, "share uploaded but completed state could not be persisted");
+            }
             Ok(UploadResult::Success(link))
         }
         Err(AuthApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
