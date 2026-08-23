@@ -99,6 +99,7 @@ fn shared_data_dir() -> PathBuf {
     base
 }
 
+#[cfg(unix)]
 fn gpui_pidfile() -> PathBuf {
     shared_data_dir().join("cap-gpui.pid")
 }
