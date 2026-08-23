@@ -18,7 +18,10 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"..",
+);
 const gpuiDir = path.join(repoRoot, "apps", "desktop-gpui");
 const gpuiDevScript = path.join(gpuiDir, "dev.sh");
 const reopenSentinel = path.join(
