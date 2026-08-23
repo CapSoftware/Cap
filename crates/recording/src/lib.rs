@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
+pub mod log_redaction;
 pub mod memory_profiling;
 mod output_pipeline;
 pub mod output_validation;
