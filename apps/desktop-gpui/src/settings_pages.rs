@@ -9,7 +9,16 @@
 //! two apps keep reading each other's state. Web calls run on the gpui_tokio
 //! runtime (reqwest needs tokio); persistence goes through [`crate::store`].
 
-use std::{collections::HashMap, str::FromStr as _, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    str::FromStr as _,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -20,6 +29,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    diagnostics,
     settings_window::{MenuKind, Page, SettingsWindow},
     store::{
         self, Action, AutomationExportCompression, AutomationRecordingMode, AutomationRule,
@@ -65,6 +75,51 @@ enum HintSave {
 /// `useSubmission(sendFeedbackAction)`'s phases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FeedbackStatus {
+    Idle,
+    Pending,
+    Success,
+    Error(String),
+}
+
+/// The Diagnostic Report's phases. `Running` carries the CLI's own stage name
+/// and leg so the label is built at render time, not at send time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiagnosticStatus {
+    Idle,
+    Running {
+        stage: String,
+        mode: Option<String>,
+    },
+    Done {
+        verdict: Option<String>,
+        summary: Option<String>,
+        report_path: Option<PathBuf>,
+        /// Set when the sync test could not run at all; the environment half
+        /// of the report is still there.
+        sync_test_error: Option<String>,
+    },
+    Error(String),
+}
+
+/// The finished report, kept whole so "Send to Cap" never re-collects it.
+#[derive(Debug, Clone)]
+struct DiagnosticPayload {
+    report_json: String,
+    diagnostics_json: String,
+}
+
+/// Which of the two upload buttons a result belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadTarget {
+    /// "Send to Cap" on a finished diagnostic: log + diagnostics + report.
+    Diagnostic,
+    /// "Upload Logs" under Debug Information: log + diagnostics only.
+    Logs,
+}
+
+/// `useSubmission`'s phases again, for the two upload buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadStatus {
     Idle,
     Pending,
     Success,
@@ -253,6 +308,25 @@ pub(crate) struct PagesState {
     feedback: FeedbackStatus,
     /// Best-effort local stand-in for `commands.getSystemDiagnostics`.
     os_version: Option<Option<String>>,
+    /// "Upload Logs" under Debug Information.
+    logs_upload: UploadStatus,
+
+    // Diagnostic Report (feedback.tsx's diagnostic section)
+    diagnostic: DiagnosticStatus,
+    diagnostic_mode: diagnostics::SyncMode,
+    diagnostic_mic: bool,
+    /// Set for the length of a run; the Cancel button flips it and the runner's
+    /// watchdog kills the self-test subprocess. It stays readable after Cancel
+    /// so the run's later stages can still see it.
+    diagnostic_cancel: Option<Arc<AtomicBool>>,
+    /// Cancel has been pressed and the run has not resolved yet: the label
+    /// stays on "Cancelling..." and no later stage walks it back.
+    diagnostic_cancelling: bool,
+    diagnostic_payload: Option<DiagnosticPayload>,
+    diagnostic_upload: UploadStatus,
+    /// `None` until the Feedback page resolves it once; `Some(None)` means no
+    /// `cap` sidecar was found and the run will be environment-only.
+    selftest_binary: Option<Option<PathBuf>>,
 
     // Changelog (changelog.tsx). `None` until the first fetch lands; a
     // refetch keeps showing the loaded list, the way the cached query does.
@@ -351,6 +425,15 @@ impl PagesState {
             feedback_draft: String::new(),
             feedback: FeedbackStatus::Idle,
             os_version: None,
+            logs_upload: UploadStatus::Idle,
+            diagnostic: DiagnosticStatus::Idle,
+            diagnostic_mode: diagnostics::SyncMode::Both,
+            diagnostic_mic: false,
+            diagnostic_cancel: None,
+            diagnostic_cancelling: false,
+            diagnostic_payload: None,
+            diagnostic_upload: UploadStatus::Idle,
+            selftest_binary: None,
             changelog: None,
             license_input,
             license_draft: String::new(),
@@ -2261,14 +2344,22 @@ impl SettingsWindow {
 // ---------------------------------------------------------------------------
 
 impl SettingsWindow {
+    /// The page's two one-shot probes: the OS string and whether there is a
+    /// `cap` sidecar to run the sync test with. Both stat the filesystem, so
+    /// neither runs on the UI thread and neither is repeated per frame.
     fn feedback_load_os_version(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pages.os_version.is_some() {
             return;
         }
         cx.spawn_in(window, async move |this, cx| {
             let version = cx.background_executor().spawn(async { os_version() }).await;
+            let selftest = cx
+                .background_executor()
+                .spawn(async { diagnostics::resolve_selftest_binary() })
+                .await;
             this.update_in(cx, |this, window, cx| {
                 this.pages.os_version = Some(version);
+                this.pages.selftest_binary = Some(selftest);
                 cx.notify();
                 window.refresh();
             })
@@ -2338,6 +2429,618 @@ impl SettingsWindow {
                 };
             },
         );
+    }
+
+    /// Run the A/V sync self-test, then collect the environment report around
+    /// it and write it next to the store.
+    ///
+    /// The self-test is a subprocess by necessity -- it builds its own event
+    /// loop and needs the process main thread, which gpui owns -- and the
+    /// environment probes block for tens of seconds, so the whole thing lives
+    /// on the background executor and reports back over a channel, the same
+    /// shape the editor's export progress uses.
+    fn diagnostic_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.pages.diagnostic, DiagnosticStatus::Running { .. }) {
+            return;
+        }
+
+        // The test starts its own recording and flashes the screen, which
+        // would land in whatever the user is currently recording.
+        if crate::session::RecordingSession::recording_in_flight(cx) {
+            self.pages.diagnostic = DiagnosticStatus::Error(
+                "Stop the current recording before running a diagnostic.".to_string(),
+            );
+            cx.notify();
+            return;
+        }
+
+        // A stray click costs a couple of minutes of hijacked screen and loud
+        // beeps, so it is confirmed the way the Tauri app confirms it.
+        let message = format!(
+            "Cap will take over your screen with a flashing pattern and play loud beeps for \
+             about {} seconds per pipeline. Take your headphones off, leave the volume \
+             audible, and leave the machine alone until it finishes.",
+            diagnostics::DEFAULT_DURATION_SECS
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if !crate::platform::confirm_dialog(
+                "Run diagnostic?",
+                &message,
+                "Run Diagnostic",
+                "Cancel",
+                true,
+            ) {
+                return;
+            }
+            this.update_in(cx, |this, window, cx| this.diagnostic_start(window, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn diagnostic_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Process-global, not per-page: Settings builds a fresh state every
+        // time it opens while the run is a detached task that outlives the
+        // window, so `self.pages.diagnostic` alone cannot see the run started
+        // by a previous Settings window.
+        let guard = match diagnostics::RunGuard::acquire() {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.pages.diagnostic = DiagnosticStatus::Error(error);
+                cx.notify();
+                return;
+            }
+        };
+
+        let options = diagnostics::SyncTestOptions {
+            mode: self.pages.diagnostic_mode,
+            microphone: self.pages.diagnostic_mic,
+            duration_secs: diagnostics::DEFAULT_DURATION_SECS,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.pages.diagnostic_cancel = Some(cancel.clone());
+        self.pages.diagnostic_cancelling = false;
+        self.pages.diagnostic_payload = None;
+        self.pages.diagnostic_upload = UploadStatus::Idle;
+        self.pages.diagnostic = DiagnosticStatus::Running {
+            stage: diagnostics::START_STAGE.to_string(),
+            mode: None,
+        };
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let (stage_tx, stage_rx) = flume::unbounded::<diagnostics::Stage>();
+            let run = cx.background_executor().spawn({
+                let cancel = cancel.clone();
+                async move {
+                    // Released on every exit path below, and on the drop of the
+                    // whole future if the run is ever abandoned.
+                    let _guard = guard;
+                    let stages = stage_tx.clone();
+                    let (sync_test, sync_test_error) = match diagnostics::resolve_selftest_binary()
+                    {
+                        Some(binary) => {
+                            match diagnostics::run_sync_test(&binary, &options, &cancel, |stage| {
+                                let _ = stages.send(stage);
+                            }) {
+                                Ok(report) => (Some(report), None),
+                                Err(error) => (None, Some(error)),
+                            }
+                        }
+                        // No sidecar: the environment half of the report is
+                        // still worth having, with the reason recorded in it.
+                        None => (
+                            None,
+                            Some(
+                                "The Cap command-line tool was not found next to this build, so \
+                                 the sync test could not run."
+                                    .to_string(),
+                            ),
+                        ),
+                    };
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(diagnostics::CANCELLED.to_string());
+                    }
+
+                    let _ = stage_tx.send(diagnostics::Stage {
+                        stage: diagnostics::COLLECT_STAGE.to_string(),
+                        mode: None,
+                    });
+                    let report = diagnostics::collect_report(sync_test, sync_test_error.clone());
+                    // `collect_report` blocks for tens of seconds and cannot be
+                    // interrupted, so the flag is read again on the far side of
+                    // it: a cancelled run must not still write a report.
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(diagnostics::CANCELLED.to_string());
+                    }
+                    let path = diagnostics::write_report(&report)
+                        .map_err(|error| tracing::warn!("writing the diagnostic report: {error}"))
+                        .ok();
+                    let report_json = serde_json::to_string(&report)
+                        .map_err(|error| format!("Failed to serialize the report: {error}"))?;
+                    let diagnostics_json =
+                        serde_json::to_string(&diagnostics::log_diagnostics_from_report(&report))
+                            .unwrap_or_else(|_| "{}".to_string());
+                    let sync = report.get("syncTest").cloned().unwrap_or(Value::Null);
+                    Ok((
+                        sync.get("verdict")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        sync.get("summary")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        path,
+                        sync_test_error,
+                        DiagnosticPayload {
+                            report_json,
+                            diagnostics_json,
+                        },
+                    ))
+                }
+            });
+
+            // Poll the stage channel until the run drops its sender, the same
+            // shape `editor_export` uses; only the newest stage is worth a
+            // repaint.
+            loop {
+                let mut latest = None;
+                while let Ok(stage) = stage_rx.try_recv() {
+                    latest = Some(stage);
+                }
+                if let Some(stage) = latest {
+                    this.update_in(cx, |this, window, cx| {
+                        // A stage still in flight when Cancel was pressed must
+                        // not walk the label back off "Cancelling".
+                        if this.pages.diagnostic_cancelling
+                            || this.pages.diagnostic_cancel.is_none()
+                        {
+                            return;
+                        }
+                        this.pages.diagnostic = DiagnosticStatus::Running {
+                            stage: stage.stage,
+                            mode: stage.mode,
+                        };
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .ok();
+                }
+                if stage_rx.is_disconnected() {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+            }
+
+            let outcome = run.await;
+            this.update_in(cx, |this, window, cx| {
+                this.pages.diagnostic_cancel = None;
+                this.pages.diagnostic_cancelling = false;
+                this.pages.diagnostic = match outcome {
+                    Ok((verdict, summary, report_path, sync_test_error, payload)) => {
+                        this.pages.diagnostic_payload = Some(payload);
+                        DiagnosticStatus::Done {
+                            verdict,
+                            summary,
+                            report_path,
+                            sync_test_error,
+                        }
+                    }
+                    Err(error) if error == diagnostics::CANCELLED => DiagnosticStatus::Idle,
+                    Err(error) => DiagnosticStatus::Error(error),
+                };
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn diagnostic_stop(&mut self, cx: &mut Context<Self>) {
+        // The flag stays in place rather than being taken: the run reads it
+        // again after `collect_report`, which is the whole second half of a
+        // run, and a taken flag left that half uncancellable.
+        let Some(cancel) = self.pages.diagnostic_cancel.clone() else {
+            return;
+        };
+        cancel.store(true, Ordering::Relaxed);
+        self.pages.diagnostic_cancelling = true;
+        if let DiagnosticStatus::Running { stage, .. } = &mut self.pages.diagnostic {
+            diagnostics::CANCEL_STAGE.clone_into(stage);
+        }
+        cx.notify();
+    }
+
+    fn upload_status_mut(&mut self, target: UploadTarget) -> &mut UploadStatus {
+        match target {
+            UploadTarget::Diagnostic => &mut self.pages.diagnostic_upload,
+            UploadTarget::Logs => &mut self.pages.logs_upload,
+        }
+    }
+
+    fn upload_status(&self, target: UploadTarget) -> &UploadStatus {
+        match target {
+            UploadTarget::Diagnostic => &self.pages.diagnostic_upload,
+            UploadTarget::Logs => &self.pages.logs_upload,
+        }
+    }
+
+    /// `commands.uploadLogs()`: POST the log tail to `/api/desktop/logs`, with
+    /// the diagnostic report attached when the caller has one. Auth is
+    /// optional on that route, so a signed-out user can still send it.
+    fn upload_to_cap(&mut self, target: UploadTarget, window: &mut Window, cx: &mut Context<Self>) {
+        if self.upload_status(target) == &UploadStatus::Pending {
+            return;
+        }
+        let payload = match target {
+            UploadTarget::Diagnostic => match self.pages.diagnostic_payload.clone() {
+                Some(payload) => Some(payload),
+                None => return,
+            },
+            UploadTarget::Logs => None,
+        };
+        let server = self.settings.server_url.clone();
+        let token = store::auth_snapshot().token;
+        *self.upload_status_mut(target) = UploadStatus::Pending;
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            // Reading the log tail and (for the plain log upload) probing the
+            // devices are both blocking; only the POST belongs on tokio.
+            let (log, report, diagnostics_json) = cx
+                .background_executor()
+                .spawn(async move {
+                    let log = diagnostics::log_tail();
+                    match payload {
+                        Some(payload) => (
+                            log,
+                            Some(payload.report_json),
+                            Some(payload.diagnostics_json),
+                        ),
+                        None => {
+                            let diagnostics_json =
+                                serde_json::to_string(&diagnostics::collect_log_diagnostics()).ok();
+                            (log, None, diagnostics_json)
+                        }
+                    }
+                })
+                .await;
+
+            let Ok(task) = cx.update(|_window, cx| {
+                gpui_tokio::Tokio::spawn(
+                    cx,
+                    diagnostics::upload_report(server, token, log, report, diagnostics_json),
+                )
+            }) else {
+                return;
+            };
+            let result = task
+                .await
+                .unwrap_or_else(|_| Err("The upload was interrupted".to_string()));
+
+            this.update_in(cx, |this, window, cx| {
+                *this.upload_status_mut(target) = match result {
+                    Ok(()) => UploadStatus::Success,
+                    Err(error) => UploadStatus::Error(error),
+                };
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The status line under an upload button. `None` while idle.
+    fn upload_note(&self, target: UploadTarget) -> Option<gpui::AnyElement> {
+        let theme = self.theme;
+        let (text, color): (String, Hsla) = match self.upload_status(target) {
+            UploadStatus::Idle => return None,
+            UploadStatus::Pending => ("Uploading...".to_string(), theme.settings_muted()),
+            UploadStatus::Success => (
+                "Sent. Thank you -- this helps us find the problem.".to_string(),
+                theme.settings_muted(),
+            ),
+            UploadStatus::Error(error) => (error.clone(), Hsla::from(theme.red_9)),
+        };
+        Some(
+            div()
+                .text_size(px(11.))
+                .text_color(color)
+                .child(text)
+                .into_any_element(),
+        )
+    }
+
+    /// The Diagnostic Report section: the two options, the run button, and
+    /// whichever of the four states the run is in.
+    fn render_diagnostic(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let running = matches!(self.pages.diagnostic, DiagnosticStatus::Running { .. });
+
+        let warning = self
+            .note_box()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme.settings_text())
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("The test takes over your screen and makes noise."),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(theme.settings_muted())
+                    .child(
+                        "A fullscreen window flashes black and white while 1kHz beeps play \
+                         through your speakers, and Cap records it and measures how far the \
+                         picture and the sound have drifted apart. Leave the machine alone \
+                         while it runs. Both modes together take a couple of minutes.",
+                    ),
+            );
+
+        let mode = self.pages.diagnostic_mode;
+        let mode_control = ui::SegmentedControl::settings(
+            &theme,
+            "diagnostic-mode",
+            diagnostics::SyncMode::ALL
+                .iter()
+                .map(|value| {
+                    ui::SegmentOption::new(value.label(), *value == mode).disabled(running)
+                })
+                .collect(),
+        )
+        .on_select(cx.listener(|this, index: &usize, _window, cx| {
+            if let Some(value) = ui::option_at(diagnostics::SyncMode::ALL, *index) {
+                this.pages.diagnostic_mode = value;
+                cx.notify();
+            }
+        }));
+
+        let options = self.rows(vec![
+            self.setting_row(
+                "Recording mode",
+                Some("Which pipeline to test. Both runs the studio leg and then the instant one."),
+                mode_control.into_any_element(),
+            ),
+            self.setting_row(
+                "Test microphone",
+                Some(
+                    "Also record your microphone and check that it hears the beeps in time. \
+                     Needs speakers the mic can actually hear.",
+                ),
+                self.toggle(
+                    "diagnostic-mic",
+                    self.pages.diagnostic_mic,
+                    cx,
+                    |this, cx| {
+                        this.pages.diagnostic_mic = !this.pages.diagnostic_mic;
+                        cx.notify();
+                    },
+                )
+                .into_any_element(),
+            ),
+        ]);
+
+        let mut body = div().flex().flex_col().gap(px(8.));
+        match &self.pages.diagnostic {
+            DiagnosticStatus::Idle => {
+                body = body.child(
+                    div().child(
+                        ui::Button::settings(
+                            &theme,
+                            "diagnostic-run",
+                            ui::ButtonVariant::Dark,
+                            ui::ButtonSize::Md,
+                        )
+                        .label("Run Diagnostic")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.diagnostic_run(window, cx)),
+                        ),
+                    ),
+                );
+                // Resolved once when the page opens; a build with no sidecar
+                // still produces the environment half of the report.
+                if let Some(None) = &self.pages.selftest_binary {
+                    body = body.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.settings_muted())
+                            .child(
+                                "The Cap command-line tool was not found next to this build, so \
+                                 the report will cover your environment only.",
+                            ),
+                    );
+                }
+            }
+            DiagnosticStatus::Running { stage, mode } => {
+                body = body
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(theme.settings_text())
+                            .child(diagnostics::stage_label(stage, mode.as_deref())),
+                    )
+                    .child(
+                        div().child(
+                            ui::Button::settings(
+                                &theme,
+                                "diagnostic-cancel",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Md,
+                            )
+                            .label("Cancel")
+                            .disabled_settings(
+                                &theme,
+                                self.pages.diagnostic_cancel.is_none()
+                                    || self.pages.diagnostic_cancelling,
+                            )
+                            .on_click(cx.listener(|this, _, _window, cx| this.diagnostic_stop(cx))),
+                        ),
+                    );
+            }
+            DiagnosticStatus::Done {
+                verdict,
+                summary,
+                report_path,
+                sync_test_error,
+            } => {
+                body = body.child(self.verdict_chip(verdict.as_deref()));
+                if let Some(summary) = summary {
+                    body = body.child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(19.))
+                            .text_color(theme.settings_text())
+                            .child(summary.clone()),
+                    );
+                }
+                if let Some(error) = sync_test_error {
+                    body = body.child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(Hsla::from(theme.red_9))
+                            .child(error.clone()),
+                    );
+                }
+
+                let mut buttons = div().flex().flex_row().gap(px(8.)).child(
+                    ui::Button::settings(
+                        &theme,
+                        "diagnostic-send",
+                        ui::ButtonVariant::Dark,
+                        ui::ButtonSize::Md,
+                    )
+                    .label(if self.pages.diagnostic_upload == UploadStatus::Pending {
+                        "Sending..."
+                    } else {
+                        "Send to Cap"
+                    })
+                    .disabled_settings(
+                        &theme,
+                        self.pages.diagnostic_upload == UploadStatus::Pending
+                            || self.pages.diagnostic_payload.is_none(),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.upload_to_cap(UploadTarget::Diagnostic, window, cx)
+                    })),
+                );
+                if let Some(path) = report_path {
+                    let path = path.clone();
+                    buttons = buttons.child(
+                        ui::Button::settings(
+                            &theme,
+                            "diagnostic-reveal",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Md,
+                        )
+                        .label("Show File")
+                        .on_click(move |_, _, _| crate::library::reveal_in_folder(&path)),
+                    );
+                }
+                buttons = buttons.child(
+                    ui::Button::settings(
+                        &theme,
+                        "diagnostic-rerun",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Md,
+                    )
+                    .label("Run Again")
+                    .on_click(cx.listener(|this, _, window, cx| this.diagnostic_run(window, cx))),
+                );
+                body = body
+                    .child(buttons)
+                    .children(self.upload_note(UploadTarget::Diagnostic));
+            }
+            DiagnosticStatus::Error(error) => {
+                body = body
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .line_height(px(19.))
+                            .text_color(Hsla::from(theme.red_9))
+                            .child(error.clone()),
+                    )
+                    .child(
+                        div().child(
+                            ui::Button::settings(
+                                &theme,
+                                "diagnostic-retry",
+                                ui::ButtonVariant::Gray,
+                                ui::ButtonSize::Md,
+                            )
+                            .label("Try Again")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.diagnostic_run(window, cx)),
+                            ),
+                        ),
+                    );
+            }
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(warning)
+            .child(options)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// PASS / WARN / FAIL / INCONCLUSIVE, in the same pill shape the System
+    /// Information block's capture-support chip uses.
+    fn verdict_chip(&self, verdict: Option<&str>) -> gpui::AnyElement {
+        let theme = self.theme;
+        // The same green/red pair the capture-support chip below uses, plus an
+        // amber for `warn`; `inconclusive` and "no sync test at all" are not
+        // failures, so they stay in the muted grey.
+        let (label, fill, text): (&str, Hsla, Hsla) = match verdict {
+            Some("pass") => (
+                "PASS",
+                gpui::rgb(0x22c55e).into(),
+                gpui::rgb(0x4ade80).into(),
+            ),
+            Some("warn") => (
+                "WARN",
+                gpui::rgb(0xf59e0b).into(),
+                gpui::rgb(0xfbbf24).into(),
+            ),
+            Some("fail") => ("FAIL", theme.red_9.into(), theme.red_9.into()),
+            Some("inconclusive") => (
+                "INCONCLUSIVE",
+                theme.settings_muted(),
+                theme.settings_muted(),
+            ),
+            // No sync test in the report: the environment half still ran.
+            _ => (
+                "ENVIRONMENT ONLY",
+                theme.settings_muted(),
+                theme.settings_muted(),
+            ),
+        };
+        let mut fill = fill;
+        fill.a = 0.2;
+        div()
+            .flex()
+            .flex_row()
+            .child(
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .rounded(px(4.))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .bg(fill)
+                    .text_color(text)
+                    .child(label),
+            )
+            .into_any_element()
     }
 
     pub(crate) fn render_feedback(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -2411,8 +3114,11 @@ impl SettingsWindow {
             .on_click(|_, _, cx| cx.open_url("https://cap.link/discord")),
         );
 
-        // `commands.uploadLogs()` has no gpui counterpart yet, so the button
-        // ships disabled with a note instead of silently doing nothing.
+        // `commands.uploadLogs()`. The gpui app writes a rolling log file of
+        // its own (`main.rs`), so this posts the same multipart form the Tauri
+        // app posts -- minus the diagnostic report, which the section above
+        // owns.
+        let logs_pending = self.pages.logs_upload == UploadStatus::Pending;
         let upload_logs = div()
             .flex()
             .flex_col()
@@ -2425,16 +3131,18 @@ impl SettingsWindow {
                         ui::ButtonVariant::Gray,
                         ui::ButtonSize::Md,
                     )
-                    .label("Upload Logs")
-                    .disabled_settings(&theme, true),
+                    .label(if logs_pending {
+                        "Uploading..."
+                    } else {
+                        "Upload Logs"
+                    })
+                    .disabled_settings(&theme, logs_pending)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.upload_to_cap(UploadTarget::Logs, window, cx)
+                    })),
                 ),
             )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.settings_muted())
-                    .child("Log upload is not available in this build yet."),
-            );
+            .children(self.upload_note(UploadTarget::Logs));
 
         let system_info: gpui::AnyElement = match &self.pages.os_version {
             None => div()
@@ -2550,6 +3258,18 @@ impl SettingsWindow {
                 ),
                 None,
                 vec![discord.into_any_element()],
+            )
+            .into_any_element(),
+            self.section(
+                "Diagnostic Report",
+                Some(
+                    "Records a short flashing/beeping test pattern, measures how far the \
+                     picture and sound drift apart, and snapshots your displays, cameras, \
+                     microphones, disk space and recording settings. Nothing is sent \
+                     anywhere until you choose to send it.",
+                ),
+                None,
+                vec![self.render_diagnostic(cx)],
             )
             .into_any_element(),
             self.section(
