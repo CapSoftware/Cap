@@ -3482,7 +3482,7 @@ fn push_rounded_rect(builder: &mut PathBuilder, bounds: Bounds<Pixels>, radius: 
 /// A circle in screen units, as four cubics.
 fn push_circle(builder: &mut PathBuilder, center: Point<Pixels>, radius_x: f32, radius_y: f32) {
     // The usual cubic approximation of a quarter turn.
-    const KAPPA: f32 = 0.552_284_75;
+    const KAPPA: f32 = 0.552_284_8;
     let (cx, cy) = (f32::from(center.x), f32::from(center.y));
     let (ox, oy) = (radius_x * KAPPA, radius_y * KAPPA);
     let point = |x: f32, y: f32| gpui::point(px(x), px(y));

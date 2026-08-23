@@ -998,6 +998,13 @@ pub struct Camera3DScene {
     pub shots: &'static [SceneShot],
 }
 
+struct Camera3DSection<'a> {
+    id: &'static str,
+    name: &'static str,
+    icon: &'static str,
+    summary: Option<&'a str>,
+}
+
 /// The showcase's third shot has its own defocus, authored inline.
 fn showcase_push_blur() -> Camera3DBlur {
     Camera3DBlur {
@@ -5605,14 +5612,16 @@ impl EditorWindow {
             )
             .child(
                 self.camera3d_section(
-                    "camera3d-camera",
-                    "Camera",
-                    "icons/video.svg",
-                    Some(if editing_end {
-                        "End pose"
-                    } else {
-                        "Start pose"
-                    }),
+                    Camera3DSection {
+                        id: "camera3d-camera",
+                        name: "Camera",
+                        icon: "icons/video.svg",
+                        summary: Some(if editing_end {
+                            "End pose"
+                        } else {
+                            "Start pose"
+                        }),
+                    },
                     PanelSection::Camera3DCamera,
                     &camera_section,
                     div()
@@ -5661,10 +5670,12 @@ impl EditorWindow {
             )
             .child(
                 self.camera3d_section(
-                    "camera3d-blur",
-                    "Blur",
-                    "icons/wind.svg",
-                    Some(&blur_summary),
+                    Camera3DSection {
+                        id: "camera3d-blur",
+                        name: "Blur",
+                        icon: "icons/wind.svg",
+                        summary: Some(&blur_summary),
+                    },
                     PanelSection::Camera3DBlur,
                     &blur_section,
                     div()
@@ -5753,10 +5764,12 @@ impl EditorWindow {
             )
             .child(
                 self.camera3d_section(
-                    "camera3d-advanced",
-                    "Advanced",
-                    "icons/timer.svg",
-                    None,
+                    Camera3DSection {
+                        id: "camera3d-advanced",
+                        name: "Advanced",
+                        icon: "icons/timer.svg",
+                        summary: None,
+                    },
                     PanelSection::Camera3DAdvanced,
                     &advanced_section,
                     div()
@@ -5834,15 +5847,18 @@ impl EditorWindow {
     /// away, with an optional summary on the right.
     fn camera3d_section(
         &self,
-        id: &'static str,
-        name: &'static str,
-        icon: &'static str,
-        summary: Option<&str>,
+        header: Camera3DSection<'_>,
         key: PanelSection,
         state: &ui::CollapsibleState,
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let Camera3DSection {
+            id,
+            name,
+            icon,
+            summary,
+        } = header;
         let theme = self.theme;
         let open = state.is_open();
         let summary = summary.map(|summary| SharedString::from(summary.to_string()));

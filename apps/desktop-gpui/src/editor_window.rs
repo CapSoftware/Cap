@@ -3449,7 +3449,7 @@ impl EditorWindow {
     /// Blip's `video_segment_drag_layout` in Ghost mode, expressed as deltas
     /// over the frozen model boxes: the dragged edge follows the draft,
     /// shrinking opens a gap in place, growing pushes the boxes after it.
-    fn ghost_clip_boxes(&self) -> Option<(Vec<(f64, f64)>, Option<(f64, f64)>)> {
+    fn ghost_clip_boxes(&self) -> Option<GhostClipLayout> {
         let draft = self.clip_draft?;
         let timeline = self.project.timeline.as_ref()?;
         let segment = timeline.segments.get(draft.index)?;
@@ -3599,10 +3599,7 @@ impl EditorWindow {
         .detach();
     }
 
-    fn ghost_clip_boxes_for(
-        &mut self,
-        draft: ClipDraft,
-    ) -> Option<(Vec<(f64, f64)>, Option<(f64, f64)>)> {
+    fn ghost_clip_boxes_for(&mut self, draft: ClipDraft) -> Option<GhostClipLayout> {
         self.clip_draft = Some(draft);
         let result = self.ghost_clip_boxes();
         self.clip_draft = None;
@@ -3615,6 +3612,8 @@ pub(crate) struct Camera3DSetup {
     pub scene_id: &'static str,
     pub shots: usize,
 }
+
+type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
 
 impl EditorWindow {
     fn clamp_timeline_height(&self, value: f32, viewport_height: f32) -> f32 {
@@ -6018,14 +6017,11 @@ impl EditorWindow {
     fn render_clip_speed_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.clip_speed?;
         let theme = self.theme;
-        let Some(segment) = self
+        let segment = self
             .project
             .timeline
             .as_ref()
-            .and_then(|timeline| timeline.segments.get(menu.index))
-        else {
-            return None;
-        };
+            .and_then(|timeline| timeline.segments.get(menu.index))?;
         let timescale = segment.timescale;
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
@@ -8257,7 +8253,7 @@ fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_samp
     if !playing || !epoch_has_sample {
         return 0.0;
     }
-    since_last_sample.max(0.0).min(MAX_PLAYHEAD_EXTRAPOLATION)
+    since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
 impl Render for EditorWindow {

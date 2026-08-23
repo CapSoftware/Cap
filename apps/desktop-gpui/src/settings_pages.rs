@@ -1388,8 +1388,7 @@ impl SettingsWindow {
                 )
                 .child(div().child(self.button(
                     "cli-retry",
-                    ui::ButtonVariant::Gray,
-                    None,
+                    (ui::ButtonVariant::Gray, None),
                     "Retry",
                     false,
                     cx,
@@ -1483,8 +1482,7 @@ impl SettingsWindow {
                     .when(status.installed, |this| {
                         this.child(self.button(
                             "cli-remove",
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             if uninstalling {
                                 "Removing..."
                             } else {
@@ -1497,8 +1495,7 @@ impl SettingsWindow {
                     })
                     .child(self.button(
                         "cli-install",
-                        ui::ButtonVariant::Dark,
-                        None,
+                        (ui::ButtonVariant::Dark, None),
                         install_label,
                         installing,
                         cx,
@@ -1635,8 +1632,7 @@ impl SettingsWindow {
                                 )
                                 .child(self.button(
                                     "cli-copy-path",
-                                    ui::ButtonVariant::Gray,
-                                    None,
+                                    (ui::ButtonVariant::Gray, None),
                                     if self.pages.cli_copied {
                                         "Copied"
                                     } else {
@@ -1782,8 +1778,7 @@ impl SettingsWindow {
                     .when(!hints.is_empty(), |this| {
                         this.child(self.button(
                             "hints-clear",
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             "Clear",
                             false,
                             cx,
@@ -1817,8 +1812,7 @@ impl SettingsWindow {
             )
             .child(self.button(
                 "hints-add",
-                ui::ButtonVariant::Primary,
-                Some("icons/plus.svg"),
+                (ui::ButtonVariant::Primary, Some("icons/plus.svg")),
                 "Add",
                 add_disabled,
                 cx,
@@ -2310,7 +2304,7 @@ impl SettingsWindow {
                         }
                         if !store::classic_pending_path().exists() {
                             tracing::info!("classic app is up; quitting");
-                            cx.update(|cx| crate::menus::quit(cx));
+                            cx.update(crate::menus::quit);
                             break;
                         }
                         if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
@@ -3761,8 +3755,7 @@ impl SettingsWindow {
                     .child(div().h(px(1.)).w_full().bg(theme.settings_border()))
                     .child(div().flex().flex_col().items_center().child(self.button(
                         "license-deactivate",
-                        ui::ButtonVariant::Destructive,
-                        None,
+                        (ui::ButtonVariant::Destructive, None),
                         "Deactivate License",
                         false,
                         cx,
@@ -3973,8 +3966,7 @@ impl SettingsWindow {
                     .mt(px(16.))
                     .child(self.button(
                         "license-activate",
-                        ui::ButtonVariant::Primary,
-                        None,
+                        (ui::ButtonVariant::Primary, None),
                         if activating {
                             "Activating..."
                         } else {
@@ -4670,8 +4662,7 @@ impl SettingsWindow {
                                     )
                                     .child(self.button(
                                         ("integration-configure", index),
-                                        ui::ButtonVariant::Primary,
-                                        None,
+                                        (ui::ButtonVariant::Primary, None),
                                         button_label,
                                         managed_here,
                                         cx,
@@ -4733,8 +4724,7 @@ impl SettingsWindow {
             .pb(px(12.))
             .child(self.button(
                 "integration-back",
-                ui::ButtonVariant::Gray,
-                Some("icons/arrow-left.svg"),
+                (ui::ButtonVariant::Gray, Some("icons/arrow-left.svg")),
                 "Back",
                 false,
                 cx,
@@ -4888,8 +4878,7 @@ impl SettingsWindow {
                     .when(!s3.loading && s3.has_config, |this| {
                         this.child(self.button(
                             "s3-remove",
-                            ui::ButtonVariant::Destructive,
-                            None,
+                            (ui::ButtonVariant::Destructive, None),
                             if s3.deleting {
                                 "Removing..."
                             } else {
@@ -4902,8 +4891,7 @@ impl SettingsWindow {
                     })
                     .child(self.button(
                         "s3-test",
-                        ui::ButtonVariant::Gray,
-                        None,
+                        (ui::ButtonVariant::Gray, None),
                         if s3.testing {
                             "Testing..."
                         } else {
@@ -4916,8 +4904,7 @@ impl SettingsWindow {
             )
             .child(self.button(
                 "s3-save",
-                ui::ButtonVariant::Primary,
-                None,
+                (ui::ButtonVariant::Primary, None),
                 if s3.saving { "Saving..." } else { "Save" },
                 busy,
                 cx,
@@ -5035,8 +5022,7 @@ impl SettingsWindow {
                 )
                 .child(self.button(
                     "gdrive-refresh",
-                    ui::ButtonVariant::Gray,
-                    None,
+                    (ui::ButtonVariant::Gray, None),
                     if gdrive.refreshing {
                         "Refreshing..."
                     } else {
@@ -5058,8 +5044,7 @@ impl SettingsWindow {
             };
             card = card.child(div().flex().flex_row().child(self.button(
                 "gdrive-connect",
-                ui::ButtonVariant::Primary,
-                None,
+                (ui::ButtonVariant::Primary, None),
                 connect_label,
                 busy,
                 cx,
@@ -5077,8 +5062,7 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(self.button(
                         "gdrive-use",
-                        ui::ButtonVariant::Primary,
-                        None,
+                        (ui::ButtonVariant::Primary, None),
                         if active { "Active" } else { "Use Google Drive" },
                         busy || active,
                         cx,
@@ -5087,8 +5071,7 @@ impl SettingsWindow {
                     .when(gdrive.s3_has_config, |this| {
                         this.child(self.button(
                             "gdrive-use-s3",
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             "Use S3",
                             busy || !active,
                             cx,
@@ -5097,8 +5080,7 @@ impl SettingsWindow {
                     })
                     .child(self.button(
                         "gdrive-test",
-                        ui::ButtonVariant::Gray,
-                        None,
+                        (ui::ButtonVariant::Gray, None),
                         if gdrive.testing { "Testing..." } else { "Test" },
                         busy,
                         cx,
@@ -5106,8 +5088,7 @@ impl SettingsWindow {
                     ))
                     .child(self.button(
                         "gdrive-disconnect",
-                        ui::ButtonVariant::Destructive,
-                        None,
+                        (ui::ButtonVariant::Destructive, None),
                         "Disconnect",
                         busy,
                         cx,
@@ -6426,8 +6407,7 @@ impl SettingsWindow {
                 )
                 .child(div().mt(px(4.)).child(self.button(
                     "automations-scratch",
-                    ui::ButtonVariant::Gray,
-                    Some("icons/plus.svg"),
+                    (ui::ButtonVariant::Gray, Some("icons/plus.svg")),
                     "Start from scratch",
                     false,
                     cx,
@@ -7251,8 +7231,7 @@ impl SettingsWindow {
                                     ))
                                     .child(self.button(
                                         SharedString::from(format!("action-browse-{rule}-{index}")),
-                                        ui::ButtonVariant::Gray,
-                                        None,
+                                        (ui::ButtonVariant::Gray, None),
                                         "Browse",
                                         false,
                                         cx,
@@ -7625,8 +7604,7 @@ impl SettingsWindow {
                         )
                         .child(self.button(
                             SharedString::from(format!("export-browse-{rule}-{index}")),
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             "Browse",
                             false,
                             cx,

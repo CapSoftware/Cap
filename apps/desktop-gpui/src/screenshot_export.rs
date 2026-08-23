@@ -445,8 +445,8 @@ fn premultiply(rgba: &mut [u8]) {
         if alpha == 255 {
             continue;
         }
-        for channel in 0..3 {
-            pixel[channel] = ((u16::from(pixel[channel]) * alpha + 127) / 255) as u8;
+        for channel in &mut pixel[..3] {
+            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
         }
     }
 }
@@ -457,9 +457,9 @@ fn demultiply(rgba: &mut [u8]) {
         if alpha == 255 || alpha == 0 {
             continue;
         }
-        for channel in 0..3 {
-            let value = (u32::from(pixel[channel]) * 255 + alpha / 2) / alpha;
-            pixel[channel] = value.min(255) as u8;
+        for channel in &mut pixel[..3] {
+            let value = (u32::from(*channel) * 255 + alpha / 2) / alpha;
+            *channel = value.min(255) as u8;
         }
     }
 }

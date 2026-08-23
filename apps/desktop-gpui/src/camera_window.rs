@@ -278,7 +278,7 @@ mod frame {
             let converter = this.as_mut()?;
 
             let dst = converter.ring[converter.next].clone();
-            converter.session.transfer(&src, &dst).ok()?;
+            converter.session.transfer(src, &dst).ok()?;
             let out = if let Some(flip) = &converter.flip_session {
                 let mut flipped = converter.mirror_ring[converter.next].clone();
                 flip.rotate(&dst, &mut flipped).ok()?;

@@ -318,12 +318,12 @@ impl DeepLinkAction {
                         .into_iter()
                         .find(|(s, _)| s.name == name)
                         .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                        .ok_or(format!("No screen with name \"{}\"", name))?,
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                        .ok_or(format!("No window with name \"{}\"", name))?,
                     #[cfg(debug_assertions)]
                     CaptureMode::Area(area) => {
                         if area.width <= 0.0 || area.height <= 0.0 {
@@ -333,7 +333,7 @@ impl DeepLinkAction {
                             .into_iter()
                             .find(|(display, _)| display.name == area.screen)
                             .map(|(display, _)| display.id)
-                            .ok_or(format!("No screen with name \"{}\"", &area.screen))?;
+                            .ok_or(format!("No screen with name \"{}\"", area.screen))?;
                         ScreenCaptureTarget::Area {
                             screen,
                             bounds: scap_targets::bounds::LogicalBounds::new(

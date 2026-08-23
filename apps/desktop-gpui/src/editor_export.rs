@@ -686,12 +686,10 @@ impl EditorWindow {
                 .await;
             match signed_in {
                 Ok(true) => {
-                    if let Ok(plan) =
+                    if let Ok(Err(error)) =
                         gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
                     {
-                        if let Err(error) = plan {
-                            tracing::warn!("updating auth plan after sign-in: {error}");
-                        }
+                        tracing::warn!("updating auth plan after sign-in: {error}");
                     }
                     platform::activate_app();
                     let _ = this.update(cx, |this, cx| {

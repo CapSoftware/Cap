@@ -78,6 +78,13 @@ const MAX_ZOOM: f32 = 3.;
 const DEFAULT_BACKGROUND_SHADOW: f32 = 73.6;
 /// `solid-toast`'s default duration.
 const TOAST_DURATION: Duration = Duration::from_millis(3500);
+
+struct LoadedScreenshot {
+    config: ProjectConfiguration,
+    image_size: (u32, u32),
+    config_tx: tokio::sync::watch::Sender<ConfigUpdate>,
+    export_tx: tokio::sync::mpsc::Sender<ExportRequest>,
+}
 /// The checkerboard tile: 24 cells of 10px, so it repeats seamlessly.
 const CHECKER_TILE: u32 = 240;
 const CHECKER_CELL: u32 = 10;
@@ -1060,16 +1067,19 @@ impl ScreenshotEditorWindow {
         cx.notify();
     }
 
-    pub fn set_loaded(
+    fn set_loaded(
         &mut self,
         pretty_name: String,
-        config: ProjectConfiguration,
-        image_size: (u32, u32),
-        config_tx: tokio::sync::watch::Sender<ConfigUpdate>,
-        export_tx: tokio::sync::mpsc::Sender<ExportRequest>,
+        loaded: LoadedScreenshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let LoadedScreenshot {
+            config,
+            image_size,
+            config_tx,
+            export_tx,
+        } = loaded;
         self.pretty_name = pretty_name;
         self.bg_tab = BgTab::for_source(&config.background.source);
         self.border_body
@@ -4552,7 +4562,7 @@ fn spinning_logo(theme: &Theme) -> impl IntoElement {
 fn checkerboard_tile() -> Arc<RenderImage> {
     let mut tile = image::RgbaImage::new(CHECKER_TILE, CHECKER_TILE);
     for (x, y, pixel) in tile.enumerate_pixels_mut() {
-        let dark = ((x / CHECKER_CELL) + (y / CHECKER_CELL)) % 2 == 0;
+        let dark = ((x / CHECKER_CELL) + (y / CHECKER_CELL)).is_multiple_of(2);
         *pixel = if dark {
             image::Rgba([240, 240, 240, 255])
         } else {
@@ -4696,10 +4706,12 @@ pub fn load_screenshot_project(
             .update(cx, |view, window, cx| {
                 view.set_loaded(
                     source.pretty_name.clone(),
-                    source.config.clone(),
-                    image_size,
-                    config_tx,
-                    export_tx,
+                    LoadedScreenshot {
+                        config: source.config.clone(),
+                        image_size,
+                        config_tx,
+                        export_tx,
+                    },
                     window,
                     cx,
                 )

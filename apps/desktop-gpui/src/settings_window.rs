@@ -1609,8 +1609,7 @@ impl SettingsWindow {
                 };
                 self.button(
                     "settings-sign-in",
-                    variant,
-                    None,
+                    (variant, None),
                     label,
                     false,
                     cx,
@@ -1731,8 +1730,7 @@ impl SettingsWindow {
         let import = self
             .button(
                 "recordings-import",
-                ui::ButtonVariant::Gray,
-                Some("icons/import.svg"),
+                (ui::ButtonVariant::Gray, Some("icons/import.svg")),
                 "Import",
                 false,
                 cx,
@@ -1778,8 +1776,7 @@ impl SettingsWindow {
         let import = self
             .button(
                 "screenshots-import",
-                ui::ButtonVariant::Gray,
-                Some("icons/import.svg"),
+                (ui::ButtonVariant::Gray, Some("icons/import.svg")),
                 "Import image",
                 false,
                 cx,
@@ -1884,8 +1881,7 @@ impl SettingsWindow {
                         .border_color(theme.settings_border())
                         .child(self.button(
                             "screenshots-load-more",
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             "Load more",
                             false,
                             cx,
@@ -2175,8 +2171,7 @@ impl SettingsWindow {
                         .border_color(theme.settings_border())
                         .child(self.button(
                             "recordings-load-more",
-                            ui::ButtonVariant::Gray,
-                            None,
+                            (ui::ButtonVariant::Gray, None),
                             "Load more",
                             false,
                             cx,
@@ -3038,8 +3033,7 @@ impl SettingsWindow {
         if is_custom {
             actions = actions.child(self.button(
                 "recordings-reset",
-                ui::ButtonVariant::Gray,
-                None,
+                (ui::ButtonVariant::Gray, None),
                 "Reset to Default",
                 false,
                 cx,
@@ -3051,8 +3045,7 @@ impl SettingsWindow {
         }
         actions = actions.child(self.button(
             "recordings-pick",
-            ui::ButtonVariant::Dark,
-            None,
+            (ui::ButtonVariant::Dark, None),
             "Choose Folder",
             false,
             cx,
@@ -3145,8 +3138,7 @@ impl SettingsWindow {
             .gap(px(8.))
             .child(self.button(
                 "project-name-reset",
-                ui::ButtonVariant::Gray,
-                None,
+                (ui::ButtonVariant::Gray, None),
                 "Reset",
                 reset_disabled,
                 cx,
@@ -3162,8 +3154,7 @@ impl SettingsWindow {
             ))
             .child(self.button(
                 "project-name-save",
-                ui::ButtonVariant::Dark,
-                None,
+                (ui::ButtonVariant::Dark, None),
                 "Save",
                 save_disabled,
                 cx,
@@ -3321,8 +3312,7 @@ impl SettingsWindow {
             .gap(px(8.))
             .child(self.button(
                 "exclusions-reset",
-                ui::ButtonVariant::Gray,
-                None,
+                (ui::ButtonVariant::Gray, None),
                 "Reset",
                 false,
                 cx,
@@ -3333,8 +3323,7 @@ impl SettingsWindow {
             .child(
                 self.button(
                     "exclusions-add",
-                    ui::ButtonVariant::Dark,
-                    Some("icons/plus.svg"),
+                    (ui::ButtonVariant::Dark, Some("icons/plus.svg")),
                     "Add",
                     self.windows.is_empty(),
                     cx,
@@ -3473,8 +3462,7 @@ impl SettingsWindow {
                     )
                     .child(self.button(
                         "exclusions-restore",
-                        ui::ButtonVariant::Gray,
-                        None,
+                        (ui::ButtonVariant::Gray, None),
                         "Restore",
                         false,
                         cx,
@@ -3591,8 +3579,7 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(self.button(
                         "server-url-reset",
-                        ui::ButtonVariant::Gray,
-                        None,
+                        (ui::ButtonVariant::Gray, None),
                         "Reset to Default",
                         stored == DEFAULT_SERVER_URL && draft == DEFAULT_SERVER_URL,
                         cx,
@@ -3610,8 +3597,7 @@ impl SettingsWindow {
                     ))
                     .child(self.button(
                         "server-url-update",
-                        ui::ButtonVariant::Dark,
-                        None,
+                        (ui::ButtonVariant::Dark, None),
                         "Update",
                         stored == draft,
                         cx,
@@ -3811,13 +3797,13 @@ impl SettingsWindow {
     pub(crate) fn button(
         &self,
         id: impl Into<gpui::ElementId>,
-        variant: ui::ButtonVariant,
-        icon: Option<&'static str>,
+        style: (ui::ButtonVariant, Option<&'static str>),
         label: impl Into<SharedString>,
         disabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> ui::Button {
+        let (variant, icon) = style;
         let mut button = ui::Button::settings(&self.theme, id, variant, ui::ButtonSize::Sm)
             .label(label)
             .disabled_settings(&self.theme, disabled);

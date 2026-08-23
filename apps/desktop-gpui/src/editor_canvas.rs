@@ -810,12 +810,13 @@ impl EditorWindow {
                         start,
                         size,
                         delta,
-                        dir_x,
-                        dir_y,
+                        (dir_x, dir_y),
                         &targets,
                         shift,
-                        max_width,
-                        padding_scale,
+                        DisplayResize {
+                            max_width,
+                            padding_scale,
+                        },
                     );
                     self.snap_guides = guides;
                     self.canvas_drag_rect = Some(rect);
@@ -829,15 +830,14 @@ impl EditorWindow {
                         start,
                         size,
                         delta,
-                        dir_x,
-                        dir_y,
+                        (dir_x, dir_y),
                         &targets,
                         shift,
-                        output_w,
-                        output_h,
-                        camera_manual,
-                        camera_x,
-                        camera_y,
+                        CameraResize {
+                            output: (output_w, output_h),
+                            manual: camera_manual,
+                            position: (camera_x, camera_y),
+                        },
                     );
                     self.snap_guides = guides;
                     self.canvas_drag_camera_rect = Some(rect);
@@ -1009,10 +1009,9 @@ impl EditorWindow {
                     .canvas_drag
                     .as_ref()
                     .is_some_and(|drag| drag.element == element)
+                    && let Some(rect) = self.canvas_overlay_rect
                 {
-                    if let Some(rect) = self.canvas_overlay_rect {
-                        return Some(rect);
-                    }
+                    return Some(rect);
                 }
                 overlay_rect_from_center_size(
                     self.project.timeline.as_ref()?.mask_segments.get(index)?,
@@ -1023,10 +1022,9 @@ impl EditorWindow {
                     .canvas_drag
                     .as_ref()
                     .is_some_and(|drag| drag.element == element)
+                    && let Some(rect) = self.canvas_overlay_rect
                 {
-                    if let Some(rect) = self.canvas_overlay_rect {
-                        return Some(rect);
-                    }
+                    return Some(rect);
                 }
                 let segment = self.project.timeline.as_ref()?.text_segments.get(index)?;
                 Some(NormRect {
@@ -1546,12 +1544,12 @@ fn resolve_scale(
     start: NormRect,
     canvas: (f64, f64),
     delta: (f64, f64),
-    dir_x: i8,
-    dir_y: i8,
+    direction: (i8, i8),
     anchor: (f64, f64),
     targets: &SnapTargets,
     shift: bool,
 ) -> (f64, Vec<SnapGuide>) {
+    let (dir_x, dir_y) = direction;
     let dx_n = delta.0 / canvas.0.max(1.);
     let dy_n = delta.1 / canvas.1.max(1.);
     let outward = dx_n * f64::from(dir_x) + dy_n * f64::from(dir_y);
@@ -1598,19 +1596,26 @@ fn display_resize_scales(rect: NormRect, layout: &FrameLayout, has_aspect: bool)
     (max_width, (2. * k * 0.4) / 100.)
 }
 
+struct DisplayResize {
+    max_width: f64,
+    padding_scale: f64,
+}
+
 fn display_resize_rect(
     start: NormRect,
     canvas: (f64, f64),
     delta: (f64, f64),
-    dir_x: i8,
-    dir_y: i8,
+    direction: (i8, i8),
     targets: &SnapTargets,
     shift: bool,
-    max_width: f64,
-    padding_scale: f64,
+    resize: DisplayResize,
 ) -> (NormRect, f64, Vec<SnapGuide>) {
+    let DisplayResize {
+        max_width,
+        padding_scale,
+    } = resize;
     let anchor = (start.x + start.w / 2., start.y + start.h / 2.);
-    let (scale, guides) = resolve_scale(start, canvas, delta, dir_x, dir_y, anchor, targets, shift);
+    let (scale, guides) = resolve_scale(start, canvas, delta, direction, anchor, targets, shift);
     let target_width = (start.w * scale).max(1e-6);
     let padding = clamp(
         (max_width / target_width - 1.) / padding_scale.max(1e-9),
@@ -1633,20 +1638,26 @@ fn display_resize_rect(
     )
 }
 
+struct CameraResize {
+    output: (f64, f64),
+    manual: Option<XY<f64>>,
+    position: (CameraXPosition, CameraYPosition),
+}
+
 fn camera_resize_rect(
     start: NormRect,
     canvas: (f64, f64),
     delta: (f64, f64),
-    dir_x: i8,
-    dir_y: i8,
+    direction: (i8, i8),
     targets: &SnapTargets,
     shift: bool,
-    output_w: f64,
-    output_h: f64,
-    manual: Option<XY<f64>>,
-    enum_x: CameraXPosition,
-    enum_y: CameraYPosition,
+    resize: CameraResize,
 ) -> (NormRect, f64, Vec<SnapGuide>) {
+    let CameraResize {
+        output: (output_w, output_h),
+        manual,
+        position: (enum_x, enum_y),
+    } = resize;
     let anchor = if manual.is_some() {
         (start.x + start.w / 2., start.y + start.h / 2.)
     } else {
@@ -1662,7 +1673,7 @@ fn camera_resize_rect(
             },
         )
     };
-    let (scale, guides) = resolve_scale(start, canvas, delta, dir_x, dir_y, anchor, targets, shift);
+    let (scale, guides) = resolve_scale(start, canvas, delta, direction, anchor, targets, shift);
     let min_axis = output_w.min(output_h);
     let cam_pad = 50. * (output_h / 1080.);
     let min_dim0 = (start.w * output_w).min(start.h * output_h);
