@@ -78,9 +78,32 @@ pub async fn upload_exported_video(
         return Err(format!("Failed to generate thumbnail: {error}"));
     }
 
+    let video_id = match reusable_video_id(meta.sharing.as_ref(), meta.upload.as_ref()) {
+        Some(video_id) => video_id,
+        None => {
+            let video_id = match request_video_id().await {
+                Ok(video_id) => video_id,
+                Err(AuthApiError::InvalidAuthentication) => {
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                Err(AuthApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+                Err(error) => return Err(error.to_string()),
+            };
+            meta.upload = Some(UploadMeta::SinglePartUpload {
+                video_id: video_id.clone(),
+                file_path: file_path.clone(),
+                screenshot_path: screenshot_path.clone(),
+                recording_dir: project_path.clone(),
+            });
+            meta.save_for_project()
+                .map_err(|error| format!("Failed to persist upload identity: {error}"))?;
+            video_id
+        }
+    };
+
     let s3_config = match create_or_get_video(
         false,
-        reusable_video_id(meta.sharing.as_ref(), meta.upload.as_ref()),
+        Some(video_id.clone()),
         Some(meta.pretty_name.clone()),
         Some(&metadata),
         organization_id,
@@ -92,6 +115,9 @@ pub async fn upload_exported_video(
         Err(AuthApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
         Err(error) => return Err(error.to_string()),
     };
+    if s3_config.id != video_id {
+        return Err("Server did not preserve the reserved upload identity".into());
+    }
 
     meta.upload = Some(UploadMeta::SinglePartUpload {
         video_id: s3_config.id.clone(),
@@ -140,6 +166,28 @@ fn store_auth_missing() -> bool {
     !crate::store::auth_snapshot().signed_in()
 }
 
+async fn request_video_id() -> Result<String, AuthApiError> {
+    let response =
+        auth::authed_request(reqwest::Method::GET, "/api/desktop/video/new-id", None).await?;
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AuthApiError::Other(format!(
+            "request_video_id/error/{status}: {body:?}"
+        )));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
+    let config = serde_json::from_str::<S3UploadMeta>(&text).map_err(|error| {
+        AuthApiError::Other(format!(
+            "Failed to deserialize reserved video ID: {error}. Response body: {text}"
+        ))
+    })?;
+    Ok(config.id)
+}
+
 /// `create_or_get_video` (`src-tauri/upload.rs:340-436`): passing an existing
 /// `video_id` re-uses that server record (which is what keeps a share link
 /// stable across re-uploads), and `is_screenshot` marks the record the way the
@@ -154,6 +202,7 @@ async fn create_or_get_video(
     let mut path = "/api/desktop/video/create?recordingMode=desktopMP4".to_string();
     if let Some(id) = video_id {
         path.push_str(&format!("&videoId={id}"));
+        path.push_str("&createWithId=true");
     }
     if is_screenshot {
         path.push_str("&isScreenshot=true");
