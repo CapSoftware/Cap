@@ -26,7 +26,7 @@ use cap_recording::{
     },
 };
 use cap_timestamp::{Timestamp, Timestamps};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const CONTENT_SECS: f64 = 4.0;
 /// Absolute tolerance for a muxed pts vs the sent capture timestamp,
@@ -1294,6 +1294,267 @@ fn unmatched_sent_indices(sent: &[f64], pts: &[f64], period: f64) -> String {
     runs.join(", ")
 }
 
+// Replaying a user's machine
+// --------------------------
+// `CAP_SYNC_MATRIX_FROM_REPORT=<path to a DiagnosticReport JSON>` replaces the
+// curated matrix with cases built from that report's `matrixHints`, so a
+// support report can be re-run locally against the shapes the reporter
+// actually has:
+//
+//   CAP_SYNC_MATRIX_FROM_REPORT=~/Downloads/report.json \
+//   CAP_SYNC_MATRIX_REPORT=/tmp/replay.json \
+//     cargo test -p cap-recording --test sync_matrix -- --nocapture
+//
+// Every display hint is crossed with every audio-input hint, capped at
+// MAX_REPORT_CASES pairs. The report is read through the local structs below
+// rather than `cap_recording::diagnostics::DiagnosticReport` on purpose: a
+// Windows report must be replayable on macOS, and the per-OS `SystemDiagnostics`
+// in the envelope would not deserialize there.
+//
+// Case resolution is scaled down from the reported display size: the matrix
+// generates frames in real time, so a 4K case would spend its budget on
+// memcpy rather than on the timestamp behaviour under test. The real size
+// stays in the case name.
+const MAX_REPORT_CASES: usize = 12;
+/// Longest edge of a replayed video case, in pixels.
+const REPORT_CASE_MAX_EDGE: u32 = 640;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportEnvelope {
+    #[serde(default, alias = "matrix_hints")]
+    matrix_hints: Option<ReportMatrixHints>,
+    #[serde(default, alias = "sync_test")]
+    sync_test: Option<ReportSyncTest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportMatrixHints {
+    #[serde(default)]
+    video: Vec<ReportVideoHint>,
+    #[serde(default, alias = "audio_inputs")]
+    audio_inputs: Vec<ReportAudioHint>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportVideoHint {
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default, alias = "refresh_rate")]
+    refresh_rate: u32,
+    #[serde(default, alias = "configured_max_fps")]
+    configured_max_fps: Option<u32>,
+    #[serde(default)]
+    fragmented: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportAudioHint {
+    #[serde(default)]
+    rate: u32,
+    #[serde(default)]
+    channels: u16,
+    #[serde(default, alias = "buffer_range")]
+    buffer_range: Option<(u32, u32)>,
+}
+
+/// The embedded `cap selftest av-sync` report, which serializes snake_case.
+#[derive(Deserialize)]
+struct ReportSyncTest {
+    #[serde(default)]
+    recording: Option<ReportMeasurement>,
+}
+
+#[derive(Deserialize)]
+struct ReportMeasurement {
+    #[serde(default, alias = "driftMsPerMin")]
+    drift_ms_per_min: Option<f64>,
+}
+
+/// Scales a real display size into something the matrix can generate in real
+/// time, preserving aspect ratio and keeping both dimensions even.
+fn report_case_size(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (160, 120);
+    }
+    let longest = width.max(height);
+    let (w, h) = if longest <= REPORT_CASE_MAX_EDGE {
+        (width, height)
+    } else {
+        let scale = f64::from(REPORT_CASE_MAX_EDGE) / f64::from(longest);
+        (
+            (f64::from(width) * scale).round() as u32,
+            (f64::from(height) * scale).round() as u32,
+        )
+    };
+    (w.max(16) & !1, h.max(16) & !1)
+}
+
+/// The chunk size to replay for one reported input.
+///
+/// A device's buffer-size range only says something about its real chunking
+/// when it is narrow. CoreAudio/cpal reports `15..=4096` frames for essentially
+/// every device, and taking the midpoint of that turns every microphone into
+/// the same fabricated ~46ms chunk -- which is exactly what the replay is
+/// supposed to avoid. So a wide range falls back to the curated matrix's 20ms
+/// rather than inventing a number from it.
+fn report_chunk_ms(rate: u32, buffer_range: Option<(u32, u32)>) -> f64 {
+    const DEFAULT_CHUNK_MS: f64 = 20.0;
+    const MAX_INFORMATIVE_RATIO: u32 = 8;
+
+    buffer_range
+        .filter(|(min, max)| {
+            *min > 0 && *max >= *min && *max <= min.saturating_mul(MAX_INFORMATIVE_RATIO)
+        })
+        .map(|(min, max)| (f64::from(min) + f64::from(max)) / 2.0 / f64::from(rate) * 1000.0)
+        .filter(|ms| ms.is_finite() && *ms >= 1.0 && *ms <= 200.0)
+        .unwrap_or(DEFAULT_CHUNK_MS)
+}
+
+/// A wide buffer range says nothing about the device, so it must not become a
+/// fabricated chunk size; a narrow one is the device's real shape.
+#[test]
+fn report_chunk_ms_only_trusts_a_narrow_buffer_range() {
+    // What CoreAudio reports for nearly every device.
+    assert_eq!(report_chunk_ms(48_000, Some((15, 4096))), 20.0);
+    assert_eq!(report_chunk_ms(48_000, None), 20.0);
+    // A device pinned to one buffer size, and a narrow range around it.
+    assert!((report_chunk_ms(48_000, Some((512, 512))) - 10.666).abs() < 0.01);
+    assert!((report_chunk_ms(48_000, Some((480, 960))) - 15.0).abs() < 0.01);
+    // Narrow but out of the plausible range, and degenerate values.
+    assert_eq!(report_chunk_ms(48_000, Some((1, 2))), 20.0);
+    assert_eq!(report_chunk_ms(48_000, Some((0, 4096))), 20.0);
+    assert_eq!(report_chunk_ms(48_000, Some((4096, 15))), 20.0);
+    assert_eq!(report_chunk_ms(0, Some((480, 960))), 20.0);
+}
+
+fn cases_from_report(path: &Path) -> Result<Vec<(String, VideoCase, AudioCase)>, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let envelope: ReportEnvelope =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
+
+    let hints = envelope
+        .matrix_hints
+        .ok_or_else(|| "report has no matrixHints".to_string())?;
+    if hints.video.is_empty() {
+        return Err("report matrixHints has no video entries".to_string());
+    }
+
+    // A measured recording drift becomes the audio source's crystal drift:
+    // the audio clock running fast/slow against the wall clock is what the
+    // measurement observed.
+    let drift = envelope
+        .sync_test
+        .and_then(|test| test.recording)
+        .and_then(|m| m.drift_ms_per_min)
+        .filter(|d| d.is_finite())
+        .map(|d| 1.0 + d / 60_000.0)
+        .unwrap_or(1.0);
+
+    let audio_hints: Vec<ReportAudioHint> = if hints.audio_inputs.is_empty() {
+        vec![ReportAudioHint {
+            rate: 48_000,
+            channels: 2,
+            buffer_range: None,
+        }]
+    } else {
+        hints.audio_inputs.clone()
+    };
+
+    let mut cases = Vec::new();
+    for video in &hints.video {
+        for audio in &audio_hints {
+            if cases.len() >= MAX_REPORT_CASES {
+                return Ok(cases);
+            }
+
+            let refresh = if video.refresh_rate == 0 {
+                60
+            } else {
+                video.refresh_rate.clamp(1, 240)
+            };
+            let fps = video
+                .configured_max_fps
+                .unwrap_or(60)
+                .min(refresh)
+                .clamp(1, 240);
+            let (width, height) = report_case_size(video.width, video.height);
+
+            let rate = if audio.rate == 0 { 48_000 } else { audio.rate };
+            let channels = audio.channels.max(1);
+            let chunk_ms = report_chunk_ms(rate, audio.buffer_range);
+
+            let name = format!(
+                "report/{}/video-{}x{}-nominal{fps}-delivered{refresh}-{}/audio-{rate}hz-{channels}ch-{chunk_ms:.0}ms-drift{:+.3}%",
+                cases.len(),
+                video.width,
+                video.height,
+                if video.fragmented {
+                    "fragmented"
+                } else {
+                    "mp4"
+                },
+                (drift - 1.0) * 100.0,
+            );
+
+            cases.push((
+                name,
+                VideoCase {
+                    fps,
+                    delivered_fps: refresh,
+                    sent: VideoScenario::Steady.timestamps(refresh),
+                    fragmented: video.fragmented,
+                    width,
+                    height,
+                    content: Content::Flat,
+                    rng_seed: 1,
+                },
+                AudioCase {
+                    rate,
+                    channels,
+                    chunk_ms,
+                    drift,
+                },
+            ));
+        }
+    }
+
+    Ok(cases)
+}
+
+async fn run_report_replay(path: &str, results: &mut Vec<CaseResult>) {
+    let cases = match cases_from_report(Path::new(path)) {
+        Ok(cases) => cases,
+        Err(e) => {
+            record(
+                results,
+                "report/load".to_string(),
+                Err(format!("could not build cases from {path}: {e}")),
+            );
+            return;
+        }
+    };
+
+    eprintln!("replaying {} cases from {path}", cases.len());
+
+    for (name, video, audio) in cases {
+        // Both legs run concurrently, as a real recording does.
+        let (video_outcome, audio_outcome) =
+            tokio::join!(run_video_case_with_cold_retry(video), run_audio_case(audio));
+        let outcome = match (video_outcome, audio_outcome) {
+            (Ok(v), Ok(a)) => Ok(format!("video: {v}; audio: {a}")),
+            (Err(e), _) => Err(format!("video leg: {e}")),
+            (_, Err(e)) => Err(format!("audio leg: {e}")),
+        };
+        record(results, name, outcome);
+    }
+}
+
 fn record(results: &mut Vec<CaseResult>, name: String, outcome: Result<String, String>) {
     eprintln!(
         "{name}: {}",
@@ -1503,6 +1764,14 @@ async fn synthetic_device_matrix_preserves_sync() {
         .unwrap_or(6);
     eprintln!("randomized cases: {random_cases}, CAP_SYNC_MATRIX_SEED={seed}");
 
+    // Replay mode runs only the reporter's shapes; the curated matrix is a
+    // different question than "does this user's machine hold sync".
+    if let Ok(report_path) = std::env::var("CAP_SYNC_MATRIX_FROM_REPORT") {
+        run_report_replay(&report_path, &mut results).await;
+        finish(results, seed);
+        return;
+    }
+
     let video_cases: Vec<(u32, VideoScenario, bool)> = vec![
         (15, VideoScenario::Steady, true),
         (30, VideoScenario::Steady, true),
@@ -1665,6 +1934,11 @@ async fn synthetic_device_matrix_preserves_sync() {
         record(&mut results, name, outcome);
     }
 
+    finish(results, seed);
+}
+
+/// Writes the optional JSON report and applies the pass/degradation gates.
+fn finish(results: Vec<CaseResult>, seed: u64) {
     if let Ok(report_path) = std::env::var("CAP_SYNC_MATRIX_REPORT") {
         #[derive(Serialize)]
         struct Report<'a> {
