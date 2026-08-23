@@ -15,6 +15,7 @@ mod controls_window;
 mod deeplink;
 mod dev_restore;
 mod devices;
+mod diagnostics;
 mod editor_audio;
 mod editor_canvas;
 mod editor_clips;
@@ -117,16 +118,59 @@ fn resolve_auto_screenshot_editor(target: &str) -> Option<std::path::PathBuf> {
         .map(|item| item.bundle)
 }
 
-fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            // The binary is `cap-gpui`, so the crate these spans are recorded
-            // under is `cap_gpui` -- not `cap_desktop_gpui`, which is the
-            // package name and matches nothing.
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cap_gpui=info".into()),
-        )
+/// stdout, plus a rolling daily file the Feedback page can upload.
+///
+/// Mirrors `src-tauri/src/main.rs`: `tracing_appender::rolling::daily` into
+/// `~/Library/Logs/so.cap.desktop` on macOS (the directory the Tauri app
+/// already writes into) under a **different** filename prefix, so the two apps
+/// never interleave lines into one file. Returns the non-blocking writer's
+/// guard, which has to outlive `main` or the last lines never reach the disk.
+fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
+
+    // The binary is `cap-gpui`, so the crate these spans are recorded under is
+    // `cap_gpui` -- not `cap_desktop_gpui`, which is the package name and
+    // matches nothing.
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "cap_gpui=info".into())
+    };
+
+    let logs_dir = diagnostics::logs_dir();
+    let file = match std::fs::create_dir_all(&logs_dir) {
+        Ok(()) => {
+            let (writer, guard) = tracing_appender::non_blocking(tracing_appender::rolling::daily(
+                &logs_dir,
+                diagnostics::LOG_FILE_PREFIX,
+            ));
+            Some((
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(writer)
+                    .with_filter(filter()),
+                guard,
+            ))
+        }
+        Err(error) => {
+            // A log file is a nice-to-have; losing it must never stop the app.
+            eprintln!("failed to create the logs directory {logs_dir:?}: {error}");
+            None
+        }
+    };
+    let (file_layer, guard) = match file {
+        Some((layer, guard)) => (Some(layer), Some(guard)),
+        None => (None, None),
+    };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(filter()))
+        .with(file_layer)
         .init();
+    guard
+}
+
+fn main() {
+    let _log_guard = init_logging();
 
     // A relaunch means "run the code I just built": take over from any
     // previous instance still alive in the tray (see `single_instance`).

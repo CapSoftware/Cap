@@ -128,11 +128,18 @@ sha2 = "0.10"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The rolling file log the Feedback page uploads. Same crate and rolling
+# strategy the Tauri app uses, under a different filename prefix so the two
+# apps never write into one file (`src/diagnostics.rs`).
+tracing-appender = "0.2"
 
 # Web-backed settings pages (feedback, changelog, license) and transcription
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
+# `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
+# `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
+    "multipart",
     "stream",
     "rustls-tls",
 ] }
