@@ -200,7 +200,18 @@ fn restore(state: DevState, cx: &mut App) {
         // window callbacks (the `place_overlay_panel` rule).
         for (native, frame, order_front) in &placements {
             if let Some((x, y, width, height)) = frame {
-                platform::set_window_frame(native, *x, *y, *width, *height);
+                // A frame saved on a monitor that is no longer attached would
+                // put the window off every screen, where it stays live and
+                // ordered front but invisible -- and `show_main_window` then
+                // "does nothing" on every dock click.
+                if platform::frame_is_on_screen(*x, *y, *width, *height) {
+                    platform::set_window_frame(native, *x, *y, *width, *height);
+                } else {
+                    tracing::info!(
+                        x, y, width, height,
+                        "saved window frame is off every connected display; keeping the default placement"
+                    );
+                }
             }
             if *order_front {
                 platform::order_front_native(native);

@@ -558,6 +558,46 @@ mod mac {
         );
     }
 
+    /// Whether a saved AppKit frame still lands on a connected display.
+    ///
+    /// A frame captured while an external monitor was attached keeps that
+    /// monitor's coordinates after it is unplugged, and `setFrame:` will
+    /// happily place a window at x=2519 on a 1512pt-wide laptop screen: the
+    /// window is then live, ordered front and completely invisible, which
+    /// reads as "the app opens and disappears". Raw messages rather than
+    /// `objc2_app_kit::NSScreen` for the same reason as `mainScreen` below --
+    /// the typed binding needs the `NSScreen` feature.
+    pub fn frame_is_on_screen(x: f64, y: f64, width: f64, height: f64) -> bool {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::NSRect;
+
+        // Enough of the window on one screen to grab and move it.
+        const MIN_VISIBLE: f64 = 80.0;
+
+        unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return true;
+            }
+            let count: usize = msg_send![screens, count];
+            for index in 0..count {
+                let screen: *mut AnyObject = msg_send![screens, objectAtIndex: index];
+                if screen.is_null() {
+                    continue;
+                }
+                let bounds: NSRect = msg_send![screen, frame];
+                let overlap_x =
+                    (x + width).min(bounds.origin.x + bounds.size.width) - x.max(bounds.origin.x);
+                let overlap_y =
+                    (y + height).min(bounds.origin.y + bounds.size.height) - y.max(bounds.origin.y);
+                if overlap_x >= MIN_VISIBLE.min(width) && overlap_y >= MIN_VISIBLE.min(height) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// `orderFrontRegardless` on the retained handle: bring a restored window
     /// forward without activating the app -- the dev loop relaunches on every
     /// rebuild and must not steal focus from whatever the user is typing in.
@@ -1640,6 +1680,10 @@ mod stub {
     }
     pub fn set_window_frame(_native: &NativeWindow, _x: f64, _y: f64, _width: f64, _height: f64) {}
     pub fn order_front_native(_native: &NativeWindow) {}
+    pub fn frame_is_on_screen(_x: f64, _y: f64, _width: f64, _height: f64) -> bool {
+        true
+    }
+
     pub fn close_native(_native: &NativeWindow) {}
     pub fn debug_window_state(_native: &NativeWindow) -> String {
         String::new()
