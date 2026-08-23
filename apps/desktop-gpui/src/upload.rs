@@ -21,12 +21,6 @@ pub enum UploadResult {
     UpgradeRequired,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UploadMode {
-    Initial,
-    Reupload,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadedPart {
@@ -48,7 +42,6 @@ struct VideoMeta {
 
 pub async fn upload_exported_video(
     project_path: PathBuf,
-    mode: UploadMode,
     organization_id: Option<String>,
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
@@ -87,14 +80,7 @@ pub async fn upload_exported_video(
 
     let s3_config = match create_or_get_video(
         false,
-        matches!(mode, UploadMode::Reupload)
-            .then(|| {
-                meta.sharing
-                    .as_ref()
-                    .map(|sharing| sharing.id.clone())
-                    .ok_or_else(|| "No sharing metadata found".to_string())
-            })
-            .transpose()?,
+        reusable_video_id(meta.sharing.as_ref(), meta.upload.as_ref()),
         Some(meta.pretty_name.clone()),
         Some(&metadata),
         organization_id,
@@ -113,54 +99,41 @@ pub async fn upload_exported_video(
         screenshot_path: screenshot_path.clone(),
         recording_dir: project_path.clone(),
     });
-    if let Err(error) = meta.save_for_project() {
-        tracing::error!("Failed to save recording meta: {error}");
-    }
+    meta.save_for_project()
+        .map_err(|error| format!("Failed to persist upload state: {error}"))?;
 
     match upload_video(&s3_config.id, &file_path, &metadata, progress, &cancel).await {
         Ok(link) => {
-            // The video content is fully uploaded at this point, so persist the
-            // sharing meta to disk before attempting the thumbnail: a retry
-            // after any later failure then runs as a reupload against this
-            // video id instead of creating a duplicate server video.
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
                 content_hash: None,
             });
-            if let Err(error) = meta.save_for_project() {
-                tracing::error!("Failed to save recording meta: {error}");
-            }
+            meta.save_for_project()
+                .map_err(|error| format!("Failed to persist sharing state: {error}"))?;
 
             if let Err(error) = upload_screenshot(&s3_config.id, &screenshot_path).await {
-                let message = format!("thumbnail upload failed: {error}");
-                meta.upload = Some(UploadMeta::Failed {
-                    error: message.clone(),
-                });
-                if let Err(save_error) = meta.save_for_project() {
-                    tracing::error!("Failed to save recording meta: {save_error}");
-                }
-                return Err(message);
+                return Err(format!("thumbnail upload failed: {error}"));
             }
 
             meta.upload = Some(UploadMeta::Complete);
-            if let Err(error) = meta.save_for_project() {
-                tracing::error!("Failed to save recording meta: {error}");
-            }
+            meta.save_for_project()
+                .map_err(|error| format!("Failed to persist completed upload: {error}"))?;
             Ok(UploadResult::Success(link))
         }
         Err(AuthApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
         Err(AuthApiError::InvalidAuthentication) => Ok(UploadResult::NotAuthenticated),
-        Err(error) => {
-            meta.upload = Some(UploadMeta::Failed {
-                error: error.to_string(),
-            });
-            if let Err(save_error) = meta.save_for_project() {
-                tracing::error!("Failed to save recording meta: {save_error}");
-            }
-            Err(error.to_string())
-        }
+        Err(error) => Err(error.to_string()),
     }
+}
+
+fn reusable_video_id(sharing: Option<&SharingMeta>, upload: Option<&UploadMeta>) -> Option<String> {
+    sharing
+        .map(|sharing| sharing.id.clone())
+        .or_else(|| match upload {
+            Some(UploadMeta::SinglePartUpload { video_id, .. }) => Some(video_id.clone()),
+            _ => None,
+        })
 }
 
 fn store_auth_missing() -> bool {
@@ -815,5 +788,49 @@ mod tests {
             "https://s3.amazonaws.com/bucket/key"
         ));
         assert!(is_google_drive_upload(Some("googleDrive"), "abc"));
+    }
+
+    #[test]
+    fn reusable_video_id_prefers_sharing_state() {
+        let sharing = SharingMeta {
+            link: "https://cap.so/s/shared".into(),
+            id: "shared".into(),
+            content_hash: None,
+        };
+        let upload = UploadMeta::SinglePartUpload {
+            video_id: "pending".into(),
+            file_path: PathBuf::from("video.mp4"),
+            screenshot_path: PathBuf::from("display.jpg"),
+            recording_dir: PathBuf::from("recording.cap"),
+        };
+
+        assert_eq!(
+            reusable_video_id(Some(&sharing), Some(&upload)).as_deref(),
+            Some("shared")
+        );
+    }
+
+    #[test]
+    fn reusable_video_id_resumes_persisted_upload() {
+        let upload = UploadMeta::SinglePartUpload {
+            video_id: "pending".into(),
+            file_path: PathBuf::from("video.mp4"),
+            screenshot_path: PathBuf::from("display.jpg"),
+            recording_dir: PathBuf::from("recording.cap"),
+        };
+
+        assert_eq!(
+            reusable_video_id(None, Some(&upload)).as_deref(),
+            Some("pending")
+        );
+        assert_eq!(
+            reusable_video_id(
+                None,
+                Some(&UploadMeta::Failed {
+                    error: "network".into(),
+                }),
+            ),
+            None
+        );
     }
 }

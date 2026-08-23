@@ -846,19 +846,9 @@ impl EditorWindow {
                     let (upload_tx, upload_rx) = flume::unbounded::<f64>();
                     let upload_cancel = cancel.clone();
                     let upload_project = project_path.clone();
-                    let already_shared = RecordingMeta::load_for_project(&project_path)
-                        .ok()
-                        .and_then(|meta| meta.sharing)
-                        .is_some();
-                    let mode = if already_shared {
-                        crate::upload::UploadMode::Reupload
-                    } else {
-                        crate::upload::UploadMode::Initial
-                    };
                     let upload = gpui_tokio::Tokio::spawn(cx, async move {
                         crate::upload::upload_exported_video(
                             upload_project,
-                            mode,
                             organization_id,
                             |progress| {
                                 let _ = upload_tx.send(progress);
