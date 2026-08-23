@@ -15,6 +15,7 @@ mod cli;
 mod clip_thumbnails;
 mod crash_sentinel;
 mod deeplink_actions;
+mod diagnostics;
 mod editor_window;
 mod exit_shutdown;
 mod export;
@@ -4887,6 +4888,9 @@ fn specta_builder() -> tauri_specta::Builder {
             recording_settings::set_recording_mode,
             upload_logs,
             get_system_diagnostics,
+            diagnostics::run_diagnostic,
+            diagnostics::upload_diagnostic_report,
+            diagnostics::reveal_diagnostic_report,
             cli::get_cli_install_status,
             cli::install_cli,
             cli::uninstall_cli,
@@ -5074,6 +5078,7 @@ fn specta_builder() -> tauri_specta::Builder {
             DevicesUpdated,
             updates::UpdateDownloadProgress,
             updates::UpdateReady,
+            diagnostics::DiagnosticProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
