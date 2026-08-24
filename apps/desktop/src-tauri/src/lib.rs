@@ -1750,6 +1750,12 @@ async fn get_devices_snapshot() -> DevicesUpdated {
     }
 }
 
+fn any_webview_window_visible(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|window| window.is_visible().unwrap_or(false))
+}
+
 fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
     tokio::spawn(async move {
         let mut last_perm_tuple: (u8, u8, u8, u8) = (255, 255, 255, 255);
@@ -1763,6 +1769,15 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
 
             if power_observer::is_system_asleep() {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+
+            // Device snapshots only feed UI pickers via DevicesUpdated, and on
+            // Windows every enumeration instantiates each capture device, so
+            // polling while all windows sit hidden in the tray burns CPU for
+            // nobody (#2132).
+            if !any_webview_window_visible(&app_handle) {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             }
 
@@ -4739,9 +4754,7 @@ pub async fn open_target_picker(
 ) {
     use tauri::Manager;
 
-    if let Some(window) = CapWindowId::Main.get(app) {
-        window.hide().ok();
-    }
+    hide_main_window(app);
 
     let state = app.state::<target_select_overlay::WindowFocusManager>();
     let display_id = None;
@@ -5644,7 +5657,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
                                 CapWindowId::Main => {
                                 api.prevent_close();
-                                let _ = window.hide();
+                                hide_main_window(app);
 
                                 #[cfg(target_os = "macos")]
                                 crate::permissions::schedule_macos_dock_visibility_sync(app);
@@ -6798,9 +6811,13 @@ fn show_import_error_dialog(app: &AppHandle, message: String) {
         .show(|_| {});
 }
 
+// Hidden webviews on Windows never see document.visibilityState change
+// (tauri-apps/tauri#9524), so the frontend cannot detect hide-to-tray on its
+// own; this event lets it pause polling (#2132).
 fn hide_main_window(app: &AppHandle) {
     if let Some(main_window) = CapWindowId::Main.get(app) {
         let _ = main_window.hide();
+        let _ = main_window.emit_to(CapWindowId::Main.label(), "main-window-hidden", ());
     }
 }
 
@@ -6880,9 +6897,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                 let _ = app
                     .opener()
                     .open_path(mp4_path.to_str().unwrap_or_default(), None::<String>);
-                if let Some(main_window) = CapWindowId::Main.get(&app) {
-                    main_window.hide().ok();
-                }
+                hide_main_window(&app);
             }
         }
     }

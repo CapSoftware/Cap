@@ -1,5 +1,9 @@
 import { Route, Router, useCurrentMatches } from "@solidjs/router";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import {
+	focusManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
@@ -124,6 +128,7 @@ export default function App() {
 function Inner() {
 	const currentWindow = getCurrentWebviewWindow();
 	createThemeListener(currentWindow);
+	createHiddenWindowQueryPause(currentWindow);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -286,6 +291,27 @@ function prewarmFontCaches() {
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);
 	else setTimeout(warm, 250);
+}
+
+// Hidden Tauri windows never flip document.visibilityState on Windows
+// (tauri-apps/tauri#9524), so TanStack keeps every refetchInterval firing
+// while the app idles in the tray (#2132). Pause queries from the window's
+// real hide/focus signals instead.
+function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
+	if (currentWindow.label !== "main") return;
+
+	const unlisteners = [
+		currentWindow.listen("main-window-hidden", () => {
+			focusManager.setFocused(false);
+		}),
+		currentWindow.onFocusChanged((event) => {
+			if (event.payload) focusManager.setFocused(true);
+		}),
+	];
+
+	onCleanup(() => {
+		for (const unlisten of unlisteners) void unlisten.then((fn) => fn());
+	});
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
