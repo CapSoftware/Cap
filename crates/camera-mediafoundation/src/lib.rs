@@ -157,6 +157,17 @@ impl Device {
         self.media_source.get().ok_or_else(|| E_FAIL.into())
     }
 
+    /// Retires this instance's Media Foundation path for good, releasing the
+    /// device at the driver so another backend can open it. Any cached source
+    /// stays shut down afterwards; only call this when abandoning MF for this
+    /// device.
+    pub fn shutdown(&self) {
+        if let Some(media_source) = self.media_source.get() {
+            let _ = unsafe { media_source.Shutdown() };
+        }
+        let _ = unsafe { self.activate.ShutdownObject() };
+    }
+
     pub fn name(&self) -> windows_core::Result<OsString> {
         unsafe { self.read_allocated_string(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME) }
     }

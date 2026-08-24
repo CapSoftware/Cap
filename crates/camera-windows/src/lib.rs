@@ -189,6 +189,8 @@ pub enum StartCapturingError {
     DirectShow(#[from] cap_camera_directshow::StartCapturingError),
     #[error("Format/{0}")]
     Format(#[from] VideoFormatError),
+    #[error("format doesn't match any backend available for this device")]
+    FormatMismatch,
 }
 
 impl VideoDeviceInfo {
@@ -391,7 +393,7 @@ impl VideoDeviceInfo {
 
                 CaptureHandle::DirectShow(handle)
             }
-            _ => todo!(),
+            _ => return Err(StartCapturingError::FormatMismatch),
         };
 
         Ok(res)
@@ -416,7 +418,14 @@ impl VideoDeviceInfo {
                     return formats;
                 }
 
-                dshow_fallback.as_ref().map(ds_formats).unwrap_or_default()
+                let Some(dshow) = dshow_fallback else {
+                    return Vec::new();
+                };
+
+                // Exclusive drivers reject DirectShow's bind while the failed
+                // MF source still holds the device open.
+                device.shutdown();
+                ds_formats(dshow)
             }
             VideoDeviceInfoInner::DirectShow(device) => ds_formats(device),
         }
@@ -622,9 +631,18 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
     for dshow_device in dshow_devices {
         let name_and_model = dshow_device.name_and_model();
 
-        let mf_twin = devices
-            .iter()
-            .position(|device| device.is_mf() && device.name_and_model() == name_and_model);
+        // Identical devices produce identical names; pair each DS device with
+        // the first MF entry that doesn't have a fallback yet so twins map
+        // one-to-one instead of piling onto the first match.
+        let mf_twin = devices.iter().position(|device| {
+            matches!(
+                &device.inner,
+                VideoDeviceInfoInner::MediaFoundation {
+                    dshow_fallback: None,
+                    ..
+                }
+            ) && device.name_and_model() == name_and_model
+        });
 
         match mf_twin {
             Some(index) => {
