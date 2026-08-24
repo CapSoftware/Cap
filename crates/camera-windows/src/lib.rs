@@ -418,14 +418,13 @@ impl VideoDeviceInfo {
                     return formats;
                 }
 
-                let Some(dshow) = dshow_fallback else {
-                    return Vec::new();
-                };
-
-                // Exclusive drivers reject DirectShow's bind while the failed
-                // MF source still holds the device open.
+                // MF yielded nothing for this device, so release it at the
+                // driver: repeated format requests must not accumulate
+                // half-open sources, and exclusive drivers reject
+                // DirectShow's bind while the failed source holds the device.
                 device.shutdown();
-                ds_formats(dshow)
+
+                dshow_fallback.as_ref().map(ds_formats).unwrap_or_default()
             }
             VideoDeviceInfoInner::DirectShow(device) => ds_formats(device),
         }
