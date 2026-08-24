@@ -1772,10 +1772,9 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
                 continue;
             }
 
-            // Device snapshots only feed UI pickers via DevicesUpdated, and on
-            // Windows every enumeration instantiates each capture device, so
-            // polling while all windows sit hidden in the tray burns CPU for
-            // nobody (#2132).
+            // Device snapshots only feed UI pickers via DevicesUpdated, so
+            // polling while every window sits hidden in the tray probes the
+            // OS device stack and burns CPU for nobody (#2132).
             if !any_webview_window_visible(&app_handle) {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
