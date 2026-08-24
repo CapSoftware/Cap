@@ -163,6 +163,8 @@ fn hide_recording_windows(app: &AppHandle, restore_target_select_overlays: bool)
                     focus_manager.remember_overlay_for_restore(label);
                 }
                 hide_overlay(&window);
+            } else if matches!(id, CapWindowId::Main) {
+                crate::hide_main_window(app);
             } else {
                 let _ = window.hide();
             }

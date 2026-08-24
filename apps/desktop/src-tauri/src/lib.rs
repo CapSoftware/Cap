@@ -6812,10 +6812,12 @@ fn show_import_error_dialog(app: &AppHandle, message: String) {
 
 // Hidden webviews on Windows never see document.visibilityState change
 // (tauri-apps/tauri#9524), so the frontend cannot detect hide-to-tray on its
-// own; this event lets it pause polling (#2132).
-fn hide_main_window(app: &AppHandle) {
-    if let Some(main_window) = CapWindowId::Main.get(app) {
-        let _ = main_window.hide();
+// own; this event lets it pause polling, and only fires when the hide
+// actually happened so a failed hide never pauses a visible window (#2132).
+pub(crate) fn hide_main_window(app: &AppHandle) {
+    if let Some(main_window) = CapWindowId::Main.get(app)
+        && main_window.hide().is_ok()
+    {
         let _ = main_window.emit_to(CapWindowId::Main.label(), "main-window-hidden", ());
     }
 }

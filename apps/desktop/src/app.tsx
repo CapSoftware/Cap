@@ -302,11 +302,14 @@ function prewarmFontCaches() {
 function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
 	if (currentWindow.label !== "main") return;
 
+	let focusGeneration = 0;
+
 	const unlisteners = [
 		currentWindow.listen("main-window-hidden", () => {
 			focusManager.setFocused(false);
 		}),
 		currentWindow.onFocusChanged((event) => {
+			focusGeneration += 1;
 			if (event.payload) {
 				focusManager.setFocused(undefined);
 				return;
@@ -314,9 +317,13 @@ function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
 			// Safety net for hide paths that bypass hide_main_window and
 			// hideCurrentWindow: a blur with the window no longer visible
 			// means hidden, not just unfocused. Not sufficient alone — an
-			// earlier benign blur (e.g. shell.open) masks a later hide.
+			// earlier benign blur (e.g. shell.open) masks a later hide. The
+			// generation guard stops a stale visibility result from pausing a
+			// window that regained focus while the check was in flight.
+			const generation = focusGeneration;
 			void currentWindow.isVisible().then((visible) => {
-				if (!visible) focusManager.setFocused(false);
+				if (visible || generation !== focusGeneration) return;
+				focusManager.setFocused(false);
 			});
 		}),
 	];
