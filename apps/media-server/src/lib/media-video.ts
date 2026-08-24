@@ -76,6 +76,7 @@ export interface VideoProcessingOptions {
 	crf?: number;
 	preset?: "ultrafast" | "fast" | "medium" | "slow";
 	remuxOnly?: boolean;
+	normalizeH264Level?: boolean;
 	timeoutMs?: number;
 }
 
@@ -151,6 +152,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	crf: 23,
 	preset: "medium",
 	remuxOnly: false,
+	normalizeH264Level: false,
 	timeoutMs: PROCESS_TIMEOUT_MS,
 };
 
@@ -1466,6 +1468,13 @@ export async function processVideo(
 			? await probeH264Level(inputPath, abortSignal)
 			: null;
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
+	const normalizeH264Level =
+		opts.normalizeH264Level &&
+		metadata.videoCodec === "h264" &&
+		sourceH264Level !== null &&
+		sourceH264Level > targetH264Level.value &&
+		metadata.width <= opts.maxWidth &&
+		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
 		: needsVideoTranscode(metadata, opts, sourceH264Level);
@@ -1489,7 +1498,14 @@ export async function processVideo(
 		inputPath,
 	];
 
-	if (videoTranscode) {
+	if (normalizeH264Level) {
+		ffmpegArgs.push(
+			"-c:v",
+			"copy",
+			"-bsf:v",
+			`h264_metadata=level=${targetH264Level.ffmpegValue}`,
+		);
+	} else if (videoTranscode) {
 		ffmpegArgs.push(
 			"-c:v",
 			"libx264",

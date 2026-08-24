@@ -94,6 +94,7 @@ const processSchema = z.object({
 	crf: z.number().min(0).max(51).optional(),
 	preset: z.enum(["ultrafast", "fast", "medium", "slow"]).optional(),
 	remuxOnly: z.boolean().optional(),
+	normalizeH264Level: z.boolean().optional(),
 });
 
 const editRangeSchema = z
@@ -876,6 +877,7 @@ async function processWithResilientRetry(
 		crf: options.crf,
 		preset: options.preset,
 		remuxOnly: options.remuxOnly,
+		normalizeH264Level: options.normalizeH264Level,
 	};
 
 	const onProgress = (progress: number, message: string) => {

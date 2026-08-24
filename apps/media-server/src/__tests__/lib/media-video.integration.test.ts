@@ -65,6 +65,25 @@ function readH264Level(filePath: string): number {
 	return Number.parseInt(output, 10);
 }
 
+function readDecodedStreamHash(filePath: string, stream: "v" | "a") {
+	return execFileSync("ffmpeg", [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-i",
+		filePath,
+		"-map",
+		`0:${stream}:0`,
+		"-f",
+		"hash",
+		"-hash",
+		"sha256",
+		"-",
+	])
+		.toString()
+		.trim();
+}
+
 afterAll(() => {
 	for (const file of tempFiles) {
 		if (existsSync(file)) {
@@ -724,6 +743,60 @@ describe("processVideo integration tests", () => {
 			expect(readH264Level(tempFile.path)).toBeLessThanOrEqual(
 				expectedLevel.value,
 			);
+
+			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("normalizes repeated unsafe h264 parameter sets without recompressing video or audio", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-lossless-h264-level-"));
+		try {
+			const highLevelPath = join(workDir, "high-level.mp4");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"libx264",
+				"-level:v",
+				"6.2",
+				"-x264-params",
+				"repeat-headers=1",
+				"-c:a",
+				"copy",
+				highLevelPath,
+			]);
+
+			const metadata = await probeVideo(`file://${highLevelPath}`);
+			const originalVideoHash = readDecodedStreamHash(highLevelPath, "v");
+			const originalAudioHash = readDecodedStreamHash(highLevelPath, "a");
+			const expectedLevel = pickMobileSafeH264Level(metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+			});
+
+			expect(readH264Level(highLevelPath)).toBe(62);
+
+			const tempFile = await processVideo(highLevelPath, metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+				normalizeH264Level: true,
+			});
+			tempFiles.push(tempFile.path);
+
+			expect(readH264Level(tempFile.path)).toBe(expectedLevel.value);
+			expect(readDecodedStreamHash(tempFile.path, "v")).toBe(originalVideoHash);
+			expect(readDecodedStreamHash(tempFile.path, "a")).toBe(originalAudioHash);
+
+			const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+			expect(outputMetadata.width).toBe(metadata.width);
+			expect(outputMetadata.height).toBe(metadata.height);
+			expect(outputMetadata.duration).toBeCloseTo(metadata.duration, 2);
 
 			await tempFile.cleanup();
 		} finally {
