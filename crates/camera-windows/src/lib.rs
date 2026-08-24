@@ -587,22 +587,18 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
 
     let mut devices = mf_devices;
 
+    // The previous MF-formats probe here was a no-op (it re-inserted the same
+    // MF entry in both branches) that opened every paired device on every
+    // enumeration; deduplication only needs names (CapSoftware/Cap#2132).
     for dshow_device in dshow_devices {
         let name_and_model = dshow_device.name_and_model();
 
-        let mf_device = devices
+        let already_listed = devices
             .iter()
-            .enumerate()
-            .find(|(_, device)| device.is_mf() && device.name_and_model() == name_and_model);
+            .any(|device| device.is_mf() && device.name_and_model() == name_and_model);
 
-        match mf_device {
-            Some((i, mf_device)) => {
-                if mf_device.formats().is_empty() {
-                    devices.push(mf_device.clone());
-                    devices.swap_remove(i);
-                }
-            }
-            None => devices.push(dshow_device),
+        if !already_listed {
+            devices.push(dshow_device);
         }
     }
 
