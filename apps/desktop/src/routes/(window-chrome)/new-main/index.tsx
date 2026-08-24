@@ -55,6 +55,7 @@ import {
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
 import { clientEnv } from "~/utils/env";
+import { hideCurrentWindow } from "~/utils/hide-window";
 import {
 	importImageFromPicker,
 	importVideoFromPicker,
@@ -2024,7 +2025,7 @@ function Page() {
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
-			void getCurrentWindow().hide();
+			void hideCurrentWindow();
 		} else if (pickerActive && hasHidden) {
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
 		} else if (recording) {
@@ -2922,7 +2923,7 @@ function Page() {
 			await shell.open(link);
 		}
 
-		await getCurrentWindow().hide();
+		await hideCurrentWindow();
 	};
 
 	const openScreenshot = async (screenshot: ScreenshotWithPath) => {
@@ -3224,7 +3225,7 @@ function Page() {
 								type="button"
 								onClick={async () => {
 									await commands.showWindow({ Settings: { page: "general" } });
-									getCurrentWindow().hide();
+									hideCurrentWindow();
 								}}
 								class="flex items-center justify-center size-5 focus:outline-hidden"
 							>
@@ -3412,7 +3413,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 									uploadProgress={uploadProgress}
 									reuploadingPaths={reuploadingPaths()}
@@ -3436,7 +3437,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "screenshots" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 								/>
 							) : variant === "camera" ? (

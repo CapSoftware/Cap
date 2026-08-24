@@ -311,9 +311,10 @@ function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
 				focusManager.setFocused(undefined);
 				return;
 			}
-			// Frontend-initiated hides don't go through the Rust helper, but a
-			// window that hides itself always loses focus first, so a blur with
-			// the window no longer visible means hidden, not just unfocused.
+			// Safety net for hide paths that bypass hide_main_window and
+			// hideCurrentWindow: a blur with the window no longer visible
+			// means hidden, not just unfocused. Not sufficient alone — an
+			// earlier benign blur (e.g. shell.open) masks a later hide.
 			void currentWindow.isVisible().then((visible) => {
 				if (!visible) focusManager.setFocused(false);
 			});
