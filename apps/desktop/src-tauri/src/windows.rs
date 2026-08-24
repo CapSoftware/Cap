@@ -1515,7 +1515,7 @@ impl ShowCapWindow {
                 init_target_mode: Some(target_mode),
             } = self
             {
-                window.hide().ok();
+                crate::hide_main_window(app);
                 emit_app_event(
                     app,
                     RequestSetTargetMode {
@@ -2044,9 +2044,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Upgrade => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/upgrade")
@@ -2080,9 +2078,7 @@ impl ShowCapWindow {
                 window
             }
             Self::ModeSelect => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/mode-select")
@@ -2116,9 +2112,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Onboarding => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let width = (cursor_monitor.width * 0.58).clamp(860.0, 1080.0);
                 let height = (width * 0.72).clamp(690.0, 780.0);
