@@ -27,4 +27,16 @@ export interface ToolPageContent {
 		question: string;
 		answer: string;
 	}>;
+
+	/**
+	 * Optional HowTo steps. Emitted as HowTo structured data by
+	 * `ToolsPageTemplate`, which makes the page eligible for step-by-step rich
+	 * results on "how do I ..." queries.
+	 */
+	howTo?: {
+		name: string;
+		description: string;
+		totalTime?: string;
+		steps: Array<{ name: string; text: string }>;
+	};
 }

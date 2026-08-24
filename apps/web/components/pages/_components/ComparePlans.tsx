@@ -5,6 +5,7 @@ import { classNames } from "@cap/utils";
 import { faCheck } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useCurrency } from "hooks/useCurrency";
+import { usePromoCode } from "hooks/usePromoCode";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -165,6 +166,7 @@ export const ComparePlans = () => {
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
 	const stripeCtx = useStripeContext();
+	const { promoCode } = usePromoCode();
 
 	const isDisabled = useMemo(
 		() =>
@@ -234,7 +236,7 @@ export const ComparePlans = () => {
 	const guestCheckout = (planId: string) =>
 		handleCheckout(
 			"/api/settings/billing/guest-checkout",
-			{ priceId: planId, quantity: 1 },
+			{ priceId: planId, quantity: 1, promoCode },
 			setGuestLoading,
 			"Failed to create checkout session",
 		);
@@ -255,7 +257,7 @@ export const ComparePlans = () => {
 			const response = await fetch("/api/settings/billing/subscribe", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ priceId: finalPlanId, quantity: 1 }),
+				body: JSON.stringify({ priceId: finalPlanId, quantity: 1, promoCode }),
 			});
 
 			const data = await response.json();

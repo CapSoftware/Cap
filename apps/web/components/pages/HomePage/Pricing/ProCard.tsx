@@ -4,6 +4,7 @@ import { Button } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import { useCurrency } from "hooks/useCurrency";
+import { usePromoCode } from "hooks/usePromoCode";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
@@ -18,14 +19,24 @@ const copy = homepageCopy.pricing.pro;
 
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();
+	const { promoCode, promoPercentOff } = usePromoCode();
 	const { symbol } = useCurrency();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(false);
 	const artRef = useRef<ProArtRef>(null);
 
-	const perUser = isAnnually ? copy.pricing.annual : copy.pricing.monthly;
-	const monthlyTotal = perUser * users;
-	const yearlyTotal = Math.round(copy.pricing.annual * 12) * users;
+	const round2 = (value: number) => Math.round(value * 100) / 100;
+	// A discounted price is rarely a whole number, and NumberFlow would render
+	// 9.6 rather than 9.60 without this. List prices keep their existing format.
+	const priceFormat =
+		promoPercentOff > 0 ? { minimumFractionDigits: 2 } : undefined;
+	const promoFactor = (100 - promoPercentOff) / 100;
+	const listPerUser = isAnnually ? copy.pricing.annual : copy.pricing.monthly;
+	const perUser = round2(listPerUser * promoFactor);
+	const monthlyTotal = round2(perUser * users);
+	const yearlyTotal = round2(
+		Math.round(copy.pricing.annual * 12) * promoFactor * users,
+	);
 
 	const incrementUsers = () => setUsers((prev) => prev + 1);
 	const decrementUsers = () => setUsers((prev) => (prev > 1 ? prev - 1 : 1));
@@ -37,7 +48,7 @@ export const ProCard = () => {
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: users }),
+				body: JSON.stringify({ priceId: planId, quantity: users, promoCode }),
 			});
 			const data = await response.json();
 
@@ -61,7 +72,7 @@ export const ProCard = () => {
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: users }),
+				body: JSON.stringify({ priceId: planId, quantity: users, promoCode }),
 			});
 			const data = await response.json();
 
@@ -104,14 +115,28 @@ export const ProCard = () => {
 			</p>
 
 			<div className="flex gap-1.5 items-baseline mt-6">
+				{promoPercentOff > 0 && (
+					<span className="text-2xl font-medium tabular-nums line-through text-gray-9">
+						{symbol}
+						{listPerUser}
+					</span>
+				)}
 				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
 					{symbol}
-					<NumberFlow value={perUser} />
+					<NumberFlow value={perUser} format={priceFormat} />
 				</span>
 				<span className="text-sm text-gray-10">/ user / month</span>
 			</div>
 			<p className="mt-1 text-sm text-gray-10">
 				billed {isAnnually ? "annually" : "monthly"}
+				{promoPercentOff > 0 && (
+					<>
+						{" · "}
+						<span className="font-medium text-blue-500">
+							{promoPercentOff}% off with {promoCode}
+						</span>
+					</>
+				)}
 			</p>
 
 			<div className="mt-6 space-y-3 min-h-[120px]">
@@ -136,7 +161,10 @@ export const ProCard = () => {
 					Total:{" "}
 					<span className="font-medium text-gray-12">
 						{symbol}
-						<NumberFlow value={isAnnually ? yearlyTotal : monthlyTotal} />
+						<NumberFlow
+							value={isAnnually ? yearlyTotal : monthlyTotal}
+							format={priceFormat}
+						/>
 					</span>{" "}
 					{isAnnually ? "/ year" : "/ month"}
 				</p>

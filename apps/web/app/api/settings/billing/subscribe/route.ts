@@ -6,12 +6,16 @@ import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import {
+	checkoutDiscountParams,
+	resolveUrlPromotionCodeId,
+} from "@/lib/checkout-promos";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const { priceId, quantity, isOnBoarding, promoCode } = await request.json();
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -63,6 +67,8 @@ export async function POST(request: NextRequest) {
 			customerId = customer.id;
 		}
 
+		const promotionCodeId = await resolveUrlPromotionCodeId(promoCode);
+
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
@@ -73,11 +79,19 @@ export async function POST(request: NextRequest) {
 			cancel_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/onboarding`
 				: `${serverEnv().WEB_URL}/pricing`,
-			allow_promotion_codes: true,
+			...checkoutDiscountParams(promotionCodeId),
+			// Attaches a recovery URL to `checkout.session.expired` so abandoned
+			// upgrades can be emailed back (handled in the Stripe webhook).
+			after_expiration: {
+				recovery: { enabled: true, allow_promotion_codes: true },
+			},
 			metadata: {
 				platform: "web",
 				dubCustomerId: user.id,
 				isOnBoarding: isOnBoarding ? "true" : "false",
+				// Read back on `checkout.session.expired` to tailor the recovery email.
+				priceId,
+				...(promotionCodeId ? { promoCode: String(promoCode) } : {}),
 			},
 		});
 
