@@ -15,6 +15,7 @@ import { probeVideo } from "../../lib/media-probe";
 import {
 	buildStreamingDownloadFfmpegArgs,
 	copyFileToMp4,
+	estimateMaterializedStreamingDurationSeconds,
 	generatePreviewGif,
 	generateThumbnail,
 	getFfmpegHlsCapabilities,
@@ -839,6 +840,42 @@ describe("processVideo integration tests", () => {
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {
+	test("estimates streaming duration from local manifests without probing remote segments", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-manifest-duration-"));
+		try {
+			writeFileSync(
+				join(workDir, "video.m3u8"),
+				"#EXTM3U\n#EXTINF:10.5,\nvideo-1.ts\n#EXTINF:8.25,\nvideo-2.ts\n",
+			);
+			writeFileSync(
+				join(workDir, "audio.m3u8"),
+				"#EXTM3U\n#EXTINF:7.0,\naudio-1.ts\n#EXTINF:8.0,\naudio-2.ts\n",
+			);
+
+			expect(await estimateMaterializedStreamingDurationSeconds(workDir)).toBe(
+				18.75,
+			);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	test("estimates streaming duration from a DASH presentation attribute", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-mpd-duration-"));
+		try {
+			writeFileSync(
+				join(workDir, "video.mpd"),
+				'<MPD mediaPresentationDuration="PT1M30.5S"></MPD>',
+			);
+
+			expect(await estimateMaterializedStreamingDurationSeconds(workDir)).toBe(
+				90.5,
+			);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
 	test("uses only legacy HLS options when newer FFmpeg options are unavailable", () => {
 		const capabilities = parseFfmpegHlsCapabilities(`
 			-allowed_extensions <string>

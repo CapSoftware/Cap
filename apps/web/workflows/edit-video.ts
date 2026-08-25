@@ -21,7 +21,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { FatalError } from "workflow";
+import { FatalError, sleep } from "workflow";
 import {
 	type EditTranscript,
 	editTranscriptWordsToCaptionVtt,
@@ -31,6 +31,10 @@ import {
 } from "@/lib/edit-transcript";
 import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	getEditSpecOutputDuration,
@@ -58,8 +62,8 @@ interface VideoEditRenderResult {
 	};
 }
 
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
 const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -109,7 +113,19 @@ export async function editVideoWorkflow(
 
 	try {
 		await validateEditRequest(videoId, sourceKey);
-		const result = await renderVideoEditOnMediaServer(payload);
+		let result: VideoEditRenderResult;
+		let capacityRetryCount = 0;
+		while (true) {
+			try {
+				result = await renderVideoEditOnMediaServer(payload);
+				break;
+			} catch (error) {
+				if (!isMediaServerCapacityError(error)) throw error;
+				await markEditWaitingForCapacity(videoId);
+				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+				capacityRetryCount++;
+			}
+		}
 		await verifyRenderedEditOutput(videoId, userId, editSpec, result.metadata);
 		await invalidateEditedVideoCache(videoId, editSpec);
 		const { transcriptRemapped } = await saveEditResultAndComplete(
@@ -254,6 +270,14 @@ async function startMediaServerEditJob(
 			continue;
 		}
 
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
+		}
+
 		throw new Error(errorMessage);
 	}
 
@@ -361,6 +385,19 @@ async function renderVideoEditOnMediaServer(
 	});
 
 	return await waitForEditCompletion(videoId);
+}
+
+async function markEditWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video editing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }
 
 function getMetadataFromVideoRow(

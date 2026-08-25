@@ -245,6 +245,53 @@ describe("transcribeVideoWorkflow", () => {
 		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
 	});
 
+	it("marks audio without speech as skipped without retrying transcription", async () => {
+		mocks.transcribe.mockResolvedValueOnce({
+			id: "silent-transcript",
+			status: "error",
+			error:
+				"language_detection cannot be performed on files with no spoken audio.",
+		});
+
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+		const result = await transcribeVideoWorkflow({
+			videoId: "video-123",
+			userId: "user-456",
+			aiGenerationEnabled: true,
+		});
+
+		expect(result).toEqual({
+			success: true,
+			message: "Video has no spoken audio - skipped transcription",
+		});
+		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
+		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
+		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
+	});
+
+	it("preserves transcription failures unrelated to missing speech", async () => {
+		mocks.transcribe.mockResolvedValueOnce({
+			id: "failed-transcript",
+			status: "error",
+			error: "Audio could not be decoded",
+		});
+
+		const { transcribeVideoWorkflow } = await import("@/workflows/transcribe");
+
+		await expect(
+			transcribeVideoWorkflow({
+				videoId: "video-123",
+				userId: "user-456",
+				aiGenerationEnabled: false,
+			}),
+		).rejects.toThrow("Audio could not be decoded");
+		expect(mocks.updates).toContainEqual({ transcriptionStatus: "ERROR" });
+		expect(mocks.updates).not.toContainEqual({
+			transcriptionStatus: "NO_AUDIO",
+		});
+	});
+
 	it("never overwrites the original-timeline transcript of an edited video", async () => {
 		state.editRows = [
 			{

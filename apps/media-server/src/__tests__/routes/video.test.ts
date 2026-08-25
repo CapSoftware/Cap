@@ -472,6 +472,37 @@ describe("POST /video/process", () => {
 		expect(data.code).toBe("SERVER_BUSY");
 	});
 
+	test("reserves one processing slot for normal-priority recordings", async () => {
+		const resources = jobManager.getSystemResources();
+		mock.module("../../lib/job-manager", () => ({
+			...jobManager,
+			canAcceptNewVideoProcess: () => true,
+			getActiveVideoProcessCount: () => 3,
+			getMaxConcurrentVideoProcesses: () => 4,
+			getSystemResources: () => ({
+				...resources,
+				effectiveMax: 4,
+			}),
+		}));
+
+		const { default: appWithMock } = await import("../../app");
+		const response = await appWithMock.fetch(
+			videoPostRequest("/video/process", {
+				videoId: "bulk-video",
+				userId: "user-id",
+				videoUrl: "https://example.com/video.mp4",
+				outputPresignedUrl: "https://s3.example.com/output",
+				priority: "bulk",
+			}),
+		);
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get("Retry-After")).toBe("15");
+		const data = await response.json();
+		expect(data.code).toBe("SERVER_BUSY");
+		expect(data.activeVideoProcesses).toBe(3);
+	});
+
 	test("returns jobId when process starts successfully", async () => {
 		mock.module("../../lib/job-manager", () => ({
 			canAcceptNewVideoProcess: () => true,

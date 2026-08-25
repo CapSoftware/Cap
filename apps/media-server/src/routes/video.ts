@@ -89,6 +89,7 @@ const processSchema = z.object({
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
+	priority: z.enum(["normal", "bulk"]).optional(),
 	maxWidth: z.number().max(4096).optional(),
 	maxHeight: z.number().max(4096).optional(),
 	crf: z.number().min(0).max(51).optional(),
@@ -652,9 +653,14 @@ video.post("/process", async (c) => {
 		);
 	}
 
-	if (!canAcceptNewVideoProcess()) {
+	const capacity = getVideoCapacitySnapshot();
+	const bulkCapacityReached =
+		result.data.priority === "bulk" &&
+		capacity.effectiveMaxVideoProcesses > 1 &&
+		capacity.activeVideoProcesses >= capacity.effectiveMaxVideoProcesses - 1;
+	if (bulkCapacityReached || !canAcceptNewVideoProcess()) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
-		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
+		return c.json(getBusyResponseBody(capacity), 503);
 	}
 
 	const {
@@ -1088,10 +1094,8 @@ async function editVideoAsync(
 			await sendWebhook(downloadingJob);
 		}
 
-		const inputTempFile = await downloadVideoToTemp(
-			sourceUrl,
-			".mp4",
-			abortController.signal,
+		const inputTempFile = await withJobHeartbeat(jobId, () =>
+			downloadVideoToTemp(sourceUrl, ".mp4", abortController.signal),
 		);
 		updateJob(jobId, { inputTempFile });
 
@@ -1254,10 +1258,12 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		const inputTempFile = await downloadVideoToTemp(
-			videoUrl,
-			options.inputExtension,
-			abortController.signal,
+		const inputTempFile = await withJobHeartbeat(jobId, () =>
+			downloadVideoToTemp(
+				videoUrl,
+				options.inputExtension,
+				abortController.signal,
+			),
 		);
 		updateJob(jobId, { inputTempFile });
 

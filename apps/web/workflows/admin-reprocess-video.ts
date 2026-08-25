@@ -10,7 +10,11 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { FatalError } from "workflow";
+import { FatalError, sleep } from "workflow";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -41,8 +45,8 @@ interface MediaServerJobBody {
 	inputExtension: string;
 }
 
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
 const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -124,6 +128,14 @@ async function startMediaServerProcessJob(
 		if (shouldRetry && attempt < MEDIA_SERVER_START_MAX_ATTEMPTS - 1) {
 			await waitForRetry(MEDIA_SERVER_START_RETRY_BASE_MS * 2 ** attempt);
 			continue;
+		}
+
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
 		}
 
 		throw new Error(errorMessage);
@@ -461,7 +473,19 @@ export async function adminReprocessVideoWorkflow(
 
 	try {
 		await validateReprocessRequest(videoId);
-		const result = await processExistingResultOnMediaServer(videoId);
+		let result: MediaServerProcessResult;
+		let capacityRetryCount = 0;
+		while (true) {
+			try {
+				result = await processExistingResultOnMediaServer(videoId);
+				break;
+			} catch (error) {
+				if (!isMediaServerCapacityError(error)) throw error;
+				await markReprocessWaitingForCapacity(videoId);
+				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+				capacityRetryCount++;
+			}
+		}
 		await saveMetadataAndComplete(videoId, result.metadata);
 		await invalidateResultCache(videoId, result.ownerId, result.bucketId);
 
@@ -474,4 +498,17 @@ export async function adminReprocessVideoWorkflow(
 		await setReprocessError(videoId, errorMessage);
 		throw new FatalError(errorMessage);
 	}
+}
+
+async function markReprocessWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video reprocessing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }
