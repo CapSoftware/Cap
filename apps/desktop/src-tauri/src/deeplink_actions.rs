@@ -176,8 +176,6 @@ impl TryFrom<&Url> for DeepLinkAction {
         }
 
         let host = url.host_str().unwrap_or_default();
-
-        // Non-action endpoints such as login/signin flows
         if host == "login" || host == "signin" || host == "auth" || host == "oauth" {
             return Err(ActionParseFromUrlError::NotAction);
         }
@@ -217,7 +215,6 @@ impl DeepLinkAction {
         action_name: &str,
         params: &HashMap<std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>>,
     ) -> Result<Self, ActionParseFromUrlError> {
-        // Check if value parameter contains a valid DeepLinkAction JSON
         if let Some(json_value) = params.get("value") {
             if let Ok(action) = serde_json::from_str::<Self>(json_value) {
                 return Ok(action);
@@ -393,7 +390,8 @@ impl DeepLinkAction {
                 let camera = if device_id.is_empty() || device_id.eq_ignore_ascii_case("none") {
                     None
                 } else {
-                    Some(DeviceOrModelID::DeviceID(device_id))
+                    let id = DeviceOrModelID::DeviceID(device_id);
+                    Some(id)
                 };
                 crate::set_camera_input(app.clone(), app.state::<ArcLock<App>>(), camera, None)
                     .await
@@ -402,7 +400,10 @@ impl DeepLinkAction {
                 let mic = if device_id.is_empty() || device_id.eq_ignore_ascii_case("none") {
                     None
                 } else {
-                    Some(device_id)
+                    let mic_names = cap_recording::feeds::microphone::MicrophoneFeed::list_names();
+                    let matched = crate::find_mic_by_label_or_fuzzy(&mic_names, &device_id)
+                        .unwrap_or(device_id);
+                    Some(matched)
                 };
                 crate::set_mic_input(app.state::<ArcLock<App>>(), mic).await
             }
