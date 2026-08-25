@@ -18,20 +18,63 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::AtomicBool,
-        mpsc::{RecvTimeoutError, SyncSender, sync_channel},
+        mpsc::{RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel},
     },
     thread::JoinHandle,
     time::Duration,
 };
 use tracing::*;
 
-const DEFAULT_MUXER_BUFFER_SIZE: usize = 240;
+const DEFAULT_MUXER_BUFFER_SIZE: usize = 8;
 
 fn get_muxer_buffer_size() -> usize {
     std::env::var("CAP_MUXER_BUFFER_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MUXER_BUFFER_SIZE)
+}
+
+type ScreenFrameItem = Option<(screen_capture::ScreenFrame, Duration)>;
+
+struct LatestScreenFrame {
+    frame: screen_capture::ScreenFrame,
+    timestamp: Duration,
+    stale_frames: u64,
+    end_after_frame: bool,
+}
+
+fn recv_latest_screen_frame(
+    video_rx: &std::sync::mpsc::Receiver<ScreenFrameItem>,
+    timeout: Duration,
+) -> Result<Option<LatestScreenFrame>, RecvTimeoutError> {
+    let Some((mut frame, mut timestamp)) = video_rx.recv_timeout(timeout)? else {
+        return Ok(None);
+    };
+
+    let mut stale_frames = 0;
+    let mut end_after_frame = false;
+    loop {
+        match video_rx.try_recv() {
+            Ok(Some((next_frame, next_timestamp))) => {
+                frame = next_frame;
+                timestamp = next_timestamp;
+                stale_frames += 1;
+            }
+            Ok(None) => {
+                end_after_frame = true;
+                break;
+            }
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
+        }
+    }
+
+    Ok(Some(LatestScreenFrame {
+        frame,
+        timestamp,
+        stale_frames,
+        end_after_frame,
+    }))
 }
 
 struct FrameDropTracker {
@@ -368,6 +411,8 @@ impl WindowsFragmentedM4SMuxer {
                 let mut slow_encode_count = 0u32;
                 let mut total_frames = 0u64;
                 let mut duplicated_frames = 0u64;
+                let mut stale_frames_dropped = 0u64;
+                let mut pending_end_after_frame = false;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
                 const SLOW_THRESHOLD_MS: u128 = 5;
@@ -422,6 +467,10 @@ impl WindowsFragmentedM4SMuxer {
                 };
 
                 loop {
+                    if pending_end_after_frame {
+                        break;
+                    }
+
                     if matches!(
                         disk_monitor.poll(&base_path, &health_tx),
                         super::core::DiskSpacePollResult::Exhausted { .. }
@@ -435,26 +484,44 @@ impl WindowsFragmentedM4SMuxer {
 
                     let convert_start = std::time::Instant::now();
 
-                    let (ffmpeg_frame, timestamp) = match video_rx.recv_timeout(frame_interval) {
-                        Ok(Some((frame, ts))) => match frame.as_ffmpeg() {
-                            Ok(f) => {
-                                last_ffmpeg_frame = Some(f.clone());
-                                last_timestamp = Some(ts);
-                                (Some(f), ts)
-                            }
-                            Err(e) => {
-                                warn!("Failed to convert D3D11 frame: {e:?}");
-                                match (&last_ffmpeg_frame, last_timestamp) {
-                                    (Some(f), Some(last_ts)) => {
-                                        let new_ts = last_ts.saturating_add(frame_interval);
-                                        last_timestamp = Some(new_ts);
-                                        duplicated_frames += 1;
-                                        (Some(f.clone()), new_ts)
-                                    }
-                                    _ => (None, Duration::ZERO),
+                    let (ffmpeg_frame, timestamp) = match recv_latest_screen_frame(
+                        &video_rx,
+                        frame_interval,
+                    ) {
+                        Ok(Some(latest)) => {
+                            if latest.stale_frames > 0 {
+                                stale_frames_dropped += latest.stale_frames;
+                                if stale_frames_dropped <= 5
+                                    || stale_frames_dropped.is_multiple_of(120)
+                                {
+                                    debug!(
+                                        stale_frames = latest.stale_frames,
+                                        total_stale_frames = stale_frames_dropped,
+                                        "Dropped stale queued screen frames before encoding latest"
+                                    );
                                 }
                             }
-                        },
+                            pending_end_after_frame = latest.end_after_frame;
+                            match latest.frame.as_ffmpeg() {
+                                Ok(f) => {
+                                    last_ffmpeg_frame = Some(f.clone());
+                                    last_timestamp = Some(latest.timestamp);
+                                    (Some(f), latest.timestamp)
+                                }
+                                Err(e) => {
+                                    warn!("Failed to convert D3D11 frame: {e:?}");
+                                    match (&last_ffmpeg_frame, last_timestamp) {
+                                        (Some(f), Some(last_ts)) => {
+                                            let new_ts = last_ts.saturating_add(frame_interval);
+                                            last_timestamp = Some(new_ts);
+                                            duplicated_frames += 1;
+                                            (Some(f.clone()), new_ts)
+                                        }
+                                        _ => (None, Duration::ZERO),
+                                    }
+                                }
+                            }
+                        }
                         Ok(None) | Err(RecvTimeoutError::Disconnected) => {
                             let mut drained = 0u64;
                             let drain_start = std::time::Instant::now();
@@ -551,6 +618,7 @@ impl WindowsFragmentedM4SMuxer {
                     debug!(
                         total_frames = total_frames,
                         duplicated_frames = duplicated_frames,
+                        stale_frames_dropped = stale_frames_dropped,
                         slow_converts = slow_convert_count,
                         slow_encodes = slow_encode_count,
                         slow_convert_pct = format!(
@@ -602,11 +670,17 @@ impl VideoMuxer for WindowsFragmentedM4SMuxer {
         };
 
         if let Some(state) = &self.state {
-            match state.video_tx.send(Some((frame.frame, adjusted_timestamp))) {
+            match state
+                .video_tx
+                .try_send(Some((frame.frame, adjusted_timestamp)))
+            {
                 Ok(()) => {
                     self.frame_drops.record_frame();
                 }
-                Err(_) => {
+                Err(TrySendError::Full(_)) => {
+                    self.frame_drops.record_drop();
+                }
+                Err(TrySendError::Disconnected(_)) => {
                     return Err(anyhow!("Windows M4S encoder channel disconnected"));
                 }
             }

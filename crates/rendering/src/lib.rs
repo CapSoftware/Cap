@@ -353,8 +353,18 @@ impl RecordingSegmentDecoders {
             camera: camera_path,
         } = segment;
 
+        // Windows studio recordings write video packets with recording-epoch timestamps,
+        // so the finalized tracks already share one timeline that starts at the epoch.
+        // Applying `latest_start_time` on top (which assumes first-frame-rebased tracks,
+        // as produced on macOS) double-counts the capture startup delay and makes the
+        // rendered cursor run ahead of the screen content by that delay.
+        let recorded_on_windows = matches!(
+            _recording_meta.platform,
+            Some(cap_project::Platform::Windows)
+        );
         let latest_start_time = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => None,
+            StudioRecordingMeta::MultipleSegments { .. } if recorded_on_windows => None,
             StudioRecordingMeta::MultipleSegments { inner, .. } => {
                 inner.segments[segment_i].latest_start_time()
             }
