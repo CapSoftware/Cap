@@ -374,7 +374,7 @@ export default function () {
 													>
 														<IconCapUpload class="size-4" />
 													</TooltipIconButton>
-													<div class="flex absolute inset-0 justify-center items-center">
+													<div class="flex flex-col absolute inset-0 justify-center items-center gap-1">
 														<Button
 															variant="white"
 															size="sm"
@@ -382,6 +382,27 @@ export default function () {
 														>
 															Export
 														</Button>
+														<Show when={metadata.latest}>
+															{(metadata) => {
+																const rawSec = metadata().estimatedExportTime;
+																const sec = Number.isFinite(rawSec)
+																	? Math.max(1, Math.ceil(rawSec))
+																	: 1;
+																const timeStr =
+																	sec < 60
+																		? `~${sec}s`
+																		: `~${Math.floor(sec / 60)}m ${sec % 60}s`;
+																const sizeVal = metadata().size;
+																const sizeStr = Number.isFinite(sizeVal)
+																	? sizeVal.toFixed(1)
+																	: "?";
+																return (
+																	<span class="text-[10px] text-gray-200 font-medium bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm">
+																		Est. {sizeStr} MB • {timeStr}
+																	</span>
+																);
+															}}
+														</Show>
 													</div>
 												</div>
 												<Show when={metadata.latest}>
