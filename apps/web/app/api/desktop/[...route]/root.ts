@@ -33,6 +33,11 @@ import {
 	OrganizationBrandingValidationError,
 	toDesktopOrganization,
 } from "./organization-branding";
+import {
+	MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
+	readUploadHealthProbeBytes,
+	UploadHealthProbeTooLargeError,
+} from "./uploadHealth";
 
 export const app = new Hono();
 
@@ -440,6 +445,41 @@ app.post(
 		}
 	},
 );
+
+app.on("HEAD", "/upload-health", withAuth, (c) => c.body(null, 204));
+
+app.post("/upload-health", withAuth, async (c) => {
+	const contentLengthHeader = c.req.header("content-length");
+	const contentLength =
+		contentLengthHeader === undefined ? null : Number(contentLengthHeader);
+
+	if (
+		contentLength !== null &&
+		Number.isFinite(contentLength) &&
+		contentLength > MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES
+	) {
+		return c.json({ error: "probe_too_large" }, { status: 413 });
+	}
+
+	try {
+		// The stream reader below is the enforcement boundary for missing,
+		// invalid, or understated Content-Length headers.
+		const receivedBytes = await readUploadHealthProbeBytes(c.req.raw);
+
+		return c.json({
+			success: true,
+			receivedBytes,
+			maxProbeBytes: MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
+		});
+	} catch (error) {
+		if (error instanceof UploadHealthProbeTooLargeError) {
+			return c.json({ error: "probe_too_large" }, { status: 413 });
+		}
+
+		console.error("[upload-health] Failed to read probe body:", error);
+		return c.json({ error: "probe_failed" }, { status: 500 });
+	}
+});
 
 app.get("/org-custom-domain", withAuth, async (c) => {
 	const user = c.get("user");
