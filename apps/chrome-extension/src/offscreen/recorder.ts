@@ -1301,6 +1301,20 @@ const getCurrentUploadSnapshot = () =>
 				uploadStatus: undefined,
 			};
 
+// A capture phase with nothing behind it: the session that owned it is gone
+// (crashed, or the document was force-closed mid-recording and restored) but
+// no terminal status was ever written. The stale phase pins every tab's
+// recording bar, makes stop a no-op, and blocks the idle self-close that
+// would let the service worker heal — so it must be detected and cleared.
+const isZombieCaptureStatus = () =>
+	!activeRecording &&
+	!startInProgress &&
+	!retryInProgress &&
+	!countdownInProgress &&
+	(status.phase === "creating" ||
+		status.phase === "recording" ||
+		status.phase === "paused");
+
 async function stopRecording() {
 	// A stop during the pre-roll countdown cancels the start before any frame is
 	// captured. Resolving the countdown wait lets startRecording's
@@ -1319,6 +1333,9 @@ async function stopRecording() {
 		// itself resolves as a cancellation.
 		if (startInProgress) {
 			startCancelRequested = true;
+		} else if (isZombieCaptureStatus()) {
+			status = { phase: "idle" };
+			broadcastStatus();
 		}
 		return status;
 	}
@@ -1719,6 +1736,13 @@ const canCloseIdleDocument = () =>
 	(status.phase === "idle" || status.phase === "completed");
 
 window.setInterval(() => {
+	// Clear zombie capture phases before the idle check: a stale
+	// creating/recording/paused status would otherwise hold this document
+	// open forever and keep every tab's recording bar frozen.
+	if (isZombieCaptureStatus()) {
+		status = { phase: "idle" };
+		broadcastStatus();
+	}
 	if (canCloseIdleDocument()) {
 		window.close();
 	}

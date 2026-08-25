@@ -387,6 +387,14 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
+			type: "standalone-panel-opened";
+	  }
+	| {
+			target: "service-worker";
+			type: "standalone-panel-closed";
+	  }
+	| {
+			target: "service-worker";
 			type: "settings-updated";
 			settings: ExtensionSettings;
 	  }
