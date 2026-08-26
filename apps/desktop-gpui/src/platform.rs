@@ -83,6 +83,9 @@ pub struct PanelBehavior {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod macos_occlusion;
+
+#[cfg(target_os = "macos")]
 mod mac {
     use gpui::Window;
     use objc2::rc::Id;
@@ -291,48 +294,7 @@ mod mac {
     /// (self-delegating) occlusion handler for windows that opened before the
     /// state ever changed.
     pub fn install_occlusion_shim() {
-        use objc2::ffi::{class_addMethod, objc_msgSendSuper, objc_super};
-
-        unsafe extern "C" fn occlusion_state_shim(this: *mut AnyObject, sel: Sel) -> usize {
-            unsafe {
-                let class = (*this).class();
-                let Some(superclass) = class.superclass() else {
-                    return 0;
-                };
-                let mut sup = objc_super {
-                    receiver: this.cast(),
-                    super_class: (superclass as *const objc2::runtime::AnyClass).cast(),
-                };
-                let send: unsafe extern "C" fn(*mut objc_super, Sel) -> usize =
-                    std::mem::transmute(objc_msgSendSuper as unsafe extern "C" fn());
-                let raw = send(&mut sup, sel);
-                if raw != 0 { raw | 0x2 } else { raw }
-            }
-        }
-
-        for name in ["GPUIWindow", "GPUIPanel"] {
-            let Some(class) = objc2::runtime::AnyClass::get(name) else {
-                // The class registers lazily with the first window; the caller
-                // runs before that only if nothing was opened -- harmless, the
-                // second call from `kick_display_link` retries.
-                continue;
-            };
-            let added = unsafe {
-                class_addMethod(
-                    (class as *const objc2::runtime::AnyClass as *mut objc2::ffi::objc_class)
-                        .cast(),
-                    objc2::sel!(occlusionState).as_ptr(),
-                    Some(std::mem::transmute::<
-                        unsafe extern "C" fn(*mut AnyObject, Sel) -> usize,
-                        unsafe extern "C" fn(),
-                    >(occlusion_state_shim)),
-                    c"Q@:".as_ptr(),
-                )
-            };
-            if objc2::runtime::Bool::from_raw(added).as_bool() {
-                tracing::info!("installed macOS 26 occlusion shim on {name}");
-            }
-        }
+        super::macos_occlusion::install();
 
         // Same per-class, retried-from-the-same-spots lifecycle, so it rides
         // along here.

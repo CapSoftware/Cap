@@ -179,6 +179,7 @@ fn main() {
     // A relaunch means "run the code I just built": take over from any
     // previous instance still alive in the tray (see `single_instance`).
     single_instance::acquire();
+    store::mark_handoff_session();
 
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
@@ -254,7 +255,16 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .expect("failed to open the main window");
+            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
+        let Ok(window_handle) = window_handle else {
+            cx.quit();
+            return;
+        };
+
+        cx.on_app_quit(|_| async {
+            crate::store::clear_handoff_marker();
+        })
+        .detach();
 
         app_windows::init(window_handle, session, cx);
         updates::schedule_startup_check(cx);
@@ -283,18 +293,6 @@ fn main() {
             if show_onboarding {
                 cx.update(app_windows::open_onboarding);
             }
-        })
-        .detach();
-        // The other half of the Tauri app's hand-off protocol
-        // (`store::handoff_marker_path`): staying up this long is what proves
-        // to it that redirecting here was not a mistake.
-        cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(10))
-                .await;
-            cx.background_executor()
-                .spawn(async { crate::store::clear_handoff_marker() })
-                .await;
         })
         .detach();
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.

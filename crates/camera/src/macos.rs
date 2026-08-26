@@ -62,18 +62,22 @@ impl CameraInfo {
 impl ModelID {
     fn from_avfoundation(device: &cidre::av::capture::Device) -> Option<Self> {
         let unique_id = device.unique_id().to_string();
-        if unique_id.len() < 8 {
-            return None;
-        }
+        Self::from_avfoundation_unique_id(&unique_id)
+    }
 
-        let vid = unique_id[unique_id.len() - 2 * 4..unique_id.len() - 4].to_string();
-        let pid = unique_id[unique_id.len() - 4..].to_string();
+    fn from_avfoundation_unique_id(unique_id: &str) -> Option<Self> {
+        let suffix = unique_id.get(unique_id.len().checked_sub(8)?..)?;
+        let vid = suffix.get(..4)?;
+        let pid = suffix.get(4..)?;
 
         if vid == "0000" && pid == "0001" {
             return None;
         }
 
-        Some(Self { vid, pid })
+        Some(Self {
+            vid: vid.to_string(),
+            pid: pid.to_string(),
+        })
     }
 }
 
@@ -370,5 +374,31 @@ impl NativeCapturedFrame {
 
     pub fn sample_buf(&self) -> &arc::R<cm::SampleBuf> {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod model_id_tests {
+    use super::ModelID;
+
+    #[test]
+    fn usb_camera_ids_preserve_the_vendor_and_product_suffix() {
+        for unique_id in ["0x12340000046d082d", "046d082d", "カメラ046d082d"] {
+            let model = ModelID::from_avfoundation_unique_id(unique_id).unwrap();
+            assert_eq!(model.vid, "046d");
+            assert_eq!(model.pid, "082d");
+        }
+    }
+
+    #[test]
+    fn malformed_camera_ids_fall_back_to_the_device_id() {
+        for unique_id in ["", "short", "cameraé123", "é1234567", "123é456"] {
+            assert!(ModelID::from_avfoundation_unique_id(unique_id).is_none());
+        }
+    }
+
+    #[test]
+    fn builtin_camera_ids_still_fall_back_to_the_device_id() {
+        assert!(ModelID::from_avfoundation_unique_id("0x1234000000000001").is_none());
     }
 }

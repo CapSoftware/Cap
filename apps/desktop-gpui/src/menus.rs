@@ -287,10 +287,6 @@ pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
 /// quit waits for the session to come back to `Idle` (bounded, so a wedged
 /// finalize cannot make the app unquittable).
 pub fn quit(cx: &mut App) {
-    // Reaching a deliberate quit is proof enough that this build came up, even
-    // if it happens inside the marker's ten-second window.
-    crate::store::clear_handoff_marker();
-
     let session = RecordingSession::global(cx);
     if session.read(cx).phase == Phase::Idle {
         cx.quit();

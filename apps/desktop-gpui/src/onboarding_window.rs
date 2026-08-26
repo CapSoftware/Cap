@@ -582,7 +582,7 @@ impl OnboardingWindow {
                                     .radius(px(8.))
                                     .icon("icons/rotate-ccw.svg")
                                     .label("Relaunch Cap")
-                                    .on_click(cx.listener(|_, _, _, _| permissions::relaunch())),
+                                    .on_click(cx.listener(|_, _, _, cx| permissions::relaunch(cx))),
                                 ),
                         ),
                 )

@@ -193,21 +193,31 @@ fn bundled_resource_dirs_for(
 
 /// The Tauri app's hand-off marker (`gpui_app.rs`).
 ///
-/// It writes this file immediately before spawning this app and never deletes
-/// it; this app deletes it once it has been alive long enough to count as
-/// healthy (`main.rs`) or on a clean quit (`menus::quit`). A marker the Tauri
-/// app still finds at startup therefore means the build it handed off to never
-/// came up, so it clears `enableGpuiApp` and takes the session back rather than
-/// bouncing the user into an app that does not start.
+/// It survives for the entire session, including recording finalization, and
+/// is removed only during clean app shutdown. A timer cannot establish health:
+/// an idle native callback can crash after any startup grace period has elapsed.
 pub fn handoff_marker_path() -> PathBuf {
     app_data_dir().join("cap-gpui.handoff")
+}
+
+pub fn mark_handoff_session() {
+    if let Err(error) = mark_handoff_session_at(&handoff_marker_path()) {
+        tracing::warn!("writing the hand-off marker: {error}");
+    }
+}
+
+fn mark_handoff_session_at(path: &Path) -> std::io::Result<()> {
+    write_update_handoff_at(path, &std::process::id().to_string())
 }
 
 /// Best-effort: a marker that cannot be removed only costs one fallback to the
 /// Tauri app on the next launch.
 pub fn clear_handoff_marker() {
-    let path = handoff_marker_path();
-    match std::fs::remove_file(&path) {
+    clear_handoff_marker_at(&handoff_marker_path());
+}
+
+fn clear_handoff_marker_at(path: &Path) {
+    match std::fs::remove_file(path) {
         Ok(()) => tracing::info!("cleared the hand-off marker"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
@@ -1947,6 +1957,43 @@ mod tests {
             super::update_handoff_path(),
             super::app_data_dir().join("cap-gpui.update-handoff")
         );
+    }
+
+    #[test]
+    fn handoff_marker_survives_until_explicit_clean_shutdown() {
+        let directory =
+            std::env::temp_dir().join(format!("cap-gpui-handoff-session-{}", super::new_uuid_v4()));
+        let marker = directory.join("cap-gpui.handoff");
+
+        super::mark_handoff_session_at(&marker).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            std::process::id().to_string()
+        );
+        super::mark_handoff_session_at(&marker).unwrap();
+        assert!(marker.exists());
+
+        super::clear_handoff_marker_at(&marker);
+        assert!(!marker.exists());
+        super::clear_handoff_marker_at(&marker);
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn handoff_marker_write_failure_leaves_existing_state_intact() {
+        let directory =
+            std::env::temp_dir().join(format!("cap-gpui-handoff-failure-{}", super::new_uuid_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let blocked_parent = directory.join("not-a-directory");
+        std::fs::write(&blocked_parent, "unchanged").unwrap();
+
+        assert!(super::mark_handoff_session_at(&blocked_parent.join("marker")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&blocked_parent).unwrap(),
+            "unchanged"
+        );
+        std::fs::remove_file(blocked_parent).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
