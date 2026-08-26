@@ -204,6 +204,15 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
     }
 }
 
+fn frame_layout_requires_editor_invalidation(
+    first_frame: bool,
+    playing: bool,
+    layout_changed: bool,
+    cleared_drag_rect: bool,
+) -> bool {
+    first_frame || cleared_drag_rect || (!playing && layout_changed)
+}
+
 // ---------------------------------------------------------------------------
 // Loading a project
 // ---------------------------------------------------------------------------
@@ -213,6 +222,7 @@ pub fn letterbox(container: (f32, f32), frame: (f32, f32)) -> (f32, f32) {
 /// whose disabled state is data-driven.
 #[derive(Debug, Clone)]
 pub struct ProjectSummary {
+    pub recordings: Arc<ProjectRecordingsMeta>,
     /// `meta().prettyName` -- the header's editable name.
     pub pretty_name: String,
     /// Every track the timeline draws, derived from the bundle's own
@@ -262,8 +272,7 @@ pub struct ProjectSummary {
 ///   unwinds out of the renderer's task. It is a plain synchronous function,
 ///   so running it here under `catch_unwind` -- on a background thread, in
 ///   Rust-only frames, never across an objc boundary -- converts the panic
-///   into a message. `EditorInstance::new` then repeats the same construction
-///   with input already known to be good.
+///   into a message. The validated metadata is reused by `EditorInstance`.
 ///
 /// Blocking; callers run it on the background executor.
 pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
@@ -314,6 +323,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         "This recording's video tracks could not be opened. The bundle looks damaged.".to_string()
     })?
     .map_err(|error| format!("Failed to read this recording's media: {error}"))?;
+    let recordings = Arc::new(recordings);
 
     // `RecordingMeta::project_config()` loads `project-config.json` (falling
     // back to the default) and overlays `captions.json` -- the same read
@@ -358,6 +368,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
+        recordings: recordings.clone(),
         pretty_name: meta.pretty_name.clone(),
         timeline,
         duration: duration.max(0.0),
@@ -4776,7 +4787,12 @@ impl EditorWindow {
         if let Some(stats) = &self.stats {
             stats.presented.fetch_add(1, Ordering::Relaxed);
         }
-        if layout_changed || cleared_drag_rect {
+        if frame_layout_requires_editor_invalidation(
+            first_frame,
+            self.playing,
+            layout_changed,
+            cleared_drag_rect,
+        ) {
             cx.notify();
         }
         // `refresh()` is a whole-window invalidation, so calling it per frame on
@@ -8724,7 +8740,14 @@ pub fn make_frame_callback(
 ) -> cap_editor::EditorFrameCallback {
     Box::new(move |output, layout| {
         stats.rendered.fetch_add(1, Ordering::Relaxed);
-        if tx.try_send((output, layout)).is_err() {
+        #[cfg(target_os = "windows")]
+        let sent = tx
+            .send_timeout((output, layout), Duration::from_millis(100))
+            .is_ok();
+        #[cfg(not(target_os = "windows"))]
+        let sent = tx.try_send((output, layout)).is_ok();
+
+        if !sent {
             stats.dropped.fetch_add(1, Ordering::Relaxed);
         }
     })
@@ -8807,6 +8830,31 @@ mod tests {
         let (width, height) = letterbox((1000., 500.), (0., 0.));
         assert_eq!(width, 992.);
         assert!((width / height - 992. / 492.).abs() < 0.001);
+    }
+
+    #[test]
+    fn animated_frame_layout_does_not_invalidate_editor_during_playback() {
+        assert!(!frame_layout_requires_editor_invalidation(
+            false, true, true, false
+        ));
+        assert!(!frame_layout_requires_editor_invalidation(
+            false, true, false, false
+        ));
+        assert!(!frame_layout_requires_editor_invalidation(
+            false, false, false, false
+        ));
+        assert!(frame_layout_requires_editor_invalidation(
+            false, false, true, false
+        ));
+        assert!(frame_layout_requires_editor_invalidation(
+            true, true, true, false
+        ));
+        assert!(frame_layout_requires_editor_invalidation(
+            false, true, false, true
+        ));
+        assert!(frame_layout_requires_editor_invalidation(
+            false, true, true, true
+        ));
     }
 
     /// Every failure `EditorInstance::new` would return, plus the one it would

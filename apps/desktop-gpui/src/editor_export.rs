@@ -140,7 +140,7 @@ pub enum ExportPhase {
 }
 
 impl ExportPhase {
-    fn is_busy(self) -> bool {
+    pub(crate) fn is_busy(self) -> bool {
         matches!(
             self,
             Self::Starting | Self::Rendering | Self::Copying | Self::Uploading
@@ -473,7 +473,7 @@ impl EditorWindow {
         }));
     }
 
-    fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pretty_name = self
             .summary()
             .map(|summary| summary.pretty_name.clone())
@@ -528,7 +528,9 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = platform::save_file_panel(&default, &[ext]);
+                let chosen = std::env::var_os("CAP_GPUI_AUTO_EXPORT")
+                    .map(PathBuf::from)
+                    .or_else(|| platform::save_file_panel(&default, &[ext]));
                 if chosen.is_none() {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
@@ -593,6 +595,7 @@ impl EditorWindow {
 
             match export.await {
                 Ok(Ok(path)) => {
+                    tracing::info!(path = %path.display(), "editor export completed");
                     if destination == ExportDestination::Clipboard {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
@@ -633,6 +636,7 @@ impl EditorWindow {
                     }
                 }
                 Ok(Err(error)) => {
+                    tracing::error!(error, "editor export failed");
                     let cancelled = error == "Export cancelled" || cancel.load(Ordering::Relaxed);
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {

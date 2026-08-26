@@ -1723,7 +1723,7 @@ fn render_track_content(
     let mut content = div().relative().size_full();
 
     if !segments.iter().any(|segment| segment.lane == row.lane)
-        && !(row.kind == TrackKind::ThreeD && !model.camera3d_setup_ghosts.is_empty())
+        && (row.kind != TrackKind::ThreeD || model.camera3d_setup_ghosts.is_empty())
         && let Some(empty) = render_empty_track(
             theme,
             row.kind,
