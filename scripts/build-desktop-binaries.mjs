@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+	releaseBinaryMatchesDebugBinary,
+	stagedBinariesAreCurrent,
+} from "./build-desktop-binaries-cache.mjs";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const binariesDir = path.join(
@@ -30,35 +35,6 @@ async function fileExists(p) {
 		.access(p)
 		.then(() => true)
 		.catch(() => false);
-}
-
-async function newestMtimeMs(targetPath) {
-	let max = 0;
-	const stack = [targetPath];
-	while (stack.length > 0) {
-		const current = stack.pop();
-		const stat = await fs.stat(current).catch(() => null);
-		if (!stat) continue;
-		if (stat.isFile()) {
-			if (stat.mtimeMs > max) max = stat.mtimeMs;
-			continue;
-		}
-		if (stat.isDirectory()) {
-			const entries = await fs.readdir(current);
-			for (const name of entries) stack.push(path.join(current, name));
-		}
-	}
-	return max;
-}
-
-async function isUpToDate(destPath, sourcePaths) {
-	if (!(await fileExists(destPath))) return false;
-	const destStat = await fs.stat(destPath);
-	for (const src of sourcePaths) {
-		const newest = await newestMtimeMs(src);
-		if (newest > destStat.mtimeMs) return false;
-	}
-	return true;
 }
 
 async function main() {
@@ -112,13 +88,31 @@ async function buildSidecar(sidecar, target, ext) {
 	const dests = sidecar.destBinaries.map((destBinary) =>
 		path.join(binariesDir, `${destBinary}-${target}${ext}`),
 	);
+	const debugBinaries = [
+		path.join(
+			repoRoot,
+			"target",
+			target,
+			"debug",
+			`${sidecar.sourceBinary}${ext}`,
+		),
+		path.join(repoRoot, "target", "debug", `${sidecar.sourceBinary}${ext}`),
+	];
+
+	if (await releaseBinaryMatchesDebugBinary(src, debugBinaries)) {
+		console.warn(
+			`Discarding debug binary found in release artifact path: ${src}`,
+		);
+		await fs.rm(src);
+	}
 
 	if (
-		(
-			await Promise.all(
-				dests.map((dest) => isUpToDate(dest, sidecar.watchPaths)),
-			)
-		).every(Boolean)
+		await stagedBinariesAreCurrent(
+			src,
+			dests,
+			sidecar.watchPaths,
+			debugBinaries,
+		)
 	) {
 		console.log(
 			`${sidecar.destBinaries.join(", ")} desktop binaries up to date`,
