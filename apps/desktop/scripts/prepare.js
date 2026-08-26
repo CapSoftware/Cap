@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { shouldBundleGpui } from "../../../scripts/run-gpui-build.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,7 +48,7 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
  * @param {Object} source
  * @returns {Object}
  */
-function deepMerge(target, source) {
+export function deepMerge(target, source) {
 	for (const key of Object.keys(source)) {
 		if (
 			source[key] instanceof Object &&
@@ -71,6 +72,40 @@ export async function createTauriPlatformConfigs(
 	configOptions = undefined,
 ) {
 	const srcTauri = path.join(__dirname, "../src-tauri/");
+	const profile = process.argv.includes("--release") ? "release" : "debug";
+	const hostArchitecture = process.arch === "arm64" ? "aarch64" : "x86_64";
+	const hostTargets = {
+		darwin: `${hostArchitecture}-apple-darwin`,
+		win32: `${hostArchitecture}-pc-windows-msvc`,
+		linux: `${hostArchitecture}-unknown-linux-gnu`,
+	};
+	const target = process.env.RUST_TARGET_TRIPLE ?? hostTargets[platform];
+	const extension = platform === "win32" ? ".exe" : "";
+	const sidecarAvailable = target
+		? await fs
+				.access(
+					path.join(srcTauri, "binaries", `cap-gpui-${target}${extension}`),
+				)
+				.then(() => true)
+				.catch(() => false)
+		: false;
+	const developmentWorkspaceAvailable = await fs
+		.access(path.join(__dirname, "../../desktop-gpui/dev.sh"))
+		.then(() => true)
+		.catch(() => false);
+	const includeGpui = shouldBundleGpui(
+		platform,
+		process.env,
+		profile,
+		sidecarAvailable,
+		developmentWorkspaceAvailable,
+	);
+	const externalBin = [
+		"binaries/cap-muxer",
+		"binaries/cap-exporter",
+		"binaries/cap-cli",
+		...(includeGpui ? ["binaries/cap-gpui"] : []),
+	];
 	let baseConfig = {};
 	let configFileName = null;
 
@@ -80,11 +115,7 @@ export async function createTauriPlatformConfigs(
 		baseConfig = {
 			...baseConfig,
 			bundle: {
-				externalBin: [
-					"binaries/cap-muxer",
-					"binaries/cap-exporter",
-					"binaries/cap-cli",
-				],
+				externalBin,
 				resources: {
 					"../../../target/ffmpeg/bin/*.dll": "./",
 					"../../../target/native-deps/dxc/*.dll": "./",
@@ -107,17 +138,25 @@ export async function createTauriPlatformConfigs(
 		baseConfig = {
 			...baseConfig,
 			bundle: {
-				externalBin: [
-					"binaries/cap-muxer",
-					"binaries/cap-exporter",
-					"binaries/cap-cli",
-				],
+				externalBin,
 				resources: {
 					"../../../target/native-deps/onnxruntime/lib/libonnxruntime.dylib":
 						"onnxruntime/lib/libonnxruntime.dylib",
 				},
 			},
 		};
+	}
+
+	if (platform === "linux") {
+		configFileName = "tauri.linux.conf.json";
+		const existingConfig = await fs
+			.readFile(path.join(srcTauri, configFileName), "utf-8")
+			.then(JSON.parse)
+			.catch((error) => {
+				if (error.code === "ENOENT") return {};
+				throw error;
+			});
+		baseConfig = deepMerge(existingConfig, { bundle: { externalBin } });
 	}
 
 	if (!configFileName) return;
@@ -137,11 +176,14 @@ async function main() {
 	console.log("--- Preparation finished");
 }
 
-main().catch((err) => {
-	console.error("\n--- Preparation Failed");
-	console.error(err);
-	console.error("---");
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+	main().catch((err) => {
+		console.error("\n--- Preparation Failed");
+		console.error(err);
+		console.error("---");
+		process.exitCode = 1;
+	});
+}
 
 async function writeFileIfChanged(filePath, contents) {
 	const currentContents = await fs
