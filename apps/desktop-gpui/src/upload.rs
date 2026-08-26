@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use cap_project::{RecordingMeta, S3UploadMeta, SharingMeta, UploadMeta};
+use cap_enc_ffmpeg::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
+use cap_project::{RecordingMeta, S3UploadMeta, SharingMeta, UploadMeta, VideoUploadInfo};
+use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,12 +16,543 @@ use crate::auth::{self, AuthApiError};
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
+const MAX_SEGMENT_UPLOADS: usize = 6;
+const SEGMENT_URL_PREFETCH: u32 = 20;
+const SEGMENT_UPLOAD_ATTEMPTS: u32 = 3;
+const MANIFEST_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Deserialize)]
+struct SignedUploadTarget {
+    url: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UploadResult {
     Success(String),
     NotAuthenticated,
     UpgradeRequired,
+}
+
+pub struct InstantUpload {
+    pub video: VideoUploadInfo,
+    segment_upload: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct SegmentManifestEntry {
+    index: u32,
+    duration: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct SegmentUploadManifest {
+    version: u32,
+    video_init_uploaded: bool,
+    audio_init_uploaded: bool,
+    video_segments: Vec<SegmentManifestEntry>,
+    audio_segments: Vec<SegmentManifestEntry>,
+    is_complete: bool,
+}
+
+impl Default for SegmentUploadManifest {
+    fn default() -> Self {
+        Self {
+            version: 2,
+            video_init_uploaded: false,
+            audio_init_uploaded: false,
+            video_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            is_complete: false,
+        }
+    }
+}
+
+impl SegmentUploadManifest {
+    fn record(&mut self, event: &SegmentCompletedEvent) {
+        match (event.is_init, event.media_type) {
+            (true, SegmentMediaType::Video) => self.video_init_uploaded = true,
+            (true, SegmentMediaType::Audio) => self.audio_init_uploaded = true,
+            (false, media_type) => {
+                let segments = match media_type {
+                    SegmentMediaType::Video => &mut self.video_segments,
+                    SegmentMediaType::Audio => &mut self.audio_segments,
+                };
+                if let Some(segment) = segments
+                    .iter_mut()
+                    .find(|segment| segment.index == event.index)
+                {
+                    segment.duration = event.duration;
+                } else {
+                    segments.push(SegmentManifestEntry {
+                        index: event.index,
+                        duration: event.duration,
+                    });
+                    segments.sort_unstable_by_key(|segment| segment.index);
+                }
+            }
+        }
+    }
+
+    fn has_video_content(&self) -> bool {
+        self.video_init_uploaded && !self.video_segments.is_empty()
+    }
+}
+
+pub async fn prepare_instant_upload(
+    camera_only: bool,
+    project_name: String,
+    organization_id: Option<String>,
+) -> Result<VideoUploadInfo, String> {
+    if store_auth_missing() {
+        return Err("Please sign in to use instant recording".to_string());
+    }
+
+    let recording_mode = if camera_only {
+        "desktopMP4"
+    } else {
+        "desktopSegments"
+    };
+    let config = create_or_get_video_with_mode(
+        false,
+        None,
+        Some(project_name),
+        None,
+        organization_id,
+        recording_mode,
+    )
+    .await
+    .map_err(|error| match error {
+        AuthApiError::InvalidAuthentication => {
+            "Your session has expired. Please sign in again to use instant recording.".to_string()
+        }
+        AuthApiError::UpgradeRequired => "Instant recording requires an upgraded plan.".to_string(),
+        error => format!("Could not create the shareable link: {error}"),
+    })?;
+
+    Ok(VideoUploadInfo {
+        id: config.id.clone(),
+        link: format!("{}/s/{}", auth::server_url(), config.id),
+        config,
+    })
+}
+
+pub fn start_instant_upload(
+    video: VideoUploadInfo,
+    project_path: PathBuf,
+    segment_rx: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
+) -> Result<InstantUpload, String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let segment_upload = if let Some(segment_rx) = segment_rx {
+        let (events_tx, events_rx) = flume::unbounded();
+        std::thread::Builder::new()
+            .name("gpui-instant-segments".to_string())
+            .spawn(move || {
+                while let Ok(event) = segment_rx.recv() {
+                    if events_tx.send(event).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| format!("Failed to start instant upload: {error}"))?;
+
+        let upload_video = video.clone();
+        let upload_cancel = cancel.clone();
+        Some(tokio::spawn(async move {
+            run_segment_upload(upload_video, project_path, events_rx, upload_cancel).await
+        }))
+    } else {
+        None
+    };
+
+    Ok(InstantUpload {
+        video,
+        segment_upload,
+        cancel,
+    })
+}
+
+impl InstantUpload {
+    pub fn video(&self) -> &VideoUploadInfo {
+        &self.video
+    }
+
+    pub fn is_segmented(&self) -> bool {
+        self.segment_upload.is_some()
+    }
+
+    pub async fn finish_segments(&mut self) -> Result<(), String> {
+        let Some(upload) = self.segment_upload.take() else {
+            return Ok(());
+        };
+        upload
+            .await
+            .map_err(|error| format!("Instant segment upload task failed: {error}"))?
+    }
+
+    pub async fn finish_screenshot(&self, project_path: &Path) -> Result<(), String> {
+        upload_screenshot(
+            &self.video.id,
+            &project_path.join("screenshots/display.jpg"),
+        )
+        .await
+        .map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
+    }
+
+    pub async fn cancel(mut self) -> Result<(), String> {
+        self.cancel.store(true, Ordering::Release);
+        if let Some(upload) = self.segment_upload.take() {
+            upload.abort();
+        }
+
+        delete_instant_video(&self.video.id).await
+    }
+}
+
+pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
+    let path = format!(
+        "/api/desktop/video/delete?videoId={}",
+        urlencoding(video_id)
+    );
+    let response = auth::authed_request(reqwest::Method::DELETE, &path, None)
+        .await
+        .map_err(|error| format!("Failed to delete instant recording: {error}"))?;
+    let status = response.status();
+    if status.is_success() || status == StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(format!(
+        "Failed to delete instant recording {video_id}: {status}: {body}"
+    ))
+}
+
+async fn run_segment_upload(
+    video: VideoUploadInfo,
+    project_path: PathBuf,
+    events: flume::Receiver<SegmentCompletedEvent>,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let result = upload_segments(&video.id, events, cancel.clone()).await;
+    if let Err(error) = &result
+        && !cancel.load(Ordering::Acquire)
+        && let Ok(mut meta) = RecordingMeta::load_for_project(&project_path)
+    {
+        meta.upload = Some(UploadMeta::Failed {
+            error: error.clone(),
+        });
+        if let Err(save_error) = meta.save_for_project() {
+            tracing::error!("Failed to persist instant upload failure: {save_error}");
+        }
+    }
+    result
+}
+
+async fn upload_segments(
+    video_id: &str,
+    events: flume::Receiver<SegmentCompletedEvent>,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let mut manifest = SegmentUploadManifest::default();
+    let mut uploads = FuturesUnordered::new();
+    let mut events_closed = false;
+    let mut last_manifest_upload: Option<Instant> = None;
+    let mut next_prefetch = SEGMENT_URL_PREFETCH + 1;
+    let signed_urls = Arc::new(Mutex::new(
+        prefetch_segment_urls(video_id, 1, SEGMENT_URL_PREFETCH)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("Failed to prefetch instant upload URLs: {error}");
+                HashMap::new()
+            }),
+    ));
+
+    loop {
+        tokio::select! {
+            next_event = events.recv_async(), if !events_closed && uploads.len() < MAX_SEGMENT_UPLOADS => {
+                match next_event {
+                    Ok(event) => {
+                        if cancel.load(Ordering::Acquire) {
+                            return Err("Instant recording upload cancelled".to_string());
+                        }
+                        if event.media_type == SegmentMediaType::Video
+                            && event.index.saturating_add(5) >= next_prefetch
+                        {
+                            match prefetch_segment_urls(video_id, next_prefetch, SEGMENT_URL_PREFETCH).await {
+                                Ok(urls) => {
+                                    signed_urls.lock().unwrap_or_else(|error| error.into_inner()).extend(urls);
+                                    next_prefetch = next_prefetch.saturating_add(SEGMENT_URL_PREFETCH);
+                                }
+                                Err(error) => tracing::warn!("Failed to extend instant upload URLs: {error}"),
+                            }
+                        }
+                        uploads.push(upload_segment_with_retry(
+                            video_id.to_string(),
+                            event,
+                            signed_urls.clone(),
+                            cancel.clone(),
+                        ));
+                    }
+                    Err(_) => events_closed = true,
+                }
+            }
+            Some(upload) = uploads.next(), if !uploads.is_empty() => {
+                let event = upload?;
+                manifest.record(&event);
+                if manifest.has_video_content()
+                    && last_manifest_upload.is_none_or(|last| last.elapsed() >= MANIFEST_UPLOAD_INTERVAL)
+                {
+                    upload_segment_manifest_with_retry(video_id, &manifest, &cancel).await?;
+                    last_manifest_upload = Some(Instant::now());
+                }
+            }
+            else => break,
+        }
+    }
+
+    if cancel.load(Ordering::Acquire) {
+        return Err("Instant recording upload cancelled".to_string());
+    }
+    if !manifest.has_video_content() {
+        return Err(format!(
+            "Segment upload completed without video segments for {video_id}"
+        ));
+    }
+
+    manifest.is_complete = true;
+    upload_segment_manifest_with_retry(video_id, &manifest, &cancel).await?;
+    signal_recording_complete_with_retry(video_id, &cancel).await
+}
+
+fn prefetched_segment_paths(start: u32, count: u32) -> Vec<String> {
+    let mut subpaths = Vec::with_capacity((count as usize).saturating_mul(2).saturating_add(3));
+    if start == 1 {
+        subpaths.push("segments/video/init.mp4".to_string());
+        subpaths.push("segments/audio/init.mp4".to_string());
+        subpaths.push("segments/manifest.json".to_string());
+    }
+    for index in start..start.saturating_add(count) {
+        subpaths.push(format!("segments/video/segment_{index:03}.m4s"));
+        subpaths.push(format!("segments/audio/segment_{index:03}.m4s"));
+    }
+    subpaths
+}
+
+async fn prefetch_segment_urls(
+    video_id: &str,
+    start: u32,
+    count: u32,
+) -> Result<HashMap<String, String>, AuthApiError> {
+    #[derive(Deserialize)]
+    struct BatchResponse {
+        urls: HashMap<String, String>,
+    }
+
+    let response = auth::authed_request(
+        reqwest::Method::POST,
+        "/api/upload/signed/batch",
+        Some(json!({
+            "videoId": video_id,
+            "subpaths": prefetched_segment_paths(start, count),
+        })),
+    )
+    .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(AuthApiError::Other(format!(
+            "api/upload_signed_batch/{status}: {body}"
+        )));
+    }
+    response
+        .json::<BatchResponse>()
+        .await
+        .map(|batch| batch.urls)
+        .map_err(|error| AuthApiError::Other(format!("api/upload_signed_batch/response: {error}")))
+}
+
+async fn upload_segment_with_retry(
+    video_id: String,
+    event: SegmentCompletedEvent,
+    signed_urls: Arc<Mutex<HashMap<String, String>>>,
+    cancel: Arc<AtomicBool>,
+) -> Result<SegmentCompletedEvent, String> {
+    let subpath = segment_subpath(&event);
+    let bytes = read_completed_segment(&event, &subpath, &cancel).await?;
+    let mut cached_url = signed_urls
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(&subpath);
+
+    for attempt in 0..SEGMENT_UPLOAD_ATTEMPTS {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Instant recording upload cancelled".to_string());
+        }
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(250u64 << attempt)).await;
+        }
+
+        let result = if let Some(url) = cached_url.take() {
+            upload_signed_bytes(
+                SignedUploadTarget {
+                    url,
+                    headers: HashMap::new(),
+                },
+                &subpath,
+                bytes.clone(),
+            )
+            .await
+        } else {
+            presigned_put_bytes(&video_id, &subpath, bytes.clone()).await
+        };
+
+        match result {
+            Ok(()) => return Ok(event),
+            Err(AuthApiError::InvalidAuthentication) => {
+                return Err("Authentication expired while uploading the instant recording".into());
+            }
+            Err(error) if attempt + 1 == SEGMENT_UPLOAD_ATTEMPTS => {
+                return Err(format!(
+                    "Failed to upload instant segment {subpath}: {error}"
+                ));
+            }
+            Err(error) => tracing::warn!(
+                subpath,
+                attempt = attempt + 1,
+                "Instant recording segment upload failed; retrying: {error}"
+            ),
+        }
+    }
+
+    Err(format!("Failed to upload instant segment {subpath}"))
+}
+
+async fn read_completed_segment(
+    event: &SegmentCompletedEvent,
+    subpath: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let started = Instant::now();
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Instant recording upload cancelled".to_string());
+        }
+        let bytes = tokio::task::spawn_blocking({
+            let path = event.path.clone();
+            move || std::fs::read(path)
+        })
+        .await
+        .map_err(|error| format!("Failed to read instant segment {subpath}: {error}"))?;
+
+        match bytes {
+            Ok(bytes)
+                if !bytes.is_empty()
+                    && (event.file_size == 0 || bytes.len() >= event.file_size as usize) =>
+            {
+                return Ok(bytes);
+            }
+            Ok(_) if started.elapsed() >= Duration::from_secs(10) => {
+                return Err(format!(
+                    "Instant recording segment is incomplete: {subpath}"
+                ));
+            }
+            Err(error) if started.elapsed() >= Duration::from_secs(10) => {
+                return Err(format!("Failed to read instant segment {subpath}: {error}"));
+            }
+            _ => tokio::time::sleep(Duration::from_millis(50)).await,
+        }
+    }
+}
+
+fn segment_subpath(event: &SegmentCompletedEvent) -> String {
+    match (event.is_init, event.media_type) {
+        (true, SegmentMediaType::Video) => "segments/video/init.mp4".to_string(),
+        (true, SegmentMediaType::Audio) => "segments/audio/init.mp4".to_string(),
+        (false, SegmentMediaType::Video) => {
+            format!("segments/video/segment_{:03}.m4s", event.index)
+        }
+        (false, SegmentMediaType::Audio) => {
+            format!("segments/audio/segment_{:03}.m4s", event.index)
+        }
+    }
+}
+
+async fn upload_segment_manifest(
+    video_id: &str,
+    manifest: &SegmentUploadManifest,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(manifest)
+        .map_err(|error| format!("Failed to serialize instant upload manifest: {error}"))?;
+    presigned_put_bytes(video_id, "segments/manifest.json", bytes)
+        .await
+        .map_err(|error| format!("Failed to upload instant recording manifest: {error}"))
+}
+
+async fn upload_segment_manifest_with_retry(
+    video_id: &str,
+    manifest: &SegmentUploadManifest,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    for attempt in 0..SEGMENT_UPLOAD_ATTEMPTS {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Instant recording upload cancelled".to_string());
+        }
+        match upload_segment_manifest(video_id, manifest).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt + 1 == SEGMENT_UPLOAD_ATTEMPTS => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    "Instant manifest upload failed: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(250u64 << attempt)).await;
+            }
+        }
+    }
+    Err("Instant recording manifest upload failed".to_string())
+}
+
+async fn signal_recording_complete_with_retry(
+    video_id: &str,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    for attempt in 0..SEGMENT_UPLOAD_ATTEMPTS {
+        if cancel.load(Ordering::Acquire) {
+            return Err("Instant recording upload cancelled".to_string());
+        }
+        match signal_recording_complete(video_id).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt + 1 == SEGMENT_UPLOAD_ATTEMPTS => return Err(error),
+            Err(error) => {
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    "Instant completion signal failed: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(250u64 << attempt)).await;
+            }
+        }
+    }
+    Err("Failed to finish instant recording upload".to_string())
+}
+
+async fn signal_recording_complete(video_id: &str) -> Result<(), String> {
+    let response = auth::authed_request(
+        reqwest::Method::POST,
+        "/api/upload/recording-complete",
+        Some(json!({ "videoId": video_id })),
+    )
+    .await
+    .map_err(|error| format!("Failed to finish instant recording upload: {error}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(format!(
+        "Failed to finish instant recording upload: {status}: {body}"
+    ))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -199,7 +733,29 @@ async fn create_or_get_video(
     meta: Option<&VideoMeta>,
     organization_id: Option<String>,
 ) -> Result<S3UploadMeta, AuthApiError> {
-    let mut path = "/api/desktop/video/create?recordingMode=desktopMP4".to_string();
+    create_or_get_video_with_mode(
+        is_screenshot,
+        video_id,
+        name,
+        meta,
+        organization_id,
+        "desktopMP4",
+    )
+    .await
+}
+
+async fn create_or_get_video_with_mode(
+    is_screenshot: bool,
+    video_id: Option<String>,
+    name: Option<String>,
+    meta: Option<&VideoMeta>,
+    organization_id: Option<String>,
+    recording_mode: &str,
+) -> Result<S3UploadMeta, AuthApiError> {
+    let mut path = format!(
+        "/api/desktop/video/create?recordingMode={}",
+        urlencoding(recording_mode)
+    );
     if let Some(id) = video_id {
         path.push_str(&format!("&videoId={id}"));
         path.push_str("&createWithId=true");
@@ -577,13 +1133,7 @@ async fn presigned_put_bytes(
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Response {
-        presigned_put_data: SignedUpload,
-    }
-    #[derive(Deserialize)]
-    struct SignedUpload {
-        url: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
+        presigned_put_data: SignedUploadTarget,
     }
 
     let response = auth::authed_request(
@@ -608,17 +1158,40 @@ async fn presigned_put_bytes(
         .await
         .map_err(|error| AuthApiError::Other(format!("api/upload_signed/response: {error}")))?
         .presigned_put_data;
-    let mut request = reqwest::Client::new()
-        .put(target.url)
-        .header("Content-Length", bytes.len())
+    upload_signed_bytes(target, subpath, bytes).await
+}
+
+async fn upload_signed_bytes(
+    target: SignedUploadTarget,
+    subpath: &str,
+    bytes: Vec<u8>,
+) -> Result<(), AuthApiError> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    let length = bytes.len() as u64;
+    let mut request = CLIENT
+        .get_or_init(reqwest::Client::new)
+        .put(&target.url)
+        .header("Content-Length", length)
+        .header("Content-Type", upload_content_type(subpath))
+        .timeout(Duration::from_secs(5 * 60))
         .body(bytes);
+    if is_google_drive_resumable_url(&target.url) && length > 0 {
+        request = request.header(
+            "Content-Range",
+            format!("bytes 0-{}/{}", length.saturating_sub(1), length),
+        );
+    }
     for (name, value) in target.headers {
         request = request.header(name, value);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| AuthApiError::Other(error.to_string()))?;
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            AuthApiError::Timeout
+        } else {
+            AuthApiError::Other(error.to_string())
+        }
+    })?;
     if !response.status().is_success() {
         return Err(AuthApiError::Other(format!(
             "upload failed: {}",
@@ -626,6 +1199,20 @@ async fn presigned_put_bytes(
         )));
     }
     Ok(())
+}
+
+fn upload_content_type(subpath: &str) -> &'static str {
+    if subpath.ends_with(".json") {
+        "application/json"
+    } else if subpath.ends_with(".mp4") || subpath.ends_with(".m4s") {
+        "video/mp4"
+    } else if subpath.ends_with(".png") {
+        "image/png"
+    } else if subpath.ends_with(".jpg") || subpath.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -816,6 +1403,137 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn segment_event(
+        index: u32,
+        duration: f64,
+        is_init: bool,
+        media_type: SegmentMediaType,
+    ) -> SegmentCompletedEvent {
+        SegmentCompletedEvent {
+            path: PathBuf::from("segment.m4s"),
+            index,
+            duration,
+            file_size: 16,
+            is_init,
+            media_type,
+        }
+    }
+
+    #[test]
+    fn segment_manifest_requires_init_and_orders_video_and_audio() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(3, 1.5, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(1, 2.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(2, 2.0, false, SegmentMediaType::Audio));
+        manifest.record(&segment_event(1, 1.8, false, SegmentMediaType::Audio));
+
+        assert!(!manifest.has_video_content());
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+        manifest.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+
+        assert!(manifest.has_video_content());
+        assert_eq!(
+            manifest
+                .video_segments
+                .iter()
+                .map(|segment| segment.index)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert_eq!(
+            manifest
+                .audio_segments
+                .iter()
+                .map(|segment| segment.index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(manifest.video_init_uploaded);
+        assert!(manifest.audio_init_uploaded);
+        assert!(!manifest.is_complete);
+    }
+
+    #[test]
+    fn initial_segment_batch_prefetches_initializers_and_matching_media_pairs() {
+        let paths = prefetched_segment_paths(1, 3);
+
+        assert_eq!(paths.len(), 9);
+        assert!(paths.contains(&"segments/video/init.mp4".to_string()));
+        assert!(paths.contains(&"segments/audio/init.mp4".to_string()));
+        assert!(paths.contains(&"segments/manifest.json".to_string()));
+        assert!(paths.contains(&"segments/video/segment_001.m4s".to_string()));
+        assert!(paths.contains(&"segments/audio/segment_003.m4s".to_string()));
+    }
+
+    #[test]
+    fn subsequent_segment_batches_do_not_repeat_initializers() {
+        assert_eq!(
+            prefetched_segment_paths(21, 2),
+            vec![
+                "segments/video/segment_021.m4s",
+                "segments/audio/segment_021.m4s",
+                "segments/video/segment_022.m4s",
+                "segments/audio/segment_022.m4s",
+            ]
+        );
+    }
+
+    #[test]
+    fn segment_manifest_updates_replayed_segments_without_duplicates() {
+        let mut manifest = SegmentUploadManifest::default();
+        manifest.record(&segment_event(4, 1.0, false, SegmentMediaType::Video));
+        manifest.record(&segment_event(4, 2.5, false, SegmentMediaType::Video));
+
+        assert_eq!(
+            manifest.video_segments,
+            vec![SegmentManifestEntry {
+                index: 4,
+                duration: 2.5,
+            }]
+        );
+    }
+
+    #[test]
+    fn segment_upload_paths_match_tauri_storage_layout() {
+        assert_eq!(
+            segment_subpath(&segment_event(0, 0.0, true, SegmentMediaType::Video)),
+            "segments/video/init.mp4"
+        );
+        assert_eq!(
+            segment_subpath(&segment_event(0, 0.0, true, SegmentMediaType::Audio)),
+            "segments/audio/init.mp4"
+        );
+        assert_eq!(
+            segment_subpath(&segment_event(7, 2.0, false, SegmentMediaType::Video)),
+            "segments/video/segment_007.m4s"
+        );
+        assert_eq!(
+            segment_subpath(&segment_event(14, 2.0, false, SegmentMediaType::Audio)),
+            "segments/audio/segment_014.m4s"
+        );
+    }
+
+    #[test]
+    fn signed_upload_content_types_match_media() {
+        assert_eq!(
+            upload_content_type("segments/manifest.json"),
+            "application/json"
+        );
+        assert_eq!(upload_content_type("segments/video/init.mp4"), "video/mp4");
+        assert_eq!(
+            upload_content_type("segments/audio/segment_001.m4s"),
+            "video/mp4"
+        );
+        assert_eq!(
+            upload_content_type("screenshot/screen-capture.jpg"),
+            "image/jpeg"
+        );
+        assert_eq!(
+            upload_content_type("screenshot/screen-capture.png"),
+            "image/png"
+        );
+    }
 
     #[test]
     fn chunk_size_clamps() {

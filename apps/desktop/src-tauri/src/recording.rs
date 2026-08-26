@@ -1154,6 +1154,14 @@ fn notify_recording_start_failed(app: &AppHandle, error: &str) {
     .emit(app);
 }
 
+fn recording_start_mode_error(mode: RecordingMode, authenticated: bool) -> Option<&'static str> {
+    match mode {
+        RecordingMode::Instant if !authenticated => Some("Please sign in to use instant recording"),
+        RecordingMode::Screenshot => Some("Use take_screenshot for screenshots"),
+        RecordingMode::Studio | RecordingMode::Instant => None,
+    }
+}
+
 #[derive(Serialize, Type)]
 pub enum RecordingAction {
     Started,
@@ -1515,6 +1523,17 @@ pub async fn start_recording(
         }
     }
 
+    let instant_auth = if matches!(inputs.mode, RecordingMode::Instant) {
+        AuthStore::get(&app).ok().flatten()
+    } else {
+        None
+    };
+    if let Some(error) = recording_start_mode_error(inputs.mode, instant_auth.is_some()) {
+        state_mtx.write().await.clear_pending_recording();
+        notify_recording_start_failed(&app, error);
+        return Err(error.to_string());
+    }
+
     macro_rules! pending_try {
         ($expr:expr, $map_err:expr) => {
             match $expr {
@@ -1625,7 +1644,7 @@ pub async fn start_recording(
 
     let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
-            let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+            let Some(auth) = instant_auth else {
                 let error = "Please sign in to use instant recording".to_string();
                 state_mtx.write().await.clear_pending_recording();
                 notify_recording_start_failed(&app, &error);
@@ -4237,6 +4256,30 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn recording_start_preflight_requires_authentication_for_instant_recordings() {
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Instant, false),
+            Some("Please sign in to use instant recording")
+        );
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Instant, true),
+            None
+        );
+    }
+
+    #[test]
+    fn recording_start_preflight_preserves_studio_and_rejects_screenshot_modes() {
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Studio, false),
+            None
+        );
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Screenshot, true),
+            Some("Use take_screenshot for screenshots")
+        );
+    }
 
     fn click_event_with_state(time_ms: f64, down: bool) -> CursorClickEvent {
         CursorClickEvent {
