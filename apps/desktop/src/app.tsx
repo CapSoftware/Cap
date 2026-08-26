@@ -1,5 +1,9 @@
 import { Route, Router, useCurrentMatches } from "@solidjs/router";
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import {
+	focusManager,
+	QueryClient,
+	QueryClientProvider,
+} from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
@@ -124,6 +128,7 @@ export default function App() {
 function Inner() {
 	const currentWindow = getCurrentWebviewWindow();
 	createThemeListener(currentWindow);
+	createHiddenWindowQueryPause(currentWindow);
 
 	onMount(() => {
 		initAnonymousUser();
@@ -286,6 +291,35 @@ function prewarmFontCaches() {
 
 	if ("requestIdleCallback" in window) requestIdleCallback(warm);
 	else setTimeout(warm, 250);
+}
+
+function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
+	if (currentWindow.label !== "main") return;
+
+	let focusGeneration = 0;
+
+	const unlisteners = [
+		currentWindow.listen("main-window-hidden", () => {
+			focusManager.setFocused(false);
+		}),
+		currentWindow.onFocusChanged((event) => {
+			focusGeneration += 1;
+			if (event.payload) {
+				focusManager.setFocused(undefined);
+				return;
+			}
+
+			const generation = focusGeneration;
+			void currentWindow.isVisible().then((visible) => {
+				if (visible || generation !== focusGeneration) return;
+				focusManager.setFocused(false);
+			});
+		}),
+	];
+
+	onCleanup(() => {
+		for (const unlisten of unlisteners) void unlisten.then((fn) => fn());
+	});
 }
 
 function createThemeListener(currentWindow: WebviewWindow) {
