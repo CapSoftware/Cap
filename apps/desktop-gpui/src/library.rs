@@ -300,10 +300,7 @@ impl RecordingItem {
     /// there are no uploads in this app, so `MultipartUpload` /
     /// `SinglePartUpload` can never be the reason to keep polling.
     pub fn is_active(&self) -> bool {
-        matches!(
-            self.status,
-            RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-        )
+        self.status == RecordingStatus::InProgress
     }
 
     /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
@@ -339,7 +336,10 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
             },
             StudioRecordingMeta::SingleSegment { .. } => RecordingStatus::Complete,
         },
-        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: false }) => {
+            RecordingStatus::NeedsRemux
+        }
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true }) => {
             RecordingStatus::InProgress
         }
         RecordingMetaInner::Instant(InstantRecordingMeta::Failed { error }) => {
@@ -411,15 +411,30 @@ pub fn find_incomplete_recordings_in(
     list_recordings_in(dirs)
         .into_iter()
         .filter(|item| {
-            item.mode == RecordingMode::Studio
-                && matches!(
-                    item.status,
-                    RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-                )
-                && active_recording != Some(item.path.as_path())
-                && is_recording_after_recovery_cutoff(&item.pretty_name)
+            matches!(
+                item.status,
+                RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+            ) && active_recording != Some(item.path.as_path())
+                && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
         })
         .filter_map(|item| {
+            if item.mode == RecordingMode::Instant {
+                let display = item.path.join("content/display");
+                if !display.join("init.mp4").is_file() {
+                    return None;
+                }
+                let segment_count = std::fs::read_dir(display)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
+                    .count();
+                return (segment_count > 0).then_some(IncompleteRecordingItem {
+                    project_path: item.path,
+                    pretty_name: item.pretty_name,
+                    segment_count,
+                    estimated_duration_secs: 0.0,
+                });
+            }
             let incomplete = RecoveryManager::inspect_recording(&item.path)?;
             (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
                 project_path: item.path,
@@ -435,11 +450,15 @@ pub fn find_incomplete_recordings() -> Vec<IncompleteRecordingItem> {
     find_incomplete_recordings_in(&known_recordings_dirs(), None)
 }
 
-fn is_recording_after_recovery_cutoff(pretty_name: &str) -> bool {
+fn is_recording_after_recovery_cutoff(pretty_name: &str, sort_time_millis: f64) -> bool {
     let Some(date) = pretty_name
         .strip_prefix("Cap ")
         .and_then(|name| name.split(" at ").next())
         .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .or_else(|| {
+            chrono::DateTime::from_timestamp_millis(sort_time_millis as i64)
+                .map(|timestamp| timestamp.date_naive())
+        })
     else {
         return false;
     };
@@ -475,6 +494,10 @@ fn recover_incomplete_recording_in(
 
     let meta = RecordingMeta::load_for_project(&canonical_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
+    if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
+        return crate::recording::recover_instant_recording(&canonical_path)
+            .map_err(|error| format!("Could not save the instant recording: {error:#}"));
+    }
     let Some(studio) = meta.studio_meta() else {
         return Err("Only incomplete studio recordings can be recovered".to_string());
     };
@@ -487,6 +510,8 @@ fn recover_incomplete_recording_in(
 
     let incomplete = RecoveryManager::inspect_recording(&canonical_path)
         .ok_or_else(|| "No recoverable segments found".to_string())?;
+    crate::recording::ensure_finalization_storage(&canonical_path)
+        .map_err(|error| format!("{error:#}"))?;
     let recovered = RecoveryManager::recover(&incomplete)
         .map_err(|error| format!("Failed to recover recording: {error}"))?;
     let display = match &recovered.meta {
@@ -1241,6 +1266,16 @@ mod tests {
         dir
     }
 
+    fn complete_m4s_fragment() -> Vec<u8> {
+        let mut fragment = Vec::new();
+        for name in [b"moof", b"mdat"] {
+            fragment.extend_from_slice(&72u32.to_be_bytes());
+            fragment.extend_from_slice(name);
+            fragment.extend_from_slice(&[0; 64]);
+        }
+        fragment
+    }
+
     #[test]
     fn recents_are_newest_first_and_capped_at_nine() {
         let root = temp_dir("cap");
@@ -1470,7 +1505,10 @@ mod tests {
 
         let remux = by_name("Studio remux");
         assert_eq!(remux.status, RecordingStatus::NeedsRemux);
-        assert!(remux.is_active(), "NeedsRemux keeps the 2s poll running");
+        assert!(
+            !remux.is_active(),
+            "deferred finalization does not keep polling"
+        );
 
         let complete = by_name("Instant complete");
         assert_eq!(complete.mode, RecordingMode::Instant);
@@ -1511,9 +1549,10 @@ mod tests {
         );
         if fragments {
             let display = bundle.join("content/segments/segment-0/display");
+            let fragment = complete_m4s_fragment();
             std::fs::create_dir_all(&display).unwrap();
             std::fs::write(display.join("init.mp4"), vec![0u8; 128]).unwrap();
-            std::fs::write(display.join("segment_001.m4s"), vec![1u8; 256]).unwrap();
+            std::fs::write(display.join("segment_001.m4s"), &fragment).unwrap();
             std::fs::write(
                 display.join("manifest.json"),
                 serde_json::to_vec(&serde_json::json!({
@@ -1523,7 +1562,7 @@ mod tests {
                     "segments": [{
                         "path": "segment_001.m4s",
                         "is_complete": true,
-                        "file_size": 256
+                        "file_size": fragment.len()
                     }]
                 }))
                 .unwrap(),
@@ -1602,6 +1641,73 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_instant_recordings_are_recoverable_but_active_recordings_are_excluded() {
+        for recording in [false, true] {
+            let root = temp_dir("instant-storage-recovery");
+            let metadata = serde_json::json!({
+                "pretty_name": "Custom instant recording",
+                "sharing": null,
+                "recording": recording,
+            })
+            .to_string();
+            let bundle = write_bundle(&root, "deferred-instant", &metadata);
+            let display = bundle.join("content/display");
+            std::fs::create_dir_all(&display).unwrap();
+            std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+            let fragment = complete_m4s_fragment();
+            std::fs::write(display.join("segment_001.m4s"), &fragment).unwrap();
+            std::fs::write(
+                display.join("segment_002.m4s"),
+                &fragment[..fragment.len() - 1],
+            )
+            .unwrap();
+            let items = list_recordings_in(std::slice::from_ref(&root));
+            if !recording {
+                assert_eq!(items[0].status, RecordingStatus::NeedsRemux);
+                assert!(!items[0].is_active());
+            }
+            let recoverable = find_incomplete_recordings_in(std::slice::from_ref(&root), None);
+            assert_eq!(recoverable.len(), 1);
+            assert_eq!(recoverable[0].project_path, bundle);
+            assert_eq!(recoverable[0].segment_count, 1);
+            assert!(
+                find_incomplete_recordings_in(std::slice::from_ref(&root), Some(&bundle))
+                    .is_empty()
+            );
+            assert!(display.join("segment_001.m4s").is_file());
+            assert!(display.join("segment_002.m4s").is_file());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn interrupted_instant_recordings_with_only_partial_fragments_are_not_recoverable() {
+        let root = temp_dir("instant-partial-recovery");
+        let metadata = serde_json::json!({
+            "pretty_name": "Custom instant recording",
+            "sharing": null,
+            "recording": false,
+        })
+        .to_string();
+        let bundle = write_bundle(&root, "deferred-instant", &metadata);
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        let fragment = complete_m4s_fragment();
+        std::fs::write(
+            display.join("segment_001.m4s"),
+            &fragment[..fragment.len() - 1],
+        )
+        .unwrap();
+
+        let recoverable = find_incomplete_recordings_in(std::slice::from_ref(&root), None);
+
+        assert!(recoverable.is_empty());
+        assert!(display.join("segment_001.m4s").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn recovery_rejects_paths_outside_the_recording_library() {
         let root = temp_dir("recovery-path");
         let recordings = root.join("recordings");
@@ -1646,24 +1752,49 @@ mod tests {
             }
         }
 
+        let mut interrupted = RecordingMeta::load_for_project(&copy).unwrap();
+        if matches!(interrupted.inner, RecordingMetaInner::Instant(_)) {
+            interrupted.inner =
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true });
+            interrupted.save_for_project().unwrap();
+        }
+
         let dirs = std::slice::from_ref(&recordings);
         let found = find_incomplete_recordings_in(dirs, None);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].segment_count, 1);
+        assert!(found[0].segment_count > 0);
 
         let recovered = recover_incomplete_recording_in(dirs, &copy).unwrap();
         let meta = RecordingMeta::load_for_project(&recovered).unwrap();
 
-        assert!(matches!(
-            meta.studio_meta().unwrap().status(),
-            StudioRecordingStatus::Complete
-        ));
-        assert!(
-            recovered
-                .join("content/segments/segment-0/display.mp4")
-                .is_file()
-        );
-        assert!(recovered.join("project-config.json").is_file());
+        match &meta.inner {
+            RecordingMetaInner::Studio(studio) => {
+                assert!(matches!(studio.status(), StudioRecordingStatus::Complete));
+                assert!(
+                    recovered
+                        .join("content/segments/segment-0/display.mp4")
+                        .is_file()
+                );
+                assert!(recovered.join("project-config.json").is_file());
+            }
+            RecordingMetaInner::Instant(InstantRecordingMeta::Complete { fps, sample_rate }) => {
+                assert_eq!(*fps, 30);
+                assert_eq!(*sample_rate, Some(48_000));
+                let output = recovered.join("content/output.mp4");
+                assert!(output.is_file());
+                assert!(ffmpeg::format::input(&output).unwrap().duration() >= 2_900_000);
+                assert!(recovered.join("content/display/segment_001.m4s").is_file());
+                assert!(recovered.join("content/audio/segment_001.m4s").is_file());
+                let status = std::process::Command::new("ffmpeg")
+                    .args(["-v", "error", "-xerror", "-i"])
+                    .arg(output)
+                    .args(["-f", "null", "-"])
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+            _ => panic!("Recovery left incomplete metadata"),
+        }
         assert!(bundle_thumbnail_path(&recovered).is_file());
         assert!(find_incomplete_recordings_in(dirs, None).is_empty());
 

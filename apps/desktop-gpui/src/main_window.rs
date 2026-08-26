@@ -330,6 +330,7 @@ pub struct MainWindow {
     /// The app-wide recording session; the lifecycle itself lives there so the
     /// controls bar window can drive the same recording.
     session: Entity<RecordingSession>,
+    checking_storage: bool,
     /// The Recents scan, or `None` while the first one is in flight -- which
     /// is the query's `isLoading`, and draws the same three skeleton cards.
     recents: Option<Vec<RecentEntry>>,
@@ -405,7 +406,38 @@ impl MainWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, true);
-        cx.observe(&session, |_, _, cx| cx.notify()).detach();
+        let mut previous_phase = Phase::Idle;
+        cx.observe_in(&session, window, move |this, session, window, cx| {
+            let phase = session.read(cx).phase;
+            if phase == Phase::Idle && previous_phase != Phase::Idle {
+                this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
+                if let Some(notice) = session.read(cx).storage_notice.clone() {
+                    let main = cx.global::<app_windows::AppWindows>().main;
+                    cx.spawn(async move |_, cx| {
+                        let receiver = cx.update(|cx| {
+                            app_windows::show_main_window(cx);
+                            cx.activate(true);
+                            main.update(cx, |_, window, cx| {
+                                window.prompt(
+                                    gpui::PromptLevel::Warning,
+                                    "Low storage",
+                                    Some(&notice),
+                                    &[gpui::PromptButton::cancel("OK")],
+                                    cx,
+                                )
+                            })
+                        });
+                        if let Ok(receiver) = receiver {
+                            let _ = receiver.await;
+                        }
+                    })
+                    .detach();
+                }
+            }
+            previous_phase = phase;
+            cx.notify();
+        })
+        .detach();
 
         // Track the app-scoped feeds: the camera bubble's close button
         // deselects the camera there, and this window's selection has to
@@ -457,6 +489,7 @@ impl MainWindow {
             _search_events: search_events,
             enumerating: true,
             session,
+            checking_storage: false,
             recents: None,
             recents_task: None,
             library: None,
@@ -1010,6 +1043,17 @@ impl MainWindow {
         let Some(recording) = self.incomplete_recording.clone() else {
             return;
         };
+        if !recover
+            && !crate::platform::confirm_dialog(
+                "Cap",
+                "Are you sure you want to delete this recording?",
+                "Yes",
+                "No",
+                false,
+            )
+        {
+            return;
+        }
 
         self.recovery_pending = true;
         self.recovery_error = None;
@@ -1039,7 +1083,11 @@ impl MainWindow {
                         this.refresh_open_library(window, cx);
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
-                            cx.defer(move |cx| app_windows::open_editor(project_path, cx));
+                            if project_path.join("content/output.mp4").is_file() {
+                                cx.reveal_path(&project_path.join("content/output.mp4"));
+                            } else {
+                                cx.defer(move |cx| app_windows::open_editor(project_path, cx));
+                            }
                         }
                     }
                     Err(error) => {
@@ -1620,7 +1668,7 @@ impl MainWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.session.read(cx).phase != Phase::Idle {
+        if self.session.read(cx).phase != Phase::Idle || self.checking_storage {
             return;
         }
         // An armed editor recording target forces Studio before this window's
@@ -1670,7 +1718,104 @@ impl MainWindow {
             mic_feed,
         };
 
-        cx.defer(move |cx: &mut gpui::App| app_windows::begin_recording(config, cx));
+        self.start_recording_config(config, cx);
+    }
+
+    pub(crate) fn start_recording_config(
+        &mut self,
+        config: recording::StartConfig,
+        cx: &mut Context<Self>,
+    ) {
+        self.check_storage_before_start(config, false, cx);
+    }
+
+    fn check_storage_before_start(
+        &mut self,
+        config: recording::StartConfig,
+        acknowledged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.checking_storage || self.session.read(cx).phase != Phase::Idle {
+            return;
+        }
+        self.checking_storage = true;
+        let main = cx.global::<app_windows::AppWindows>().main;
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async {
+                recording::available_recording_storage()
+            }).await;
+            if !this.update(cx, |this, cx| {
+                if this.session.read(cx).phase != Phase::Idle {
+                    this.checking_storage = false;
+                    return false;
+                }
+                true
+            }).unwrap_or(false) {
+                return;
+            }
+            let storage = match result {
+                Ok(storage) => storage,
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.checking_storage = false;
+                        this.session.update(cx, |session, cx| {
+                            session.error = Some(format!("Could not check recording storage: {error}"));
+                            cx.notify();
+                        });
+                        cx.defer(app_windows::show_main_window);
+                        if this.session.read(cx).editor_recording_target().is_some() {
+                            cx.defer(app_windows::abort_editor_recording_flow);
+                        }
+                    }).ok();
+                    return;
+                }
+            };
+            let can_start = storage.status() != cap_utils::disk_space::DiskSpaceStatus::Exhausted;
+            if storage.status() == cap_utils::disk_space::DiskSpaceStatus::Ok || acknowledged && can_start {
+                this.update(cx, |this, cx| {
+                    this.checking_storage = false;
+                    cx.defer(move |cx| app_windows::begin_recording(config, cx));
+                }).ok();
+                return;
+            }
+            let available = storage.available_bytes as f64 / 1_073_741_824.0;
+            let detail = if can_start {
+                format!("Only {available:.2} GB is available on your recording drive. Cap will stop automatically if storage gets too low, preserving your recording.")
+            } else {
+                format!("Only {available:.2} GB is available on your recording drive. Free up space so at least 512 MB is available before recording.")
+            };
+            let buttons = if can_start {
+                vec![gpui::PromptButton::ok("Record anyway"), gpui::PromptButton::cancel("Go back")]
+            } else {
+                vec![gpui::PromptButton::cancel("OK")]
+            };
+            let receiver = cx.update(|cx| {
+                if RecordingSession::global(cx).read(cx).phase != Phase::Idle {
+                    return Err(anyhow::anyhow!("A recording has already started."));
+                }
+                app_windows::show_main_window(cx);
+                cx.activate(true);
+                main.update(cx, |_, window, cx| {
+                    window.prompt(gpui::PromptLevel::Warning, "Low storage", Some(&detail), &buttons, cx)
+                })
+            });
+            let confirmed = match receiver {
+                Ok(receiver) => receiver.await == Ok(0) && can_start,
+                Err(_) => false,
+            };
+            this.update(cx, |this, cx| {
+                this.checking_storage = false;
+                if this.session.read(cx).phase != Phase::Idle {
+                    return;
+                }
+                if confirmed {
+                    this.check_storage_before_start(config, true, cx);
+                } else if this.session.read(cx).editor_recording_target().is_some() {
+                    cx.defer(app_windows::abort_editor_recording_flow);
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
     }
 
     /// `await commands.focusWindow(target.id)` at the end of

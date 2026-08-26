@@ -114,6 +114,8 @@ impl ControlsWindow {
         let stopping = session.phase == Phase::Stopping;
         let label: SharedString = if starting {
             "Starting".into()
+        } else if stopping {
+            "Saving…".into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
@@ -373,6 +375,18 @@ impl Render for ControlsWindow {
             .font_family("Geist")
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
+            .when(self.session.read(cx).storage_warning, |this| {
+                this.child(
+                    div()
+                        .mb(px(8.))
+                        .rounded(px(8.))
+                        .bg(self.theme.red_2)
+                        .p(px(8.))
+                        .text_size(px(11.))
+                        .text_color(self.theme.red_11)
+                        .child("Low storage. Cap will stop soon to save your recording."),
+                )
+            })
             .child(self.render_bar(cx))
     }
 }
