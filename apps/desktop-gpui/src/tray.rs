@@ -38,6 +38,7 @@ const THUMBNAIL_SIZE: u32 = 32;
 
 /// `get_mode_icon(mode)`. Template images (`icon_as_template(true)`), so macOS
 /// tints them for the current menu-bar appearance.
+#[cfg(target_os = "macos")]
 fn mode_icon(mode: Mode) -> &'static [u8] {
     match mode {
         Mode::Studio => include_bytes!("../assets/tray/tray-default-icon-studio.png"),
@@ -47,6 +48,7 @@ fn mode_icon(mode: Mode) -> &'static [u8] {
 }
 
 /// `set_tray_stop_icon`.
+#[cfg(target_os = "macos")]
 const STOP_ICON: &[u8] = include_bytes!("../assets/tray/tray-stop-icon.png");
 
 // ---------------------------------------------------------------------------
@@ -1071,19 +1073,22 @@ mod mac {
 mod stub {
     use gpui::App;
 
-    use super::{Entry, PreviousItem};
+    use super::{Entry, PreviousItem, current_menu_entries, scan_previous};
 
     pub fn init(_cx: &mut App) {}
-    pub fn rebuild(_cx: &mut App) {}
     pub fn set_recording(_recording: bool, _cx: &mut App) {}
     pub fn mode_changed(_mode: crate::main_window::Mode, _cx: &mut App) {}
     pub fn refresh_previous(_cx: &mut App) {}
     pub fn refresh_menu(_cx: &mut App) {}
     pub fn previous_items(_cx: &App) -> Vec<PreviousItem> {
-        Vec::new()
+        scan_previous(false)
     }
-    pub fn menu_snapshot(_cx: &App) -> Vec<Entry> {
-        Vec::new()
+    pub fn menu_snapshot(cx: &App) -> Vec<Entry> {
+        current_menu_entries(
+            cx,
+            crate::main_window::Mode::from_store(),
+            &scan_previous(false),
+        )
     }
 }
 
