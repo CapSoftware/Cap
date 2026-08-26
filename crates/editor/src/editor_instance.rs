@@ -177,6 +177,48 @@ impl EditorInstance {
         frame_format: editor::EditorFrameFormat,
         audio_output: Arc<crate::AudioOutput>,
     ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            None,
+        )
+        .await
+    }
+
+    pub async fn new_with_preloaded_recordings(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        recordings: Arc<ProjectRecordingsMeta>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            Some(recordings),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        preloaded_recordings: Option<Arc<ProjectRecordingsMeta>>,
+    ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
         }
@@ -347,10 +389,30 @@ impl EditorInstance {
             audio_output.prewarm();
         }
 
-        let recordings = Arc::new(ProjectRecordingsMeta::new(
-            &recording_meta.project_path,
-            meta.as_ref(),
-        )?);
+        let music_cache = Arc::new(std::sync::Mutex::new(crate::MusicTracks::new()));
+        if has_music {
+            let project = project.clone();
+            let project_path = project_path.clone();
+            let cache = Arc::clone(&music_cache);
+            tokio::task::spawn_blocking(move || {
+                let mut cache = cache
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                drop(crate::load_music_tracks(
+                    &project,
+                    &project_path,
+                    &mut cache,
+                ));
+            });
+        }
+
+        let recordings = match preloaded_recordings {
+            Some(recordings) => recordings,
+            None => Arc::new(ProjectRecordingsMeta::new(
+                &recording_meta.project_path,
+                meta.as_ref(),
+            )?),
+        };
 
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
@@ -403,7 +465,7 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
-            music_cache: Arc::new(std::sync::Mutex::new(crate::MusicTracks::new())),
+            music_cache,
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,

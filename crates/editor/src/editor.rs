@@ -85,7 +85,7 @@ pub fn start_renderer_layers_creation(
     let constants = render_constants.clone();
     let use_svg = project.cursor.use_svg;
     let cursor_type = project.cursor.cursor_type().clone();
-    std::thread::Builder::new()
+    if let Err(error) = std::thread::Builder::new()
         .name("renderer-layers-init".into())
         .spawn(move || {
             let mut layers = RendererLayers::new_with_options(
@@ -96,7 +96,9 @@ pub fn start_renderer_layers_creation(
             layers.preload_cursor_assets(&constants, use_svg, &cursor_type);
             let _ = layers_tx.send(layers);
         })
-        .expect("failed to spawn renderer layers init thread");
+    {
+        tracing::warn!(%error, "renderer layer initialization thread unavailable; initializing inline");
+    }
     layers_rx
 }
 
@@ -193,7 +195,7 @@ impl Renderer {
         let mut layers = match layers_rx.await {
             Ok(layers) => layers,
             Err(_) => {
-                tracing::error!("Failed to receive pre-created renderer layers, creating inline");
+                tracing::warn!("Failed to receive pre-created renderer layers, creating inline");
                 let mut layers = RendererLayers::new_with_options(
                     &render_constants.device,
                     &render_constants.queue,
