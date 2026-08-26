@@ -7,8 +7,9 @@
 //! runs on the tokio runtime (`gpui_tokio`), never on gpui's main thread --
 //! kameo actors and the capture pipeline both assume tokio.
 
+use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, anyhow};
 use cap_recording::{
@@ -144,14 +145,22 @@ impl ActiveRecording {
         Ok(())
     }
 
-    pub async fn stop(self) -> anyhow::Result<PathBuf> {
+    pub async fn stop(self, preserve_local: bool) -> anyhow::Result<PathBuf> {
         let mut instant_upload = self.instant_upload;
         match self.handle {
             Handle::Studio(handle) => {
                 let completed = handle.stop().await?;
                 let project_path = completed.project_path.clone();
+                let needs_remux = matches!(
+                    completed.meta.status(),
+                    cap_project::StudioRecordingStatus::NeedsRemux
+                );
                 tokio::task::spawn_blocking(move || {
+                    if needs_remux {
+                        ensure_finalization_storage(&project_path)?;
+                    }
                     cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+                        .map_err(anyhow::Error::from)
                 })
                 .await
                 .context("studio finalize task")?
@@ -175,100 +184,249 @@ impl ActiveRecording {
                 Ok(completed.project_path)
             }
             Handle::Instant(handle) => {
-                let completed = handle.stop().await?;
-                let project_path = completed.project_path.clone();
-                let upload = instant_upload
-                    .as_mut()
-                    .ok_or_else(|| anyhow!("instant recording has no upload session"))?;
-                let segmented = upload.is_segmented();
-                let segment_upload_result = upload.finish_segments().await;
-
-                let display_dir = project_path.join("content/display");
-                let audio_dir = project_path.join("content/audio");
-                let output_path = project_path.join("content/output.mp4");
-                if display_dir.is_dir() {
-                    let muxed = output_path.clone();
-                    tokio::task::spawn_blocking(move || {
-                        cap_recording::recovery::RecoveryManager::finalize_instant_output(
-                            &display_dir,
-                            &audio_dir,
-                            &muxed,
-                        )
-                    })
-                    .await
-                    .context("instant finalize task")?
-                    .context("instant finalize")?;
-                } else if !output_path.is_file() {
-                    return Err(anyhow!("instant recording has no finalized output"));
-                }
-
-                persist_instant_meta(&completed, upload.video())?;
-
-                // The Tauri app builds the instant thumbnail by concatenating
-                // `content/display`'s init segment with the first media
-                // segment (`create_screenshot_source_from_segments`); by this
-                // point `finalize_instant_output` has already muxed the whole
-                // thing into `content/output.mp4`, which is the same first
-                // frame without the temporary file. The blur bridge is *not*
-                // applied here: `project_config_from_recording` is the studio
-                // arm of `handle_recording_finish` only.
-                let project_path = completed.project_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    write_bundle_thumbnail(&project_path, &output_path);
-                })
-                .await
-                .context("instant thumbnail task")?;
-
-                if let Err(error) = segment_upload_result {
-                    persist_instant_upload_failure(&completed.project_path, &error)?;
-                    return Err(anyhow!(error));
-                }
-
-                let upload_result = if segmented {
-                    upload.finish_screenshot(&completed.project_path).await
-                } else {
-                    crate::upload::upload_exported_video(
-                        completed.project_path.clone(),
-                        None,
-                        |_| {},
-                        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    )
-                    .await
-                    .and_then(|result| match result {
-                        crate::upload::UploadResult::Success(_) => Ok(()),
-                        crate::upload::UploadResult::NotAuthenticated => Err(
-                            "Your session has expired. Please sign in again to upload this recording."
-                                .to_string(),
-                        ),
-                        crate::upload::UploadResult::UpgradeRequired => {
-                            Err("Instant recording requires an upgraded plan.".to_string())
+                let result = async {
+                    let stopped = handle.stop().await;
+                    let metadata_result = match instant_upload.as_ref() {
+                        Some(upload) => {
+                            mark_instant_recording_stopped(&self.project_dir, upload.metadata_lock())
                         }
-                    })
-                };
-                if let Err(error) = upload_result {
-                    persist_instant_upload_failure(&completed.project_path, &error)?;
-                    return Err(anyhow!(error));
-                }
+                        None => Err(anyhow!("instant recording has no upload session")),
+                    };
+                    if let Err(error) = &metadata_result {
+                        tracing::warn!(%error, "Could not mark the instant recording as stopped");
+                    }
+                    let completed = stopped?;
+                    metadata_result?;
+                    let project_path = completed.project_path.clone();
+                    let upload = instant_upload
+                        .as_mut()
+                        .ok_or_else(|| anyhow!("instant recording has no upload session"))?;
+                    let segmented = upload.is_segmented();
 
-                let mut meta =
-                    cap_project::RecordingMeta::load_for_project(&completed.project_path)
-                        .map_err(|error| anyhow!("loading instant recording metadata: {error}"))?;
-                meta.upload = Some(cap_project::UploadMeta::Complete);
-                meta.save_for_project()
-                    .map_err(|error| anyhow!("saving completed instant upload: {error}"))?;
-
-                if crate::store::GeneralSettings::load().delete_instant_recordings_after_upload {
-                    let directory = completed.project_path.clone();
-                    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(directory))
+                    let display_dir = project_path.join("content/display");
+                    let audio_dir = project_path.join("content/audio");
+                    let output_path = project_path.join("content/output.mp4");
+                    if display_dir.is_dir() {
+                        let muxed = output_path.clone();
+                        let project_path = project_path.clone();
+                        tokio::task::spawn_blocking(move || {
+                            ensure_finalization_storage(&project_path)?;
+                            cap_recording::recovery::RecoveryManager::finalize_instant_output(
+                                &display_dir,
+                                &audio_dir,
+                                &muxed,
+                            )
+                            .map_err(anyhow::Error::from)
+                        })
                         .await
-                        .context("instant upload cleanup task")?
-                        .context("deleting uploaded instant recording")?;
-                }
+                        .context("instant finalize task")?
+                        .context("instant finalize")?;
+                    } else if !output_path.is_file() {
+                        return Err(anyhow!("instant recording has no finalized output"));
+                    }
 
-                Ok(completed.project_path)
+                    persist_instant_meta(&completed, upload.video(), upload.metadata_lock())?;
+
+                    // The Tauri app builds the instant thumbnail by concatenating
+                    // `content/display`'s init segment with the first media
+                    // segment (`create_screenshot_source_from_segments`); by this
+                    // point `finalize_instant_output` has already muxed the whole
+                    // thing into `content/output.mp4`, which is the same first
+                    // frame without the temporary file. The blur bridge is *not*
+                    // applied here: `project_config_from_recording` is the studio
+                    // arm of `handle_recording_finish` only.
+                    let project_path = completed.project_path.clone();
+                    tokio::task::spawn_blocking(move || {
+                        write_bundle_thumbnail(&project_path, &output_path);
+                    })
+                    .await
+                    .context("instant thumbnail task")?;
+
+                    if let Err(error) = upload.finish_segments().await {
+                        persist_instant_upload_failure(
+                            &completed.project_path,
+                            &error,
+                            upload.metadata_lock(),
+                        )?;
+                        return Err(anyhow!(error));
+                    }
+
+                    let upload_result = if segmented {
+                        upload.finish_screenshot(&completed.project_path).await
+                    } else {
+                        crate::upload::upload_exported_video(
+                            completed.project_path.clone(),
+                            None,
+                            |_| {},
+                            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                        )
+                        .await
+                        .and_then(|result| match result {
+                            crate::upload::UploadResult::Success(_) => Ok(()),
+                            crate::upload::UploadResult::NotAuthenticated => Err(
+                                "Your session has expired. Please sign in again to upload this recording."
+                                    .to_string(),
+                            ),
+                            crate::upload::UploadResult::UpgradeRequired => {
+                                Err("Instant recording requires an upgraded plan.".to_string())
+                            }
+                        })
+                    };
+                    if let Err(error) = upload_result {
+                        persist_instant_upload_failure(
+                            &completed.project_path,
+                            &error,
+                            upload.metadata_lock(),
+                        )?;
+                        return Err(anyhow!(error));
+                    }
+
+                    persist_instant_upload_complete(&completed.project_path, upload.metadata_lock())?;
+
+                    if !preserve_local
+                        && crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
+                    {
+                        let directory = completed.project_path.clone();
+                        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(directory))
+                            .await
+                            .context("instant upload cleanup task")?
+                            .context("deleting uploaded instant recording")?;
+                    }
+
+                    Ok(completed.project_path)
+                }
+                .await;
+                if result.is_err()
+                    && let Some(upload) = instant_upload.as_mut()
+                {
+                    upload.abort_segments().await;
+                }
+                result
             }
         }
     }
+}
+
+fn with_instant_metadata_lock<T>(
+    metadata_lock: &Mutex<()>,
+    update: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let _guard = metadata_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    update()
+}
+
+fn save_instant_metadata(meta: &cap_project::RecordingMeta) -> anyhow::Result<()> {
+    let contents = serde_json::to_vec_pretty(meta)?;
+    write_instant_metadata(&meta.project_path, |file| file.write_all(&contents))
+}
+
+fn write_instant_metadata(
+    project_path: &std::path::Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    let temporary = project_path.join(format!(
+        ".recording-meta-{}.tmp",
+        crate::store::new_uuid_v4()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| {
+        write(&mut file)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, project_path.join("recording-meta.json"))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.context("saving instant recording metadata")
+}
+
+fn mark_instant_recording_stopped(
+    project_path: &std::path::Path,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
+    with_instant_metadata_lock(metadata_lock, || {
+        let mut meta = cap_project::RecordingMeta::load_for_project(project_path)
+            .map_err(|error| anyhow!("loading recording metadata: {error}"))?;
+        meta.inner = cap_project::RecordingMetaInner::Instant(
+            cap_project::InstantRecordingMeta::InProgress { recording: false },
+        );
+        save_instant_metadata(&meta)?;
+        Ok(())
+    })
+}
+
+pub fn available_recording_storage() -> std::io::Result<cap_utils::disk_space::RecordingStorage> {
+    Ok(cap_utils::disk_space::RecordingStorage {
+        available_bytes: cap_utils::disk_space::free_bytes_for_path(&recordings_dir())?,
+        recording_bytes: 0,
+    })
+}
+
+pub(crate) fn ensure_finalization_storage(project_path: &std::path::Path) -> anyhow::Result<()> {
+    let storage = cap_utils::disk_space::recording_storage(project_path)
+        .context("checking storage before saving the recording")?;
+    if !storage.can_finalize() {
+        return Err(anyhow!(
+            "Low storage. Your recording files are preserved at {}. Free up space, then recover the recording in Cap.",
+            project_path.display()
+        ));
+    }
+    Ok(())
+}
+
+pub fn recover_instant_recording(project_path: &std::path::Path) -> anyhow::Result<PathBuf> {
+    use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner};
+
+    let mut meta = RecordingMeta::load_for_project(project_path)
+        .map_err(|error| anyhow!("loading recording metadata: {error}"))?;
+    if !matches!(
+        meta.inner,
+        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
+    ) {
+        return Err(anyhow!(
+            "This instant recording is not waiting to be saved."
+        ));
+    }
+    ensure_finalization_storage(project_path)?;
+    let output = project_path.join("content/output.mp4");
+    cap_recording::recovery::RecoveryManager::finalize_instant_output(
+        &project_path.join("content/display"),
+        &project_path.join("content/audio"),
+        &output,
+    )?;
+    let input = ffmpeg::format::input(&output)?;
+    let video = input
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or_else(|| anyhow!("The recovered recording has no video track."))?;
+    let fps = f64::from(video.avg_frame_rate());
+    if !fps.is_finite() || fps <= 0.0 {
+        return Err(anyhow!(
+            "The recovered recording has an invalid frame rate."
+        ));
+    }
+    let sample_rate = input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .map(|audio| {
+            ffmpeg::codec::context::Context::from_parameters(audio.parameters())
+                .and_then(|context| context.decoder().audio())
+                .map(|decoder| decoder.rate())
+        })
+        .transpose()?;
+    meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+        fps: fps.round() as u32,
+        sample_rate,
+    });
+    save_instant_metadata(&meta)?;
+    write_bundle_thumbnail(project_path, &output);
+    Ok(project_path.to_path_buf())
 }
 
 /// The first segment's display track, which is what
@@ -433,103 +591,124 @@ pub fn apply_camera_blur_to_project_config(
 fn persist_instant_meta(
     completed: &instant_recording::CompletedRecording,
     upload: &cap_project::VideoUploadInfo,
+    metadata_lock: &Mutex<()>,
 ) -> anyhow::Result<()> {
-    use cap_project::{
-        InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    };
+    with_instant_metadata_lock(metadata_lock, || {
+        use cap_project::{
+            InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+        };
 
-    let pretty_name = completed
-        .project_path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Cap Recording")
-        .to_string();
-    let meta = match &completed.meta {
-        InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
-            error: "instant recording stopped before completion".to_string(),
-        },
-        other => other.clone(),
-    };
+        let pretty_name = completed
+            .project_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Cap Recording")
+            .to_string();
+        let meta = match &completed.meta {
+            InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
+                error: "instant recording stopped before completion".to_string(),
+            },
+            other => other.clone(),
+        };
 
-    let previous_upload = RecordingMeta::load_for_project(&completed.project_path)
-        .ok()
-        .and_then(|meta| meta.upload);
+        let previous_upload = RecordingMeta::load_for_project(&completed.project_path)
+            .ok()
+            .and_then(|meta| meta.upload);
 
-    RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: completed.project_path.clone(),
-        pretty_name,
-        sharing: Some(cap_project::SharingMeta {
-            id: upload.id.clone(),
-            link: upload.link.clone(),
-            content_hash: None,
-        }),
-        inner: RecordingMetaInner::Instant(meta),
-        upload: previous_upload,
-    }
-    .save_for_project()
-    .map_err(|e| anyhow!("saving instant recording meta: {e}"))?;
+        let meta = RecordingMeta {
+            platform: Some(Platform::default()),
+            project_path: completed.project_path.clone(),
+            pretty_name,
+            sharing: Some(cap_project::SharingMeta {
+                id: upload.id.clone(),
+                link: upload.link.clone(),
+                content_hash: None,
+            }),
+            inner: RecordingMetaInner::Instant(meta),
+            upload: previous_upload,
+        };
+        save_instant_metadata(&meta)?;
 
-    ProjectConfiguration::default()
-        .write(&completed.project_path)
-        .map_err(|e| anyhow!("saving instant project config: {e}"))?;
-    Ok(())
+        ProjectConfiguration::default()
+            .write(&completed.project_path)
+            .map_err(|e| anyhow!("saving instant project config: {e}"))?;
+        Ok(())
+    })
 }
 
-fn persist_instant_upload_failure(
+pub(crate) fn persist_instant_upload_failure(
     project_path: &std::path::Path,
     error: &str,
+    metadata_lock: &Mutex<()>,
 ) -> anyhow::Result<()> {
-    let mut meta = cap_project::RecordingMeta::load_for_project(project_path)
-        .map_err(|load_error| anyhow!("loading failed instant recording metadata: {load_error}"))?;
-    meta.upload = Some(cap_project::UploadMeta::Failed {
-        error: error.to_string(),
-    });
-    meta.save_for_project()
-        .map_err(|save_error| anyhow!("saving failed instant upload: {save_error}"))?;
-    Ok(())
+    with_instant_metadata_lock(metadata_lock, || {
+        let mut meta =
+            cap_project::RecordingMeta::load_for_project(project_path).map_err(|load_error| {
+                anyhow!("loading failed instant recording metadata: {load_error}")
+            })?;
+        meta.upload = Some(cap_project::UploadMeta::Failed {
+            error: error.to_string(),
+        });
+        save_instant_metadata(&meta)?;
+        Ok(())
+    })
+}
+
+fn persist_instant_upload_complete(
+    project_path: &std::path::Path,
+    metadata_lock: &Mutex<()>,
+) -> anyhow::Result<()> {
+    with_instant_metadata_lock(metadata_lock, || {
+        let mut meta = cap_project::RecordingMeta::load_for_project(project_path)
+            .map_err(|error| anyhow!("loading instant recording metadata: {error}"))?;
+        meta.upload = Some(cap_project::UploadMeta::Complete);
+        save_instant_metadata(&meta)?;
+        Ok(())
+    })
 }
 
 fn persist_in_progress_instant_meta(
     project_path: &std::path::Path,
     video: &cap_project::VideoUploadInfo,
     segmented: bool,
+    metadata_lock: &Mutex<()>,
 ) -> anyhow::Result<()> {
-    let upload = if segmented {
-        cap_project::UploadMeta::SegmentUpload {
-            video_id: video.id.clone(),
-            pre_created_video: video.clone(),
-            recording_dir: project_path.to_path_buf(),
-        }
-    } else {
-        cap_project::UploadMeta::MultipartUpload {
-            video_id: video.id.clone(),
-            file_path: project_path.join("content/output.mp4"),
-            pre_created_video: video.clone(),
-            recording_dir: project_path.to_path_buf(),
-        }
-    };
-    let pretty_name = project_path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Cap Recording")
-        .to_string();
+    with_instant_metadata_lock(metadata_lock, || {
+        let upload = if segmented {
+            cap_project::UploadMeta::SegmentUpload {
+                video_id: video.id.clone(),
+                pre_created_video: video.clone(),
+                recording_dir: project_path.to_path_buf(),
+            }
+        } else {
+            cap_project::UploadMeta::MultipartUpload {
+                video_id: video.id.clone(),
+                file_path: project_path.join("content/output.mp4"),
+                pre_created_video: video.clone(),
+                recording_dir: project_path.to_path_buf(),
+            }
+        };
+        let pretty_name = project_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Cap Recording")
+            .to_string();
 
-    cap_project::RecordingMeta {
-        platform: Some(cap_project::Platform::default()),
-        project_path: project_path.to_path_buf(),
-        pretty_name,
-        sharing: None,
-        inner: cap_project::RecordingMetaInner::Instant(
-            cap_project::InstantRecordingMeta::InProgress { recording: true },
-        ),
-        upload: Some(upload),
-    }
-    .save_for_project()
-    .map_err(|error| anyhow!("saving in-progress instant recording metadata: {error}"))?;
-    Ok(())
+        let meta = cap_project::RecordingMeta {
+            platform: Some(cap_project::Platform::default()),
+            project_path: project_path.to_path_buf(),
+            pretty_name,
+            sharing: None,
+            inner: cap_project::RecordingMetaInner::Instant(
+                cap_project::InstantRecordingMeta::InProgress { recording: true },
+            ),
+            upload: Some(upload),
+        };
+        save_instant_metadata(&meta)?;
+        Ok(())
+    })
 }
 
 pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
@@ -770,10 +949,21 @@ async fn start_attempt_with_upload(
             let video = pre_created_video
                 .ok_or_else(|| anyhow!("instant recording has no reserved upload"))?;
             let segment_rx = handle.take_segment_rx();
-            persist_in_progress_instant_meta(&project_dir, &video, segment_rx.is_some())?;
+            let metadata_lock = Arc::new(Mutex::new(()));
+            persist_in_progress_instant_meta(
+                &project_dir,
+                &video,
+                segment_rx.is_some(),
+                &metadata_lock,
+            )?;
             instant_upload = Some(
-                crate::upload::start_instant_upload(video, project_dir.clone(), segment_rx)
-                    .map_err(anyhow::Error::msg)?,
+                crate::upload::start_instant_upload(
+                    video,
+                    project_dir.clone(),
+                    segment_rx,
+                    metadata_lock,
+                )
+                .map_err(anyhow::Error::msg)?,
             );
             Handle::Instant(handle)
         }
@@ -970,21 +1160,21 @@ fn create_project_dir(
         .with_context(|| format!("creating recordings dir {}", base.display()))?;
 
     match cap_utils::disk_space::free_bytes_for_path(&base) {
-        Ok(bytes) if bytes <= cap_utils::disk_space::LOW_DISK_STOP_BYTES => {
+        Ok(bytes) if bytes <= cap_utils::disk_space::RECORDING_DISK_RESERVE_BYTES => {
             return Err(anyhow!(
-                "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
+                "Low storage: only {:.2} GB is available. Free up at least {} MB before recording.",
                 bytes as f64 / 1_073_741_824.0,
-                cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024)
+                cap_utils::disk_space::RECORDING_DISK_RESERVE_BYTES / (1024 * 1024)
             ));
         }
-        Ok(bytes) if bytes <= cap_utils::disk_space::LOW_DISK_WARN_BYTES => {
+        Ok(bytes) if bytes <= cap_utils::disk_space::RECORDING_DISK_WARN_BYTES => {
             tracing::warn!(
                 bytes_remaining = bytes,
                 "Starting recording with low disk space"
             );
         }
         Ok(_) => {}
-        Err(error) => tracing::warn!("Failed to check disk space before recording: {error}"),
+        Err(error) => return Err(anyhow!("Could not check recording storage: {error}")),
     }
 
     let target_name = target.title().unwrap_or_else(|| "Unknown".into());
@@ -1071,6 +1261,7 @@ mod tests {
     use crate::store::BlurMode;
     use chrono::TimeZone as _;
     use serde_json::Value;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn recording_project_names_honor_mode_target_and_custom_datetime_formats() {
@@ -1124,6 +1315,128 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn stopped_instant_metadata_preserves_recovery_and_upload_state() {
+        let dir = temp_project("instant-stopped");
+        std::fs::write(
+            dir.join("recording-meta.json"),
+            r#"{"pretty_name":"Storage test","sharing":null,"recording":true,"upload":{"state":"Failed","error":"offline"}}"#,
+        )
+        .unwrap();
+        mark_instant_recording_stopped(&dir, &std::sync::Mutex::new(())).unwrap();
+        let meta = cap_project::RecordingMeta::load_for_project(&dir).unwrap();
+        assert!(matches!(
+            meta.inner,
+            cap_project::RecordingMetaInner::Instant(
+                cap_project::InstantRecordingMeta::InProgress { recording: false }
+            )
+        ));
+        assert!(matches!(
+            meta.upload,
+            Some(cap_project::UploadMeta::Failed { error }) if error == "offline"
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_instant_metadata_write_preserves_the_previous_recording_state() {
+        let dir = temp_project("instant-metadata-write-failure");
+        let original = br#"{"pretty_name":"Storage test","sharing":null,"recording":true}"#;
+        let path = dir.join("recording-meta.json");
+        std::fs::write(&path, original).unwrap();
+
+        let result = write_instant_metadata(&dir, |file| {
+            std::io::Write::write_all(file, b"{partial")?;
+            Err(std::io::Error::other("simulated disk full"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_instant_metadata_updates_stay_valid_and_recoverable() {
+        for finalized in [false, true] {
+            let dir = temp_project("instant-metadata-race");
+            let initial = serde_json::json!({
+                "pretty_name": "Race test",
+                "sharing": null,
+                "recording": true,
+                "upload": { "state": "Failed", "error": "old" },
+            });
+            std::fs::write(
+                dir.join("recording-meta.json"),
+                serde_json::to_vec(&initial).unwrap(),
+            )
+            .unwrap();
+
+            let metadata_lock = Arc::new(std::sync::Mutex::new(()));
+            let barrier = Arc::new(Barrier::new(2));
+            let stopped_dir = dir.clone();
+            let stopped_lock = metadata_lock.clone();
+            let stopped_barrier = barrier.clone();
+            let failed_dir = dir.clone();
+            let failed_lock = metadata_lock.clone();
+            let failed_barrier = barrier.clone();
+            std::thread::scope(|scope| {
+                let stopped = scope.spawn(move || {
+                    stopped_barrier.wait();
+                    if finalized {
+                        let completed = instant_recording::CompletedRecording {
+                            project_path: stopped_dir,
+                            display_source: ScreenCaptureTarget::CameraOnly,
+                            meta: cap_project::InstantRecordingMeta::Complete {
+                                fps: 30,
+                                sample_rate: Some(48_000),
+                            },
+                            health: cap_recording::RecordingHealth::Healthy,
+                        };
+                        let video = cap_project::VideoUploadInfo {
+                            id: "test".into(),
+                            link: "https://example.invalid/s/test".into(),
+                            config: cap_project::S3UploadMeta { id: "test".into() },
+                        };
+                        persist_instant_meta(&completed, &video, &stopped_lock)
+                    } else {
+                        mark_instant_recording_stopped(&stopped_dir, &stopped_lock)
+                    }
+                });
+                let failed = scope.spawn(move || {
+                    failed_barrier.wait();
+                    persist_instant_upload_failure(&failed_dir, "offline", &failed_lock)
+                });
+                stopped.join().unwrap().unwrap();
+                failed.join().unwrap().unwrap();
+            });
+
+            let meta = cap_project::RecordingMeta::load_for_project(&dir).unwrap();
+            assert!(matches!(
+                (finalized, meta.inner),
+                (
+                    false,
+                    cap_project::RecordingMetaInner::Instant(
+                        cap_project::InstantRecordingMeta::InProgress { recording: false },
+                    )
+                ) | (
+                    true,
+                    cap_project::RecordingMetaInner::Instant(
+                        cap_project::InstantRecordingMeta::Complete {
+                            fps: 30,
+                            sample_rate: Some(48_000)
+                        },
+                    )
+                )
+            ));
+            assert!(matches!(
+                meta.upload,
+                Some(cap_project::UploadMeta::Failed { error }) if error == "offline"
+            ));
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     /// The bridge writes exactly `camera.backgroundBlur.mode` and nothing else

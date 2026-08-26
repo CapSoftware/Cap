@@ -16,27 +16,30 @@ import { faFileSignature } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import {
+	confirmSignedBaaPayment,
 	getSignedBaaStatus,
 	purchaseSignedBaa,
+	type SignedBaaInput,
 	type SignedBaaStatus,
+	signPaidBaa,
 } from "@/actions/organization/signed-baa";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SignaturePad } from "./SignaturePad";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-type FormState = {
-	entityName: string;
-	entityType: string;
-	entityAddress: string;
-	signerName: string;
-	signerTitle: string;
-	noticesEmail: string;
-};
+type FormState = Omit<SignedBaaInput, "signatureDataUrl">;
 
 const EMPTY_FORM: FormState = {
 	entityName: "",
@@ -48,17 +51,41 @@ const EMPTY_FORM: FormState = {
 };
 
 export function SignedBaaCard() {
+	const { activeOrganization } = useDashboardContext();
+
+	return (
+		<Suspense
+			fallback={<div className="h-32 rounded-xl animate-pulse bg-gray-4" />}
+		>
+			<SignedBaaCardContent key={activeOrganization?.organization.id} />
+		</Suspense>
+	);
+}
+
+function SignedBaaCardContent() {
 	const { activeOrganization, user } = useDashboardContext();
 	const router = useRouter();
+	const searchParams = useSearchParams();
 	const queryClient = useQueryClient();
 	const organizationId = activeOrganization?.organization.id;
+	const isBaaRedirect = searchParams.get("baaRedirect") === "true";
+	const sessionId = searchParams.get("session_id");
 	const fieldIdPrefix = useId();
+	const handledSessionId = useRef<string | null>(null);
 
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [form, setForm] = useState<FormState>(EMPTY_FORM);
-	const [signature, setSignature] = useState<string | null>(null);
+	const [signature, setSignature] = useState<{
+		paid: boolean;
+		dataUrl: string;
+	} | null>(null);
 
-	const { data: baa, isLoading } = useQuery<SignedBaaStatus | null>({
+	const {
+		data: baa,
+		isLoading,
+		isError: statusFailed,
+		refetch: refetchStatus,
+	} = useQuery<SignedBaaStatus | null>({
 		queryKey: ["signed-baa", organizationId],
 		queryFn: () => {
 			if (!organizationId) return null;
@@ -66,16 +93,72 @@ export function SignedBaaCard() {
 		},
 		enabled: !!organizationId,
 		staleTime: 60 * 1000,
+		refetchInterval: (query) =>
+			query.state.data?.status === "processing" ? 3000 : false,
 	});
 
-	const purchaseMutation = useMutation({
+	const paymentConfirmation = useQuery({
+		queryKey: ["signed-baa-payment", organizationId, sessionId],
+		queryFn: async () => {
+			if (!organizationId || !sessionId) {
+				throw new Error("The payment confirmation link is incomplete.");
+			}
+			const result = await confirmSignedBaaPayment(organizationId, sessionId);
+			if (result.status === "none" || result.status === "canceled") {
+				throw new Error("Your BAA payment could not be confirmed.");
+			}
+			const queryKey = ["signed-baa", organizationId];
+			await queryClient.cancelQueries({ queryKey, exact: true });
+			queryClient.setQueryData(queryKey, result);
+			await queryClient.invalidateQueries({ queryKey, exact: true });
+			return result;
+		},
+		enabled: isBaaRedirect && !!organizationId && !!sessionId,
+		retry: false,
+		refetchOnWindowFocus: false,
+		refetchOnReconnect: false,
+		gcTime: 0,
+	});
+
+	const verificationPending =
+		isBaaRedirect &&
+		!!sessionId &&
+		(paymentConfirmation.isPending || paymentConfirmation.isFetching);
+	const verificationError = isBaaRedirect
+		? !sessionId
+			? "The payment confirmation link is incomplete. Reopen the link from checkout or contact hello@cap.so."
+			: paymentConfirmation.error?.message
+		: null;
+	const verificationBlocked =
+		isBaaRedirect &&
+		(!sessionId || !paymentConfirmation.isSuccess || verificationPending);
+	const isActive = baa?.status === "active";
+	const isPaid = baa?.status === "paid";
+	const signatureDataUrl =
+		signature?.paid === isPaid ? signature.dataUrl : null;
+	const isProcessing = baa?.status === "processing";
+	const canPurchase = Boolean(baa?.canPurchase);
+	const actionsBlocked =
+		!organizationId ||
+		isLoading ||
+		statusFailed ||
+		verificationBlocked ||
+		isProcessing ||
+		isActive ||
+		(!isPaid && !canPurchase);
+
+	const signatureMutation = useMutation({
 		mutationFn: () => {
 			if (!organizationId) throw new Error("No organization");
-			if (!signature) throw new Error("Please add your signature");
-			return purchaseSignedBaa(organizationId, {
+			if (actionsBlocked) throw new Error("Please wait for your BAA status.");
+			if (!signatureDataUrl) throw new Error("Please add your signature");
+			const input = {
 				...form,
-				signatureDataUrl: signature,
-			});
+				signatureDataUrl,
+			};
+			return isPaid
+				? signPaidBaa(organizationId, input)
+				: purchaseSignedBaa(organizationId, input);
 		},
 		onSuccess: (result) => {
 			toast.success(
@@ -92,27 +175,64 @@ export function SignedBaaCard() {
 			router.refresh();
 		},
 		onError: (error) => {
+			queryClient.invalidateQueries({
+				queryKey: ["signed-baa", organizationId],
+			});
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to complete the Signed BAA purchase",
+					: "Failed to complete your Signed BAA",
 			);
 		},
 	});
 
-	const isActive = baa?.status === "active";
-	const canPurchase = Boolean(baa?.canPurchase);
-
-	const openDialog = () => {
-		setForm((current) => ({
-			...current,
+	const openDialog = useCallback(() => {
+		setForm({
+			...(baa?.details ?? EMPTY_FORM),
 			signerName:
-				current.signerName ||
+				baa?.details?.signerName ||
 				[user.name, user.lastName].filter(Boolean).join(" "),
-			noticesEmail: current.noticesEmail || user.email,
-		}));
+			noticesEmail: baa?.details?.noticesEmail || user.email,
+		});
+		setSignature(null);
 		setDialogOpen(true);
-	};
+	}, [baa?.details, user.name, user.lastName, user.email]);
+
+	useEffect(() => {
+		if (
+			isBaaRedirect &&
+			sessionId &&
+			!verificationBlocked &&
+			!statusFailed &&
+			!isLoading &&
+			(isPaid || isActive) &&
+			handledSessionId.current !== sessionId
+		) {
+			handledSessionId.current = sessionId;
+			if (isPaid) openDialog();
+			const url = new URL(window.location.href);
+			if (
+				url.searchParams.get("baaRedirect") === "true" &&
+				url.searchParams.get("session_id") === sessionId
+			) {
+				url.searchParams.delete("baaRedirect");
+				url.searchParams.delete("session_id");
+				router.replace(`${url.pathname}${url.search}${url.hash}`, {
+					scroll: false,
+				});
+			}
+		}
+	}, [
+		isBaaRedirect,
+		sessionId,
+		verificationBlocked,
+		statusFailed,
+		isLoading,
+		isPaid,
+		isActive,
+		openDialog,
+		router,
+	]);
 
 	const updateField =
 		(field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -125,7 +245,7 @@ export function SignedBaaCard() {
 		form.signerName.trim().length >= 2 &&
 		form.signerTitle.trim().length >= 2 &&
 		EMAIL_REGEX.test(form.noticesEmail.trim()) &&
-		Boolean(signature);
+		Boolean(signatureDataUrl);
 
 	const downloadUrl = organizationId
 		? `/api/settings/billing/baa/download?organizationId=${organizationId}`
@@ -175,7 +295,40 @@ export function SignedBaaCard() {
 				</CardDescription>
 			</CardHeader>
 			<div className="flex flex-wrap gap-5 justify-between items-center pt-4 mt-auto">
-				{isLoading ? (
+				{verificationPending ? (
+					<output className="text-sm text-gray-11">
+						Confirming your BAA payment...
+					</output>
+				) : verificationError ? (
+					<div className="flex flex-col gap-3 text-sm text-gray-11">
+						<p role="alert">{verificationError}</p>
+						<p>Do not pay again. We need to verify your existing payment.</p>
+						{sessionId && (
+							<Button
+								type="button"
+								size="sm"
+								variant="gray"
+								onClick={() => paymentConfirmation.refetch()}
+							>
+								Retry payment confirmation
+							</Button>
+						)}
+					</div>
+				) : statusFailed ? (
+					<div className="flex flex-col gap-3 text-sm text-gray-11">
+						<p role="alert">
+							Unable to load your BAA status. Please try again.
+						</p>
+						<Button
+							type="button"
+							size="sm"
+							variant="gray"
+							onClick={() => refetchStatus()}
+						>
+							Retry
+						</Button>
+					</div>
+				) : isLoading ? (
 					<div className="h-5 w-64 rounded animate-pulse bg-gray-4" />
 				) : isActive ? (
 					<>
@@ -201,6 +354,30 @@ export function SignedBaaCard() {
 							Download signed copy
 						</Button>
 					</>
+				) : isPaid ? (
+					<>
+						<div className="flex flex-col gap-1 text-sm text-gray-11">
+							<span className="font-medium text-gray-12">
+								Paid — awaiting signature
+							</span>
+							<span>
+								Payment received. Complete your details and sign your agreement.
+							</span>
+						</div>
+						<Button
+							type="button"
+							size="sm"
+							variant="primary"
+							disabled={actionsBlocked || signatureMutation.isPending}
+							onClick={openDialog}
+						>
+							Complete and sign BAA
+						</Button>
+					</>
+				) : isProcessing ? (
+					<output className="text-sm text-gray-11">
+						Your BAA is processing. Please wait before trying again.
+					</output>
 				) : (
 					<>
 						<div className="flex flex-col gap-1 text-sm text-gray-11">
@@ -218,7 +395,7 @@ export function SignedBaaCard() {
 							type="button"
 							size="sm"
 							variant="primary"
-							disabled={!canPurchase}
+							disabled={actionsBlocked || signatureMutation.isPending}
 							onClick={openDialog}
 						>
 							Get Signed BAA
@@ -228,9 +405,9 @@ export function SignedBaaCard() {
 			</div>
 
 			<Dialog
-				open={dialogOpen}
+				open={dialogOpen && !verificationBlocked && !isActive}
 				onOpenChange={(open) => {
-					if (!purchaseMutation.isPending) setDialogOpen(open);
+					if (!signatureMutation.isPending) setDialogOpen(open);
 				}}
 			>
 				<DialogContent className="p-0 w-[calc(100%-20px)] max-w-lg rounded-xl border bg-gray-2 border-gray-4">
@@ -263,7 +440,7 @@ export function SignedBaaCard() {
 										value={form[field.key]}
 										placeholder={field.placeholder}
 										onChange={updateField(field.key)}
-										disabled={purchaseMutation.isPending}
+										disabled={actionsBlocked || signatureMutation.isPending}
 									/>
 								</div>
 							))}
@@ -273,20 +450,30 @@ export function SignedBaaCard() {
 								Signature
 							</span>
 							<SignaturePad
-								onChange={setSignature}
-								disabled={purchaseMutation.isPending}
+								key={isPaid ? "paid" : "purchase"}
+								onChange={(dataUrl) =>
+									setSignature(dataUrl ? { paid: isPaid, dataUrl } : null)
+								}
+								disabled={actionsBlocked || signatureMutation.isPending}
 							/>
 						</div>
 					</div>
 					<div className="flex flex-col gap-4 p-5 border-t border-gray-4">
 						<p className="text-xs leading-5 text-gray-11">
-							By signing, you execute the Business Associate Agreement and
-							authorize Cap to charge the card on file{" "}
-							<span className="font-medium text-gray-12">$99/month</span>{" "}
-							starting today. This is a separate subscription from Cap Pro and
-							is not prorated. Once purchased, the Signed BAA can't be disabled;
-							it ends automatically if your Cap Pro subscription is canceled. A
-							countersigned PDF will be emailed to you and hello@cap.so.
+							{isPaid ? (
+								"Payment has already been received. Signing completes your Business Associate Agreement with no additional charge. Your existing $99/month BAA subscription continues on its current billing schedule, separately from Cap Pro, and ends if your Cap Pro subscription is canceled."
+							) : (
+								<>
+									By signing, you execute the Business Associate Agreement and
+									authorize Cap to charge the card on file{" "}
+									<span className="font-medium text-gray-12">$99/month</span>{" "}
+									starting today. This is a separate subscription from Cap Pro
+									and is not prorated. Once purchased, the Signed BAA can't be
+									disabled; it ends automatically if your Cap Pro subscription
+									is canceled.
+								</>
+							)}{" "}
+							A countersigned PDF will be emailed to you and hello@cap.so.
 						</p>
 						<div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
 							<Button
@@ -294,7 +481,7 @@ export function SignedBaaCard() {
 								size="sm"
 								variant="gray"
 								onClick={() => setDialogOpen(false)}
-								disabled={purchaseMutation.isPending}
+								disabled={signatureMutation.isPending}
 							>
 								Cancel
 							</Button>
@@ -302,13 +489,17 @@ export function SignedBaaCard() {
 								type="button"
 								size="sm"
 								variant="primary"
-								spinner={purchaseMutation.isPending}
-								disabled={!formValid || purchaseMutation.isPending}
-								onClick={() => purchaseMutation.mutate()}
+								spinner={signatureMutation.isPending}
+								disabled={
+									!formValid || actionsBlocked || signatureMutation.isPending
+								}
+								onClick={() => signatureMutation.mutate()}
 							>
-								{purchaseMutation.isPending
+								{signatureMutation.isPending
 									? "Processing..."
-									: "Sign & pay $99/mo"}
+									: isPaid
+										? "Sign BAA"
+										: "Sign & pay $99/mo"}
 							</Button>
 						</div>
 					</div>

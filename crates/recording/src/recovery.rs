@@ -371,7 +371,7 @@ impl RecoveryManager {
                     f.get("file_size").and_then(|s| s.as_u64())
                 };
 
-                let result: Vec<PathBuf> = entries
+                let mut result: Vec<PathBuf> = entries
                     .iter()
                     .filter(|f| {
                         f.get("is_complete")
@@ -395,6 +395,15 @@ impl RecoveryManager {
                                 expected_size,
                                 metadata.len()
                             );
+                            return None;
+                        }
+
+                        if path
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("m4s"))
+                            && !Self::is_m4s_complete(&path)
+                        {
+                            warn!("Fragment {} has an incomplete M4S tail", path.display());
                             return None;
                         }
 
@@ -430,6 +439,28 @@ impl RecoveryManager {
                     })
                     .collect();
 
+                if manifest_type == "m4s_segments" && init_segment.is_some() {
+                    let listed: std::collections::HashSet<_> = entries
+                        .iter()
+                        .filter_map(|entry| entry.get("path").and_then(|path| path.as_str()))
+                        .map(|path| dir.join(path))
+                        .collect();
+                    result.extend(Self::probe_m4s_fragments_with_init(dir).into_iter().filter(
+                        |path| {
+                            !listed.contains(path)
+                                && Self::m4s_fragment_index(path).is_some()
+                                && path
+                                    .symlink_metadata()
+                                    .is_ok_and(|metadata| metadata.is_file())
+                        },
+                    ));
+                    result.sort_by(|a, b| {
+                        Self::m4s_fragment_index(a)
+                            .cmp(&Self::m4s_fragment_index(b))
+                            .then_with(|| a.cmp(b))
+                    });
+                }
+
                 if !result.is_empty() {
                     return FragmentsInfo {
                         fragments: result,
@@ -439,7 +470,10 @@ impl RecoveryManager {
             }
         }
 
-        if let Some(init_segment) = manifest_init_segment {
+        if let Some(init_segment) = manifest_init_segment.or_else(|| {
+            let path = dir.join("init.mp4");
+            path.is_file().then_some(path)
+        }) {
             let fragments = Self::probe_m4s_fragments_with_init(dir);
             if !fragments.is_empty() {
                 return FragmentsInfo {
@@ -459,8 +493,6 @@ impl RecoveryManager {
         dir: &Path,
         health_tx: Option<&HealthSender>,
     ) -> Vec<(u32, PathBuf, Vec<PathBuf>)> {
-        const MIN_VALID_FRAGMENT_SIZE: u64 = 100;
-
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
@@ -509,13 +541,8 @@ impl RecoveryManager {
                         .strip_prefix("segment_")
                         .and_then(|s| s.strip_suffix(".m4s"))
                         .and_then(|s| s.parse().ok())?;
-                    let metadata = std::fs::metadata(&p).ok()?;
-                    if metadata.len() < MIN_VALID_FRAGMENT_SIZE {
-                        debug!(
-                            "Skipping tiny respawn fragment {} ({} bytes)",
-                            p.display(),
-                            metadata.len()
-                        );
+                    if !Self::is_m4s_complete(&p) {
+                        debug!("Skipping incomplete respawn fragment {}", p.display());
                         return None;
                     }
                     Some((idx, p))
@@ -650,6 +677,7 @@ impl RecoveryManager {
                     .and_then(|e| e.to_str())
                     .map(|e| e.to_lowercase());
                 match ext.as_deref() {
+                    Some("m4s") if !Self::is_m4s_complete(p) => false,
                     Some("mp4") | Some("m4s") => match probe_video_can_decode(p) {
                         Ok(true) => true,
                         Ok(false) => {
@@ -672,8 +700,6 @@ impl RecoveryManager {
     }
 
     fn probe_m4s_fragments_with_init(dir: &Path) -> Vec<PathBuf> {
-        const MIN_VALID_FRAGMENT_SIZE: u64 = 100;
-
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
@@ -681,16 +707,35 @@ impl RecoveryManager {
         let mut fragments: Vec<_> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("m4s")))
-            .filter(|p| {
-                std::fs::metadata(p)
-                    .map(|metadata| metadata.len() >= MIN_VALID_FRAGMENT_SIZE)
-                    .unwrap_or(false)
-            })
+            .filter(|p| Self::is_m4s_complete(p))
             .collect();
 
-        fragments.sort();
+        fragments.sort_by(|a, b| {
+            Self::m4s_fragment_index(a)
+                .cmp(&Self::m4s_fragment_index(b))
+                .then_with(|| a.cmp(b))
+        });
         fragments
+    }
+
+    pub fn is_m4s_complete(path: &Path) -> bool {
+        const MIN_VALID_FRAGMENT_SIZE: u64 = 100;
+
+        path.extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("m4s"))
+            && std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.len() >= MIN_VALID_FRAGMENT_SIZE
+            })
+            && tail_is_complete(path).unwrap_or(false)
+    }
+
+    fn m4s_fragment_index(path: &Path) -> Option<u64> {
+        path.file_name()?
+            .to_str()?
+            .strip_prefix("segment_")?
+            .strip_suffix(".m4s")?
+            .parse()
+            .ok()
     }
 
     fn probe_single_file(path: &Path) -> Option<PathBuf> {
@@ -1666,9 +1711,159 @@ fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_file, start_time_or_display_fallback, valid_recovered_audio};
+    use super::{
+        RecoveryManager, replace_file, start_time_or_display_fallback, valid_recovered_audio,
+    };
     use std::fs;
     use tempfile::tempdir;
+
+    fn complete_m4s_fragment() -> Vec<u8> {
+        let mut fragment = Vec::new();
+        for name in [b"moof", b"mdat"] {
+            fragment.extend_from_slice(&72u32.to_be_bytes());
+            fragment.extend_from_slice(name);
+            fragment.extend_from_slice(&[0; 64]);
+        }
+        fragment
+    }
+
+    #[test]
+    fn recovery_includes_complete_fragments_missing_from_the_last_manifest() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        for name in [
+            "segment_001.m4s",
+            "segment_002.m4s",
+            "segment_999.m4s",
+            "segment_1000.m4s",
+        ] {
+            fs::write(dir.path().join(name), &fragment).unwrap();
+        }
+        fs::write(
+            dir.path().join("segment_1001.m4s"),
+            &fragment[..fragment.len() - 1],
+        )
+        .unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": true, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": true, "file_size": fragment.len() + 1}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), &manifest).unwrap();
+
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+        assert_eq!(
+            recovered.fragments,
+            ["segment_001.m4s", "segment_999.m4s", "segment_1000.m4s"]
+                .map(|name| dir.path().join(name))
+        );
+        assert_eq!(
+            fs::read(dir.path().join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert!(dir.path().join("segment_1001.m4s").is_file());
+    }
+
+    #[test]
+    fn recovery_reconstructs_only_complete_fragments_when_manifest_has_no_valid_entries() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        let partial = &fragment[..fragment.len() - 1];
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        fs::write(dir.path().join("segment_001.m4s"), &fragment).unwrap();
+        fs::write(dir.path().join("segment_999.m4s"), &fragment).unwrap();
+        fs::write(dir.path().join("segment_1000.m4s"), &fragment).unwrap();
+        fs::write(dir.path().join("segment_002.m4s"), partial).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": false, "file_size": fragment.len()},
+                {"path": "segment_999.m4s", "is_complete": false, "file_size": fragment.len()},
+                {"path": "segment_1000.m4s", "is_complete": false, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": false, "file_size": partial.len()}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), &manifest).unwrap();
+
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+
+        assert_eq!(
+            recovered.fragments,
+            ["segment_001.m4s", "segment_999.m4s", "segment_1000.m4s"]
+                .map(|name| dir.path().join(name))
+        );
+        assert_eq!(recovered.init_segment, Some(dir.path().join("init.mp4")));
+        assert_eq!(
+            fs::read(dir.path().join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert!(dir.path().join("segment_002.m4s").is_file());
+    }
+
+    #[test]
+    fn recovery_rejects_partial_only_fragments_when_manifest_has_no_valid_entries() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        let partial = &fragment[..fragment.len() - 1];
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        fs::write(dir.path().join("segment_001.m4s"), partial).unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": false, "file_size": partial.len()}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), &manifest).unwrap();
+
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+
+        assert!(recovered.fragments.is_empty());
+        assert_eq!(
+            fs::read(dir.path().join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert!(dir.path().join("segment_001.m4s").is_file());
+    }
+
+    #[test]
+    fn recovery_finds_complete_fragments_without_a_readable_manifest() {
+        for manifest in [None, Some("{interrupted")] {
+            let dir = tempdir().unwrap();
+            let fragment = complete_m4s_fragment();
+            fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+            fs::write(dir.path().join("segment_001.m4s"), &fragment).unwrap();
+            fs::write(
+                dir.path().join("segment_002.m4s"),
+                &fragment[..fragment.len() - 1],
+            )
+            .unwrap();
+            if let Some(manifest) = manifest {
+                fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+            }
+
+            let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+
+            assert_eq!(recovered.fragments, [dir.path().join("segment_001.m4s")]);
+            assert_eq!(recovered.init_segment, Some(dir.path().join("init.mp4")));
+            assert_eq!(
+                fs::read_to_string(dir.path().join("manifest.json")).ok(),
+                manifest.map(str::to_string)
+            );
+            assert!(dir.path().join("segment_002.m4s").is_file());
+        }
+    }
 
     #[test]
     fn replace_file_overwrites_existing_destination() {
