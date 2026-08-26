@@ -369,19 +369,23 @@ impl DeepLinkAction {
                         let feeds = feeds.read(cx);
                         (feeds.camera_actor(), feeds.mic_actor())
                     };
-                    app_windows::begin_recording(
-                        recording::StartConfig {
-                            mode,
-                            target: capture_target,
-                            microphone: mic_label,
-                            camera,
-                            system_audio: capture_system_audio,
-                            excluded_windows: Vec::new(),
-                            camera_feed,
-                            mic_feed,
-                        },
-                        cx,
-                    );
+                    let main = cx.global::<app_windows::AppWindows>().main;
+                    main.update(cx, |view, _, cx| {
+                        view.start_recording_config(
+                            recording::StartConfig {
+                                mode,
+                                target: capture_target,
+                                microphone: mic_label,
+                                camera,
+                                system_audio: capture_system_audio,
+                                excluded_windows: Vec::new(),
+                                camera_feed,
+                                mic_feed,
+                            },
+                            cx,
+                        )
+                    })
+                    .ok();
                 });
                 Ok(())
             }

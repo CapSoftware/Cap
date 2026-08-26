@@ -8,7 +8,8 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{App, AppContext as _, Context, Entity, Global};
+use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorage};
+use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::recording::{self, ActiveRecording, StartConfig};
 
@@ -27,6 +28,10 @@ pub struct RecordingSession {
     active: Option<ActiveRecording>,
     /// Why the last start attempt failed, for the main window to surface.
     pub error: Option<String>,
+    pub storage_warning: bool,
+    pub storage_notice: Option<String>,
+    stopped_for_low_storage: bool,
+    stopped_elapsed: Option<Duration>,
     /// The config of the live (or last) recording, kept for restart.
     last_config: Option<StartConfig>,
     /// True while the controls bar window is open, so the main window knows to
@@ -53,6 +58,7 @@ pub struct RecordingSession {
     started_at: Option<Instant>,
     paused_accum: Duration,
     paused_since: Option<Instant>,
+    storage_monitor: Option<Task<()>>,
 }
 
 struct SessionGlobal(Entity<RecordingSession>);
@@ -64,6 +70,10 @@ impl RecordingSession {
             phase: Phase::Idle,
             active: None,
             error: None,
+            storage_warning: false,
+            storage_notice: None,
+            stopped_for_low_storage: false,
+            stopped_elapsed: None,
             last_config: None,
             controls_open: false,
             mic_muted: false,
@@ -72,6 +82,7 @@ impl RecordingSession {
             started_at: None,
             paused_accum: Duration::ZERO,
             paused_since: None,
+            storage_monitor: None,
         });
         cx.set_global(SessionGlobal(session.clone()));
         session
@@ -92,6 +103,9 @@ impl RecordingSession {
     /// Elapsed recording time, excluding paused stretches -- what the bar's
     /// timer shows.
     pub fn elapsed(&self) -> Duration {
+        if let Some(elapsed) = self.stopped_elapsed {
+            return elapsed;
+        }
         let Some(started_at) = self.started_at else {
             return Duration::ZERO;
         };
@@ -165,8 +179,13 @@ impl RecordingSession {
         if self.phase != Phase::Idle {
             return;
         }
+        self.storage_monitor = None;
         self.phase = Phase::Starting;
         self.error = None;
+        self.storage_warning = false;
+        self.storage_notice = None;
+        self.stopped_for_low_storage = false;
+        self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
         cx.notify();
 
@@ -177,6 +196,7 @@ impl RecordingSession {
                 match result {
                     Ok(Ok(active)) => {
                         tracing::info!(dir = %active.project_dir.display(), "recording started");
+                        let project_dir = active.project_dir.clone();
                         this.active = Some(active);
                         this.phase = Phase::Recording { paused: false };
                         // A fresh mic lock always starts unmuted.
@@ -184,6 +204,7 @@ impl RecordingSession {
                         this.started_at = Some(Instant::now());
                         this.paused_accum = Duration::ZERO;
                         this.paused_since = None;
+                        this.monitor_storage(project_dir, cx);
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to start: {error:#}");
@@ -203,24 +224,100 @@ impl RecordingSession {
         .detach();
     }
 
+    fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.storage_monitor = None;
+        let task = cx.spawn(async move |this, cx| {
+            let mut check_failed = false;
+            loop {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let is_current = |session: &Self| {
+                    matches!(session.phase, Phase::Recording { .. })
+                        && session
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.project_dir == project_dir)
+                };
+                if !this.update(cx, |this, _| is_current(this)).unwrap_or(false) {
+                    return;
+                }
+                let path = project_dir.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { cap_utils::disk_space::free_bytes_for_path(&path) })
+                    .await;
+                let available_bytes = match result {
+                    Ok(bytes) => {
+                        check_failed = false;
+                        bytes
+                    }
+                    Err(error) => {
+                        if !check_failed {
+                            tracing::warn!(%error, "Could not check recording storage");
+                            check_failed = true;
+                        }
+                        continue;
+                    }
+                };
+                if !this
+                    .update(cx, |this, cx| {
+                        if !is_current(this) {
+                            return false;
+                        }
+                        match (RecordingStorage {
+                            available_bytes,
+                            recording_bytes: 0,
+                        })
+                        .status()
+                        {
+                            DiskSpaceStatus::Exhausted => {
+                                this.storage_warning = true;
+                                this.stopped_for_low_storage = true;
+                                this.storage_notice =
+                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.stop(cx);
+                                false
+                            }
+                            status => {
+                                let warning = status == DiskSpaceStatus::Low;
+                                if warning != this.storage_warning {
+                                    this.storage_warning = warning;
+                                    cx.notify();
+                                }
+                                true
+                            }
+                        }
+                    })
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+            }
+        });
+        self.storage_monitor = Some(task);
+    }
+
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::Recording { .. }) {
             return;
         }
+        self.storage_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
+        let low_storage = self.stopped_for_low_storage;
         if let Some(link) = &instant_share_url
+            && !low_storage
             && !crate::store::GeneralSettings::load().disable_auto_open_links
         {
             let separator = if link.contains('?') { '&' } else { '?' };
             cx.open_url(&format!("{link}{separator}recordingStopped=1"));
         }
+        self.stopped_elapsed = Some(self.elapsed());
         self.phase = Phase::Stopping;
         cx.notify();
 
-        let task = gpui_tokio::Tokio::spawn(cx, active.stop());
+        let task = gpui_tokio::Tokio::spawn(cx, active.stop(low_storage));
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -233,7 +330,10 @@ impl RecordingSession {
                         // never does that, so it goes with the placeholder it
                         // was standing in for.
                         tracing::info!(dir = %project_dir.display(), "recording finished");
-                        if this.mode() == Some(crate::recording::RecordingMode::Studio) {
+                        if low_storage {
+                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                        }
+                        if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
                             this.finished_studio = Some(project_dir);
                         } else if let Some(link) = instant_share_url {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
@@ -241,10 +341,12 @@ impl RecordingSession {
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
+                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
+                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
                         this.error = Some("Stop task failed.".into());
                     }
                 }
@@ -294,6 +396,7 @@ impl RecordingSession {
         if !matches!(self.phase, Phase::Recording { .. }) {
             return;
         }
+        self.storage_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -316,6 +419,7 @@ impl RecordingSession {
         if !matches!(self.phase, Phase::Recording { .. }) {
             return;
         }
+        self.storage_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -344,8 +448,11 @@ impl RecordingSession {
     }
 
     fn finish(&mut self, cx: &mut Context<Self>) {
+        self.storage_monitor = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;
+        self.storage_warning = false;
+        self.stopped_elapsed = None;
         self.started_at = None;
         self.paused_accum = Duration::ZERO;
         self.paused_since = None;

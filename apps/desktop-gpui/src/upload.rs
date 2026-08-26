@@ -39,6 +39,7 @@ pub struct InstantUpload {
     pub video: VideoUploadInfo,
     segment_upload: Option<tokio::task::JoinHandle<Result<(), String>>>,
     cancel: Arc<AtomicBool>,
+    metadata_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -143,6 +144,7 @@ pub fn start_instant_upload(
     video: VideoUploadInfo,
     project_path: PathBuf,
     segment_rx: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
+    metadata_lock: Arc<Mutex<()>>,
 ) -> Result<InstantUpload, String> {
     let cancel = Arc::new(AtomicBool::new(false));
     let segment_upload = if let Some(segment_rx) = segment_rx {
@@ -160,8 +162,16 @@ pub fn start_instant_upload(
 
         let upload_video = video.clone();
         let upload_cancel = cancel.clone();
+        let upload_metadata_lock = metadata_lock.clone();
         Some(tokio::spawn(async move {
-            run_segment_upload(upload_video, project_path, events_rx, upload_cancel).await
+            run_segment_upload(
+                upload_video,
+                project_path,
+                events_rx,
+                upload_cancel,
+                upload_metadata_lock,
+            )
+            .await
         }))
     } else {
         None
@@ -171,6 +181,7 @@ pub fn start_instant_upload(
         video,
         segment_upload,
         cancel,
+        metadata_lock,
     })
 }
 
@@ -181,6 +192,10 @@ impl InstantUpload {
 
     pub fn is_segmented(&self) -> bool {
         self.segment_upload.is_some()
+    }
+
+    pub(crate) fn metadata_lock(&self) -> &Mutex<()> {
+        &self.metadata_lock
     }
 
     pub async fn finish_segments(&mut self) -> Result<(), String> {
@@ -202,12 +217,16 @@ impl InstantUpload {
     }
 
     pub async fn cancel(mut self) -> Result<(), String> {
+        self.abort_segments().await;
+        delete_instant_video(&self.video.id).await
+    }
+
+    pub(crate) async fn abort_segments(&mut self) {
         self.cancel.store(true, Ordering::Release);
         if let Some(upload) = self.segment_upload.take() {
             upload.abort();
+            let _ = upload.await;
         }
-
-        delete_instant_video(&self.video.id).await
     }
 }
 
@@ -234,18 +253,15 @@ async fn run_segment_upload(
     project_path: PathBuf,
     events: flume::Receiver<SegmentCompletedEvent>,
     cancel: Arc<AtomicBool>,
+    metadata_lock: Arc<Mutex<()>>,
 ) -> Result<(), String> {
     let result = upload_segments(&video.id, events, cancel.clone()).await;
     if let Err(error) = &result
         && !cancel.load(Ordering::Acquire)
-        && let Ok(mut meta) = RecordingMeta::load_for_project(&project_path)
+        && let Err(save_error) =
+            crate::recording::persist_instant_upload_failure(&project_path, error, &metadata_lock)
     {
-        meta.upload = Some(UploadMeta::Failed {
-            error: error.clone(),
-        });
-        if let Err(save_error) = meta.save_for_project() {
-            tracing::error!("Failed to persist instant upload failure: {save_error}");
-        }
+        tracing::error!("Failed to persist instant upload failure: {save_error}");
     }
     result
 }
@@ -1403,6 +1419,47 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abort_segments_waits_until_the_upload_task_has_stopped() {
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let dropped = Arc::new(AtomicBool::new(false));
+                let upload_dropped = dropped.clone();
+                let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                let task = tokio::spawn(async move {
+                    let _dropped = Dropped(upload_dropped);
+                    let _ = started_tx.send(());
+                    std::future::pending::<()>().await;
+                    Ok(())
+                });
+                started_rx.await.unwrap();
+                let mut upload = InstantUpload {
+                    video: VideoUploadInfo {
+                        id: "test".into(),
+                        link: "https://example.invalid/s/test".into(),
+                        config: S3UploadMeta { id: "test".into() },
+                    },
+                    segment_upload: Some(task),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    metadata_lock: Arc::new(Mutex::new(())),
+                };
+
+                upload.abort_segments().await;
+
+                assert!(dropped.load(Ordering::Acquire));
+                assert!(upload.cancel.load(Ordering::Acquire));
+            });
+    }
 
     fn segment_event(
         index: u32,
