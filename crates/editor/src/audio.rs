@@ -943,7 +943,7 @@ fn mix_transition_audio(
 }
 
 /// Below this volume a music track is treated as silent and skipped entirely.
-const MUSIC_SILENCE_DB: f32 = -60.0;
+pub(crate) const MUSIC_SILENCE_DB: f32 = -60.0;
 
 fn music_gain(volume_db: f32) -> f32 {
     if volume_db <= MUSIC_SILENCE_DB {
@@ -1012,7 +1012,7 @@ fn mix_music(
 
         for out_sample in lo..hi {
             let local = out_sample - start_sample;
-            let src_index = trim_sample + local;
+            let src_index = trim_sample + local - data.source_start_sample() as i64;
             if src_index < 0 || src_index >= src_frames {
                 continue;
             }
@@ -2677,5 +2677,81 @@ mod tests {
         assert!((left_at_second(&stream, 0) - full * 0.25).abs() < 0.03);
         assert!((left_at_second(&stream, 1) - full * 0.75).abs() < 0.03);
         assert!((left_at_second(&stream, 2) - full).abs() < 0.03);
+    }
+
+    #[test]
+    fn bounded_timeline_music_preserves_trimmed_source_and_cache_coverage() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let music_path = dir.path().join("music.wav");
+        let values = [2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+        write_step_wav(&music_path, &values);
+
+        let mut segment = music_track_segment("music.wav", 0.0, 2.0, 0.0, 0.0);
+        segment.trim_start = 3.0;
+        let mut project = music_project(vec![segment]);
+        let mut cache = MusicTracks::new();
+        let music = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let original = music.get("music.wav").unwrap();
+
+        assert_eq!(
+            original.source_start_sample(),
+            AudioData::SAMPLE_RATE as usize * 3
+        );
+        assert_eq!(original.sample_count(), AudioData::SAMPLE_RATE as usize * 2);
+
+        let repeated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        assert!(Arc::ptr_eq(original, repeated.get("music.wav").unwrap()));
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(music.clone());
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(values[3])).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(values[4])).abs() < 0.02);
+
+        project.timeline.as_mut().unwrap().audio_segments[0].trim_start = 1.0;
+        let updated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let replacement = updated.get("music.wav").unwrap();
+
+        assert!(!Arc::ptr_eq(original, replacement));
+        assert_eq!(
+            replacement.source_start_sample(),
+            AudioData::SAMPLE_RATE as usize
+        );
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(updated);
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(values[1])).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(values[2])).abs() < 0.02);
+    }
+
+    #[test]
+    fn bounded_timeline_music_unions_segments_and_skips_inaudible_tracks() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let music_path = dir.path().join("music.wav");
+        write_step_wav(&music_path, &[2_000, 4_000, 6_000, 8_000, 10_000, 12_000]);
+
+        let mut early = music_track_segment("music.wav", 0.0, 1.0, 0.0, 0.0);
+        early.trim_start = 1.0;
+        let mut late = music_track_segment("music.wav", 1.0, 2.0, 0.0, 0.0);
+        late.trim_start = 4.0;
+        let mut disabled = music_track_segment("missing-disabled.wav", 0.0, 1.0, 0.0, 0.0);
+        disabled.enabled = false;
+        let mut muted = music_track_segment("missing-muted.wav", 0.0, 1.0, 0.0, 0.0);
+        muted.volume_db = -60.0;
+
+        let project = music_project(vec![early, late, disabled, muted]);
+        let mut cache = MusicTracks::new();
+        let tracks = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let music = tracks.get("music.wav").unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(music.source_start_sample(), AudioData::SAMPLE_RATE as usize);
+        assert_eq!(music.sample_count(), AudioData::SAMPLE_RATE as usize * 4);
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(tracks);
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(4_000)).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
     }
 }
