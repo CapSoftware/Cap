@@ -1485,6 +1485,7 @@ dependencies = [
  "lz4_flex",
  "md5",
  "nix 0.29.0",
+ "notify-rust",
  "objc",
  "objc2 0.6.2",
  "objc2-app-kit 0.3.1",
