@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const LOW_DISK_WARN_BYTES: u64 = 200 * 1024 * 1024;
 pub const LOW_DISK_STOP_BYTES: u64 = 50 * 1024 * 1024;
@@ -56,6 +57,96 @@ pub fn recording_storage(path: &Path) -> io::Result<RecordingStorage> {
         available_bytes: free_bytes_for_path(path)?,
         recording_bytes,
     })
+}
+
+#[derive(Default)]
+pub struct RecordingStorageMonitor {
+    fragments: HashMap<PathBuf, FinalizedFragments>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct FinalizedFragments {
+    last_index: Option<u64>,
+    bytes: u64,
+}
+
+impl RecordingStorageMonitor {
+    pub fn sample(&mut self, path: &Path) -> io::Result<RecordingStorage> {
+        const MAX_CACHED_DIRECTORIES: usize = 256;
+        let mut pending = vec![path.to_path_buf()];
+        let mut recording_bytes = 0u64;
+        while let Some(directory) = pending.pop() {
+            let cached = self.fragments.get(&directory).copied().unwrap_or_default();
+            let mut new_fragment_bytes = 0u64;
+            let mut newest_fragment = None;
+            let mut other_bytes = 0u64;
+            for entry in std::fs::read_dir(&directory)? {
+                let entry = entry?;
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                };
+                if file_type.is_dir() {
+                    pending.push(entry.path());
+                } else if file_type.is_file() {
+                    let name = entry.file_name();
+                    let fragment_index = name.to_str().and_then(|name| {
+                        name.strip_prefix("segment_")?
+                            .strip_suffix(".m4s")?
+                            .parse::<u64>()
+                            .ok()
+                    });
+                    if let Some(index) = fragment_index {
+                        if cached.last_index.is_some_and(|last| index <= last) {
+                            continue;
+                        }
+                        let bytes = match entry.metadata() {
+                            Ok(metadata) => metadata.len(),
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                            Err(error) => return Err(error),
+                        };
+                        new_fragment_bytes = new_fragment_bytes.saturating_add(bytes);
+                        if newest_fragment.is_none_or(|(newest, _)| index > newest) {
+                            newest_fragment = Some((index, bytes));
+                        }
+                    } else {
+                        match entry.metadata() {
+                            Ok(metadata) => {
+                                other_bytes = other_bytes.saturating_add(metadata.len());
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
+            }
+            recording_bytes = recording_bytes
+                .saturating_add(cached.bytes)
+                .saturating_add(new_fragment_bytes)
+                .saturating_add(other_bytes);
+            if let Some((index, bytes)) = newest_fragment
+                && (self.fragments.contains_key(&directory)
+                    || self.fragments.len() < MAX_CACHED_DIRECTORIES)
+            {
+                // DASH fragments are immutable once a later fragment exists. Keep
+                // measuring the newest fragment and temporary files until then.
+                let _ = self.fragments.insert(
+                    directory,
+                    FinalizedFragments {
+                        last_index: index.checked_sub(1),
+                        bytes: cached
+                            .bytes
+                            .saturating_add(new_fragment_bytes.saturating_sub(bytes)),
+                    },
+                );
+            }
+        }
+        Ok(RecordingStorage {
+            available_bytes: free_bytes_for_path(path)?,
+            recording_bytes,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +299,79 @@ mod tests {
             recording_storage(directory.path()).unwrap().recording_bytes,
             208
         );
+    }
+
+    #[test]
+    fn monitor_counts_growing_fragments_temporary_files_and_other_tracks() {
+        let directory = tempfile::tempdir().unwrap();
+        let display = directory.path().join("display");
+        std::fs::create_dir(&display).unwrap();
+        std::fs::write(display.join("segment_999.m4s"), [0; 128]).unwrap();
+        std::fs::write(display.join("segment_1000.m4s"), [0; 64]).unwrap();
+        std::fs::write(display.join("segment_1001.m4s.tmp"), [0; 32]).unwrap();
+        std::fs::write(directory.path().join("camera.mp4"), [0; 16]).unwrap();
+        let mut monitor = RecordingStorageMonitor::default();
+        assert_eq!(
+            monitor.sample(directory.path()).unwrap().recording_bytes,
+            240
+        );
+        assert_eq!(monitor.fragments.len(), 1);
+
+        std::fs::write(display.join("segment_1000.m4s"), [0; 96]).unwrap();
+        std::fs::rename(
+            display.join("segment_1001.m4s.tmp"),
+            display.join("segment_1001.m4s"),
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("camera.mp4"), [0; 32]).unwrap();
+        assert_eq!(
+            monitor.sample(directory.path()).unwrap().recording_bytes,
+            288
+        );
+        assert_eq!(
+            monitor.sample(directory.path()).unwrap().recording_bytes,
+            recording_storage(directory.path()).unwrap().recording_bytes
+        );
+
+        std::fs::remove_file(display.join("segment_999.m4s")).unwrap();
+        assert_eq!(
+            monitor.sample(directory.path()).unwrap().recording_bytes,
+            288
+        );
+    }
+
+    #[test]
+    fn monitor_reserves_finalization_space_for_large_recordings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("segment_000.m4s");
+        let file = std::fs::File::create(path).unwrap();
+        file.set_len(1024 * 1024 * 1024).unwrap();
+        let mut storage = RecordingStorageMonitor::default()
+            .sample(directory.path())
+            .unwrap();
+        storage.available_bytes = 2 * storage.recording_bytes + RECORDING_DISK_RESERVE_BYTES;
+        assert_eq!(storage.recording_bytes, 1024 * 1024 * 1024);
+        assert_eq!(storage.status(), DiskSpaceStatus::Exhausted);
+        assert!(storage.can_finalize());
+    }
+
+    #[test]
+    fn monitor_bounds_cached_directories_without_missing_uncached_tracks() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..260 {
+            let track = directory.path().join(index.to_string());
+            std::fs::create_dir(&track).unwrap();
+            std::fs::write(track.join("segment_000.m4s"), [0; 4]).unwrap();
+            std::fs::write(track.join("segment_001.m4s"), [0; 8]).unwrap();
+        }
+        let mut monitor = RecordingStorageMonitor::default();
+        for _ in 0..2 {
+            assert_eq!(
+                monitor.sample(directory.path()).unwrap().recording_bytes,
+                3120
+            );
+            assert_eq!(monitor.fragments.len(), 256);
+        }
     }
 
     #[cfg(unix)]

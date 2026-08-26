@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorage};
+use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
 use crate::recording::{self, ActiveRecording, StartConfig};
@@ -228,6 +228,7 @@ impl RecordingSession {
         self.storage_monitor = None;
         let task = cx.spawn(async move |this, cx| {
             let mut check_failed = false;
+            let mut storage_monitor = RecordingStorageMonitor::default();
             loop {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 let is_current = |session: &Self| {
@@ -241,14 +242,18 @@ impl RecordingSession {
                     return;
                 }
                 let path = project_dir.clone();
-                let result = cx
+                let (next_monitor, result) = cx
                     .background_executor()
-                    .spawn(async move { cap_utils::disk_space::free_bytes_for_path(&path) })
+                    .spawn(async move {
+                        let result = storage_monitor.sample(&path);
+                        (storage_monitor, result)
+                    })
                     .await;
-                let available_bytes = match result {
-                    Ok(bytes) => {
+                storage_monitor = next_monitor;
+                let storage = match result {
+                    Ok(storage) => {
                         check_failed = false;
-                        bytes
+                        storage
                     }
                     Err(error) => {
                         if !check_failed {
@@ -263,12 +268,7 @@ impl RecordingSession {
                         if !is_current(this) {
                             return false;
                         }
-                        match (RecordingStorage {
-                            available_bytes,
-                            recording_bytes: 0,
-                        })
-                        .status()
-                        {
+                        match storage.status() {
                             DiskSpaceStatus::Exhausted => {
                                 this.storage_warning = true;
                                 this.stopped_for_low_storage = true;
