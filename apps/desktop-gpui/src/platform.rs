@@ -59,6 +59,15 @@ pub fn active_material(cx: &gpui::App) -> Option<MaterialKind> {
         .and_then(|material| material.0)
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
+fn confirmation_accepted(result: rfd::MessageDialogResult, accept: &str) -> bool {
+    match result {
+        rfd::MessageDialogResult::Ok => true,
+        rfd::MessageDialogResult::Custom(label) => label == accept,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PanelBehavior {
     pub level: isize,
@@ -320,7 +329,7 @@ mod mac {
                     c"Q@:".as_ptr(),
                 )
             };
-            if added {
+            if objc2::runtime::Bool::from_raw(added).as_bool() {
                 tracing::info!("installed macOS 26 occlusion shim on {name}");
             }
         }
@@ -368,7 +377,7 @@ mod mac {
                     c"{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@".as_ptr(),
                 )
             };
-            if added {
+            if objc2::runtime::Bool::from_raw(added).as_bool() {
                 tracing::info!("installed frame-constraint shim on {name}");
             }
         }
@@ -456,6 +465,20 @@ mod mac {
             if mask != want {
                 tracing::info!(mask, "clearing foreign style-mask bits on the main window");
                 let _: () = msg_send![&*native.0, setStyleMask: want];
+            }
+        }
+    }
+
+    pub fn remove_popup_window_chrome(native: &NativeWindow) {
+        use objc2::msg_send;
+
+        const TITLED: usize = 1 << 0;
+
+        unsafe {
+            let mask: usize = msg_send![&*native.0, styleMask];
+            let borderless = mask & !TITLED;
+            if mask != borderless {
+                let _: () = msg_send![&*native.0, setStyleMask: borderless];
             }
         }
     }
@@ -579,11 +602,14 @@ mod mac {
             if screens.is_null() {
                 return true;
             }
-            let count: usize = msg_send![screens, count];
-            for index in 0..count {
-                let screen: *mut AnyObject = msg_send![screens, objectAtIndex: index];
+            let enumerator: *mut AnyObject = msg_send![screens, objectEnumerator];
+            if enumerator.is_null() {
+                return true;
+            }
+            loop {
+                let screen: *mut AnyObject = msg_send![enumerator, nextObject];
                 if screen.is_null() {
-                    continue;
+                    break;
                 }
                 let bounds: NSRect = msg_send![screen, frame];
                 let overlap_x =
@@ -1591,6 +1617,7 @@ mod stub {
         None
     }
     pub fn restore_borderless_style(_native: &NativeWindow) {}
+    pub fn remove_popup_window_chrome(_native: &NativeWindow) {}
     pub fn place_overlay_panel(
         _native: &NativeWindow,
         _x: f64,
@@ -1600,9 +1627,9 @@ mod stub {
         _level: isize,
     ) {
     }
-    pub fn install_occlusion_shim() {}
     pub fn kick_display_link(_window: &Window) {}
-    pub fn apply_panel_behavior(window: &Window, _behavior: PanelBehavior) {
+    pub fn apply_panel_behavior(window: &Window, behavior: PanelBehavior) {
+        let _ = (behavior.level, behavior.join_all_spaces, behavior.shadow);
         apply_always_on_top(window);
     }
 
@@ -1613,7 +1640,7 @@ mod stub {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
             };
-            if let Ok(handle) = window.window_handle()
+            if let Ok(handle) = HasWindowHandle::window_handle(window)
                 && let RawWindowHandle::Win32(win) = handle.as_raw()
             {
                 let hwnd = win.hwnd.get() as windows_sys::Win32::Foundation::HWND;
@@ -1636,7 +1663,7 @@ mod stub {
             CLIENT_MESSAGE_EVENT, ClientMessageEvent, ConnectionExt, EventMask,
         };
 
-        let Ok(handle) = window.window_handle() else {
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;
         };
         let window_id = match handle.as_raw() {
@@ -1685,9 +1712,6 @@ mod stub {
     }
 
     pub fn close_native(_native: &NativeWindow) {}
-    pub fn debug_window_state(_native: &NativeWindow) -> String {
-        String::new()
-    }
     pub fn set_dock_icon(_png: &[u8]) {}
     pub fn escape_hotkey_events() -> flume::Receiver<()> {
         // A channel whose sender is dropped immediately: the drain task's
@@ -1724,7 +1748,7 @@ mod stub {
         } else {
             rfd::MessageLevel::Info
         };
-        rfd::MessageDialog::new()
+        let result = rfd::MessageDialog::new()
             .set_title(title)
             .set_description(message)
             .set_buttons(rfd::MessageButtons::OkCancelCustom(
@@ -1732,8 +1756,8 @@ mod stub {
                 cancel.to_string(),
             ))
             .set_level(level)
-            .show()
-            == rfd::MessageDialogResult::Custom(accept.to_string())
+            .show();
+        super::confirmation_accepted(result, accept)
     }
 
     pub fn alert_dialog(title: &str, message: &str) {
@@ -1809,3 +1833,36 @@ mod stub {
 
 #[cfg(not(target_os = "macos"))]
 pub use stub::*;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn confirmation_accepts_native_ok_and_matching_custom_label_only() {
+        let accept = "Install update";
+
+        assert!(super::confirmation_accepted(
+            rfd::MessageDialogResult::Ok,
+            accept
+        ));
+        assert!(super::confirmation_accepted(
+            rfd::MessageDialogResult::Custom(accept.to_string()),
+            accept
+        ));
+        assert!(!super::confirmation_accepted(
+            rfd::MessageDialogResult::Custom("Ignore".to_string()),
+            accept
+        ));
+        assert!(!super::confirmation_accepted(
+            rfd::MessageDialogResult::Cancel,
+            accept
+        ));
+        assert!(!super::confirmation_accepted(
+            rfd::MessageDialogResult::No,
+            accept
+        ));
+        assert!(!super::confirmation_accepted(
+            rfd::MessageDialogResult::Yes,
+            accept
+        ));
+    }
+}
