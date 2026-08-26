@@ -13,6 +13,7 @@
 
 use std::{
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
 
@@ -35,6 +36,7 @@ const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "bmp", "tif", "tiff",
 ];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
+static ACTIVE_IMPORT_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
 /// `transcode_video` fails with exactly this when the bundle vanishes mid-way
 /// (the user deleted it -- the Tauri cancellation seam, `import.rs:1253-1256`);
@@ -187,6 +189,25 @@ pub fn imports_snapshot(cx: &App) -> Vec<ImportProgress> {
         .unwrap_or_default()
 }
 
+pub fn imports_in_flight(cx: &App) -> bool {
+    ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire) != 0 || !imports_snapshot(cx).is_empty()
+}
+
+struct InFlightImport;
+
+impl InFlightImport {
+    fn begin() -> Self {
+        ACTIVE_IMPORT_WORKERS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for InFlightImport {
+    fn drop(&mut self) {
+        ACTIVE_IMPORT_WORKERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// One worker->UI update, applied with a clean gpui borrow.
 fn apply_progress(update: ImportProgress, cx: &mut App) {
     if !cx.has_global::<ActiveImports>() {
@@ -327,9 +348,13 @@ pub fn import_image_from_path(source_path: PathBuf, cx: &mut App) {
 /// conversion -- `tokio::task::spawn_blocking`'s role in the Tauri version.
 fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) + Send + 'static) {
     let (tx, rx) = flume::unbounded::<ImportProgress>();
+    let in_flight = InFlightImport::begin();
     let worker = std::thread::Builder::new()
         .name("cap-media-import".to_string())
-        .spawn(move || work(tx));
+        .spawn(move || {
+            let _in_flight = in_flight;
+            work(tx);
+        });
     if let Err(error) = worker {
         tracing::error!("failed to spawn the import worker thread: {error}");
         return;
@@ -1016,7 +1041,13 @@ fn convert_for_encode(
     height: u32,
 ) -> Result<ffmpeg::frame::Video, String> {
     if frame.format() == pixel_format && frame.width() == width && frame.height() == height {
-        return Ok(frame.clone());
+        let mut reference = ffmpeg::frame::Video::empty();
+        let status = unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
+        return Ok(if status >= 0 {
+            reference
+        } else {
+            frame.clone()
+        });
     }
 
     if scaler.is_none() {
@@ -1650,6 +1681,24 @@ mod tests {
     }
 
     #[test]
+    fn imports_are_in_flight_before_their_first_progress_update() {
+        let baseline = ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire);
+        let in_flight = InFlightImport::begin();
+        assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline + 1);
+
+        let (release, released) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _in_flight = in_flight;
+            released.recv().unwrap();
+        });
+
+        assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline + 1);
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(ACTIVE_IMPORT_WORKERS.load(Ordering::Acquire), baseline);
+    }
+
+    #[test]
     fn extension_filters_are_case_insensitive_and_file_gated() {
         let dir = temp_dir("extensions");
         let video = dir.join("clip.MP4");
@@ -1727,5 +1776,50 @@ mod tests {
         assert_eq!(ensure_even(1919), 1918);
         assert_eq!(ensure_even(1), 2);
         assert_eq!(ensure_even(0), 2);
+    }
+
+    #[test]
+    fn matching_import_frame_reuses_reference_counted_pixels() {
+        let mut original = ffmpeg::frame::Video::new(avformat::Pixel::YUV420P, 16, 12);
+        original.set_pts(Some(417));
+        original.data_mut(0)[0] = 81;
+        let mut scaler = None;
+
+        let converted =
+            convert_for_encode(&original, &mut scaler, avformat::Pixel::YUV420P, 16, 12)
+                .expect("reference-counted import frame");
+
+        assert!(scaler.is_none());
+        assert_eq!(converted.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(converted.pts(), Some(417));
+        let buffer = unsafe { (*original.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+
+        drop(original);
+
+        assert_eq!(converted.data(0)[0], 81);
+        let retained_buffer = unsafe { (*converted.as_ptr()).buf[0] };
+        assert_eq!(
+            unsafe { ffmpeg::ffi::av_buffer_get_ref_count(retained_buffer) },
+            1
+        );
+    }
+
+    #[test]
+    fn mismatched_import_frame_still_converts_and_preserves_timestamp() {
+        let mut original = ffmpeg::frame::Video::new(avformat::Pixel::RGBA, 16, 12);
+        original.set_pts(Some(819));
+        let mut scaler = None;
+
+        let converted =
+            convert_for_encode(&original, &mut scaler, avformat::Pixel::YUV420P, 16, 12)
+                .expect("converted import frame");
+
+        assert!(scaler.is_some());
+        assert_eq!(converted.format(), avformat::Pixel::YUV420P);
+        assert_eq!(converted.width(), 16);
+        assert_eq!(converted.height(), 12);
+        assert_eq!(converted.pts(), Some(819));
+        assert_ne!(converted.data(0).as_ptr(), original.data(0).as_ptr());
     }
 }
