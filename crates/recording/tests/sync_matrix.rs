@@ -29,6 +29,7 @@ use cap_timestamp::{Timestamp, Timestamps};
 use serde::{Deserialize, Serialize};
 
 const CONTENT_SECS: f64 = 4.0;
+const MAX_PRODUCTION_CAPTURE_FPS: u32 = 240;
 /// Absolute tolerance for a muxed pts vs the sent capture timestamp,
 /// measured from each side's own origin (first sent frame vs first muxed
 /// pts). Covers warmup anchoring, emission jitter and encoder rounding,
@@ -241,6 +242,11 @@ impl VideoCase {
     }
 }
 
+fn minimum_overload_coverage(delivered_fps: u32) -> f64 {
+    0.9 * f64::from(MAX_PRODUCTION_CAPTURE_FPS)
+        / f64::from(delivered_fps.max(MAX_PRODUCTION_CAPTURE_FPS))
+}
+
 async fn run_video_case(case: VideoCase) -> Result<String, String> {
     let temp = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
     let out_path = if case.fragmented {
@@ -277,7 +283,7 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         // exist to verify drop handling, not consumer throughput: a weak
         // runner saturated by the firehose proves nothing, so send blocking
         // still counts as falling behind there and earns a loud skip.
-        let overload_case = case.delivered_fps > 240;
+        let overload_case = case.delivered_fps > MAX_PRODUCTION_CAPTURE_FPS;
         tokio::spawn(async move {
             let mut max_late = 0.0f64;
             let mut last_send_end: Option<std::time::Instant> = None;
@@ -391,9 +397,10 @@ async fn run_video_case(case: VideoCase) -> Result<String, String> {
         // cannot real-time-encode several hundred fps of worst-case content.
         // Timestamp correctness is still enforced below on every frame that
         // was muxed; extra frames or heavy loss always fail.
-        let overload_case = case.delivered_fps > 240;
+        let overload_case = case.delivered_fps > MAX_PRODUCTION_CAPTURE_FPS;
         let coverage = pts.len() as f64 / sent.len() as f64;
-        if !overload_case || coverage < 0.9 || pts.len() > sent.len() {
+        let minimum_coverage = minimum_overload_coverage(case.delivered_fps);
+        if !overload_case || coverage < minimum_coverage || pts.len() > sent.len() {
             return Err(format!(
                 "frame count mismatch: sent {} frames, container has {} \
                  (missing sent indices: {})",
@@ -1433,6 +1440,15 @@ fn report_chunk_ms_only_trusts_a_narrow_buffer_range() {
     assert_eq!(report_chunk_ms(0, Some((480, 960))), 20.0);
 }
 
+#[test]
+fn overload_coverage_preserves_supported_capture_throughput() {
+    assert!((minimum_overload_coverage(240) - 0.9).abs() < f64::EPSILON);
+    assert!((minimum_overload_coverage(480) - 0.45).abs() < f64::EPSILON);
+    assert!((minimum_overload_coverage(1_000) - 0.216).abs() < f64::EPSILON);
+    assert!(1620.0 / 3298.0 >= minimum_overload_coverage(938));
+    assert!(700.0 / 3298.0 < minimum_overload_coverage(938));
+}
+
 fn cases_from_report(path: &Path) -> Result<Vec<(String, VideoCase, AudioCase)>, String> {
     let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let envelope: ReportEnvelope =
@@ -1732,6 +1748,58 @@ async fn run_video_case_with_cold_retry(case: VideoCase) -> Result<String, Strin
         }
         Err(first_error) => Err(first_error),
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn segmented_video_muxer_forwards_completed_video_segments() {
+    let temp = tempfile::tempdir().expect("temporary recording directory");
+    let info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+    let (frame_tx, frame_rx) = flume::bounded::<FFmpegVideoFrame>(8);
+    let (segment_tx, segment_rx) = std::sync::mpsc::channel();
+    let timestamps = Timestamps::now();
+    let base = timestamps.instant();
+    let mut rng = Rng(7);
+
+    let pipeline = OutputPipeline::builder(temp.path().join("progressive-video"))
+        .with_video::<ChannelVideoSource<FFmpegVideoFrame>>(ChannelVideoSourceConfig::new(
+            info, frame_rx,
+        ))
+        .with_timestamps(timestamps)
+        .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+            segment_duration: Duration::from_millis(250),
+            segment_tx: Some(segment_tx),
+            ..Default::default()
+        })
+        .await
+        .expect("segmented video pipeline");
+
+    for index in 0..90u64 {
+        frame_tx
+            .send_async(FFmpegVideoFrame {
+                inner: make_video_frame(160, 120, index, Content::Motion, &mut rng),
+                timestamp: Timestamp::Instant(base + Duration::from_millis(index * 33)),
+            })
+            .await
+            .expect("synthetic video frame");
+    }
+    drop(frame_tx);
+
+    pipeline.stop().await.expect("finalized video pipeline");
+
+    let events = segment_rx.try_iter().collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| event.is_init),
+        "segmented video pipeline did not forward its initialization segment"
+    );
+    assert!(
+        events.iter().any(|event| !event.is_init),
+        "segmented video pipeline did not forward a completed media segment"
+    );
+    assert!(events.iter().all(|event| {
+        event.media_type == cap_enc_ffmpeg::segmented_stream::SegmentMediaType::Video
+            && event.file_size > 0
+            && event.path.is_file()
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
