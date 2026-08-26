@@ -359,6 +359,43 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      - name: Verify macOS app contents and signing
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="target/${{ matrix.settings.target }}/release/bundle/macos/Cap.app"
+          for binary in Cap cap-muxer cap-exporter cap-cli cap-gpui; do
+            executable="$APP/Contents/MacOS/$binary"
+            if [[ ! -x "$executable" ]]; then
+              echo "::error::Bundled executable missing or not executable: $executable"
+              exit 1
+            fi
+            codesign --verify --strict "$executable"
+          done
+          GPUI_SIGNATURE="$(codesign -dv --verbose=4 "$APP/Contents/MacOS/cap-gpui" 2>&1)"
+          if ! grep -Eq 'flags=.*runtime' <<< "$GPUI_SIGNATURE"; then
+            echo "::error::Cap GPUI is not signed with the macOS hardened runtime."
+            exit 1
+          fi
+          if ! grep -Eq '^Authority=Developer ID Application:' <<< "$GPUI_SIGNATURE"; then
+            echo "::error::Cap GPUI is not signed with a Developer ID Application certificate."
+            exit 1
+          fi
+          codesign --verify --deep --strict "$APP"
+          spctl --assess --type execute "$APP"
+          xcrun stapler validate "$APP"
+          if [[ ! -s "$APP.tar.gz" || ! -s "$APP.tar.gz.sig" ]]; then
+            echo "::error::macOS updater artifact or production signature is missing."
+            exit 1
+          fi
+          DMG="$(find "target/${{ matrix.settings.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [[ -z "$DMG" || ! -s "$DMG" ]]; then
+            echo "::error::macOS disk image is missing or empty."
+            exit 1
+          fi
+          codesign --verify "$DMG"
+
       # Guards against the Linux packaging regressions:
       #   1. Frontend missing: vinxi must produce apps/desktop/.output/public,
       #      which Tauri EMBEDS into the binary (it is NOT shipped as a loose
@@ -402,6 +439,22 @@ jobs:
           WORK="$(mktemp -d)"
           dpkg-deb -x "$DEB" "$WORK"
 
+          EXECUTABLES=()
+          for binary in Cap cap-muxer cap-exporter cap-cli cap-gpui; do
+            executable="$WORK/usr/bin/$binary"
+            if [[ ! -x "$executable" ]]; then
+              echo "::error::Bundled executable missing or not executable: /usr/bin/$binary"
+              exit 1
+            fi
+            EXECUTABLES+=("$executable")
+          done
+
+          GPUI_RPATH="$(objdump -p "$WORK/usr/bin/cap-gpui" | awk '/RPATH|RUNPATH/{print $2}')"
+          if [[ "$GPUI_RPATH" != *'$ORIGIN/../lib/cap'* ]]; then
+            echo "::error::The bundled GPUI executable cannot resolve shared libraries from /usr/lib/cap"
+            exit 1
+          fi
+
           # Best-effort confirmation that the SPA actually got embedded into the
           # binary (Tauri stores asset path keys as plaintext). Informational only.
           if strings "$WORK/usr/bin/Cap" 2>/dev/null | grep -q "index.html"; then
@@ -412,7 +465,7 @@ jobs:
 
           # (2) every FFmpeg soname the binary NEEDs is bundled
           BIN="$WORK/usr/bin/Cap"
-          NEEDED="$(objdump -p "$BIN" | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' || true)"
+          NEEDED="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' | sort -u || true)"
           echo "Binary NEEDs FFmpeg sonames:"; echo "${NEEDED:-(none)}"
           echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
           MISSING=0
@@ -434,12 +487,19 @@ jobs:
           # in 0.5.2). Assert the curated set of such sonames the binary links.
           DEPENDS="$(dpkg-deb -f "$DEB" Depends || true)"
           echo "Declared Depends: ${DEPENDS:-(none)}"
-          NEEDED_ALL="$(objdump -p "$BIN" | awk '/NEEDED/{print $2}')"
+          if ! echo "$DEPENDS" | grep -Eq '(^|,[[:space:]]*)pulseaudio-utils([[:space:](,]|$)'; then
+            echo "::error::Linux system audio requires pulseaudio-utils (pactl) in .deb Depends."
+            exit 1
+          fi
+          NEEDED_ALL="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | sort -u)"
           # soname -> a Depends token that satisfies it. The alsa token is a
           # substring so it matches both libasound2 and libasound2t64.
           declare -A SONAME_DEP=(
             [libpipewire-0.3.so.0]="libpipewire-0.3-0"
             [libasound.so.2]="libasound2"
+            [libxkbcommon.so.0]="libxkbcommon0"
+            [libxkbcommon-x11.so.0]="libxkbcommon-x11-0"
+            [libssl.so.3]="libssl3"
           )
           DEP_MISSING=0
           for so in "${!SONAME_DEP[@]}"; do
@@ -458,6 +518,33 @@ jobs:
             exit 1
           fi
           echo "Runtime dependency declarations OK"
+
+      - name: Verify Windows installer contents
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "target/${{ matrix.settings.target }}/release/bundle/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows NSIS installer was produced."
+          }
+          $sevenZip = Get-Command 7z -ErrorAction Stop
+          $requiredFiles = @(
+            "Cap.exe", "cap-muxer.exe", "cap-exporter.exe", "cap-cli.exe", "cap-gpui.exe",
+            "avcodec-61.dll", "avdevice-61.dll", "avfilter-10.dll", "avformat-61.dll",
+            "avutil-59.dll", "postproc-58.dll", "swresample-5.dll", "swscale-8.dll",
+            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"
+          )
+          foreach ($installer in $installers) {
+            $contents = & $sevenZip.Source l -slt $installer.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect Windows installer '$($installer.Name)'."
+            }
+            foreach ($file in $requiredFiles) {
+              if ($contents -notcontains "Path = $file") {
+                throw "Windows installer '$($installer.Name)' is missing bundled '$file'."
+              }
+            }
+          }
 
       - name: Upload unsigned Windows installer
         if: ${{ runner.os == 'Windows' }}
@@ -518,6 +605,21 @@ jobs:
           Write-Host "Files in bundle directory after signing:"
           Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
+      - name: Verify Windows installer Authenticode signature
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "target/${{ matrix.settings.target }}/release/bundle/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists after SignPath signing."
+          }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Windows installer '$($installer.Name)' has invalid Authenticode status: $($signature.Status)."
+            }
+          }
+
       - name: Re-sign Windows installer for Tauri updater
         if: ${{ runner.os == 'Windows' }}
         shell: bash
@@ -528,6 +630,10 @@ jobs:
             echo "Re-signing $(basename "$exe") for Tauri updater..."
             rm -f "${exe}.sig"
             pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+            if [[ ! -s "${exe}.sig" ]]; then
+              echo "::error::Windows production updater signature missing for $exe"
+              exit 1
+            fi
           done
           echo "Signature files after re-signing:"
           ls -la "$BUNDLE_DIR"/*.sig
