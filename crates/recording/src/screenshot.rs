@@ -819,8 +819,213 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
 
 #[cfg(target_os = "linux")]
 pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
+    if is_pure_wayland_session() {
+        let image = capture_screenshot_wayland(&target).await?;
+        return Ok(finalize_screenshot(image, &target));
+    }
+
     let image = capture_screenshot_x11(&target).await?;
     Ok(finalize_screenshot(image, &target))
+}
+
+#[cfg(target_os = "linux")]
+pub fn is_pure_wayland_session() -> bool {
+    is_pure_wayland_environment(
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        std::env::var_os("DISPLAY").as_deref(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn is_pure_wayland_environment(
+    wayland_display: Option<&std::ffi::OsStr>,
+    x11_display: Option<&std::ffi::OsStr>,
+) -> bool {
+    wayland_display.is_some() && x11_display.is_none()
+}
+
+#[cfg(target_os = "linux")]
+async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    let display_id = wayland_screenshot_display_id(target)?;
+
+    let displays = scap_targets::Display::list();
+    let [display] = displays.as_slice() else {
+        return Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected display"
+        ));
+    };
+
+    if display.id() != *display_id {
+        return Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected display"
+        ));
+    }
+
+    let display_size = display
+        .physical_size()
+        .ok_or_else(|| anyhow!("Selected Wayland display size unavailable"))?;
+    let (width, height) =
+        checked_wayland_display_size(display_size.width(), display_size.height())?;
+    let crop = checked_wayland_screenshot_crop(target, width, height)?;
+
+    let screenshot = ashpd::desktop::screenshot::Screenshot::request()
+        .interactive(false)
+        .send()
+        .await
+        .context("Request Wayland screenshot from desktop portal")?
+        .response()
+        .context("Wayland screenshot portal request was cancelled or rejected")?;
+
+    let uri = screenshot.uri();
+    if !is_local_wayland_screenshot_uri(uri.scheme(), uri.host_str()) {
+        return Err(anyhow!(
+            "Wayland screenshot portal returned a non-local file URI"
+        ));
+    }
+
+    let path = uri
+        .to_file_path()
+        .map_err(|()| anyhow!("Wayland screenshot portal returned a non-local file URI"))?;
+
+    let metadata = tokio::fs::symlink_metadata(&path)
+        .await
+        .context("Read Wayland screenshot portal file metadata")?;
+    if !metadata.file_type().is_file() {
+        return Err(anyhow!(
+            "Wayland screenshot portal returned a non-regular file"
+        ));
+    }
+
+    let image = tokio::task::spawn_blocking(move || {
+        use std::os::unix::fs::MetadataExt;
+
+        let file = std::fs::File::open(&path).context("Open Wayland screenshot portal image")?;
+        let opened_metadata = file
+            .metadata()
+            .context("Read opened Wayland screenshot portal file metadata")?;
+        if !opened_metadata.file_type().is_file()
+            || opened_metadata.dev() != metadata.dev()
+            || opened_metadata.ino() != metadata.ino()
+        {
+            return Err(anyhow!(
+                "Wayland screenshot portal image changed before it could be read"
+            ));
+        }
+
+        image::ImageReader::new(std::io::BufReader::new(file))
+            .with_guessed_format()
+            .context("Identify Wayland screenshot portal image format")?
+            .decode()
+            .map(DynamicImage::into_rgb8)
+            .context("Decode Wayland screenshot portal image")
+    })
+    .await
+    .context("Wayland screenshot image task failed")??;
+
+    if !wayland_screenshot_matches_display(image.width(), image.height(), width, height) {
+        return Err(anyhow!(
+            "Wayland screenshot contains content outside the selected display"
+        ));
+    }
+
+    match crop {
+        Some((x, y, width, height)) => {
+            Ok(image::imageops::crop_imm(&image, x, y, width, height).to_image())
+        }
+        None => Ok(image),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_screenshot_display_id(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<&scap_targets::DisplayId> {
+    match target {
+        ScreenCaptureTarget::Display { id } => Ok(id),
+        ScreenCaptureTarget::Area { screen, .. } => Ok(screen),
+        ScreenCaptureTarget::Window { .. } => Err(anyhow!(
+            "Wayland screenshot portal cannot safely isolate the selected window"
+        )),
+        ScreenCaptureTarget::CameraOnly => {
+            Err(anyhow!("Camera-only not supported for screenshots"))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_local_wayland_screenshot_uri(scheme: &str, host: Option<&str>) -> bool {
+    scheme == "file" && (host.is_none() || host == Some("localhost"))
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_screenshot_matches_display(
+    image_width: u32,
+    image_height: u32,
+    display_width: u32,
+    display_height: u32,
+) -> bool {
+    image_width == display_width && image_height == display_height
+}
+
+#[cfg(target_os = "linux")]
+fn checked_wayland_display_size(width: f64, height: f64) -> anyhow::Result<(u32, u32)> {
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || width.fract() != 0.0
+        || height.fract() != 0.0
+        || width > f64::from(u32::MAX)
+        || height > f64::from(u32::MAX)
+    {
+        return Err(anyhow!("Selected Wayland display size is invalid"));
+    }
+
+    Ok((width as u32, height as u32))
+}
+
+#[cfg(target_os = "linux")]
+fn checked_wayland_screenshot_crop(
+    target: &ScreenCaptureTarget,
+    image_width: u32,
+    image_height: u32,
+) -> anyhow::Result<Option<(u32, u32, u32, u32)>> {
+    let ScreenCaptureTarget::Area { bounds, .. } = target else {
+        return Ok(None);
+    };
+
+    let x = bounds.position().x();
+    let y = bounds.position().y();
+    let width = bounds.size().width();
+    let height = bounds.size().height();
+    let right = x + width;
+    let bottom = y + height;
+
+    if ![x, y, width, height, right, bottom]
+        .iter()
+        .all(|value| value.is_finite())
+        || x < 0.0
+        || y < 0.0
+        || width <= 0.0
+        || height <= 0.0
+        || right > f64::from(image_width)
+        || bottom > f64::from(image_height)
+    {
+        return Err(anyhow!(
+            "Selected Wayland screenshot area exceeds the selected display"
+        ));
+    }
+
+    let x = x.ceil() as u32;
+    let y = y.ceil() as u32;
+    let right = right.floor() as u32;
+    let bottom = bottom.floor() as u32;
+
+    if right <= x || bottom <= y {
+        return Err(anyhow!("Selected Wayland screenshot area is empty"));
+    }
+
+    Ok(Some((x, y, right - x, bottom - y)))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -988,7 +1193,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 display
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::Window { id } => {
                 let window = scap_targets::Window::from_id(&id)
@@ -996,7 +1201,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 window
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::Area { screen, .. } => {
                 let display = scap_targets::Display::from_id(&screen)
@@ -1004,10 +1209,19 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
                 display
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))
             }
             ScreenCaptureTarget::CameraOnly => {
                 return Err(anyhow!("Camera-only not supported for screenshots"));
+            }
+        };
+
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                let fallback_image = gdi_or_error(&target, error)?;
+                return crop_area_if_needed(fallback_image, &target, false)
+                    .map(|image| finalize_screenshot(image, &target));
             }
         };
 
@@ -1320,5 +1534,124 @@ fn linux_capture_geometry(
         ScreenCaptureTarget::CameraOnly => {
             Err(anyhow!("Camera-only not supported for screenshots"))
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod wayland_screenshot_tests {
+    use super::*;
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+    use std::ffi::OsStr;
+
+    fn area_target(x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Area {
+            screen: "0".parse().expect("valid display id"),
+            bounds: LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height)),
+        }
+    }
+
+    #[test]
+    fn pure_wayland_requires_wayland_socket_without_x11_display() {
+        assert!(is_pure_wayland_environment(
+            Some(OsStr::new("wayland-1")),
+            None
+        ));
+        assert!(!is_pure_wayland_environment(
+            Some(OsStr::new("wayland-1")),
+            Some(OsStr::new(":99"))
+        ));
+        assert!(!is_pure_wayland_environment(None, None));
+        assert!(!is_pure_wayland_environment(None, Some(OsStr::new(":99"))));
+    }
+
+    #[test]
+    fn only_local_file_screenshot_uris_are_accepted() {
+        assert!(is_local_wayland_screenshot_uri("file", None));
+        assert!(is_local_wayland_screenshot_uri("file", Some("localhost")));
+        assert!(!is_local_wayland_screenshot_uri("https", None));
+        assert!(!is_local_wayland_screenshot_uri("https", Some("localhost")));
+        assert!(!is_local_wayland_screenshot_uri("file", Some("remote")));
+    }
+
+    #[test]
+    fn valid_wayland_display_dimensions_must_be_exact_positive_pixels() {
+        assert_eq!(
+            checked_wayland_display_size(1920.0, 1080.0).expect("valid display"),
+            (1920, 1080)
+        );
+
+        for (width, height) in [
+            (0.0, 1080.0),
+            (1920.0, -1.0),
+            (1920.5, 1080.0),
+            (f64::NAN, 1080.0),
+            (1920.0, f64::INFINITY),
+            (f64::from(u32::MAX) + 1.0, 1080.0),
+        ] {
+            assert!(checked_wayland_display_size(width, height).is_err());
+        }
+    }
+
+    #[test]
+    fn screenshot_must_match_the_selected_display_exactly() {
+        assert!(wayland_screenshot_matches_display(1920, 1080, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(3840, 1080, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(1920, 2160, 1920, 1080));
+        assert!(!wayland_screenshot_matches_display(1280, 720, 1920, 1080));
+    }
+
+    #[test]
+    fn selected_wayland_area_is_cropped_exactly() {
+        let target = area_target(100.0, 120.0, 640.0, 360.0);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080).expect("valid crop"),
+            Some((100, 120, 640, 360))
+        );
+    }
+
+    #[test]
+    fn fractional_wayland_areas_never_include_pixels_outside_selection() {
+        let target = area_target(10.25, 20.25, 30.75, 40.75);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080).expect("valid crop"),
+            Some((11, 21, 30, 40))
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_or_non_finite_wayland_areas_are_rejected() {
+        for (x, y, width, height) in [
+            (-1.0, 0.0, 10.0, 10.0),
+            (0.0, -1.0, 10.0, 10.0),
+            (1915.0, 0.0, 10.0, 10.0),
+            (0.0, 1075.0, 10.0, 10.0),
+            (0.0, 0.0, 0.0, 10.0),
+            (0.0, 0.0, 10.0, -1.0),
+            (f64::NAN, 0.0, 10.0, 10.0),
+            (0.0, 0.0, f64::INFINITY, 10.0),
+            (f64::MAX, 0.0, f64::MAX, 10.0),
+        ] {
+            let target = area_target(x, y, width, height);
+            assert!(checked_wayland_screenshot_crop(&target, 1920, 1080).is_err());
+        }
+    }
+
+    #[test]
+    fn too_small_fractional_wayland_areas_are_rejected() {
+        let target = area_target(10.25, 20.25, 0.25, 0.25);
+        assert!(checked_wayland_screenshot_crop(&target, 1920, 1080).is_err());
+    }
+
+    #[test]
+    fn wayland_window_screenshots_are_rejected_before_portal_capture() {
+        let target = ScreenCaptureTarget::Window {
+            id: "0".parse().expect("valid window id"),
+        };
+        assert!(wayland_screenshot_display_id(&target).is_err());
+    }
+
+    #[test]
+    fn wayland_camera_only_screenshots_are_rejected_before_portal_capture() {
+        assert!(wayland_screenshot_display_id(&ScreenCaptureTarget::CameraOnly).is_err());
     }
 }

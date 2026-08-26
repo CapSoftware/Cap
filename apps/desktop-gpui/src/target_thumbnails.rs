@@ -441,6 +441,7 @@ pub fn display_signature(list: &[DisplayOption]) -> String {
 /// (the card's slot background shows through, as in the Tauri picker).
 /// Requesting this size FROM SCK instead is not an option: for some sizes
 /// `capture_sample_buf` never resolves -- no error, the future hangs.
+#[cfg(any(target_os = "macos", test))]
 pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
     let Some((width, height)) = source else {
         return (THUMBNAIL_WIDTH as usize, THUMBNAIL_HEIGHT as usize);
@@ -938,12 +939,13 @@ mod platform {
     }
 }
 
-/// Windows and Linux have their own `thumbnails/{windows,linux}.rs` in the
-/// Tauri app; neither is ported yet, and the picker falls back to the icon
-/// card, which is exactly what it did before this unit.
 #[cfg(not(target_os = "macos"))]
 mod platform {
+    use cap_recording::screenshot::capture_screenshot;
+    use cap_recording::sources::screen_capture::ScreenCaptureTarget;
     use image::RgbaImage;
+
+    use super::normalize_thumbnail_dimensions;
 
     #[derive(Clone)]
     pub struct ShareableContent;
@@ -955,21 +957,42 @@ mod platform {
     }
 
     pub async fn shareable_content() -> Option<ShareableContent> {
-        None
+        Some(ShareableContent)
     }
 
     pub async fn capture_display_thumbnail(
-        _display: &scap_targets::Display,
+        display: &scap_targets::Display,
         _content: ShareableContent,
     ) -> Option<RgbaImage> {
-        None
+        capture_target_thumbnail(ScreenCaptureTarget::Display { id: display.id() }).await
     }
 
     pub async fn capture_window_thumbnail(
-        _window: &scap_targets::Window,
+        window: &scap_targets::Window,
         _content: ShareableContent,
     ) -> Option<RgbaImage> {
-        None
+        capture_target_thumbnail(ScreenCaptureTarget::Window { id: window.id() }).await
+    }
+
+    async fn capture_target_thumbnail(target: ScreenCaptureTarget) -> Option<RgbaImage> {
+        #[cfg(target_os = "linux")]
+        if cap_recording::screenshot::is_pure_wayland_session() {
+            return None;
+        }
+
+        let image = match capture_screenshot(target).await {
+            Ok(image) => image.into_rgba8(),
+            Err(error) => {
+                tracing::warn!(%error, "target thumbnail capture failed");
+                return None;
+            }
+        };
+
+        if image.width() == 0 || image.height() == 0 {
+            return None;
+        }
+
+        Some(normalize_thumbnail_dimensions(&image))
     }
 }
 
@@ -984,6 +1007,7 @@ use platform::{capture_display_thumbnail, capture_window_thumbnail, shareable_co
 /// The four 32-bit orders `capture_thumbnail_from_filter` accepts
 /// (`thumbnails/mac.rs:73-78`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg(any(target_os = "macos", test))]
 pub enum ChannelOrder {
     Bgra,
     Rgba,
@@ -996,6 +1020,7 @@ pub enum ChannelOrder {
 /// # Safety
 /// `base_ptr` must be the base address of a locked pixel buffer holding at
 /// least `bytes_per_row * height` readable bytes.
+#[cfg(target_os = "macos")]
 unsafe fn convert_32bit_pixel_buffer(
     base_ptr: *const u8,
     bytes_per_row: usize,
@@ -1014,6 +1039,7 @@ unsafe fn convert_32bit_pixel_buffer(
 }
 
 /// The row loop of `convert_32bit_pixel_buffer`, over a slice.
+#[cfg(any(target_os = "macos", test))]
 fn convert_32bit_rows(
     raw_data: &[u8],
     bytes_per_row: usize,
@@ -1056,12 +1082,14 @@ fn convert_32bit_rows(
 }
 
 #[derive(Copy, Clone)]
+#[cfg(any(target_os = "macos", test))]
 pub enum Nv12Range {
     Video,
     _Full,
 }
 
 /// The plane geometry `convert_nv12_pixel_buffer` reads out of the lock.
+#[cfg(target_os = "macos")]
 struct Nv12Planes {
     y: *const u8,
     y_stride: usize,
@@ -1076,7 +1104,7 @@ struct Nv12Planes {
 /// # Safety
 /// Both plane pointers must address at least `stride * plane_height` readable
 /// bytes of a locked pixel buffer.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(target_os = "macos")]
 unsafe fn convert_nv12_pixel_buffer(
     planes: Nv12Planes,
     width: usize,
@@ -1125,6 +1153,7 @@ unsafe fn convert_nv12_pixel_buffer(
 }
 
 /// The pixel loop of `convert_nv12_pixel_buffer`, over slices.
+#[cfg(any(target_os = "macos", test))]
 fn convert_nv12_planes(
     y_plane: &[u8],
     y_stride: usize,
@@ -1188,6 +1217,7 @@ fn convert_nv12_planes(
 
 /// `ycbcr_to_rgb` (`thumbnails/mac.rs:256-275`): BT.601 coefficients, with the
 /// video-range 16..235 luma expansion.
+#[cfg(any(target_os = "macos", test))]
 fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
     let y = y as f32;
     let cb = cb as f32 - 128.0;
@@ -1205,6 +1235,7 @@ fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
     (clamp_channel(r), clamp_channel(g), clamp_channel(b))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn clamp_channel(value: f32) -> u8 {
     value.clamp(0.0, 255.0) as u8
 }
