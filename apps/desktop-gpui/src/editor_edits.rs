@@ -2128,6 +2128,7 @@ mod tests {
                 source_start: 0.,
                 source_duration: end - start,
                 timescale: 1.,
+                muted: false,
                 recording_clip: 0,
                 holds: Arc::from(&[][..]),
             },

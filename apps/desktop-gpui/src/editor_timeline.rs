@@ -42,7 +42,10 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
-use crate::{editor_edits::Selection, theme::Theme};
+use crate::{
+    editor_edits::{Selection, clip_is_muted},
+    theme::Theme,
+};
 
 // ---------------------------------------------------------------------------
 // Layout constants (`TL/index.tsx:62-68`)
@@ -131,6 +134,7 @@ const FADE_RAMP_PX: f64 = 50.;
 /// step 9 constant across the two), so it is a literal here too.
 pub mod track_color {
     pub const CLIP: u32 = 0x3f8ae0;
+    pub const MUTED_CLIP: u32 = 0x5b6c80;
     pub const ZOOM: u32 = 0x4a4f5c;
     pub const CAPTION: u32 = 0x6f747d;
     pub const KEYBOARD: u32 = 0xd4742c;
@@ -841,6 +845,7 @@ pub enum SegmentDetail {
         /// (`TL/ClipTrack.tsx:1261`) -- the source span, before timescale.
         source_duration: f64,
         timescale: f64,
+        muted: bool,
         recording_clip: u32,
         /// Held (paused) windows inside this clip's on-screen box, in output
         /// time (`TL/ClipTrack.tsx:658-666`).
@@ -874,6 +879,19 @@ pub enum SegmentDetail {
     Caption { text: SharedString },
     /// `TL/KeyboardTrack.tsx:168-266`.
     Keyboard { text: SharedString },
+}
+
+impl SegmentDetail {
+    fn shows_waveform(&self) -> bool {
+        matches!(
+            self,
+            Self::Clip {
+                timescale,
+                muted: false,
+                ..
+            } if *timescale == 1.0
+        )
+    }
 }
 
 /// A row of the timeline body: a track type plus its lane index.
@@ -1280,6 +1298,7 @@ fn clip_rows(
                     // *source* span, not the output one (`TL/ClipTrack.tsx:1261`).
                     source_duration: segment.end - segment.start,
                     timescale: segment.timescale,
+                    muted: clip_is_muted(segment),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
                 },
@@ -2153,7 +2172,11 @@ fn render_segment(
     hovered: bool,
     split_mode: bool,
 ) -> AnyElement {
-    let color = kind.color();
+    let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
+        gpui::rgb(track_color::MUTED_CLIP).into()
+    } else {
+        kind.color()
+    };
     let x = ((segment.start - view.transform.position) / secs_per_pixel) as f32;
     let width = ((segment.end - segment.start) / secs_per_pixel) as f32;
     let (visible_width, center_x) =
@@ -2182,13 +2205,12 @@ fn render_segment(
     // The clip track's waveform and its per-second markings, both under the
     // label (`TL/ClipTrack.tsx:943-957`).
     if let SegmentDetail::Clip {
-        timescale,
         holds,
         recording_clip,
         ..
     } = &segment.detail
     {
-        if *timescale == 1. {
+        if segment.detail.shows_waveform() {
             fill = fill.child(render_waveform(
                 model,
                 segment,
@@ -2688,20 +2710,50 @@ fn label_body(
             SegmentDetail::Clip {
                 name,
                 source_duration,
+                muted,
                 ..
             },
             LabelTier::Full,
         ) => div()
             .flex()
             .flex_col()
+            .max_w_full()
+            .min_w_0()
             .gap(px(4.))
             .items_center()
             .justify_center()
             .text_size(px(12.))
             .child(
                 div()
-                    .text_color(with_alpha(gpui::white(), 0.7))
-                    .child(name.clone()),
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .max_w_full()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(with_alpha(gpui::white(), 0.7))
+                            .child(name.clone()),
+                    )
+                    .when(*muted, |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(px(4.))
+                                .px(px(4.))
+                                .rounded(px(4.))
+                                .bg(with_alpha(gpui::black(), 0.2))
+                                .text_color(gpui::white())
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(svg().path("icons/volume-x.svg").size(px(12.)).flex_none())
+                                .child("Muted"),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -2729,17 +2781,35 @@ fn label_body(
             .into_any_element(),
         (
             SegmentDetail::Clip {
-                source_duration, ..
+                source_duration,
+                muted,
+                ..
             },
             LabelTier::Compact,
         ) => div()
             .flex()
             .flex_row()
+            .max_w_full()
+            .min_w_0()
             .gap(px(4.))
             .items_center()
             .text_size(px(10.))
             .text_color(on_fill)
-            .child(div().truncate().child(format_clip_time(*source_duration)))
+            .when(*muted, |this| {
+                this.child(svg().path("icons/volume-x.svg").size(px(12.)).flex_none())
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(format_clip_time(*source_duration)),
+            )
+            .into_any_element(),
+        (SegmentDetail::Clip { muted: true, .. }, LabelTier::Glyph) => svg()
+            .path("icons/volume-x.svg")
+            .size(px((visible_width - 8.).clamp(8., 14.) as f32))
+            .flex_none()
+            .text_color(gpui::white())
             .into_any_element(),
         (SegmentDetail::Clip { .. }, LabelTier::Glyph) => {
             return None;
@@ -3712,6 +3782,71 @@ mod tests {
             panic!("not a clip")
         };
         assert_eq!(name.as_ref(), "Clip 1");
+    }
+
+    #[test]
+    fn muting_a_split_hides_only_its_waveform_and_shows_a_muted_glyph() {
+        let mut config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        assert!(crate::editor_edits::split_clip_segment(
+            config.timeline.as_mut().unwrap(),
+            5.0,
+            Some(0),
+        ));
+
+        for muted in [true, false] {
+            assert!(crate::editor_edits::set_clip_muted(
+                config.timeline.as_mut().unwrap(),
+                1,
+                muted,
+            ));
+            let model = TimelineModel::build(&config, false, false);
+            assert!(model.clips[0].detail.shows_waveform());
+            assert_eq!(model.clips[1].detail.shows_waveform(), !muted);
+            assert!(matches!(
+                model.clips[1].detail,
+                SegmentDetail::Clip { muted: value, .. } if value == muted
+            ));
+
+            for theme in [Theme::light(), Theme::dark()] {
+                for (tier, width) in [(LabelTier::Full, 140.0), (LabelTier::Compact, 64.0)] {
+                    assert!(label_body(&theme, &model.clips[1], tier, width).is_some());
+                }
+                assert_eq!(
+                    label_body(&theme, &model.clips[1], LabelTier::Glyph, 24.0).is_some(),
+                    muted,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clip_mute_indicators_follow_speed_audio_modes() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 0.0, "end": 2.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 2.0, "end": 4.0, "speedAudioMode": "maintainPitch" },
+                    { "recordingSegment": 0, "timescale": 0.5, "start": 4.0, "end": 6.0, "speedAudioMode": "mute" },
+                    { "recordingSegment": 0, "timescale": 0.5, "start": 6.0, "end": 8.0, "speedAudioMode": "matchSpeed" }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        let model = TimelineModel::build(&config, false, false);
+        for (clip, expected_muted) in model.clips.iter().zip([true, false, true, false]) {
+            assert!(matches!(
+                clip.detail,
+                SegmentDetail::Clip { muted, .. } if muted == expected_muted
+            ));
+            assert!(!clip.detail.shows_waveform());
+        }
     }
 
     #[test]
