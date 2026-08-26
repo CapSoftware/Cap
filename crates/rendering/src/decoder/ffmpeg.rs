@@ -70,6 +70,7 @@ struct PendingRequest {
 }
 
 const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
+const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
@@ -199,6 +200,76 @@ enum CachedFrame {
         number: u32,
         textures: Arc<FrameTextures>,
     },
+}
+
+impl CachedFrame {
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Raw { frame, .. } => {
+                let height = frame.height() as usize;
+                match frame.format() {
+                    format::Pixel::YUV420P => {
+                        frame.stride(0).saturating_mul(height).saturating_add(
+                            frame
+                                .stride(1)
+                                .saturating_add(frame.stride(2))
+                                .saturating_mul(height / 2),
+                        )
+                    }
+                    format::Pixel::NV12 => frame
+                        .stride(0)
+                        .saturating_mul(height)
+                        .saturating_add(frame.stride(1).saturating_mul(height / 2)),
+                    _ => (frame.width() as usize)
+                        .saturating_mul(height)
+                        .saturating_mul(4),
+                }
+            }
+            Self::Processed(frame) => frame.data.len(),
+            #[cfg(target_os = "windows")]
+            Self::Gpu { frame, .. } => (frame.width() as usize)
+                .saturating_mul(frame.height() as usize)
+                .saturating_mul(3),
+        }
+    }
+}
+
+fn insert_cached_frame(
+    cache: &mut BTreeMap<u32, CachedFrame>,
+    number: u32,
+    frame: CachedFrame,
+    requested_frame: u32,
+    last_active_frame: Option<u32>,
+    max_bytes: usize,
+) {
+    let frame_bytes = frame.estimated_bytes();
+    let mut cache_bytes = cache
+        .values()
+        .map(CachedFrame::estimated_bytes)
+        .fold(0usize, usize::saturating_add);
+
+    while !cache.is_empty()
+        && (cache.len() >= FRAME_CACHE_SIZE || cache_bytes.saturating_add(frame_bytes) > max_bytes)
+    {
+        let Some(last_active_frame) = last_active_frame else {
+            cache.clear();
+            break;
+        };
+        let first = *cache.keys().next().unwrap();
+        let last = *cache.keys().next_back().unwrap();
+        let evicted = if requested_frame > last_active_frame {
+            first
+        } else if requested_frame < last_active_frame || number <= last {
+            last
+        } else {
+            first
+        };
+        if let Some(frame) = cache.remove(&evicted) {
+            cache_bytes = cache_bytes.saturating_sub(frame.estimated_bytes());
+        }
+    }
+
+    cache.insert(number, frame);
 }
 
 pub struct FfmpegDecoder;
@@ -571,24 +642,14 @@ impl FfmpegDecoder {
                             {
                                 cache_frame.produce(&mut sw_converter);
 
-                                if sw_cache.len() >= FRAME_CACHE_SIZE {
-                                    if let Some(last_active_frame) = &sw_last_active_frame {
-                                        let frame = if requested_frame > *last_active_frame {
-                                            *sw_cache.keys().next().unwrap()
-                                        } else if requested_frame < *last_active_frame {
-                                            *sw_cache.keys().next_back().unwrap()
-                                        } else {
-                                            let min = *sw_cache.keys().min().unwrap();
-                                            let max = *sw_cache.keys().max().unwrap();
-                                            if current_frame > max { min } else { max }
-                                        };
-                                        sw_cache.remove(&frame);
-                                    } else {
-                                        sw_cache.clear()
-                                    }
-                                }
-
-                                sw_cache.insert(current_frame, cache_frame);
+                                insert_cached_frame(
+                                    &mut sw_cache,
+                                    current_frame,
+                                    cache_frame,
+                                    requested_frame,
+                                    sw_last_active_frame,
+                                    MAX_FRAME_CACHE_BYTES,
+                                );
 
                                 // Serve exact matches from the cache so
                                 // sequentially played frames stay available as
@@ -1032,26 +1093,14 @@ impl FfmpegDecoder {
                         {
                             cache_frame.produce(&mut converter);
 
-                            if cache.len() >= FRAME_CACHE_SIZE {
-                                if let Some(last_active_frame) = &last_active_frame {
-                                    let frame = if requested_frame > *last_active_frame {
-                                        *cache.keys().next().unwrap()
-                                    } else if requested_frame < *last_active_frame {
-                                        *cache.keys().next_back().unwrap()
-                                    } else {
-                                        let min = *cache.keys().min().unwrap();
-                                        let max = *cache.keys().max().unwrap();
-
-                                        if current_frame > max { min } else { max }
-                                    };
-
-                                    cache.remove(&frame);
-                                } else {
-                                    cache.clear()
-                                }
-                            }
-
-                            cache.insert(current_frame, cache_frame);
+                            insert_cached_frame(
+                                &mut cache,
+                                current_frame,
+                                cache_frame,
+                                requested_frame,
+                                last_active_frame,
+                                MAX_FRAME_CACHE_BYTES,
+                            );
 
                             // Serve exact matches from the cache so
                             // sequentially played frames stay available as
@@ -1213,6 +1262,69 @@ impl FfmpegDecoder {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn frame(number: u32, bytes: usize) -> CachedFrame {
+        CachedFrame::Processed(ProcessedFrame {
+            number,
+            data: Arc::new(vec![0; bytes]),
+            width: 2,
+            height: 2,
+            format: PixelFormat::Nv12,
+            y_stride: 2,
+            uv_stride: 2,
+        })
+    }
+
+    #[test]
+    fn forward_playback_keeps_recent_frames_within_byte_budget() {
+        let mut cache = BTreeMap::new();
+
+        for number in 0..5 {
+            insert_cached_frame(&mut cache, number, frame(number, 6), 5, Some(4), 13);
+        }
+
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![3, 4]);
+        assert_eq!(
+            cache
+                .values()
+                .map(CachedFrame::estimated_bytes)
+                .sum::<usize>(),
+            12
+        );
+    }
+
+    #[test]
+    fn backward_seek_keeps_earliest_frames_within_byte_budget() {
+        let mut cache = BTreeMap::new();
+
+        for number in [5, 4, 3, 2] {
+            insert_cached_frame(&mut cache, number, frame(number, 5), 2, Some(6), 11);
+        }
+
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(
+            cache
+                .values()
+                .map(CachedFrame::estimated_bytes)
+                .sum::<usize>(),
+            10
+        );
+    }
+
+    #[test]
+    fn oversize_frame_remains_available_without_retaining_older_frames() {
+        let mut cache = BTreeMap::new();
+        insert_cached_frame(&mut cache, 1, frame(1, 4), 1, Some(1), 8);
+        insert_cached_frame(&mut cache, 2, frame(2, 12), 2, Some(1), 8);
+
+        assert_eq!(cache.keys().copied().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(cache[&2].estimated_bytes(), 12);
     }
 }
 

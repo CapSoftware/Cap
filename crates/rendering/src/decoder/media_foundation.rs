@@ -12,6 +12,8 @@ use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
 use super::{DecodedFrame, DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage};
 
+const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
 struct DecoderHealthMonitor {
     consecutive_errors: u32,
     consecutive_texture_read_failures: u32,
@@ -123,7 +125,7 @@ impl DecoderHealthMonitor {
 #[derive(Clone)]
 struct CachedFrame {
     number: u32,
-    _texture: ID3D11Texture2D,
+    _texture: Option<ID3D11Texture2D>,
     _shared_handle: Option<HANDLE>,
     _y_handle: Option<HANDLE>,
     _uv_handle: Option<HANDLE>,
@@ -133,15 +135,26 @@ struct CachedFrame {
 }
 
 impl CachedFrame {
+    fn estimated_bytes(&self) -> usize {
+        let texture_bytes = self._texture.as_ref().map_or(0, |_| {
+            (self.width as usize)
+                .saturating_mul(self.height as usize)
+                .saturating_mul(3)
+        });
+        texture_bytes.saturating_add(self.nv12_data.as_ref().map_or(0, |data| data.data.len()))
+    }
+
     fn to_decoded_frame(&self) -> DecodedFrame {
         let null_ptr = std::ptr::null_mut();
         let y_handle = self._y_handle.filter(|h| h.0 != null_ptr);
         let uv_handle = self._uv_handle.filter(|h| h.0 != null_ptr);
-        if let (Some(y_handle), Some(uv_handle)) = (y_handle, uv_handle) {
+        if let (Some(texture), Some(y_handle), Some(uv_handle)) =
+            (&self._texture, y_handle, uv_handle)
+        {
             return DecodedFrame::new_nv12_with_d3d11_texture_and_yuv_handles(
                 self.width,
                 self.height,
-                self._texture.clone(),
+                texture.clone(),
                 self._shared_handle,
                 Some(y_handle),
                 Some(uv_handle),
@@ -149,8 +162,8 @@ impl CachedFrame {
         }
 
         if let Some(nv12_data) = &self.nv12_data {
-            DecodedFrame::new_nv12(
-                nv12_data.data.clone(),
+            DecodedFrame::new_nv12_with_arc(
+                Arc::clone(&nv12_data.data),
                 self.width,
                 self.height,
                 nv12_data.y_stride,
@@ -218,6 +231,7 @@ impl MFDecoder {
             let video_height = decoder.height();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
+            let mut cache_bytes = 0usize;
             let mut last_decoded_frame: Option<u32> = None;
             let mut health = DecoderHealthMonitor::new();
 
@@ -324,6 +338,7 @@ impl MFDecoder {
                         warn!("MediaFoundation seek failed: {e}");
                     }
                     cache.clear();
+                    cache_bytes = 0;
                     last_decoded_frame = None;
                 }
 
@@ -393,27 +408,47 @@ impl MFDecoder {
 
                             let cached = CachedFrame {
                                 number: frame_number,
-                                _texture: mf_frame.textures.nv12.texture.clone(),
-                                _shared_handle: Some(mf_frame.textures.nv12.handle),
-                                _y_handle: Some(mf_frame.textures.y.handle),
-                                _uv_handle: Some(mf_frame.textures.uv.handle),
+                                _texture: has_valid_zero_copy_handles
+                                    .then(|| mf_frame.textures.nv12.texture.clone()),
+                                _shared_handle: has_valid_zero_copy_handles
+                                    .then_some(mf_frame.textures.nv12.handle),
+                                _y_handle: has_valid_zero_copy_handles
+                                    .then_some(mf_frame.textures.y.handle),
+                                _uv_handle: has_valid_zero_copy_handles
+                                    .then_some(mf_frame.textures.uv.handle),
                                 nv12_data,
                                 width: mf_frame.width,
                                 height: mf_frame.height,
                             };
 
+                            if !has_valid_zero_copy_handles {
+                                decoder.recycle_textures(mf_frame.textures);
+                            }
+
                             last_decoded_frame = Some(frame_number);
 
                             if frame_number >= cache_min && frame_number <= cache_max {
-                                if cache.len() >= FRAME_CACHE_SIZE {
+                                let frame_bytes = cached.estimated_bytes();
+                                while !cache.is_empty()
+                                    && (cache.len() >= FRAME_CACHE_SIZE
+                                        || cache_bytes.saturating_add(frame_bytes)
+                                            > MAX_FRAME_CACHE_BYTES)
+                                {
                                     let key_to_remove = if frame_number > requested_frame {
                                         *cache.keys().next().unwrap()
                                     } else {
                                         *cache.keys().next_back().unwrap()
                                     };
-                                    cache.remove(&key_to_remove);
+                                    if let Some(evicted) = cache.remove(&key_to_remove) {
+                                        cache_bytes =
+                                            cache_bytes.saturating_sub(evicted.estimated_bytes());
+                                    }
                                 }
-                                cache.insert(frame_number, cached.clone());
+                                if let Some(replaced) = cache.insert(frame_number, cached.clone()) {
+                                    cache_bytes =
+                                        cache_bytes.saturating_sub(replaced.estimated_bytes());
+                                }
+                                cache_bytes = cache_bytes.saturating_add(frame_bytes);
                             }
 
                             if frame_number <= requested_frame {
