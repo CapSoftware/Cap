@@ -63,6 +63,10 @@ fn area_min_size(mode: Mode) -> f32 {
     }
 }
 
+fn required_window_title_matches(required: Option<&str>, actual: Option<&str>) -> bool {
+    required.is_none_or(|required| actual == Some(required))
+}
+
 /// How close to an edge or corner counts as grabbing that handle. The TSX's
 /// corner buttons are 30px boxes hung 12px outside the crop and its edge
 /// buttons are 10px strips straddling the border; this is the same reach
@@ -547,6 +551,26 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
+        if let ScreenCaptureTarget::Window { id } = &target {
+            let window = scap_targets::Window::from_id(id);
+            let expected_title = crate::main_window::auto_window_title();
+            let actual_title = window.as_ref().and_then(scap_targets::Window::name);
+            if window.is_none()
+                || !required_window_title_matches(
+                    expected_title.as_deref(),
+                    actual_title.as_deref(),
+                )
+            {
+                tracing::warn!(
+                    window = %id,
+                    expected = ?expected_title,
+                    actual = ?actual_title,
+                    "refusing unavailable or unexpected recording window"
+                );
+                cx.defer(app_windows::reject_unavailable_window);
+                return;
+            }
+        }
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
         if self.select.read(cx).recording_mode == Mode::Screenshot {
             // Screenshots never reach the recording actors: the target goes
@@ -1589,6 +1613,28 @@ mod tests {
             ],
         );
         assert_eq!(MODE_MENU[2].1, Mode::Screenshot);
+    }
+
+    #[test]
+    fn required_window_titles_match_exactly_or_fail_closed() {
+        assert!(required_window_title_matches(None, None));
+        assert!(required_window_title_matches(None, Some("Other window")));
+        assert!(required_window_title_matches(
+            Some("Synthetic target"),
+            Some("Synthetic target")
+        ));
+        assert!(!required_window_title_matches(
+            Some("Synthetic target"),
+            Some("Synthetic target - private window")
+        ));
+        assert!(!required_window_title_matches(
+            Some("Synthetic target"),
+            Some("Private window")
+        ));
+        assert!(!required_window_title_matches(
+            Some("Synthetic target"),
+            None
+        ));
     }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> AreaRect {
