@@ -19,7 +19,6 @@ import {
 	PhysicalPosition,
 } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -55,6 +54,7 @@ import {
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
 import { clientEnv } from "~/utils/env";
+import { hideCurrentWindow } from "~/utils/hide-window";
 import {
 	importImageFromPicker,
 	importVideoFromPicker,
@@ -86,6 +86,7 @@ import {
 	type UploadProgress,
 } from "~/utils/tauri";
 import { openTeleprompter } from "~/utils/teleprompter";
+import { restartAfterUpdate } from "~/utils/updater";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -1741,6 +1742,7 @@ export default function () {
 }
 
 let hasChecked = false;
+const [installingUpdate, setInstallingUpdate] = createSignal(false);
 function createUpdateCheck() {
 	if (import.meta.env.DEV) return;
 
@@ -1799,17 +1801,21 @@ function createUpdateReadyToast() {
 					<div class="flex gap-2 items-center">
 						<button
 							type="button"
-							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
+							disabled={installingUpdate()}
+							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10 disabled:cursor-not-allowed disabled:opacity-60"
 							onClick={() => {
-								toast.dismiss(t.id);
-								const install = update.installed
-									? Promise.resolve(null)
-									: commands.updatesDownloadAndInstall();
-								// On Windows the NSIS installer restarts Cap itself, so the
-								// relaunch call is unreachable there; that matches update.tsx.
-								install
-									.then(() => relaunch())
-									.catch((e) => console.error("Failed to install update:", e));
+								if (installingUpdate()) return;
+								setInstallingUpdate(true);
+								restartAfterUpdate()
+									.catch((error) => {
+										console.error("Failed to install update:", error);
+										toast.error(
+											typeof error === "string"
+												? error
+												: "Unable to restart Cap safely.",
+										);
+									})
+									.finally(() => setInstallingUpdate(false));
 							}}
 						>
 							{update.installed ? "Restart now" : "Install and restart"}
@@ -2024,7 +2030,7 @@ function Page() {
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
-			void getCurrentWindow().hide();
+			void hideCurrentWindow();
 		} else if (pickerActive && hasHidden) {
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
 		} else if (recording) {
@@ -2922,7 +2928,7 @@ function Page() {
 			await shell.open(link);
 		}
 
-		await getCurrentWindow().hide();
+		await hideCurrentWindow();
 	};
 
 	const openScreenshot = async (screenshot: ScreenshotWithPath) => {
@@ -3224,7 +3230,7 @@ function Page() {
 								type="button"
 								onClick={async () => {
 									await commands.showWindow({ Settings: { page: "general" } });
-									getCurrentWindow().hide();
+									hideCurrentWindow();
 								}}
 								class="flex items-center justify-center size-5 focus:outline-hidden"
 							>
@@ -3412,7 +3418,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 									uploadProgress={uploadProgress}
 									reuploadingPaths={reuploadingPaths()}
@@ -3436,7 +3442,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "screenshots" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 								/>
 							) : variant === "camera" ? (

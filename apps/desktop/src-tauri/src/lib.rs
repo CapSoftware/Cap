@@ -70,8 +70,12 @@ use cap_recording::{
     sources::screen_capture::ScreenCaptureTarget,
 };
 use cap_rendering::ProjectRecordingsMeta;
+use clipboard_rs::Clipboard;
+#[cfg(not(target_os = "linux"))]
+use clipboard_rs::ClipboardContext;
+#[cfg(target_os = "linux")]
+use clipboard_rs::ClipboardContext as PlatformClipboardContext;
 use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
 use editor_window::{EditorInstances, PendingEditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
@@ -107,6 +111,8 @@ use std::{
 };
 use tauri::Listener;
 use tauri::{AppHandle, Emitter, Manager, State, Window, WindowEvent, ipc::Channel};
+#[cfg(target_os = "linux")]
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -201,6 +207,22 @@ mod tests {
             scaled_editor_preview_resolution(XY::new(1919, 1079), 65, 100),
             XY::new(1248, 702)
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wayland_clipboard_fallback_requires_wayland_without_x11() {
+        use std::ffi::OsStr;
+
+        assert!(uses_wayland_clipboard_fallback(
+            Some(OsStr::new("wayland-1")),
+            None
+        ));
+        assert!(!uses_wayland_clipboard_fallback(
+            Some(OsStr::new("wayland-1")),
+            Some(OsStr::new(":0"))
+        ));
+        assert!(!uses_wayland_clipboard_fallback(None, None));
     }
 
     #[test]
@@ -320,23 +342,38 @@ impl CameraWindowCloseGate {
     }
 }
 
-pub struct AppExitState(AtomicBool);
+pub struct AppExitState {
+    exiting: AtomicBool,
+    restarting: AtomicBool,
+}
 
 impl Default for AppExitState {
     fn default() -> Self {
-        Self(AtomicBool::new(false))
+        Self {
+            exiting: AtomicBool::new(false),
+            restarting: AtomicBool::new(false),
+        }
     }
 }
 
 impl AppExitState {
     pub fn begin(&self) -> bool {
-        self.0
+        self.exiting
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
 
+    pub fn begin_restart(&self) {
+        self.restarting.store(true, Ordering::Release);
+        self.exiting.store(true, Ordering::Release);
+    }
+
     pub fn is_exiting(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.exiting.load(Ordering::Acquire)
+    }
+
+    pub fn is_restarting(&self) -> bool {
+        self.restarting.load(Ordering::Acquire)
     }
 }
 
@@ -1752,6 +1789,12 @@ async fn get_devices_snapshot() -> DevicesUpdated {
     }
 }
 
+fn any_webview_window_visible(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|window| window.is_visible().unwrap_or(false))
+}
+
 fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
     tokio::spawn(async move {
         let mut last_perm_tuple: (u8, u8, u8, u8) = (255, 255, 255, 255);
@@ -1765,6 +1808,11 @@ fn spawn_devices_snapshot_emitter(app_handle: AppHandle) {
 
             if power_observer::is_system_asleep() {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+
+            if !any_webview_window_visible(&app_handle) {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             }
 
@@ -2475,6 +2523,83 @@ pub struct NewNotification {
 
 type ArcLock<T> = Arc<RwLock<T>>;
 pub type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
+
+#[cfg(target_os = "linux")]
+pub enum ClipboardContext {
+    Platform(PlatformClipboardContext),
+    Wayland(AppHandle),
+}
+
+#[cfg(target_os = "linux")]
+fn uses_wayland_clipboard_fallback(
+    wayland_display: Option<&std::ffi::OsStr>,
+    x11_display: Option<&std::ffi::OsStr>,
+) -> bool {
+    wayland_display.is_some() && x11_display.is_none()
+}
+
+#[cfg(target_os = "linux")]
+impl ClipboardContext {
+    fn new(app: &AppHandle) -> clipboard_rs::common::Result<Self> {
+        match PlatformClipboardContext::new() {
+            Ok(context) => Ok(Self::Platform(context)),
+            Err(error)
+                if uses_wayland_clipboard_fallback(
+                    std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+                    std::env::var_os("DISPLAY").as_deref(),
+                ) =>
+            {
+                info!(%error, "Using native Wayland clipboard");
+                Ok(Self::Wayland(app.clone()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn set_text(&self, text: String) -> clipboard_rs::common::Result<()> {
+        match self {
+            Self::Platform(context) => context.set_text(text),
+            Self::Wayland(app) => app.clipboard().write_text(text).map_err(Into::into),
+        }
+    }
+
+    fn set_image(&self, image: clipboard_rs::RustImageData) -> clipboard_rs::common::Result<()> {
+        match self {
+            Self::Platform(context) => context.set_image(image),
+            Self::Wayland(app) => {
+                let rgba = image.to_rgba8()?;
+                let width = rgba.width();
+                let height = rgba.height();
+                let image = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+                app.clipboard().write_image(&image).map_err(Into::into)
+            }
+        }
+    }
+
+    fn set_files(&self, files: Vec<String>) -> clipboard_rs::common::Result<()> {
+        match self {
+            Self::Platform(context) => context.set_files(files),
+            Self::Wayland(app) => {
+                let urls = files
+                    .into_iter()
+                    .map(|path| {
+                        tauri::Url::from_file_path(&path)
+                            .map(|url| url.to_string())
+                            .map_err(|()| format!("Invalid clipboard file path: {path}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                if urls.is_empty() {
+                    return Err("No files supplied for clipboard".into());
+                }
+
+                app.clipboard()
+                    .write_text(urls.join("\r\n"))
+                    .map_err(Into::into)
+            }
+        }
+    }
+}
 
 type SingleTuple<T> = (T,);
 
@@ -4741,9 +4866,7 @@ pub async fn open_target_picker(
 ) {
     use tauri::Manager;
 
-    if let Some(window) = CapWindowId::Main.get(app) {
-        window.hide().ok();
-    }
+    hide_main_window(app);
 
     let state = app.state::<target_select_overlay::WindowFocusManager>();
     let display_id = None;
@@ -5196,7 +5319,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     #[cfg(not(target_os = "linux"))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            trace!("Single instance invoked with args {args:?}");
+            trace!(arg_count = args.len(), "Single instance invoked");
+
+            if gpui_app::handle_update_handoff(app) {
+                return;
+            }
+
+            #[cfg(any(target_os = "macos", windows))]
+            if gpui_app::forward_deep_links_to_active_gpui(app, &args) {
+                return;
+            }
 
             let action_urls = args
                 .iter()
@@ -5301,7 +5433,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             }
 
             specta_builder.mount_events(&app);
-            hotkeys::init(&app);
             general_settings::init(&app);
             // Before anything shows a window or initialises further state: when
             // the native app owns the session, this one only exists to start it.
@@ -5313,9 +5444,28 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 exit_state.begin();
                 app.manage(exit_state);
                 crash_sentinel::mark_clean_exit();
+
+                #[cfg(target_os = "macos")]
+                {
+                    app.manage(gpui_app::StartupRedirectState::default());
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(750)).await;
+                        if app
+                            .try_state::<gpui_app::StartupRedirectState>()
+                            .is_some_and(|state| state.exit_if_pending())
+                        {
+                            app.exit(0);
+                        }
+                    });
+                }
+
+                #[cfg(not(target_os = "macos"))]
                 app.exit(0);
+
                 return Ok(());
             }
+            hotkeys::init(&app);
             configure_camera_blur_recovery(&app, previous_termination);
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
@@ -5456,9 +5606,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 install_macos_native_terminate_handler(&app);
                 spawn_process_memory_sampler(app.clone());
 
-                app.manage(Arc::new(RwLock::new(
-                    ClipboardContext::new().expect("Failed to create clipboard context"),
-                )));
+                #[cfg(target_os = "linux")]
+                let clipboard = ClipboardContext::new(&app)
+                    .expect("Failed to create clipboard context");
+                #[cfg(not(target_os = "linux"))]
+                let clipboard = ClipboardContext::new()
+                    .expect("Failed to create clipboard context");
+                app.manage(Arc::new(RwLock::new(clipboard)));
             }
 
             app.listen_any("main-window-ready", {
@@ -5665,7 +5819,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
                                 CapWindowId::Main => {
                                 api.prevent_close();
-                                let _ = window.hide();
+                                hide_main_window(app);
 
                                 #[cfg(target_os = "macos")]
                                 crate::permissions::schedule_macos_dock_visibility_sync(app);
@@ -6107,7 +6261,69 @@ where
 fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
     match event {
         #[cfg(target_os = "macos")]
+        tauri::RunEvent::Opened { urls } => {
+            let arguments = urls
+                .iter()
+                .map(|url| url.as_str().to_string())
+                .collect::<Vec<_>>();
+
+            if let Some(redirect) = _handle.try_state::<gpui_app::StartupRedirectState>() {
+                if redirect.begin_forwarding() {
+                    let app = _handle.clone();
+                    tokio::spawn(async move {
+                        let forwarded = tokio::task::spawn_blocking(move || {
+                            gpui_app::forward_deep_links_to_gpui_when_ready(&arguments)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+
+                        if let Some(pid) = forwarded {
+                            if let Err(error) = app.run_on_main_thread(move || {
+                                gpui_app::activate_instance(pid);
+                            }) {
+                                warn!(%error, "Could not activate Cap GPUI after forwarding a project");
+                            }
+                        } else {
+                            warn!("Could not forward the requested project to Cap GPUI");
+                        }
+                        if app
+                            .try_state::<gpui_app::StartupRedirectState>()
+                            .is_some_and(|state| state.exit_after_forwarding())
+                        {
+                            app.exit(0);
+                        }
+                    });
+                }
+                return;
+            }
+
+            if gpui_app::forward_deep_links_to_active_gpui(_handle, &arguments) {
+                return;
+            }
+
+            for url in urls {
+                if url.scheme() == "file"
+                    && let Ok(path) = url.to_file_path()
+                    && let Err(error) = open_project_from_path(&path, _handle.clone())
+                {
+                    warn!(path = %path.display(), %error, "Could not open the requested project");
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
+            if _handle
+                .try_state::<gpui_app::StartupRedirectState>()
+                .is_some()
+            {
+                return;
+            }
+
+            if gpui_app::handle_update_handoff(_handle) {
+                return;
+            }
+
             let should_focus_onboarding = should_show_onboarding(_handle);
 
             if should_focus_onboarding
@@ -6159,12 +6375,12 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                 _handle
                     .try_state::<AppExitState>()
                     .is_some_and(|state| state.is_exiting()),
-                export::export_session_active(),
+                export::export_session_active() || upload::upload_session_active(),
                 code.is_some(),
+                code == Some(tauri::RESTART_EXIT_CODE),
                 || api.prevent_exit(),
             ) {
                 ExitRequestDecision::StartCleanup => {
-                    let _ = code;
                     let handle = _handle.clone();
                     spawn_on_runtime(async move {
                         request_app_exit(handle).await;
@@ -6172,19 +6388,36 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                 }
                 ExitRequestDecision::AlreadyExiting => {}
                 ExitRequestDecision::ExportActive => {
-                    warn!("Preventing app exit request during active export");
+                    warn!("Preventing app exit request during an active export or upload");
                 }
                 ExitRequestDecision::AllowRuntimeExit => {}
+                ExitRequestDecision::AllowRuntimeRestart => {
+                    if let Some(state) = _handle.try_state::<AppExitState>() {
+                        state.begin_restart();
+                    }
+                    crash_sentinel::mark_clean_exit();
+                    info!("Allowing Tauri to restart the app");
+                }
             }
         }
         tauri::RunEvent::Exit => {
             #[cfg(target_os = "macos")]
             {
                 // This arm runs on the AppKit main thread, so reverse the Liquid Glass
-                // SPI inline before the hard _exit. This is the last-chance teardown for
-                // terminal paths that skip cleanup_app_resources_for_exit; touching the
-                // NSWindow/NSView here is safe precisely because we are on main.
+                // SPI inline before restart or a hard _exit. This is the last-chance
+                // teardown for terminal paths that skip cleanup_app_resources_for_exit;
+                // touching the NSWindow/NSView here is safe because we are on main.
                 let torn_down = crate::platform::teardown_all_liquid_glass_on_main(_handle);
+                if _handle
+                    .try_state::<AppExitState>()
+                    .is_some_and(|state| state.is_restarting())
+                {
+                    info!(
+                        windows = torn_down,
+                        "macOS runtime exit reached; allowing Tauri to restart"
+                    );
+                    return;
+                }
                 warn!(
                     windows = torn_down,
                     "macOS runtime exit reached; tore down liquid glass, forcing process exit"
@@ -6819,9 +7052,11 @@ fn show_import_error_dialog(app: &AppHandle, message: String) {
         .show(|_| {});
 }
 
-fn hide_main_window(app: &AppHandle) {
-    if let Some(main_window) = CapWindowId::Main.get(app) {
-        let _ = main_window.hide();
+pub(crate) fn hide_main_window(app: &AppHandle) {
+    if let Some(main_window) = CapWindowId::Main.get(app)
+        && main_window.hide().is_ok()
+    {
+        let _ = main_window.emit_to(CapWindowId::Main.label(), "main-window-hidden", ());
     }
 }
 
@@ -6901,9 +7136,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                 let _ = app
                     .opener()
                     .open_path(mp4_path.to_str().unwrap_or_default(), None::<String>);
-                if let Some(main_window) = CapWindowId::Main.get(&app) {
-                    main_window.hide().ok();
-                }
+                hide_main_window(&app);
             }
         }
     }
