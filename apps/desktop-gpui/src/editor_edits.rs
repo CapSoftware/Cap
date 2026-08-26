@@ -1894,6 +1894,8 @@ mod tests {
     use super::*;
     use crate::editor_timeline::{SegmentDetail, TimelineModel};
 
+    const OVERLAPPING_SEGMENT_END: f64 = 314.0 / 100.0;
+
     fn config(json: serde_json::Value) -> ProjectConfiguration {
         serde_json::from_value(json).expect("fixture parses")
     }
@@ -2333,7 +2335,7 @@ mod tests {
         let overlapping = config(serde_json::json!({
             "timeline": {
                 "segments": [
-                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": 3.14 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": OVERLAPPING_SEGMENT_END },
                     { "recordingSegment": 0, "timescale": 1.0, "start": 2.14, "end": 3.29 },
                     { "recordingSegment": 0, "timescale": 1.0, "start": 3.29, "end": 6.68 },
                     { "recordingSegment": 0, "timescale": 1.0, "start": 5.83, "end": 6.98 }
@@ -2398,7 +2400,7 @@ mod tests {
         let overlapping = config(serde_json::json!({
             "timeline": {
                 "segments": [
-                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": 3.14 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.54, "end": OVERLAPPING_SEGMENT_END },
                     { "recordingSegment": 0, "timescale": 1.0, "start": 2.14, "end": 3.29 }
                 ],
                 "zoomSegments": []
@@ -2411,7 +2413,7 @@ mod tests {
 
         assert_eq!(
             clip_trim_end(timeline, 0, 2.6, spp, &displays, recording),
-            Some(3.14)
+            Some(OVERLAPPING_SEGMENT_END)
         );
         assert_eq!(
             clip_trim_start(timeline, 0, 3.0, spp, &displays, recording),

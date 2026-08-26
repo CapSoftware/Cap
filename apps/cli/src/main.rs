@@ -447,6 +447,13 @@ struct CompletionsArgs {
 }
 
 fn main() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+
+        let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
+
     let cli = Cli::parse();
     let level_filter = cli.log_level.level_filter();
 

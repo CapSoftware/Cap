@@ -586,19 +586,7 @@ fn process_pipewire_frame(
     else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
     };
-    if state.scaler.is_none() {
-        state.scaler = Some(FrameScaler::new(
-            raw_frame.format(),
-            raw_frame.width(),
-            raw_frame.height(),
-            state.video_info,
-        )?);
-    }
-    let frame = state
-        .scaler
-        .as_mut()
-        .expect("PipeWire frame scaler initialized")
-        .scale(&raw_frame, state.video_info)?;
+    let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
     let timestamp = Timestamp::Instant(Instant::now());
 
     Ok(Some(send_with_stall_budget_futures(
@@ -610,6 +598,33 @@ fn process_pipewire_frame(
         "linux-wayland-video",
         &state.health_tx,
     )))
+}
+
+fn prepare_pipewire_frame(
+    frame: ffmpeg::frame::Video,
+    scaler: &mut Option<FrameScaler>,
+    output: VideoInfo,
+) -> anyhow::Result<ffmpeg::frame::Video> {
+    if frame.format() == output.pixel_format
+        && frame.width() == output.width
+        && frame.height() == output.height
+    {
+        return Ok(frame);
+    }
+
+    if scaler.is_none() {
+        *scaler = Some(FrameScaler::new(
+            frame.format(),
+            frame.width(),
+            frame.height(),
+            output,
+        )?);
+    }
+
+    scaler
+        .as_mut()
+        .expect("PipeWire frame scaler initialized")
+        .scale(&frame, output)
 }
 
 fn frame_from_pipewire_data(
@@ -820,12 +835,20 @@ fn pipewire_format_param(fps: u32) -> anyhow::Result<Vec<u8>> {
 pub struct SystemAudioSourceConfig {
     feed_lock: Arc<MicrophoneFeedLock>,
     device_name: String,
-    restore_source: Option<String>,
+    monitor_route: Option<PactlMonitorRoute>,
 }
 
 pub struct SystemAudioSource {
     inner: crate::sources::Microphone,
-    restore_source: Option<String>,
+}
+
+struct PactlMonitorRoute {
+    monitor_source: String,
+    monitor_source_index: u32,
+    default_source: Option<String>,
+    default_source_index: Option<u32>,
+    source_output: u32,
+    previous_process_source_outputs: Vec<PactlSourceOutput>,
 }
 
 impl AudioSource for SystemAudioSource {
@@ -840,17 +863,17 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
-        let restore_source = config.restore_source;
         let setup = <crate::sources::Microphone as AudioSource>::setup(config.feed_lock, tx, ctx);
         async move {
             let inner = setup
                 .await
                 .with_context(|| format!("set up Linux system audio source '{device_name}'"))?;
 
-            Ok(Self {
-                inner,
-                restore_source,
-            })
+            if let Some(route) = config.monitor_route {
+                apply_pactl_monitor_route(&route)?;
+            }
+
+            Ok(Self { inner })
         }
     }
 
@@ -859,15 +882,7 @@ impl AudioSource for SystemAudioSource {
     }
 
     fn stop(&mut self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
-        let restore_source = self.restore_source.take();
-        let stop = self.inner.stop();
-        async move {
-            let result = stop.await;
-            if let Some(source) = restore_source {
-                restore_pactl_default_source(&source);
-            }
-            result
-        }
+        self.inner.stop()
     }
 }
 
@@ -897,43 +912,110 @@ async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSource
         .await
         .map_err(|e| anyhow!("Failed to lock Linux system audio input: {e}"))?;
 
+    let monitor_route = if let Some(monitor_source) = selected.monitor_source {
+        let current_source_outputs = current_process_source_outputs()?;
+        let source_output = newly_created_source_output(
+            &selected.previous_process_source_outputs,
+            &current_source_outputs,
+        )?;
+
+        Some(PactlMonitorRoute {
+            monitor_source,
+            monitor_source_index: selected.monitor_source_index.ok_or_else(|| {
+                anyhow!("PulseAudio/PipeWire monitor source has no routing index")
+            })?,
+            default_source: selected.default_source,
+            default_source_index: selected.default_source_index,
+            source_output,
+            previous_process_source_outputs: selected.previous_process_source_outputs,
+        })
+    } else {
+        None
+    };
+
+    if let Some(route) = monitor_route.as_ref() {
+        apply_pactl_monitor_route(route)?;
+    }
+
     Ok(SystemAudioSourceConfig {
         feed_lock: Arc::new(lock),
         device_name: selected.device_name,
-        restore_source: selected.restore_source,
+        monitor_route,
     })
-}
-
-impl Drop for SystemAudioSource {
-    fn drop(&mut self) {
-        if let Some(source) = self.restore_source.take() {
-            restore_pactl_default_source(&source);
-        }
-    }
 }
 
 struct SelectedSystemAudioInput {
     device_name: String,
-    restore_source: Option<String>,
+    monitor_source: Option<String>,
+    monitor_source_index: Option<u32>,
+    default_source: Option<String>,
+    default_source_index: Option<u32>,
+    previous_process_source_outputs: Vec<PactlSourceOutput>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PactlSourceOutput {
+    id: u32,
+    source: u32,
+}
+
+fn apply_pactl_monitor_route(route: &PactlMonitorRoute) -> anyhow::Result<()> {
+    let mut current_source_outputs = current_process_source_outputs()?;
+    let current_system_source = current_source_outputs
+        .iter()
+        .find(|source_output| source_output.id == route.source_output)
+        .ok_or_else(|| anyhow!("PulseAudio/PipeWire system-audio stream is no longer active"))?;
+
+    if source_output_needs_move(
+        current_system_source.source,
+        Some(route.monitor_source_index),
+    ) {
+        move_pactl_source_output(route.source_output, &route.monitor_source)?;
+        current_source_outputs = current_process_source_outputs()?;
+    }
+
+    for previous_output in &route.previous_process_source_outputs {
+        if let Some(current_output) = current_source_outputs
+            .iter()
+            .find(|current_output| current_output.id == previous_output.id)
+        {
+            let destination = previous_source_destination(
+                previous_output.source,
+                route.monitor_source_index,
+                &route.monitor_source,
+                route.default_source.as_deref(),
+            );
+            let destination_index = if destination == previous_output.source.to_string() {
+                Some(previous_output.source)
+            } else {
+                route.default_source_index
+            };
+
+            if source_output_needs_move(current_output.source, destination_index) {
+                move_pactl_source_output(previous_output.id, &destination)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn source_output_needs_move(current_source: u32, target_source: Option<u32>) -> bool {
+    target_source != Some(current_source)
 }
 
 fn select_system_audio_monitor() -> anyhow::Result<SelectedSystemAudioInput> {
     let devices = MicrophoneFeed::list();
     let available = devices.keys().cloned().collect::<Vec<_>>();
 
-    let mut candidates = devices
-        .iter()
-        .filter_map(|(name, device)| {
-            system_audio_device_rank(&name).map(|rank| (rank, name, device))
-        })
-        .collect::<Vec<_>>();
-
-    candidates.sort_by_key(|(rank, name, _)| (*rank, name.to_ascii_lowercase()));
-
-    if let Some((_, name, _)) = candidates.into_iter().next() {
+    if let Some(name) = preferred_system_audio_device(&available, false) {
         return Ok(SelectedSystemAudioInput {
             device_name: name.to_string(),
-            restore_source: None,
+            monitor_source: None,
+            monitor_source_index: None,
+            default_source: None,
+            default_source_index: None,
+            previous_process_source_outputs: Vec::new(),
         });
     }
 
@@ -941,10 +1023,41 @@ fn select_system_audio_monitor() -> anyhow::Result<SelectedSystemAudioInput> {
         return Ok(selected);
     }
 
+    if let Some(name) = preferred_system_audio_device(&available, true) {
+        return Ok(SelectedSystemAudioInput {
+            device_name: name.to_string(),
+            monitor_source: None,
+            monitor_source_index: None,
+            default_source: None,
+            default_source_index: None,
+            previous_process_source_outputs: Vec::new(),
+        });
+    }
+
     Err(anyhow!(
         "No PulseAudio/PipeWire monitor input was found for Linux system audio. \
         Available input devices: {available:?}. Select a monitor source with --mic, or enable a monitor source in your audio server."
     ))
+}
+
+fn preferred_system_audio_device(
+    available_devices: &[String],
+    include_ambiguous: bool,
+) -> Option<&str> {
+    available_devices
+        .iter()
+        .filter_map(|name| {
+            let rank = system_audio_device_rank(name)?;
+            (include_ambiguous || rank < 2).then_some((rank, name.as_str()))
+        })
+        .min_by(|(left_rank, left_name), (right_rank, right_name)| {
+            left_rank.cmp(right_rank).then_with(|| {
+                left_name
+                    .to_ascii_lowercase()
+                    .cmp(&right_name.to_ascii_lowercase())
+            })
+        })
+        .map(|(_, name)| name)
 }
 
 fn system_audio_device_rank(name: &str) -> Option<u8> {
@@ -963,42 +1076,164 @@ fn system_audio_device_rank(name: &str) -> Option<u8> {
 fn select_pactl_monitor_source(
     available_devices: &[String],
 ) -> anyhow::Result<Option<SelectedSystemAudioInput>> {
-    let Some(device_name) = pulse_cpal_device_name(available_devices) else {
-        return Ok(None);
-    };
-
     let output = match Command::new("pactl")
         .args(["list", "short", "sources"])
         .output()
     {
         Ok(output) if output.status.success() => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!(
+                "Linux system audio capture needs `pactl` to discover monitor sources, \
+                but it was not found on PATH. Install it with `apt install pulseaudio-utils`, \
+                `dnf install pulseaudio-utils`, or `pacman -S libpulse`, then try again. \
+                Available input devices: {available_devices:?}."
+            ));
+        }
         _ => return Ok(None),
     };
 
-    let sources = String::from_utf8_lossy(&output.stdout);
-    let mut monitor_sources = sources
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1))
-        .filter_map(|name| pactl_monitor_rank(name).map(|rank| (rank, name.to_string())))
-        .collect::<Vec<_>>();
-    monitor_sources.sort_by_key(|(rank, name)| (*rank, name.to_ascii_lowercase()));
-
-    let Some((_, source)) = monitor_sources.into_iter().next() else {
+    let Some(device_name) = pulse_cpal_device_name(available_devices) else {
         return Ok(None);
     };
 
-    let previous_source = pactl_default_source();
-    let restore_source = if previous_source.as_deref() == Some(source.as_str()) {
-        None
-    } else {
-        set_pactl_default_source(&source)?;
-        previous_source
+    let sources = String::from_utf8_lossy(&output.stdout);
+    let default_sink = pactl_default_sink();
+    let mut monitor_sources = sources
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let index = fields.next()?.parse::<u32>().ok()?;
+            let name = fields.next()?;
+
+            pactl_monitor_preference(name, default_sink.as_deref())
+                .map(|rank| (rank, name.to_string(), index))
+        })
+        .collect::<Vec<_>>();
+    monitor_sources.sort_by_key(|(rank, name, _)| (*rank, name.to_ascii_lowercase()));
+
+    let Some((_, source, source_index)) = monitor_sources.into_iter().next() else {
+        return Ok(None);
     };
+
+    let previous_process_source_outputs = current_process_source_outputs()?;
+    let default_source = pactl_default_source();
+    let default_source_index = default_source
+        .as_deref()
+        .and_then(|source| pactl_source_index(&sources, source));
 
     Ok(Some(SelectedSystemAudioInput {
         device_name,
-        restore_source,
+        monitor_source: Some(source),
+        monitor_source_index: Some(source_index),
+        default_source,
+        default_source_index,
+        previous_process_source_outputs,
     }))
+}
+
+fn pactl_source_index(sources: &str, name: &str) -> Option<u32> {
+    sources.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let index = fields.next()?.parse::<u32>().ok()?;
+
+        (fields.next()? == name).then_some(index)
+    })
+}
+
+fn previous_source_destination(
+    previous_source: u32,
+    monitor_source: u32,
+    monitor_name: &str,
+    default_source: Option<&str>,
+) -> String {
+    if previous_source == monitor_source
+        && let Some(default_source) = default_source
+        && default_source != monitor_name
+    {
+        default_source.to_string()
+    } else {
+        previous_source.to_string()
+    }
+}
+
+fn current_process_source_outputs() -> anyhow::Result<Vec<PactlSourceOutput>> {
+    let output = Command::new("pactl")
+        .args(["-f", "json", "list", "source-outputs"])
+        .output()
+        .context("list PulseAudio/PipeWire source outputs")?;
+
+    if !output.status.success() {
+        bail!("Could not inspect PulseAudio/PipeWire source outputs for isolated system audio");
+    }
+
+    let outputs: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .context("parse PulseAudio/PipeWire source outputs")?;
+    process_source_output_ids(&outputs, &std::process::id().to_string())
+}
+
+fn process_source_output_ids(
+    outputs: &[serde_json::Value],
+    process_id: &str,
+) -> anyhow::Result<Vec<PactlSourceOutput>> {
+    outputs
+        .iter()
+        .filter(|output| {
+            output["properties"]["application.process.id"]
+                .as_str()
+                .is_some_and(|id| id == process_id)
+        })
+        .map(|output| {
+            let id = output["index"]
+                .as_u64()
+                .and_then(|index| u32::try_from(index).ok())
+                .ok_or_else(|| anyhow!("PulseAudio/PipeWire source output has an invalid index"))?;
+            let source = output["source"]
+                .as_u64()
+                .and_then(|source| u32::try_from(source).ok())
+                .ok_or_else(|| {
+                    anyhow!("PulseAudio/PipeWire source output has an invalid source")
+                })?;
+
+            Ok(PactlSourceOutput { id, source })
+        })
+        .collect()
+}
+
+fn newly_created_source_output(
+    previous: &[PactlSourceOutput],
+    current: &[PactlSourceOutput],
+) -> anyhow::Result<u32> {
+    let mut created = current
+        .iter()
+        .filter(|source_output| {
+            !previous
+                .iter()
+                .any(|previous_output| previous_output.id == source_output.id)
+        })
+        .map(|source_output| source_output.id);
+
+    match (created.next(), created.next()) {
+        (Some(source_output), None) => Ok(source_output),
+        (None, _) => bail!("Could not identify the PulseAudio/PipeWire system-audio stream"),
+        (Some(_), Some(_)) => {
+            bail!("Multiple PulseAudio/PipeWire system-audio streams started simultaneously")
+        }
+    }
+}
+
+fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<()> {
+    let status = Command::new("pactl")
+        .args(["move-source-output", &source_output.to_string(), source])
+        .status()
+        .context("move PulseAudio/PipeWire system-audio stream")?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        bail!(
+            "Could not route PulseAudio/PipeWire system-audio stream {source_output} to '{source}'"
+        )
+    }
 }
 
 fn pulse_cpal_device_name(available_devices: &[String]) -> Option<String> {
@@ -1029,39 +1264,32 @@ fn pactl_monitor_rank(name: &str) -> Option<u8> {
     }
 }
 
+fn pactl_monitor_preference(name: &str, default_sink: Option<&str>) -> Option<(u8, u8)> {
+    let rank = pactl_monitor_rank(name)?;
+    let is_default_sink = default_sink.is_some_and(|sink| {
+        name.strip_suffix(".monitor")
+            .is_some_and(|monitor_sink| monitor_sink == sink)
+    });
+
+    Some((u8::from(!is_default_sink), rank))
+}
+
+fn pactl_default_sink() -> Option<String> {
+    pactl_default_device("get-default-sink")
+}
+
 fn pactl_default_source() -> Option<String> {
-    let output = Command::new("pactl")
-        .arg("get-default-source")
-        .output()
-        .ok()?;
+    pactl_default_device("get-default-source")
+}
+
+fn pactl_default_device(command: &str) -> Option<String> {
+    let output = Command::new("pactl").arg(command).output().ok()?;
 
     output
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|source| !source.is_empty())
-}
-
-fn set_pactl_default_source(source: &str) -> anyhow::Result<()> {
-    let status = Command::new("pactl")
-        .args(["set-default-source", source])
-        .status()
-        .context("run pactl set-default-source")?;
-
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| anyhow!("pactl set-default-source '{source}' failed"))
-}
-
-fn restore_pactl_default_source(source: &str) {
-    if let Err(error) = set_pactl_default_source(source) {
-        tracing::warn!(
-            source,
-            error = %error,
-            "Failed to restore PulseAudio/PipeWire default source after Linux system audio capture"
-        );
-    }
+        .filter(|sink| !sink.is_empty())
 }
 
 struct FrameScaler {
@@ -1468,4 +1696,179 @@ fn x11_source_pixel(
         (3, 2, 1) => ffmpeg::format::Pixel::ZRGB,
         _ => bail!("Unsupported X11 channel order: b={blue} g={green} r={red}"),
     })
+}
+
+#[cfg(test)]
+mod system_audio_tests {
+    use super::{
+        PactlSourceOutput, newly_created_source_output, pactl_monitor_preference,
+        pactl_source_index, preferred_system_audio_device, previous_source_destination,
+        process_source_output_ids, source_output_needs_move,
+    };
+
+    #[test]
+    fn ambiguous_loopback_waits_for_verified_pulse_monitor() {
+        let devices = ["Loopback", "pulse", "default"].map(str::to_string);
+
+        assert_eq!(preferred_system_audio_device(&devices, false), None);
+        assert_eq!(
+            preferred_system_audio_device(&devices, true),
+            Some("Loopback")
+        );
+    }
+
+    #[test]
+    fn explicit_monitor_and_stereo_mix_remain_direct_inputs() {
+        let devices = ["Loopback", "Stereo Mix", "Output Monitor"].map(str::to_string);
+
+        assert_eq!(
+            preferred_system_audio_device(&devices, false),
+            Some("Output Monitor")
+        );
+
+        let devices = ["Loopback", "Stereo Mix"].map(str::to_string);
+
+        assert_eq!(
+            preferred_system_audio_device(&devices, false),
+            Some("Stereo Mix")
+        );
+    }
+
+    #[test]
+    fn default_sink_monitor_precedes_other_monitor_sources() {
+        let default =
+            pactl_monitor_preference("cap_validation_sink.monitor", Some("cap_validation_sink"));
+        let suspended = pactl_monitor_preference(
+            "alsa_output.platform-snd_aloop.monitor",
+            Some("cap_validation_sink"),
+        );
+
+        assert_eq!(default, Some((0, 0)));
+        assert_eq!(suspended, Some((1, 0)));
+        assert!(default < suspended);
+        assert_eq!(
+            pactl_monitor_preference("cap_validation_sink.monitor", None),
+            Some((1, 0))
+        );
+    }
+
+    #[test]
+    fn source_outputs_only_include_the_current_process() {
+        let outputs = serde_json::json!([
+            { "index": 11, "source": 5, "properties": { "application.process.id": "41" } },
+            { "index": 12, "source": 6, "properties": { "application.process.id": "42" } },
+            { "index": 13, "source": 7, "properties": { "application.process.id": "42" } }
+        ]);
+
+        assert_eq!(
+            process_source_output_ids(outputs.as_array().unwrap(), "42").unwrap(),
+            vec![
+                PactlSourceOutput { id: 12, source: 6 },
+                PactlSourceOutput { id: 13, source: 7 }
+            ]
+        );
+    }
+
+    #[test]
+    fn only_one_new_system_audio_stream_is_accepted() {
+        let previous = [PactlSourceOutput { id: 11, source: 3 }];
+        let current = [
+            PactlSourceOutput { id: 11, source: 2 },
+            PactlSourceOutput { id: 12, source: 2 },
+        ];
+
+        assert_eq!(
+            newly_created_source_output(&previous, &current).unwrap(),
+            12
+        );
+        assert!(newly_created_source_output(&previous, &previous).is_err());
+
+        let ambiguous = [
+            PactlSourceOutput { id: 11, source: 2 },
+            PactlSourceOutput { id: 12, source: 2 },
+            PactlSourceOutput { id: 13, source: 2 },
+        ];
+
+        assert!(newly_created_source_output(&previous, &ambiguous).is_err());
+    }
+
+    #[test]
+    fn remembered_monitor_input_returns_to_selected_microphone() {
+        assert_eq!(
+            previous_source_destination(2, 2, "desktop.monitor", Some("microphone.monitor")),
+            "microphone.monitor"
+        );
+        assert_eq!(
+            previous_source_destination(7, 2, "desktop.monitor", Some("microphone.monitor")),
+            "7"
+        );
+        assert_eq!(
+            previous_source_destination(2, 2, "desktop.monitor", Some("desktop.monitor")),
+            "2"
+        );
+        assert_eq!(
+            previous_source_destination(2, 2, "desktop.monitor", None),
+            "2"
+        );
+    }
+
+    #[test]
+    fn correctly_routed_streams_are_not_interrupted() {
+        assert!(!source_output_needs_move(2, Some(2)));
+        assert!(source_output_needs_move(2, Some(3)));
+        assert!(source_output_needs_move(2, None));
+
+        let sources = "2 desktop.monitor module-null-sink\n3 microphone.monitor module-null-sink";
+        assert_eq!(pactl_source_index(sources, "microphone.monitor"), Some(3));
+        assert_eq!(pactl_source_index(sources, "missing.monitor"), None);
+    }
+}
+
+#[cfg(test)]
+mod pipewire_frame_tests {
+    use super::{FrameScaler, VideoInfo, prepare_pipewire_frame};
+
+    #[test]
+    fn matching_pipewire_frames_reuse_owned_pixel_storage_without_a_scaler() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRZ, 16, 12);
+        frame.set_pts(Some(73));
+        let source = frame.data(0).as_ptr();
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 16, 12, 60);
+        let mut scaler: Option<FrameScaler> = None;
+
+        let prepared = prepare_pipewire_frame(frame, &mut scaler, output).unwrap();
+
+        assert_eq!(prepared.data(0).as_ptr(), source);
+        assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
+        assert_eq!(prepared.pts(), Some(73));
+        assert!(scaler.is_none());
+    }
+
+    #[test]
+    fn mismatched_pipewire_pixel_formats_are_converted() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBZ, 16, 12);
+        frame.set_pts(Some(31));
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 16, 12, 60);
+        let mut scaler: Option<FrameScaler> = None;
+
+        let prepared = prepare_pipewire_frame(frame, &mut scaler, output).unwrap();
+
+        assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
+        assert_eq!((prepared.width(), prepared.height()), (16, 12));
+        assert_eq!(prepared.pts(), Some(31));
+        assert!(scaler.is_some());
+    }
+
+    #[test]
+    fn mismatched_pipewire_dimensions_are_scaled() {
+        let frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRZ, 16, 12);
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 8, 6, 60);
+        let mut scaler: Option<FrameScaler> = None;
+
+        let prepared = prepare_pipewire_frame(frame, &mut scaler, output).unwrap();
+
+        assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
+        assert_eq!((prepared.width(), prepared.height()), (8, 6));
+        assert!(scaler.is_some());
+    }
 }

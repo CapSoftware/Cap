@@ -202,21 +202,50 @@ async function main() {
 			path.relative(__root, onnxRuntimePath),
 		)}" }\n`;
 
-		const { stdout: vcInstallDir } = await exec(
-			// biome-ignore lint/suspicious/noTemplateCurlyInString: PowerShell syntax, not JS template literal
-			'$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
-			{ shell: "powershell.exe" },
+		const vswherePath = path.join(
+			process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+			"Microsoft Visual Studio",
+			"Installer",
+			"vswhere.exe",
 		);
+		const { stdout: vcInstallDir } = await execFile(vswherePath, [
+			"-latest",
+			"-products",
+			"*",
+			"-requires",
+			"Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+			"-property",
+			"installationPath",
+		]);
+		if (!vcInstallDir.trim())
+			throw new Error(
+				"Visual Studio C++ build tools installation was not found",
+			);
 
 		const libclangPath = path.join(
 			vcInstallDir.trim(),
 			"VC/Tools/LLVM/x64/bin/libclang.dll",
 		);
+		if (!(await fileExists(libclangPath)))
+			throw new Error(
+				`Visual Studio LLVM libclang was not found at ${libclangPath}`,
+			);
 
 		cargoConfigContents += `LIBCLANG_PATH = "${libclangPath.replaceAll(
 			"\\",
 			"/",
 		)}"\n`;
+
+		const cmakePath = path.join(
+			vcInstallDir.trim(),
+			"Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe",
+		);
+		if (await fileExists(cmakePath))
+			cargoConfigContents += `CMAKE = "${cargoConfigPath(cmakePath)}"\n`;
+		else if (!(await findExecutable("cmake")))
+			throw new Error(
+				"CMake was not found. Install the Visual Studio C++ CMake tools component.",
+			);
 	} else if (process.platform === "linux") {
 		const triple = process.env.RUST_TARGET_TRIPLE;
 		if (triple) {
@@ -259,6 +288,7 @@ async function main() {
 				console.log("Extracted native-deps");
 			} else console.log("Using cached native-deps");
 
+			const onnxRuntimePath = await setupLinuxOnnxRuntime();
 			const debLibDir = path.join(nativeDepsDir, "cap-deb-libs");
 			await fs.rm(debLibDir, { recursive: true, force: true }).catch(() => {});
 			await fs.mkdir(debLibDir, { recursive: true });
@@ -279,12 +309,30 @@ async function main() {
 				for (const dir of profileDirs)
 					await fs.copyFile(realPath, path.join(dir, name));
 			}
+			const onnxRuntimeName = path.basename(onnxRuntimePath);
+			const onnxRuntimeNames = [onnxRuntimeName, `${onnxRuntimeName}.1`];
+			for (const name of onnxRuntimeNames) {
+				await fs.copyFile(onnxRuntimePath, path.join(debLibDir, name));
+				for (const dir of profileDirs)
+					await fs.copyFile(onnxRuntimePath, path.join(dir, name));
+			}
+			const bundledLibraries = [
+				...new Set([...sonameLibs, ...onnxRuntimeNames]),
+			];
 			console.log(
-				`Staged ${sonameLibs.length} FFmpeg shared libraries for Linux bundling`,
+				`Staged ${bundledLibraries.length} shared libraries for Linux bundling`,
 			);
-			await writeLinuxTauriConfig(sonameLibs);
+			await writeLinuxTauriConfig(bundledLibraries);
 
+			cargoConfigContents += `ORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
+				path.relative(__root, onnxRuntimePath),
+			)}" }\n`;
 			cargoConfigContents += `\n[target.${triple}]\nrustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN", "-C", "link-arg=-Wl,-rpath,$ORIGIN/../lib/cap"]\n`;
+		} else {
+			const onnxRuntimePath = await setupLinuxOnnxRuntime();
+			cargoConfigContents += `[env]\nORT_DYLIB_PATH = { relative = true, force = true, value = "${cargoConfigPath(
+				path.relative(__root, onnxRuntimePath),
+			)}" }\n`;
 		}
 	}
 
@@ -486,6 +534,50 @@ async function setupWindowsOnnxRuntime() {
 		}
 	}
 	console.log("Copied ONNX Runtime DLLs to target/debug and target/release");
+
+	return outputPath;
+}
+
+async function setupLinuxOnnxRuntime() {
+	const version = "1.24.3";
+	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
+	if (!platformArch)
+		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
+
+	const archiveName = `onnxruntime-linux-${platformArch}-${version}.tgz`;
+	const archivePath = path.join(targetDir, archiveName);
+	const extractDir = path.join(targetDir, archiveName.replace(/\.tgz$/, ""));
+	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
+	const outputPath = path.join(outputDir, "libonnxruntime.so");
+	const markerPath = path.join(outputDir, "asset.txt");
+	const marker = await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+
+	if (!(await fileExists(archivePath))) {
+		const response = await fetch(
+			`https://github.com/microsoft/onnxruntime/releases/download/v${version}/${archiveName}`,
+		);
+		if (!response.ok)
+			throw new Error(
+				`Failed to download ${archiveName}: HTTP ${response.status}`,
+			);
+		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+		console.log(`Downloaded ${archiveName}`);
+	} else console.log(`Using cached ${archiveName}`);
+
+	if (!(await fileExists(outputPath)) || marker !== archiveName) {
+		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+		await fs.mkdir(outputDir, { recursive: true });
+		await fs.copyFile(
+			path.join(extractDir, "lib", "libonnxruntime.so"),
+			outputPath,
+		);
+		await fs.writeFile(markerPath, archiveName);
+		console.log("Prepared ONNX Runtime shared library");
+	} else console.log("Using cached ONNX Runtime shared library");
 
 	return outputPath;
 }

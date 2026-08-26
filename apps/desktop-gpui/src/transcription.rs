@@ -155,6 +155,16 @@ struct Hub {
     generation_errors: HashMap<PathBuf, String>,
 }
 
+impl Hub {
+    fn work_in_flight(&self) -> bool {
+        self.download
+            .as_ref()
+            .is_some_and(|download| download.state == DownloadState::Downloading)
+            || !self.generating.is_empty()
+            || self.deleting.is_some()
+    }
+}
+
 static HUB: LazyLock<Mutex<Hub>> = LazyLock::new(|| Mutex::new(Hub::default()));
 
 fn hub() -> std::sync::MutexGuard<'static, Hub> {
@@ -186,6 +196,10 @@ pub fn download_active() -> bool {
         .download
         .as_ref()
         .is_some_and(|download| download.state == DownloadState::Downloading)
+}
+
+pub fn work_in_flight() -> bool {
+    hub().work_in_flight()
 }
 
 /// Rescan the catalogue against the disk -- `refreshDownloadedModels`
@@ -450,6 +464,7 @@ async fn total_content_length(urls: &[&str]) -> u64 {
 }
 
 /// `PARAKEET_TDT_INT8_MODEL_FILES` (`captions.rs:2249-2268`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &[&str])] = &[
     (
         "encoder-model.int8.onnx",
@@ -472,6 +487,7 @@ const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &[&str])] = &[
 ];
 
 /// `PARAKEET_TDT_FULL_MODEL_FILES` (`captions.rs:2270-2296`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_TDT_FULL_MODEL_FILES: &[(&str, &[&str])] = &[
     (
         "encoder-model.onnx",
@@ -501,6 +517,7 @@ const PARAKEET_TDT_FULL_MODEL_FILES: &[(&str, &[&str])] = &[
 ];
 
 /// `PARAKEET_MODEL_CLEANUP_FILES` (`captions.rs:2298-2306`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
     "encoder-model.onnx",
     "encoder-model.onnx.data",
@@ -512,6 +529,7 @@ const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
 ];
 
 /// `PARAKEET_KNOWN_PART_SIZES` (`captions.rs:2308-2316`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_KNOWN_PART_SIZES: &[(&str, u64)] = &[
     ("encoder-model.int8.onnx", 652_183_999),
     ("decoder_joint-model.int8.onnx", 18_202_004),
@@ -522,12 +540,14 @@ const PARAKEET_KNOWN_PART_SIZES: &[(&str, u64)] = &[
     ("vocab.txt", 93_939),
 ];
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn parakeet_known_part_size(url: &str) -> Option<u64> {
     PARAKEET_KNOWN_PART_SIZES
         .iter()
         .find_map(|(name, size)| url.ends_with(name).then_some(*size))
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn parakeet_model_files_for_dir(
     output_dir: &Path,
 ) -> &'static [(&'static str, &'static [&'static str])] {
@@ -537,6 +557,7 @@ fn parakeet_model_files_for_dir(
     }
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn parakeet_staging_dir(validated_dir: &Path) -> PathBuf {
     validated_dir.with_file_name(format!(
         "{}.downloading",
@@ -547,6 +568,7 @@ fn parakeet_staging_dir(validated_dir: &Path) -> PathBuf {
     ))
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 async fn parakeet_model_file_sizes(
     model_files: &'static [(&'static str, &'static [&'static str])],
 ) -> Result<Vec<(&'static str, u64)>, String> {
@@ -580,6 +602,7 @@ async fn parakeet_model_file_sizes(
     Ok(sizes)
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn parakeet_model_files_match(dir: &Path, expected_files: &[(&str, u64)]) -> bool {
     expected_files.iter().all(|(filename, expected_size)| {
         let Ok(metadata) = std::fs::metadata(dir.join(filename)) else {
@@ -589,6 +612,7 @@ fn parakeet_model_files_match(dir: &Path, expected_files: &[(&str, u64)]) -> boo
     })
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn finalize_parakeet_model_download(
     validated_dir: &Path,
     staging_dir: &Path,
@@ -2399,6 +2423,30 @@ mod tests {
         assert_eq!(model_path("best-max"), base.join("parakeet-best-max"));
         assert_eq!(model_path("small"), base.join("small.bin"));
         assert_eq!(model_path("medium"), base.join("medium.bin"));
+    }
+
+    #[test]
+    fn downloads_generation_and_deletion_block_application_handoffs() {
+        let mut state = Hub::default();
+        assert!(!state.work_in_flight());
+
+        state.download = Some(ModelDownload {
+            model: "small".to_string(),
+            state: DownloadState::Downloading,
+            progress: 25.0,
+            message: "Downloading".to_string(),
+        });
+        assert!(state.work_in_flight());
+
+        state.download.as_mut().unwrap().state = DownloadState::Completed;
+        assert!(!state.work_in_flight());
+
+        state.generating.insert(PathBuf::from("/tmp/recording.cap"));
+        assert!(state.work_in_flight());
+        state.generating.clear();
+
+        state.deleting = Some("small".to_string());
+        assert!(state.work_in_flight());
     }
 
     #[test]

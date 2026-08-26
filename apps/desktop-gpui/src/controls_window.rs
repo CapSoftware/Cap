@@ -31,6 +31,12 @@ pub struct ControlsWindow {
     _tick: gpui::Task<()>,
 }
 
+#[derive(Clone, Copy)]
+enum DestructiveAction {
+    Restart,
+    Delete,
+}
+
 impl ControlsWindow {
     pub fn new(
         session: Entity<RecordingSession>,
@@ -213,6 +219,41 @@ impl ControlsWindow {
             })
     }
 
+    fn confirm_action(
+        &mut self,
+        action: DestructiveAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (title, message, accept) = match action {
+            DestructiveAction::Restart => (
+                "Confirm Restart",
+                "Are you sure you want to restart the recording? The current recording will be discarded.",
+                "Restart",
+            ),
+            DestructiveAction::Delete => (
+                "Confirm Delete",
+                "Are you sure you want to delete the recording?",
+                "Delete",
+            ),
+        };
+
+        cx.spawn_in(window, async move |this, cx| {
+            if !crate::platform::confirm_dialog(title, message, accept, "Cancel", true) {
+                return;
+            }
+
+            this.update_in(cx, |this, _, cx| {
+                this.session.update(cx, |session, cx| match action {
+                    DestructiveAction::Restart => session.restart(cx),
+                    DestructiveAction::Delete => session.delete(cx),
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn render_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
@@ -273,17 +314,20 @@ impl ControlsWindow {
                             .child(
                                 self.action_button("restart", "icons/restart.svg", busy)
                                     .when(!busy, |this| {
-                                        this.on_click(cx.listener(|this, _, _, cx| {
-                                            this.session
-                                                .update(cx, |session, cx| session.restart(cx));
+                                        this.on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_action(
+                                                DestructiveAction::Restart,
+                                                window,
+                                                cx,
+                                            );
                                         }))
                                     }),
                             )
                             .child(self.action_button("delete", "icons/trash.svg", busy).when(
                                 !busy,
                                 |this| {
-                                    this.on_click(cx.listener(|this, _, _, cx| {
-                                        this.session.update(cx, |session, cx| session.delete(cx));
+                                    this.on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_action(DestructiveAction::Delete, window, cx);
                                     }))
                                 },
                             ))
@@ -297,6 +341,7 @@ impl ControlsWindow {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .rounded_r(px(15.))
                     .border_l_1()
                     .border_color(theme.gray_5)
                     .p(px(4.))

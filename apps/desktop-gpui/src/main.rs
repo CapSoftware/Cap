@@ -10,6 +10,8 @@ mod auth;
 mod camera_bench;
 #[cfg(target_os = "macos")]
 mod camera_blur;
+#[cfg(any(not(target_os = "macos"), test))]
+mod camera_blur_portable;
 mod camera_window;
 mod controls_window;
 mod deeplink;
@@ -58,6 +60,7 @@ mod theme;
 mod transcription;
 mod tray;
 mod ui;
+mod updates;
 mod upload;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -72,6 +75,7 @@ const MAIN_WINDOW_HEIGHT: f32 = 395.;
 /// material `"panel"` on both visual systems in
 /// `apps/desktop/src/utils/macos-window-material.ts`, and the same 16 the
 /// shell paints with (`rounded-[16px]`).
+#[cfg(target_os = "macos")]
 const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 16.;
 
 fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
@@ -253,6 +257,7 @@ fn main() {
             .expect("failed to open the main window");
 
         app_windows::init(window_handle, session, cx);
+        updates::schedule_startup_check(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu
@@ -350,6 +355,7 @@ fn main() {
                     "main window opened"
                 );
                 view.start_enumeration(window, cx);
+                view.start_recovery_check(window, cx);
                 view.auto_expand(window, cx);
                 view.auto_open_recent(window, cx);
                 // The AppKit work below must not run inside this update:
@@ -366,6 +372,7 @@ fn main() {
         // `applyMacOSWindowMaterial("panel")` does in the Tauri app. Nothing
         // paints it; the shell paints a translucent tint *over* it, so the
         // window has to be told which one landed.
+        #[cfg(target_os = "macos")]
         cx.spawn(async move |cx| {
             let Some(native) = native_main else {
                 tracing::error!("no NSWindow behind the main window; material not installed");
@@ -384,6 +391,8 @@ fn main() {
             });
         })
         .detach();
+        #[cfg(not(target_os = "macos"))]
+        let _ = native_main;
 
         // `CAP_GPUI_DEBUG_LIGHTS=1`: poll the main window's style mask and
         // standard-button set, logging on change -- pins down *when* AppKit

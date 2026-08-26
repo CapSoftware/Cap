@@ -521,8 +521,6 @@ version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f3f79755c74fd155000314eb349864caa787c6592eace6c6882dad873d9c39"
 dependencies = [
- "async-fs",
- "async-net",
  "enumflags2",
  "futures-channel",
  "futures-util",
@@ -1480,6 +1478,7 @@ dependencies = [
  "cap-camera",
  "cap-camera-effects",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-project",
  "cap-recording",
@@ -1501,6 +1500,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "image 0.25.10",
+ "jpeg-decoder",
  "kameo",
  "libc",
  "md-5",
@@ -1512,6 +1512,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rfd",
  "scap-targets",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

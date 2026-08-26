@@ -293,12 +293,6 @@ function prewarmFontCaches() {
 	else setTimeout(warm, 250);
 }
 
-// Hidden Tauri windows never flip document.visibilityState on Windows
-// (tauri-apps/tauri#9524), so TanStack keeps every refetchInterval firing
-// while the app idles in the tray (#2132). Pause queries when the backend
-// hides the window; on focus, hand control back to TanStack's own
-// visibilitychange detection (setFocused(undefined)) so platforms where it
-// works, like macOS minimize, keep pausing natively.
 function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
 	if (currentWindow.label !== "main") return;
 
@@ -314,12 +308,7 @@ function createHiddenWindowQueryPause(currentWindow: WebviewWindow) {
 				focusManager.setFocused(undefined);
 				return;
 			}
-			// Safety net for hide paths that bypass hide_main_window and
-			// hideCurrentWindow: a blur with the window no longer visible
-			// means hidden, not just unfocused. Not sufficient alone — an
-			// earlier benign blur (e.g. shell.open) masks a later hide. The
-			// generation guard stops a stale visibility result from pausing a
-			// window that regained focus while the check was in flight.
+
 			const generation = focusGeneration;
 			void currentWindow.isVisible().then((visible) => {
 				if (visible || generation !== focusGeneration) return;

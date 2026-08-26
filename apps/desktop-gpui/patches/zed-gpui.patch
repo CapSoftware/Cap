@@ -1,0 +1,361 @@
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index afb2171476..6cc35624a4 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -830,0 +831,4 @@ pub struct PaintSurface {
++    pub corner_radii: Corners<ScaledPixels>,
++    /// Normalized sub-rect of the source texture to sample, for object-fit
++    /// crops. The full texture is `(0,0)..(1,1)`.
++    pub source_uv: Bounds<f32>,
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 0480dc9574..484179d778 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1519,0 +1520 @@ impl Window {
++                let will_draw = invalidator.is_dirty() || request_frame_options.force_render;
+@@ -1526 +1527,4 @@ impl Window {
+-                    Some(Duration::from_micros(33333))
++                    // The skip below returns before the dirty check, so without
++                    // this an unrelated pending next-frame callback caps fresh
++                    // content at 30fps -- video playback in an unfocused window.
++                    (!will_draw).then_some(Duration::from_micros(33333))
+@@ -4544,0 +4549,18 @@ impl Window {
++        self.paint_surface_fitted(bounds, bounds, Corners::default(), image_buffer);
++    }
++
++    /// [`Self::paint_surface`] for object-fit layouts: paint the `visible`
++    /// rect of a surface whose fitted content box is `fitted` (equal or
++    /// larger, e.g. `ObjectFit::Cover`), cropping via the surface's source
++    /// UVs so `corner_radii` round the element's actual corners — the same
++    /// contract as [`Self::paint_image_fitted`].
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    #[cfg(target_os = "macos")]
++    pub fn paint_surface_fitted(
++        &mut self,
++        visible: Bounds<Pixels>,
++        fitted: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        image_buffer: CVPixelBuffer,
++    ) {
+@@ -4549 +4571,20 @@ impl Window {
+-        let bounds = self.snap_bounds(bounds);
++        let source_uv = if visible == fitted {
++            Bounds {
++                origin: point(0., 0.),
++                size: size(1., 1.),
++            }
++        } else {
++            let fitted_width = f32::from(fitted.size.width).max(1.0);
++            let fitted_height = f32::from(fitted.size.height).max(1.0);
++            Bounds {
++                origin: point(
++                    (f32::from(visible.origin.x) - f32::from(fitted.origin.x)) / fitted_width,
++                    (f32::from(visible.origin.y) - f32::from(fitted.origin.y)) / fitted_height,
++                ),
++                size: size(
++                    f32::from(visible.size.width) / fitted_width,
++                    f32::from(visible.size.height) / fitted_height,
++                ),
++            }
++        };
++        let bounds = self.snap_bounds(visible);
+@@ -4550,0 +4592 @@ impl Window {
++        let corner_radii = corner_radii.scale(self.scale_factor());
+@@ -4554,0 +4597,2 @@ impl Window {
++            corner_radii,
++            source_uv,
+diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
+index c93a383c38..11506dbb62 100644
+--- a/crates/gpui_macos/src/metal_renderer.rs
++++ b/crates/gpui_macos/src/metal_renderer.rs
+@@ -10,3 +10,3 @@ use gpui::{
+-    AtlasTextureId, BackdropBlur, Background, Bounds, ContentMask, DevicePixels, DrawOrder,
+-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
++    AtlasTextureId, BackdropBlur, Background, Bounds, ContentMask, Corners, DevicePixels,
++    DrawOrder, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
++    ScaledPixels, Scene, Shadow, Size, Underline, point, size,
+@@ -19,2 +19,3 @@ use core_video::{
+-    metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
+-    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
++    metal_texture::CVMetalTextureGetTexture,
++    metal_texture_cache::CVMetalTextureCache,
++    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
+@@ -178,0 +180 @@ pub(crate) struct MetalRenderer {
++    bgra_surfaces_pipeline_state: metal::RenderPipelineState,
+@@ -393,0 +396,8 @@ impl MetalRenderer {
++        let bgra_surfaces_pipeline_state = build_pipeline_state(
++            &device,
++            &library,
++            "bgra_surfaces",
++            "surface_vertex",
++            "surface_bgra_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        );
+@@ -422,0 +433 @@ impl MetalRenderer {
++            bgra_surfaces_pipeline_state,
+@@ -489,3 +500,7 @@ impl MetalRenderer {
+-        if self.path_intermediate_texture.as_ref().is_some_and(|texture| {
+-            texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
+-        }) {
++        if self
++            .path_intermediate_texture
++            .as_ref()
++            .is_some_and(|texture| {
++                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
++            })
++        {
+@@ -1196,3 +1211 @@ impl MetalRenderer {
+-            texture
+-                .as_ref()
+-                .map_or(0, |t| t.width() * t.height() * 4)
++            texture.as_ref().map_or(0, |t| t.width() * t.height() * 4)
+@@ -1385,2 +1398 @@ impl MetalRenderer {
+-            let alloc: *mut objc::runtime::Object =
+-                msg_send![class!(MPSImageGaussianBlur), alloc];
++            let alloc: *mut objc::runtime::Object = msg_send![class!(MPSImageGaussianBlur), alloc];
+@@ -1444,2 +1456,4 @@ impl MetalRenderer {
+-        command_encoder
+-            .set_fragment_texture(BackdropBlurInputIndex::SourceTexture as u64, Some(source_texture));
++        command_encoder.set_fragment_texture(
++            BackdropBlurInputIndex::SourceTexture as u64,
++            Some(source_texture),
++        );
+@@ -1898 +1911,0 @@ impl MetalRenderer {
+-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
+@@ -1916,27 +1929,63 @@ impl MetalRenderer {
+-            assert_eq!(
+-                surface.image_buffer.get_pixel_format(),
+-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+-            );
+-
+-            let y_texture = self
+-                .core_video_texture_cache
+-                .create_texture_from_image(
+-                    surface.image_buffer.as_concrete_TypeRef(),
+-                    None,
+-                    MTLPixelFormat::R8Unorm,
+-                    surface.image_buffer.get_width_of_plane(0),
+-                    surface.image_buffer.get_height_of_plane(0),
+-                    0,
+-                )
+-                .unwrap();
+-            let cb_cr_texture = self
+-                .core_video_texture_cache
+-                .create_texture_from_image(
+-                    surface.image_buffer.as_concrete_TypeRef(),
+-                    None,
+-                    MTLPixelFormat::RG8Unorm,
+-                    surface.image_buffer.get_width_of_plane(1),
+-                    surface.image_buffer.get_height_of_plane(1),
+-                    1,
+-                )
+-                .unwrap();
++            // CVMetalTexture wrappers must outlive the draw call below; the
++            // command encoder retains the underlying MTLTextures, but the
++            // texture cache may recycle them once the wrapper is released.
++            let pixel_format = surface.image_buffer.get_pixel_format();
++            let _plane_textures = if pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
++            {
++                command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
++                let y_texture = self
++                    .core_video_texture_cache
++                    .create_texture_from_image(
++                        surface.image_buffer.as_concrete_TypeRef(),
++                        None,
++                        MTLPixelFormat::R8Unorm,
++                        surface.image_buffer.get_width_of_plane(0),
++                        surface.image_buffer.get_height_of_plane(0),
++                        0,
++                    )
++                    .unwrap();
++                let cb_cr_texture = self
++                    .core_video_texture_cache
++                    .create_texture_from_image(
++                        surface.image_buffer.as_concrete_TypeRef(),
++                        None,
++                        MTLPixelFormat::RG8Unorm,
++                        surface.image_buffer.get_width_of_plane(1),
++                        surface.image_buffer.get_height_of_plane(1),
++                        1,
++                    )
++                    .unwrap();
++                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
++                    let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
++                    Some(metal::TextureRef::from_ptr(texture as *mut _))
++                });
++                command_encoder.set_fragment_texture(
++                    SurfaceInputIndex::CbCrTexture as u64,
++                    unsafe {
++                        let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
++                        Some(metal::TextureRef::from_ptr(texture as *mut _))
++                    },
++                );
++                (y_texture, Some(cb_cr_texture))
++            } else if pixel_format == kCVPixelFormatType_32BGRA {
++                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
++                let color_texture = self
++                    .core_video_texture_cache
++                    .create_texture_from_image(
++                        surface.image_buffer.as_concrete_TypeRef(),
++                        None,
++                        MTLPixelFormat::BGRA8Unorm,
++                        surface.image_buffer.get_width(),
++                        surface.image_buffer.get_height(),
++                        0,
++                    )
++                    .unwrap();
++                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
++                    let texture = CVMetalTextureGetTexture(color_texture.as_concrete_TypeRef());
++                    Some(metal::TextureRef::from_ptr(texture as *mut _))
++                });
++                (color_texture, None)
++            } else {
++                log::error!("unsupported surface pixel format: {pixel_format:#x}");
++                continue;
++            };
+@@ -1945 +1994 @@ impl MetalRenderer {
+-            let next_offset = *instance_offset + mem::size_of::<Surface>();
++            let next_offset = *instance_offset + mem::size_of::<SurfaceBounds>();
+@@ -1954,0 +2004,6 @@ impl MetalRenderer {
++            // The fragment reads corner radii from the same instance record.
++            command_encoder.set_fragment_buffer(
++                SurfaceInputIndex::Surfaces as u64,
++                Some(&instance_buffer.metal_buffer),
++                *instance_offset as u64,
++            );
+@@ -1960,9 +2014,0 @@ impl MetalRenderer {
+-            // let y_texture = y_texture.get_texture().unwrap().
+-            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
+-                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
+-                Some(metal::TextureRef::from_ptr(texture as *mut _))
+-            });
+-            command_encoder.set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
+-                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
+-                Some(metal::TextureRef::from_ptr(texture as *mut _))
+-            });
+@@ -1978,0 +2025,2 @@ impl MetalRenderer {
++                        corner_radii: surface.corner_radii,
++                        source_uv: surface.source_uv,
+@@ -2246 +2294 @@ pub struct PathSprite {
+-#[derive(Clone, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, PartialEq)]
+@@ -2250,0 +2299,2 @@ pub struct SurfaceBounds {
++    pub corner_radii: Corners<ScaledPixels>,
++    pub source_uv: Bounds<f32>,
+@@ -2454 +2504,4 @@ mod backdrop_blur_tests {
+-        assert!(diff <= 3, "vignette or shift at window edge: max diff {diff}");
++        assert!(
++            diff <= 3,
++            "vignette or shift at window edge: max diff {diff}"
++        );
+diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
+index 97bad184dc..71a05aca4f 100644
+--- a/crates/gpui_macos/src/shaders.metal
++++ b/crates/gpui_macos/src/shaders.metal
+@@ -883,3 +883,4 @@ vertex SurfaceVertexOutput surface_vertex(
+-  // We are going to copy the whole texture, so the texture position corresponds
+-  // to the current vertex of the unit triangle.
+-  float2 texture_position = unit_vertex;
++  float2 texture_position =
++      float2(surface.source_uv.origin.x, surface.source_uv.origin.y) +
++      unit_vertex * float2(surface.source_uv.size.width,
++                           surface.source_uv.size.height);
+@@ -891,0 +893,11 @@ vertex SurfaceVertexOutput surface_vertex(
++float surface_corner_alpha(float2 position, SurfaceBounds surface) {
++  float max_radius = max(
++      max(surface.corner_radii.top_left, surface.corner_radii.top_right),
++      max(surface.corner_radii.bottom_left, surface.corner_radii.bottom_right));
++  if (max_radius <= 0.) {
++    return 1.;
++  }
++  float distance = quad_sdf(position, surface.bounds, surface.corner_radii);
++  return saturate(0.5 - distance);
++}
++
+@@ -892,0 +905,2 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
++                                 constant SurfaceBounds *surfaces
++                                 [[buffer(SurfaceInputIndex_Surfaces)]],
+@@ -907 +921,15 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+-  return ycbcrToRGBTransform * ycbcr;
++  float4 color = ycbcrToRGBTransform * ycbcr;
++  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
++  return color;
++}
++
++fragment float4 surface_bgra_fragment(SurfaceFragmentInput input [[stage_in]],
++                                      constant SurfaceBounds *surfaces
++                                      [[buffer(SurfaceInputIndex_Surfaces)]],
++                                      texture2d<float> color_texture
++                                      [[texture(SurfaceInputIndex_YTexture)]]) {
++  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
++  float4 color = float4(
++      color_texture.sample(texture_sampler, input.texture_position).rgb, 1.0);
++  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
++  return color;
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+index 8a3aa5ea06..e0a9b8e2ef 100644
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -3135 +3135,2 @@ unsafe fn remove_layer_background(layer: id) {
+-                    let _: () = msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
++                    let _: () =
++                        msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -110,0 +111,9 @@ impl PlatformAtlas for DirectXAtlas {
++        let cached_texture_index = if id.kind == AtlasTextureKind::Polychrome {
++            textures.textures.iter().position(|entry| {
++                entry
++                    .as_ref()
++                    .is_some_and(|entry| entry.live_atlas_keys == 0)
++            })
++        } else {
++            None
++        };
+@@ -119 +129,7 @@ impl PlatformAtlas for DirectXAtlas {
+-            if texture.is_unreferenced() {
++            if texture.is_unreferenced() && id.kind == AtlasTextureKind::Polychrome {
++                *texture_slot = Some(texture);
++                if let Some(index) = cached_texture_index {
++                    textures.textures[index] = None;
++                    textures.free_list.push(index);
++                }
++            } else if texture.is_unreferenced() {
+@@ -420 +435,33 @@ mod tests {
+-}
++
++    #[test]
++    fn test_reuses_one_unreferenced_polychrome_texture() {
++        let Some(atlas) = create_atlas() else {
++            return;
++        };
++
++        let small = Size {
++            width: DevicePixels(64),
++            height: DevicePixels(64),
++        };
++        let large = Size {
++            width: DevicePixels(1280),
++            height: DevicePixels(720),
++        };
++        let small_key = make_image_key(10);
++        let first_key = make_image_key(11);
++        let second_key = make_image_key(12);
++
++        insert_tile(&atlas, &small_key, small);
++        atlas.remove(&small_key);
++        let first = insert_tile(&atlas, &first_key, large);
++        atlas.remove(&first_key);
++        let second = insert_tile(&atlas, &second_key, large);
++
++        assert_eq!(first.texture_id, second.texture_id);
++        let state = atlas.0.lock();
++        assert_eq!(
++            state.polychrome_textures.textures.iter().flatten().count(),
++            1
++        );
++    }
++}

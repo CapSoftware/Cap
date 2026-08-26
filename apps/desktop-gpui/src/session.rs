@@ -210,6 +210,13 @@ impl RecordingSession {
         let Some(active) = self.active.take() else {
             return;
         };
+        let instant_share_url = active.instant_share_url().map(ToString::to_string);
+        if let Some(link) = &instant_share_url
+            && !crate::store::GeneralSettings::load().disable_auto_open_links
+        {
+            let separator = if link.contains('?') { '&' } else { '?' };
+            cx.open_url(&format!("{link}{separator}recordingStopped=1"));
+        }
         self.phase = Phase::Stopping;
         cx.notify();
 
@@ -228,6 +235,8 @@ impl RecordingSession {
                         tracing::info!(dir = %project_dir.display(), "recording finished");
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) {
                             this.finished_studio = Some(project_dir);
+                        } else if let Some(link) = instant_share_url {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }
                     Ok(Err(error)) => {

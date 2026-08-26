@@ -341,6 +341,11 @@ pub struct MainWindow {
     /// is open so a large library is not walked on every home paint.
     library: Option<LibraryItems>,
     library_task: Option<gpui::Task<()>>,
+    incomplete_recording: Option<library::IncompleteRecordingItem>,
+    recovery_error: Option<String>,
+    recovery_pending: bool,
+    recovery_scan_task: Option<Task<()>>,
+    recovery_action_task: Option<Task<()>>,
     /// `createLicenseQuery()`'s resolution, cached: reading the store file in
     /// `render_plan_badge` would be I/O per paint. Refreshed on every Recents
     /// rescan -- the same seam that already re-reads the library on reshow,
@@ -456,6 +461,11 @@ impl MainWindow {
             recents_task: None,
             library: None,
             library_task: None,
+            incomplete_recording: None,
+            recovery_error: None,
+            recovery_pending: false,
+            recovery_scan_task: None,
+            recovery_action_task: None,
             plan: PlanBadge::current(),
             thumbnails: target_thumbnails::ThumbnailCache::default(),
             display_thumbnail_task: None,
@@ -510,6 +520,24 @@ impl MainWindow {
                             cx,
                         )
                     });
+                }
+                if std::env::var("CAP_GPUI_AUTO_MIC").is_ok_and(|value| value == "1")
+                    && this.microphone.is_none()
+                {
+                    let selected =
+                        cap_recording::feeds::microphone::MicrophoneFeed::default_device()
+                            .and_then(|(name, _, _)| {
+                                this.devices
+                                    .microphones
+                                    .iter()
+                                    .find(|microphone| microphone.name == name)
+                                    .cloned()
+                            })
+                            .or_else(|| this.devices.microphones.first().cloned());
+                    if let Some(microphone) = selected {
+                        tracing::info!(microphone = %microphone.name, "auto-selecting microphone");
+                        this.set_microphone_selection(Some(microphone), cx);
+                    }
                 }
                 // `CAP_GPUI_AUTO_PANEL=display|window`: open that target
                 // picker panel the way the chevron click does. Same reason as
@@ -928,6 +956,104 @@ impl MainWindow {
         }));
     }
 
+    pub fn start_recovery_check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scan_incomplete_recordings(window, cx, std::time::Duration::from_secs(2));
+    }
+
+    fn scan_incomplete_recordings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        delay: std::time::Duration,
+    ) {
+        self.recovery_scan_task = Some(cx.spawn_in(window, async move |this, cx| {
+            if !delay.is_zero() {
+                cx.background_executor().timer(delay).await;
+            }
+
+            let idle = this
+                .update_in(cx, |this, _, cx| this.session.read(cx).phase == Phase::Idle)
+                .unwrap_or(false);
+            if !idle {
+                return;
+            }
+
+            let incomplete = cx
+                .background_executor()
+                .spawn(async { library::find_incomplete_recordings() })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                if this.session.read(cx).phase != Phase::Idle {
+                    return;
+                }
+                this.incomplete_recording = incomplete.into_iter().next();
+                if this.incomplete_recording.is_none() {
+                    this.recovery_error = None;
+                }
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        }));
+    }
+
+    fn process_incomplete_recording(
+        &mut self,
+        recover: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recovery_pending || self.session.read(cx).phase != Phase::Idle {
+            return;
+        }
+        let Some(recording) = self.incomplete_recording.clone() else {
+            return;
+        };
+
+        self.recovery_pending = true;
+        self.recovery_error = None;
+        cx.notify();
+        window.refresh();
+
+        self.recovery_action_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if recover {
+                        library::recover_incomplete_recording(&recording.project_path)
+                    } else {
+                        library::delete_recording_directory(&recording.project_path)
+                            .map(|()| recording.project_path)
+                    }
+                })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                this.recovery_pending = false;
+                match result {
+                    Ok(project_path) => {
+                        this.incomplete_recording = None;
+                        this.recovery_error = None;
+                        this.refresh_recents(window, cx);
+                        this.refresh_open_library(window, cx);
+                        this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
+                        if recover {
+                            cx.defer(move |cx| app_windows::open_editor(project_path, cx));
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "incomplete recording action failed");
+                        this.recovery_error = Some(error);
+                    }
+                }
+                cx.notify();
+                window.refresh();
+            })
+            .ok();
+        }));
+    }
+
     /// Install a fresh scan result, releasing the previous thumbnails from the
     /// sprite atlas -- the same explicit drop the camera preview does with
     /// every frame it replaces.
@@ -1239,6 +1365,8 @@ impl MainWindow {
 
         self.mode = mode;
         self.target = Some(overlay.unwrap_or(TargetType::Display));
+        self.system_audio =
+            std::env::var("CAP_GPUI_AUTO_SYSTEM_AUDIO").is_ok_and(|value| value == "1");
         cx.notify();
 
         // `CAP_GPUI_AUTO_PAUSE=1`: wiggle pause/resume in the middle third, so
@@ -1339,10 +1467,20 @@ impl MainWindow {
                     // The overlay route: arm the mode (which opens the
                     // overlays), let them come up, seed what a drag or a hover
                     // would have produced, then press their Start button.
-                    if this
-                        .update_in(cx, |this, _window, cx| this.arm_overlay(kind, cx))
-                        .is_err()
-                    {
+                    let wanted = required_window.clone();
+                    let armed = this
+                        .update_in(cx, |this, _window, cx| {
+                            this.arm_overlay(kind, cx);
+                            kind != TargetType::Window
+                                || wanted.as_ref().is_none_or(|wanted| {
+                                    this.selected_window
+                                        .as_ref()
+                                        .is_some_and(|selected| window_matches(selected, wanted))
+                                })
+                        })
+                        .unwrap_or(false);
+                    if !armed {
+                        tracing::error!("auto-record selected window is no longer available");
                         return;
                     }
                     cx.background_executor()
@@ -1514,6 +1652,7 @@ impl MainWindow {
 
         let (camera_feed, mic_feed) = {
             let feeds = Feeds::global(cx);
+            feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
             (feeds.camera_actor(), feeds.mic_actor())
         };
@@ -1590,7 +1729,13 @@ impl MainWindow {
             label: camera.label.clone(),
         });
         self.camera = camera;
-        Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(selection, cx));
+        Feeds::global(cx).update(cx, |feeds, cx| {
+            let selected = selection.is_some();
+            feeds.set_camera(selection, cx);
+            if selected {
+                feeds.resume_camera_preview(cx);
+            }
+        });
         cx.notify();
     }
 
@@ -1623,6 +1768,7 @@ impl Render for MainWindow {
 
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -1657,10 +1803,138 @@ impl Render for MainWindow {
                 },
                 |this| this.child(self.render_recording_overlay(cx)),
             )
+            .when_some(
+                self.incomplete_recording
+                    .clone()
+                    .filter(|_| self.session.read(cx).phase == Phase::Idle),
+                |this, recording| this.child(self.render_recovery_toast(recording, cx)),
+            )
     }
 }
 
 impl MainWindow {
+    fn render_recovery_toast(
+        &self,
+        recording: library::IncompleteRecordingItem,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let pending = self.recovery_pending;
+        let duration = recording.estimated_duration_secs.round() as u64;
+        let duration_label = if duration == 0 {
+            String::new()
+        } else if duration < 60 {
+            format!(" · ~{duration}s")
+        } else if duration.is_multiple_of(60) {
+            format!(" · ~{}m", duration / 60)
+        } else {
+            format!(" · ~{}m {}s", duration / 60, duration % 60)
+        };
+        let segments = format!(
+            "{} segment{}{}",
+            recording.segment_count,
+            if recording.segment_count == 1 {
+                ""
+            } else {
+                "s"
+            },
+            duration_label
+        );
+
+        div()
+            .absolute()
+            .bottom(px(12.))
+            .left(px(12.))
+            .right(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.red_4)
+            .bg(theme.red_2)
+            .p(px(10.))
+            .shadow_md()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.red_11)
+                                    .child("Incomplete Recording"),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.gray_12)
+                                    .child(recording.pretty_name),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.gray_11)
+                                    .child(segments),
+                            )
+                            .when_some(self.recovery_error.clone(), |this, error| {
+                                this.child(
+                                    div()
+                                        .mt(px(4.))
+                                        .text_size(px(10.))
+                                        .text_color(theme.red_11)
+                                        .child(error),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_shrink_0()
+                            .gap(px(6.))
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "recover-incomplete-recording",
+                                    ui::ButtonVariant::Primary,
+                                    ui::ButtonSize::Xs,
+                                )
+                                .label(if pending { "..." } else { "Recover" })
+                                .disabled(pending)
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.process_incomplete_recording(true, window, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "discard-incomplete-recording",
+                                    ui::ButtonVariant::Gray,
+                                    ui::ButtonSize::Xs,
+                                )
+                                .label("Discard")
+                                .disabled(pending)
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.process_incomplete_recording(false, window, cx);
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+    }
+
     fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
@@ -2606,6 +2880,7 @@ impl MainWindow {
         let studio = item.mode == library::RecordingMode::Studio;
         let sharing = item.sharing.clone();
         let mode = item.mode;
+        let opens_editor = item.opens_editor();
         let subtitle = item.mode.label().to_string();
         let actions = self.render_recording_card_actions(index, item, cx);
 
@@ -2617,12 +2892,12 @@ impl MainWindow {
             Some(subtitle),
             item.clip_count,
             cx.listener(move |_, _, _window, cx| {
-                if studio {
+                if studio && opens_editor {
                     let path = path.clone();
                     cx.defer(move |cx| app_windows::open_editor(path, cx));
-                } else if let Some(url) = &sharing {
+                } else if !studio && let Some(url) = &sharing {
                     cx.open_url(url);
-                } else {
+                } else if !studio {
                     library::open_recording_folder(&path, mode);
                 }
             }),
@@ -2648,7 +2923,7 @@ impl MainWindow {
             .px(px(8.))
             .pb(px(6.))
             .gap(px(4.));
-        if mode == library::RecordingMode::Studio {
+        if item.opens_editor() {
             let editor = path.clone();
             row = row.child(self.library_action(
                 ("lib-rec-edit", index),
@@ -4454,7 +4729,7 @@ pub fn auto_overlay_kind() -> Option<TargetType> {
     }
 }
 
-fn auto_window_title() -> Option<String> {
+pub(crate) fn auto_window_title() -> Option<String> {
     std::env::var("CAP_GPUI_AUTO_WINDOW")
         .ok()
         .map(|value| value.trim().to_string())
@@ -4462,7 +4737,7 @@ fn auto_window_title() -> Option<String> {
 }
 
 fn window_matches(window: &crate::devices::WindowOption, title: &str) -> bool {
-    window.label == title || window.label.contains(title)
+    window.label == title
 }
 
 /// `CAP_GPUI_AUTO_AREA=x,y,width,height`, the harness's stand-in for drawing a

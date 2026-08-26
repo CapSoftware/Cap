@@ -85,18 +85,22 @@ pub(crate) enum ExitRequestDecision {
     AlreadyExiting,
     ExportActive,
     AllowRuntimeExit,
+    AllowRuntimeRestart,
 }
 
 pub(crate) fn handle_exit_requested<FPrevent>(
     is_exiting: bool,
     export_active: bool,
     runtime_exit_requested: bool,
+    runtime_restart_requested: bool,
     prevent_exit: FPrevent,
 ) -> ExitRequestDecision
 where
     FPrevent: FnOnce(),
 {
-    if is_exiting && runtime_exit_requested {
+    if runtime_restart_requested {
+        ExitRequestDecision::AllowRuntimeRestart
+    } else if is_exiting && runtime_exit_requested {
         ExitRequestDecision::AllowRuntimeExit
     } else if export_active {
         prevent_exit();

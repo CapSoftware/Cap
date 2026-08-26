@@ -1383,9 +1383,7 @@ impl RecoveryManager {
                         None
                     },
                     mic: {
-                        let mic_size = std::fs::metadata(&mic_path).map(|m| m.len()).unwrap_or(0);
-                        const MIN_VALID_AUDIO_SIZE: u64 = 500;
-                        if mic_path.exists() && mic_size > MIN_VALID_AUDIO_SIZE {
+                        if valid_recovered_audio(&mic_path) {
                             Some(AudioMeta {
                                 path: RelativePathBuf::from(format!(
                                     "{segment_base}/audio-input.ogg"
@@ -1405,11 +1403,7 @@ impl RecoveryManager {
                         }
                     },
                     system_audio: {
-                        let file_size = std::fs::metadata(&system_audio_path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
-                        const MIN_VALID_AUDIO_SIZE: u64 = 500;
-                        if system_audio_path.exists() && file_size > MIN_VALID_AUDIO_SIZE {
+                        if valid_recovered_audio(&system_audio_path) {
                             Some(AudioMeta {
                                 path: RelativePathBuf::from(format!(
                                     "{segment_base}/system_audio.ogg"
@@ -1658,6 +1652,10 @@ fn start_time_or_display_fallback(
     original_time.or(display_start_time)
 }
 
+fn valid_recovered_audio(path: &Path) -> bool {
+    path.is_file() && probe_media_valid(path)
+}
+
 fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
     if dst.exists() {
         std::fs::remove_file(dst).map_err(RecoveryError::Io)?;
@@ -1668,7 +1666,7 @@ fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_file, start_time_or_display_fallback};
+    use super::{replace_file, start_time_or_display_fallback, valid_recovered_audio};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1685,6 +1683,40 @@ mod tests {
 
         assert_eq!(fs::read(&dst).unwrap(), b"new");
         assert!(!src.exists());
+    }
+
+    #[test]
+    fn recovered_audio_keeps_valid_media_smaller_than_legacy_threshold() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("quiet.wav");
+        let samples = [0u8; 32];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&8000u32.to_le_bytes());
+        bytes.extend_from_slice(&16000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&samples);
+        fs::write(&path, &bytes).unwrap();
+
+        assert!(bytes.len() < 500);
+        assert!(valid_recovered_audio(&path));
+    }
+
+    #[test]
+    fn recovered_audio_rejects_large_corrupt_media() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("corrupt.ogg");
+        fs::write(&path, [0u8; 1024]).unwrap();
+
+        assert!(!valid_recovered_audio(&path));
     }
 
     #[test]

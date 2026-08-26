@@ -18,6 +18,7 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
       rust: ${{ steps.filter.outputs.rust }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
       branch: ${{ steps.branch.outputs.branch }}
@@ -31,11 +32,30 @@ jobs:
         with:
           filters: |
             desktop:
+              - '.github/actions/install-desktop-deps/**'
+              - '.github/workflows/ci.yml'
+              - 'apps/cli/**'
               - 'apps/desktop/**'
+              - 'apps/desktop-gpui/**'
+              - 'crates/**'
+              - 'packages/database/**'
+              - 'packages/ui-solid/**'
+              - 'packages/utils/**'
+              - 'packages/web-api-contract/**'
+              - 'scripts/build-desktop-binaries*'
+              - 'scripts/build-gpui-binary.sh'
+              - 'scripts/prepare-gpui-dependency.sh'
+              - 'scripts/run-gpui-build*'
+              - 'scripts/sync-desktop-versions.mjs'
+              - 'scripts/verify-gpui-release-inputs.mjs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
             rust:
               - '.cargo/**'
               - '.github/**'
               - 'apps/cli/**'
+              - 'apps/desktop-gpui/**'
               - 'crates/**'
               - 'apps/desktop/src-tauri/**'
               - 'Cargo.toml'
@@ -73,9 +93,13 @@ jobs:
       - uses: ./.github/actions/setup-js
 
       - name: Check Expo dependencies
+        env:
+          EXPO_OFFLINE: "1"
         run: pnpm --dir apps/mobile exec expo install --check
 
       - name: Run Expo Doctor
+        env:
+          EXPO_OFFLINE: "1"
         working-directory: apps/mobile
         run: pnpm dlx expo-doctor@1.20.1
 
@@ -195,6 +219,8 @@ jobs:
             runner: macos-latest
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
     runs-on: ${{ matrix.settings.runner }}
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
@@ -202,6 +228,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
 
       - name: Rust setup
         uses: dtolnay/rust-toolchain@1.88.0
@@ -240,10 +270,43 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
+      - name: Test Linux recording and encoder regressions
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          cargo test --locked -p cap-recording --lib
+          cargo test --locked -p cap-enc-ffmpeg
+        env:
+          LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}
+
+      - name: Build GPUI desktop
+        shell: bash
+        run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
+
+      - name: Test GPUI desktop
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks"
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" \
+              cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
+          else
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
+          fi
+
       - name: Build app
         working-directory: apps/desktop
         run: pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) || '' }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
   tauri-plugins:
@@ -279,6 +342,8 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
     runs-on: ${{ matrix.settings.runner }}
+    env:
+      RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -300,12 +365,16 @@ jobs:
 
       - run: node scripts/setup.js
 
+      - name: Build desktop binaries
+        shell: bash
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
+
       - name: Build debug
-        run: cargo build --all
+        run: cargo build --all --target ${{ matrix.settings.target }}
 
       - name: Build release
-        run: cargo check --all --release
+        run: cargo check --all --release --target ${{ matrix.settings.target }}
 
       - name: Run Clippy
         if: ${{ matrix.settings.target == 'aarch64-apple-darwin' || matrix.settings.target == 'x86_64-pc-windows-msvc' }}
-        run: cargo clippy --workspace --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-features --locked --target ${{ matrix.settings.target }} -- -D warnings

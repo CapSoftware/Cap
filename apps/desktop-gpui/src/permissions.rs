@@ -54,14 +54,16 @@ impl OSPermission {
         }
     }
 
-    /// The one-line "why we need it" under the row name. Single line on
-    /// purpose: the row's text column is a fixed width and truncates.
     pub fn blurb(self) -> &'static str {
         match self {
-            Self::ScreenRecording => "Captures your screen and windows for recordings.",
-            Self::Accessibility => "Tracks mouse activity for automatic zoom.",
-            Self::Microphone => "Adds your voice to recordings.",
-            Self::Camera => "Shows your webcam in recordings.",
+            Self::ScreenRecording => {
+                "Click Grant to allow when macOS asks, or pick Cap in System Settings if needed. Restart the app after allowing screen recording."
+            }
+            Self::Accessibility => {
+                "During recording, Cap collects mouse activity locally to generate automatic zoom in segments."
+            }
+            Self::Microphone => "This permission is required to record audio in your Caps.",
+            Self::Camera => "This permission is required to record your camera in your Caps.",
         }
     }
 
@@ -71,19 +73,9 @@ impl OSPermission {
         matches!(self, Self::ScreenRecording | Self::Accessibility)
     }
 
-    pub fn icon(self) -> &'static str {
-        match self {
-            // `screen.svg`, not `monitor.svg`: the latter is a multicolor
-            // asset, and `svg()` is alpha-mask-only -- it renders as a blob.
-            Self::ScreenRecording => "icons/screen.svg",
-            Self::Accessibility => "icons/cursor.svg",
-            Self::Microphone => "icons/microphone.svg",
-            Self::Camera => "icons/camera.svg",
-        }
-    }
-
     /// The exact System Settings pane, verbatim from
     /// `macos_permission_settings_url` in the Tauri app.
+    #[cfg(any(target_os = "macos", test))]
     fn settings_url(self) -> &'static str {
         match self {
             Self::ScreenRecording => {
