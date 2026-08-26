@@ -135,7 +135,7 @@ export function SeatManagementCard() {
 	const canDecrease = desiredQuantity > minQuantity;
 	const canIncrease = desiredQuantity < MAX_SEATS;
 	const isCancelRequest = desiredQuantity === 0;
-	const baaActive = baa?.status === "active";
+	const baaActive = baa?.status === "active" || baa?.status === "paid";
 
 	return (
 		<Card>

@@ -1,8 +1,11 @@
+import { sendEmail } from "@cap/database/emails/config";
+import { signedBaas, users } from "@cap/database/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDbChain = {
 	select: vi.fn(),
 	from: vi.fn(),
+	innerJoin: vi.fn(),
 	where: vi.fn(),
 	limit: vi.fn(),
 	insert: vi.fn(),
@@ -18,6 +21,7 @@ function resetDbChain() {
 	}
 	mockDbChain.select.mockReturnValue(mockDbChain);
 	mockDbChain.from.mockReturnValue(mockDbChain);
+	mockDbChain.innerJoin.mockReturnValue(mockDbChain);
 	mockDbChain.where.mockReturnValue(mockDbChain);
 	mockDbChain.limit.mockReturnValue(Promise.resolve([]));
 	mockDbChain.insert.mockReturnValue(mockDbChain);
@@ -50,8 +54,17 @@ vi.mock("@cap/database/schema", () => ({
 		organizationId: "signedBaaOrganizationId",
 		stripeSubscriptionId: "signedBaaStripeSubscriptionId",
 		status: "signedBaaStatus",
+		userId: "signedBaaUserId",
+		signedAt: "signedBaaSignedAt",
+		updatedAt: "signedBaaUpdatedAt",
 	},
-	users: { id: "id", email: "email" },
+	users: {
+		id: "id",
+		email: "email",
+		stripeCustomerId: "stripeCustomerId",
+		stripeSubscriptionId: "stripeSubscriptionId",
+	},
+	organizations: { id: "organizationId", ownerId: "ownerId" },
 }));
 
 vi.mock("@cap/env", () => ({
@@ -86,12 +99,21 @@ const mockStripe = {
 
 vi.mock("@cap/utils", () => ({
 	stripe: () => mockStripe,
+	STRIPE_SIGNED_BAA_PRICE_IDS: {
+		production: "price_baa",
+		development: "price_baa_test",
+	},
 }));
 
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
 	isNull: vi.fn((a: unknown) => ({ isNull: a })),
+	ne: vi.fn((a: unknown, b: unknown) => ({ ne: [a, b] })),
+	sql: (parts: TemplateStringsArray, ...values: unknown[]) => ({
+		parts: [...parts],
+		values,
+	}),
 	or: vi.fn((...args: unknown[]) => args),
 }));
 
@@ -112,6 +134,40 @@ function makeWebhookRequest(body = "{}") {
 
 describe("Stripe webhook — Signed BAA", () => {
 	let POST: typeof import("@/app/api/webhooks/stripe/route").POST;
+	const directOwner = {
+		stripeCustomerId: "cus_pro",
+		stripeSubscriptionId: "sub_pro",
+	};
+	const directProSubscription = {
+		id: "sub_pro",
+		customer: "cus_pro",
+		status: "active",
+		metadata: {},
+		items: { data: [{ price: { id: "price_pro" } }] },
+	};
+
+	function mockDirectBaaRecovery(
+		subscription: Record<string, unknown>,
+		proStatus = "active",
+	) {
+		mockStripe.subscriptions.retrieve.mockImplementation(async (id: string) =>
+			id === "sub_pro"
+				? { ...directProSubscription, status: proStatus }
+				: subscription,
+		);
+		mockDbChain.limit
+			.mockResolvedValueOnce([
+				{
+					id: "baa-1",
+					userId: "user-1",
+					organizationId: "org-1",
+					status: "processing",
+					stripeSubscriptionId: subscription.id,
+					signedAt: null,
+				},
+			])
+			.mockResolvedValueOnce([directOwner]);
+	}
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
@@ -121,6 +177,13 @@ describe("Stripe webhook — Signed BAA", () => {
 	});
 
 	it("attaches an entitled BAA subscription to a row missing the Stripe ID", async () => {
+		const subscription = {
+			id: "sub_baa_1",
+			status: "active",
+			metadata: { type: "signed_baa", organizationId: "org-1" },
+			latest_invoice: { status: "paid" },
+		};
+		mockDirectBaaRecovery(subscription);
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "customer.subscription.updated",
 			data: {
@@ -139,13 +202,27 @@ describe("Stripe webhook — Signed BAA", () => {
 
 		expect(res.status).toBe(200);
 		expect(mockDbChain.set).toHaveBeenCalledWith({
-			status: "active",
 			stripeSubscriptionId: "sub_baa_1",
+			updatedAt: expect.any(Object),
+		});
+		expect(mockDbChain.set).toHaveBeenCalledWith({
+			status: expect.objectContaining({
+				values: expect.arrayContaining(["paid"]),
+			}),
+			stripeSubscriptionId: "sub_baa_1",
+			updatedAt: expect.any(Object),
 		});
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 	});
 
 	it("associates the BAA subscription from its creation event", async () => {
+		const subscription = {
+			id: "sub_baa_new",
+			status: "active",
+			metadata: { type: "signed_baa", organizationId: "org-1" },
+			latest_invoice: { status: "paid" },
+		};
+		mockDirectBaaRecovery(subscription);
 		mockStripe.webhooks.constructEvent.mockReturnValue({
 			type: "customer.subscription.created",
 			data: {
@@ -164,10 +241,76 @@ describe("Stripe webhook — Signed BAA", () => {
 
 		expect(res.status).toBe(200);
 		expect(mockDbChain.set).toHaveBeenCalledWith({
-			status: "active",
 			stripeSubscriptionId: "sub_baa_new",
+			updatedAt: expect.any(Object),
+		});
+		expect(mockDbChain.set).toHaveBeenCalledWith({
+			status: expect.objectContaining({
+				values: expect.arrayContaining(["paid"]),
+			}),
+			stripeSubscriptionId: "sub_baa_new",
+			updatedAt: expect.any(Object),
 		});
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("cancels a recovered BAA when Pro ended before its creation event", async () => {
+		const subscription = {
+			id: "sub_baa_lost_response",
+			status: "active",
+			metadata: {
+				type: "signed_baa",
+				organizationId: "org-1",
+				userId: "user-1",
+			},
+			latest_invoice: { status: "paid" },
+		};
+		mockDirectBaaRecovery(subscription, "canceled");
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.created",
+			data: { object: subscription },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(200);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+			"sub_baa_lost_response",
+		);
+		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+		expect(mockDbChain.set).toHaveBeenCalledTimes(2);
+	});
+
+	it("retries recovered BAA association when its owner is missing", async () => {
+		const subscription = {
+			id: "sub_baa_missing_owner",
+			status: "active",
+			metadata: { type: "signed_baa", organizationId: "org-1" },
+			latest_invoice: { status: "paid" },
+		};
+		mockStripe.subscriptions.retrieve.mockResolvedValue(subscription);
+		mockDbChain.limit
+			.mockResolvedValueOnce([
+				{
+					id: "baa-1",
+					userId: "missing-user",
+					organizationId: "org-1",
+					status: "processing",
+					stripeSubscriptionId: subscription.id,
+					signedAt: null,
+				},
+			])
+			.mockResolvedValueOnce([]);
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.created",
+			data: { object: subscription },
+		});
+
+		const res = await POST(makeWebhookRequest());
+
+		expect(res.status).toBe(400);
+		expect(mockDbChain.set).toHaveBeenCalledTimes(1);
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
 	});
 
 	it("cancels Signed BAA when Pro becomes unpaid", async () => {
@@ -383,5 +526,278 @@ describe("Stripe webhook — Signed BAA", () => {
 		const res = await POST(makeWebhookRequest());
 
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("Signed BAA Payment Link webhooks", () => {
+	let POST: typeof import("@/app/api/webhooks/stripe/route").POST;
+	const subscription = {
+		id: "sub_link_baa",
+		customer: "cus_link",
+		status: "active",
+		metadata: {},
+		items: { data: [{ price: { id: "price_baa" }, quantity: 1 }] },
+		latest_invoice: { status: "paid" },
+	};
+	const session = {
+		id: "cs_link_baa",
+		mode: "subscription",
+		status: "complete",
+		payment_status: "paid",
+		customer: "cus_link",
+		customer_details: { email: "owner@example.com" },
+		subscription: "sub_link_baa",
+		metadata: {},
+	};
+	const owner = {
+		id: "user-1",
+		email: "owner@example.com",
+		stripeCustomerId: "cus_pro",
+		stripeSubscriptionId: "sub_pro",
+	};
+	const proSubscription = {
+		id: "sub_pro",
+		customer: "cus_pro",
+		status: "active",
+		metadata: {},
+		items: { data: [{ price: { id: "price_pro" }, quantity: 1 }] },
+	};
+	const pending = {
+		id: "baa-1",
+		userId: "user-1",
+		organizationId: "org-1",
+		status: "pending",
+		stripeSubscriptionId: null,
+		signedAt: null,
+	};
+	const paid = {
+		...pending,
+		status: "paid",
+		stripeSubscriptionId: "sub_link_baa",
+	};
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetDbChain();
+		mockStripe.subscriptions.retrieve
+			.mockReset()
+			.mockImplementation(async (id: string) =>
+				id === "sub_pro" ? proSubscription : subscription,
+			);
+		mockStripe.subscriptions.cancel
+			.mockReset()
+			.mockResolvedValue({ id: "sub_link_baa", status: "canceled" });
+		POST = (await import("@/app/api/webhooks/stripe/route")).POST;
+	});
+
+	it.each([
+		"checkout.session.completed",
+		"checkout.session.async_payment_succeeded",
+	])("attaches %s without overwriting Pro billing", async (eventType) => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: eventType,
+			data: { object: session },
+		});
+		mockDbChain.limit
+			.mockResolvedValueOnce([owner])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([pending])
+			.mockResolvedValueOnce([{ ownerId: owner.id }])
+			.mockResolvedValueOnce([{ ...paid, status: "pending" }])
+			.mockResolvedValueOnce([paid]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.update).toHaveBeenCalledWith(signedBaas);
+		expect(mockDbChain.set).toHaveBeenCalledWith({
+			stripeSubscriptionId: "sub_link_baa",
+		});
+		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "paid" });
+		expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it("acknowledges an unpaid BAA checkout without granting payment or Pro", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: { ...session, payment_status: "unpaid" } },
+		});
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.update).not.toHaveBeenCalled();
+	});
+
+	it.each(["canceled", "unpaid"])(
+		"cancels delayed paid checkout when Pro is already %s",
+		async (status) => {
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: "checkout.session.completed",
+				data: { object: session },
+			});
+			mockStripe.subscriptions.retrieve.mockImplementation(
+				async (id: string) =>
+					id === "sub_pro" ? { ...proSubscription, status } : subscription,
+			);
+			mockDbChain.limit
+				.mockResolvedValueOnce([owner])
+				.mockResolvedValueOnce([])
+				.mockResolvedValueOnce([pending])
+				.mockResolvedValueOnce([{ ownerId: owner.id }])
+				.mockResolvedValueOnce([{ ...paid, status: "pending" }]);
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+				"sub_link_baa",
+			);
+			expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+			expect(mockDbChain.set).not.toHaveBeenCalledWith({ status: "paid" });
+			expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+		},
+	);
+
+	it("is idempotent after the same subscription has already been attached", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit
+			.mockResolvedValueOnce([owner])
+			.mockResolvedValueOnce([paid])
+			.mockResolvedValueOnce([{ ownerId: owner.id }]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.update).not.toHaveBeenCalled();
+	});
+
+	it("cancels a second checkout while preserving the existing paid BAA and Pro", async () => {
+		const previous = { ...paid, stripeSubscriptionId: "sub_existing" };
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit
+			.mockResolvedValueOnce([owner])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([previous])
+			.mockResolvedValueOnce([{ ownerId: owner.id }]);
+		mockStripe.subscriptions.retrieve.mockImplementation(
+			async (id: string) => ({ ...subscription, id }),
+		);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+			"sub_link_baa",
+		);
+		expect(mockDbChain.update).not.toHaveBeenCalled();
+	});
+
+	it("recognizes price-only BAA subscription updates before Pro handling", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: { object: subscription },
+		});
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.update).toHaveBeenCalledWith(signedBaas);
+		expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("uses current cancellation state instead of a stale active event", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: {
+				object: {
+					...subscription,
+					metadata: { type: "signed_baa", organizationId: "org-1" },
+				},
+			},
+		});
+		mockStripe.subscriptions.retrieve.mockResolvedValue({
+			...subscription,
+			status: "canceled",
+			metadata: { type: "signed_baa", organizationId: "org-1" },
+		});
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.set).toHaveBeenCalledWith(
+			expect.objectContaining({ status: "canceled" }),
+		);
+		expect(mockDbChain.where).toHaveBeenCalledWith([
+			{ eq: ["signedBaaStripeSubscriptionId", "sub_link_baa"] },
+		]);
+	});
+
+	it("does not send Pro payment failure emails for a price-only BAA invoice", async () => {
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "invoice.payment_failed",
+			data: {
+				object: {
+					id: "in_baa",
+					billing_reason: "subscription_cycle",
+					attempt_count: 1,
+					next_payment_attempt: null,
+					lines: { data: [{ price: { id: "price_baa" } }] },
+				},
+			},
+		});
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(sendEmail).not.toHaveBeenCalled();
+		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
+	});
+
+	it("cancels the BAA on its separate customer when Pro becomes unpaid", async () => {
+		const pro = {
+			id: "sub_pro",
+			status: "unpaid",
+			customer: "cus_pro",
+			metadata: {},
+			items: { data: [{ price: { id: "price_pro" }, quantity: 3 }] },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: { object: pro },
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_pro",
+			email: owner.email,
+			metadata: { userId: owner.id },
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({ data: [pro] });
+		mockDbChain.limit
+			.mockResolvedValueOnce([owner])
+			.mockResolvedValueOnce([{ subscriptionId: "sub_link_baa" }]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+			"sub_link_baa",
+		);
+		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+	});
+
+	it("preserves ordinary Pro checkout and its seat quota", async () => {
+		const pro = {
+			id: "sub_pro",
+			status: "active",
+			customer: "cus_pro",
+			metadata: {},
+			items: { data: [{ price: { id: "price_pro" }, quantity: 3 }] },
+		};
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: {
+				object: { ...session, subscription: "sub_pro", customer: "cus_pro" },
+			},
+		});
+		mockStripe.subscriptions.retrieve.mockResolvedValue(pro);
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_pro",
+			email: owner.email,
+			metadata: { userId: owner.id },
+		});
+		mockDbChain.limit.mockResolvedValueOnce([owner]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.update).toHaveBeenCalledWith(users);
+		expect(mockDbChain.set).toHaveBeenCalledWith(
+			expect.objectContaining({
+				stripeSubscriptionId: "sub_pro",
+				stripeCustomerId: "cus_pro",
+				inviteQuota: 3,
+			}),
+		);
+		expect(mockDbChain.update).not.toHaveBeenCalledWith(signedBaas);
 	});
 });
