@@ -17,10 +17,9 @@
 //! A handoff that spawns a `cap-gpui` which then dies immediately would leave
 //! the user with no app at all, and with a setting that keeps redirecting away
 //! from the app that does work. So this side writes `cap-gpui.handoff` next to
-//! the shared store before spawning, and `cap-gpui` deletes it once it has been
-//! alive for ~10 seconds (`store::handoff_marker_path`, `main.rs`). A marker
-//! still present at startup therefore means the last handoff never reached a
-//! healthy instance: clear the flag, tell the user, and start normally.
+//! the shared store before spawning, and `cap-gpui` deletes it only on clean
+//! shutdown. With no live GPUI process, a surviving marker means the previous
+//! session exited unexpectedly: clear the flag, tell the user, and start normally.
 
 use std::path::PathBuf;
 
@@ -775,11 +774,8 @@ fn redirect_decision(app: &AppHandle) -> bool {
         return false;
     }
 
-    // A live instance is checked before the marker: within ten seconds of a
-    // successful handoff the marker is still legitimately on disk, and healing
-    // then would clear the flag and open this app next to a healthy native one.
-    // The marker's lifecycle stays with `cap-gpui` -- if that instance dies
-    // before proving itself, the marker survives it and the next launch heals.
+    // The marker exists throughout a live session. Check the process first so
+    // reopening Cap does not mistake a running native app for a crashed one.
     if let Some(pid) = running_instance_pid() {
         info!(pid, "Cap GPUI is already running; handing over to it");
         #[cfg(any(target_os = "macos", windows))]
@@ -793,7 +789,7 @@ fn redirect_decision(app: &AppHandle) -> bool {
 
     let marker = handoff_marker();
     if marker.exists() {
-        warn!("the last hand-off to Cap GPUI never reported a healthy instance; taking back over");
+        warn!("the last Cap GPUI session exited unexpectedly; taking back over");
         let _ = std::fs::remove_file(&marker);
         if let Err(error) = GeneralSettingsStore::update(app, |settings| {
             settings.enable_gpui_app = false;
@@ -805,7 +801,7 @@ fn redirect_decision(app: &AppHandle) -> bool {
         }
         app.dialog()
             .message(
-                "The native Cap app didn't start correctly last time, so the classic app has been restored.",
+                "The native Cap app exited unexpectedly last time, so the classic app has been restored.",
             )
             .show(|_| {});
         return false;
