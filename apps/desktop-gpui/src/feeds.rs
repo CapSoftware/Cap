@@ -14,6 +14,11 @@
 
 use std::time::{Duration, Instant};
 
+#[cfg(any(not(target_os = "macos"), test))]
+use std::sync::Arc;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
 use cap_recording::feeds::{
     camera::{self, CameraFeed},
     microphone::{self, MicrophoneFeed, MicrophoneSamples},
@@ -48,10 +53,19 @@ pub struct Feeds {
     /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
     pub mic_level_db: f64,
     pub camera_error: Option<String>,
+    camera_preview_parked: bool,
     /// Bumped on every camera/mic selection change; async completions from a
     /// previous selection see a stale epoch and drop their result.
     camera_epoch: u64,
     mic_epoch: u64,
+    #[cfg(not(target_os = "macos"))]
+    camera_preview_mirrored: Arc<AtomicBool>,
+    #[cfg(not(target_os = "macos"))]
+    camera_preview_active: Arc<AtomicBool>,
+    #[cfg(not(target_os = "macos"))]
+    camera_preview_blur: Arc<AtomicU8>,
+    #[cfg(not(target_os = "macos"))]
+    camera_preview_reset: Option<flume::Sender<()>>,
     // Channel-holding tasks; dropping them ends the pumps.
     _frame_pump: Option<gpui::Task<()>>,
     _meter_pump: Option<gpui::Task<()>>,
@@ -77,8 +91,17 @@ impl Feeds {
             microphone: None,
             mic_level_db: -96.0,
             camera_error: None,
+            camera_preview_parked: false,
             camera_epoch: 0,
             mic_epoch: 0,
+            #[cfg(not(target_os = "macos"))]
+            camera_preview_mirrored: Arc::new(AtomicBool::new(false)),
+            #[cfg(not(target_os = "macos"))]
+            camera_preview_active: Arc::new(AtomicBool::new(true)),
+            #[cfg(not(target_os = "macos"))]
+            camera_preview_blur: Arc::new(AtomicU8::new(0)),
+            #[cfg(not(target_os = "macos"))]
+            camera_preview_reset: None,
             _frame_pump: None,
             _meter_pump: None,
             _mic_errors: None,
@@ -95,6 +118,9 @@ impl Feeds {
     /// selected (or the actor died -- `recording::start` falls back to a
     /// per-recording feed in that case).
     pub fn camera_actor(&self) -> Option<ActorRef<CameraFeed>> {
+        if self.camera_preview_parked {
+            return None;
+        }
         self.camera.as_ref()?;
         self.camera_actor.clone().filter(|actor| actor.is_alive())
     }
@@ -104,6 +130,20 @@ impl Feeds {
         self.mic_actor.clone().filter(|actor| actor.is_alive())
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn set_camera_preview_state(&self, mirrored: bool, blur: crate::store::BlurMode) {
+        self.camera_preview_mirrored
+            .store(mirrored, Ordering::Relaxed);
+        self.camera_preview_blur.store(
+            match blur {
+                crate::store::BlurMode::Off => 0,
+                crate::store::BlurMode::Light => 1,
+                crate::store::BlurMode::Heavy => 2,
+            },
+            Ordering::Relaxed,
+        );
+    }
+
     /// Select (or deselect) the camera. Opens/closes the preview window and
     /// points the app-scoped feed at the device.
     pub fn set_camera(&mut self, selection: Option<SelectedCamera>, cx: &mut Context<Self>) {
@@ -111,47 +151,15 @@ impl Feeds {
             return;
         }
         self.camera_epoch += 1;
-        let epoch = self.camera_epoch;
         self.camera = selection.clone();
         self.camera_error = None;
         cx.notify();
 
         match selection {
-            Some(selection) => {
-                let actor = self.ensure_camera_actor(cx);
-                let set = gpui_tokio::Tokio::spawn(cx, async move {
-                    let ready = actor
-                        .ask(camera::SetInput {
-                            id: selection.id,
-                            settings: None,
-                        })
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    ready.await.map_err(|e| e.to_string())
-                });
-                cx.spawn(async move |this, cx| {
-                    let result = match set.await {
-                        Ok(result) => result.map(|_| ()),
-                        Err(join_error) => Err(join_error.to_string()),
-                    };
-                    this.update(cx, |this, cx| {
-                        if this.camera_epoch != epoch {
-                            return;
-                        }
-                        if let Err(error) = result {
-                            tracing::error!("camera input failed: {error}");
-                            this.camera_error = Some(error);
-                        }
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
-                // Deferred: `open_window` paints the new window's first frame
-                // synchronously, and that render reads this very entity --
-                // opening inside the update is a double-lease panic.
-                cx.defer(app_windows::open_camera_window);
+            Some(selection) if !self.camera_preview_parked => {
+                self.start_camera_preview(selection, cx);
             }
+            Some(_) => {}
             None => {
                 if let Some(actor) = self.camera_actor.clone() {
                     gpui_tokio::Tokio::spawn(cx, async move {
@@ -162,6 +170,83 @@ impl Feeds {
                 cx.defer(app_windows::close_camera_window);
             }
         }
+    }
+
+    pub fn park_camera_preview(&mut self, cx: &mut Context<Self>) {
+        if self.camera_preview_parked {
+            return;
+        }
+
+        self.camera_preview_parked = true;
+        self.camera_epoch += 1;
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.camera_preview_active.store(false, Ordering::Release);
+            if let Some(reset) = &self.camera_preview_reset {
+                let _ = reset.try_send(());
+            }
+        }
+
+        if let Some(actor) = self.camera_actor.clone() {
+            gpui_tokio::Tokio::spawn(cx, async move {
+                if let Err(error) = actor.ask(camera::RemoveInput).await {
+                    tracing::warn!("parking the camera preview: {error}");
+                }
+            })
+            .detach();
+        }
+
+        tracing::info!("camera preview parked");
+    }
+
+    pub fn resume_camera_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.camera_preview_parked {
+            return;
+        }
+
+        self.camera_preview_parked = false;
+        #[cfg(not(target_os = "macos"))]
+        self.camera_preview_active.store(true, Ordering::Release);
+        if let Some(selection) = self.camera.clone() {
+            self.camera_epoch += 1;
+            self.start_camera_preview(selection, cx);
+            tracing::info!("camera preview resumed");
+        }
+    }
+
+    fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
+        let epoch = self.camera_epoch;
+        let actor = self.ensure_camera_actor(cx);
+        let set = gpui_tokio::Tokio::spawn(cx, async move {
+            let ready = actor
+                .ask(camera::SetInput {
+                    id: selection.id,
+                    settings: None,
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+            ready.await.map_err(|error| error.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = match set.await {
+                Ok(result) => result.map(|_| ()),
+                Err(error) => Err(error.to_string()),
+            };
+            this.update(cx, |this, cx| {
+                if this.camera_epoch != epoch {
+                    return;
+                }
+                if let Err(error) = result {
+                    tracing::error!("camera input failed: {error}");
+                    this.camera_error = Some(error);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.defer(app_windows::open_camera_window);
     }
 
     /// Select (or deselect) the microphone. The feed keeps running between
@@ -254,24 +339,142 @@ impl Feeds {
         // The preview channel: bounded(4) so a stalled UI drops frames instead
         // of ballooning; the pump drains on the main thread and hands each
         // frame straight to the camera window.
-        let (frame_tx, frame_rx) = flume::bounded::<cap_recording::NativeCameraFrame>(4);
-        {
-            let actor = actor.clone();
-            gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(camera::AddNativeSender(frame_tx)).await {
-                    tracing::error!("attaching camera preview sender: {error}");
+        #[cfg(target_os = "macos")]
+        let pump = {
+            let (frame_tx, frame_rx) = flume::bounded::<cap_recording::NativeCameraFrame>(4);
+            {
+                let actor = actor.clone();
+                gpui_tokio::Tokio::spawn(cx, async move {
+                    if let Err(error) = actor.ask(camera::AddNativeSender(frame_tx)).await {
+                        tracing::error!("attaching camera preview sender: {error}");
+                    }
+                })
+                .detach();
+            }
+
+            cx.spawn(async move |_this, cx| {
+                while let Ok(frame) = frame_rx.recv_async().await {
+                    cx.update(|cx| app_windows::deliver_camera_frame(frame, cx));
                 }
             })
-            .detach();
-        }
+        };
 
-        let pump = cx.spawn(async move |_this, cx| {
-            while let Ok(frame) = frame_rx.recv_async().await {
-                // When no window is open (yet), the frame is dropped and the
-                // channel keeps draining.
-                cx.update(|cx| app_windows::deliver_camera_frame(frame, cx));
+        #[cfg(not(target_os = "macos"))]
+        let pump = {
+            let (frame_tx, frame_rx) = flume::bounded::<cap_recording::FFmpegVideoFrame>(4);
+            let (preview_tx, preview_rx) = flume::bounded(2);
+            let (reset_tx, reset_rx) = flume::bounded(1);
+            self.camera_preview_reset = Some(reset_tx);
+            let mirrored = self.camera_preview_mirrored.clone();
+            let active = self.camera_preview_active.clone();
+            let blur = self.camera_preview_blur.clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("camera-preview".into())
+                .spawn(move || {
+                    let mut scaler = None;
+                    let mut processor = None;
+                    let mut previous_blur = 0;
+                    let mut blur_failed = false;
+                    loop {
+                        let received = flume::Selector::new()
+                            .recv(&frame_rx, |result| result.map(Some))
+                            .recv(&reset_rx, |result| result.map(|()| None))
+                            .wait();
+                        let mut frame = match received {
+                            Ok(Some(frame)) => frame,
+                            Ok(None) => {
+                                scaler = None;
+                                processor = None;
+                                previous_blur = 0;
+                                blur_failed = false;
+                                continue;
+                            }
+                            Err(_) => break,
+                        };
+                        if !active.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        while let Ok(newer) = frame_rx.try_recv() {
+                            frame = newer;
+                        }
+                        let requested_blur = blur.load(Ordering::Relaxed);
+                        if requested_blur != previous_blur {
+                            processor = None;
+                            blur_failed = false;
+                            previous_blur = requested_blur;
+                        }
+                        let blur_mode = match requested_blur {
+                            1 => Some(cap_camera_effects::BlurMode::Light),
+                            2 => Some(cap_camera_effects::BlurMode::Heavy),
+                            _ => None,
+                        }
+                        .filter(|_| !blur_failed && crate::camera_blur_portable::blur_allowed());
+                        let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
+                        let Some((mut image, dims)) = camera_preview_image(
+                            &frame.inner,
+                            &mut scaler,
+                            mirrored.load(Ordering::Relaxed),
+                            max_dims,
+                        ) else {
+                            continue;
+                        };
+                        if let Some(mode) = blur_mode
+                            && !blur_failed
+                        {
+                            if processor.is_none() {
+                                match crate::camera_blur_portable::PortableCameraBlur::new() {
+                                    Ok(worker) => {
+                                        tracing::info!("camera blur preview initialized");
+                                        processor = Some(worker);
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(
+                                            "camera blur preview unavailable: {error:#}"
+                                        );
+                                        blur_failed = true;
+                                    }
+                                }
+                            }
+                            if let Some(worker) = processor.as_mut() {
+                                match worker.process(&image, dims, mode) {
+                                    Ok(blurred) => image = blurred,
+                                    Err(error) => {
+                                        tracing::warn!("camera blur preview stopped: {error:#}");
+                                        processor = None;
+                                        blur_failed = true;
+                                    }
+                                }
+                            }
+                        }
+                        match preview_tx
+                            .try_send(crate::camera_window::CameraPreviewFrame { image, dims })
+                        {
+                            Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+                            Err(flume::TrySendError::Disconnected(_)) => break,
+                        }
+                    }
+                })
+            {
+                tracing::error!("starting camera preview worker: {error}");
             }
-        });
+
+            {
+                let actor = actor.clone();
+                gpui_tokio::Tokio::spawn(cx, async move {
+                    if let Err(error) = actor.ask(camera::AddSender(frame_tx)).await {
+                        tracing::error!("attaching camera preview sender: {error}");
+                    }
+                })
+                .detach();
+            }
+
+            cx.spawn(async move |_this, cx| {
+                while let Ok(frame) = preview_rx.recv_async().await {
+                    cx.update(|cx| app_windows::deliver_camera_frame(frame, cx));
+                }
+            })
+        };
+
         self._frame_pump = Some(pump);
         self.camera_actor = Some(actor.clone());
         actor
@@ -353,6 +556,85 @@ impl Feeds {
     }
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) fn camera_preview_image(
+    frame: &ffmpeg::frame::Video,
+    scaler: &mut Option<ffmpeg::software::scaling::Context>,
+    mirrored: bool,
+    max_dims: Option<(u32, u32)>,
+) -> Option<(Arc<gpui::RenderImage>, (usize, usize))> {
+    let source_width = frame.width();
+    let source_height = frame.height();
+    let (width, height) = match max_dims {
+        Some(max) => {
+            crate::camera_blur_portable::fitted_dimensions(source_width, source_height, max)?
+        }
+        None if source_width > 0 && source_height > 0 => (source_width, source_height),
+        None => return None,
+    };
+
+    let mut converted = ffmpeg::frame::Video::empty();
+    let source = if frame.format() == ffmpeg::format::Pixel::BGRA
+        && width == source_width
+        && height == source_height
+    {
+        frame
+    } else {
+        let definition = scaler.as_ref().map(|context| context.input());
+        let output = scaler.as_ref().map(|context| context.output());
+        if definition.is_none_or(|input| {
+            input.format != frame.format()
+                || input.width != source_width
+                || input.height != source_height
+        }) || output.is_none_or(|output| output.width != width || output.height != height)
+        {
+            *scaler = Some(
+                ffmpeg::software::scaling::Context::get(
+                    frame.format(),
+                    source_width,
+                    source_height,
+                    ffmpeg::format::Pixel::BGRA,
+                    width,
+                    height,
+                    ffmpeg::software::scaling::Flags::BILINEAR,
+                )
+                .ok()?,
+            );
+        }
+        scaler.as_mut()?.run(frame, &mut converted).ok()?;
+        &converted
+    };
+
+    let width = width as usize;
+    let height = height as usize;
+    let row_bytes = width.checked_mul(4)?;
+    let stride = source.stride(0);
+    if stride < row_bytes {
+        return None;
+    }
+    let input = source.data(0);
+    if input.len() < height.checked_mul(stride)? {
+        return None;
+    }
+    let mut pixels = vec![0; height.checked_mul(row_bytes)?];
+    for (row, output) in pixels.chunks_exact_mut(row_bytes).enumerate() {
+        let input = &input[row * stride..row * stride + row_bytes];
+        if mirrored {
+            for (destination, source) in output.chunks_exact_mut(4).zip(input.chunks_exact(4).rev())
+            {
+                destination.copy_from_slice(source);
+            }
+        } else {
+            output.copy_from_slice(input);
+        }
+    }
+    let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
+    let image = Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+        image::Frame::new(image)
+    ]));
+    Some((image, (width, height)))
+}
+
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
 /// clamped to [-96, 0].
 fn db_fs(samples: &MicrophoneSamples) -> f64 {
@@ -416,5 +698,63 @@ mod tests {
         assert_eq!(bar_level(-60.0), 0.0);
         assert_eq!(bar_level(0.0), 1.0);
         assert!((bar_level(-30.0) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn camera_preview_preserves_bgra_pixels_and_mirrors_each_row() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 2, 2);
+        let stride = frame.stride(0);
+        let pixels = frame.data_mut(0);
+        pixels[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        pixels[stride..stride + 8].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+
+        let mut scaler = None;
+        let (image, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (2, 2));
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        );
+        assert!(scaler.is_none());
+
+        let (mirrored, dims) = camera_preview_image(&frame, &mut scaler, true, None).unwrap();
+        assert_eq!(dims, (2, 2));
+        assert_eq!(
+            mirrored.as_bytes(0).unwrap(),
+            &[5, 6, 7, 8, 1, 2, 3, 4, 13, 14, 15, 16, 9, 10, 11, 12]
+        );
+    }
+
+    #[test]
+    fn camera_preview_converts_rgba_to_bgra() {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 2, 1);
+        frame.data_mut(0)[..8].copy_from_slice(&[10, 20, 30, 255, 40, 50, 60, 128]);
+
+        let mut scaler = None;
+        let (image, dims) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+        assert_eq!(dims, (2, 1));
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            &[30, 20, 10, 255, 60, 50, 40, 128]
+        );
+        assert!(scaler.is_some());
+    }
+
+    #[test]
+    fn camera_preview_downscales_only_when_blur_requires_it() {
+        let frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 64, 32);
+        let mut scaler = None;
+
+        let (_, full_size) = camera_preview_image(&frame, &mut scaler, false, None).unwrap();
+        assert_eq!(full_size, (64, 32));
+        assert!(scaler.is_none());
+
+        let (_, capped) = camera_preview_image(&frame, &mut scaler, false, Some((32, 32))).unwrap();
+        assert_eq!(capped, (32, 16));
+        assert!(scaler.is_some());
+
+        let (_, recapped) =
+            camera_preview_image(&frame, &mut scaler, false, Some((16, 16))).unwrap();
+        assert_eq!(recapped, (16, 8));
     }
 }

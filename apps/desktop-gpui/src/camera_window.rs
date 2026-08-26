@@ -48,6 +48,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "macos"))]
+use gpui::StyledImage as _;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
@@ -376,6 +378,8 @@ struct CameraPreviewView {
     size: f32,
     #[cfg(target_os = "macos")]
     latest_frame: Option<core_video::pixel_buffer::CVPixelBuffer>,
+    #[cfg(not(target_os = "macos"))]
+    latest_frame: Option<Arc<gpui::RenderImage>>,
     frame_dims: Option<(usize, usize)>,
     /// Bumped by the canvas paint callback; the parent's cadence log reads it
     /// to prove notify-driven repaints actually present.
@@ -411,6 +415,8 @@ impl CameraPreviewView {
             size,
             #[cfg(target_os = "macos")]
             latest_frame: None,
+            #[cfg(not(target_os = "macos"))]
+            latest_frame: None,
             frame_dims: None,
             paints,
             camera_error,
@@ -422,6 +428,18 @@ impl CameraPreviewView {
     fn set_frame(
         &mut self,
         frame: core_video::pixel_buffer::CVPixelBuffer,
+        dims: (usize, usize),
+        cx: &mut Context<Self>,
+    ) {
+        self.latest_frame = Some(frame);
+        self.frame_dims = Some(dims);
+        cx.notify();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn set_frame(
+        &mut self,
+        frame: Arc<gpui::RenderImage>,
         dims: (usize, usize),
         cx: &mut Context<Self>,
     ) {
@@ -485,10 +503,17 @@ impl Render for CameraPreviewView {
             );
         }
 
-        #[cfg(target_os = "macos")]
-        let showing_frame = self.latest_frame.is_some();
         #[cfg(not(target_os = "macos"))]
-        let showing_frame = false;
+        if let Some(image) = self.latest_frame.clone() {
+            self.paints.fetch_add(1, Ordering::Relaxed);
+            container = container.child(
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            );
+        }
+
+        let showing_frame = self.latest_frame.is_some();
 
         if !showing_frame {
             container = container.child(
@@ -549,6 +574,12 @@ impl Render for CameraPreviewView {
 
         container
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub struct CameraPreviewFrame {
+    pub image: Arc<gpui::RenderImage>,
+    pub dims: (usize, usize),
 }
 
 /// The chrome half: renders the parent's toolbar, re-rendered only when the
@@ -631,6 +662,10 @@ impl CameraWindow {
         platform::apply_window_theme(window, platform::ForcedAppearance::Dark);
         let theme = Theme::dark();
         let state = store::load().camera_window.unwrap_or_default();
+        #[cfg(not(target_os = "macos"))]
+        Feeds::global(cx).update(cx, |feeds, _| {
+            feeds.set_camera_preview_state(state.mirrored, state.background_blur)
+        });
         let paints = Arc::new(AtomicU32::new(0));
         let preview = cx.new({
             let paints = paints.clone();
@@ -679,7 +714,8 @@ impl CameraWindow {
     /// explicit ask (unit-2 finding).
     pub fn frame_arrived(
         &mut self,
-        frame: cap_recording::NativeCameraFrame,
+        #[cfg(target_os = "macos")] frame: cap_recording::NativeCameraFrame,
+        #[cfg(not(target_os = "macos"))] frame: CameraPreviewFrame,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -751,7 +787,19 @@ impl CameraWindow {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (frame, window, cx);
+            let first_frame = self.frame_dims.is_none();
+            let dims_changed = self.frame_dims != Some(frame.dims);
+            self.frame_dims = Some(frame.dims);
+            self.preview.update(cx, |preview, cx| {
+                preview.set_frame(frame.image, frame.dims, cx)
+            });
+            if dims_changed {
+                self.apply_window_size(window, cx);
+                cx.notify();
+            }
+            if first_frame && !window.is_window_active() {
+                window.refresh();
+            }
         }
 
         self.frames_in_window += 1;
@@ -890,6 +938,10 @@ impl CameraWindow {
         let blur_before = self.state.background_blur;
         mutate(&mut self.state);
         self.state.size = clamp_size(self.state.size);
+        #[cfg(not(target_os = "macos"))]
+        Feeds::global(cx).update(cx, |feeds, _| {
+            feeds.set_camera_preview_state(self.state.mirrored, self.state.background_blur)
+        });
         #[cfg(target_os = "macos")]
         {
             if self.state.background_blur != blur_before {
@@ -1386,9 +1438,17 @@ impl Render for CameraWindow {
             )
             .when(resizing, |this| {
                 this.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    this.handle_resize_move(event, window, cx);
+                    if event.dragging() {
+                        this.handle_resize_move(event, window, cx);
+                    } else {
+                        this.end_resize(cx);
+                    }
                 }))
                 .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)),
+                )
+                .on_mouse_up_out(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)),
                 )
