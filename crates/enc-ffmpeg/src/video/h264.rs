@@ -1077,6 +1077,15 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: 
     false
 }
 
+#[cfg(target_os = "linux")]
+fn linux_encoder_priority(nvidia_device_available: bool) -> &'static [&'static str] {
+    if nvidia_device_available {
+        &["h264_nvenc", "libx264"]
+    } else {
+        &["libx264"]
+    }
+}
+
 fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
@@ -1108,7 +1117,12 @@ fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] 
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_encoder_priority(std::path::Path::new("/dev/nvidiactl").exists())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         &["libx264"]
     }
@@ -1313,14 +1327,14 @@ fn get_codec_and_options(
 /// candidate is rejected and encoder selection falls through to the next one
 /// (terminating at libx264, which never takes this path).
 ///
-/// Windows-only: that is where the multi-vendor encoder/driver matrix
-/// (nvenc/amf/qsv/mf) lives and where zeroed-output reports come from.
-/// VideoToolbox is a single-vendor OS stack, and measured session creation
-/// alone costs ~1.6s — too much to add to recording start for a failure mode
-/// never observed there. Results are cached per everything that shapes the
-/// encode path (encoder, resolution, input pixel format, frame rate, bitrate
-/// inputs, and the full option set) so the cost is one-time per process, and
-/// `CAP_DISABLE_ENCODER_SELF_TEST=1` bypasses the check as an escape hatch.
+/// The Windows multi-vendor encoder/driver matrix (nvenc/amf/qsv/mf) and
+/// Linux NVIDIA encoders are preflight-tested. VideoToolbox is a single-vendor
+/// OS stack, and measured session creation alone costs ~1.6s — too much to
+/// add to recording start for a failure mode never observed there. Results
+/// are cached per everything that shapes the encode path (encoder, resolution,
+/// input pixel format, frame rate, bitrate inputs, and the full option set)
+/// so the cost is one-time per process, and `CAP_DISABLE_ENCODER_SELF_TEST=1`
+/// bypasses the check as an escape hatch.
 fn cached_hardware_self_test(
     codec: Codec,
     encoder_options: &Dictionary<'static>,
@@ -1336,7 +1350,8 @@ fn cached_hardware_self_test(
         sync::{Mutex, OnceLock},
     };
 
-    if !cfg!(target_os = "windows") {
+    if !(cfg!(target_os = "windows") || (cfg!(target_os = "linux") && codec.name() == "h264_nvenc"))
+    {
         return Ok(());
     }
 
@@ -1630,5 +1645,78 @@ mod self_test_tests {
         let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
         hardware_encoder_self_test(codec, options, &config, 160, 120, 0.3, None)
             .expect("healthy encoder passes the round trip");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_nvidia_device_prefers_nvenc_and_keeps_software_fallback() {
+        assert_eq!(linux_encoder_priority(true), &["h264_nvenc", "libx264"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_without_nvidia_preserves_software_encoder() {
+        assert_eq!(linux_encoder_priority(false), &["libx264"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_high_throughput_preserves_software_encoder() {
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+
+        assert_eq!(
+            get_encoder_priority_with_override(
+                &config,
+                H264Preset::HighThroughput,
+                Some(linux_encoder_priority(true)),
+                false,
+            ),
+            &["libx264"],
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_crf_preserves_software_encoder() {
+        ffmpeg::init().ok();
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+        let codecs = get_codec_and_options(
+            &config,
+            H264Preset::Ultrafast,
+            Some(linux_encoder_priority(true)),
+            true,
+            Some(23),
+        );
+
+        assert_eq!(codecs.len(), 1);
+        assert_eq!(codecs[0].0.name(), "libx264");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_nvenc_self_test_decodes_real_gray_frames_when_available() {
+        if !std::path::Path::new("/dev/nvidiactl").exists() {
+            return;
+        }
+
+        ffmpeg::init().ok();
+        let Some(codec) = encoder::find_by_name("h264_nvenc") else {
+            return;
+        };
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+        let options = get_codec_and_options(
+            &config,
+            H264Preset::Ultrafast,
+            Some(&["h264_nvenc", "libx264"]),
+            false,
+            None,
+        )
+        .into_iter()
+        .find(|(candidate, _)| candidate.name() == "h264_nvenc")
+        .expect("available NVENC encoder is configured")
+        .1;
+
+        cached_hardware_self_test(codec, &options, &config, 160, 120, 0.3, None)
+            .expect("real NVIDIA hardware preserves neutral gray through encode and decode");
     }
 }
