@@ -254,7 +254,11 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .expect("failed to open the main window");
+            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
+        let Ok(window_handle) = window_handle else {
+            cx.quit();
+            return;
+        };
 
         app_windows::init(window_handle, session, cx);
         updates::schedule_startup_check(cx);

@@ -66,7 +66,7 @@ index 0480dc9574..484179d778 100644
 +            corner_radii,
 +            source_uv,
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index c93a383c38..11506dbb62 100644
+index c93a383c38..1d35af12f6 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
 @@ -10,3 +10,3 @@ use gpui::{
@@ -79,12 +79,89 @@ index c93a383c38..11506dbb62 100644
 @@ -19,2 +19,3 @@ use core_video::{
 -    metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
 -    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-+    metal_texture::CVMetalTextureGetTexture,
++    metal_texture::{CVMetalTexture, CVMetalTextureGetTexture},
 +    metal_texture_cache::CVMetalTextureCache,
 +    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
-@@ -178,0 +180 @@ pub(crate) struct MetalRenderer {
+@@ -50,0 +52 @@ const SCRATCH_RELEASE_AFTER_FRAMES: u32 = 30;
++const SURFACE_ERROR_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+@@ -55,7 +57 @@ pub(crate) type Renderer = MetalRenderer;
+-pub(crate) unsafe fn new_renderer(
+-    context: self::Context,
+-    _native_window: *mut c_void,
+-    _native_view: *mut c_void,
+-    _bounds: gpui::Size<f32>,
+-    transparent: bool,
+-) -> Renderer {
++pub(crate) fn new_renderer(context: self::Context, transparent: bool) -> Result<Renderer> {
+@@ -173,0 +170 @@ pub(crate) struct MetalRenderer {
++    surface_error_last_log: Option<std::time::Instant>,
+@@ -178,0 +176 @@ pub(crate) struct MetalRenderer {
 +    bgra_surfaces_pipeline_state: metal::RenderPipelineState,
-@@ -393,0 +396,8 @@ impl MetalRenderer {
+@@ -211,2 +209,5 @@ impl MetalRenderer {
+-    pub fn new(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>, transparent: bool) -> Self {
+-        let device = Self::create_device();
++    pub fn new(
++        instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
++        transparent: bool,
++    ) -> Result<Self> {
++        let device = Self::create_device()?;
+@@ -242,2 +243,2 @@ impl MetalRenderer {
+-    pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Self {
+-        let device = Self::create_device();
++    pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Result<Self> {
++        let device = Self::create_device()?;
+@@ -247 +248 @@ impl MetalRenderer {
+-    fn create_device() -> metal::Device {
++    fn create_device() -> Result<metal::Device> {
+@@ -255 +256 @@ impl MetalRenderer {
+-            d
++            Ok(d)
+@@ -262,4 +263,2 @@ impl MetalRenderer {
+-            metal::Device::system_default().unwrap_or_else(|| {
+-                log::error!("unable to access a compatible graphics device");
+-                std::process::exit(1);
+-            })
++            metal::Device::system_default()
++                .ok_or_else(|| anyhow::anyhow!("unable to access a compatible graphics device"))
+@@ -274,9 +273,2 @@ impl MetalRenderer {
+-    ) -> Self {
+-        #[cfg(feature = "runtime_shaders")]
+-        let library = device
+-            .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
+-            .expect("error building metal library");
+-        #[cfg(not(feature = "runtime_shaders"))]
+-        let library = device
+-            .new_library_with_data(SHADERS_METALLIB)
+-            .expect("error building metal library");
++    ) -> Result<Self> {
++        let library = build_shader_library(&device)?;
+@@ -327 +319 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -335 +327 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -343 +335 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -353 +345 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -361 +353 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -369 +361 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -377 +369 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -385 +377 @@ impl MetalRenderer {
+-        );
++        )?;
+@@ -393 +385,9 @@ impl MetalRenderer {
+-        );
++        )?;
 +        let bgra_surfaces_pipeline_state = build_pipeline_state(
 +            &device,
 +            &library,
@@ -92,10 +169,25 @@ index c93a383c38..11506dbb62 100644
 +            "surface_vertex",
 +            "surface_bgra_fragment",
 +            MTLPixelFormat::BGRA8Unorm,
-+        );
-@@ -422,0 +433 @@ impl MetalRenderer {
++        )?;
+@@ -397,2 +397,4 @@ impl MetalRenderer {
+-        let core_video_texture_cache =
+-            CVMetalTextureCache::new(None, device.clone(), None).unwrap();
++        let core_video_texture_cache = CVMetalTextureCache::new(None, device.clone(), None)
++            .map_err(|status| {
++                anyhow::anyhow!("failed to create Core Video Metal texture cache: {status}")
++            })?;
+@@ -400 +402 @@ impl MetalRenderer {
+-        Self {
++        Ok(Self {
+@@ -417,0 +420 @@ impl MetalRenderer {
++            surface_error_last_log: None,
+@@ -422,0 +426 @@ impl MetalRenderer {
 +            bgra_surfaces_pipeline_state,
-@@ -489,3 +500,7 @@ impl MetalRenderer {
+@@ -432 +436 @@ impl MetalRenderer {
+-        }
++        })
+@@ -489,3 +493,7 @@ impl MetalRenderer {
 -        if self.path_intermediate_texture.as_ref().is_some_and(|texture| {
 -            texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
 -        }) {
@@ -106,25 +198,34 @@ index c93a383c38..11506dbb62 100644
 +                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
 +            })
 +        {
-@@ -1196,3 +1211 @@ impl MetalRenderer {
+@@ -921,0 +930 @@ impl MetalRenderer {
++        let mut retained_surface_textures = CommandBufferResources::default();
+@@ -1141,0 +1151 @@ impl MetalRenderer {
++                    &mut retained_surface_textures,
+@@ -1172,0 +1183,2 @@ impl MetalRenderer {
++        retained_surface_textures.retain_until_completion(command_buffer);
++
+@@ -1196,3 +1208 @@ impl MetalRenderer {
 -            texture
 -                .as_ref()
 -                .map_or(0, |t| t.width() * t.height() * 4)
 +            texture.as_ref().map_or(0, |t| t.width() * t.height() * 4)
-@@ -1385,2 +1398 @@ impl MetalRenderer {
+@@ -1385,2 +1395 @@ impl MetalRenderer {
 -            let alloc: *mut objc::runtime::Object =
 -                msg_send![class!(MPSImageGaussianBlur), alloc];
 +            let alloc: *mut objc::runtime::Object = msg_send![class!(MPSImageGaussianBlur), alloc];
-@@ -1444,2 +1456,4 @@ impl MetalRenderer {
+@@ -1444,2 +1453,4 @@ impl MetalRenderer {
 -        command_encoder
 -            .set_fragment_texture(BackdropBlurInputIndex::SourceTexture as u64, Some(source_texture));
 +        command_encoder.set_fragment_texture(
 +            BackdropBlurInputIndex::SourceTexture as u64,
 +            Some(source_texture),
 +        );
-@@ -1898 +1911,0 @@ impl MetalRenderer {
+@@ -1896,0 +1908 @@ impl MetalRenderer {
++        retained_surface_textures: &mut CommandBufferResources<CVMetalTexture>,
+@@ -1898 +1909,0 @@ impl MetalRenderer {
 -        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
-@@ -1916,27 +1929,63 @@ impl MetalRenderer {
+@@ -1916,8 +1927,3 @@ impl MetalRenderer {
 -            assert_eq!(
 -                surface.image_buffer.get_pixel_format(),
 -                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -133,99 +234,106 @@ index c93a383c38..11506dbb62 100644
 -            let y_texture = self
 -                .core_video_texture_cache
 -                .create_texture_from_image(
--                    surface.image_buffer.as_concrete_TypeRef(),
--                    None,
--                    MTLPixelFormat::R8Unorm,
--                    surface.image_buffer.get_width_of_plane(0),
--                    surface.image_buffer.get_height_of_plane(0),
--                    0,
++            let pixel_format = surface.image_buffer.get_pixel_format();
++            if pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
++                let y_texture = match self.core_video_texture_cache.create_texture_from_image(
+@@ -1930,5 +1936,10 @@ impl MetalRenderer {
 -                )
 -                .unwrap();
 -            let cb_cr_texture = self
 -                .core_video_texture_cache
 -                .create_texture_from_image(
--                    surface.image_buffer.as_concrete_TypeRef(),
--                    None,
--                    MTLPixelFormat::RG8Unorm,
--                    surface.image_buffer.get_width_of_plane(1),
--                    surface.image_buffer.get_height_of_plane(1),
--                    1,
++                ) {
++                    Ok(texture) => texture,
++                    Err(status) => {
++                        self.log_surface_texture_error(format_args!(
++                            "failed to create Metal luma texture for surface frame: {status}"
++                        ));
++                        continue;
++                    }
++                };
++                let cb_cr_texture = match self.core_video_texture_cache.create_texture_from_image(
+@@ -1941,2 +1952,67 @@ impl MetalRenderer {
 -                )
 -                .unwrap();
-+            // CVMetalTexture wrappers must outlive the draw call below; the
-+            // command encoder retains the underlying MTLTextures, but the
-+            // texture cache may recycle them once the wrapper is released.
-+            let pixel_format = surface.image_buffer.get_pixel_format();
-+            let _plane_textures = if pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-+            {
++                ) {
++                    Ok(texture) => texture,
++                    Err(status) => {
++                        self.log_surface_texture_error(format_args!(
++                            "failed to create Metal chroma texture for surface frame: {status}"
++                        ));
++                        continue;
++                    }
++                };
++                let y_metal_texture =
++                    unsafe { CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef()) };
++                let cb_cr_metal_texture =
++                    unsafe { CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef()) };
++                if y_metal_texture.is_null() || cb_cr_metal_texture.is_null() {
++                    self.log_surface_texture_error(format_args!(
++                        "Core Video returned a null Metal texture for surface frame"
++                    ));
++                    continue;
++                }
++
 +                command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
-+                let y_texture = self
-+                    .core_video_texture_cache
-+                    .create_texture_from_image(
-+                        surface.image_buffer.as_concrete_TypeRef(),
-+                        None,
-+                        MTLPixelFormat::R8Unorm,
-+                        surface.image_buffer.get_width_of_plane(0),
-+                        surface.image_buffer.get_height_of_plane(0),
-+                        0,
-+                    )
-+                    .unwrap();
-+                let cb_cr_texture = self
-+                    .core_video_texture_cache
-+                    .create_texture_from_image(
-+                        surface.image_buffer.as_concrete_TypeRef(),
-+                        None,
-+                        MTLPixelFormat::RG8Unorm,
-+                        surface.image_buffer.get_width_of_plane(1),
-+                        surface.image_buffer.get_height_of_plane(1),
-+                        1,
-+                    )
-+                    .unwrap();
 +                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-+                    let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
-+                    Some(metal::TextureRef::from_ptr(texture as *mut _))
++                    Some(metal::TextureRef::from_ptr(y_metal_texture as *mut _))
 +                });
-+                command_encoder.set_fragment_texture(
-+                    SurfaceInputIndex::CbCrTexture as u64,
-+                    unsafe {
-+                        let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
-+                        Some(metal::TextureRef::from_ptr(texture as *mut _))
-+                    },
-+                );
-+                (y_texture, Some(cb_cr_texture))
++                command_encoder
++                    .set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
++                        Some(metal::TextureRef::from_ptr(cb_cr_metal_texture as *mut _))
++                    });
++                retained_surface_textures.push(y_texture);
++                retained_surface_textures.push(cb_cr_texture);
 +            } else if pixel_format == kCVPixelFormatType_32BGRA {
++                let color_texture = match self.core_video_texture_cache.create_texture_from_image(
++                    surface.image_buffer.as_concrete_TypeRef(),
++                    None,
++                    MTLPixelFormat::BGRA8Unorm,
++                    surface.image_buffer.get_width(),
++                    surface.image_buffer.get_height(),
++                    0,
++                ) {
++                    Ok(texture) => texture,
++                    Err(status) => {
++                        self.log_surface_texture_error(format_args!(
++                            "failed to create Metal BGRA texture for surface frame: {status}"
++                        ));
++                        continue;
++                    }
++                };
++                let metal_texture =
++                    unsafe { CVMetalTextureGetTexture(color_texture.as_concrete_TypeRef()) };
++                if metal_texture.is_null() {
++                    self.log_surface_texture_error(format_args!(
++                        "Core Video returned a null Metal texture for surface frame"
++                    ));
++                    continue;
++                }
++
 +                command_encoder.set_render_pipeline_state(&self.bgra_surfaces_pipeline_state);
-+                let color_texture = self
-+                    .core_video_texture_cache
-+                    .create_texture_from_image(
-+                        surface.image_buffer.as_concrete_TypeRef(),
-+                        None,
-+                        MTLPixelFormat::BGRA8Unorm,
-+                        surface.image_buffer.get_width(),
-+                        surface.image_buffer.get_height(),
-+                        0,
-+                    )
-+                    .unwrap();
 +                command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-+                    let texture = CVMetalTextureGetTexture(color_texture.as_concrete_TypeRef());
-+                    Some(metal::TextureRef::from_ptr(texture as *mut _))
++                    Some(metal::TextureRef::from_ptr(metal_texture as *mut _))
 +                });
-+                (color_texture, None)
++                retained_surface_textures.push(color_texture);
 +            } else {
-+                log::error!("unsupported surface pixel format: {pixel_format:#x}");
++                self.log_surface_texture_error(format_args!(
++                    "unsupported surface pixel format: {pixel_format:#x}"
++                ));
 +                continue;
-+            };
-@@ -1945 +1994 @@ impl MetalRenderer {
++            }
+@@ -1945 +2021 @@ impl MetalRenderer {
 -            let next_offset = *instance_offset + mem::size_of::<Surface>();
 +            let next_offset = *instance_offset + mem::size_of::<SurfaceBounds>();
-@@ -1954,0 +2004,6 @@ impl MetalRenderer {
+@@ -1954,0 +2031,6 @@ impl MetalRenderer {
 +            // The fragment reads corner radii from the same instance record.
 +            command_encoder.set_fragment_buffer(
 +                SurfaceInputIndex::Surfaces as u64,
 +                Some(&instance_buffer.metal_buffer),
 +                *instance_offset as u64,
 +            );
-@@ -1960,9 +2014,0 @@ impl MetalRenderer {
+@@ -1960,9 +2041,0 @@ impl MetalRenderer {
 -            // let y_texture = y_texture.get_texture().unwrap().
 -            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
 -                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
@@ -235,16 +343,279 @@ index c93a383c38..11506dbb62 100644
 -                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
 -                Some(metal::TextureRef::from_ptr(texture as *mut _))
 -            });
-@@ -1978,0 +2025,2 @@ impl MetalRenderer {
+@@ -1978,0 +2052,2 @@ impl MetalRenderer {
 +                        corner_radii: surface.corner_radii,
 +                        source_uv: surface.source_uv,
-@@ -2246 +2294 @@ pub struct PathSprite {
+@@ -1987,0 +2063,50 @@ impl MetalRenderer {
++
++    fn log_surface_texture_error(&mut self, error: std::fmt::Arguments<'_>) {
++        let now = std::time::Instant::now();
++        if !surface_error_log_due(self.surface_error_last_log, now) {
++            return;
++        }
++        self.surface_error_last_log = Some(now);
++        log::error!("{error}");
++    }
++}
++
++struct CommandBufferResources<T> {
++    resources: Vec<T>,
++}
++
++impl<T> Default for CommandBufferResources<T> {
++    fn default() -> Self {
++        Self {
++            resources: Vec::new(),
++        }
++    }
++}
++
++impl<T> CommandBufferResources<T> {
++    fn push(&mut self, resource: T) {
++        self.resources.push(resource);
++    }
++}
++
++impl<T: 'static> CommandBufferResources<T> {
++    fn retain_until_completion(self, command_buffer: &metal::CommandBufferRef) {
++        if self.resources.is_empty() {
++            return;
++        }
++
++        // Command encoders retain MTLTexture, but Core Video may recycle its
++        // cache-managed backing unless the CVMetalTexture wrapper also survives.
++        let resources = Cell::new(Some(self.resources));
++        let block = ConcreteBlock::new(move |_| {
++            drop(resources.take());
++        });
++        let block = block.copy();
++        command_buffer.add_completed_handler(&block);
++    }
++}
++
++fn surface_error_log_due(last_log: Option<std::time::Instant>, now: std::time::Instant) -> bool {
++    last_log.is_none_or(|last_log| {
++        now.saturating_duration_since(last_log) >= SURFACE_ERROR_LOG_INTERVAL
++    })
+@@ -2016,0 +2142,15 @@ fn new_command_encoder_for_texture<'a>(
++fn build_shader_library(device: &metal::DeviceRef) -> Result<metal::Library> {
++    #[cfg(feature = "runtime_shaders")]
++    {
++        device
++            .new_library_with_source(SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
++            .map_err(|error| anyhow::anyhow!("failed to build Metal shader library: {error}"))
++    }
++    #[cfg(not(feature = "runtime_shaders"))]
++    {
++        device
++            .new_library_with_data(SHADERS_METALLIB)
++            .map_err(|error| anyhow::anyhow!("failed to load Metal shader library: {error}"))
++    }
++}
++
+@@ -2024 +2164 @@ fn build_pipeline_state(
+-) -> metal::RenderPipelineState {
++) -> Result<metal::RenderPipelineState> {
+@@ -2027 +2167,5 @@ fn build_pipeline_state(
+-        .expect("error locating vertex function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2030 +2174,5 @@ fn build_pipeline_state(
+-        .expect("error locating fragment function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2036 +2184,4 @@ fn build_pipeline_state(
+-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
++    let color_attachment = descriptor
++        .color_attachments()
++        .object_at(0)
++        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
+@@ -2053 +2204 @@ fn build_pipeline_state(
+-        .expect("could not create render pipeline state")
++        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
+@@ -2063 +2214 @@ fn build_pipeline_state_no_blend(
+-) -> metal::RenderPipelineState {
++) -> Result<metal::RenderPipelineState> {
+@@ -2066 +2217,5 @@ fn build_pipeline_state_no_blend(
+-        .expect("error locating vertex function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2069 +2224,5 @@ fn build_pipeline_state_no_blend(
+-        .expect("error locating fragment function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2075 +2234,4 @@ fn build_pipeline_state_no_blend(
+-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
++    let color_attachment = descriptor
++        .color_attachments()
++        .object_at(0)
++        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
+@@ -2081 +2243 @@ fn build_pipeline_state_no_blend(
+-        .expect("could not create render pipeline state")
++        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
+@@ -2110 +2272 @@ fn build_path_sprite_pipeline_state(
+-) -> metal::RenderPipelineState {
++) -> Result<metal::RenderPipelineState> {
+@@ -2113 +2275,5 @@ fn build_path_sprite_pipeline_state(
+-        .expect("error locating vertex function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2116 +2282,5 @@ fn build_path_sprite_pipeline_state(
+-        .expect("error locating fragment function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2122 +2292,4 @@ fn build_path_sprite_pipeline_state(
+-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
++    let color_attachment = descriptor
++        .color_attachments()
++        .object_at(0)
++        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
+@@ -2136 +2309 @@ fn build_path_sprite_pipeline_state(
+-        .expect("could not create render pipeline state")
++        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
+@@ -2147 +2320 @@ fn build_path_rasterization_pipeline_state(
+-) -> metal::RenderPipelineState {
++) -> Result<metal::RenderPipelineState> {
+@@ -2150 +2323,5 @@ fn build_path_rasterization_pipeline_state(
+-        .expect("error locating vertex function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2153 +2330,5 @@ fn build_path_rasterization_pipeline_state(
+-        .expect("error locating fragment function");
++        .map_err(|error| {
++            anyhow::anyhow!(
++                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
++            )
++        })?;
+@@ -2163 +2344,4 @@ fn build_path_rasterization_pipeline_state(
+-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
++    let color_attachment = descriptor
++        .color_attachments()
++        .object_at(0)
++        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
+@@ -2175 +2359 @@ fn build_path_rasterization_pipeline_state(
+-        .expect("could not create render pipeline state")
++        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
+@@ -2246 +2430 @@ pub struct PathSprite {
 -#[derive(Clone, Debug, Eq, PartialEq)]
 +#[derive(Clone, Debug, PartialEq)]
-@@ -2250,0 +2299,2 @@ pub struct SurfaceBounds {
+@@ -2250,0 +2435,2 @@ pub struct SurfaceBounds {
 +    pub corner_radii: Corners<ScaledPixels>,
 +    pub source_uv: Bounds<f32>,
-@@ -2454 +2504,4 @@ mod backdrop_blur_tests {
+@@ -2260 +2446 @@ impl MetalHeadlessRenderer {
+-    pub fn new() -> Self {
++    pub fn new() -> Result<Self> {
+@@ -2262,2 +2448,2 @@ impl MetalHeadlessRenderer {
+-        let renderer = MetalRenderer::new_headless(instance_buffer_pool);
+-        Self { renderer }
++        let renderer = MetalRenderer::new_headless(instance_buffer_pool)?;
++        Ok(Self { renderer })
+@@ -2285,0 +2472,79 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
++#[cfg(test)]
++mod renderer_hardening_tests {
++    use super::*;
++    use std::sync::atomic::{AtomicBool, Ordering};
++
++    struct DropProbe(Arc<AtomicBool>);
++
++    impl Drop for DropProbe {
++        fn drop(&mut self) {
++            self.0.store(true, Ordering::Release);
++        }
++    }
++
++    #[test]
++    fn missing_pipeline_function_returns_error() -> Result<()> {
++        let Some(device) = metal::Device::system_default() else {
++            return Ok(());
++        };
++        let library = build_shader_library(&device)?;
++        let result = build_pipeline_state(
++            &device,
++            &library,
++            "invalid_test_pipeline",
++            "missing_vertex_function",
++            "quad_fragment",
++            MTLPixelFormat::BGRA8Unorm,
++        );
++
++        let Err(error) = result else {
++            anyhow::bail!("pipeline unexpectedly accepted a missing vertex function");
++        };
++        assert!(
++            error.to_string().contains("missing_vertex_function"),
++            "unexpected pipeline error: {error:#}"
++        );
++        Ok(())
++    }
++
++    #[test]
++    fn command_buffer_resources_follow_completion_or_scope_lifetime() {
++        let Some(device) = metal::Device::system_default() else {
++            return;
++        };
++        let command_queue = device.new_command_queue();
++
++        let completed_drop = Arc::new(AtomicBool::new(false));
++        let command_buffer = command_queue.new_command_buffer();
++        let mut completed_resources = CommandBufferResources::default();
++        completed_resources.push(DropProbe(completed_drop.clone()));
++        completed_resources.retain_until_completion(command_buffer);
++        assert!(!completed_drop.load(Ordering::Acquire));
++        command_buffer.commit();
++        command_buffer.wait_until_completed();
++        assert!(completed_drop.load(Ordering::Acquire));
++
++        let unsubmitted_drop = Arc::new(AtomicBool::new(false));
++        let mut unsubmitted_resources = CommandBufferResources::default();
++        unsubmitted_resources.push(DropProbe(unsubmitted_drop.clone()));
++        assert!(!unsubmitted_drop.load(Ordering::Acquire));
++        drop(unsubmitted_resources);
++        assert!(unsubmitted_drop.load(Ordering::Acquire));
++    }
++
++    #[test]
++    fn surface_error_logging_is_throttled() {
++        let last_log = std::time::Instant::now();
++        let before_interval = last_log
++            .checked_add(SURFACE_ERROR_LOG_INTERVAL / 2)
++            .expect("test instant overflowed");
++        let at_interval = last_log
++            .checked_add(SURFACE_ERROR_LOG_INTERVAL)
++            .expect("test instant overflowed");
++
++        assert!(surface_error_log_due(None, last_log));
++        assert!(!surface_error_log_due(Some(last_log), before_interval));
++        assert!(surface_error_log_due(Some(last_log), at_interval));
++    }
++}
++
+@@ -2372 +2637,2 @@ mod backdrop_blur_tests {
+-            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())));
++            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
++                .expect("failed to initialize headless renderer");
+@@ -2454 +2720,4 @@ mod backdrop_blur_tests {
 -        assert!(diff <= 3, "vignette or shift at window edge: max diff {diff}");
 +        assert!(
 +            diff <= 3,
@@ -295,10 +666,29 @@ index 97bad184dc..71a05aca4f 100644
 +  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
 +  return color;
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index 8a3aa5ea06..e0a9b8e2ef 100644
+index 8a3aa5ea06..aacd697be5 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
-@@ -3135 +3135,2 @@ unsafe fn remove_layer_background(layer: id) {
+@@ -7 +6,0 @@ use crate::{
+-#[cfg(any(test, feature = "test-support"))]
+@@ -776 +775,3 @@ impl MacWindow {
+-    ) -> Self {
++    ) -> Result<Self> {
++        let renderer =
++            objc::rc::autoreleasepool(|| renderer::new_renderer(renderer_context, false))?;
+@@ -896,7 +897 @@ impl MacWindow {
+-                renderer: renderer::new_renderer(
+-                    renderer_context,
+-                    native_window as *mut _,
+-                    native_view as *mut _,
+-                    bounds.size.map(|pixels| pixels.as_f32()),
+-                    false,
+-                ),
++                renderer,
+@@ -1101 +1096 @@ impl MacWindow {
+-            window
++            Ok(window)
+@@ -3135 +3130,2 @@ unsafe fn remove_layer_background(layer: id) {
 -                    let _: () = msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
 +                    let _: () =
 +                        msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
@@ -359,3 +749,25 @@ diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/
 +        );
 +    }
 +}
+diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
+index b25067935e..c60ef0b4ec 100644
+--- a/crates/gpui_macos/src/platform.rs
++++ b/crates/gpui_macos/src/platform.rs
+@@ -669 +669 @@ impl Platform for MacPlatform {
+-        )))
++        )?))
+diff --git a/crates/gpui_platform/src/gpui_platform.rs b/crates/gpui_platform/src/gpui_platform.rs
+index 1d2fea90b4..c2e070e721 100644
+--- a/crates/gpui_platform/src/gpui_platform.rs
++++ b/crates/gpui_platform/src/gpui_platform.rs
+@@ -67,3 +67,7 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
+-        Some(Box::new(
+-            gpui_macos::metal_renderer::MetalHeadlessRenderer::new(),
+-        ))
++        match gpui_macos::metal_renderer::MetalHeadlessRenderer::new() {
++            Ok(renderer) => Some(Box::new(renderer)),
++            Err(error) => {
++                eprintln!("failed to initialize headless Metal renderer: {error:#}");
++                None
++            }
++        }
