@@ -65,6 +65,79 @@ fn subprocess_spawns_and_finishes_cleanly_without_packets() {
 }
 
 #[test]
+fn subprocess_exits_after_finish_or_abort_without_waiting_for_stdin_eof() {
+    use cap_muxer_protocol::{Frame, write_frame};
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let binary = setup_muxer_binary();
+    for (frame, expected_exit) in [(Frame::Finish, 0), (Frame::Abort("test".into()), 40)] {
+        let mut child = Command::new(&binary)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        write_frame(&mut stdin, &frame).unwrap();
+        stdin.flush().unwrap();
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if started.elapsed() >= Duration::from_secs(3) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("muxer waited for stdin EOF after receiving {frame:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        drop(stdin);
+        assert_eq!(status.code(), Some(expected_exit));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn finish_preserves_packets_when_a_slow_muxer_takes_more_than_five_seconds() {
+    use cap_muxer_protocol::{Frame, read_frame};
+    use std::io::Cursor;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let directory = TempDir::new().unwrap();
+    let binary = directory.path().join("slow-muxer");
+    std::fs::write(&binary, "#!/bin/sh\nsleep 6\ncat > \"$0.received\"\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = minimal_video_config(&directory.path().join("video"), Vec::new());
+    let mut subprocess = MuxerSubprocess::spawn(binary, config, None).unwrap();
+    let payload = vec![42; 128 * 1024];
+    subprocess
+        .write_video_packet(0, 0, 1, true, &payload)
+        .unwrap();
+    let started = Instant::now();
+    let report = subprocess.finish().unwrap();
+    assert_eq!(report.exit_code, Some(0));
+    assert!(started.elapsed() >= Duration::from_secs(5));
+
+    let received = std::fs::read(directory.path().join("slow-muxer.received")).unwrap();
+    let mut reader = Cursor::new(received.as_slice());
+    assert!(matches!(
+        read_frame(&mut reader).unwrap(),
+        Frame::InitVideo(_)
+    ));
+    assert!(matches!(read_frame(&mut reader).unwrap(), Frame::Start(_)));
+    let Frame::Packet(packet) = read_frame(&mut reader).unwrap() else {
+        panic!("expected the buffered video packet");
+    };
+    assert_eq!(packet.data, payload);
+    assert!(matches!(read_frame(&mut reader).unwrap(), Frame::Finish));
+    assert_eq!(reader.position(), received.len() as u64);
+}
+
+#[test]
 fn subprocess_survives_kill_and_parent_reports_crashed() {
     let bin = setup_muxer_binary();
     let temp_dir = TempDir::new().unwrap();
