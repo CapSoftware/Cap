@@ -254,19 +254,15 @@ diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders
 index 97bad184dc..71a05aca4f 100644
 --- a/crates/gpui_macos/src/shaders.metal
 +++ b/crates/gpui_macos/src/shaders.metal
-@@ -883,3 +883,6 @@ vertex SurfaceVertexOutput surface_vertex(
+@@ -883,3 +883,4 @@ vertex SurfaceVertexOutput surface_vertex(
 -  // We are going to copy the whole texture, so the texture position corresponds
 -  // to the current vertex of the unit triangle.
 -  float2 texture_position = unit_vertex;
-+  // Sample the source_uv sub-rect: the full texture for plain paint_surface,
-+  // an object-fit crop for paint_surface_fitted.
 +  float2 texture_position =
 +      float2(surface.source_uv.origin.x, surface.source_uv.origin.y) +
 +      unit_vertex * float2(surface.source_uv.size.width,
 +                           surface.source_uv.size.height);
-@@ -891,0 +895,13 @@ vertex SurfaceVertexOutput surface_vertex(
-+// Rounded-corner clip shared by both surface fragments. Radii of zero take
-+// the early return so an unrounded surface keeps its exact hard-edged output.
+@@ -891,0 +893,11 @@ vertex SurfaceVertexOutput surface_vertex(
 +float surface_corner_alpha(float2 position, SurfaceBounds surface) {
 +  float max_radius = max(
 +      max(surface.corner_radii.top_left, surface.corner_radii.top_right),
@@ -278,10 +274,10 @@ index 97bad184dc..71a05aca4f 100644
 +  return saturate(0.5 - distance);
 +}
 +
-@@ -892,0 +909,2 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+@@ -892,0 +905,2 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
 +                                 constant SurfaceBounds *surfaces
 +                                 [[buffer(SurfaceInputIndex_Surfaces)]],
-@@ -907 +925,15 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+@@ -907 +921,15 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
 -  return ycbcrToRGBTransform * ycbcr;
 +  float4 color = ycbcrToRGBTransform * ycbcr;
 +  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
