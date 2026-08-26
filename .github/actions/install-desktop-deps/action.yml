@@ -47,4 +47,6 @@ runs:
           libxkbcommon-dev \
           libxkbcommon-x11-dev \
           libva-dev \
+          xvfb \
+          xauth \
           patchelf
