@@ -462,24 +462,34 @@ pub fn wallpapers_for_theme(theme: &str) -> Vec<&'static str> {
 /// installed Cap.app (whose paths are byte-identical to what the shipping app
 /// would write) and falling back to the repository the dev build runs from.
 pub fn wallpaper_dir() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("CAP_GPUI_WALLPAPERS_DIR") {
-        let path = PathBuf::from(path);
-        if path.is_dir() {
-            return Some(path);
-        }
+    let override_dir = std::env::var_os("CAP_GPUI_WALLPAPERS_DIR").map(PathBuf::from);
+    wallpaper_dir_from(
+        &crate::store::bundled_resource_dirs(),
+        override_dir.as_deref(),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
+}
+
+fn wallpaper_dir_from(
+    resource_dirs: &[PathBuf],
+    override_dir: Option<&Path>,
+    manifest: &Path,
+) -> Option<PathBuf> {
+    if let Some(path) = override_dir
+        && path.is_dir()
+    {
+        return Some(path.to_path_buf());
     }
 
-    let mut candidates = Vec::with_capacity(3);
-    if let Ok(executable) = std::env::current_exe()
-        && let Some(contents) = executable.parent().and_then(Path::parent)
-    {
-        candidates.push(contents.join("Resources/assets/backgrounds"));
-    }
+    let mut candidates = resource_dirs
+        .iter()
+        .map(|directory| directory.join("assets/backgrounds"))
+        .collect::<Vec<_>>();
     candidates.push(PathBuf::from(
         "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
     ));
     candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        manifest
             .join("../desktop/src-tauri/assets/backgrounds")
             .clean(),
     );
@@ -510,6 +520,9 @@ impl Clean for PathBuf {
 }
 
 pub fn wallpaper_path(id: &str) -> Option<PathBuf> {
+    if !WALLPAPER_NAMES.contains(&id) {
+        return None;
+    }
     let path = wallpaper_dir()?.join(format!("{id}.jpg"));
     path.is_file().then_some(path)
 }
@@ -1699,8 +1712,18 @@ impl EditorWindow {
 fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
     let bytes = std::fs::read(path).ok()?;
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        decode_jpeg_thumbnail(&bytes, max).or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
     let scale = (max as f32 / width.max(height) as f32).min(1.);
     let target_width = ((width as f32 * scale).round() as u32).max(1);
     let target_height = ((height as f32 * scale).round() as u32).max(1);
@@ -1722,6 +1745,25 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
     } else {
         decoded.into_rgba8()
     })
+}
+
+fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
+    let mut decoder = jpeg_decoder::Decoder::new(bytes);
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let requested = max.clamp(1, u16::MAX as u32) as u16;
+    let (width, height) = decoder.scale(requested, requested).ok()?;
+    let pixels = decoder.decode().ok()?;
+    let decoded = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(width as u32, height as u32, pixels)?,
+        ),
+        jpeg_decoder::PixelFormat::L8 => image::DynamicImage::ImageLuma8(
+            image::GrayImage::from_raw(width as u32, height as u32, pixels)?,
+        ),
+        _ => return None,
+    };
+    Some((decoded, info.width as u32, info.height as u32))
 }
 
 /// [`decode_scaled_rgba`] in gpui's BGRA order.
@@ -1931,7 +1973,7 @@ impl EditorWindow {
         }
         self.sidebar.wallpaper_task = Some(cx.spawn_in(window, async move |this, cx| {
             let (_decodes, results) =
-                library::spawn_decode_pool(cx.background_executor(), wanted, |id| {
+                library::spawn_decode_pool_limited(cx.background_executor(), wanted, 2, |id| {
                     decode_wallpaper_thumbnail(id).map(|image| (id, image))
                 });
             while let Ok(first) = results.recv_async().await {
@@ -3902,6 +3944,69 @@ mod tests {
         }
         assert_eq!(wallpapers_for_theme("macOS").len(), 18);
         assert_eq!(wallpapers_for_theme("orange").len(), 9);
+    }
+
+    #[test]
+    fn built_in_wallpapers_remain_available_from_the_development_checkout() {
+        assert!(wallpaper_path("macOS/sequoia-dark").is_some());
+    }
+
+    #[test]
+    fn wallpaper_jpegs_decode_at_thumbnail_dimensions() {
+        let path = wallpaper_path("macOS/sequoia-dark").unwrap();
+        let (width, height) = image::image_dimensions(&path).unwrap();
+        let image = decode_scaled_rgba(&path, WALLPAPER_TILE_MAX).unwrap();
+
+        assert_eq!(image.width().max(image.height()), WALLPAPER_TILE_MAX);
+        assert!(
+            (image.width() as f64 / image.height() as f64 - width as f64 / height as f64).abs()
+                < 0.025
+        );
+    }
+
+    #[test]
+    fn jpeg_thumbnail_decoder_downsamples_before_allocating_pixels() {
+        let original = image::RgbImage::from_pixel(1024, 512, image::Rgb([40, 120, 200]));
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut encoded)
+            .encode_image(&original)
+            .unwrap();
+
+        let (decoded, width, height) = decode_jpeg_thumbnail(&encoded, 128).unwrap();
+
+        assert_eq!((width, height), (1024, 512));
+        assert!(decoded.width() <= 256);
+        assert!(decoded.height() <= 128);
+        let pixel = decoded.to_rgb8().get_pixel(0, 0).0;
+        assert!(pixel[0].abs_diff(40) <= 3);
+        assert!(pixel[1].abs_diff(120) <= 3);
+        assert!(pixel[2].abs_diff(200) <= 3);
+    }
+
+    #[test]
+    fn built_in_wallpapers_reject_unknown_and_traversal_identifiers() {
+        assert_eq!(wallpaper_path("unknown/wallpaper"), None);
+        assert_eq!(wallpaper_path("../macOS/sequoia-dark"), None);
+        assert_eq!(wallpaper_path("/macOS/sequoia-dark"), None);
+    }
+
+    #[test]
+    fn built_in_wallpapers_resolve_from_an_installed_bundle() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-installed-wallpapers-{}",
+            std::process::id()
+        ));
+        let resources = root.join("Cap.app/Contents/Resources");
+        let backgrounds = resources.join("assets/backgrounds");
+        let wallpaper = backgrounds.join("macOS/sequoia-dark.jpg");
+        std::fs::create_dir_all(wallpaper.parent().unwrap()).unwrap();
+        std::fs::write(&wallpaper, b"test wallpaper").unwrap();
+
+        let found = wallpaper_dir_from(&[resources], None, &root.join("missing"));
+        assert_eq!(found, Some(backgrounds));
+        assert!(found.unwrap().join("macOS/sequoia-dark.jpg").is_file());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

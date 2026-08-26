@@ -964,6 +964,10 @@ pub struct ScreenshotEditorWindow {
 }
 
 impl ScreenshotEditorWindow {
+    pub(crate) fn export_in_flight(&self) -> bool {
+        self.exporting
+    }
+
     pub fn new(bundle: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let close_bundle = bundle.clone();
         window.on_window_should_close(cx, move |_window, cx| {

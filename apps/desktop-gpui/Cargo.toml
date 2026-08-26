@@ -50,6 +50,7 @@ cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 # The actual recording engine -- the same studio/instant actors the Tauri app
 # drives. Drags in the ffmpeg encode stack; that is the point.
 cap-recording = { path = "../../crates/recording" }
+cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 # Already in the tree through cap-recording; direct so the camera draw bench
 # can construct `NativeCameraFrame.timestamp` for its synthetic frames.
 cap-timestamp = { path = "../../crates/timestamp" }
@@ -93,6 +94,7 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # the app ships as webp; features are additive, so enabling it here does not
 # move gpui's own pin.
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+jpeg-decoder = "0.3"
 smallvec = "1"
 # Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived
 # character, not a `char`, so a flag emoji or a combining accent goes in one
@@ -114,8 +116,9 @@ chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+semver = "1"
 base64 = "0.22"
-rfd = "0.15"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 # The screenshot export compositor (`src/screenshot_export.rs`): the canvas-2d
 # work `renderScreenshotExportCanvas` does in the webview -- shape rasterizing,
 # text, and the share fingerprint. All three are already in this lockfile
@@ -166,6 +169,9 @@ libc = "0.2"
 raw-window-handle = "0.6"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

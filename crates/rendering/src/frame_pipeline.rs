@@ -1340,6 +1340,16 @@ pub struct PendingReadback {
     frame_rate: u32,
 }
 
+fn active_readback_byte_len(
+    padded_bytes_per_row: usize,
+    height: usize,
+    mapped_bytes: usize,
+) -> Option<usize> {
+    padded_bytes_per_row
+        .checked_mul(height)
+        .filter(|&active_bytes| active_bytes > 0 && active_bytes <= mapped_bytes)
+}
+
 impl PendingReadback {
     fn cancel(&self) -> RenderingError {
         self.buffer.unmap();
@@ -1396,9 +1406,23 @@ impl PendingReadback {
             }
         }
 
-        let buffer_slice = self.buffer.slice(..);
+        let Some(active_bytes) =
+            usize::try_from(self.buffer.size())
+                .ok()
+                .and_then(|buffer_bytes| {
+                    active_readback_byte_len(
+                        self.padded_bytes_per_row as usize,
+                        self.height as usize,
+                        buffer_bytes,
+                    )
+                })
+        else {
+            self.buffer.unmap();
+            return Err(RenderingError::BufferMapWaitingFailed);
+        };
+        let buffer_slice = self.buffer.slice(..active_bytes as u64);
         let data = buffer_slice.get_mapped_range();
-        let mut data_vec = Vec::with_capacity(data.len() + 24);
+        let mut data_vec = Vec::with_capacity(active_bytes + 24);
         data_vec.extend_from_slice(&data);
 
         drop(data);
@@ -1516,7 +1540,8 @@ impl PipelinedGpuReadback {
         mut render_encoder: wgpu::CommandEncoder,
     ) -> Result<(), RenderingError> {
         let padded_bytes_per_row = padded_bytes_per_row(uniforms.output_size);
-        let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
+        let output_buffer_size =
+            u64::from(padded_bytes_per_row) * u64::from(uniforms.output_size.1);
 
         self.ensure_size(device, output_buffer_size);
         let buffer = self.next_buffer();
@@ -1549,7 +1574,7 @@ impl PipelinedGpuReadback {
 
         let (tx, rx) = oneshot::channel();
         buffer
-            .slice(..)
+            .slice(..output_buffer_size)
             .map_async(wgpu::MapMode::Read, move |result| {
                 if let Err(e) = tx.send(result) {
                     tracing::error!("Failed to send map_async result: {:?}", e);
@@ -1896,6 +1921,57 @@ pub async fn flush_pending_readback(
         Some(pending.wait(device).await)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod readback_output_tests {
+    use super::active_readback_byte_len;
+
+    #[test]
+    fn oversized_readback_buffers_only_include_active_rows() {
+        assert_eq!(
+            active_readback_byte_len(2_048, 270, 3_594_240),
+            Some(552_960)
+        );
+    }
+
+    #[test]
+    fn exact_readback_buffers_include_every_row() {
+        assert_eq!(
+            active_readback_byte_len(5_120, 702, 3_594_240),
+            Some(3_594_240)
+        );
+    }
+
+    #[test]
+    fn undersized_readback_buffers_are_rejected() {
+        assert_eq!(active_readback_byte_len(2_048, 270, 552_959), None);
+    }
+
+    #[test]
+    fn overflowing_readback_dimensions_are_rejected() {
+        assert_eq!(active_readback_byte_len(usize::MAX, 2, usize::MAX), None);
+    }
+
+    #[test]
+    fn pooled_readback_buffers_preserve_grow_shrink_grow_frame_lengths() {
+        let buffer_bytes = 3_594_240;
+        let frame_lengths = [(5_120, 702), (2_048, 270), (5_120, 702)]
+            .into_iter()
+            .map(|(stride, height)| active_readback_byte_len(stride, height, buffer_bytes))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            frame_lengths,
+            vec![Some(3_594_240), Some(552_960), Some(3_594_240)]
+        );
+    }
+
+    #[test]
+    fn empty_readback_dimensions_do_not_access_the_buffer() {
+        assert_eq!(active_readback_byte_len(2_048, 0, 3_594_240), None);
+        assert_eq!(active_readback_byte_len(0, 270, 3_594_240), None);
     }
 }
 

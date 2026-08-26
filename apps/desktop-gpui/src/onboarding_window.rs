@@ -21,7 +21,8 @@
 
 use gpui::{
     Context, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px, svg,
+    Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -48,18 +49,15 @@ const REQUEST_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 /// itself, so the all-green state is actually seen.
 const AUTO_FINISH_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 
-// The permissions column. Fixed, computed widths throughout: the rows repeat,
-// so nothing text-bearing in them gets flex_1 (the layout perf rule).
-const CARD_W: f32 = 560.;
+const CARD_W: f32 = 440.;
 const ROW_PAD_X: f32 = 16.;
-const ROW_ICON_TILE: f32 = 40.;
-const ROW_GAP: f32 = 14.;
-const ROW_ACTION_W: f32 = 122.;
-const ROW_TEXT_W: f32 = CARD_W - 2. * ROW_PAD_X - ROW_ICON_TILE - 2. * ROW_GAP - ROW_ACTION_W;
+const ROW_GAP: f32 = 16.;
+const ROW_ACTION_W: f32 = 112.;
+const ROW_TEXT_W: f32 = CARD_W - 2. * ROW_PAD_X - ROW_GAP - ROW_ACTION_W;
 const HINT_ICON: f32 = 16.;
 const HINT_BUTTON_W: f32 = 116.;
 const HINT_TEXT_W: f32 = CARD_W - 2. * ROW_PAD_X - HINT_ICON - 2. * ROW_GAP - HINT_BUTTON_W;
-const FOOTER_CTA_W: f32 = 168.;
+const FOOTER_CTA_W: f32 = 144.;
 const FOOTER_TEXT_W: f32 = CARD_W - FOOTER_CTA_W - 16.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +111,16 @@ impl OnboardingWindow {
             forced,
             focus: cx.focus_handle(),
         };
+        cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            if window.is_window_active() && this.step == Step::Permissions {
+                this.refresh_permissions(window, cx);
+            }
+        })
+        .detach();
         this.arm_poll(window, cx);
+        if this.step == Step::Permissions && this.state.all_shown_granted() && !this.forced {
+            this.schedule_auto_finish(cx);
+        }
         this
     }
 
@@ -176,6 +183,39 @@ impl OnboardingWindow {
         }
     }
 
+    fn refresh_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let raw = cx
+                .background_executor()
+                .spawn(async { crate::permissions_ui::sweep_raw() })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                if this.step != Step::Permissions {
+                    return;
+                }
+
+                if this.state.apply_raw(raw) {
+                    this.grants_changed(cx);
+                    cx.notify();
+                }
+
+                if this.state.all_shown_granted() {
+                    this.pending = None;
+                    this.verify = None;
+                    this.poll = None;
+                    if !this.forced {
+                        this.schedule_auto_finish(cx);
+                    }
+                } else {
+                    this.arm_poll(window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Everything granted: close the surface on its own after a beat -- the
     /// "finish gracefully" half of the poll contract.
     fn schedule_auto_finish(&mut self, cx: &mut Context<Self>) {
@@ -222,36 +262,76 @@ impl OnboardingWindow {
         if self.pending.is_some() {
             return;
         }
-        match self.state.action(permission) {
-            None => return,
-            Some(RowAction::OpenSettings) => {
-                self.state.note_settings_opened(permission);
-                permissions::open_permission_settings(permission);
-            }
-            Some(RowAction::Request) => {
-                permissions::request_permission(permission);
-                self.pending = Some(permission);
-                self.verify = Some(cx.spawn_in(window, async move |this, cx| {
-                    cx.background_executor().timer(REQUEST_GRACE).await;
-                    let raw = cx
-                        .background_executor()
-                        .spawn(async { crate::permissions_ui::sweep_raw() })
-                        .await;
-                    this.update_in(cx, |this, _window, cx| {
-                        this.state.apply_raw(raw);
+
+        self.pending = Some(permission);
+        self.verify = Some(cx.spawn_in(window, async move |this, cx| {
+            let raw = cx
+                .background_executor()
+                .spawn(async { crate::permissions_ui::sweep_raw() })
+                .await;
+
+            let should_verify = match this.update_in(cx, |this, window, cx| {
+                let action = this.state.refreshed_action(permission, raw);
+                match action {
+                    None => {
                         this.pending = None;
-                        if permission.required() && !this.state.status(permission).permitted() {
-                            this.state.note_request_failed(permission);
-                            this.state.note_settings_opened(permission);
-                            permissions::open_permission_settings(permission);
+                        if this.state.all_shown_granted() {
+                            this.poll = None;
+                            if !this.forced {
+                                this.schedule_auto_finish(cx);
+                            }
                         }
                         cx.notify();
-                    })
-                    .ok();
-                }));
+                        false
+                    }
+                    Some(RowAction::OpenSettings) => {
+                        this.pending = None;
+                        this.state.note_settings_opened(permission);
+                        permissions::open_permission_settings(permission);
+                        this.arm_poll(window, cx);
+                        cx.notify();
+                        false
+                    }
+                    Some(RowAction::Request) => {
+                        permissions::request_permission(permission);
+                        this.arm_poll(window, cx);
+                        cx.notify();
+                        true
+                    }
+                }
+            }) {
+                Ok(should_verify) => should_verify,
+                Err(_) => return,
+            };
+
+            if !should_verify {
+                return;
             }
-        }
-        self.arm_poll(window, cx);
+
+            cx.background_executor().timer(REQUEST_GRACE).await;
+            let raw = cx
+                .background_executor()
+                .spawn(async { crate::permissions_ui::sweep_raw() })
+                .await;
+
+            this.update_in(cx, |this, _window, cx| {
+                this.state.apply_raw(raw);
+                this.pending = None;
+                if permission.required() && !this.state.status(permission).permitted() {
+                    this.state.note_request_failed(permission);
+                    this.state.note_settings_opened(permission);
+                    permissions::open_permission_settings(permission);
+                }
+                if this.state.all_shown_granted() {
+                    this.poll = None;
+                    if !this.forced {
+                        this.schedule_auto_finish(cx);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
         cx.notify();
     }
 
@@ -381,7 +461,7 @@ impl OnboardingWindow {
         let (granted, total) = self.state.granted_counts();
         let all_granted = self.state.all_shown_granted();
         let can_continue = self.state.necessary_granted();
-        let (success_bg, success_border, success_fg) = self.success_palette();
+        let (_, _, success_fg) = self.success_palette();
 
         let rows = self
             .state
@@ -392,117 +472,69 @@ impl OnboardingWindow {
             })
             .collect::<Vec<_>>();
 
-        div()
+        let content = div()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_h_0()
+            .min_h_full()
+            .w_full()
             .items_center()
-            .px(px(48.))
-            .pt(px(10.))
-            .pb(px(28.))
-            // Header
+            .justify_center()
+            .gap(px(24.))
+            .py(px(24.))
             .child(
                 div()
                     .flex()
                     .flex_col()
+                    .flex_none()
                     .items_center()
-                    .gap(px(10.))
+                    .gap(px(12.))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .justify_center()
                             .size(px(48.))
-                            .rounded(px(14.))
+                            .rounded(px(16.))
                             .border_1()
-                            .map(|badge| {
-                                if all_granted {
-                                    badge.bg(success_bg).border_color(success_border)
-                                } else {
-                                    badge
-                                        .bg(Hsla::from(theme.gray_2))
-                                        .border_color(Hsla::from(theme.gray_4))
-                                }
-                            })
-                            .child(svg().path("icons/shield.svg").size(px(22.)).text_color(
-                                if all_granted {
-                                    success_fg
-                                } else {
-                                    Hsla::from(theme.gray_11)
-                                },
-                            )),
+                            .border_color(Hsla::from(theme.gray_4))
+                            .bg(Hsla::from(theme.gray_2))
+                            .child(
+                                svg()
+                                    .path("icons/shield.svg")
+                                    .size(px(20.))
+                                    .text_color(Hsla::from(theme.gray_11)),
+                            ),
                     )
                     .child(
                         div()
                             .text_size(px(24.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(Hsla::from(theme.gray_12))
-                            .child(if self.revisit {
-                                "Permissions needed"
-                            } else {
-                                "Permissions"
-                            }),
+                            .child("Permissions Required"),
                     )
                     .child(
                         div()
-                            .max_w(px(440.))
-                            .text_size(px(13.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .max_w(px(CARD_W))
+                            .text_size(px(14.))
+                            .line_height(px(20.))
+                            .text_color(Hsla::from(theme.gray_10))
                             .text_center()
                             .child(if self.revisit {
-                                "Cap no longer has the access it needs to record. Re-grant the permissions below to continue."
+                                "Cap needs these permissions again to continue recording."
                             } else {
-                                "Cap needs a few macOS permissions to capture your screen, audio and camera."
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.))
-                            .px(px(10.))
-                            .py(px(4.))
-                            .rounded_full()
-                            .border_1()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .map(|pill| {
-                                if all_granted {
-                                    pill.bg(success_bg)
-                                        .border_color(success_border)
-                                        .text_color(success_fg)
-                                        .child(
-                                            svg()
-                                                .path("icons/check.svg")
-                                                .size(px(11.))
-                                                .text_color(success_fg),
-                                        )
-                                        .child("All permissions granted")
-                                } else {
-                                    pill.bg(Hsla::from(theme.gray_2))
-                                        .border_color(Hsla::from(theme.gray_4))
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .child(SharedString::from(format!(
-                                            "{granted} of {total} granted"
-                                        )))
-                                }
+                                "Cap needs a few permissions to record your screen and capture audio."
                             }),
                     ),
             )
-            // Rows
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_none()
                     .w(px(CARD_W))
-                    .gap(px(10.))
-                    .mt(px(22.))
+                    .gap(px(8.))
                     .children(rows),
             )
-            // Relaunch hint (Tauri's "Restart Required" dialog, inline)
             .when(self.state.relaunch_hint(), |this| {
                 this.child(
                     div()
@@ -512,7 +544,6 @@ impl OnboardingWindow {
                         .items_center()
                         .gap(px(ROW_GAP))
                         .w(px(CARD_W))
-                        .mt(px(12.))
                         .px(px(ROW_PAD_X))
                         .py(px(10.))
                         .rounded(px(12.))
@@ -530,28 +561,52 @@ impl OnboardingWindow {
                             div()
                                 .w(px(HINT_TEXT_W))
                                 .flex_none()
-                                .truncate()
-                                .text_size(px(12.))
+                                .text_size(px(11.))
+                                .line_height(px(15.))
                                 .text_color(Hsla::from(theme.amber_11))
                                 .child("Granted it in System Settings? Relaunch Cap to apply."),
                         )
                         .child(
-                            div().w(px(HINT_BUTTON_W)).flex_none().flex().justify_end().child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "perm-relaunch",
-                                    ui::ButtonVariant::White,
-                                    ui::ButtonSize::Sm,
-                                )
-                                .icon("icons/rotate-ccw.svg")
-                                .label("Relaunch Cap")
-                                .on_click(cx.listener(|_, _, _, _| permissions::relaunch())),
-                            ),
+                            div()
+                                .w(px(HINT_BUTTON_W))
+                                .flex_none()
+                                .flex()
+                                .justify_end()
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "perm-relaunch",
+                                        ui::ButtonVariant::White,
+                                        ui::ButtonSize::Sm,
+                                    )
+                                    .radius(px(8.))
+                                    .icon("icons/rotate-ccw.svg")
+                                    .label("Relaunch Cap")
+                                    .on_click(cx.listener(|_, _, _, _| permissions::relaunch())),
+                                ),
                         ),
                 )
-            })
-            .child(div().flex_1())
-            // Footer
+            });
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .px(px(48.))
+            .pb(px(24.))
+            .child(
+                div()
+                    .id("onboarding-permissions-content")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .child(content),
+            )
             .child(
                 div()
                     .flex()
@@ -560,6 +615,7 @@ impl OnboardingWindow {
                     .items_center()
                     .justify_between()
                     .w(px(CARD_W))
+                    .pt(px(16.))
                     .child(
                         div()
                             .w(px(FOOTER_TEXT_W))
@@ -571,13 +627,13 @@ impl OnboardingWindow {
                             } else {
                                 Hsla::from(theme.gray_11)
                             })
-                            .child(if all_granted {
-                                "You're all set."
+                            .child(SharedString::from(if all_granted {
+                                "You're all set.".to_string()
                             } else if !can_continue {
-                                "Screen Recording and Accessibility are required to continue."
+                                format!("{granted} of {total} permissions granted")
                             } else {
-                                "Microphone and Camera are optional. Grant them anytime."
-                            }),
+                                "Microphone and Camera are optional.".to_string()
+                            })),
                     )
                     .child(
                         ui::Button::plain(
@@ -586,6 +642,7 @@ impl OnboardingWindow {
                             ui::ButtonVariant::Primary,
                             ui::ButtonSize::Lg,
                         )
+                        .radius(px(8.))
                         .label(if self.revisit {
                             "Continue to Cap"
                         } else {
@@ -610,17 +667,7 @@ impl OnboardingWindow {
         let theme = self.theme;
         let (success_bg, success_border, success_fg) = self.success_palette();
         let granted = status == OSPermissionStatus::Granted;
-        let denied = status == OSPermissionStatus::Denied;
         let busy = self.pending.is_some();
-
-        // Icon tile, tinted by state.
-        let (tile_bg, tile_fg) = if granted {
-            (success_bg, success_fg)
-        } else if denied {
-            (Hsla::from(theme.red_3), Hsla::from(theme.red_11))
-        } else {
-            (Hsla::from(theme.gray_3), Hsla::from(theme.gray_12))
-        };
 
         let action: gpui::AnyElement = if granted {
             div()
@@ -628,9 +675,9 @@ impl OnboardingWindow {
                 .flex_row()
                 .items_center()
                 .gap(px(6.))
-                .px(px(10.))
-                .h(px(30.))
-                .rounded_full()
+                .px(px(12.))
+                .h(px(28.))
+                .rounded(px(8.))
                 .bg(success_bg)
                 .border_1()
                 .border_color(success_border)
@@ -646,16 +693,17 @@ impl OnboardingWindow {
                 .child("Granted")
                 .into_any_element()
         } else {
-            let (label, variant) = match self.state.action(permission) {
-                Some(RowAction::OpenSettings) => ("Open Settings", ui::ButtonVariant::Gray),
-                _ => ("Grant", ui::ButtonVariant::Primary),
+            let label = match self.state.action(permission) {
+                Some(RowAction::OpenSettings) => "Open Settings",
+                _ => "Grant",
             };
             ui::Button::plain(
                 &theme,
                 SharedString::from(format!("perm-action-{}", permission.label())),
-                variant,
+                ui::ButtonVariant::Gray,
                 ui::ButtonSize::Sm,
             )
+            .radius(px(8.))
             .label(label)
             .disabled(busy)
             .on_click(cx.listener(move |this, _, window, cx| this.act(permission, window, cx)))
@@ -670,34 +718,18 @@ impl OnboardingWindow {
             .gap(px(ROW_GAP))
             .w(px(CARD_W))
             .px(px(ROW_PAD_X))
-            .py(px(14.))
-            .rounded(px(14.))
+            .py(px(12.))
+            .rounded(px(12.))
             .border_1()
             .border_color(Hsla::from(theme.gray_4))
             .bg(Hsla::from(theme.gray_2))
             .child(
                 div()
                     .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(ROW_ICON_TILE))
-                    .rounded(px(10.))
-                    .bg(tile_bg)
-                    .child(
-                        svg()
-                            .path(permission.icon())
-                            .size(px(18.))
-                            .text_color(tile_fg),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
                     .flex_col()
                     .flex_none()
                     .w(px(ROW_TEXT_W))
-                    .gap(px(3.))
+                    .gap(px(2.))
                     .child(
                         div()
                             .flex()
@@ -711,36 +743,24 @@ impl OnboardingWindow {
                                     .text_color(Hsla::from(theme.gray_12))
                                     .child(permission.label()),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .px(px(6.))
-                                    .py(px(2.))
-                                    .rounded_full()
-                                    .bg(Hsla::from(theme.gray_3))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child(if permission.required() {
-                                        "Required"
-                                    } else {
-                                        "Optional"
-                                    }),
-                            )
-                            .when(denied, |this| {
+                            .when(!permission.required(), |this| {
                                 this.child(
                                     div()
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(Hsla::from(theme.red_11))
-                                        .child("Denied"),
+                                        .text_size(px(10.))
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded_full()
+                                        .bg(Hsla::from(theme.gray_3))
+                                        .text_color(Hsla::from(theme.gray_10))
+                                        .child("Optional"),
                                 )
                             }),
                     )
                     .child(
                         div()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_size(px(11.))
+                            .line_height(px(15.))
+                            .text_color(Hsla::from(theme.gray_10))
                             .child(permission.blurb()),
                     ),
             )

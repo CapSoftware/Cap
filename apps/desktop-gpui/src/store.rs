@@ -14,7 +14,11 @@
 //!   read-modify-write on the raw JSON that touches exactly one key: see
 //!   [`set_store_setting`].
 
-use std::path::PathBuf;
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -154,6 +158,39 @@ pub fn app_data_dir() -> PathBuf {
     }
 }
 
+pub(crate) fn bundled_resource_dirs() -> Vec<PathBuf> {
+    let executable = std::env::current_exe().ok();
+    let override_dir = std::env::var_os("CAP_GPUI_RESOURCES_DIR").map(PathBuf::from);
+    bundled_resource_dirs_for(executable.as_deref(), override_dir.as_deref())
+}
+
+fn bundled_resource_dirs_for(
+    executable: Option<&Path>,
+    override_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    if let Some(directory) = override_dir {
+        directories.push(directory.to_path_buf());
+    }
+
+    if let Some(parent) = executable.and_then(Path::parent) {
+        if parent.file_name().is_some_and(|name| name == "MacOS")
+            && let Some(contents) = parent.parent()
+        {
+            directories.push(contents.join("Resources"));
+        }
+        if parent.file_name().is_some_and(|name| name == "bin")
+            && let Some(prefix) = parent.parent()
+        {
+            directories.push(prefix.join("lib").join("cap"));
+        }
+        directories.push(parent.join("resources"));
+        directories.push(parent.to_path_buf());
+    }
+
+    directories
+}
+
 /// The Tauri app's hand-off marker (`gpui_app.rs`).
 ///
 /// It writes this file immediately before spawning this app and never deletes
@@ -174,6 +211,99 @@ pub fn clear_handoff_marker() {
         Ok(()) => tracing::info!("cleared the hand-off marker"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!("clearing the hand-off marker: {error}"),
+    }
+}
+
+/// One-shot request for the Tauri host to own the next startup and open its
+/// updater. The GPUI preference stays enabled, so the relaunch after a signed
+/// bundle update routes back to the new GPUI binary.
+pub fn update_handoff_path() -> PathBuf {
+    app_data_dir().join("cap-gpui.update-handoff")
+}
+
+pub fn request_update_handoff() -> std::io::Result<()> {
+    write_update_handoff(&std::process::id().to_string())
+}
+
+#[cfg(debug_assertions)]
+pub fn request_simulated_update_handoff() -> std::io::Result<()> {
+    write_update_handoff(&format!("simulate:{}", std::process::id()))
+}
+
+fn write_update_handoff(contents: &str) -> std::io::Result<()> {
+    write_update_handoff_at(&update_handoff_path(), contents)
+}
+
+fn write_update_handoff_at(path: &Path, contents: &str) -> std::io::Result<()> {
+    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let _guard = WRITES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let (temporary_path, mut file) = loop {
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary_path = path.as_os_str().to_os_string();
+        temporary_path.push(format!(".tmp.{}.{sequence}", std::process::id()));
+        let temporary_path = PathBuf::from(temporary_path);
+
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+        {
+            Ok(file) => break (temporary_path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    };
+
+    let written = file.write_all(contents.as_bytes());
+    drop(file);
+    let published = written.and_then(|()| publish_update_handoff(&temporary_path, path));
+    if published.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    published
+}
+
+#[cfg(not(windows))]
+fn publish_update_handoff(temporary_path: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary_path, path)
+}
+
+#[cfg(windows)]
+fn publish_update_handoff(temporary_path: &Path, path: &Path) -> std::io::Result<()> {
+    match std::fs::rename(temporary_path, path) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            std::fs::rename(temporary_path, path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn clear_update_handoff() {
+    let path = update_handoff_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!("clearing the update hand-off: {error}"),
     }
 }
 
@@ -248,12 +378,24 @@ pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
 // The Tauri settings store
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+thread_local! {
+    static TEST_TAURI_STORE_PATH: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 /// The tauri-plugin-store file, shared with the shipping app.
 ///
 /// `CAP_GPUI_TAURI_STORE` redirects it at a copy, which is how the tests --
 /// and any verification run that must not touch the user's real settings --
 /// work.
 pub fn tauri_store_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_TAURI_STORE_PATH.with(|path| path.borrow().clone()) {
+        return path;
+    }
+
     match std::env::var("CAP_GPUI_TAURI_STORE") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
         // `Store.load("store")`: no extension, and the sibling `store.json`
@@ -1527,24 +1669,12 @@ pub fn preset_names() -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// `CAP_GPUI_TAURI_STORE` is process-global and `cargo test` runs these in
-    /// parallel threads, so the redirect is held under a lock -- without it
-    /// one test's store path is read by another's `load()`.
-    static STORE_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     struct TempStore {
         path: PathBuf,
-        /// Held for the store's lifetime so no parallel test re-points the
-        /// env var mid-flight; never read, only dropped.
-        _guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl TempStore {
         fn new(name: &str, contents: Option<&str>) -> Self {
-            let guard = STORE_ENV.lock().unwrap_or_else(|error| error.into_inner());
-            // Keyed by pid too: the mutex serializes threads, but two test
-            // *processes* (e.g. `cargo test` twice in parallel) sharing one
-            // path race each other's writes and drops.
             let path = std::env::temp_dir()
                 .join(format!("cap-gpui-store-test-{}-{name}", std::process::id()));
             match contents {
@@ -1553,13 +1683,11 @@ mod tests {
                     let _ = std::fs::remove_file(&path);
                 }
             }
-            // SAFETY: the guard above is the only writer of this var, and no
-            // other thread in the test binary reads the environment.
-            unsafe { std::env::set_var("CAP_GPUI_TAURI_STORE", &path) };
-            Self {
-                path,
-                _guard: guard,
-            }
+            TEST_TAURI_STORE_PATH.with(|current| {
+                assert!(current.borrow().is_none());
+                *current.borrow_mut() = Some(path.clone());
+            });
+            Self { path }
         }
 
         fn read(&self) -> Value {
@@ -1570,8 +1698,37 @@ mod tests {
     impl Drop for TempStore {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
-            unsafe { std::env::remove_var("CAP_GPUI_TAURI_STORE") };
+            TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
         }
+    }
+
+    #[test]
+    fn temporary_stores_are_thread_local_without_mutating_process_environment() {
+        let original = std::env::var_os("CAP_GPUI_TAURI_STORE");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let workers = (0..4)
+            .map(|index| {
+                let barrier = barrier.clone();
+                let original = original.clone();
+                std::thread::spawn(move || {
+                    let store = TempStore::new(&format!("thread-local-{index}"), None);
+                    assert_eq!(super::tauri_store_path(), store.path);
+                    assert!(super::set_store_setting(
+                        GENERAL_SETTINGS,
+                        "maxFps",
+                        Value::from(24 + index)
+                    ));
+                    barrier.wait();
+                    assert_eq!(GeneralSettings::load().max_fps, 24 + index);
+                    assert_eq!(std::env::var_os("CAP_GPUI_TAURI_STORE"), original);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(std::env::var_os("CAP_GPUI_TAURI_STORE"), original);
     }
 
     /// The compatibility contract: writing one setting must leave every key
@@ -1786,6 +1943,98 @@ mod tests {
             super::handoff_marker_path(),
             super::app_data_dir().join("cap-gpui.handoff")
         );
+        assert_eq!(
+            super::update_handoff_path(),
+            super::app_data_dir().join("cap-gpui.update-handoff")
+        );
+    }
+
+    #[test]
+    fn bundled_resource_paths_follow_the_installed_executable() {
+        let executable = std::path::Path::new("/Applications/Cap.app/Contents/MacOS/cap-gpui");
+        let override_dir = std::path::Path::new("/tmp/cap-resources");
+
+        assert_eq!(
+            super::bundled_resource_dirs_for(Some(executable), Some(override_dir)),
+            vec![
+                override_dir.to_path_buf(),
+                std::path::PathBuf::from("/Applications/Cap.app/Contents/Resources"),
+                std::path::PathBuf::from("/Applications/Cap.app/Contents/MacOS/resources"),
+                std::path::PathBuf::from("/Applications/Cap.app/Contents/MacOS"),
+            ]
+        );
+
+        let executable = std::path::Path::new("/opt/cap/cap-gpui");
+        assert_eq!(
+            super::bundled_resource_dirs_for(Some(executable), None),
+            vec![
+                std::path::PathBuf::from("/opt/cap/resources"),
+                std::path::PathBuf::from("/opt/cap"),
+            ]
+        );
+
+        let executable = std::path::Path::new("/usr/bin/cap-gpui");
+        assert_eq!(
+            super::bundled_resource_dirs_for(Some(executable), None),
+            vec![
+                std::path::PathBuf::from("/usr/lib/cap"),
+                std::path::PathBuf::from("/usr/bin/resources"),
+                std::path::PathBuf::from("/usr/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn update_handoff_publication_replaces_complete_markers() {
+        let directory = std::env::temp_dir().join(format!(
+            "cap-gpui-update-handoff-replace-{}",
+            std::process::id()
+        ));
+        let marker = directory.join("cap-gpui.update-handoff");
+
+        super::write_update_handoff_at(&marker, "1234").unwrap();
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "1234");
+
+        super::write_update_handoff_at(&marker, "simulate:5678").unwrap();
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "simulate:5678");
+
+        let entries = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec![marker.clone()]);
+
+        std::fs::remove_file(marker).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn concurrent_update_handoff_writers_publish_complete_markers() {
+        let directory = std::env::temp_dir().join(format!(
+            "cap-gpui-update-handoff-concurrent-{}",
+            std::process::id()
+        ));
+        let marker = directory.join("cap-gpui.update-handoff");
+
+        let writers = (0..8)
+            .map(|index| {
+                let marker = marker.clone();
+                std::thread::spawn(move || {
+                    super::write_update_handoff_at(&marker, &(1000 + index).to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap().unwrap();
+        }
+
+        let contents = std::fs::read_to_string(&marker).unwrap();
+        let pid = contents.parse::<u32>().unwrap();
+        assert!((1000..1008).contains(&pid));
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+
+        std::fs::remove_file(marker).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     /// `normalizeTranscriptionHints`: NULs stripped, whitespace trimmed,
@@ -1805,9 +2054,7 @@ mod tests {
     }
 
     /// An absent `transcriptionHints` key shows the four defaults
-    /// (`createDefaultGeneralSettings`), an empty array shows none. Scoped
-    /// blocks: each `TempStore` holds the global env lock, so the first must
-    /// drop before the second is created.
+    /// (`createDefaultGeneralSettings`), an empty array shows none.
     #[test]
     fn transcription_hints_default_only_when_absent() {
         {

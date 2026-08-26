@@ -4,6 +4,7 @@ use cap_automation::{
     Trigger, TriggerContext, sanitize_filename_component,
 };
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
+#[cfg(not(target_os = "linux"))]
 use clipboard_rs::Clipboard;
 use clipboard_rs::common::RustImage;
 use serde_json::json;
@@ -426,6 +427,7 @@ impl AutomationHost for DesktopAutomationHost {
         title_template: &str,
         body_template: &str,
     ) -> Result<(), String> {
+        #[cfg(not(target_os = "linux"))]
         use tauri_plugin_notification::NotificationExt;
 
         let enabled = crate::general_settings::GeneralSettingsStore::get(&self.app)
@@ -439,6 +441,10 @@ impl AutomationHost for DesktopAutomationHost {
         let title = apply_body_template(&apply_filename_template(title_template, ctx), ctx);
         let body = apply_body_template(&apply_filename_template(body_template, ctx), ctx);
 
+        #[cfg(target_os = "linux")]
+        crate::notifications::show_linux_notification(&title, &body).await?;
+
+        #[cfg(not(target_os = "linux"))]
         self.app
             .notification()
             .builder()

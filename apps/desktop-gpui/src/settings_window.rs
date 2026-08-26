@@ -39,6 +39,7 @@ pub const SETTINGS_WIDTH: f32 = 782.;
 pub const SETTINGS_HEIGHT: f32 = 775.;
 pub const SETTINGS_MIN_WIDTH: f32 = 780.;
 pub const SETTINGS_MIN_HEIGHT: f32 = 560.;
+const MAX_PROFILE_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 /// `CapWindowId::Settings::traffic_lights_position` -- `Some(Some(
 /// LogicalPosition::new(22.0, 22.0)))`. Unlike the main window these are the
@@ -53,12 +54,9 @@ pub const TRAFFIC_LIGHTS: Point<Pixels> = Point {
     y: px(15.),
 };
 
-/// `applyMacOSWindowMaterial("settings")` -> `radius = 26` under liquid glass.
-/// The vibrancy fallback uses 16, which is also `--macos-settings-window-radius`
-/// in the `:root` block; the material install is told 26 either way because
-/// `install_window_material` only uses it for the glass view's own corner and
-/// the content-view clip, and the vibrancy path re-clips to the same rect.
-pub const SETTINGS_MATERIAL_RADIUS: f64 = 26.;
+/// AppKit's titled-window shadow uses a 16px contour; a larger content mask
+/// leaves a transparent crescent between the settings window and its shadow.
+pub const SETTINGS_MATERIAL_RADIUS: f64 = 16.;
 
 // -- Sidebar/content metrics, all `:root` custom properties -----------------
 
@@ -487,6 +485,118 @@ fn recordings_empty_message(tab: RecordingsTab, trimmed_search: &str) -> String 
     format!("{prefix} {tab_label}")
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UserProfile {
+    name: Option<String>,
+    email: Option<String>,
+    image_url: Option<String>,
+}
+
+fn signed_in_user_id() -> Option<Option<String>> {
+    store::auth_snapshot().signed_in().then(|| {
+        store::store_section("auth")
+            .get("user_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
+fn cached_user_profile(
+    user_id: Option<&str>,
+    cached: &serde_json::Map<String, Value>,
+) -> Option<UserProfile> {
+    let cached_user_id = match cached.get("userId")? {
+        Value::Null => None,
+        Value::String(value) => Some(value.as_str()),
+        _ => return None,
+    };
+    if cached_user_id != user_id {
+        return None;
+    }
+    serde_json::from_value(cached.get("profile")?.clone()).ok()
+}
+
+fn account_name(signed_in: bool, profile: Option<&UserProfile>) -> String {
+    if !signed_in {
+        return "Click to sign in".to_string();
+    }
+    profile
+        .and_then(|profile| {
+            [&profile.name, &profile.email]
+                .into_iter()
+                .filter_map(Option::as_deref)
+                .map(str::trim)
+                .find(|value| !value.is_empty())
+        })
+        .unwrap_or("Signed in")
+        .to_string()
+}
+
+async fn fetch_user_profile() -> Result<UserProfile, crate::auth::AuthApiError> {
+    let response =
+        crate::auth::authed_request(reqwest::Method::GET, "/api/desktop/user/profile", None)
+            .await?;
+    if !response.status().is_success() {
+        return Err(crate::auth::AuthApiError::Other(format!(
+            "Profile fetch returned {}",
+            response.status()
+        )));
+    }
+    response
+        .json::<UserProfile>()
+        .await
+        .map_err(|error| crate::auth::AuthApiError::Other(error.to_string()))
+}
+
+async fn fetch_profile_image() -> Result<Arc<RenderImage>, crate::auth::AuthApiError> {
+    let response = crate::auth::authed_request(
+        reqwest::Method::GET,
+        "/api/desktop/user/profile/image",
+        None,
+    )
+    .await?;
+    if !response.status().is_success() {
+        return Err(crate::auth::AuthApiError::Other(format!(
+            "Profile image fetch returned {}",
+            response.status()
+        )));
+    }
+    if response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .is_some_and(|value| {
+            value.to_str().map_or(true, |value| {
+                !value.to_ascii_lowercase().starts_with("image/")
+            })
+        })
+    {
+        return Err(crate::auth::AuthApiError::Other(
+            "Invalid profile image response".to_string(),
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PROFILE_IMAGE_BYTES as u64)
+    {
+        return Err(crate::auth::AuthApiError::Other(
+            "Profile image is too large".to_string(),
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| crate::auth::AuthApiError::Other(error.to_string()))?;
+    if bytes.len() > MAX_PROFILE_IMAGE_BYTES {
+        return Err(crate::auth::AuthApiError::Other(
+            "Profile image is too large".to_string(),
+        ));
+    }
+    let image = image::load_from_memory(&bytes)
+        .map_err(|error| crate::auth::AuthApiError::Other(error.to_string()))?;
+    Ok(library::rgba_to_render_image(image.into_rgba8()))
+}
+
 pub struct SettingsWindow {
     pub(crate) theme: Theme,
     pub(crate) page: Page,
@@ -527,6 +637,8 @@ pub struct SettingsWindow {
     sign_in_pending: bool,
     sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     sign_in_task: Option<gpui::Task<()>>,
+    user_profile: Option<UserProfile>,
+    profile_image: Option<Arc<RenderImage>>,
 }
 
 impl SettingsWindow {
@@ -534,6 +646,9 @@ impl SettingsWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, true);
         let settings = GeneralSettings::load();
+        let user_profile = signed_in_user_id().and_then(|user_id| {
+            cached_user_profile(user_id.as_deref(), &store::store_section("user_profile"))
+        });
 
         // The Tauri app's close button and Cmd-W both go through the window's
         // own close, and `CapWindowId::Settings`'s `Destroyed` arm calls
@@ -615,6 +730,8 @@ impl SettingsWindow {
             sign_in_pending: false,
             sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sign_in_task: None,
+            user_profile,
+            profile_image: None,
         }
     }
 
@@ -624,6 +741,7 @@ impl SettingsWindow {
     /// a task spawned inside `open_window`'s builder closure updates the model
     /// without ever scheduling a frame.
     pub fn start_enumeration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_user_profile(window, cx);
         cx.spawn_in(window, async move |this, cx| {
             let windows = cx
                 .background_executor()
@@ -1364,12 +1482,9 @@ impl Render for SettingsWindow {
             .flex()
             .flex_row()
             .overflow_hidden()
-            // `.cap-settings-shell { background: transparent }` under the
-            // settings material; the panes paint. The radius is
-            // `--macos-settings-window-radius`, 26 under Liquid Glass, and
-            // the content view's layer is clipped to the same curve by
-            // `platform::install_window_material`.
-            .rounded(px(theme.settings_window_radius()))
+            .rounded(px(theme
+                .settings_window_radius()
+                .min(SETTINGS_MATERIAL_RADIUS as f32)))
             .font_family("Geist")
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
@@ -1414,18 +1529,43 @@ impl SettingsWindow {
                         window.start_window_move();
                     }),
             )
-            .child(self.render_profile())
+            .child(self.render_profile(cx))
             .child(self.render_nav(cx))
             .child(self.render_account(cx))
     }
 
-    /// The account button. There is no auth here (same gap as the main
-    /// window's plan badge), so it renders the signed-out state and does
-    /// nothing when clicked -- see the README.
-    fn render_profile(&self) -> impl IntoElement {
+    fn render_profile(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let signed_in = store::auth_snapshot().signed_in();
+        let avatar = match self.profile_image.clone() {
+            Some(image) if signed_in => {
+                use gpui::StyledImage as _;
+                img(image)
+                    .size(px(32.))
+                    .flex_shrink_0()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .rounded_full()
+                    .into_any_element()
+            }
+            _ => div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(32.))
+                .flex_shrink_0()
+                .rounded_full()
+                .bg(theme.settings_fill())
+                .child(
+                    svg()
+                        .path("icons/user-round.svg")
+                        .size(px(16.))
+                        .text_color(theme.settings_muted()),
+                )
+                .into_any_element(),
+        };
 
         div()
+            .id("settings-profile")
             .flex()
             .flex_row()
             .items_center()
@@ -1439,25 +1579,10 @@ impl SettingsWindow {
             .px(px(4.))
             .py(px(6.))
             .rounded(px(8.))
-            .child(
-                // `.cap-settings-profile-icon { width/height: 32px; color:
-                //  var(--macos-settings-muted); background:
-                //  var(--macos-settings-fill); border-radius: 999px }`
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(32.))
-                    .flex_shrink_0()
-                    .rounded_full()
-                    .bg(theme.settings_fill())
-                    .child(
-                        svg()
-                            .path("icons/user-round.svg")
-                            .size(px(16.))
-                            .text_color(theme.settings_muted()),
-                    ),
-            )
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.settings_hover()))
+            .active(move |style| style.bg(theme.settings_selection()))
+            .child(avatar)
             .child(
                 div()
                     .flex()
@@ -1468,13 +1593,11 @@ impl SettingsWindow {
                     // `.cap-settings-profile-copy { gap: 2px }`
                     .gap(px(2.))
                     .child(
-                        // `text-[13px] leading-[15px] text-gray-12`, and
-                        // `accountName()` with no auth.
                         div()
                             .truncate()
                             .text_size(px(13.))
                             .line_height(px(15.))
-                            .child("Click to sign in"),
+                            .child(account_name(signed_in, self.user_profile.as_ref())),
                     )
                     .child(
                         // `text-[11px] leading-[13px] text-gray-10`
@@ -1486,6 +1609,13 @@ impl SettingsWindow {
                             .child("Account"),
                     ),
             )
+            .on_click(cx.listener(|this, _, window, cx| {
+                if store::auth_snapshot().signed_in() {
+                    cx.open_url(&format!("{}/dashboard", crate::auth::server_url()));
+                } else {
+                    this.toggle_sign_in(window, cx);
+                }
+            }))
     }
 
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1551,6 +1681,40 @@ impl SettingsWindow {
     fn render_account(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
+        let update_links = div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(6.))
+            .mb(px(8.))
+            .text_size(px(12.))
+            .text_color(theme.settings_muted())
+            .child(
+                div()
+                    .id("settings-version")
+                    .px(px(4.))
+                    .py(px(2.))
+                    .rounded(px(4.))
+                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+            )
+            .child(
+                div()
+                    .id("settings-previous-versions")
+                    .child("View previous versions")
+                    .hover(|style| style.text_color(theme.settings_text()))
+                    .on_click(|_, _, cx| cx.open_url("https://cap.so/download/versions")),
+            )
+            .child(
+                div()
+                    .id("settings-check-updates")
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(theme.settings_text()))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        crate::updates::check_manually(cx);
+                    }))
+                    .child("Check for updates"),
+            );
+
         div()
             .flex()
             .flex_col()
@@ -1562,50 +1726,15 @@ impl SettingsWindow {
             .pb(px(SIDEBAR_PADDING_X))
             .border_t_1()
             .border_color(theme.settings_border())
-            .child(
-                // `mb-2 text-xs text-gray-11 flex flex-col items-start gap-1.5`
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    .gap(px(6.))
-                    .mb(px(8.))
-                    .text_size(px(12.))
-                    .text_color(theme.settings_muted())
-                    .child(
-                        // The version button copies to the clipboard in the
-                        // Tauri app; the string is this crate's version, not
-                        // the shipping app's (there is no `getVersion()`
-                        // here).
-                        div()
-                            .id("settings-version")
-                            .px(px(4.))
-                            .py(px(2.))
-                            .rounded(px(4.))
-                            .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
-                    )
-                    .child(
-                        div()
-                            .id("settings-previous-versions")
-                            .child("View previous versions")
-                            .hover(|style| style.text_color(theme.settings_text()))
-                            .on_click(|_, _, cx| cx.open_url("https://cap.so/download/versions")),
-                    )
-                    .child(
-                        // Inert: there is no updater in this app. Drawn in the
-                        // disabled state the shipping button uses while a
-                        // check is in flight (`disabled:opacity-50`).
-                        div().opacity(0.5).child("Check for updates"),
-                    ),
-            )
+            .child(update_links)
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
                 let (variant, label) = if self.sign_in_pending {
                     (ui::ButtonVariant::Gray, "Cancel Sign In")
                 } else if signed_in {
-                    (ui::ButtonVariant::Dark, "Sign Out")
+                    (ui::ButtonVariant::Gray, "Sign Out")
                 } else {
-                    (ui::ButtonVariant::Dark, "Sign In")
+                    (ui::ButtonVariant::Primary, "Sign In")
                 };
                 self.button(
                     "settings-sign-in",
@@ -1630,8 +1759,7 @@ impl SettingsWindow {
             return;
         }
         if store::auth_snapshot().signed_in() {
-            crate::auth::sign_out();
-            cx.notify();
+            self.clear_local_auth(window, cx);
             return;
         }
 
@@ -1659,12 +1787,131 @@ impl SettingsWindow {
                 tracing::warn!("updating auth plan after sign-in: {error}");
             }
             crate::platform::activate_app();
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.sign_in_pending = false;
+                if store::auth_snapshot().signed_in() {
+                    this.refresh_user_profile(window, cx);
+                }
                 cx.notify();
+                window.refresh();
             });
         }));
         cx.notify();
+    }
+
+    fn clear_local_auth(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::auth::sign_out() {
+            tracing::error!("failed to clear the auth session");
+        }
+        if !store::set_store_value("user_profile", Value::Null) {
+            tracing::error!("failed to clear the cached user profile");
+        }
+        self.user_profile = None;
+        if let Some(image) = self.profile_image.take() {
+            let _ = window.drop_image(image);
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    fn refresh_user_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(user_id) = signed_in_user_id() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(task) = cx.update(|_, cx| gpui_tokio::Tokio::spawn(cx, fetch_user_profile()))
+            else {
+                return;
+            };
+            let Ok(result) = task.await else {
+                return;
+            };
+            let profile = match result {
+                Ok(profile) => profile,
+                Err(crate::auth::AuthApiError::InvalidAuthentication) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                            this.clear_local_auth(window, cx);
+                        }
+                    });
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!("loading account profile: {error}");
+                    return;
+                }
+            };
+            let image_url = profile
+                .image_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Ok(true) = this.update_in(cx, |this, window, cx| {
+                if signed_in_user_id().as_ref() != Some(&user_id) {
+                    return false;
+                }
+                if !store::set_store_value(
+                    "user_profile",
+                    serde_json::json!({
+                        "userId": &user_id,
+                        "profile": &profile,
+                        "updatedAt": chrono::Utc::now().timestamp_millis(),
+                    }),
+                ) {
+                    tracing::warn!("failed to cache the user profile");
+                }
+                this.user_profile = Some(profile);
+                if let Some(image) = this.profile_image.take() {
+                    let _ = window.drop_image(image);
+                }
+                cx.notify();
+                window.refresh();
+                true
+            }) else {
+                return;
+            };
+            let Some(image_url) = image_url else {
+                return;
+            };
+            let Ok(task) = cx.update(|_, cx| gpui_tokio::Tokio::spawn(cx, fetch_profile_image()))
+            else {
+                return;
+            };
+            let Ok(result) = task.await else {
+                return;
+            };
+            match result {
+                Ok(image) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if signed_in_user_id().as_ref() != Some(&user_id)
+                            || this
+                                .user_profile
+                                .as_ref()
+                                .and_then(|profile| profile.image_url.as_deref())
+                                .map(str::trim)
+                                != Some(image_url.as_str())
+                        {
+                            return;
+                        }
+                        if let Some(old) = this.profile_image.replace(image) {
+                            let _ = window.drop_image(old);
+                        }
+                        cx.notify();
+                        window.refresh();
+                    });
+                }
+                Err(crate::auth::AuthApiError::InvalidAuthentication) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if signed_in_user_id().as_ref() == Some(&user_id) {
+                            this.clear_local_auth(window, cx);
+                        }
+                    });
+                }
+                Err(error) => tracing::warn!("loading account profile image: {error}"),
+            }
+        })
+        .detach();
     }
 
     // -- Content pane ------------------------------------------------------
@@ -3526,6 +3773,10 @@ impl SettingsWindow {
                         |this, value, cx| {
                             this.settings.update_channel = value;
                             this.write_enum("updateChannel", value, cx);
+                            crate::updates::update_channel_changed(
+                                this.settings.update_channel,
+                                cx,
+                            );
                         },
                     )),
             )
@@ -3865,21 +4116,21 @@ impl SettingsWindow {
             // `onKeyDown`: Escape clears the field, and *only* when there is
             // something in it -- `if (event.key === "Escape" && search())`.
             // With the field empty the key is not even preventDefault'd.
-            ui::TextInputEvent::Cancelled if field == Field::RecordingsSearch => {
-                if !self.recordings.search.is_empty() {
-                    self.recordings.search.clear();
-                    self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
-                    input.update(cx, |input, cx| input.set_text("", cx));
-                    cx.notify();
-                }
+            ui::TextInputEvent::Cancelled
+                if field == Field::RecordingsSearch && !self.recordings.search.is_empty() =>
+            {
+                self.recordings.search.clear();
+                self.recordings.visible_count = RECORDINGS_PAGE_SIZE;
+                input.update(cx, |input, cx| input.set_text("", cx));
+                cx.notify();
             }
-            ui::TextInputEvent::Cancelled if field == Field::ScreenshotsSearch => {
-                if !self.screenshots.search.is_empty() {
-                    self.screenshots.search.clear();
-                    self.screenshots.visible_count = RECORDINGS_PAGE_SIZE;
-                    input.update(cx, |input, cx| input.set_text("", cx));
-                    cx.notify();
-                }
+            ui::TextInputEvent::Cancelled
+                if field == Field::ScreenshotsSearch && !self.screenshots.search.is_empty() =>
+            {
+                self.screenshots.search.clear();
+                self.screenshots.visible_count = RECORDINGS_PAGE_SIZE;
+                input.update(cx, |input, cx| input.set_text("", cx));
+                cx.notify();
             }
             ui::TextInputEvent::Cancelled => {
                 // Revert to what is stored, the way leaving the field without
@@ -4070,6 +4321,66 @@ mod tests {
         assert_eq!(origin_of("cap.so"), None);
         assert_eq!(origin_of("ftp://cap.so"), None);
         assert_eq!(origin_of(""), None);
+    }
+
+    #[test]
+    fn account_name_matches_the_tauri_profile_fallbacks() {
+        let mut profile = UserProfile {
+            name: Some(" Taylor Example ".to_string()),
+            email: Some("taylor@example.com".to_string()),
+            image_url: None,
+        };
+
+        assert_eq!(account_name(false, Some(&profile)), "Click to sign in");
+        assert_eq!(account_name(true, None), "Signed in");
+        assert_eq!(account_name(true, Some(&profile)), "Taylor Example");
+
+        profile.name = Some("  ".to_string());
+        assert_eq!(account_name(true, Some(&profile)), "taylor@example.com");
+
+        profile.email = None;
+        assert_eq!(account_name(true, Some(&profile)), "Signed in");
+    }
+
+    #[test]
+    fn cached_profile_must_belong_to_the_signed_in_user() {
+        let cached = serde_json::json!({
+            "userId": "user-1",
+            "profile": {
+                "name": "Taylor",
+                "email": "taylor@example.com",
+                "imageUrl": "https://example.com/profile.png"
+            },
+            "updatedAt": 1
+        });
+        let cached = cached.as_object().expect("cached profile object");
+
+        assert_eq!(
+            cached_user_profile(Some("user-1"), cached).and_then(|profile| profile.name),
+            Some("Taylor".to_string())
+        );
+        assert!(cached_user_profile(Some("user-2"), cached).is_none());
+        assert!(cached_user_profile(None, cached).is_none());
+    }
+
+    #[test]
+    fn cached_profile_accepts_the_tauri_null_user_identity() {
+        let cached = serde_json::json!({
+            "userId": null,
+            "profile": {
+                "name": null,
+                "email": "taylor@example.com",
+                "imageUrl": null
+            },
+            "updatedAt": 1
+        });
+        let cached = cached.as_object().expect("cached profile object");
+
+        assert_eq!(
+            cached_user_profile(None, cached).and_then(|profile| profile.email),
+            Some("taylor@example.com".to_string())
+        );
+        assert!(cached_user_profile(Some("user-1"), cached).is_none());
     }
 
     /// `coversDefaultExclusion`: the Reset button's "is this default already

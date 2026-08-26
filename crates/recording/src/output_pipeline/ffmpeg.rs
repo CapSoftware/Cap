@@ -39,6 +39,15 @@ impl VideoFrame for FFmpegVideoFrame {
     fn timestamp(&self) -> Timestamp {
         self.timestamp
     }
+
+    fn duplicate(&self) -> Option<Self> {
+        let mut inner = ffmpeg::frame::Video::empty();
+        let status = unsafe { ffmpeg::ffi::av_frame_ref(inner.as_mut_ptr(), self.inner.as_ptr()) };
+        (status >= 0).then_some(Self {
+            inner,
+            timestamp: self.timestamp,
+        })
+    }
 }
 
 pub struct Mp4Muxer {
@@ -414,6 +423,7 @@ pub struct SegmentedVideoMuxer {
     segment_duration: Duration,
     preset: H264Preset,
     output_size: Option<(u32, u32)>,
+    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     state: Option<SegmentedEncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
@@ -425,6 +435,7 @@ pub struct SegmentedVideoMuxerConfig {
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
 }
 
 impl Default for SegmentedVideoMuxerConfig {
@@ -434,6 +445,7 @@ impl Default for SegmentedVideoMuxerConfig {
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            segment_tx: None,
         }
     }
 }
@@ -468,6 +480,7 @@ impl Muxer for SegmentedVideoMuxer {
             segment_duration: config.segment_duration,
             preset: config.preset,
             output_size: config.output_size,
+            segment_tx: config.segment_tx,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(),
@@ -584,8 +597,11 @@ impl SegmentedVideoMuxer {
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
-        let encoder =
+        let mut encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        if let Some(tx) = &self.segment_tx {
+            encoder.set_segment_callback(tx.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
@@ -802,5 +818,45 @@ impl AudioMuxer for DashSegmentedAudioMuxer {
         self.encoder
             .queue_frame(frame.inner, adjusted_timestamp)
             .map_err(|e| anyhow!("Failed to queue audio frame: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FFmpegVideoFrame, VideoFrame};
+    use cap_timestamp::Timestamp;
+    use std::time::Instant;
+
+    #[test]
+    fn duplicated_video_frame_reuses_reference_counted_pixel_storage() {
+        let timestamp = Instant::now();
+        let mut inner = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        inner.set_pts(Some(417));
+        inner.data_mut(0)[..4].copy_from_slice(&[11, 22, 33, 44]);
+        let original = FFmpegVideoFrame {
+            inner,
+            timestamp: Timestamp::Instant(timestamp),
+        };
+
+        let duplicate = original.duplicate().expect("reference-counted video frame");
+
+        assert_eq!(
+            duplicate.inner.data(0).as_ptr(),
+            original.inner.data(0).as_ptr()
+        );
+        assert_eq!(duplicate.inner.format(), original.inner.format());
+        assert_eq!(duplicate.inner.width(), original.inner.width());
+        assert_eq!(duplicate.inner.height(), original.inner.height());
+        assert_eq!(duplicate.inner.pts(), Some(417));
+        assert!(matches!(duplicate.timestamp, Timestamp::Instant(value) if value == timestamp));
+        let buffer = unsafe { (*original.inner.as_ptr()).buf[0] };
+        assert!(!buffer.is_null());
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+
+        drop(original);
+
+        assert_eq!(&duplicate.inner.data(0)[..4], &[11, 22, 33, 44]);
+        let retained = unsafe { (*duplicate.inner.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(retained) }, 1);
     }
 }

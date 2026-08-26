@@ -386,6 +386,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 },
                 output_size,
                 shared_pause_state,
+                segment_tx: None,
             })
             .await
     }
@@ -395,7 +396,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
-        _segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+        segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
@@ -405,6 +406,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
                 preset: H264Preset::Ultrafast,
                 output_size: Some(output_size),
                 shared_pause_state: None,
+                segment_tx,
             })
             .await
     }

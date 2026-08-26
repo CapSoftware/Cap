@@ -92,7 +92,10 @@ impl MainWindowRecordingStartBehaviour {
                 #[cfg(windows)]
                 return window.minimize();
                 #[cfg(not(windows))]
-                window.hide()
+                {
+                    crate::hide_main_window(window.app_handle());
+                    Ok(())
+                }
             }
             Self::Minimise => window.minimize(),
         }

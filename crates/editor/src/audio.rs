@@ -281,21 +281,19 @@ impl AudioRenderer {
                 samples: self.playhead_to_samples(cursor.segment_time),
             };
 
+            self.render_segment_chunk(
+                project,
+                TimelineSource {
+                    source_time: cursor.segment_time,
+                    segment_index: cursor.segment_index,
+                    segment: cursor.segment,
+                },
+                chunk_samples,
+                written * 2,
+                &mut ret,
+            );
             if cursor.segment.timescale == 1.0 {
-                self.render_current_chunk(project, chunk_samples, written * 2, &mut ret);
                 self.cursor.samples += chunk_samples;
-            } else {
-                self.render_speed_audio_chunk(
-                    project,
-                    TimelineSource {
-                        source_time: cursor.segment_time,
-                        segment_index: cursor.segment_index,
-                        segment: cursor.segment,
-                    },
-                    chunk_samples,
-                    written * 2,
-                    &mut ret,
-                );
             }
 
             self.elapsed_samples += chunk_samples;
@@ -943,7 +941,7 @@ fn mix_transition_audio(
 }
 
 /// Below this volume a music track is treated as silent and skipped entirely.
-const MUSIC_SILENCE_DB: f32 = -60.0;
+pub(crate) const MUSIC_SILENCE_DB: f32 = -60.0;
 
 fn music_gain(volume_db: f32) -> f32 {
     if volume_db <= MUSIC_SILENCE_DB {
@@ -1012,7 +1010,7 @@ fn mix_music(
 
         for out_sample in lo..hi {
             let local = out_sample - start_sample;
-            let src_index = trim_sample + local;
+            let src_index = trim_sample + local - data.source_start_sample() as i64;
             if src_index < 0 || src_index >= src_frames {
                 continue;
             }
@@ -2134,14 +2132,109 @@ mod tests {
     #[test]
     fn one_x_audio_bypasses_speed_processing() {
         let (_dir, mut renderer, mut project) = build_renderer_fixture();
-        project.timeline.as_mut().unwrap().segments[0].speed_audio_mode =
-            Some(ClipSpeedAudioMode::MaintainPitch);
+        for mode in [
+            None,
+            Some(ClipSpeedAudioMode::MaintainPitch),
+            Some(ClipSpeedAudioMode::MatchSpeed),
+        ] {
+            project.timeline.as_mut().unwrap().segments[0].speed_audio_mode = mode;
+            renderer.set_playhead(0.0, &project);
+            let (_, samples) = renderer.render_frame_raw(4_800, &project).unwrap();
 
-        renderer.set_playhead(0.0, &project);
-        let (_, samples) = renderer.render_frame_raw(4_800, &project).unwrap();
+            assert!(mean_abs(&samples) > 0.01);
+            assert!(renderer.speed_audio_processors.iter().all(Option::is_none));
+        }
+    }
 
-        assert!(mean_abs(&samples) > 0.01);
+    #[test]
+    fn one_x_split_clip_mute_is_local_in_playback_and_export() {
+        let (_dir, mut renderer, mut project) = single_clip_fixture(
+            &[4000, 8000, 12000],
+            vec![
+                segment(0, 0.0, 1.0, 1.0),
+                segment(0, 1.0, 2.0, 1.0),
+                segment(0, 2.0, 3.0, 1.0),
+            ],
+        );
+        project.timeline.as_mut().unwrap().segments[1].speed_audio_mode =
+            Some(ClipSpeedAudioMode::Mute);
+
+        let samples_per_second = AudioData::SAMPLE_RATE as usize * 2;
+        let export_stream = render_export_audio(&mut renderer, &project, 30, 90);
+        assert_eq!(export_stream.len(), samples_per_second * 3);
+        assert!((left_at_second(&export_stream, 0) - expected(4000)).abs() < 0.001);
+        assert!(
+            export_stream[samples_per_second..samples_per_second * 2]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert!((left_at_second(&export_stream, 2) - expected(12000)).abs() < 0.001);
         assert!(renderer.speed_audio_processors.iter().all(Option::is_none));
+
+        for duration_secs in [3.0, 3600.0] {
+            let mut playback = PrerenderedAudioBuffer::<f32>::new(
+                renderer.data.clone(),
+                MusicTracks::new(),
+                &project,
+                AudioRenderer::info(),
+                duration_secs,
+                0.0,
+            );
+            playback.wait_until_fully_rendered();
+            let mut playback_stream = vec![0.0; export_stream.len()];
+            for block in playback_stream.chunks_mut(1024) {
+                playback.fill(block);
+            }
+            for (index, (playback_sample, export_sample)) in
+                playback_stream.iter().zip(&export_stream).enumerate()
+            {
+                assert!(
+                    (playback_sample - export_sample).abs() < 0.000_001,
+                    "duration {duration_secs}, sample {index}: playback {playback_sample}, export {export_sample}"
+                );
+            }
+
+            playback.set_playhead(1.5);
+            let mut seek_samples = [1.0; 1024];
+            playback.fill(&mut seek_samples);
+            assert!(seek_samples.iter().all(|sample| *sample == 0.0));
+        }
+
+        project.timeline.as_mut().unwrap().segments[1].speed_audio_mode = None;
+        renderer.set_playhead(1.5, &project);
+        let (_, samples) = renderer.render_frame_raw(1024, &project).unwrap();
+        assert!((samples[0] - expected(8000)).abs() < 0.001);
+    }
+
+    #[test]
+    fn one_x_clip_mute_cuts_and_resumes_inside_a_single_request() {
+        let (_dir, mut renderer, mut project) = single_clip_fixture(
+            &[4000, 8000, 12000],
+            vec![
+                segment(0, 0.0, 1.0, 1.0),
+                segment(0, 1.0, 2.0, 1.0),
+                segment(0, 2.0, 3.0, 1.0),
+            ],
+        );
+        project.timeline.as_mut().unwrap().segments[1].speed_audio_mode =
+            Some(ClipSpeedAudioMode::Mute);
+
+        for (playhead, before, after) in [(0.99, 4000, 0), (1.99, 0, 12000)] {
+            renderer.set_playhead(playhead, &project);
+            let (written, samples) = renderer.render_frame_raw(1920, &project).unwrap();
+            assert_eq!(written, 1920);
+            let boundary = (0.01 * AudioData::SAMPLE_RATE as f64).round() as usize * 2;
+            assert!(
+                samples[..boundary]
+                    .iter()
+                    .all(|sample| (*sample - expected(before)).abs() < 0.001)
+            );
+            assert!(
+                samples[boundary..]
+                    .iter()
+                    .all(|sample| (*sample - expected(after)).abs() < 0.001)
+            );
+        }
     }
 
     /// One clip per second `section_values`, on a timeline made of `segments`.
@@ -2319,6 +2412,22 @@ mod tests {
             (expected(8000) + expected(16000)) * std::f32::consts::FRAC_1_SQRT_2;
 
         assert!((midpoint - expected_midpoint).abs() < 0.01);
+    }
+
+    #[test]
+    fn one_x_clip_mute_preserves_the_other_side_of_a_transition() {
+        for muted_index in [0, 1] {
+            let (_dir, mut renderer, mut project) =
+                transition_fixture(ClipTransitionType::CrossFade);
+            project.timeline.as_mut().unwrap().segments[muted_index].speed_audio_mode =
+                Some(ClipSpeedAudioMode::Mute);
+            let stream = render_export_audio(&mut renderer, &project, 30, 45);
+            let audible_value = if muted_index == 0 { 16000 } else { 8000 };
+            let midpoint = expected(audible_value) * std::f32::consts::FRAC_1_SQRT_2;
+            assert!((left_at_time(&stream, 0.75) - midpoint).abs() < 0.001);
+            let muted_time = if muted_index == 0 { 0.25 } else { 1.25 };
+            assert_eq!(left_at_time(&stream, muted_time), 0.0);
+        }
     }
 
     #[test]
@@ -2625,6 +2734,28 @@ mod tests {
         assert!((left_at_time(&stream, 0.5) - expected(8000)).abs() < 0.02);
     }
 
+    #[test]
+    fn one_x_clip_mute_keeps_timeline_music_audible() {
+        let (dir, mut renderer, mut project) =
+            single_clip_fixture(&[16000], vec![segment(0, 0.0, 1.0, 1.0)]);
+        let music_path = dir.path().join("music.wav");
+        write_step_wav(&music_path, &[4000]);
+        let mut music = MusicTracks::new();
+        music.insert(
+            "music.wav".to_string(),
+            Arc::new(AudioData::from_file(&music_path).unwrap()),
+        );
+        renderer = renderer.with_music(music);
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[0].speed_audio_mode = Some(ClipSpeedAudioMode::Mute);
+        timeline
+            .audio_segments
+            .push(music_track_segment("music.wav", 0.0, 1.0, 0.0, 0.0));
+
+        let stream = render_export_audio(&mut renderer, &project, 30, 30);
+        assert!((left_at_time(&stream, 0.5) - expected(4000)).abs() < 0.001);
+    }
+
     // A timeline-positioned music clip only sounds inside its [start, end) window.
     #[test]
     fn timeline_music_respects_start_offset() {
@@ -2677,5 +2808,81 @@ mod tests {
         assert!((left_at_second(&stream, 0) - full * 0.25).abs() < 0.03);
         assert!((left_at_second(&stream, 1) - full * 0.75).abs() < 0.03);
         assert!((left_at_second(&stream, 2) - full).abs() < 0.03);
+    }
+
+    #[test]
+    fn bounded_timeline_music_preserves_trimmed_source_and_cache_coverage() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let music_path = dir.path().join("music.wav");
+        let values = [2_000, 4_000, 6_000, 8_000, 10_000, 12_000];
+        write_step_wav(&music_path, &values);
+
+        let mut segment = music_track_segment("music.wav", 0.0, 2.0, 0.0, 0.0);
+        segment.trim_start = 3.0;
+        let mut project = music_project(vec![segment]);
+        let mut cache = MusicTracks::new();
+        let music = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let original = music.get("music.wav").unwrap();
+
+        assert_eq!(
+            original.source_start_sample(),
+            AudioData::SAMPLE_RATE as usize * 3
+        );
+        assert_eq!(original.sample_count(), AudioData::SAMPLE_RATE as usize * 2);
+
+        let repeated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        assert!(Arc::ptr_eq(original, repeated.get("music.wav").unwrap()));
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(music.clone());
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(values[3])).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(values[4])).abs() < 0.02);
+
+        project.timeline.as_mut().unwrap().audio_segments[0].trim_start = 1.0;
+        let updated = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let replacement = updated.get("music.wav").unwrap();
+
+        assert!(!Arc::ptr_eq(original, replacement));
+        assert_eq!(
+            replacement.source_start_sample(),
+            AudioData::SAMPLE_RATE as usize
+        );
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(updated);
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(values[1])).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(values[2])).abs() < 0.02);
+    }
+
+    #[test]
+    fn bounded_timeline_music_unions_segments_and_skips_inaudible_tracks() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let music_path = dir.path().join("music.wav");
+        write_step_wav(&music_path, &[2_000, 4_000, 6_000, 8_000, 10_000, 12_000]);
+
+        let mut early = music_track_segment("music.wav", 0.0, 1.0, 0.0, 0.0);
+        early.trim_start = 1.0;
+        let mut late = music_track_segment("music.wav", 1.0, 2.0, 0.0, 0.0);
+        late.trim_start = 4.0;
+        let mut disabled = music_track_segment("missing-disabled.wav", 0.0, 1.0, 0.0, 0.0);
+        disabled.enabled = false;
+        let mut muted = music_track_segment("missing-muted.wav", 0.0, 1.0, 0.0, 0.0);
+        muted.volume_db = -60.0;
+
+        let project = music_project(vec![early, late, disabled, muted]);
+        let mut cache = MusicTracks::new();
+        let tracks = crate::load_music_tracks(&project, dir.path(), &mut cache);
+        let music = tracks.get("music.wav").unwrap();
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(music.source_start_sample(), AudioData::SAMPLE_RATE as usize);
+        assert_eq!(music.sample_count(), AudioData::SAMPLE_RATE as usize * 4);
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(tracks);
+        let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
+        assert!((left_at_second(&stream, 0) - expected(4_000)).abs() < 0.02);
+        assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
     }
 }

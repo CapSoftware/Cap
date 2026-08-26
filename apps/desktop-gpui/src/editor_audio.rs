@@ -30,13 +30,29 @@ pub enum AudioPicker {
 }
 
 pub fn bundled_track_path(id: &str) -> Option<PathBuf> {
-    let file = format!("{id}.mp3");
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
+    bundled_track_path_from(id, &crate::store::bundled_resource_dirs(), &manifest)
+}
+
+fn bundled_track_path_from(
+    id: &str,
+    resource_dirs: &[PathBuf],
+    manifest: &Path,
+) -> Option<PathBuf> {
+    if !AUDIO_LIBRARY.iter().any(|(known, _)| *known == id) {
+        return None;
+    }
+
+    let file = format!("{id}.mp3");
+    let mut candidates = resource_dirs
+        .iter()
+        .map(|directory| directory.join("assets/music").join(&file))
+        .collect::<Vec<_>>();
+    candidates.extend([
         manifest.join("../desktop/src/assets/music").join(&file),
         manifest.join("assets/music").join(&file),
-    ];
-    candidates.into_iter().find(|path| path.exists())
+    ]);
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 pub fn copy_library_track(
@@ -183,4 +199,43 @@ fn render_library_row(
                 .text_color(Hsla::from(theme.gray_11)),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AUDIO_LIBRARY, bundled_track_path, bundled_track_path_from};
+
+    #[test]
+    fn built_in_music_resolves_from_an_installed_bundle() {
+        let root =
+            std::env::temp_dir().join(format!("cap-gpui-installed-music-{}", std::process::id()));
+        let resources = root.join("Cap.app/Contents/Resources");
+        let music = resources.join("assets/music");
+        std::fs::create_dir_all(&music).unwrap();
+        let track = music.join("lofi-beats-mirostar.mp3");
+        std::fs::write(&track, b"test track").unwrap();
+
+        assert_eq!(
+            bundled_track_path_from("lofi-beats-mirostar", &[resources], &root.join("missing")),
+            Some(track)
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn built_in_music_remains_available_from_the_development_checkout() {
+        for (id, _) in AUDIO_LIBRARY {
+            assert!(
+                bundled_track_path(id).is_some(),
+                "missing bundled track {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_music_rejects_unknown_and_traversal_identifiers() {
+        assert_eq!(bundled_track_path("unknown-track"), None);
+        assert_eq!(bundled_track_path("../lofi-beats-mirostar"), None);
+    }
 }

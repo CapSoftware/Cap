@@ -157,14 +157,7 @@ function Inner(props: {
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
-				<Show
-					when={props.osType !== "windows"}
-					fallback={
-						<p class="text-xs leading-relaxed text-gray-10 px-1">
-							No experimental features are currently available on this platform.
-						</p>
-					}
-				>
+				<Show when={props.osType === "macos"}>
 					<Section title="Preview">
 						<SectionRows>
 							<ToggleSettingItem

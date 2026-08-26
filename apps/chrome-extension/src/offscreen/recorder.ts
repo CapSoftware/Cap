@@ -150,6 +150,10 @@ let retryInProgress = false;
 let lastProgressBroadcastAt = 0;
 let cameraPreviewStream: MediaStream | null = null;
 let cameraPreviewDeviceId: string | null = null;
+let cameraPreviewStreamRequest: {
+	deviceId: string | null;
+	promise: Promise<MediaStream>;
+} | null = null;
 const cameraPreviewSessions = new Map<string, RTCPeerConnection>();
 const activeRecordingSounds = new Set<HTMLAudioElement>();
 
@@ -297,10 +301,32 @@ const getCameraPreviewStream = async (settings: WebcamSettings) => {
 		return cameraPreviewStream;
 	}
 
+	if (cameraPreviewStreamRequest?.deviceId === settings.deviceId) {
+		return cameraPreviewStreamRequest.promise;
+	}
+
+	if (cameraPreviewStreamRequest) {
+		await cameraPreviewStreamRequest.promise.catch(() => undefined);
+	}
+
 	disconnectCameraPreviews();
-	cameraPreviewStream = await getCameraMediaStream(settings, false);
-	cameraPreviewDeviceId = settings.deviceId;
-	return cameraPreviewStream;
+	const promise = getCameraMediaStream(settings, false).then((stream) => {
+		cameraPreviewStream = stream;
+		cameraPreviewDeviceId = settings.deviceId;
+		return stream;
+	});
+	cameraPreviewStreamRequest = {
+		deviceId: settings.deviceId,
+		promise,
+	};
+
+	try {
+		return await promise;
+	} finally {
+		if (cameraPreviewStreamRequest?.promise === promise) {
+			cameraPreviewStreamRequest = null;
+		}
+	}
 };
 
 const getStreamSize = (stream: MediaStream) => {

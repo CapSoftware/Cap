@@ -208,6 +208,7 @@ fn channel() -> &'static (
 /// slot only exists during an active sign-in and filters for its own
 /// `token`/`api_key` parameters -- the pre-existing behavior of the handler,
 /// unchanged. Action parsing happens on top.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn submit_deep_link(raw: &str) {
     crate::auth::submit_deep_link(raw);
     submit_action_url(raw);
@@ -364,6 +365,7 @@ impl DeepLinkAction {
                 cx.defer(move |cx| {
                     let (camera_feed, mic_feed) = {
                         let feeds = Feeds::global(cx);
+                        feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
                         let feeds = feeds.read(cx);
                         (feeds.camera_actor(), feeds.mic_actor())
                     };

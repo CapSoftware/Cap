@@ -601,7 +601,7 @@ impl EditorWindow {
                 if exclude == CanvasSelection::Text(index) {
                     continue;
                 }
-                if !(t >= segment.start && t < segment.end) || !segment.enabled {
+                if !(t >= segment.start && t < segment.end && segment.enabled) {
                     continue;
                 }
                 let center = segment.center;
@@ -1173,7 +1173,7 @@ impl EditorWindow {
                 }
             }
             for (index, segment) in timeline.text_segments.iter().enumerate() {
-                if !(time >= segment.start && time < segment.end) || !segment.enabled {
+                if !(time >= segment.start && time < segment.end && segment.enabled) {
                     continue;
                 }
                 let element = CanvasSelection::Text(index);

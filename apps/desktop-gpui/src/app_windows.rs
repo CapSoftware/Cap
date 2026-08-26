@@ -106,6 +106,60 @@ pub struct CameraPark {
 
 impl Global for AppWindows {}
 
+fn remove_popup_window_chrome(native: Option<platform::NativeWindow>, cx: &mut App) {
+    let Some(native) = native else {
+        return;
+    };
+
+    cx.spawn(async move |_| platform::remove_popup_window_chrome(&native))
+        .detach();
+}
+
+pub(crate) fn export_in_flight(cx: &App) -> bool {
+    if !cx.has_global::<AppWindows>() {
+        return false;
+    }
+
+    let windows = cx.global::<AppWindows>();
+    windows.editors.iter().any(|(_, handle)| {
+        handle
+            .read(cx)
+            .ok()
+            .and_then(|editor| editor.export.as_ref())
+            .is_some_and(|export| export.phase.is_busy())
+    }) || windows.screenshot_editors.iter().any(|(_, handle)| {
+        handle
+            .read(cx)
+            .is_ok_and(ScreenshotEditorWindow::export_in_flight)
+    })
+}
+
+pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
+    if !cx.has_global::<AppWindows>() {
+        return;
+    }
+
+    let windows = cx.global::<AppWindows>();
+    let editors: Vec<_> = windows.editors.iter().map(|(_, handle)| *handle).collect();
+    let screenshot_editors: Vec<_> = windows
+        .screenshot_editors
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+
+    for handle in editors {
+        if let Ok(pending) = handle.update(cx, |editor, _, _| editor.pending_save()) {
+            pending.borrow_mut().flush();
+        }
+    }
+
+    for handle in screenshot_editors {
+        if let Ok(pending) = handle.update(cx, |editor, _, _| editor.pending_save()) {
+            pending.borrow_mut().flush();
+        }
+    }
+}
+
 /// Install the registry and wire the session observer that tears the bar down
 /// when a recording ends (stop, delete, or a failed start).
 pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, cx: &mut App) {
@@ -302,9 +356,27 @@ pub fn show_main_window(cx: &mut App) {
         open_onboarding(cx);
         return;
     }
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
+    }
+    let reset_target = RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && cx.global::<AppWindows>().editor_hidden_for_picker.is_none();
+    if reset_target {
+        let picker_open = {
+            let windows = cx.global::<AppWindows>();
+            windows.main_hidden_for_picker || !windows.overlays.is_empty()
+        };
+        if picker_open {
+            close_target_overlays(cx);
+        }
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    }
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |view, window, cx| {
+            if reset_target {
+                view.clear_target(cx);
+            }
             // Every path back to the main window is a path a new capture may
             // have arrived on -- a finished recording most of all. The Tauri
             // app gets this from `invalidateRecentMedia` plus the query's
@@ -393,6 +465,21 @@ pub fn hide_main_window(cx: &mut App) {
         cx.update(crate::menus::schedule_dock_sync);
     })
     .detach();
+}
+
+fn hide_main_and_park_camera_preview(cx: &mut App) {
+    hide_main_window(cx);
+
+    if !camera_preview_can_be_parked(RecordingSession::global(cx).read(cx).phase) {
+        return;
+    }
+
+    close_camera_window(cx);
+    crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
+}
+
+fn camera_preview_can_be_parked(phase: Phase) -> bool {
+    matches!(phase, Phase::Idle)
 }
 
 /// ⌘W, the File/Window menus' Close Window, and the main window's own red
@@ -493,7 +580,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
             }
         })
         .detach();
-        hide_main_window(cx);
+        hide_main_and_park_camera_preview(cx);
         return;
     }
 
@@ -574,8 +661,6 @@ pub fn open_settings(page: Page, cx: &mut App) {
 
     cx.spawn(async move |cx| {
         if let Some(native) = &native {
-            // `applyMacOSWindowMaterial("settings")`: same install as the main
-            // window, radius 26 instead of 16.
             let kind = platform::install_window_material(
                 native,
                 settings_window::SETTINGS_MATERIAL_RADIUS,
@@ -609,7 +694,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
     })
     .detach();
 
-    hide_main_window(cx);
+    hide_main_and_park_camera_preview(cx);
 }
 
 /// Close the settings window from our side (Cmd-W). The close button goes
@@ -1112,6 +1197,21 @@ fn resolve_window(id: &scap_targets::WindowId) -> Option<HoveredWindow> {
     HoveredWindow::from_window(&scap_targets::Window::from_id(id)?)
 }
 
+fn pinned_window_resolution_matches(
+    requested: Option<&scap_targets::WindowId>,
+    resolved: Option<&scap_targets::WindowId>,
+) -> bool {
+    requested.is_none_or(|requested| resolved.is_some_and(|resolved| requested == resolved))
+}
+
+pub(crate) fn reject_unavailable_window(cx: &mut App) {
+    dismiss_target_overlays(cx);
+    RecordingSession::global(cx).update(cx, |session, cx| {
+        session.error = Some("The selected window is no longer available. Select it again.".into());
+        cx.notify();
+    });
+}
+
 /// Open (or re-target) the fullscreen overlays.
 ///
 /// A mode change tears the old windows down first: the overlay carries
@@ -1119,7 +1219,10 @@ fn resolve_window(id: &scap_targets::WindowId) -> Option<HoveredWindow> {
 /// cheaper to reason about and what the Tauri flow does (the webviews are
 /// recreated with a new `targetMode` query parameter).
 pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
-    open_overlays_core(request, cx);
+    if !open_overlays_core(request, cx) {
+        reject_unavailable_window(cx);
+        return;
+    }
 
     // `pickerActive && !hasHidden && !recording` -> `getCurrentWindow().hide()`
     // (`new-main/index.tsx:2024-2028`): the picker owns the screen; the main
@@ -1148,7 +1251,10 @@ pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest
         return;
     }
 
-    open_overlays_core(request, cx);
+    if !open_overlays_core(request, cx) {
+        reject_unavailable_window(cx);
+        return;
+    }
 
     let key = editor_key(&editor_path);
     if cx.global::<AppWindows>().editor_hidden_for_picker.as_ref() != Some(&key) {
@@ -1157,14 +1263,24 @@ pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest
     }
 }
 
-fn open_overlays_core(request: OverlayRequest, cx: &mut App) {
+fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
+    let pinned = request.pinned_window.as_ref().and_then(resolve_window);
+    if request.mode == TargetType::Window
+        && !pinned_window_resolution_matches(
+            request.pinned_window.as_ref(),
+            pinned.as_ref().map(|window| &window.id),
+        )
+    {
+        tracing::warn!(window = ?request.pinned_window, "selected window could not be resolved");
+        return false;
+    }
+
     let select = TargetSelect::global(cx);
     let mode_changed = select.read(cx).mode != Some(request.mode);
     if mode_changed {
         close_overlay_windows(cx);
     }
 
-    let pinned = request.pinned_window.as_ref().and_then(resolve_window);
     let display = request
         .display
         .clone()
@@ -1233,6 +1349,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) {
     // and the overlays non-activating, a plain key handler has nothing to be
     // delivered to.
     platform::register_escape_hotkey();
+    true
 }
 
 /// Close the overlays and clear the main window's armed target -- Escape, the
@@ -1984,7 +2101,7 @@ pub fn open_camera_window(cx: &mut App) {
     match handle {
         Ok(handle) => {
             cx.global_mut::<AppWindows>().camera = Some(handle);
-            handle
+            let native = handle
                 .update(cx, |_, window, _| {
                     platform::apply_panel_behavior(
                         window,
@@ -1999,8 +2116,11 @@ pub fn open_camera_window(cx: &mut App) {
                         },
                     );
                     platform::show_window_without_focus(window);
+                    platform::native_window(window)
                 })
-                .ok();
+                .ok()
+                .flatten();
+            remove_popup_window_chrome(native, cx);
         }
         Err(error) => tracing::error!("camera window failed to open: {error:#}"),
     }
@@ -2213,7 +2333,11 @@ fn revert_camera_park(cx: &mut App) {
 
 /// Hand a camera frame to the preview window. Returns false when no window is
 /// open (the pump drops the frame and keeps draining).
-pub fn deliver_camera_frame(frame: cap_recording::NativeCameraFrame, cx: &mut App) -> bool {
+pub fn deliver_camera_frame(
+    #[cfg(target_os = "macos")] frame: cap_recording::NativeCameraFrame,
+    #[cfg(not(target_os = "macos"))] frame: crate::camera_window::CameraPreviewFrame,
+    cx: &mut App,
+) -> bool {
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
@@ -2267,7 +2391,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
             }
         })
         .detach();
-        hide_main_window(cx);
+        hide_main_and_park_camera_preview(cx);
         return;
     }
 
@@ -2343,7 +2467,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         })
         .ok();
 
-    hide_main_window(cx);
+    hide_main_and_park_camera_preview(cx);
     load_editor_project(key, handle, cx);
 }
 
@@ -2380,6 +2504,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
             "editor project validated"
         );
         log_timeline_model(&summary.timeline);
+        let recordings = summary.recordings.clone();
         if handle
             .update(cx, |view, window, cx| view.set_summary(summary, window, cx))
             .is_err()
@@ -2390,7 +2515,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The frame seam. Bounded and try_send-only: the renderer is already
         // latest-wins (`editor.rs:242-312`), so a full queue means the UI is
         // behind and the newest frame is the one that matters.
-        let (frame_tx, frame_rx) = flume::bounded(2);
+        let (frame_tx, frame_rx) = flume::bounded(4);
         let stats = Arc::new(editor_window::PumpStats::default());
         // The playhead seam. `on_state_change` is called from the
         // `cap-playback` OS thread and from tokio workers, so it may only
@@ -2422,29 +2547,23 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
                 let frame_format = cap_editor::EditorFrameFormat::Rgba;
-                if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
-                    let silent = std::sync::Arc::new(cap_editor::AudioOutput::new_headless(
-                        Box::new(|_samples, _at| {}),
-                    ));
-                    cap_editor::EditorInstance::new_with_audio_output_and_frame_format(
-                        instance_path,
-                        state_cb,
-                        frame_cb,
-                        None,
-                        frame_format,
-                        silent,
-                    )
-                    .await
+                let audio_output = if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
+                    std::sync::Arc::new(cap_editor::AudioOutput::new_headless(Box::new(
+                        |_samples, _at| {},
+                    )))
                 } else {
-                    cap_editor::EditorInstance::new_with_frame_format(
-                        instance_path,
-                        state_cb,
-                        frame_cb,
-                        None,
-                        frame_format,
-                    )
-                    .await
-                }
+                    std::sync::Arc::new(cap_editor::AudioOutput::new())
+                };
+                cap_editor::EditorInstance::new_with_preloaded_recordings(
+                    instance_path,
+                    state_cb,
+                    frame_cb,
+                    None,
+                    frame_format,
+                    audio_output,
+                    recordings,
+                )
+                .await
             })
         });
 
@@ -2644,8 +2763,40 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
+        drive_auto_export(handle, cx).await;
     })
     .detach();
+}
+
+async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    let Some(path) = std::env::var_os("CAP_GPUI_AUTO_EXPORT").map(PathBuf::from) else {
+        return;
+    };
+
+    cx.background_executor()
+        .timer(std::time::Duration::from_millis(300))
+        .await;
+    let _ = handle.update(cx, |view, window, cx| {
+        view.open_export(window, cx);
+        if let Some(export) = view.export.as_mut() {
+            export.destination = crate::editor_export::ExportDestination::File;
+            export.format = if path.extension().is_some_and(|extension| extension == "gif") {
+                crate::editor_export::ExportFormatKind::Gif
+            } else {
+                crate::editor_export::ExportFormatKind::Mp4
+            };
+            if export.format == crate::editor_export::ExportFormatKind::Gif {
+                if export.resolution == crate::editor_export::ExportResolution::P4k {
+                    export.resolution = crate::editor_export::ExportResolution::P1080;
+                }
+                if export.fps > 30 {
+                    export.fps = 30;
+                }
+            }
+        }
+        tracing::info!(path = %path.display(), "auto editor export requested");
+        view.start_export(window, cx);
+    });
 }
 
 /// One line per timeline load naming every row and its segment count. The
@@ -3318,7 +3469,7 @@ fn open_controls(
             // Panel treatment AFTER open_window returns: inside the builder
             // closure the platform window is not finished and gpui's own
             // PopUp setup would override the level.
-            let number = handle
+            let (number, native) = handle
                 .update(cx, |_, window, _| {
                     platform::apply_panel_behavior(
                         window,
@@ -3333,10 +3484,14 @@ fn open_controls(
                     // `order_front_regardless` in the Tauri flow: front without
                     // taking key status from the app being recorded.
                     platform::show_window_without_focus(window);
-                    platform::window_number(window)
+                    (
+                        platform::window_number(window),
+                        platform::native_window(window),
+                    )
                 })
-                .ok()
-                .flatten()?;
+                .ok()?;
+            remove_popup_window_chrome(native, cx);
+            let number = number?;
             number.to_string().parse().ok()
         }
         Err(error) => {
@@ -3602,6 +3757,37 @@ mod tests {
         assert!(!reveal_main_after_editor_close(1, true, true));
         // Mid-recording the session observer owns the reveal, not this path.
         assert!(!reveal_main_after_editor_close(0, false, false));
+    }
+
+    #[test]
+    fn active_or_pending_recordings_never_park_the_camera_preview() {
+        assert!(camera_preview_can_be_parked(Phase::Idle));
+        assert!(!camera_preview_can_be_parked(Phase::Starting));
+        assert!(!camera_preview_can_be_parked(Phase::Recording {
+            paused: false,
+        }));
+        assert!(!camera_preview_can_be_parked(Phase::Recording {
+            paused: true,
+        }));
+        assert!(!camera_preview_can_be_parked(Phase::Stopping));
+    }
+
+    #[test]
+    fn pinned_window_never_falls_back_to_another_target() {
+        let selected = "41".parse::<scap_targets::WindowId>().unwrap();
+        let other = "42".parse::<scap_targets::WindowId>().unwrap();
+
+        assert!(pinned_window_resolution_matches(None, None));
+        assert!(pinned_window_resolution_matches(None, Some(&other)));
+        assert!(pinned_window_resolution_matches(
+            Some(&selected),
+            Some(&selected)
+        ));
+        assert!(!pinned_window_resolution_matches(Some(&selected), None));
+        assert!(!pinned_window_resolution_matches(
+            Some(&selected),
+            Some(&other)
+        ));
     }
 
     fn title_rule(title: &str) -> WindowExclusion {

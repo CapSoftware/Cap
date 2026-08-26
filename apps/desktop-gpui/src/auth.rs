@@ -248,10 +248,10 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
         Ok(response) => tracing::warn!("Organizations fetch returned {}", response.status()),
         Err(error) => {
             tracing::warn!("Failed to fetch organizations: {error}");
-            if !auth
+            if auth
                 .get("organizations")
                 .and_then(Value::as_array)
-                .is_some_and(|entries| !entries.is_empty())
+                .is_none_or(Vec::is_empty)
             {
                 auth.insert(
                     "organizations_updated_at".into(),

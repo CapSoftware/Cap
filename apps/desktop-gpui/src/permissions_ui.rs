@@ -123,7 +123,15 @@ impl PermissionsState {
         }
     }
 
-    /// (granted, total) over the shown rows -- the header progress readout.
+    pub fn refreshed_action(
+        &mut self,
+        permission: OSPermission,
+        raw: Option<RawPermissions>,
+    ) -> Option<RowAction> {
+        self.apply_raw(raw);
+        self.action(permission)
+    }
+
     pub fn granted_counts(&self) -> (usize, usize) {
         let mut granted = 0;
         let mut total = 0;
@@ -358,6 +366,70 @@ mod tests {
         }
         assert!(state.all_shown_granted(), "poll stop condition");
         assert_eq!(state.granted_counts(), (4, 4));
+    }
+
+    #[test]
+    fn stale_request_is_skipped_when_permission_was_already_granted() {
+        for &permission in OSPermission::ALL {
+            let mut state = fresh_ungranted();
+            assert_eq!(state.action(permission), Some(RowAction::Request));
+
+            let action = state.refreshed_action(
+                permission,
+                raw(
+                    true,
+                    true,
+                    MediaAuthorization::Authorized,
+                    MediaAuthorization::Authorized,
+                ),
+            );
+
+            assert_eq!(action, None);
+            assert_eq!(state.status(permission), OSPermissionStatus::Granted);
+        }
+    }
+
+    #[test]
+    fn stale_settings_action_is_skipped_after_permission_is_granted() {
+        let mut state = fresh_ungranted();
+        state.note_request_failed(OSPermission::ScreenRecording);
+        assert_eq!(
+            state.action(OSPermission::ScreenRecording),
+            Some(RowAction::OpenSettings)
+        );
+
+        let action = state.refreshed_action(
+            OSPermission::ScreenRecording,
+            raw(
+                true,
+                false,
+                MediaAuthorization::NotDetermined,
+                MediaAuthorization::NotDetermined,
+            ),
+        );
+
+        assert_eq!(action, None);
+        assert_eq!(
+            state.status(OSPermission::ScreenRecording),
+            OSPermissionStatus::Granted
+        );
+    }
+
+    #[test]
+    fn refreshed_denial_opens_settings_instead_of_requesting_again() {
+        let mut state = fresh_ungranted();
+
+        let action = state.refreshed_action(
+            OSPermission::Microphone,
+            raw(
+                false,
+                false,
+                MediaAuthorization::Denied,
+                MediaAuthorization::NotDetermined,
+            ),
+        );
+
+        assert_eq!(action, Some(RowAction::OpenSettings));
     }
 
     #[test]

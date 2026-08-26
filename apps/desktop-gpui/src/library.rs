@@ -33,6 +33,7 @@ use cap_project::{
     InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     StudioRecordingStatus,
 };
+use cap_recording::recovery::RecoveryManager;
 use gpui::RenderImage;
 use image::buffer::ConvertBuffer as _;
 
@@ -286,6 +287,14 @@ pub struct RecordingItem {
     pub thumbnail: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct IncompleteRecordingItem {
+    pub project_path: PathBuf,
+    pub pretty_name: String,
+    pub segment_count: usize,
+    pub estimated_duration_secs: f64,
+}
+
 impl RecordingItem {
     /// `hasActiveRecording` (`recordings.tsx:66-73`) minus its upload half:
     /// there are no uploads in this app, so `MultipartUpload` /
@@ -393,6 +402,112 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
 /// `list_recordings` against the real library.
 pub fn list_recordings() -> Vec<RecordingItem> {
     list_recordings_in(&known_recordings_dirs())
+}
+
+pub fn find_incomplete_recordings_in(
+    dirs: &[PathBuf],
+    active_recording: Option<&Path>,
+) -> Vec<IncompleteRecordingItem> {
+    list_recordings_in(dirs)
+        .into_iter()
+        .filter(|item| {
+            item.mode == RecordingMode::Studio
+                && matches!(
+                    item.status,
+                    RecordingStatus::InProgress | RecordingStatus::NeedsRemux
+                )
+                && active_recording != Some(item.path.as_path())
+                && is_recording_after_recovery_cutoff(&item.pretty_name)
+        })
+        .filter_map(|item| {
+            let incomplete = RecoveryManager::inspect_recording(&item.path)?;
+            (!incomplete.recoverable_segments.is_empty()).then_some(IncompleteRecordingItem {
+                project_path: item.path,
+                pretty_name: item.pretty_name,
+                segment_count: incomplete.recoverable_segments.len(),
+                estimated_duration_secs: incomplete.estimated_duration.as_secs_f64(),
+            })
+        })
+        .collect()
+}
+
+pub fn find_incomplete_recordings() -> Vec<IncompleteRecordingItem> {
+    find_incomplete_recordings_in(&known_recordings_dirs(), None)
+}
+
+fn is_recording_after_recovery_cutoff(pretty_name: &str) -> bool {
+    let Some(date) = pretty_name
+        .strip_prefix("Cap ")
+        .and_then(|name| name.split(" at ").next())
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+    else {
+        return false;
+    };
+
+    chrono::NaiveDate::from_ymd_opt(2025, 12, 31).is_some_and(|cutoff| date > cutoff)
+}
+
+pub fn recover_incomplete_recording(project_path: &Path) -> Result<PathBuf, String> {
+    recover_incomplete_recording_in(&known_recordings_dirs(), project_path)
+}
+
+fn recover_incomplete_recording_in(
+    dirs: &[PathBuf],
+    project_path: &Path,
+) -> Result<PathBuf, String> {
+    if project_path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+        || !dirs.iter().any(|dir| project_path.starts_with(dir))
+    {
+        return Err("Path is not inside a recordings directory".to_string());
+    }
+
+    let canonical_path = project_path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve recording path: {error}"))?;
+    if !dirs.iter().any(|dir| {
+        dir.canonicalize()
+            .is_ok_and(|canonical_dir| canonical_path.starts_with(canonical_dir))
+    }) {
+        return Err("Path is not inside a recordings directory".to_string());
+    }
+
+    let meta = RecordingMeta::load_for_project(&canonical_path)
+        .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
+    let Some(studio) = meta.studio_meta() else {
+        return Err("Only incomplete studio recordings can be recovered".to_string());
+    };
+    if !matches!(
+        studio.status(),
+        StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux
+    ) {
+        return Err("Recording is not waiting for recovery".to_string());
+    }
+
+    let incomplete = RecoveryManager::inspect_recording(&canonical_path)
+        .ok_or_else(|| "No recoverable segments found".to_string())?;
+    let recovered = RecoveryManager::recover(&incomplete)
+        .map_err(|error| format!("Failed to recover recording: {error}"))?;
+    let display = match &recovered.meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            segment.display.path.to_path(&recovered.project_path)
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .first()
+            .map(|segment| segment.display.path.to_path(&recovered.project_path))
+            .ok_or_else(|| "Recovered recording has no display segments".to_string())?,
+    };
+    if let Err(error) = create_screenshot(
+        &display,
+        &bundle_thumbnail_path(&recovered.project_path),
+        None,
+    ) {
+        tracing::warn!(path = %recovered.project_path.display(), %error, "failed to create recovered recording thumbnail");
+    }
+
+    Ok(recovered.project_path)
 }
 
 /// `delete_recording_directory` (`lib.rs:4001-4046`), guards verbatim.
@@ -701,6 +816,19 @@ where
     J: Send + 'static,
     R: Send + 'static,
 {
+    spawn_decode_pool_limited(executor, jobs, MAX_DECODE_WORKERS, decode)
+}
+
+pub fn spawn_decode_pool_limited<J, R>(
+    executor: &gpui::BackgroundExecutor,
+    jobs: Vec<J>,
+    max_workers: usize,
+    decode: impl Fn(J) -> Option<R> + Send + Sync + Clone + 'static,
+) -> (Vec<gpui::Task<()>>, flume::Receiver<R>)
+where
+    J: Send + 'static,
+    R: Send + 'static,
+{
     let (job_tx, job_rx) = flume::unbounded();
     for job in jobs {
         let _ = job_tx.send(job);
@@ -710,7 +838,7 @@ where
     let (result_tx, result_rx) = flume::unbounded();
     let workers = std::thread::available_parallelism()
         .map_or(4, std::num::NonZeroUsize::get)
-        .min(MAX_DECODE_WORKERS)
+        .min(max_workers.max(1))
         .min(job_rx.len().max(1));
     let tasks = (0..workers)
         .map(|_| {
@@ -1367,6 +1495,181 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    fn write_incomplete_bundle(
+        recordings: &Path,
+        name: &str,
+        pretty_name: &str,
+        status: &str,
+        fragments: bool,
+    ) -> PathBuf {
+        let bundle = write_bundle(
+            recordings,
+            name,
+            &format!(
+                r#"{{"pretty_name":"{pretty_name}","sharing":null,"segments":[],"status":{{"status":"{status}"}}}}"#
+            ),
+        );
+        if fragments {
+            let display = bundle.join("content/segments/segment-0/display");
+            std::fs::create_dir_all(&display).unwrap();
+            std::fs::write(display.join("init.mp4"), vec![0u8; 128]).unwrap();
+            std::fs::write(display.join("segment_001.m4s"), vec![1u8; 256]).unwrap();
+            std::fs::write(
+                display.join("manifest.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "version": 5,
+                    "type": "m4s_segments",
+                    "init_segment": "init.mp4",
+                    "segments": [{
+                        "path": "segment_001.m4s",
+                        "is_complete": true,
+                        "file_size": 256
+                    }]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        bundle
+    }
+
+    #[test]
+    fn recovery_scan_preserves_active_terminal_legacy_and_unrecoverable_recordings() {
+        let _ = ffmpeg::init();
+        let root = temp_dir("recovery-scan");
+        let recordings = root.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let eligible = write_incomplete_bundle(
+            &recordings,
+            "eligible",
+            "Cap 2026-01-02 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        let active = write_incomplete_bundle(
+            &recordings,
+            "active",
+            "Cap 2026-01-03 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        let remux = write_incomplete_bundle(
+            &recordings,
+            "remux",
+            "Cap 2026-01-04 at 10.00.00",
+            "NeedsRemux",
+            true,
+        );
+        write_incomplete_bundle(
+            &recordings,
+            "legacy",
+            "Cap 2025-12-31 at 10.00.00",
+            "InProgress",
+            true,
+        );
+        write_incomplete_bundle(
+            &recordings,
+            "terminal",
+            "Cap 2026-01-05 at 10.00.00",
+            "Complete",
+            true,
+        );
+        let corrupt = write_incomplete_bundle(
+            &recordings,
+            "unrecoverable",
+            "Cap 2026-01-06 at 10.00.00",
+            "InProgress",
+            false,
+        );
+        let corrupt_before = std::fs::read(corrupt.join("recording-meta.json")).unwrap();
+
+        let found = find_incomplete_recordings_in(
+            std::slice::from_ref(&recordings),
+            Some(active.as_path()),
+        );
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|item| item.project_path == eligible));
+        assert!(found.iter().any(|item| item.project_path == remux));
+        assert!(found.iter().all(|item| item.segment_count == 1));
+        assert_eq!(
+            std::fs::read(corrupt.join("recording-meta.json")).unwrap(),
+            corrupt_before
+        );
+        assert!(active.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_rejects_paths_outside_the_recording_library() {
+        let root = temp_dir("recovery-path");
+        let recordings = root.join("recordings");
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        let result = recover_incomplete_recording_in(std::slice::from_ref(&recordings), &elsewhere);
+
+        assert_eq!(
+            result,
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert!(elsewhere.is_dir());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_restores_interrupted_real_recording_when_fixture_is_provided() {
+        let Ok(source) = std::env::var("CAP_GPUI_RECOVERY_FIXTURE") else {
+            return;
+        };
+        let _ = ffmpeg::init();
+        let source = PathBuf::from(source);
+        let root = temp_dir("recovery-real");
+        let recordings = root.join("recordings");
+        let copy = recordings.join("interrupted.cap");
+        std::fs::create_dir_all(&copy).unwrap();
+
+        let mut pending = vec![(source, copy.clone())];
+        while let Some((from, to)) = pending.pop() {
+            for entry in std::fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                let destination = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    std::fs::create_dir_all(&destination).unwrap();
+                    pending.push((entry.path(), destination));
+                } else {
+                    std::fs::copy(entry.path(), destination).unwrap();
+                }
+            }
+        }
+
+        let dirs = std::slice::from_ref(&recordings);
+        let found = find_incomplete_recordings_in(dirs, None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].segment_count, 1);
+
+        let recovered = recover_incomplete_recording_in(dirs, &copy).unwrap();
+        let meta = RecordingMeta::load_for_project(&recovered).unwrap();
+
+        assert!(matches!(
+            meta.studio_meta().unwrap().status(),
+            StudioRecordingStatus::Complete
+        ));
+        assert!(
+            recovered
+                .join("content/segments/segment-0/display.mp4")
+                .is_file()
+        );
+        assert!(recovered.join("project-config.json").is_file());
+        assert!(bundle_thumbnail_path(&recovered).is_file());
+        assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The three `delete_recording_directory` guards, one test each.
     #[test]
     fn delete_rejects_traversal_paths_outside_and_symlink_escapes() {
@@ -1400,6 +1703,8 @@ mod tests {
         let escape = recordings.join("escape.cap");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&victim, &escape).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&victim, &escape).unwrap();
         assert_eq!(
             delete_recording_directory_in(&dirs, &escape),
             Err("Path is not inside a recordings directory".to_string()),

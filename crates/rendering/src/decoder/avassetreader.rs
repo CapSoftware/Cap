@@ -559,13 +559,14 @@ impl AVAssetReaderDecoder {
         ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
         tokio_handle: tokio::runtime::Handle,
     ) {
-        let mut this = match AVAssetReaderDecoder::new(path, tokio_handle) {
-            Ok(v) => v,
-            Err(e) => {
-                ready_tx.send(Err(e)).ok();
-                return;
-            }
-        };
+        let mut this =
+            match objc2::rc::autoreleasepool(|_| AVAssetReaderDecoder::new(path, tokio_handle)) {
+                Ok(v) => v,
+                Err(e) => {
+                    ready_tx.send(Err(e)).ok();
+                    return;
+                }
+            };
 
         let video_width = this.decoders[0].inner.width();
         let video_height = this.decoders[0].inner.height();
@@ -606,6 +607,7 @@ impl AVAssetReaderDecoder {
         let mut deferred_requests = VecDeque::<PendingRequest>::new();
 
         loop {
+            let _autorelease_pool = cidre::objc::AutoreleasePoolPage::push();
             let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
             let processing_deferred = !deferred_requests.is_empty();
 
