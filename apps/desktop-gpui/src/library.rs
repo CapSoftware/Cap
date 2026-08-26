@@ -426,12 +426,7 @@ pub fn find_incomplete_recordings_in(
                 let segment_count = std::fs::read_dir(display)
                     .ok()?
                     .filter_map(Result::ok)
-                    .filter(|entry| {
-                        entry
-                            .path()
-                            .extension()
-                            .is_some_and(|extension| extension == "m4s")
-                    })
+                    .filter(|entry| RecoveryManager::is_m4s_complete(&entry.path()))
                     .count();
                 return (segment_count > 0).then_some(IncompleteRecordingItem {
                     project_path: item.path,
@@ -1271,6 +1266,16 @@ mod tests {
         dir
     }
 
+    fn complete_m4s_fragment() -> Vec<u8> {
+        let mut fragment = Vec::new();
+        for name in [b"moof", b"mdat"] {
+            fragment.extend_from_slice(&72u32.to_be_bytes());
+            fragment.extend_from_slice(name);
+            fragment.extend_from_slice(&[0; 64]);
+        }
+        fragment
+    }
+
     #[test]
     fn recents_are_newest_first_and_capped_at_nine() {
         let root = temp_dir("cap");
@@ -1544,9 +1549,10 @@ mod tests {
         );
         if fragments {
             let display = bundle.join("content/segments/segment-0/display");
+            let fragment = complete_m4s_fragment();
             std::fs::create_dir_all(&display).unwrap();
             std::fs::write(display.join("init.mp4"), vec![0u8; 128]).unwrap();
-            std::fs::write(display.join("segment_001.m4s"), vec![1u8; 256]).unwrap();
+            std::fs::write(display.join("segment_001.m4s"), &fragment).unwrap();
             std::fs::write(
                 display.join("manifest.json"),
                 serde_json::to_vec(&serde_json::json!({
@@ -1556,7 +1562,7 @@ mod tests {
                     "segments": [{
                         "path": "segment_001.m4s",
                         "is_complete": true,
-                        "file_size": 256
+                        "file_size": fragment.len()
                     }]
                 }))
                 .unwrap(),
@@ -1648,7 +1654,13 @@ mod tests {
             let display = bundle.join("content/display");
             std::fs::create_dir_all(&display).unwrap();
             std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
-            std::fs::write(display.join("segment_001.m4s"), [0; 16]).unwrap();
+            let fragment = complete_m4s_fragment();
+            std::fs::write(display.join("segment_001.m4s"), &fragment).unwrap();
+            std::fs::write(
+                display.join("segment_002.m4s"),
+                &fragment[..fragment.len() - 1],
+            )
+            .unwrap();
             let items = list_recordings_in(std::slice::from_ref(&root));
             if !recording {
                 assert_eq!(items[0].status, RecordingStatus::NeedsRemux);
@@ -1657,13 +1669,42 @@ mod tests {
             let recoverable = find_incomplete_recordings_in(std::slice::from_ref(&root), None);
             assert_eq!(recoverable.len(), 1);
             assert_eq!(recoverable[0].project_path, bundle);
+            assert_eq!(recoverable[0].segment_count, 1);
             assert!(
                 find_incomplete_recordings_in(std::slice::from_ref(&root), Some(&bundle))
                     .is_empty()
             );
             assert!(display.join("segment_001.m4s").is_file());
+            assert!(display.join("segment_002.m4s").is_file());
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn interrupted_instant_recordings_with_only_partial_fragments_are_not_recoverable() {
+        let root = temp_dir("instant-partial-recovery");
+        let metadata = serde_json::json!({
+            "pretty_name": "Custom instant recording",
+            "sharing": null,
+            "recording": false,
+        })
+        .to_string();
+        let bundle = write_bundle(&root, "deferred-instant", &metadata);
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        let fragment = complete_m4s_fragment();
+        std::fs::write(
+            display.join("segment_001.m4s"),
+            &fragment[..fragment.len() - 1],
+        )
+        .unwrap();
+
+        let recoverable = find_incomplete_recordings_in(std::slice::from_ref(&root), None);
+
+        assert!(recoverable.is_empty());
+        assert!(display.join("segment_001.m4s").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
