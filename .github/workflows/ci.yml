@@ -93,9 +93,13 @@ jobs:
       - uses: ./.github/actions/setup-js
 
       - name: Check Expo dependencies
+        env:
+          EXPO_OFFLINE: "1"
         run: pnpm --dir apps/mobile exec expo install --check
 
       - name: Run Expo Doctor
+        env:
+          EXPO_OFFLINE: "1"
         working-directory: apps/mobile
         run: pnpm dlx expo-doctor@1.20.1
 
