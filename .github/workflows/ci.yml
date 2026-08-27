@@ -270,10 +270,14 @@ jobs:
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
 
-      - name: Test Linux recording and encoder regressions
+      - name: Test Linux desktop regressions
         if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
+          node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
+          pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
+          cargo test --locked -p cap-utils -p cap-cli-install --lib
+          cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-enc-ffmpeg
         env:
