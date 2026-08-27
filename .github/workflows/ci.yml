@@ -185,6 +185,10 @@ jobs:
         shell: bash
         run: node scripts/setup.js
 
+      - name: Test desktop installation and storage helpers
+        shell: bash
+        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
+
       - name: Build desktop binaries
         shell: bash
         run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
@@ -276,7 +280,6 @@ jobs:
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
           pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
-          cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-enc-ffmpeg

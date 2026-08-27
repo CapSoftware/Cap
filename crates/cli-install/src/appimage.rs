@@ -186,7 +186,11 @@ mod tests {
     fn cli_launch_resolves_relative_paths_from_the_original_directory() {
         let parent_directory = std::env::current_dir().unwrap();
         let root = tempfile::tempdir().unwrap();
-        for name in [b"caller's directory".as_slice(), b"caller-\xff".as_slice()] {
+        for name in [
+            b"caller's directory".as_slice(),
+            #[cfg(target_os = "linux")]
+            b"caller-\xff".as_slice(),
+        ] {
             let directory = root.path().join(OsString::from_vec(name.to_vec()));
             fs::create_dir(&directory).unwrap();
             fs::write(directory.join("relative-project.txt"), b"caller project").unwrap();
