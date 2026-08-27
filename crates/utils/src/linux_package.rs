@@ -153,13 +153,14 @@ mod tests {
 
     #[test]
     fn appimage_updates_require_the_current_executable_inside_its_appdir() {
-        let image = Some(Path::new("/home/user/Cap.AppImage"));
-        let directory = Some(Path::new("/tmp/.mount_cap"));
+        let root = std::env::temp_dir().join("cap-linux-package-test");
+        let image = root.join("Cap.AppImage");
+        let directory = root.join(".mount_cap");
         let format = package_format(
-            Path::new("/tmp/.mount_cap/usr/bin/Cap"),
+            &directory.join("usr/bin/Cap"),
             Some("appimage\n"),
-            image,
-            directory,
+            Some(&image),
+            Some(&directory),
             None,
         );
         assert_eq!(
@@ -167,10 +168,10 @@ mod tests {
             "linux-x86_64-appimage"
         );
         let format = package_format(
-            Path::new("/usr/bin/Cap"),
+            &root.join("usr/bin/Cap"),
             Some("rpm\n"),
-            image,
-            directory,
+            Some(&image),
+            Some(&directory),
             None,
         );
         assert_eq!(format, PackageFormat::Rpm);
