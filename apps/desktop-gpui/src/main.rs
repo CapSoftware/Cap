@@ -3,6 +3,8 @@
 //! Milestone 1 is the main recording window (compact + expanded) with real
 //! device enumeration. No tauri, no webview: the whole UI is gpui.
 
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app_windows;
 mod assets;
 mod auth;

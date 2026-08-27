@@ -780,6 +780,24 @@ impl Render for OnboardingWindow {
         self.theme.refresh(window, cx, false);
         let theme = self.theme;
 
+        let header = div().h(px(52.)).w_full().flex_shrink_0();
+        #[cfg(target_os = "windows")]
+        let header = header
+            .flex()
+            .justify_end()
+            .window_control_area(gpui::WindowControlArea::Drag)
+            .child(div().h(px(36.)).child(ui::windows_caption_controls(
+                theme,
+                window.is_window_active(),
+                window.is_maximized(),
+                true,
+                false,
+            )));
+        #[cfg(not(target_os = "windows"))]
+        let header = header.on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            window.start_window_move();
+        });
+
         div()
             .size_full()
             .flex()
@@ -788,12 +806,7 @@ impl Render for OnboardingWindow {
             .bg(Hsla::from(theme.gray_1))
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
-            .child(div().h(px(52.)).w_full().flex_shrink_0().on_mouse_down(
-                gpui::MouseButton::Left,
-                |_, window, _| {
-                    window.start_window_move();
-                },
-            ))
+            .child(header)
             .child(match self.step {
                 Step::Welcome => self.render_welcome(cx).into_any_element(),
                 Step::Permissions => self.render_permissions(cx).into_any_element(),

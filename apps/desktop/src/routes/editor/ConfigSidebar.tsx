@@ -13,6 +13,7 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
+import { createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
 import {
@@ -35,6 +36,7 @@ import {
 	type JSX,
 	lazy,
 	on,
+	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
@@ -49,7 +51,7 @@ import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
 import transparentBg from "~/assets/illustrations/transparent.webp";
 import { Toggle } from "~/components/Toggle";
-import { generalSettingsStore } from "~/store";
+import { animatedGradientsStore, generalSettingsStore } from "~/store";
 import { listSystemFonts } from "~/utils/fonts";
 import { normalizeOpaqueHexColor } from "~/utils/hex-color";
 import {
@@ -58,6 +60,8 @@ import {
 	type OrganizationBrandColorSwatch,
 } from "~/utils/organization-branding";
 import {
+	type AnimatedGradientConfig,
+	type AnimatedGradientLibrary,
 	type BackgroundBlurMode,
 	type BackgroundSource,
 	type CameraShape,
@@ -104,6 +108,10 @@ import IconLucideType from "~icons/lucide/type";
 import IconLucideVideo from "~icons/lucide/video";
 import IconLucideVolume2 from "~icons/lucide/volume-2";
 import IconLucideWind from "~icons/lucide/wind";
+import {
+	AnimatedGradientEditor,
+	copyAnimatedGradientConfig,
+} from "./AnimatedGradientEditor";
 import { AudioLibraryPanel } from "./AudioLibrary";
 import {
 	AUDIO_TRACK_BG_CLASS,
@@ -223,6 +231,7 @@ const BACKGROUND_SOURCES = {
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
+	animatedGradient: "Animated",
 	none: "None",
 } satisfies Record<BackgroundSourceTab, string>;
 
@@ -231,6 +240,7 @@ const BACKGROUND_ICONS = {
 	image: transparentBg,
 	color: colorBg,
 	gradient: gradientBg,
+	animatedGradient: gradientBg,
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_ROW_ONE = [
@@ -242,7 +252,7 @@ const BACKGROUND_SOURCES_ROW_ONE = [
 const BACKGROUND_SOURCES_ROW_TWO = [
 	"color",
 	"gradient",
-	"none",
+	"animatedGradient",
 ] satisfies Array<BackgroundSourceTab>;
 
 const BACKGROUND_IMAGE_ACCEPT =
@@ -1800,13 +1810,86 @@ function BackgroundConfig(props: {
 		createSignal<BackgroundSourceTab>(
 			isNoneBackground() ? "none" : projectBackgroundSourceTab(),
 		);
+	const animatedGradientCatalog = createQuery(() => ({
+		queryKey: ["animated-gradient-catalog"],
+		queryFn: () => commands.animatedGradientCatalog(),
+		staleTime: Number.POSITIVE_INFINITY,
+	}));
+	const animatedGradientLibrary = animatedGradientsStore.createQuery();
+	let lastAnimatedGradient: AnimatedGradientConfig | null =
+		project.background.source.type === "animatedGradient"
+			? copyAnimatedGradientConfig(project.background.source.config)
+			: null;
+	let pendingGradientPreference: Partial<
+		Pick<AnimatedGradientLibrary, "lastUsed" | "selected">
+	> | null = null;
+	let gradientPreferenceTimer: ReturnType<typeof setTimeout> | undefined;
+	let previousSourceType = project.background.source.type;
+	let previouslySelected =
+		previousSourceType === "animatedGradient" &&
+		backgroundSourceTab() !== "none";
+
+	const flushGradientPreference = () => {
+		clearTimeout(gradientPreferenceTimer);
+		gradientPreferenceTimer = undefined;
+		const preference = pendingGradientPreference;
+		pendingGradientPreference = null;
+		if (!preference) return;
+		void animatedGradientsStore.set(preference).catch(() => {
+			toast.error("Could not remember your animated gradient settings");
+		});
+	};
+	const gradientPreferenceFingerprint = createMemo(() => {
+		const source = project.background.source;
+		const value =
+			source.type === "wallpaper" || source.type === "image"
+				? source.type
+				: JSON.stringify(source);
+		return `${backgroundSourceTab() === "none"}:${value}`;
+	});
+	createEffect(
+		on(
+			gradientPreferenceFingerprint,
+			() => {
+				const source = project.background.source;
+				const selected =
+					source.type === "animatedGradient" &&
+					backgroundSourceTab() !== "none";
+				const selectionChanged =
+					previousSourceType !== source.type || previouslySelected !== selected;
+				previousSourceType = source.type;
+				previouslySelected = selected;
+				if (source.type === "animatedGradient") {
+					lastAnimatedGradient = copyAnimatedGradientConfig(source.config);
+					pendingGradientPreference = {
+						lastUsed: lastAnimatedGradient,
+						selected,
+					};
+				} else {
+					pendingGradientPreference = {
+						...pendingGradientPreference,
+						selected,
+					};
+				}
+				clearTimeout(gradientPreferenceTimer);
+				if (selectionChanged) flushGradientPreference();
+				else gradientPreferenceTimer = setTimeout(flushGradientPreference, 200);
+			},
+			{ defer: true },
+		),
+	);
+	onCleanup(flushGradientPreference);
 
 	// "None" is a sticky selection: nudging the padding/rounding sliders must not
-	// swap the panel back to the underlying source tab (that reflow moves the very
-	// slider being dragged), so only re-sync when the user isn't sitting on "None".
+	// reflow the panel under the slider. Undo/presets restoring an animated source
+	// must expose its controls again because None removes that source entirely.
 	createEffect(
 		on(projectBackgroundSourceTab, (tab) => {
-			if (backgroundSourceTab() !== "none") setBackgroundSourceTab(tab);
+			if (
+				backgroundSourceTab() !== "none" ||
+				(tab === "animatedGradient" && !isNoneBackground())
+			)
+				setBackgroundSourceTab(tab);
 		}),
 	);
 
@@ -2052,6 +2135,9 @@ function BackgroundConfig(props: {
 	};
 
 	const renderBackgroundSourceIcon = (item: BackgroundSourceTab) => {
+		if (item === "animatedGradient") {
+			return <IconLucideSparkles class="size-3.5" />;
+		}
 		if (item === "none") {
 			return <IconLucideImageOff class="size-3.5" />;
 		}
@@ -2119,8 +2205,14 @@ function BackgroundConfig(props: {
 	}) => (
 		<KTabs.Trigger
 			value={props.item}
+			disabled={
+				props.item === "animatedGradient" &&
+				(!animatedGradientCatalog.data ||
+					animatedGradientLibrary.isPending ||
+					animatedGradientLibrary.isError)
+			}
 			class={cx(
-				"z-10 flex justify-center items-center gap-1.5 py-2.5 px-2 text-xs whitespace-nowrap text-gray-11 rounded-[10px] border transition-colors duration-200 outline-hidden data-selected:border-gray-3 data-selected:bg-gray-3 data-selected:text-gray-12 not-data-selected:hover:border-gray-7 peer",
+				"z-10 flex justify-center items-center gap-1.5 py-2.5 px-2 text-xs whitespace-nowrap text-gray-11 rounded-[10px] border transition-colors duration-200 outline-hidden data-selected:border-gray-3 data-selected:bg-gray-3 data-selected:text-gray-12 not-data-selected:hover:border-gray-7 disabled:opacity-40 peer",
 				props.class,
 			)}
 		>
@@ -2129,26 +2221,9 @@ function BackgroundConfig(props: {
 		</KTabs.Trigger>
 	);
 
-	const backgrounds: {
-		[K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
-	} = {
-		wallpaper: {
-			type: "wallpaper",
-			path: null,
-		},
-		image: {
-			type: "image",
-			path: null,
-		},
-		color: {
-			type: "color",
-			value: DEFAULT_GRADIENT_FROM,
-		},
-		gradient: {
-			type: "gradient",
-			from: DEFAULT_GRADIENT_FROM,
-			to: DEFAULT_GRADIENT_TO,
-		},
+	let colorBackground: Extract<BackgroundSource, { type: "color" }> = {
+		type: "color",
+		value: DEFAULT_GRADIENT_FROM,
 	};
 
 	const setColorBackgroundSource = (color: string) => {
@@ -2156,13 +2231,13 @@ function BackgroundConfig(props: {
 		if (!rgbValue) return;
 
 		const [r, g, b, a] = rgbValue;
-		backgrounds.color = {
+		colorBackground = {
 			type: "color",
 			value: [r, g, b],
 			alpha: a,
 		};
 
-		setProject("background", "source", backgrounds.color);
+		setProject("background", "source", colorBackground);
 	};
 
 	const setBackgroundBorderColor = (color: string) => {
@@ -2188,15 +2263,38 @@ function BackgroundConfig(props: {
 					value={backgroundSourceTab()}
 					onChange={(v) => {
 						const tab = v as BackgroundSourceTab;
+						if (
+							tab === "animatedGradient" &&
+							(!animatedGradientCatalog.data ||
+								animatedGradientLibrary.isPending ||
+								animatedGradientLibrary.isError)
+						)
+							return;
 						const fromNone = backgroundSourceTab() === "none";
-						setBackgroundSourceTab(tab);
 						if (tab === "none") {
 							batch(() => {
+								const source = project.background.source;
+								if (source.type === "animatedGradient") {
+									lastAnimatedGradient = copyAnimatedGradientConfig(
+										source.config,
+									);
+									pendingGradientPreference = {
+										lastUsed: lastAnimatedGradient,
+										selected: false,
+									};
+									setProject("background", "source", {
+										type: "color",
+										value: [255, 255, 255],
+										alpha: 255,
+									});
+								}
+								setBackgroundSourceTab(tab);
 								setProject("background", "padding", 0);
 								setProject("background", "rounding", 0);
 							});
 							return;
 						}
+						setBackgroundSourceTab(tab);
 						if (tab === "desktop") {
 							const desktopBackground = currentDesktopBackground();
 							if (desktopBackground) {
@@ -2207,6 +2305,18 @@ function BackgroundConfig(props: {
 						}
 						ensureBackgroundPresentation(fromNone);
 						switch (tab) {
+							case "animatedGradient": {
+								const config =
+									lastAnimatedGradient ??
+									animatedGradientLibrary.data?.lastUsed ??
+									animatedGradientCatalog.data?.defaultConfig;
+								if (!config) return;
+								setProject("background", "source", {
+									type: "animatedGradient",
+									config: copyAnimatedGradientConfig(config),
+								});
+								break;
+							}
 							case "image": {
 								setProject("background", "source", {
 									type: "image",
@@ -2277,7 +2387,32 @@ function BackgroundConfig(props: {
 								)}
 							</For>
 						</div>
+						<BackgroundSourceTrigger
+							item="none"
+							class="w-full not-data-selected:border-gray-5"
+						/>
 					</KTabs.List>
+					<Show
+						when={
+							animatedGradientCatalog.isError || animatedGradientLibrary.isError
+						}
+					>
+						<div class="mt-2 flex items-center justify-between gap-2 text-xs">
+							<span role="alert" class="text-red-11">
+								Could not load animated gradients.
+							</span>
+							<button
+								type="button"
+								class="text-gray-12 underline"
+								onClick={() => {
+									void animatedGradientCatalog.refetch();
+									void animatedGradientLibrary.refetch();
+								}}
+							>
+								Retry
+							</button>
+						</div>
+					</Show>
 					{/** Dashed divider */}
 					<div class="my-5 w-full border-t border-dashed border-gray-5" />
 					<KTabs.Content value="desktop">
@@ -2584,17 +2719,13 @@ function BackgroundConfig(props: {
 														if (!rgbValue) return;
 
 														const [r, g, b, a] = rgbValue;
-														backgrounds.color = {
+														colorBackground = {
 															type: "color",
 															value: [r, g, b],
 															alpha: a,
 														};
 
-														setProject(
-															"background",
-															"source",
-															backgrounds.color,
-														);
+														setProject("background", "source", colorBackground);
 													}}
 												/>
 												<div
@@ -2628,6 +2759,11 @@ function BackgroundConfig(props: {
 					</KTabs.Content>
 					<KTabs.Content value="gradient">
 						<GradientEditor brandColorSwatches={props.brandColorSwatches} />
+					</KTabs.Content>
+					<KTabs.Content value="animatedGradient">
+						<AnimatedGradientEditor
+							brandColorSwatches={props.brandColorSwatches}
+						/>
 					</KTabs.Content>
 				</KTabs>
 			</Field>

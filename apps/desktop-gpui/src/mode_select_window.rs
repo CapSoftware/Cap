@@ -238,7 +238,7 @@ impl Render for ModeSelectWindow {
         self.sync_appearance(window, cx);
         let theme = self.theme;
 
-        div()
+        let shell = div()
             .track_focus(&self.focus)
             // `flex flex-col relative justify-center items-center min-h-screen
             //  bg-gray-1`
@@ -302,7 +302,29 @@ impl Render for ModeSelectWindow {
                             .child(self.render_card(Mode::Studio, cx))
                             .child(self.render_card(Mode::Screenshot, cx)),
                     ),
-            )
+            );
+
+        #[cfg(target_os = "windows")]
+        let shell = shell.child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(36.))
+                .flex()
+                .justify_end()
+                .window_control_area(gpui::WindowControlArea::Drag)
+                .child(crate::ui::windows_caption_controls(
+                    theme,
+                    window.is_window_active(),
+                    window.is_maximized(),
+                    true,
+                    false,
+                )),
+        );
+
+        shell
     }
 }
 

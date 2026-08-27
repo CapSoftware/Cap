@@ -53,6 +53,10 @@ pub enum BackgroundSource {
         #[serde(default)]
         animation_speed: Option<f32>,
     },
+    AnimatedGradient {
+        #[serde(deserialize_with = "crate::animated_gradient::deserialize_config")]
+        config: crate::AnimatedGradientConfig,
+    },
 }
 
 fn default_gradient_angle() -> u16 {

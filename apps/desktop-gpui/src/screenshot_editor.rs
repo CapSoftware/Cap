@@ -486,7 +486,9 @@ impl BgTab {
     fn for_source(source: &BackgroundSource) -> Self {
         match source {
             BackgroundSource::Color { .. } => Self::Color,
-            BackgroundSource::Gradient { .. } => Self::Gradient,
+            BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => {
+                Self::Gradient
+            }
             BackgroundSource::Wallpaper { .. } => Self::Wallpaper,
             BackgroundSource::Image { .. } => Self::Image,
         }
@@ -784,7 +786,7 @@ pub(crate) fn has_no_visible_background(source: &BackgroundSource) -> bool {
     match source {
         BackgroundSource::Color { alpha, .. } => *alpha == 0,
         BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => path.is_none(),
-        BackgroundSource::Gradient { .. } => false,
+        BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => false,
     }
 }
 
@@ -2761,7 +2763,7 @@ impl ScreenshotEditorWindow {
     }
 
     /// `Header.tsx:109-216`.
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let crop_enabled = self.image_size.is_some();
         let exporting = self.exporting;
@@ -2772,7 +2774,89 @@ impl ScreenshotEditorWindow {
             ExportStatus::Idle => "Create shareable link",
         };
 
-        div()
+        let tools = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .child(
+                self.anchored(
+                    Anchor::Aspect,
+                    ui::EditorButton::plain(&theme, "screenshot-aspect")
+                        .width(px(80.))
+                        .left_icon("icons/layout.svg")
+                        .icon_size(px(16.))
+                        .label(self.aspect_label())
+                        .right_icon("icons/chevron-down.svg")
+                        .right_icon_end(true)
+                        .pressed(
+                            self.menu
+                                .as_ref()
+                                .is_some_and(|(kind, _)| *kind == MenuKind::Aspect),
+                        )
+                        .tooltip(&theme, "Aspect Ratio")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_menu(MenuKind::Aspect, Anchor::Aspect, window, cx);
+                        })),
+                ),
+            )
+            .child(
+                ui::EditorButton::plain(&theme, "screenshot-crop")
+                    .left_icon("icons/crop.svg")
+                    .icon_size(px(16.))
+                    .disabled(!crop_enabled)
+                    .tooltip(&theme, "Crop Image")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_crop_dialog(window, cx);
+                    })),
+            )
+            .child(divider(&theme, 24.))
+            .child(self.render_annotation_tools(cx))
+            .child(divider(&theme, 24.))
+            .children(
+                [
+                    Popover::Background,
+                    Popover::Padding,
+                    Popover::Rounding,
+                    Popover::Shadow,
+                    Popover::Border,
+                ]
+                .map(|popover| {
+                    let button = ui::EditorButton::plain(&theme, popover.id())
+                        .left_icon(popover.icon())
+                        .icon_size(px(16.))
+                        .pressed(self.active_popover == Some(popover))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_popover(popover, window, cx);
+                        }));
+                    // The `kbd` prop rides the tooltip, which
+                    // `ui::EditorButton` does not carry, so the wrapper the
+                    // popover anchors against owns it instead.
+                    self.anchored(
+                        popover.anchor(),
+                        kbd_tooltip(&theme, popover.tooltip(), popover.keys(), button),
+                    )
+                    .into_any_element()
+                }),
+            );
+        #[cfg(not(target_os = "windows"))]
+        let tools = tools.absolute().top_0().left_0().size_full();
+        #[cfg(target_os = "windows")]
+        let tools = div()
+            .id("screenshot-header-tools")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .h(px(32.))
+            .overflow_x_scroll()
+            .occlude()
+            .child(tools.flex_shrink_0().mx_auto());
+
+        let header = div()
             .relative()
             .flex()
             .flex_row()
@@ -2781,6 +2865,12 @@ impl ScreenshotEditorWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .px(px(16.))
+            .when(cfg!(target_os = "windows"), |header| {
+                header
+                    .pr_0()
+                    .gap(px(8.))
+                    .window_control_area(gpui::WindowControlArea::Drag)
+            })
             .flex_shrink_0()
             .border_b_1()
             .border_color(theme.gray_3)
@@ -2790,86 +2880,14 @@ impl ScreenshotEditorWindow {
                 theme.gray_1
             })
             // The inset traffic lights' spacer (`Header.tsx:115`).
-            .child(div().flex().items_center().child(div().w(px(56.))))
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.child(div().flex().items_center().child(div().w(px(56.))))
+            })
             // `absolute left-1/2 -translate-x-1/2` -- a full-width centred row
             // is the same placement without a transform, and it is not
             // interactive itself, so the right cluster painted after it still
             // takes its own clicks.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(8.))
-                    .child(
-                        self.anchored(
-                            Anchor::Aspect,
-                            ui::EditorButton::plain(&theme, "screenshot-aspect")
-                                .width(px(80.))
-                                .left_icon("icons/layout.svg")
-                                .icon_size(px(16.))
-                                .label(self.aspect_label())
-                                .right_icon("icons/chevron-down.svg")
-                                .right_icon_end(true)
-                                .pressed(
-                                    self.menu
-                                        .as_ref()
-                                        .is_some_and(|(kind, _)| *kind == MenuKind::Aspect),
-                                )
-                                .tooltip(&theme, "Aspect Ratio")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.toggle_menu(MenuKind::Aspect, Anchor::Aspect, window, cx);
-                                })),
-                        ),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "screenshot-crop")
-                            .left_icon("icons/crop.svg")
-                            .icon_size(px(16.))
-                            .disabled(!crop_enabled)
-                            .tooltip(&theme, "Crop Image")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.open_crop_dialog(window, cx);
-                            })),
-                    )
-                    .child(divider(&theme, 24.))
-                    .child(self.render_annotation_tools(cx))
-                    .child(divider(&theme, 24.))
-                    .children(
-                        [
-                            Popover::Background,
-                            Popover::Padding,
-                            Popover::Rounding,
-                            Popover::Shadow,
-                            Popover::Border,
-                        ]
-                        .map(|popover| {
-                            let button = ui::EditorButton::plain(&theme, popover.id())
-                                .left_icon(popover.icon())
-                                .icon_size(px(16.))
-                                .pressed(self.active_popover == Some(popover))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.toggle_popover(popover, window, cx);
-                                }));
-                            // The `kbd` prop rides the tooltip, which
-                            // `ui::EditorButton` does not carry, so the wrapper the
-                            // popover anchors against owns it instead.
-                            self.anchored(
-                                popover.anchor(),
-                                kbd_tooltip(&theme, popover.tooltip(), popover.keys(), button),
-                            )
-                            .into_any_element()
-                        }),
-                    ),
-            )
+            .child(tools)
             .child(
                 div()
                     .flex()
@@ -2878,6 +2896,9 @@ impl ScreenshotEditorWindow {
                     .gap(px(8.))
                     .h_full()
                     .pr(px(8.))
+                    .when(cfg!(target_os = "windows"), |actions| {
+                        actions.h(px(32.)).flex_shrink_0().occlude()
+                    })
                     .child(divider(&theme, 24.))
                     .child(
                         ui::EditorButton::plain(&theme, "screenshot-copy")
@@ -2931,7 +2952,18 @@ impl ScreenshotEditorWindow {
                                 })),
                         ),
                     ),
-            )
+            );
+
+        #[cfg(target_os = "windows")]
+        let header = header.child(ui::windows_caption_controls(
+            theme,
+            _window.is_window_active(),
+            _window.is_maximized(),
+            true,
+            true,
+        ));
+
+        header
     }
 
     // -- Layers panel -----------------------------------------------------------
@@ -3532,6 +3564,16 @@ impl ScreenshotEditorWindow {
 
     fn render_gradient_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if matches!(
+            self.project.background.source,
+            BackgroundSource::AnimatedGradient { .. }
+        ) {
+            return div()
+                .text_size(px(12.))
+                .text_color(theme.gray_11)
+                .child("Animated Gradient is rendered as a still image for screenshots. Choose another background to replace it.")
+                .into_any_element();
+        }
         let (from, to, angle) = match &self.project.background.source {
             BackgroundSource::Gradient {
                 from, to, angle, ..
@@ -4255,7 +4297,7 @@ impl ScreenshotEditorWindow {
     /// `ScreenshotEditorSkeleton` (`screenshot-editor-skeleton.tsx`): the
     /// header's three clusters as `rounded-lg` placeholders, and the Cap logo
     /// spinning over a flat preview.
-    fn render_skeleton(&self) -> impl IntoElement {
+    fn render_skeleton(&self, _window: &Window) -> impl IntoElement {
         let theme = self.theme;
         let block = move |width: f32| {
             div()
@@ -4269,95 +4311,118 @@ impl ScreenshotEditorWindow {
                 })
         };
 
-        div()
-            .size_full()
+        let tools = div()
             .flex()
-            .flex_col()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .child(block(96.))
+            .child(block(36.))
+            .child(divider(&theme, 24.))
+            .children((0..5).map(|_| block(36.)))
+            .child(divider(&theme, 24.))
+            .children((0..5).map(|_| block(36.)));
+        #[cfg(not(target_os = "windows"))]
+        let tools = tools.absolute().top_0().left_0().size_full();
+        #[cfg(target_os = "windows")]
+        let tools = div()
+            .id("screenshot-skeleton-tools")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .h(px(36.))
+            .overflow_x_scroll()
+            .occlude()
+            .child(tools.flex_shrink_0().mx_auto());
+
+        let header = div()
+            .relative()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .h(px(HEADER_HEIGHT))
+            .px(px(16.))
+            .when(cfg!(target_os = "windows"), |header| {
+                header
+                    .pr_0()
+                    .gap(px(8.))
+                    .window_control_area(gpui::WindowControlArea::Drag)
+            })
+            .flex_shrink_0()
+            .border_b_1()
+            .border_color(theme.gray_3)
+            .bg(if theme.is_dark() {
+                theme.gray_2
+            } else {
+                theme.gray_1
+            })
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.child(div().w(px(56.)))
+            })
+            .child(tools)
             .child(
                 div()
-                    .relative()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .justify_between()
-                    .w_full()
-                    .h(px(HEADER_HEIGHT))
-                    .px(px(16.))
-                    .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(theme.gray_3)
-                    .bg(if theme.is_dark() {
-                        theme.gray_2
-                    } else {
-                        theme.gray_1
+                    .gap(px(8.))
+                    .pr(px(8.))
+                    .when(cfg!(target_os = "windows"), |actions| {
+                        actions.flex_shrink_0()
                     })
-                    .child(div().w(px(56.)))
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(8.))
-                            .child(block(96.))
-                            .child(block(36.))
-                            .child(divider(&theme, 24.))
-                            .children((0..5).map(|_| block(36.)))
-                            .child(divider(&theme, 24.))
-                            .children((0..5).map(|_| block(36.))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .pr(px(8.))
-                            .child(divider(&theme, 24.))
-                            .children((0..3).map(|_| block(36.))),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(if theme.is_dark() {
-                        theme.gray_3
-                    } else {
-                        theme.gray_2
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(16.))
-                            .bottom(px(16.))
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .p(px(4.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(theme.gray_4)
-                            .bg(if theme.is_dark() {
-                                theme.gray_3
-                            } else {
-                                theme.gray_1
-                            })
-                            .child(block(36.))
-                            .child(div().w(px(80.)).h(px(8.)).rounded_full().bg(theme.gray_4))
-                            .child(block(36.)),
-                    )
-                    .child(spinning_logo(&theme)),
-            )
+                    .child(divider(&theme, 24.))
+                    .children((0..3).map(|_| block(36.))),
+            );
+
+        #[cfg(target_os = "windows")]
+        let header = header.child(ui::windows_caption_controls(
+            theme,
+            _window.is_window_active(),
+            _window.is_maximized(),
+            true,
+            true,
+        ));
+
+        div().size_full().flex().flex_col().child(header).child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(if theme.is_dark() {
+                    theme.gray_3
+                } else {
+                    theme.gray_2
+                })
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(16.))
+                        .bottom(px(16.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .p(px(4.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme.gray_4)
+                        .bg(if theme.is_dark() {
+                            theme.gray_3
+                        } else {
+                            theme.gray_1
+                        })
+                        .child(block(36.))
+                        .child(div().w(px(80.)).h(px(8.)).rounded_full().bg(theme.gray_4))
+                        .child(block(36.)),
+                )
+                .child(spinning_logo(&theme)),
+        )
     }
 }
 
@@ -4395,10 +4460,10 @@ impl Render for ScreenshotEditorWindow {
             .text_color(theme.gray_12);
 
         if !self.ready {
-            return root.child(self.render_skeleton());
+            return root.child(self.render_skeleton(window));
         }
 
-        root.child(self.render_header(cx))
+        root.child(self.render_header(window, cx))
             .child(
                 div()
                     .flex()

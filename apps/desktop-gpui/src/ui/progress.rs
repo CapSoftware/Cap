@@ -61,17 +61,24 @@ impl CircularProgress {
         self.text_size = size;
         self
     }
+
+    fn percentage_label(&self) -> Option<String> {
+        self.progress
+            .filter(|_| self.label)
+            .map(|fraction| format!("{}%", (fraction * 100.).round() as u32))
+    }
 }
 
 impl RenderOnce for CircularProgress {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let percentage_label = self.percentage_label();
         let CircularProgress {
             progress,
             size,
             stroke,
             track,
             fill,
-            label,
+            label: _,
             text_color,
             text_size,
         } = self;
@@ -131,12 +138,12 @@ impl RenderOnce for CircularProgress {
                         )
                     })
             }))
-            .when(label, |this| {
+            .when_some(percentage_label, |this, label| {
                 this.child(
                     div()
                         .text_size(text_size)
                         .text_color(text_color)
-                        .child(format!("{}%", (fraction * 100.).round() as u32)),
+                        .child(label),
                 )
             })
     }
@@ -144,6 +151,26 @@ impl RenderOnce for CircularProgress {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn indeterminate_progress_has_no_percentage_label() {
+        let ring = CircularProgress::new(px(80.), px(6.), gpui::black(), gpui::white())
+            .label(gpui::white(), px(14.))
+            .indeterminate();
+        assert_eq!(ring.percentage_label(), None);
+    }
+
+    #[test]
+    fn determinate_progress_labels_only_measured_progress() {
+        for (fraction, expected) in [(0., "0%"), (0.25, "25%"), (1., "100%")] {
+            let ring = CircularProgress::new(px(80.), px(6.), gpui::black(), gpui::white())
+                .label(gpui::white(), px(14.))
+                .progress(fraction);
+            assert_eq!(ring.percentage_label().as_deref(), Some(expected));
+        }
+    }
+
     #[test]
     fn quadrant_shares_split_the_fraction_evenly() {
         let share =

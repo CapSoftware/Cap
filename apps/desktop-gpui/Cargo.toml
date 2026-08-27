@@ -153,6 +153,9 @@ dirs = "6"
 # downloaded by either app loads identically in both.
 whisper-rs = "0.11.0"
 
+[build-dependencies]
+tauri-winres = "0.3.5"
+
 [dev-dependencies]
 # The editor smoke (`tests/editor_frame0.rs`) drives `EditorInstance`, whose
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
@@ -167,6 +170,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
+tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",

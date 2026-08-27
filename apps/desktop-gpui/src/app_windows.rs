@@ -613,7 +613,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
             // hand-draws its own.)
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Settings".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: Some(settings_window::TRAFFIC_LIGHTS),
             }),
             // A normal window, not a panel: the Tauri Settings window is an
@@ -758,7 +758,7 @@ pub fn open_onboarding(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Welcome to Cap".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: Some(onboarding_window::TRAFFIC_LIGHTS),
             }),
             kind: WindowKind::Normal,
@@ -892,7 +892,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
             // `TitleBarStyle::Overlay`).
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Mode Selection".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: mode_select_window::TRAFFIC_LIGHTS,
             }),
             // An ordinary window that activates the dock icon
@@ -1007,7 +1007,7 @@ pub fn open_teleprompter(cx: &mut App) {
             // buttons, moved, as on the settings window.
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Teleprompter".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: Some(teleprompter_window::TRAFFIC_LIGHTS),
             }),
             // `alwaysOnTop: true` + `visibleOnAllWorkspaces: true` are applied
@@ -2457,7 +2457,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
             // left group reserves an `h-full w-16` spacer for them.
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Editor".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: editor_window::TRAFFIC_LIGHTS,
             }),
             // An ordinary window that activates the dock icon
@@ -3642,7 +3642,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Screenshot Editor".into()),
-                appears_transparent: !cfg!(target_os = "windows"),
+                appears_transparent: true,
                 traffic_light_position: None,
             }),
             kind: WindowKind::Normal,

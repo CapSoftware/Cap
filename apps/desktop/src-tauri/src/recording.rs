@@ -49,6 +49,7 @@ use std::{
 use tauri::{AppHandle, Manager, path::BaseDirectory};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tracing::*;
 
@@ -3880,6 +3881,19 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
+    if using_default_config {
+        let library = app
+            .store("store")
+            .ok()
+            .and_then(|store| store.get("animated_gradients"))
+            .and_then(|value| serde_json::from_value(value).ok());
+        apply_animated_gradient_default(
+            &mut config,
+            library.as_ref(),
+            using_default_config,
+            capture_target,
+        );
+    }
     config.cursor.size = cap_project::CursorConfiguration::default().size;
     apply_recording_presentation_defaults(
         app,
@@ -4001,6 +4015,24 @@ fn apply_recording_presentation_defaults(
         using_default_config,
         default_wallpaper_path,
     );
+}
+
+fn apply_animated_gradient_default(
+    config: &mut ProjectConfiguration,
+    library: Option<&cap_project::AnimatedGradientLibrary>,
+    using_default_config: bool,
+    capture_target: Option<&ScreenCaptureTarget>,
+) {
+    if using_default_config
+        && !matches!(capture_target, Some(ScreenCaptureTarget::CameraOnly))
+        && let Some(library) = library
+        && library.selected
+        && let Some(gradient) = &library.last_used
+    {
+        config.background.source = cap_project::BackgroundSource::AnimatedGradient {
+            config: gradient.normalized(),
+        };
+    }
 }
 
 const DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT: f64 = 7.5;
@@ -4256,6 +4288,67 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn animated_gradient_default_is_remembered_without_overwriting_explicit_presets() {
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::from_seed(42)),
+            ..Default::default()
+        };
+        let mut project = ProjectConfiguration::default();
+        apply_animated_gradient_default(&mut project, Some(&library), false, None);
+        assert!(matches!(
+            project.background.source,
+            cap_project::BackgroundSource::Color { .. }
+        ));
+        apply_animated_gradient_default(&mut project, Some(&library), true, None);
+        apply_screen_recording_presentation_defaults(
+            &mut project,
+            None,
+            true,
+            Some("wallpaper.jpg".into()),
+        );
+        let cap_project::BackgroundSource::AnimatedGradient { config } = project.background.source
+        else {
+            panic!("Expected remembered gradient");
+        };
+        assert_eq!(Some(config), library.last_used);
+        assert_eq!(project.background.padding, 10.0);
+    }
+
+    #[test]
+    fn deselected_or_missing_animated_gradient_keeps_recording_defaults() {
+        let mut project = ProjectConfiguration::default();
+        let library = cap_project::AnimatedGradientLibrary {
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        apply_animated_gradient_default(&mut project, Some(&library), true, None);
+        apply_animated_gradient_default(&mut project, None, true, None);
+        assert!(matches!(
+            project.background.source,
+            cap_project::BackgroundSource::Color { .. }
+        ));
+    }
+
+    #[test]
+    fn animated_gradient_default_preserves_camera_only_presentation() {
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        let mut project = ProjectConfiguration::default();
+        let original = serde_json::to_value(&project.background).unwrap();
+        apply_animated_gradient_default(
+            &mut project,
+            Some(&library),
+            true,
+            Some(&ScreenCaptureTarget::CameraOnly),
+        );
+        assert_eq!(serde_json::to_value(project.background).unwrap(), original);
+    }
 
     #[test]
     fn recording_start_preflight_requires_authentication_for_instant_recordings() {

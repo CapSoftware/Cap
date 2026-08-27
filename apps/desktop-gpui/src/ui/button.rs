@@ -503,6 +503,7 @@ pub struct IconButton {
     border: Option<Hsla>,
     active: bool,
     disabled: bool,
+    occlude: bool,
     rounded: Option<Pixels>,
     on_click: Option<ClickHandler>,
 }
@@ -523,6 +524,7 @@ impl IconButton {
             border: None,
             active: false,
             disabled: false,
+            occlude: false,
             rounded: None,
             on_click: None,
         }
@@ -532,6 +534,7 @@ impl IconButton {
     /// all, `text-gray-11` going to `text-gray-12` on hover.
     pub fn header(theme: &Theme, id: impl Into<ElementId>, icon: impl Into<SharedString>) -> Self {
         Self {
+            occlude: cfg!(target_os = "windows"),
             size: px(20.),
             icon_size: px(16.),
             idle: theme.gray(11),
@@ -634,12 +637,14 @@ impl RenderOnce for IconButton {
             border,
             active,
             disabled,
+            occlude,
             rounded,
             on_click,
         } = self;
 
         div()
             .id(id)
+            .when(occlude, |this| this.occlude())
             .tab_index(0)
             .flex()
             .items_center()

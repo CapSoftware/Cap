@@ -149,6 +149,7 @@ impl ActiveRecording {
         let mut instant_upload = self.instant_upload;
         match self.handle {
             Handle::Studio(handle) => {
+                let capture_target = handle.capture_target.clone();
                 let completed = handle.stop().await?;
                 let project_path = completed.project_path.clone();
                 let needs_remux = matches!(
@@ -177,6 +178,15 @@ impl ActiveRecording {
                         write_bundle_thumbnail(&project_path, &display_path);
                     }
                     apply_camera_blur_to_project_config(&project_path, current_camera_blur());
+                    let library = serde_json::from_value(serde_json::Value::Object(
+                        crate::store::store_section("animated_gradients"),
+                    ))
+                    .unwrap_or_default();
+                    apply_animated_gradient_to_project_config(
+                        &project_path,
+                        &capture_target,
+                        &library,
+                    );
                 })
                 .await
                 .context("studio post-finalize task")?;
@@ -493,6 +503,97 @@ fn blur_mode_json(blur: crate::store::BlurMode) -> &'static str {
         crate::store::BlurMode::Light => "light",
         crate::store::BlurMode::Heavy => "heavy",
     }
+}
+
+fn apply_animated_gradient_to_project_config(
+    project_dir: &std::path::Path,
+    capture_target: &ScreenCaptureTarget,
+    library: &cap_project::AnimatedGradientLibrary,
+) -> bool {
+    if matches!(capture_target, ScreenCaptureTarget::CameraOnly) || !library.selected {
+        return false;
+    }
+    let Some(gradient) = library.last_used.as_ref() else {
+        return false;
+    };
+    let path = project_dir.join("project-config.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), "could not read new project background: {error}");
+            return false;
+        }
+    };
+    let Ok(mut config) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        tracing::warn!(path = %path.display(), "project config did not parse; keeping its background");
+        return false;
+    };
+    if !apply_initial_animated_gradient(&mut config, gradient) {
+        return false;
+    }
+    let Ok(serialized) = serde_json::to_vec_pretty(&config) else {
+        return false;
+    };
+    let temp = path.with_extension(format!(
+        "animated-gradient-{}.tmp",
+        crate::store::new_uuid_v4()
+    ));
+    if let Err(error) =
+        std::fs::write(&temp, serialized).and_then(|()| std::fs::rename(&temp, &path))
+    {
+        tracing::warn!(path = %path.display(), "could not remember new project background: {error}");
+        let _ = std::fs::remove_file(&temp);
+        return false;
+    }
+    true
+}
+
+fn apply_initial_animated_gradient(
+    project: &mut serde_json::Value,
+    config: &cap_project::AnimatedGradientConfig,
+) -> bool {
+    let Some(background) = project
+        .get_mut("background")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+    let padding = match background.get("padding") {
+        Some(value) => match value.as_f64() {
+            Some(value) if value >= 0. => value,
+            _ => return false,
+        },
+        None => 0.,
+    };
+    let Some(source) = background
+        .get_mut("source")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+    if source.get("type").and_then(serde_json::Value::as_str) != Some("color")
+        || source.get("value") != Some(&serde_json::json!([255, 255, 255]))
+        || source.get("alpha").and_then(serde_json::Value::as_u64) != Some(255)
+    {
+        return false;
+    }
+    let Ok(config) = serde_json::to_value(config.normalized()) else {
+        return false;
+    };
+    let _ = source.insert(
+        "type".into(),
+        serde_json::Value::String("animatedGradient".into()),
+    );
+    let _ = source.insert("config".into(), config);
+    let _ = source.remove("value");
+    let _ = source.remove("alpha");
+    if padding == 0. {
+        let _ = background.insert(
+            "padding".into(),
+            serde_json::json!(crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING),
+        );
+    }
+    true
 }
 
 /// Copy the camera preview's blur toggle into the finished project's
@@ -1315,6 +1416,213 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn test_display_target() -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn animated_gradient_preference_preserves_camera_only_presentation() {
+        let dir = temp_project("animated-camera-only");
+        let path = dir.join("project-config.json");
+        let original = serde_json::to_vec(&cap_project::ProjectConfiguration::default()).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        assert!(!apply_animated_gradient_to_project_config(
+            &dir,
+            &ScreenCaptureTarget::CameraOnly,
+            &library,
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(apply_animated_gradient_to_project_config(
+            &dir,
+            &test_display_target(),
+            &library,
+        ));
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["background"]["source"]["type"], "animatedGradient");
+        assert_eq!(
+            written["background"]["padding"],
+            crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn animated_gradient_preference_is_inactive_without_selection_and_config() {
+        let dir = temp_project("animated-inactive");
+        let path = dir.join("project-config.json");
+        let original = serde_json::to_vec(&cap_project::ProjectConfiguration::default()).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        for library in [
+            cap_project::AnimatedGradientLibrary {
+                selected: false,
+                last_used: Some(cap_project::AnimatedGradientConfig::default()),
+                ..Default::default()
+            },
+            cap_project::AnimatedGradientLibrary {
+                selected: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(!apply_animated_gradient_to_project_config(
+                &dir,
+                &test_display_target(),
+                &library
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn animated_gradient_preference_applies_normalized_config_and_visible_padding() {
+        let dir = temp_project("animated-new-project");
+        let path = dir.join("project-config.json");
+        cap_project::ProjectConfiguration::default()
+            .write(&dir)
+            .unwrap();
+        let mut gradient = cap_project::AnimatedGradientConfig::from_seed(73);
+        gradient.motion_speed = 800.;
+        gradient.flow_scale = 0.;
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(gradient.clone()),
+            ..Default::default()
+        };
+        assert!(apply_animated_gradient_to_project_config(
+            &dir,
+            &test_display_target(),
+            &library
+        ));
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["background"]["source"]["type"], "animatedGradient");
+        assert_eq!(
+            written["background"]["source"]["config"],
+            serde_json::to_value(gradient.normalized()).unwrap()
+        );
+        assert_eq!(
+            written["background"]["padding"],
+            crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING
+        );
+        assert!(!apply_animated_gradient_to_project_config(
+            &dir,
+            &test_display_target(),
+            &library
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn animated_gradient_preference_preserves_unknown_fields_and_edits() {
+        let dir = temp_project("animated-preserve");
+        let path = dir.join("project-config.json");
+        let original = serde_json::json!({
+            "background": {
+                "source": {"type": "color", "value": [255, 255, 255], "alpha": 255, "futureSourceField": 42},
+                "padding": 18.0,
+                "rounding": 27.0,
+                "futureBackgroundField": {"preserved": true}
+            },
+            "timeline": {"segments": [{"recordingClip": 0, "start": 0.0, "end": 3.0}]},
+            "clips": [{"aFutureClipField": [1, 2, 3]}],
+            "camera": {"backgroundBlur": {"mode": "heavy"}},
+            "aFieldFromANewerBuild": 42
+        });
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let gradient = cap_project::AnimatedGradientConfig::default();
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(gradient.clone()),
+            ..Default::default()
+        };
+        assert!(apply_animated_gradient_to_project_config(
+            &dir,
+            &test_display_target(),
+            &library
+        ));
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut expected = original;
+        expected["background"]["source"] = serde_json::json!({
+            "type": "animatedGradient",
+            "config": gradient.normalized(),
+            "futureSourceField": 42
+        });
+        assert_eq!(written, expected);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn animated_gradient_preference_leaves_malformed_projects_untouched() {
+        let dir = temp_project("animated-malformed");
+        let path = dir.join("project-config.json");
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        assert!(!apply_animated_gradient_to_project_config(
+            &dir,
+            &test_display_target(),
+            &library
+        ));
+        assert!(!path.exists());
+        for original in [
+            "{ not valid JSON",
+            "[]",
+            "{}",
+            "{\"background\":[]}",
+            "{\"background\":{\"source\":null}}",
+            "{\"background\":{\"source\":{\"type\":\"color\",\"value\":[255,255,255],\"alpha\":255},\"padding\":\"invalid\"}}",
+        ] {
+            std::fs::write(&path, original).unwrap();
+            assert!(!apply_animated_gradient_to_project_config(
+                &dir,
+                &test_display_target(),
+                &library
+            ));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn animated_gradient_preference_does_not_replace_custom_sources() {
+        let dir = temp_project("animated-custom");
+        let path = dir.join("project-config.json");
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        for source in [
+            serde_json::json!({"type": "wallpaper", "path": "macOS/tahoe-dark"}),
+            serde_json::json!({"type": "image", "path": "custom.png"}),
+            serde_json::json!({"type": "color", "value": [254, 255, 255], "alpha": 255}),
+            serde_json::json!({"type": "color", "value": [255, 255, 255], "alpha": 0}),
+            serde_json::json!({"type": "gradient", "from": [255, 0, 0], "to": [0, 0, 255]}),
+            serde_json::json!({"type": "animatedGradient", "config": cap_project::AnimatedGradientConfig::from_seed(99)}),
+        ] {
+            let original = serde_json::to_vec(
+                &serde_json::json!({"background": {"source": source, "padding": 0}}),
+            )
+            .unwrap();
+            std::fs::write(&path, &original).unwrap();
+            assert!(!apply_animated_gradient_to_project_config(
+                &dir,
+                &test_display_target(),
+                &library
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

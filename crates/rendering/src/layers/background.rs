@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::BackgroundSource;
+use cap_project::{AnimatedGradientConfig, BackgroundSource};
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -9,6 +9,8 @@ use tokio::sync::{Mutex, RwLock};
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline};
+
+use super::AnimatedGradientLayer;
 
 const MAX_BACKGROUND_DIMENSION: u32 = 2560;
 
@@ -262,12 +264,14 @@ pub enum ColorOrGradient {
 pub enum Background {
     Color([f32; 4]),
     Gradient(Gradient),
+    AnimatedGradient(AnimatedGradientConfig),
     Image { path: String },
 }
 
 impl From<BackgroundSource> for Background {
     fn from(value: BackgroundSource) -> Self {
         match value {
+            BackgroundSource::AnimatedGradient { config } => Background::AnimatedGradient(config),
             BackgroundSource::Color { value, alpha } => Background::Color([
                 value[0] as f32 / 255.0,
                 value[1] as f32 / 255.0,
@@ -315,7 +319,7 @@ fn background_source_is_empty(source: &BackgroundSource) -> bool {
         BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
             path.as_deref().map(str::is_empty).unwrap_or(true)
         }
-        BackgroundSource::Gradient { .. } => false,
+        BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => false,
     }
 }
 
@@ -330,6 +334,7 @@ impl Background {
 }
 
 pub enum Inner {
+    AnimatedGradient(Box<AnimatedGradientLayer>),
     Image {
         path: String,
         bind_group: wgpu::BindGroup,
@@ -367,6 +372,16 @@ impl BackgroundLayer {
         let queue = &constants.queue;
 
         match background {
+            Background::AnimatedGradient(config) => match &mut self.inner {
+                Some(Inner::AnimatedGradient(layer)) => {
+                    layer.prepare(device, queue, config, uniforms);
+                }
+                _ => {
+                    self.inner = Some(Inner::AnimatedGradient(Box::new(
+                        AnimatedGradientLayer::new(device, config, uniforms),
+                    )));
+                }
+            },
             Background::Image { path } => {
                 match &self.inner {
                     Some(Inner::Image {
@@ -476,7 +491,17 @@ impl BackgroundLayer {
         Ok(())
     }
 
+    pub fn render_surface(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(Inner::AnimatedGradient(layer)) = &mut self.inner {
+            layer.render_surface(encoder);
+        }
+    }
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(Inner::AnimatedGradient(layer)) = &self.inner {
+            layer.render(pass);
+            return;
+        }
         if let Some(Inner::Image { bind_group, .. }) = &self.inner {
             pass.set_pipeline(&self.image_pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
@@ -698,8 +723,8 @@ impl From<Background> for GradientOrColorUniforms {
                 noise_scale,
                 _padding: 0.0,
             },
-            Background::Image { .. } => {
-                unreachable!("Image backgrounds should be handled separately")
+            Background::Image { .. } | Background::AnimatedGradient(_) => {
+                unreachable!("Textured backgrounds should be handled separately")
             }
         }
     }

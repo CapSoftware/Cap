@@ -43,6 +43,7 @@ const BACKGROUND_SOURCES = {
 	image: "Image",
 	color: "Color",
 	gradient: "Gradient",
+	animatedGradient: "Animated",
 } satisfies Record<BackgroundSource["type"], string>;
 
 const BACKGROUND_SOURCES_LIST = [
@@ -276,6 +277,8 @@ export function BackgroundSettingsPopover() {
 												to: DEFAULT_GRADIENT_TO,
 											};
 											break;
+										default:
+											return;
 									}
 
 									// Try to preserve existing if type matches
@@ -553,6 +556,12 @@ export function BackgroundSettingsPopover() {
 											);
 										}}
 									</Show>
+								</KTabs.Content>
+								<KTabs.Content value="animatedGradient">
+									<p class="text-xs text-gray-11">
+										This screenshot uses a still frame of the animated gradient.
+										Choose another background above to replace it.
+									</p>
 								</KTabs.Content>
 							</KTabs>
 						</Field>

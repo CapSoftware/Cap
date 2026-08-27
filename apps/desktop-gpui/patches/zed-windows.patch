@@ -85,25 +85,50 @@
 +    color.a *= sprite.opacity * saturate(0.5 - distance) * edge_fade_alpha(input.position.xy, sprite.fade);
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -216 +216,5 @@
+@@ -95,0 +96 @@
++    pub(crate) custom_frame: bool,
+@@ -216 +217,5 @@
 -                placement.rcNormalPosition,
 +                translate_rect(
 +                    placement.rcNormalPosition,
 +                    workspace_offset(self.hwnd, self.display.get(), self.scale_factor.get()),
 +                    1,
 +                ),
-@@ -463 +467 @@
+@@ -265,0 +271 @@
++            custom_frame: context.custom_frame,
+@@ -388,0 +395 @@
++    custom_frame: bool,
+@@ -405,0 +413,4 @@
++}
++
++fn custom_frame_enabled(normal_window: bool, transparent_titlebar: Option<bool>) -> bool {
++    normal_window && transparent_titlebar == Some(true)
+@@ -452,0 +464,7 @@
++        let custom_frame = custom_frame_enabled(
++            params.kind == WindowKind::Normal,
++            params
++                .titlebar
++                .as_ref()
++                .map(|titlebar| titlebar.appears_transparent),
++        );
+@@ -463 +481 @@
 -            (WS_EX_TOOLWINDOW, WINDOW_STYLE(0x0))
 +            (WS_EX_TOOLWINDOW, WS_POPUP)
-@@ -465,0 +470,5 @@
-+            if hide_title_bar {
+@@ -465,0 +484,5 @@
++            if hide_title_bar && !custom_frame {
 +                dwstyle |= WS_POPUP;
 +            } else {
 +                dwstyle |= WS_CAPTION;
 +            }
-@@ -550,0 +560 @@
+@@ -482,0 +506,3 @@
++        if custom_frame {
++            dwexstyle |= WS_EX_WINDOWEDGE;
++        }
+@@ -499,0 +526 @@
++            custom_frame,
+@@ -550,0 +578 @@
 +            params.window_min_size,
-@@ -621,2 +631,30 @@
+@@ -621,2 +649,30 @@
 -        let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
 -        let rect = calculate_window_rect(bounds, &self.state.border_offset);
 +        let size = size.to_device_pixels(self.scale_factor());
@@ -136,15 +161,15 @@
 +        if !movable {
 +            flags |= SWP_NOMOVE;
 +        }
-@@ -631,2 +669,2 @@
+@@ -631,2 +687,2 @@
 -                        bounds.origin.x.0,
 -                        bounds.origin.y.0,
 +                        rect.left,
 +                        rect.top,
-@@ -635 +673 @@
+@@ -635 +691 @@
 -                        SWP_NOMOVE,
 +                        flags,
-@@ -637,0 +676,29 @@
+@@ -637,0 +694,29 @@
 +                    .log_err();
 +                }
 +            })
@@ -174,9 +199,9 @@
 +                        LPARAM(position as isize),
 +                    )
 +                    .context("unable to start window move")
-@@ -1510,0 +1578 @@
+@@ -1510,0 +1596 @@
 +    minimum_size: Option<Size<Pixels>>,
-@@ -1524 +1592,10 @@
+@@ -1524 +1610,10 @@
 -    placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
 +    let mut rect = calculate_window_rect(bounds, border_offset);
 +    if !is_tool_window(hwnd) {
@@ -188,7 +213,7 @@
 +    }
 +    placement.rcNormalPosition =
 +        translate_rect(rect, workspace_offset(hwnd, display, scale_factor), -1);
-@@ -1525,0 +1603,54 @@
+@@ -1525,0 +1621,54 @@
 +}
 +
 +fn is_tool_window(hwnd: HWND) -> bool {
@@ -243,13 +268,27 @@
 +        right: left + width,
 +        bottom: top + height,
 +    }
-@@ -1612,2 +1743,2 @@
+@@ -1612,2 +1761,2 @@
 -    use super::ClickState;
 -    use gpui::{DevicePixels, MouseButton, point};
-+    use super::{ClickState, fit_window_rect, translate_rect};
++    use super::{ClickState, custom_frame_enabled, fit_window_rect, translate_rect};
 +    use gpui::{Bounds, DevicePixels, MouseButton, point, size};
-@@ -1614,0 +1746,66 @@
+@@ -1614,0 +1764,80 @@
 +    use windows::Win32::Foundation::RECT;
++
++    #[test]
++    fn custom_frame_requires_a_normal_window_with_an_explicit_transparent_titlebar() {
++        assert!(custom_frame_enabled(true, Some(true)));
++        for (normal_window, transparent_titlebar) in [
++            (true, Some(false)),
++            (true, None),
++            (false, Some(true)),
++            (false, Some(false)),
++            (false, None),
++        ] {
++            assert!(!custom_frame_enabled(normal_window, transparent_titlebar));
++        }
++    }
 +
 +    #[test]
 +    fn expanded_window_moves_above_bottom_taskbar() {
@@ -317,17 +356,30 @@
 +    }
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -847,5 +846,0 @@
+@@ -716,0 +717,12 @@
++        if self.custom_frame && !self.state.is_maximized() {
++            let dpi = unsafe { GetDpiForWindow(handle) };
++            let (frame, top) =
++                custom_frame_insets(get_frame_thicknessx(dpi), dpi, windows_build_number());
++            let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
++            params.rgrc[0].left += frame;
++            params.rgrc[0].top += top;
++            params.rgrc[0].right -= frame;
++            params.rgrc[0].bottom -= frame;
++            return Some(0);
++        }
++
+@@ -847,5 +858,0 @@
 -
 -                // SetWindowPos may not send WM_SIZE for maximized windows in some cases,
 -                // so we manually update the size to ensure proper rendering
 -                let device_size = size(DevicePixels(width), DevicePixels(height));
 -                self.handle_size_change(device_size, new_scale_factor, true);
-@@ -858,3 +852,0 @@
+@@ -858,3 +864,0 @@
 -            // this will emit `WM_SIZE` and `WM_MOVE` right here
 -            // even before this function returns
 -            // the new size is handled in `WM_SIZE`
-@@ -873,0 +866,15 @@
+@@ -873,0 +878,15 @@
 +        }
 +
 +        // SetWindowPos can omit a final WM_SIZE; its outer bounds also include native captions.
@@ -343,3 +395,68 @@
 +                DevicePixels((client_rect.bottom - client_rect.top).max(1)),
 +            );
 +            self.handle_size_change(device_size, self.state.scale_factor.get(), true);
+@@ -1652,0 +1672,26 @@
++fn custom_frame_insets(frame: i32, dpi: u32, windows_build: u32) -> (i32, i32) {
++    let top = if windows_build >= 22000 {
++        (dpi as f32 / 96.).round() as i32
++    } else {
++        0
++    };
++    (frame, top)
++}
++
++fn windows_build_number() -> u32 {
++    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
++
++    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
++    *BUILD.get_or_init(|| {
++        let mut version = OSVERSIONINFOW {
++            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
++            ..Default::default()
++        };
++        if unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) }.is_ok() {
++            version.dwBuildNumber
++        } else {
++            0
++        }
++    })
++}
++
+@@ -1690,0 +1736,37 @@
++
++#[cfg(test)]
++mod tests {
++    use super::custom_frame_insets;
++
++    #[test]
++    fn windows_10_has_no_top_inset_at_any_scale() {
++        for build in [19045, 21999] {
++            for (frame, dpi) in [(8, 96), (10, 120), (12, 144), (16, 192), (24, 288)] {
++                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, 0));
++            }
++        }
++    }
++
++    #[test]
++    fn windows_11_preserves_the_first_client_row_at_each_scale() {
++        for build in [22000, 22621, 26100] {
++            for (frame, dpi, top) in [
++                (8, 96, 1),
++                (10, 120, 1),
++                (12, 144, 2),
++                (14, 168, 2),
++                (16, 192, 2),
++                (20, 240, 3),
++                (24, 288, 3),
++            ] {
++                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, top));
++            }
++        }
++    }
++
++    #[test]
++    fn unknown_windows_build_does_not_restore_a_native_titlebar() {
++        assert_eq!(custom_frame_insets(8, 96, 0), (8, 0));
++        assert_eq!(custom_frame_insets(16, 192, 0), (16, 0));
++    }
++}

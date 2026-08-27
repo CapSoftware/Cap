@@ -1456,7 +1456,7 @@ impl Render for SettingsWindow {
         self.sync_appearance(window, cx);
         let theme = self.theme;
 
-        div()
+        let shell = div()
             .track_focus(&self.focus)
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
@@ -1488,9 +1488,47 @@ impl Render for SettingsWindow {
             .font_family("Geist")
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.settings_text())
+            .text_color(theme.settings_text());
+
+        #[cfg(target_os = "windows")]
+        let shell = shell
+            .flex_col()
+            .child(
+                div()
+                    .h(px(36.))
+                    .w_full()
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_end()
+                    .bg(theme.header_bg())
+                    .border_b_1()
+                    .border_color(theme.header_border())
+                    .window_control_area(gpui::WindowControlArea::Drag)
+                    .child(ui::windows_caption_controls(
+                        theme,
+                        window.is_window_active(),
+                        window.is_maximized(),
+                        true,
+                        true,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(self.render_sidebar(cx))
+                    .child(self.render_content(window, cx)),
+            );
+
+        #[cfg(not(target_os = "windows"))]
+        let shell = shell
             .child(self.render_sidebar(cx))
-            .child(self.render_content(window, cx))
+            .child(self.render_content(window, cx));
+
+        shell
             // Painted last so it lands over the page: the select menus, and
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
