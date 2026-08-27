@@ -138,6 +138,7 @@ pub struct PlaybackHandle {
 }
 
 struct PrefetchedFrame {
+    seek_generation: u64,
     frame_number: u32,
     segment_frames: DecodedSegmentFrames,
     segment_index: u32,
@@ -175,6 +176,33 @@ impl PrefetchedFrame {
             }),
         )
     }
+}
+
+fn receive_prefetched_frame(
+    receiver: &std_mpsc::Receiver<PrefetchedFrame>,
+    seek_generation: u64,
+    timeout: Duration,
+) -> Result<PrefetchedFrame, std_mpsc::RecvTimeoutError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let frame = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        // A completed decode can already be queued when the producer observes a seek.
+        if frame.seek_generation == seek_generation {
+            return Ok(frame);
+        }
+    }
+}
+
+fn should_reset_prefetch(
+    seek_generation: u64,
+    next_frame: u32,
+    requested_generation: u64,
+    requested_frame: u32,
+    has_in_flight: bool,
+) -> bool {
+    requested_generation != seek_generation
+        || requested_frame > next_frame
+        || (requested_frame < next_frame && !has_in_flight)
 }
 
 type CachedTransition = (Arc<DecodedSegmentFrames>, u32, ClipTransitionType, f32);
@@ -360,6 +388,7 @@ struct TransitionDecodeRequest {
 }
 
 struct PrefetchDecodeRequest {
+    seek_generation: u64,
     frame_number: u32,
     decoders: RecordingSegmentDecoders,
     segment_time: f64,
@@ -371,6 +400,7 @@ struct PrefetchDecodeRequest {
 }
 
 type PrefetchDecodeResult = (
+    u64,
     u32,
     u32,
     Option<DecodedSegmentFrames>,
@@ -379,6 +409,7 @@ type PrefetchDecodeResult = (
 
 async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDecodeResult {
     let PrefetchDecodeRequest {
+        seek_generation,
         frame_number,
         decoders,
         segment_time,
@@ -431,7 +462,13 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
     };
     let (segment_frames, transition) = tokio::join!(primary, transition);
 
-    (frame_number, segment_index, segment_frames, transition)
+    (
+        seek_generation,
+        frame_number,
+        segment_index,
+        segment_frames,
+        transition,
+    )
 }
 
 fn transition_decode_request(
@@ -502,7 +539,8 @@ impl Playback {
 
         let (prefetch_tx, prefetch_rx) =
             std_mpsc::sync_channel::<PrefetchedFrame>(PREFETCH_CHANNEL_SIZE);
-        let (frame_request_tx, mut frame_request_rx) = watch::channel(self.start_frame_number);
+        let (frame_request_tx, mut frame_request_rx) =
+            watch::channel((0u64, self.start_frame_number));
         let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
         let prefetch_frame_limit = Arc::new(AtomicUsize::new(INITIAL_PREFETCH_BUFFER_SIZE));
 
@@ -541,7 +579,9 @@ impl Playback {
             }
             type PrefetchFuture =
                 std::pin::Pin<Box<dyn std::future::Future<Output = PrefetchDecodeResult> + Send>>;
-            let mut next_prefetch_frame = *frame_request_rx.borrow();
+            let (mut seek_generation, mut next_prefetch_frame) =
+                *frame_request_rx.borrow_and_update();
+            let mut request_changed = false;
             let mut in_flight: FuturesUnordered<PrefetchFuture> = FuturesUnordered::new();
             let mut frames_decoded: u32 = 0;
             let mut cached_project = prefetch_project.borrow().clone();
@@ -552,28 +592,23 @@ impl Playback {
                     break;
                 }
 
-                if let Some(frame) = pending_frame.take() {
-                    match prefetch_tx.try_send(frame) {
-                        Ok(()) => {}
-                        Err(std_mpsc::TrySendError::Full(frame)) => {
-                            pending_frame = Some(frame);
-                            tokio::select! {
-                                _ = prefetch_stop_rx.changed() => {}
-                                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
-                            }
-                            continue;
-                        }
-                        Err(std_mpsc::TrySendError::Disconnected(_)) => break,
-                    }
-                }
-
                 if prefetch_project.has_changed().unwrap_or(false) {
                     cached_project = prefetch_project.borrow_and_update().clone();
                 }
 
-                if let Ok(true) = frame_request_rx.has_changed() {
-                    let requested = *frame_request_rx.borrow_and_update();
-                    if requested != next_prefetch_frame {
+                if request_changed || frame_request_rx.has_changed().unwrap_or(false) {
+                    request_changed = false;
+                    let (requested_generation, requested) = *frame_request_rx.borrow_and_update();
+                    let generation_changed = requested_generation != seek_generation;
+                    let reset = should_reset_prefetch(
+                        seek_generation,
+                        next_prefetch_frame,
+                        requested_generation,
+                        requested,
+                        !in_flight.is_empty(),
+                    );
+                    seek_generation = requested_generation;
+                    if reset {
                         let old_frame = next_prefetch_frame;
                         let is_backward_seek = requested < old_frame;
                         let seek_distance = if is_backward_seek {
@@ -591,9 +626,38 @@ impl Playback {
 
                         let reset_distance =
                             producer_prefetch_frame_limit.load(Ordering::Relaxed).max(2) as u32 / 2;
-                        if is_backward_seek || seek_distance > reset_distance {
+                        if generation_changed || is_backward_seek || seek_distance > reset_distance
+                        {
                             in_flight = FuturesUnordered::new();
                         }
+                        if generation_changed {
+                            pending_frame = None;
+                        }
+                    }
+                }
+
+                if let Some(frame) = pending_frame.take() {
+                    match prefetch_tx.try_send(frame) {
+                        Ok(()) => {}
+                        Err(std_mpsc::TrySendError::Full(frame)) => {
+                            pending_frame = Some(frame);
+                            tokio::select! {
+                                result = prefetch_stop_rx.changed() => {
+                                    if result.is_err() {
+                                        break;
+                                    }
+                                }
+                                result = frame_request_rx.changed() => {
+                                    if result.is_err() {
+                                        break;
+                                    }
+                                    request_changed = true;
+                                }
+                                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                            }
+                            continue;
+                        }
+                        Err(std_mpsc::TrySendError::Disconnected(_)) => break,
                     }
                 }
 
@@ -663,6 +727,7 @@ impl Playback {
                         }
 
                         in_flight.push(Box::pin(decode_prefetched_frame(PrefetchDecodeRequest {
+                            seek_generation,
                             frame_number: frame_num,
                             decoders,
                             segment_time,
@@ -680,7 +745,19 @@ impl Playback {
                 tokio::select! {
                     biased;
 
-                    Some((frame_num, segment_index, result, transition)) = in_flight.next() => {
+                    result = prefetch_stop_rx.changed() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    result = frame_request_rx.changed() => {
+                        if result.is_err() {
+                            break;
+                        }
+                        request_changed = true;
+                    }
+
+                    Some((generation, frame_num, segment_index, result, transition)) = in_flight.next() => {
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.remove(&frame_num);
                         }
@@ -688,6 +765,7 @@ impl Playback {
 
                         if let Some(segment_frames) = result {
                             let frame = PrefetchedFrame {
+                                seek_generation: generation,
                                 frame_number: frame_num,
                                 segment_frames,
                                 segment_index,
@@ -744,6 +822,7 @@ impl Playback {
 
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
             let mut frame_number = self.start_frame_number;
+            let mut seek_generation = 0;
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(MAX_PREFETCH_BUFFER_SIZE + PREFETCH_CHANNEL_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE, MAX_FRAME_CACHE_BYTES);
@@ -766,7 +845,7 @@ impl Playback {
                 Duration::from_millis(500)
             };
             let warmup_no_frames_timeout = Duration::from_secs(5);
-            let warmup_start = Instant::now();
+            let mut warmup_start = Instant::now();
             let mut first_frame_time: Option<Instant> = None;
             let mut boost_until: Option<Instant> = None;
             let mut starvation_skips = 0u64;
@@ -778,19 +857,14 @@ impl Playback {
                     boost_until,
                 );
 
-                // A seek that lands during warmup retargets the warmup itself:
-                // the buffer keeps only frames at or past the target and the
-                // producer re-anchors through the same watch a mid-playback
-                // seek uses.
                 if seek_rx.has_changed().unwrap_or(false) {
-                    let (_, target) = *seek_rx.borrow_and_update();
-                    if target != frame_number {
-                        frame_number = target;
-                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
-                        let _ = frame_request_tx.send(frame_number);
-                        let _ = playback_position_tx.send(frame_number);
-                        event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-                    }
+                    (seek_generation, frame_number) = *seek_rx.borrow_and_update();
+                    prefetch_buffer.clear();
+                    first_frame_time = None;
+                    warmup_start = Instant::now();
+                    let _ = frame_request_tx.send((seek_generation, frame_number));
+                    let _ = playback_position_tx.send(frame_number);
+                    event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
                 }
 
                 let should_start = if let Some(first_time) = first_frame_time {
@@ -821,7 +895,11 @@ impl Playback {
                     return;
                 }
 
-                match prefetch_rx.recv_timeout(Duration::from_millis(50)) {
+                match receive_prefetched_frame(
+                    &prefetch_rx,
+                    seek_generation,
+                    Duration::from_millis(50),
+                ) {
                     Ok(prefetched) => {
                         if prefetched.frame_number >= frame_number {
                             observe_prefetched_frame(
@@ -836,7 +914,11 @@ impl Playback {
                         while prefetch_buffer.len()
                             < warmup_target_frames.min(prefetch_frame_limit.load(Ordering::Relaxed))
                         {
-                            match prefetch_rx.try_recv() {
+                            match receive_prefetched_frame(
+                                &prefetch_rx,
+                                seek_generation,
+                                Duration::ZERO,
+                            ) {
                                 Ok(p) => {
                                     if p.frame_number >= frame_number {
                                         observe_prefetched_frame(
@@ -859,6 +941,7 @@ impl Playback {
                 .make_contiguous()
                 .sort_by_key(|p| p.frame_number);
 
+            let playback_start_frame = frame_number;
             let mut cached_project = self.project.borrow().clone();
 
             let build_cursor_timelines =
@@ -1050,7 +1133,7 @@ impl Playback {
             while prefetch_buffer.len()
                 < warmup_target_frames.min(prefetch_frame_limit.load(Ordering::Relaxed))
             {
-                match prefetch_rx.try_recv() {
+                match receive_prefetched_frame(&prefetch_rx, seek_generation, Duration::ZERO) {
                     Ok(prefetched) => {
                         if prefetched.frame_number >= frame_number {
                             observe_prefetched_frame(
@@ -1072,7 +1155,7 @@ impl Playback {
                     elapsed: warmup_start.elapsed(),
                     buffered_frames: prefetch_buffer.len(),
                     target_frames: warmup_target_frames,
-                    start_frame_number: self.start_frame_number,
+                    start_frame_number: playback_start_frame,
                 });
             }
 
@@ -1083,6 +1166,7 @@ impl Playback {
             // stream. Blocks until the live callback is consuming the source,
             // so the clock below never runs ahead of audible audio.
             let audio_spawn_start = Instant::now();
+            let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
             let audio_generation = if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
                 info!("No audio segments found, skipping audio playback.");
                 None
@@ -1092,7 +1176,7 @@ impl Playback {
                     music: self.music.clone(),
                     project: self.project.borrow().clone(),
                     duration_secs: duration,
-                    start_playhead_secs: self.start_frame_number as f64 / fps_f64,
+                    start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx,
                 })
             };
@@ -1107,7 +1191,7 @@ impl Playback {
                 });
             }
             let mut start = Instant::now();
-            let mut clock_anchor_frame = self.start_frame_number;
+            let mut clock_anchor_frame = playback_start_frame;
 
             'playback: loop {
                 let limit_now = refresh_prefetch_limit(
@@ -1116,30 +1200,22 @@ impl Playback {
                     boost_until,
                 );
 
-                // A live seek re-anchors the clock in place instead of tearing
-                // the engine down: the producer resets through the same watch
-                // its skip paths use, the last rendered picture holds until
-                // the target's frames arrive, and audio reseats itself off the
-                // playhead watch (>50ms jumps re-seat in render_source_block).
                 if seek_rx.has_changed().unwrap_or(false) {
-                    let (_, target) = *seek_rx.borrow_and_update();
-                    if target != frame_number {
-                        tracing::debug!(from = frame_number, to = target, "playback live seek");
-                        frame_number = target;
-                        clock_anchor_frame = target;
-                        start = Instant::now();
-                        let keep_until = target.saturating_add(limit_now as u32);
-                        prefetch_buffer
-                            .retain(|p| p.frame_number >= target && p.frame_number <= keep_until);
-                        frame_cache.evict_far_from(target, limit_now as u32);
-                        let _ = frame_request_tx.send(target);
-                        let _ = playback_position_tx.send(target);
-                        event_tx.send(PlaybackEvent::Frame(target)).ok();
-                        if has_audio && audio_playhead_tx.send(target as f64 / fps_f64).is_err() {
-                            break 'playback;
-                        }
-                        continue;
+                    let (generation, target) = *seek_rx.borrow_and_update();
+                    tracing::debug!(from = frame_number, to = target, "playback live seek");
+                    seek_generation = generation;
+                    frame_number = target;
+                    clock_anchor_frame = target;
+                    start = Instant::now();
+                    prefetch_buffer.clear();
+                    frame_cache.evict_far_from(target, limit_now as u32);
+                    let _ = frame_request_tx.send((seek_generation, target));
+                    let _ = playback_position_tx.send(target);
+                    event_tx.send(PlaybackEvent::Frame(target)).ok();
+                    if has_audio && audio_playhead_tx.send(target as f64 / fps_f64).is_err() {
+                        break 'playback;
                     }
+                    continue;
                 }
 
                 if self.project.has_changed().unwrap_or(false) {
@@ -1175,7 +1251,7 @@ impl Playback {
                         frame_number,
                         prefetch_frame_limit.load(Ordering::Relaxed) as u32,
                     );
-                    let _ = frame_request_tx.send(frame_number);
+                    let _ = frame_request_tx.send((seek_generation, frame_number));
                     let _ = playback_position_tx.send(frame_number);
                     if let Some(telemetry) = &self.telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
@@ -1201,7 +1277,7 @@ impl Playback {
                 while prefetch_buffer.len() < prefetch_frame_limit.load(Ordering::Relaxed)
                     && drained < drain_budget
                 {
-                    match prefetch_rx.try_recv() {
+                    match receive_prefetched_frame(&prefetch_rx, seek_generation, Duration::ZERO) {
                         Ok(prefetched) => {
                             drained += 1;
                             if prefetched.frame_number >= frame_number {
@@ -1248,14 +1324,21 @@ impl Playback {
                         prefetch_hits += 1;
                         Some(prefetched.into_cached())
                     } else if prefetch_buffer.is_empty() {
-                        let _ = frame_request_tx.send(frame_number);
+                        let _ = frame_request_tx.send((seek_generation, frame_number));
 
                         let wait_ms = if total_frames_rendered < 15 { 20 } else { 8 };
-                        let prefetched_opt = match prefetch_rx
-                            .recv_timeout(Duration::from_millis(wait_ms))
-                        {
+                        let prefetched_opt = match receive_prefetched_frame(
+                            &prefetch_rx,
+                            seek_generation,
+                            Duration::from_millis(wait_ms),
+                        ) {
                             Ok(p) => Some(p),
-                            Err(std_mpsc::RecvTimeoutError::Timeout) => prefetch_rx.try_recv().ok(),
+                            Err(std_mpsc::RecvTimeoutError::Timeout) => receive_prefetched_frame(
+                                &prefetch_rx,
+                                seek_generation,
+                                Duration::ZERO,
+                            )
+                            .ok(),
                             Err(std_mpsc::RecvTimeoutError::Disconnected) => {
                                 break 'playback;
                             }
@@ -1310,7 +1393,7 @@ impl Playback {
                                 total_frames_skipped += 1;
                                 starvation_skips += 1;
                                 boost_until = Some(Instant::now() + BOOST_CLEAN_WINDOW);
-                                let _ = frame_request_tx.send(frame_number);
+                                let _ = frame_request_tx.send((seek_generation, frame_number));
                                 let _ = playback_position_tx.send(frame_number);
                                 if let Some(telemetry) = &self.telemetry {
                                     telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
@@ -1355,7 +1438,11 @@ impl Playback {
                             .load(Ordering::Relaxed)
                             .saturating_add(PREFETCH_CHANNEL_SIZE);
                         while prefetch_buffer.len() < late_drain_limit {
-                            match prefetch_rx.try_recv() {
+                            match receive_prefetched_frame(
+                                &prefetch_rx,
+                                seek_generation,
+                                Duration::ZERO,
+                            ) {
                                 Ok(p) => {
                                     if p.frame_number >= frame_number {
                                         observe_prefetched_frame(
@@ -1617,7 +1704,7 @@ impl Playback {
                         frame_number,
                         prefetch_frame_limit.load(Ordering::Relaxed) as u32,
                     );
-                    let _ = frame_request_tx.send(frame_number);
+                    let _ = frame_request_tx.send((seek_generation, frame_number));
                     let _ = playback_position_tx.send(frame_number);
                     if let Some(telemetry) = &self.telemetry {
                         telemetry.emit(PlaybackTelemetryEvent::FrameSkipped {
@@ -1685,6 +1772,85 @@ mod tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+        }
+    }
+
+    fn prefetched_frame(seek_generation: u64, frame_number: u32) -> PrefetchedFrame {
+        PrefetchedFrame {
+            seek_generation,
+            frame_number,
+            segment_frames: decoded_frames(4),
+            segment_index: 0,
+            transition: None,
+        }
+    }
+
+    #[test]
+    fn backward_seek_discards_queued_frames_from_the_previous_generation() {
+        let (sender, receiver) = std_mpsc::sync_channel(4);
+        for (generation, frame) in [(1, 3000), (1, 480), (2, 480), (2, 481)] {
+            assert!(sender.send(prefetched_frame(generation, frame)).is_ok());
+        }
+
+        let target = receive_prefetched_frame(&receiver, 2, Duration::ZERO).unwrap();
+        assert_eq!(target.frame_number, 480);
+        assert_eq!(target.seek_generation, 2);
+        let next = receive_prefetched_frame(&receiver, 2, Duration::ZERO).unwrap();
+        assert_eq!(next.frame_number, 481);
+    }
+
+    #[test]
+    fn repeated_seeks_to_the_same_frame_require_the_latest_generation() {
+        let (sender, receiver) = std_mpsc::sync_channel(3);
+        for generation in 0..3 {
+            assert!(sender.send(prefetched_frame(generation, 480)).is_ok());
+        }
+
+        let target = receive_prefetched_frame(&receiver, 2, Duration::ZERO).unwrap();
+        assert_eq!(target.seek_generation, 2);
+        assert_eq!(target.frame_number, 480);
+    }
+
+    #[test]
+    fn stale_prefetch_frames_do_not_hide_timeout_or_disconnection() {
+        let (sender, receiver) = std_mpsc::sync_channel(1);
+        assert!(sender.send(prefetched_frame(1, 3000)).is_ok());
+        assert!(matches!(
+            receive_prefetched_frame(&receiver, 2, Duration::ZERO),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        assert!(sender.send(prefetched_frame(1, 3001)).is_ok());
+        drop(sender);
+        assert!(matches!(
+            receive_prefetched_frame(&receiver, 2, Duration::ZERO),
+            Err(std_mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn buffering_retries_preserve_in_flight_decodes() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut in_flight = FuturesUnordered::new();
+        in_flight.push(async move { receiver.await.unwrap() });
+
+        for requested in [480, 481, 482] {
+            if should_reset_prefetch(2, 484, 2, requested, !in_flight.is_empty()) {
+                in_flight = FuturesUnordered::new();
+            }
+        }
+
+        assert!(sender.send(483).is_ok());
+        assert_eq!(in_flight.next().await, Some(483));
+    }
+
+    #[test]
+    fn prefetch_retries_recover_when_idle_and_new_seeks_always_reset() {
+        assert!(should_reset_prefetch(2, 484, 2, 480, false));
+        assert!(should_reset_prefetch(2, 484, 2, 600, true));
+        assert!(!should_reset_prefetch(2, 484, 2, 484, false));
+        for requested in [480, 484, 600] {
+            assert!(should_reset_prefetch(2, 484, 3, requested, true));
         }
     }
 
