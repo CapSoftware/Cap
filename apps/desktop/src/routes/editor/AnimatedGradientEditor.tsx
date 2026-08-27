@@ -26,6 +26,10 @@ import IconLucideSave from "~icons/lucide/save";
 import IconLucideShuffle from "~icons/lucide/shuffle";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
 import IconLucideX from "~icons/lucide/x";
+import {
+	type PointerDragSession,
+	startPointerDrag,
+} from "./animated-gradient-drag";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { hexToRgb, RgbInput } from "./color-utils";
 import { useEditorContext } from "./context";
@@ -189,8 +193,11 @@ export function AnimatedGradientEditor(props: {
 	let disposed = false;
 	let revision = 0;
 	let barRef!: HTMLDivElement;
+	let activeDrag: PointerDragSession | null = null;
 	onCleanup(() => {
 		disposed = true;
+		activeDrag?.cleanup();
+		activeDrag = null;
 	});
 
 	const config = createMemo(() => {
@@ -297,26 +304,26 @@ export function AnimatedGradientEditor(props: {
 		);
 	};
 
-	const dragStop = (index: number, event: PointerEvent) => {
+	const dragStop = (
+		index: () => number | null,
+		event: PointerEvent,
+		options?: { pauseImmediately?: boolean; onStart?: () => void },
+	) => {
 		const target = event.currentTarget as HTMLElement;
-		target.setPointerCapture(event.pointerId);
-		let resume: (() => void) | null = null;
-		const move = (moveEvent: PointerEvent) => {
-			const position = barPosition(moveEvent);
-			if (position === null) return;
-			if (!resume) resume = projectHistory.pause();
-			moveStop(index, position);
-		};
-		const end = () => {
-			target.removeEventListener("pointermove", move);
-			target.removeEventListener("pointerup", end);
-			target.removeEventListener("pointercancel", end);
-			resume?.();
-			resume = null;
-		};
-		target.addEventListener("pointermove", move);
-		target.addEventListener("pointerup", end);
-		target.addEventListener("pointercancel", end);
+		activeDrag?.cleanup();
+		activeDrag = startPointerDrag({
+			target,
+			pointerId: event.pointerId,
+			pauseHistory: projectHistory.pause,
+			pauseImmediately: options?.pauseImmediately,
+			onStart: options?.onStart,
+			onMove: (moveEvent) => {
+				const position = barPosition(moveEvent);
+				const stopIndex = index();
+				if (position !== null && stopIndex !== null)
+					moveStop(stopIndex, position);
+			},
+		});
 	};
 
 	const resetFineTune = () => {
@@ -550,9 +557,18 @@ export function AnimatedGradientEditor(props: {
 									onPointerDown={(event) => {
 										if (event.button !== 0) return;
 										const position = barPosition(event);
-										if (position === null) return;
-										const index = addStop(position);
-										if (index !== null) dragStop(index, event);
+										if (
+											position === null ||
+											current().colorStops.length >= MAX_STOPS
+										)
+											return;
+										let index: number | null = null;
+										dragStop(() => index, event, {
+											pauseImmediately: true,
+											onStart: () => {
+												index = addStop(position);
+											},
+										});
 									}}
 								>
 									<div
@@ -576,7 +592,7 @@ export function AnimatedGradientEditor(props: {
 														if (event.button !== 0) return;
 														event.stopPropagation();
 														setSelectedStop(index);
-														dragStop(index, event);
+														dragStop(() => index, event);
 													}}
 													onKeyDown={(event) => {
 														const step = event.shiftKey ? 10 : 1;

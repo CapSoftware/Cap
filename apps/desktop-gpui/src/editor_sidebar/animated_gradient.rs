@@ -590,19 +590,22 @@ impl EditorWindow {
         let Some(fraction) = ui::fraction_from_x(event.position.x, bounds) else {
             return;
         };
-        let mut inserted = None;
         self.close_color_picker(cx);
+        let Some(mut updated) = self.animated_gradient_config().cloned() else {
+            return;
+        };
+        let Some(index) = insert_stop(&mut updated, fraction * 100.) else {
+            return;
+        };
+        self.begin_animated_gradient_stop_drag(index, cx);
         self.edit_animated_gradient(
             |config| {
-                inserted = insert_stop(config, fraction * 100.);
-                inserted.is_some()
+                *config = updated;
+                true
             },
             window,
             cx,
         );
-        if let Some(index) = inserted {
-            self.begin_animated_gradient_stop_drag(index, cx);
-        }
     }
 
     fn add_animated_gradient_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1404,6 +1407,36 @@ mod tests {
         assert_eq!(stop_limits(&config, 0), (0., 25.));
         assert_eq!(stop_limits(&config, 2), (25., 75.));
         assert_eq!(stop_limits(&config, 4), (75., 100.));
+    }
+
+    #[test]
+    fn adding_and_dragging_a_colour_is_one_history_entry() {
+        let mut config = AnimatedGradientConfig::default();
+        assert!(remove_stop(&mut config, 2));
+        let mut project = ProjectConfiguration::default();
+        project.background.source = BackgroundSource::AnimatedGradient { config };
+        let initial = project.clone();
+        let mut history = crate::editor_edits::ProjectHistory::new(initial.clone());
+        let mut drag = ui::SliderDrag::new();
+        let BackgroundSource::AnimatedGradient { config } = &mut project.background.source else {
+            panic!("expected animated gradient");
+        };
+        let mut updated = config.clone();
+        let index = insert_stop(&mut updated, 40.).unwrap();
+        drag.begin(SliderKey::AnimatedGradientStop(index), || history.pause());
+        *config = updated;
+        history.record(&project);
+        let BackgroundSource::AnimatedGradient { config } = &mut project.background.source else {
+            panic!("expected animated gradient");
+        };
+        config.color_stops[index].position = 50.;
+        history.record(&project);
+        drag.end(|| history.resume(&project));
+        assert_eq!(
+            serde_json::to_value(history.undo().unwrap()).unwrap(),
+            serde_json::to_value(&initial).unwrap()
+        );
+        assert!(!history.can_undo());
     }
 
     #[test]
