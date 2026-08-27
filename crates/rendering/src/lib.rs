@@ -6217,6 +6217,7 @@ impl RendererLayers {
         }
         self.camera.copy_to_texture(encoder);
         self.camera_only.copy_to_texture(encoder);
+        self.background.render_surface(encoder);
 
         {
             let mut pass = render_pass!(

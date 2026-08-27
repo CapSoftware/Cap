@@ -5000,9 +5000,23 @@ fn configure_camera_blur_recovery(
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+fn animated_gradient_catalog() -> cap_project::AnimatedGradientCatalog {
+    cap_project::animated_gradient_catalog()
+}
+
+#[tauri::command]
+#[specta::specta]
+fn random_animated_gradient() -> cap_project::AnimatedGradientConfig {
+    cap_project::AnimatedGradientConfig::random()
+}
+
 fn specta_builder() -> tauri_specta::Builder {
     tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
+            animated_gradient_catalog,
+            random_animated_gradient,
             set_mic_input,
             set_camera_input,
             set_native_camera_preview_enabled,
@@ -5205,6 +5219,7 @@ fn specta_builder() -> tauri_specta::Builder {
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
+        .typ::<cap_project::AnimatedGradientLibrary>()
         .typ::<AuthStore>()
         .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()

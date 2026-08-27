@@ -1741,6 +1741,7 @@ impl EditorWindow {
         // The sidebar's own signals are seeded from the config the instance
         // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
         // initial value reads `background.padding`/`rounding` (`CS:1799-1802`).
+        self.flush_animated_gradient_selection();
         self.sidebar = crate::editor_sidebar::SidebarState::new(&self.project);
         self.sidebar_loaded(window, cx);
         cx.notify();
@@ -2006,11 +2007,26 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let previous_animated_gradient = self.animated_gradient_config().cloned();
+        let animated_background_changed = self.animated_gradient_config()
+            != match &config.background.source {
+                cap_project::BackgroundSource::AnimatedGradient { config } => Some(config),
+                _ => None,
+            }
+            || crate::editor_sidebar::is_none_background(&self.project)
+                != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
         self.rebuild_timeline();
-        self.sync_background_source_tab();
+        if self.animated_gradient_config().is_some() {
+            self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
+        } else {
+            self.sync_background_source_tab();
+        }
         self.publish_project();
         self.schedule_save(window, cx);
+        if animated_background_changed {
+            self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
+        }
         // A segment the undo removed must not stay selected.
         if let Some(selection) = &self.selection
             && let Some(timeline) = self.project.timeline.as_ref()
@@ -5466,10 +5482,15 @@ impl EditorWindow {
             return;
         };
         self.presets_menu = None;
+        self.refresh_animated_gradient_library();
+        let previous_animated_gradient = self.animated_gradient_config().cloned();
         self.edit_project("apply-preset", window, cx, move |project| {
             *project = next.clone();
             true
         });
+        self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
+        self.close_color_picker(cx);
+        self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
     }
 
     /// The submenu's store mutations: everything but Apply and the two
@@ -8279,6 +8300,7 @@ impl Render for EditorWindow {
         // only renders on invalidation, so syncing before creating would leave
         // a brand-new box empty until something else asked for a frame.
         self.prepare_sidebar_fields(window, cx);
+        self.prepare_animated_gradient_fields(window, cx);
         self.sync_hex_inputs(window, cx);
         self.sync_picker_hex(window, cx);
         self.sync_crop_container(window);

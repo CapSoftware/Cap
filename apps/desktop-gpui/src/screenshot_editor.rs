@@ -486,7 +486,9 @@ impl BgTab {
     fn for_source(source: &BackgroundSource) -> Self {
         match source {
             BackgroundSource::Color { .. } => Self::Color,
-            BackgroundSource::Gradient { .. } => Self::Gradient,
+            BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => {
+                Self::Gradient
+            }
             BackgroundSource::Wallpaper { .. } => Self::Wallpaper,
             BackgroundSource::Image { .. } => Self::Image,
         }
@@ -784,7 +786,7 @@ pub(crate) fn has_no_visible_background(source: &BackgroundSource) -> bool {
     match source {
         BackgroundSource::Color { alpha, .. } => *alpha == 0,
         BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => path.is_none(),
-        BackgroundSource::Gradient { .. } => false,
+        BackgroundSource::Gradient { .. } | BackgroundSource::AnimatedGradient { .. } => false,
     }
 }
 
@@ -3532,6 +3534,16 @@ impl ScreenshotEditorWindow {
 
     fn render_gradient_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if matches!(
+            self.project.background.source,
+            BackgroundSource::AnimatedGradient { .. }
+        ) {
+            return div()
+                .text_size(px(12.))
+                .text_color(theme.gray_11)
+                .child("Animated Gradient is rendered as a still image for screenshots. Choose another background to replace it.")
+                .into_any_element();
+        }
         let (from, to, angle) = match &self.project.background.source {
             BackgroundSource::Gradient {
                 from, to, angle, ..
