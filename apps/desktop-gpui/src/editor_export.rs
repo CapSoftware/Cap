@@ -424,7 +424,8 @@ impl EditorWindow {
             compression_bpp: ui.bpp(),
             cursor_only: ui.cursor_only,
         };
-        let force = ui.force_ffmpeg;
+        // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
+        let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
         ui.preview_error = None;
         ui.preview_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
