@@ -34,6 +34,8 @@ runs:
           libpipewire-0.3-dev \
           libspa-0.2-dev \
           libasound2-dev \
+          libasound2-plugins \
+          pulseaudio-utils \
           libdbus-1-dev \
           libudev-dev \
           libx11-dev \
@@ -49,4 +51,8 @@ runs:
           libva-dev \
           xvfb \
           xauth \
+          rpm \
+          cpio \
+          libarchive-tools \
+          zstd \
           patchelf

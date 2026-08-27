@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { createLinuxBundleConfig } from "./linux-bundle-config.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -710,6 +711,32 @@ async function fileExists(path) {
 }
 
 async function writeLinuxTauriConfig(sonameLibs) {
+	const pluginName = "libasound_module_pcm_pulse.so";
+	const pluginDirectories = [
+		`/usr/lib/${arch}-linux-gnu/alsa-lib`,
+		"/usr/lib64/alsa-lib",
+		"/usr/lib/alsa-lib",
+	];
+	let pulsePlugin;
+	for (const directory of pluginDirectories) {
+		const candidate = path.join(directory, pluginName);
+		if (await fileExists(candidate)) {
+			pulsePlugin = candidate;
+			break;
+		}
+	}
+	if (!pulsePlugin) {
+		throw new Error(
+			"The ALSA PulseAudio plugin is required for Linux bundles. Install libasound2-plugins (Debian/Ubuntu), alsa-plugins-pulseaudio (Fedora), or alsa-plugins (Arch).",
+		);
+	}
+	const appimageLibDir = path.join(
+		__root,
+		"target/native-deps/cap-appimage-libs",
+	);
+	await fs.mkdir(appimageLibDir, { recursive: true });
+	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
+
 	const configPath = path.join(
 		__root,
 		"apps",
@@ -717,19 +744,24 @@ async function writeLinuxTauriConfig(sonameLibs) {
 		"src-tauri",
 		"tauri.linux.conf.json",
 	);
-	const files = {};
-
-	for (const name of sonameLibs.toSorted()) {
-		files[`/usr/lib/cap/${name}`] =
-			`../../../target/native-deps/cap-deb-libs/${name}`;
-	}
+	const baseConfig = JSON.parse(
+		await fs.readFile(
+			path.join(path.dirname(configPath), "tauri.conf.json"),
+			"utf8",
+		),
+	);
+	const config = createLinuxBundleConfig(
+		sonameLibs,
+		baseConfig.bundle.linux.deb.files,
+		baseConfig.bundle.linux.deb.depends,
+	);
 
 	await writeFileIfChanged(
 		configPath,
-		`${JSON.stringify({ bundle: { linux: { deb: { files } } } }, null, "\t")}\n`,
+		`${JSON.stringify(config, null, "\t")}\n`,
 	);
 	console.log(
-		`Generated Linux Tauri deb config with ${sonameLibs.length} shared libraries`,
+		`Generated Linux Tauri package configs with ${sonameLibs.length} shared libraries`,
 	);
 }
 
