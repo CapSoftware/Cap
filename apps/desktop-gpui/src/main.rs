@@ -174,6 +174,14 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
+        // Logging starts a worker thread, so configure the process environment first.
+        unsafe {
+            std::env::set_var("ALSA_CONFIG_PATH", config);
+        }
+    }
+
     let _log_guard = init_logging();
 
     // A relaunch means "run the code I just built": take over from any
@@ -234,7 +242,25 @@ fn main() {
                     // traffic lights -- the whole shell is custom-drawn. In gpui a
                     // `None` titlebar drops NSClosable/NSMiniaturizable/NSResizable
                     // from the style mask, which is the equivalent.
+                    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                     titlebar: None,
+                    #[cfg(target_os = "windows")]
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("Cap".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
+                    #[cfg(target_os = "linux")]
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("Cap".into()),
+                        ..Default::default()
+                    }),
+                    #[cfg(target_os = "linux")]
+                    app_id: Some("Cap".into()),
+                    #[cfg(target_os = "linux")]
+                    window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     // Stays `Normal` and gets its panel treatment (level 100,
                     // all Spaces) from `platform::apply_panel_behavior` below.
                     // `WindowKind::Floating` is not the answer: it allocates an
@@ -348,6 +374,10 @@ fn main() {
                         shadow: true,
                     },
                 );
+                #[cfg(target_os = "linux")]
+                if let Err(error) = platform::remove_x11_window_decorations(window) {
+                    tracing::warn!(%error, "could not remove X11 main window decorations");
+                }
                 tracing::info!(
                     number = platform::window_number(window),
                     "main window opened"

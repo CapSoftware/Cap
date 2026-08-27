@@ -97,6 +97,13 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
     cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
     cx.on_action(|_: &ToggleFullscreen, cx: &mut App| {
+        #[cfg(target_os = "windows")]
+        if let Some(handle) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.toggle_fullscreen());
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
         with_key_native(cx, platform::toggle_fullscreen_native)
     });
 

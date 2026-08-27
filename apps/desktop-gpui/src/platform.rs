@@ -1542,7 +1542,13 @@ mod mac {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "windows")]
+pub use windows::*;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod stub {
     use gpui::Window;
 
@@ -1664,6 +1670,52 @@ mod stub {
     }
     pub fn hide_native(_native: &NativeWindow) {}
     pub fn show_native(_native: &NativeWindow) {}
+
+    #[cfg(target_os = "linux")]
+    pub fn remove_x11_window_decorations(window: &Window) -> anyhow::Result<()> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{ConnectionExt, PropMode};
+        use x11rb::wrapper::ConnectionExt as _;
+
+        let window_id = match HasWindowHandle::window_handle(window)?.as_raw() {
+            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+            RawWindowHandle::Xcb(handle) => handle.window.get(),
+            _ => return Ok(()),
+        };
+        let (connection, _) = x11rb::connect(None)?;
+        let atom = connection
+            .intern_atom(false, b"_MOTIF_WM_HINTS")?
+            .reply()?
+            .atom;
+        connection
+            .change_property32(PropMode::REPLACE, window_id, atom, atom, &[2, 0, 0, 0, 0])?
+            .check()?;
+        connection.flush()?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn set_x11_window_visible(window: &Window, visible: bool) -> anyhow::Result<()> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+
+        let window_id = match HasWindowHandle::window_handle(window)?.as_raw() {
+            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+            RawWindowHandle::Xcb(handle) => handle.window.get(),
+            _ => return Ok(()),
+        };
+        let (connection, _) = x11rb::connect(None)?;
+        if visible {
+            connection.map_window(window_id)?.check()?;
+        } else {
+            connection.unmap_window(window_id)?.check()?;
+        }
+        connection.flush()?;
+        Ok(())
+    }
+
     pub fn window_frame(_native: &NativeWindow) -> (f64, f64, f64, f64) {
         (0., 0., 0., 0.)
     }
@@ -1793,7 +1845,7 @@ mod stub {
     pub fn show_about_panel(_name: &str, _version: &str) {}
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub use stub::*;
 
 #[cfg(test)]

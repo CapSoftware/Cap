@@ -405,6 +405,9 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::bind_window(window, cx);
+        #[cfg(target_os = "windows")]
+        cx.observe_window_activation(window, |_, _, cx| cx.notify())
+            .detach();
         let theme = Theme::for_window(window, cx, true);
         let mut previous_phase = Phase::Idle;
         cx.observe_in(&session, window, move |this, session, window, cx| {
@@ -1130,12 +1133,28 @@ impl MainWindow {
         let to = self.window_size();
         tracing::info!(expanded = self.expanded, "toggling main window size");
 
+        #[cfg(target_os = "linux")]
+        let uses_wayland = matches!(
+            raw_window_handle::HasWindowHandle::window_handle(window),
+            Ok(handle) if matches!(handle.as_raw(), raw_window_handle::RawWindowHandle::Wayland(_))
+        );
+
         // Matches `resizeMainWindow`: 180ms, ease-out cubic.
         //
         // Assigning over the previous task drops it, which cancels a toggle
         // that is still in flight -- otherwise two animations would fight over
         // `resize` and the window could settle at an interpolated size.
         self.resize_task = Some(cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            if uses_wayland {
+                // Intermediate sizes and half-pixel center shifts accumulate compositor rounding drift.
+                let height = to.1 + (to.1 - MAIN_WINDOW_HEIGHT).rem_euclid(2.);
+                let _ = this.update_in(cx, |_this, window, _cx| {
+                    window.resize(gpui::size(px(to.0), px(height)));
+                });
+                return;
+            }
+
             let start = std::time::Instant::now();
 
             loop {
@@ -2083,7 +2102,7 @@ impl MainWindow {
     fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
 
-        div()
+        let header = div()
             .flex()
             .flex_row()
             .items_center()
@@ -2094,8 +2113,101 @@ impl MainWindow {
             // `divide-y divide-gray-5` between header and body.
             .border_b_1()
             .border_color(theme.header_border())
-            .child(self.render_traffic_lights(cx))
-            .child(self.render_header_actions(cx))
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.child(self.render_traffic_lights(cx))
+            })
+            .child(self.render_header_actions(cx));
+
+        #[cfg(target_os = "windows")]
+        let header = header.child(self.render_windows_caption_controls(_window, cx));
+
+        header
+    }
+
+    #[cfg(target_os = "windows")]
+    fn render_windows_caption_controls(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let dark = self.theme.is_dark();
+        let foreground = Theme::with_alpha(
+            rgb(if dark { 0xffffff } else { 0x12161f }),
+            if window.is_window_active() { 0.8 } else { 0.4 },
+        );
+        let hover = gpui::rgba(if dark { 0xffffff0d } else { 0x0000000d });
+        let pressed = gpui::rgba(if dark { 0xe9e9e908 } else { 0x00000008 });
+        let button = |id: &'static str, icon: &'static str, height: f32| {
+            div()
+                .id(id)
+                .group(id)
+                .tab_index(0)
+                .w(px(46.))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_default()
+                .hover(move |style| {
+                    style.bg(if id == "caption-close" {
+                        rgb(0xc42b1c)
+                    } else {
+                        hover
+                    })
+                })
+                .active(move |style| {
+                    style.bg(if id == "caption-close" {
+                        gpui::rgba(0xc42b1ce6)
+                    } else {
+                        pressed
+                    })
+                })
+                .child(
+                    svg()
+                        .path(icon)
+                        .id("caption-glyph")
+                        .w(px(10.))
+                        .h(px(height))
+                        .text_color(foreground)
+                        .when(id == "caption-close", |icon| {
+                            icon.group_hover("caption-close", |style| {
+                                style.text_color(gpui::white())
+                            })
+                            .group_active("caption-close", |style| style.text_color(gpui::white()))
+                        }),
+                )
+        };
+
+        div()
+            .flex()
+            .h_full()
+            .flex_shrink_0()
+            .child(
+                button("caption-minimize", "icons/caption-minimize-windows.svg", 1.)
+                    .on_click(|_, window, _| window.minimize_window()),
+            )
+            .child(
+                button(
+                    "caption-maximize",
+                    if self.expanded {
+                        "icons/caption-restore-windows.svg"
+                    } else {
+                        "icons/caption-maximize-windows.svg"
+                    },
+                    if self.expanded { 11. } else { 10. },
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_expanded(window, cx);
+                })),
+            )
+            .child(
+                button("caption-close", "icons/caption-close-windows.svg", 10.).on_click(
+                    cx.listener(|_, _, _, cx| {
+                        cx.defer(app_windows::request_close_main);
+                    }),
+                ),
+            )
     }
 
     /// `CaptionControlsMacOS`: 14px circles (`size-3.5`), 10px apart
@@ -2199,7 +2311,7 @@ impl MainWindow {
             ui::IconButton::header(&theme, id, path).icon_size(px(size))
         };
 
-        div()
+        let actions = div()
             .flex()
             .flex_1()
             .items_center()
@@ -2213,17 +2325,15 @@ impl MainWindow {
                     },
                 )),
             )
-            // The drag handle, and *only* this. The Tauri header puts
-            // `data-tauri-drag-region` on the header and this spacer but not on
-            // the buttons; putting the handler on the header root instead makes
-            // every mouse-down in the header start a window drag, which eats
-            // the button clicks before they are delivered.
+            // Keep drag handlers off the header root: starting native dragging
+            // on a button's mouse-down consumes its later click.
             .child(
                 div()
                     .id("drag-region")
                     .flex_1()
                     .min_w_0()
                     .h_full()
+                    .when(cfg!(target_os = "windows"), |region| region.h(px(20.)))
                     .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                         window.start_window_move();
                     }),
@@ -2300,7 +2410,31 @@ impl MainWindow {
                             },
                         )),
                     ),
-            )
+            );
+
+        #[cfg(target_os = "windows")]
+        let actions = {
+            let drag_strip = |id: &'static str| {
+                div()
+                    .id(id)
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .h(px(6.))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                        window.start_window_move();
+                        cx.stop_propagation();
+                    })
+            };
+
+            actions
+                .relative()
+                .h_full()
+                .child(drag_strip("header-drag-top").top_0())
+                .child(drag_strip("header-drag-bottom").bottom_0())
+        };
+
+        actions
     }
 
     /// Page root: `px-[13px] gap-2 pb-[8px]`.
