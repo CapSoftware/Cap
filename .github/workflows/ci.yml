@@ -280,6 +280,7 @@ jobs:
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
           pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
+          cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib
           cargo test --locked -p cap-enc-ffmpeg
