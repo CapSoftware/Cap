@@ -188,6 +188,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         for name in [
             b"caller's directory".as_slice(),
+            "caller λ".as_bytes(),
             #[cfg(target_os = "linux")]
             b"caller-\xff".as_slice(),
         ] {
