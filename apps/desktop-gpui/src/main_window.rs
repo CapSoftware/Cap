@@ -2103,6 +2103,9 @@ impl MainWindow {
         let theme = self.theme;
 
         let header = div()
+            .when(cfg!(target_os = "windows"), |header| {
+                header.window_control_area(gpui::WindowControlArea::Drag)
+            })
             .flex()
             .flex_row()
             .items_center()
@@ -2180,6 +2183,7 @@ impl MainWindow {
         };
 
         div()
+            .occlude()
             .flex()
             .h_full()
             .flex_shrink_0()
@@ -2327,17 +2331,14 @@ impl MainWindow {
             )
             // Keep drag handlers off the header root: starting native dragging
             // on a button's mouse-down consumes its later click.
-            .child(
-                div()
-                    .id("drag-region")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .when(cfg!(target_os = "windows"), |region| region.h(px(20.)))
-                    .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            .child(div().id("drag-region").flex_1().min_w_0().h_full().when(
+                !cfg!(target_os = "windows"),
+                |region| {
+                    region.on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                         window.start_window_move();
-                    }),
-            )
+                    })
+                },
+            ))
             .child(
                 div()
                     .flex()
@@ -2413,26 +2414,7 @@ impl MainWindow {
             );
 
         #[cfg(target_os = "windows")]
-        let actions = {
-            let drag_strip = |id: &'static str| {
-                div()
-                    .id(id)
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .h(px(6.))
-                    .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
-                        window.start_window_move();
-                        cx.stop_propagation();
-                    })
-            };
-
-            actions
-                .relative()
-                .h_full()
-                .child(drag_strip("header-drag-top").top_0())
-                .child(drag_strip("header-drag-bottom").bottom_0())
-        };
+        let actions = actions.h_full();
 
         actions
     }

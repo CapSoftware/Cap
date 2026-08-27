@@ -6984,7 +6984,7 @@ impl EditorWindow {
         let theme = self.theme;
         let name_focused = self.name_input.read(cx).focus_handle().is_focused(window);
 
-        div()
+        let header = div()
             .relative()
             .flex()
             .flex_row()
@@ -6992,6 +6992,9 @@ impl EditorWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .flex_none()
+            .when(cfg!(target_os = "windows"), |header| {
+                header.window_control_area(gpui::WindowControlArea::Drag)
+            })
             // Left group: `flex flex-row flex-1 gap-2 items-center px-4 h-full`.
             .child(
                 div()
@@ -7003,8 +7006,11 @@ impl EditorWindow {
                     .items_center()
                     .px(px(16.))
                     .h_full()
+                    .when(cfg!(target_os = "windows"), |group| group.occlude())
                     // The macOS spacer for the inset traffic lights: `h-full w-16`.
-                    .child(div().h_full().w(px(64.)).flex_none())
+                    .when(!cfg!(target_os = "windows"), |group| {
+                        group.child(div().h_full().w(px(64.)).flex_none())
+                    })
                     .child(
                         ui::EditorButton::plain(&theme, "delete-recording")
                             .left_icon("icons/trash.svg")
@@ -7065,7 +7071,15 @@ impl EditorWindow {
                                     .child(".cap"),
                             ),
                     )
-                    .child(div().flex_1().h_full()),
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .when(cfg!(target_os = "windows"), |area| {
+                                area.occlude()
+                                    .window_control_area(gpui::WindowControlArea::Drag)
+                            }),
+                    ),
             )
             // Centre group: `flex flex-row items-center justify-center gap-2
             // px-4 border-x border-black-transparent-10`.
@@ -7081,6 +7095,7 @@ impl EditorWindow {
                     .border_l_1()
                     .border_r_1()
                     .border_color(gpui::hsla(0., 0., 0., 0.1))
+                    .when(cfg!(target_os = "windows"), |group| group.occlude())
                     .child(
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
@@ -7111,9 +7126,18 @@ impl EditorWindow {
                     .pl(px(8.))
                     .pr(px(8.))
                     .h_full()
+                    .when(cfg!(target_os = "windows"), |group| group.occlude())
                     .child(self.history_button("editor-undo", "icons/undo.svg", true, cx))
                     .child(self.history_button("editor-redo", "icons/redo.svg", false, cx))
-                    .child(div().flex_1().h_full())
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .when(cfg!(target_os = "windows"), |area| {
+                                area.occlude()
+                                    .window_control_area(gpui::WindowControlArea::Drag)
+                            }),
+                    )
                     // `Button` (gray), `flex gap-1.5 justify-center h-[40px]`.
                     .child(self.render_clips_pill(cx))
                     // `<Show when={hasTranscript()}>` (`Header.tsx:74-77,
@@ -7132,7 +7156,18 @@ impl EditorWindow {
                             .then(|| self.header_pill("icons/captions.svg", "Captions")),
                     )
                     .child(self.render_export_button(cx)),
-            )
+            );
+
+        #[cfg(target_os = "windows")]
+        let header = header.child(ui::windows_caption_controls(
+            theme,
+            window.is_window_active(),
+            window.is_maximized(),
+            true,
+            true,
+        ));
+
+        header
     }
 
     /// The Captions toggle: `Button variant="gray"` at

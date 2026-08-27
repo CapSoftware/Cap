@@ -63,6 +63,7 @@ mod tab_rail;
 pub mod text_input;
 mod toggle;
 mod tooltip;
+mod windows_caption;
 
 // Some of these have no call site in this rev. They are the foundation tier
 // the editor's sidebar unit was blocked on -- `KbdChip` for `EditorButton`'s
@@ -121,3 +122,5 @@ pub use text_input::{
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]
 pub use tooltip::{Tooltip, TooltipStyle};
+#[cfg(target_os = "windows")]
+pub use windows_caption::windows_caption_controls;

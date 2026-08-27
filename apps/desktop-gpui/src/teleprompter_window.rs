@@ -529,7 +529,7 @@ impl Render for TeleprompterWindow {
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(Hsla::from(theme.gray_12))
-            .child(self.render_header())
+            .child(self.render_header(window))
             .child(self.render_body(window, cx))
             .child(self.render_footer(cx))
             // `z-30` on the popover, over a footer that makes no stacking
@@ -553,10 +553,10 @@ impl TeleprompterWindow {
 
     /// `cap-window-header flex h-9 shrink-0 items-center` with the note pushed
     /// to the trailing edge. The traffic lights are AppKit's, at (14, 14).
-    fn render_header(&self) -> impl IntoElement {
+    fn render_header(&self, _window: &Window) -> impl IntoElement {
         let theme = self.theme;
 
-        div()
+        let header = div()
             .flex()
             .flex_row()
             .items_center()
@@ -570,6 +570,14 @@ impl TeleprompterWindow {
                 div()
                     .ml_auto()
                     .mr(px(12.))
+                    .when(cfg!(target_os = "windows"), |note| {
+                        note.flex_1()
+                            .min_w_0()
+                            .ml(px(12.))
+                            .mr(px(4.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                    })
                     .flex()
                     .flex_row()
                     .items_center()
@@ -584,7 +592,20 @@ impl TeleprompterWindow {
                             .text_color(Hsla::from(theme.gray_9)),
                     )
                     .child("This window is hidden from Cap recordings"),
-            )
+            );
+
+        #[cfg(target_os = "windows")]
+        let header = header
+            .window_control_area(gpui::WindowControlArea::Drag)
+            .child(ui::windows_caption_controls(
+                theme,
+                _window.is_window_active(),
+                _window.is_maximized(),
+                true,
+                true,
+            ));
+
+        header
     }
 
     /// `cap-window-body relative min-h-0 flex-1 overflow-hidden`: the script
