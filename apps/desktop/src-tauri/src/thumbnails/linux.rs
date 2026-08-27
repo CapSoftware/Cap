@@ -14,7 +14,7 @@ pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<S
 }
 
 async fn capture_target_thumbnail(target: ScreenCaptureTarget) -> Option<String> {
-    if cap_recording::screenshot::is_pure_wayland_session() {
+    if cap_recording::screenshot::uses_wayland_portal() {
         return None;
     }
 

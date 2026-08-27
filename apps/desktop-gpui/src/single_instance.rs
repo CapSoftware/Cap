@@ -85,20 +85,26 @@ pub fn acquire() {
 }
 
 /// Guard against pid reuse: only ever signal a process that is actually this
-/// binary. `comm` is the executable path on macOS and the (15-char) image
-/// name on Linux; `cap-gpui` fits both.
+/// binary. Linux zombies retain their comm name but lose their exe link.
 #[cfg(unix)]
 fn is_cap_gpui(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
-    std::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && is_cap_gpui_image(Path::new(String::from_utf8_lossy(&output.stdout).trim()))
-        })
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| is_cap_gpui_image(&path))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+            .is_ok_and(|output| {
+                output.status.success()
+                    && is_cap_gpui_image(Path::new(String::from_utf8_lossy(&output.stdout).trim()))
+            })
+    }
 }
 
 fn is_cap_gpui_image(path: &Path) -> bool {
@@ -107,9 +113,12 @@ fn is_cap_gpui_image(path: &Path) -> bool {
     #[cfg(not(windows))]
     const IMAGE_NAME: &str = "cap-gpui";
 
-    path.file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|name| name.eq_ignore_ascii_case(IMAGE_NAME))
+    let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return false;
+    };
+    #[cfg(target_os = "linux")]
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+    name.eq_ignore_ascii_case(IMAGE_NAME)
 }
 
 #[cfg(windows)]
@@ -449,6 +458,56 @@ mod tests {
         assert!(is_cap_gpui_image(Path::new(&name.to_ascii_uppercase())));
         assert!(!is_cap_gpui_image(Path::new("not-cap-gpui")));
         assert!(!is_cap_gpui_image(Path::new("cap-gpui-helper")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_check_distinguishes_live_unlinked_and_exited_processes() {
+        let directory = std::env::temp_dir().join(format!(
+            "cap-gpui-process-test-{}",
+            crate::store::new_uuid_v4()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let binary = directory.join("cap-gpui");
+        std::fs::copy("/bin/sleep", &binary).unwrap();
+        let mut child = std::process::Command::new(&binary)
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let started = std::time::Instant::now();
+        // spawn can return before /proc stops exposing the child's pre-exec image.
+        while !std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| path == binary)
+            && started.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let live = super::is_cap_gpui(pid);
+        std::fs::remove_file(&binary).unwrap();
+        let unlinked = super::is_cap_gpui(pid);
+        child.kill().unwrap();
+        let started = std::time::Instant::now();
+        let mut zombie = false;
+        while started.elapsed() < std::time::Duration::from_secs(5) {
+            zombie = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, state)| state.starts_with('Z'))
+            });
+            if zombie {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let exited = super::is_cap_gpui(pid);
+        child.wait().unwrap();
+        std::fs::remove_dir(directory).unwrap();
+
+        assert!(live);
+        assert!(unlinked);
+        assert!(zombie);
+        assert!(!exited);
+        assert!(!super::is_cap_gpui(pid));
+        assert!(!super::is_cap_gpui(std::process::id() as i32));
     }
 
     #[test]

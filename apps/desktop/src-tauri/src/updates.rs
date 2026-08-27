@@ -69,22 +69,25 @@ fn current_channel(app: &AppHandle) -> UpdateChannel {
         .unwrap_or_default()
 }
 
-// Mirrors `updaterTarget()` in src/utils/updater.ts; the plugin's built-in
-// target reports "macos"/"linux" while CrabNebula releases are keyed on
-// "darwin-*" / "linux-*-deb".
-fn updater_target() -> String {
+fn updater_target() -> Result<String, String> {
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else {
         "x86_64"
     };
 
-    if cfg!(target_os = "macos") {
-        format!("darwin-{arch}")
-    } else if cfg!(target_os = "linux") {
-        format!("linux-{arch}-deb")
-    } else {
-        format!("windows-{arch}")
+    #[cfg(target_os = "linux")]
+    {
+        cap_utils::linux_package::updater_target(arch)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let platform = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "windows"
+        };
+        Ok(format!("{platform}-{arch}"))
     }
 }
 
@@ -103,7 +106,7 @@ async fn check_channel(
 ) -> Result<Option<Update>, String> {
     let builder = app
         .updater_builder()
-        .target(updater_target())
+        .target(updater_target()?)
         .endpoints(vec![endpoint(channel)?])
         .map_err(|e| e.to_string())?;
 

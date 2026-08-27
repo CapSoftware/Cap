@@ -235,7 +235,7 @@ jobs:
               console.error("package.version line not found in " + path);
               process.exit(1);
             }
-            toml = toml.replace(re, `version = "${version}"`);
+            toml = toml.replace(re, "version = \"" + version + "\"");
             fs.writeFileSync(path, toml);
             console.log("Stamped " + path + " with " + version);
           '
@@ -340,7 +340,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 ' || '' }}pnpm build:tauri --target ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--bundles deb --verbose' || '' }}
+        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || 'pnpm build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
@@ -426,12 +426,6 @@ jobs:
           fi
           echo "Frontend build output OK ($FE, $(wc -c < "$FE") bytes)"
 
-          UNSUPPORTED_ARTIFACT="$(find target/${{ matrix.settings.target }}/release/bundle -type f \( -name '*.AppImage' -o -name '*.rpm' \) -print -quit)"
-          if [[ -n "$UNSUPPORTED_ARTIFACT" ]]; then
-            echo "::error::Unexpected Linux non-deb artifact produced: $UNSUPPORTED_ARTIFACT"
-            exit 1
-          fi
-
           DEB="$(find target/${{ matrix.settings.target }}/release/bundle/deb -name '*.deb' | head -n1)"
           if [[ -z "$DEB" ]]; then echo "::error::No .deb produced"; exit 1; fi
           if [[ ! -s "$DEB.sig" ]]; then echo "::error::No .deb updater signature produced next to $DEB"; exit 1; fi
@@ -450,7 +444,7 @@ jobs:
           done
 
           GPUI_RPATH="$(objdump -p "$WORK/usr/bin/cap-gpui" | awk '/RPATH|RUNPATH/{print $2}')"
-          if [[ "$GPUI_RPATH" != *'$ORIGIN/../lib/cap'* ]]; then
+          if [[ "$GPUI_RPATH" != *"\$ORIGIN/../lib/cap"* ]]; then
             echo "::error::The bundled GPUI executable cannot resolve shared libraries from /usr/lib/cap"
             exit 1
           fi
@@ -464,7 +458,6 @@ jobs:
           fi
 
           # (2) every FFmpeg soname the binary NEEDs is bundled
-          BIN="$WORK/usr/bin/Cap"
           NEEDED="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' | sort -u || true)"
           echo "Binary NEEDs FFmpeg sonames:"; echo "${NEEDED:-(none)}"
           echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
@@ -518,6 +511,73 @@ jobs:
             exit 1
           fi
           echo "Runtime dependency declarations OK"
+
+      - name: Verify Linux RPM and AppImage contents
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          CAP_RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          BUNDLE="${{ github.workspace }}/target/${{ matrix.settings.target }}/release/bundle"
+          RPM="$BUNDLE/rpm/Cap-$CAP_RELEASE_VERSION-1.x86_64.rpm"
+          APPIMAGE="$BUNDLE/appimage/Cap_${CAP_RELEASE_VERSION}_amd64.AppImage"
+          test -s "$APPIMAGE.sig"
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          mkdir "$WORK/rpm" "$WORK/appimage"
+          (cd "$WORK/appimage" && "$APPIMAGE" --appimage-extract > /dev/null)
+          APPROOT="$WORK/appimage/squashfs-root"
+          ROOTS=("$APPROOT")
+          if [[ "$CAP_RELEASE_VERSION" != *-* ]]; then
+            test -s "$RPM"
+            test "$(rpm -qp --queryformat '%{VERSION}-%{RELEASE}' "$RPM")" = "$CAP_RELEASE_VERSION-1"
+            rpm -Kv "$RPM"
+            bsdtar -xf "$RPM" -C "$WORK/rpm"
+            test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
+            ROOTS+=("$WORK/rpm")
+          fi
+          for ROOT in "${ROOTS[@]}"; do
+            for binary in Cap cap-muxer cap-exporter cap-cli cap-gpui; do
+              test -x "$ROOT/usr/bin/$binary"
+              while read -r soname; do
+                test -f "$ROOT/usr/lib/cap/$soname"
+              done < <(objdump -p "$ROOT/usr/bin/$binary" | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' || true)
+            done
+          done
+          test "$(cat "$APPROOT/usr/lib/cap/package-format")" = appimage
+          test -x "$APPROOT/usr/bin/pactl"
+          test -s "$APPROOT/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
+          test -s "$APPROOT/usr/lib/cap/alsa-pulse.conf"
+          if [[ -n "$(find "$APPROOT" -name 'libwayland-client.so*' -print -quit)" ]]; then
+            echo "::error::AppImage bundles a Wayland client that can conflict with host Mesa drivers"
+            exit 1
+          fi
+          if [[ -n "$(find "$APPROOT/usr/lib" -maxdepth 1 -name 'libpipewire-0.3.so*' -print -quit)" ]]; then
+            echo "::error::AppImage bundles PipeWire that can conflict with host ALSA plugins"
+            exit 1
+          fi
+
+      - name: Build Arch Linux package
+        id: build_arch
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="target/${{ matrix.settings.target }}/release/bundle"
+          mkdir -p "$BUNDLE/arch"
+          docker run --rm --network none \
+            --env CAP_PACKAGE_UID="$(id -u)" \
+            --volume "${{ github.workspace }}:/source:ro" \
+            --volume "${{ github.workspace }}/$BUNDLE/arch:/output" \
+            archlinux:base-devel@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d \
+            bash -c 'useradd --uid "$CAP_PACKAGE_UID" --create-home cap-package && runuser -u cap-package -- bash /source/scripts/build-linux-arch-package.sh "$1" /output' \
+            bash "/source/$BUNDLE/deb/Cap_${{ inputs.version }}_amd64.deb"
+          PACKAGES=("$BUNDLE/arch/"*.pkg.tar.zst)
+          test "${#PACKAGES[@]}" -eq 1
+          test -s "${PACKAGES[0]}"
+          test "$(bsdtar -xOf "${PACKAGES[0]}" usr/lib/cap/package-format)" = arch
+          echo "package=../../${PACKAGES[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Verify Windows installer contents
         if: ${{ runner.os == 'Windows' }}
@@ -657,6 +717,30 @@ jobs:
         with:
           working-directory: apps/desktop
           command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "../../target/${{ matrix.settings.target }}/release/bundle/deb/Cap_${{ inputs.version }}_amd64.deb" --signature "../../target/${{ matrix.settings.target }}/release/bundle/deb/Cap_${{ inputs.version }}_amd64.deb.sig" --public-platform deb-x86_64 --update-platform linux-x86_64-deb ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Linux AppImage asset
+        if: ${{ runner.os == 'Linux' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          working-directory: apps/desktop
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "../../target/${{ matrix.settings.target }}/release/bundle/appimage/Cap_${{ inputs.version }}_amd64.AppImage" --signature "../../target/${{ matrix.settings.target }}/release/bundle/appimage/Cap_${{ inputs.version }}_amd64.AppImage.sig" --public-platform appimage-x86_64 --update-platform linux-x86_64-appimage ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Linux RPM asset
+        if: ${{ runner.os == 'Linux' && !contains(inputs.version, '-') }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          working-directory: apps/desktop
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "../../target/${{ matrix.settings.target }}/release/bundle/rpm/Cap-${{ inputs.version }}-1.x86_64.rpm" --public-platform rpm-x86_64 ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Arch Linux asset
+        if: ${{ runner.os == 'Linux' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          working-directory: apps/desktop
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.build_arch.outputs.package }}" --public-platform pacman-x86_64 ${{ env.CN_CHANNEL_FLAG }}
           api-key: ${{ secrets.CN_API_KEY }}
 
       - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e

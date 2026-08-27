@@ -442,10 +442,11 @@ impl CameraPreviewView {
         frame: Arc<gpui::RenderImage>,
         dims: (usize, usize),
         cx: &mut Context<Self>,
-    ) {
-        self.latest_frame = Some(frame);
+    ) -> Option<Arc<gpui::RenderImage>> {
+        let previous = self.latest_frame.replace(frame);
         self.frame_dims = Some(dims);
         cx.notify();
+        previous
     }
 
     fn set_chrome(&mut self, radius: f32, size: f32, cx: &mut Context<Self>) {
@@ -509,6 +510,7 @@ impl Render for CameraPreviewView {
             container = container.child(
                 gpui::img(image)
                     .size_full()
+                    .rounded(px(radius))
                     .object_fit(gpui::ObjectFit::Cover),
             );
         }
@@ -659,6 +661,13 @@ impl CameraWindow {
         // `document.documentElement.classList.toggle("dark", true)`
         // (`camera.tsx:128`): the bubble is always dark, whatever the app
         // theme preference says.
+        #[cfg(target_os = "windows")]
+        platform::apply_window_theme(
+            window,
+            platform::ForcedAppearance::Dark,
+            cx.foreground_executor(),
+        );
+        #[cfg(not(target_os = "windows"))]
         platform::apply_window_theme(window, platform::ForcedAppearance::Dark);
         let theme = Theme::dark();
         let state = store::load().camera_window.unwrap_or_default();
@@ -790,9 +799,12 @@ impl CameraWindow {
             let first_frame = self.frame_dims.is_none();
             let dims_changed = self.frame_dims != Some(frame.dims);
             self.frame_dims = Some(frame.dims);
-            self.preview.update(cx, |preview, cx| {
+            let previous = self.preview.update(cx, |preview, cx| {
                 preview.set_frame(frame.image, frame.dims, cx)
             });
+            if let Some(previous) = previous {
+                let _ = window.drop_image(previous);
+            }
             if dims_changed {
                 self.apply_window_size(window, cx);
                 cx.notify();
@@ -997,6 +1009,23 @@ impl CameraWindow {
             }
         }
 
+        #[cfg(target_os = "windows")]
+        if let Some(native) = platform::native_window(window) {
+            cx.spawn(async move |_, _| {
+                platform::set_window_logical_frame(
+                    &native,
+                    f64::from(new_x),
+                    f64::from(new_y),
+                    f64::from(width),
+                    f64::from(height),
+                );
+            })
+            .detach();
+        } else {
+            window.resize(size(px(width), px(height)));
+        }
+
+        #[cfg(not(target_os = "windows"))]
         if let Some(native) = platform::native_window(window) {
             let (frame_x, frame_y, _, frame_height) = platform::window_frame(&native);
             // AppKit y grows upward: keep the gpui-space top edge, then apply

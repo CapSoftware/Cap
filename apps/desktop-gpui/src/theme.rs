@@ -67,15 +67,23 @@ fn forced_appearance(preference: AppTheme) -> ForcedAppearance {
 /// `window.set_theme(...)` — native chrome (traffic lights, materials, menus)
 /// follows the preference, not only the painted palette.
 pub fn apply_native(window: &Window, cx: &App) {
-    platform::apply_window_theme(window, forced_appearance(current_preference(cx)));
+    let appearance = forced_appearance(current_preference(cx));
+    #[cfg(target_os = "windows")]
+    platform::apply_window_theme(window, appearance, cx.foreground_executor());
+    #[cfg(not(target_os = "windows"))]
+    platform::apply_window_theme(window, appearance);
 }
 
 /// Force the native appearance and invalidate on OS theme changes so a System
 /// preference picks up a light/dark flip without waiting for another event.
 pub fn bind_window<T: 'static>(window: &mut Window, cx: &mut Context<T>) {
     apply_native(window, cx);
-    cx.observe_window_appearance(window, |_, _, cx| cx.notify())
-        .detach();
+    cx.observe_window_appearance(window, |_, _window, cx| {
+        #[cfg(target_os = "windows")]
+        _window.defer(cx, |window, cx| apply_native(window, cx));
+        cx.notify();
+    })
+    .detach();
 }
 
 /// What the shell paints *over* a native window material, resolved for one

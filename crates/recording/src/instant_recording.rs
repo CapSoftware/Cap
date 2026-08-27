@@ -1,5 +1,8 @@
 #[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
+#[cfg(target_os = "linux")]
+mod linux_camera;
+
 use crate::{
     RecordingBaseInputs,
     capture_pipeline::{
@@ -307,15 +310,27 @@ pub struct CompletedRecording {
     pub health: crate::RecordingHealth,
 }
 
+struct ScreenPipelineInput {
+    source: crate::sources::screen_capture::VideoSourceConfig,
+    info: VideoInfo,
+    #[cfg(target_os = "linux")]
+    camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
+}
+
 async fn create_pipeline(
     content_dir: PathBuf,
-    screen_capture: crate::sources::screen_capture::VideoSourceConfig,
-    screen_info: cap_media_info::VideoInfo,
+    screen: ScreenPipelineInput,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
+    let ScreenPipelineInput {
+        source: screen_capture,
+        info: screen_info,
+        #[cfg(target_os = "linux")]
+        camera_feed,
+    } = screen;
     let output_resolution = max_output_size
         .map(|max_output_size| {
             clamp_size(
@@ -343,6 +358,7 @@ async fn create_pipeline(
 
     let segment_tx_for_video = segment_channel.as_ref().map(|(tx, _)| tx.clone());
 
+    #[cfg(not(target_os = "linux"))]
     let video = ScreenCaptureMethod::make_instant_segmented_video_pipeline(
         screen_capture,
         segments_dir.clone(),
@@ -352,11 +368,42 @@ async fn create_pipeline(
     )
     .await?;
 
+    #[cfg(target_os = "linux")]
+    let video = if let Some(camera_feed) = camera_feed {
+        OutputPipeline::builder(segments_dir.clone())
+            .with_video::<linux_camera::CameraCompositeSource>(linux_camera::Config {
+                screen_capture,
+                camera_feed,
+            })
+            .with_timestamps(start_time)
+            .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: std::time::Duration::from_secs(2),
+                preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
+                output_size: Some(output_resolution),
+                shared_pause_state: None,
+                segment_tx: segment_tx_for_video,
+            })
+            .await?
+    } else {
+        ScreenCaptureMethod::make_instant_segmented_video_pipeline(
+            screen_capture,
+            segments_dir.clone(),
+            output_resolution,
+            start_time,
+            segment_tx_for_video,
+        )
+        .await?
+    };
+
     let has_audio = mic_feed.is_some() || system_audio_source.is_some();
     let audio = if has_audio {
         let audio_dir = content_dir.join("audio");
         let mut builder =
             output_pipeline::OutputPipeline::builder(audio_dir.clone()).with_timestamps(start_time);
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder.with_audio_anchor(output_pipeline::AudioAnchor::PipelineEpoch);
+        }
 
         if let Some(sys_audio) = system_audio_source {
             builder = builder
@@ -413,6 +460,8 @@ pub struct ActorBuilder {
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<crate::feeds::camera::CameraFeedLock>>,
+    #[cfg(target_os = "linux")]
+    composite_camera: bool,
     max_output_size: Option<u32>,
     max_fps: u32,
     #[cfg(target_os = "macos")]
@@ -427,6 +476,8 @@ impl ActorBuilder {
             system_audio: false,
             mic_feed: None,
             camera_feed: None,
+            #[cfg(target_os = "linux")]
+            composite_camera: false,
             max_output_size: None,
             max_fps: crate::defaults::DEFAULT_INSTANT_MODE_FPS,
             #[cfg(target_os = "macos")]
@@ -457,6 +508,12 @@ impl ActorBuilder {
         self
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn with_linux_camera_composition(mut self) -> Self {
+        self.composite_camera = true;
+        self
+    }
+
     pub fn with_max_fps(mut self, max_fps: u32) -> Self {
         self.max_fps = max_fps.clamp(1, 120);
         self
@@ -472,7 +529,7 @@ impl ActorBuilder {
         self,
         #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
-        spawn_instant_recording_actor(
+        spawn_instant_recording_actor_inner(
             self.output_path,
             RecordingBaseInputs {
                 capture_target: self.capture_target,
@@ -486,17 +543,37 @@ impl ActorBuilder {
             },
             self.max_output_size,
             self.max_fps,
+            #[cfg(target_os = "linux")]
+            self.composite_camera,
         )
         .await
     }
 }
 
-#[tracing::instrument("instant_recording", skip_all)]
 pub async fn spawn_instant_recording_actor(
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,
     max_output_size: Option<u32>,
     max_fps: u32,
+) -> anyhow::Result<ActorHandle> {
+    spawn_instant_recording_actor_inner(
+        recording_dir,
+        inputs,
+        max_output_size,
+        max_fps,
+        #[cfg(target_os = "linux")]
+        false,
+    )
+    .await
+}
+
+#[tracing::instrument("instant_recording", skip_all)]
+async fn spawn_instant_recording_actor_inner(
+    recording_dir: PathBuf,
+    inputs: RecordingBaseInputs,
+    max_output_size: Option<u32>,
+    max_fps: u32,
+    #[cfg(target_os = "linux")] composite_camera: bool,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -653,13 +730,22 @@ pub async fn spawn_instant_recording_actor(
 
             debug!("screen capture: {screen_source:#?}");
 
+            #[cfg(not(target_os = "linux"))]
             let screen_info = screen_source.info();
             let (screen_capture, system_audio_source) = screen_source.to_sources().await?;
+            #[cfg(target_os = "linux")]
+            let screen_info = screen_capture.video_info();
+            #[cfg(target_os = "linux")]
+            let timestamps = Timestamps::now();
 
             let pipeline = create_pipeline(
                 content_dir.clone(),
-                screen_capture,
-                screen_info,
+                ScreenPipelineInput {
+                    source: screen_capture,
+                    info: screen_info,
+                    #[cfg(target_os = "linux")]
+                    camera_feed: inputs.camera_feed.clone().filter(|_| composite_camera),
+                },
                 inputs.mic_feed.clone(),
                 system_audio_source,
                 max_output_size,
@@ -802,6 +888,8 @@ mod tests {
 
     #[test]
     fn test_clamp_size_16_9_ish_landscape() {
+        assert_eq!(clamp_size((2880, 1800), (1920, 1080)), (1920, 1200));
+
         // Test 16:9 aspect ratio (boundary case)
         let result = clamp_size((1920, 1080), (1920, 1080));
         assert_eq!(result, (1920, 1080));

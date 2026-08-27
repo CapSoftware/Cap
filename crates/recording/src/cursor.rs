@@ -44,6 +44,93 @@ pub struct IncrementalCaptureOutputs {
     pub keyboard: Option<PathBuf>,
 }
 
+pub struct CursorCaptureTarget {
+    pub crop_bounds: CursorCropBounds,
+    pub display: scap_targets::Display,
+    #[cfg(target_os = "linux")]
+    pub window: Option<scap_targets::WindowId>,
+}
+
+#[cfg(target_os = "linux")]
+struct X11WindowCursor {
+    connection: x11rb::rust_connection::RustConnection,
+    window: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl X11WindowCursor {
+    fn new(id: &scap_targets::WindowId) -> anyhow::Result<Self> {
+        let (connection, _) = x11rb::connect(None)?;
+        Ok(Self {
+            connection,
+            window: id.to_string().parse()?,
+        })
+    }
+
+    fn position(&self) -> Option<(f64, f64)> {
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let geometry = self
+            .connection
+            .get_geometry(self.window)
+            .ok()?
+            .reply()
+            .ok()?;
+        let pointer = self
+            .connection
+            .query_pointer(self.window)
+            .ok()?
+            .reply()
+            .ok()?;
+        if !pointer.same_screen {
+            return None;
+        }
+        normalized_window_cursor(
+            pointer.win_x,
+            pointer.win_y,
+            geometry.width,
+            geometry.height,
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn normalized_window_cursor(x: i16, y: i16, width: u16, height: u16) -> Option<(f64, f64)> {
+    (width != 0 && height != 0).then(|| {
+        (
+            f64::from(x) / f64::from(width),
+            f64::from(y) / f64::from(height),
+        )
+    })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod window_cursor_tests {
+    use super::normalized_window_cursor;
+
+    #[test]
+    fn window_local_cursor_coordinates_follow_resized_content() {
+        assert_eq!(
+            normalized_window_cursor(300, 150, 600, 300),
+            Some((0.5, 0.5))
+        );
+        assert_eq!(
+            normalized_window_cursor(300, 150, 1200, 600),
+            Some((0.25, 0.25))
+        );
+        assert_eq!(
+            normalized_window_cursor(-60, 330, 600, 300),
+            Some((-0.1, 1.1))
+        );
+    }
+
+    #[test]
+    fn empty_windows_cannot_produce_cursor_coordinates() {
+        assert_eq!(normalized_window_cursor(1, 1, 0, 300), None);
+        assert_eq!(normalized_window_cursor(1, 1, 600, 0), None);
+    }
+}
+
 impl CursorActor {
     pub fn stop(&mut self) {
         drop(self.stop.take());
@@ -207,8 +294,7 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    crop_bounds: CursorCropBounds,
-    display: scap_targets::Display,
+    target: CursorCaptureTarget,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
@@ -244,6 +330,16 @@ pub fn spawn_cursor_recorder(
 
     let stop_token_child = stop_token.child_token();
     let thread = std::thread::spawn(move || {
+        let crop_bounds = target.crop_bounds;
+        let display = target.display;
+        #[cfg(target_os = "linux")]
+        let window_cursor = target.window.as_ref().and_then(|id| {
+            X11WindowCursor::new(id)
+                .inspect_err(|error| tracing::error!(%error, "X11 window cursor setup failed"))
+                .ok()
+        });
+        #[cfg(target_os = "linux")]
+        let mut last_window_position = None;
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
@@ -284,6 +380,15 @@ pub fn spawn_cursor_recorder(
 
             if position_changed {
                 last_position = position;
+            }
+            #[cfg(target_os = "linux")]
+            let window_position = window_cursor.as_ref().and_then(X11WindowCursor::position);
+            #[cfg(target_os = "linux")]
+            let position_changed = position_changed
+                || (target.window.is_some() && window_position != last_window_position);
+            #[cfg(target_os = "linux")]
+            {
+                last_window_position = window_position;
             }
 
             let cursor_id = if let Some(data) = get_cursor_data() {
@@ -337,15 +442,22 @@ pub fn spawn_cursor_recorder(
                 let cropped_norm_pos = position
                     .relative_to_display(display)
                     .and_then(|p| p.normalize())
-                    .map(|p| p.with_crop(crop_bounds));
+                    .map(|p| p.with_crop(crop_bounds))
+                    .map(|p| (p.x(), p.y()));
+                #[cfg(target_os = "linux")]
+                let cropped_norm_pos = if target.window.is_some() {
+                    window_position
+                } else {
+                    cropped_norm_pos
+                };
 
-                if let Some(pos) = cropped_norm_pos {
+                if let Some((x, y)) = cropped_norm_pos {
                     let mouse_event = CursorMoveEvent {
                         active_modifiers: vec![],
                         cursor_id: cursor_id.clone(),
                         time_ms: elapsed,
-                        x: pos.x(),
-                        y: pos.y(),
+                        x,
+                        y,
                     };
                     response.moves.push(mouse_event);
                 }

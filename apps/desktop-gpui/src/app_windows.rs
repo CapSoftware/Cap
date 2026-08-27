@@ -383,6 +383,10 @@ pub fn show_main_window(cx: &mut App) {
             // focus gate; here the reshow *is* the trigger, so a recording
             // made a moment ago is in the list without a restart.
             view.refresh_recents(window, cx);
+            #[cfg(target_os = "linux")]
+            if let Err(error) = platform::set_x11_window_visible(window, true) {
+                tracing::warn!(%error, "could not show the X11 main window");
+            }
             platform::native_window(window)
         })
         .ok()
@@ -454,7 +458,13 @@ pub fn heal_main_window_style(cx: &mut App) {
 pub fn hide_main_window(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
-        .update(cx, |_, window, _| platform::native_window(window))
+        .update(cx, |_, window, _| {
+            #[cfg(target_os = "linux")]
+            if let Err(error) = platform::set_x11_window_visible(window, false) {
+                tracing::warn!(%error, "could not hide the X11 main window");
+            }
+            platform::native_window(window)
+        })
         .ok()
         .flatten();
     cx.spawn(async move |cx| {
@@ -603,7 +613,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
             // hand-draws its own.)
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Settings".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: Some(settings_window::TRAFFIC_LIGHTS),
             }),
             // A normal window, not a panel: the Tauri Settings window is an
@@ -748,7 +758,7 @@ pub fn open_onboarding(cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Welcome to Cap".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: Some(onboarding_window::TRAFFIC_LIGHTS),
             }),
             kind: WindowKind::Normal,
@@ -882,7 +892,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
             // `TitleBarStyle::Overlay`).
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Mode Selection".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: mode_select_window::TRAFFIC_LIGHTS,
             }),
             // An ordinary window that activates the dock icon
@@ -997,7 +1007,7 @@ pub fn open_teleprompter(cx: &mut App) {
             // buttons, moved, as on the settings window.
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Teleprompter".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: Some(teleprompter_window::TRAFFIC_LIGHTS),
             }),
             // `alwaysOnTop: true` + `visibleOnAllWorkspaces: true` are applied
@@ -1589,6 +1599,8 @@ fn open_overlay(
                             // one overlay has to hold focus for it to arrive.
                             let focus_handle = view.focus_handle();
                             window.focus(&focus_handle, cx);
+                            #[cfg(any(target_os = "linux", target_os = "windows"))]
+                            window.activate_window();
                         }
                         window.refresh();
                     })
@@ -2084,10 +2096,27 @@ pub fn open_camera_window(cx: &mut App) {
                 origin: point(px(x), px(y)),
                 size: size(px(width), px(height)),
             })),
+            #[cfg(not(target_os = "linux"))]
             titlebar: None,
+            #[cfg(target_os = "linux")]
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Cap Camera".into()),
+                ..Default::default()
+            }),
+            #[cfg(target_os = "linux")]
+            app_id: Some("Cap".into()),
+            #[cfg(target_os = "linux")]
+            window_decorations: Some(gpui::WindowDecorations::Client),
             // Non-activating panel, same as the bar: the bubble is clickable
             // without stealing focus from what is being recorded.
+            #[cfg(not(target_os = "linux"))]
             kind: WindowKind::PopUp,
+            #[cfg(target_os = "linux")]
+            kind: if cap_recording::screenshot::uses_wayland_portal() {
+                WindowKind::Floating
+            } else {
+                WindowKind::PopUp
+            },
             focus: false,
             show: true,
             is_resizable: false,
@@ -2163,6 +2192,9 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
     handle
         .update(cx, |_, window, _| {
             let native = platform::native_window(window)?;
+            #[cfg(target_os = "windows")]
+            let frame = platform::window_logical_frame(&native);
+            #[cfg(not(target_os = "windows"))]
             let frame = platform::window_frame(&native);
             let origin = window.bounds().origin;
             Some(CameraFrame {
@@ -2186,11 +2218,20 @@ fn move_camera_window(camera: CameraFrame, to: (f32, f32), cx: &mut App) {
     if dx.abs() < 0.5 && dy.abs() < 0.5 {
         return;
     }
+    #[cfg(not(target_os = "windows"))]
     let (frame_x, frame_y, width, height) = camera.frame;
+    #[cfg(target_os = "windows")]
+    let (_, _, width, height) = camera.frame;
+    #[cfg(target_os = "windows")]
+    let (x, y) = (f64::from(to.0), f64::from(to.1));
     // gpui +y is down, AppKit +y is up.
+    #[cfg(not(target_os = "windows"))]
     let (x, y) = (frame_x + dx, frame_y - dy);
     let native = camera.native;
     cx.spawn(async move |_| {
+        #[cfg(target_os = "windows")]
+        platform::set_window_logical_frame(&native, x, y, width, height);
+        #[cfg(not(target_os = "windows"))]
         platform::set_window_frame(&native, x, y, width, height);
     })
     .detach();
@@ -2416,7 +2457,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
             // left group reserves an `h-full w-16` spacer for them.
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Editor".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: editor_window::TRAFFIC_LIGHTS,
             }),
             // An ordinary window that activates the dock icon
@@ -2458,6 +2499,8 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
     handle
         .update(cx, |view, window, cx| {
             platform::kick_display_link(window);
+            #[cfg(target_os = "windows")]
+            platform::maximize_if_larger_than_work_area(window, cx);
             view.focus_root(window, cx);
             tracing::info!(
                 number = platform::window_number(window),
@@ -3599,7 +3642,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Screenshot Editor".into()),
-                appears_transparent: true,
+                appears_transparent: !cfg!(target_os = "windows"),
                 traffic_light_position: None,
             }),
             kind: WindowKind::Normal,

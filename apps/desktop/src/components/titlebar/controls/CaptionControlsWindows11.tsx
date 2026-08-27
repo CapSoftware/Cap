@@ -94,7 +94,7 @@ export default function (
 				disabled={!titlebarState.closable}
 				class={cx(
 					"max-h-20 w-[46px] rounded-none bg-transparent hover:text-gray-1",
-					"hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
+					"hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c] active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
 					"disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
 				)}
 			>

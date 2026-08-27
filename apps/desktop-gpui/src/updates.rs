@@ -57,30 +57,36 @@ struct UpdateScheduler {
 
 impl Global for UpdateScheduler {}
 
-fn updater_target() -> String {
+fn updater_target() -> Result<String, String> {
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else {
         "x86_64"
     };
 
-    if cfg!(target_os = "macos") {
-        format!("darwin-{arch}")
-    } else if cfg!(target_os = "linux") {
-        format!("linux-{arch}-deb")
-    } else {
-        format!("windows-{arch}")
+    #[cfg(target_os = "linux")]
+    {
+        cap_utils::linux_package::updater_target(arch)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let platform = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "windows"
+        };
+        Ok(format!("{platform}-{arch}"))
     }
 }
 
-fn endpoint(channel: UpdateChannel) -> String {
+fn endpoint(channel: UpdateChannel) -> Result<String, String> {
     let url = UPDATE_ENDPOINT
-        .replace("{target}", &updater_target())
+        .replace("{target}", &updater_target()?)
         .replace("{current_version}", env!("CARGO_PKG_VERSION"));
-    match channel {
+    Ok(match channel {
         UpdateChannel::Stable => url,
         UpdateChannel::Nightly => format!("{url}?channel=nightly"),
-    }
+    })
 }
 
 async fn remote_version(channel: UpdateChannel) -> Result<Option<Version>, String> {
@@ -88,7 +94,7 @@ async fn remote_version(channel: UpdateChannel) -> Result<Option<Version>, Strin
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|error| error.to_string())?
-        .get(endpoint(channel))
+        .get(endpoint(channel)?)
         .send()
         .await
         .map_err(|error| error.to_string())?;

@@ -2,7 +2,7 @@ use cap_project::{
     InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
 };
 use cap_recording::{
-    CameraFeed, MicrophoneFeed,
+    CameraFeed, DoneFut, MicrophoneFeed, PipelineStoppedByUser,
     feeds::{camera, microphone},
     instant_recording,
     screen_capture::ScreenCaptureTarget,
@@ -697,6 +697,13 @@ enum ActorHandle {
 }
 
 impl ActorHandle {
+    fn done_fut(&self) -> DoneFut {
+        match self {
+            Self::Studio(actor) => actor.done_fut(),
+            Self::Instant(actor) => actor.done_fut(),
+        }
+    }
+
     async fn stop(&self) -> Result<CompletedRecording, String> {
         match self {
             Self::Studio(actor) => actor
@@ -704,12 +711,12 @@ impl ActorHandle {
                 .await
                 .map(Box::new)
                 .map(CompletedRecording::Studio)
-                .map_err(|e| e.to_string()),
+                .map_err(|e| format!("{e:#}")),
             Self::Instant(actor) => actor
                 .stop()
                 .await
                 .map(CompletedRecording::Instant)
-                .map_err(|e| e.to_string()),
+                .map_err(|e| format!("{e:#}")),
         }
     }
 }
@@ -826,6 +833,10 @@ async fn start_recording(
         }
         RecordMode::Instant => {
             let mut builder = instant_builder;
+            #[cfg(target_os = "linux")]
+            if camera_active {
+                builder = builder.with_linux_camera_composition();
+            }
             builder = builder.with_max_output_size(
                 cap_recording::RecordingDefaults::default().instant_mode_max_resolution,
             );
@@ -935,22 +946,44 @@ async fn finalize(
     stop_file: Option<&Path>,
 ) -> Result<CompletedRecording, String> {
     let outcome = std::panic::AssertUnwindSafe(async {
-        wait_for_stop(duration, interactive, stop_file).await;
-        actor.stop().await.map_err(|e| e.to_string())
+        finalize_after_stop_trigger(
+            actor.done_fut().map(|result| match result {
+                Err(error) if error.is_caused_by::<PipelineStoppedByUser>() => Ok(()),
+                result => result.map_err(|error| error.to_string()),
+            }),
+            wait_for_stop(duration, interactive, stop_file),
+            async { finalize_completed(actor.stop().await?).await },
+        )
+        .await
     })
     .catch_unwind()
     .await;
 
-    let completed = match outcome {
-        Ok(Ok(completed)) => completed,
-        Ok(Err(error)) => return Err(error),
-        Err(_) => actor
-            .stop()
-            .await
-            .map_err(|e| format!("recording panicked; finalize failed: {e}"))?,
-    };
+    match outcome {
+        Ok(result) => result,
+        Err(_) => {
+            let completed = actor
+                .stop()
+                .await
+                .map_err(|e| format!("recording panicked; finalize failed: {e}"))?;
+            finalize_completed(completed).await
+        }
+    }
+}
 
-    finalize_completed(completed).await
+async fn finalize_after_stop_trigger<T>(
+    capture_done: impl Future<Output = Result<(), String>>,
+    stop_requested: impl Future<Output = ()>,
+    finalize: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let capture_result = tokio::select! {
+        biased;
+        result = capture_done => result,
+        _ = stop_requested => Ok(()),
+    };
+    let finalized = finalize.await;
+    capture_result?;
+    finalized
 }
 
 async fn finalize_completed(completed: CompletedRecording) -> Result<CompletedRecording, String> {
@@ -1201,6 +1234,59 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_failure_finalizes_without_waiting_for_stop_request() {
+        let finalized = std::cell::Cell::new(false);
+        let result = finalize_after_stop_trigger(
+            std::future::ready(Err("capture window disappeared".to_string())),
+            std::future::pending(),
+            async {
+                finalized.set(true);
+                Err::<(), _>("display".to_string())
+            },
+        )
+        .await;
+
+        assert!(finalized.get());
+        assert_eq!(result.unwrap_err(), "capture window disappeared");
+    }
+
+    #[tokio::test]
+    async fn stop_request_finalizes_while_capture_is_running() {
+        let result = finalize_after_stop_trigger(
+            std::future::pending(),
+            std::future::ready(()),
+            std::future::ready(Ok(42)),
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn completed_capture_finalizes_without_stop_request() {
+        let result = finalize_after_stop_trigger(
+            std::future::ready(Ok(())),
+            std::future::pending(),
+            std::future::ready(Ok(42)),
+        )
+        .await;
+
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn finalization_error_is_returned_after_stop_request() {
+        let result = finalize_after_stop_trigger(
+            std::future::pending(),
+            std::future::ready(()),
+            std::future::ready(Err::<(), _>("failed to finalize recording".to_string())),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err(), "failed to finalize recording");
+    }
 
     #[test]
     fn record_event_fields_are_camel_case() {

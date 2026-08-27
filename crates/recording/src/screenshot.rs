@@ -1,6 +1,8 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
 #[cfg(target_os = "linux")]
-use crate::sources::screen_capture::{X11Grabber, X11InputConfig, x11_capture_rect};
+use crate::sources::screen_capture::{
+    X11Grabber, X11InputConfig, prefers_wayland_portal, x11_capture_rect,
+};
 #[cfg(target_os = "macos")]
 use anyhow::Context;
 #[cfg(target_os = "linux")]
@@ -819,7 +821,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<DynamicImage> {
 
 #[cfg(target_os = "linux")]
 pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<DynamicImage> {
-    if is_pure_wayland_session() {
+    if uses_wayland_portal() {
         let image = capture_screenshot_wayland(&target).await?;
         return Ok(finalize_screenshot(image, &target));
     }
@@ -829,19 +831,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<D
 }
 
 #[cfg(target_os = "linux")]
-pub fn is_pure_wayland_session() -> bool {
-    is_pure_wayland_environment(
-        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
-        std::env::var_os("DISPLAY").as_deref(),
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn is_pure_wayland_environment(
-    wayland_display: Option<&std::ffi::OsStr>,
-    x11_display: Option<&std::ffi::OsStr>,
-) -> bool {
-    wayland_display.is_some() && x11_display.is_none()
+pub fn uses_wayland_portal() -> bool {
+    prefers_wayland_portal()
 }
 
 #[cfg(target_os = "linux")]
@@ -1437,6 +1428,12 @@ fn capture_screenshot_x11_blocking(target: &ScreenCaptureTarget) -> anyhow::Resu
     let (display_name, x, y, width, height) = linux_capture_geometry(target)?;
     let config = X11InputConfig {
         display_name,
+        window_id: match target {
+            ScreenCaptureTarget::Window { id } => {
+                Some(id.to_string().parse().context("Invalid X11 window ID")?)
+            }
+            _ => None,
+        },
         x,
         y,
         width,
@@ -1477,34 +1474,17 @@ fn linux_capture_geometry(
         ScreenCaptureTarget::Window { id } => {
             let window =
                 scap_targets::Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
-            let display = window
-                .display()
-                .ok_or_else(|| anyhow!("Window display unavailable"))?;
-            let display_position = display
-                .raw_handle()
-                .physical_position()
-                .ok_or_else(|| anyhow!("Display position unavailable"))?;
-            let display_size = display
-                .physical_size()
-                .ok_or_else(|| anyhow!("Display size unavailable"))?;
             let bounds = window
                 .raw_handle()
                 .physical_bounds()
                 .ok_or_else(|| anyhow!("Window bounds unavailable"))?;
-            let crop = (
-                bounds.position().x() - display_position.x(),
-                bounds.position().y() - display_position.y(),
-                bounds.size().width(),
-                bounds.size().height(),
-            );
-            let (x, y, width, height) = x11_capture_rect(
-                display_position.x(),
-                display_position.y(),
-                display_size.width(),
-                display_size.height(),
-                Some(crop),
-            )?;
-            Ok((display_name, x, y, width, height))
+            Ok((
+                display_name,
+                0,
+                0,
+                bounds.size().width() as u32,
+                bounds.size().height() as u32,
+            ))
         }
         ScreenCaptureTarget::Area { screen, bounds } => {
             let display = scap_targets::Display::from_id(screen)
@@ -1541,27 +1521,12 @@ fn linux_capture_geometry(
 mod wayland_screenshot_tests {
     use super::*;
     use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
-    use std::ffi::OsStr;
 
     fn area_target(x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
         ScreenCaptureTarget::Area {
             screen: "0".parse().expect("valid display id"),
             bounds: LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height)),
         }
-    }
-
-    #[test]
-    fn pure_wayland_requires_wayland_socket_without_x11_display() {
-        assert!(is_pure_wayland_environment(
-            Some(OsStr::new("wayland-1")),
-            None
-        ));
-        assert!(!is_pure_wayland_environment(
-            Some(OsStr::new("wayland-1")),
-            Some(OsStr::new(":99"))
-        ));
-        assert!(!is_pure_wayland_environment(None, None));
-        assert!(!is_pure_wayland_environment(None, Some(OsStr::new(":99"))));
     }
 
     #[test]

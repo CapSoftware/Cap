@@ -1,0 +1,167 @@
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 993b2ff3fa..c59ee3927c 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -112,0 +113,2 @@ pub struct WaylandWindowState {
++    fixed_outer_size: Option<Size<Pixels>>,
++    fixed_geometry_size: Option<Size<i32>>,
+@@ -594 +596 @@ impl WaylandWindowState {
+-        Ok(Self {
++        let mut state = Self {
+@@ -607,0 +610,2 @@ impl WaylandWindowState {
++            fixed_outer_size: (!options.is_resizable).then_some(options.bounds.size),
++            fixed_geometry_size: None,
+@@ -629 +633,24 @@ impl WaylandWindowState {
+-        })
++        };
++        state.update_size_constraints();
++        Ok(state)
++    }
++
++    fn update_size_constraints(&mut self) {
++        let Some(outer_size) = self.fixed_outer_size else {
++            return;
++        };
++        let geometry_size = fixed_window_geometry_size(
++            outer_size,
++            self.inset(),
++            self.tiling,
++            self.renderer.max_texture_size(),
++            self.scale,
++        );
++        if self.fixed_geometry_size == Some(geometry_size) {
++            return;
++        }
++        if let Some(toplevel) = self.surface_state.toplevel() {
++            toplevel.set_min_size(geometry_size.width, geometry_size.height);
++            toplevel.set_max_size(geometry_size.width, geometry_size.height);
++            self.fixed_geometry_size = Some(geometry_size);
++        }
+@@ -903,0 +931 @@ impl WaylandWindowStatePtr {
++                    state.update_size_constraints();
+@@ -961 +989,5 @@ impl WaylandWindowStatePtr {
+-                    self.state.borrow_mut().decorations = WindowDecorations::Server;
++                    {
++                        let mut state = self.state.borrow_mut();
++                        state.decorations = WindowDecorations::Server;
++                        state.update_size_constraints();
++                    }
+@@ -969 +1001,5 @@ impl WaylandWindowStatePtr {
+-                    self.state.borrow_mut().decorations = WindowDecorations::Client;
++                    {
++                        let mut state = self.state.borrow_mut();
++                        state.decorations = WindowDecorations::Client;
++                        state.update_size_constraints();
++                    }
+@@ -1273,0 +1310 @@ impl WaylandWindowStatePtr {
++                state.update_size_constraints();
+@@ -1469 +1506 @@ impl PlatformWindow for WaylandWindow {
+-        let state = self.borrow();
++        let mut state = self.borrow_mut();
+@@ -1488,0 +1526,5 @@ impl PlatformWindow for WaylandWindow {
++        if state.fixed_outer_size.is_some() {
++            state.fixed_outer_size = Some(size);
++            state.update_size_constraints();
++        }
++
+@@ -1778,0 +1821,3 @@ impl PlatformWindow for WaylandWindow {
++        if state.fixed_outer_size.is_some() {
++            return;
++        }
+@@ -1856,0 +1902 @@ impl PlatformWindow for WaylandWindow {
++                state.update_size_constraints();
+@@ -1865,0 +1912 @@ impl PlatformWindow for WaylandWindow {
++                state.update_size_constraints();
+@@ -1878,0 +1926 @@ impl PlatformWindow for WaylandWindow {
++            state.update_size_constraints();
+@@ -2084,0 +2133,90 @@ fn inset_by_tiling(mut bounds: Bounds<Pixels>, inset: Pixels, tiling: Tiling) ->
++
++fn fixed_window_geometry_size(
++    outer_size: Size<Pixels>,
++    inset: Pixels,
++    tiling: Tiling,
++    max_texture_size: u32,
++    scale: f32,
++) -> Size<i32> {
++    let limit = (max_texture_size as f32 / scale.max(f32::EPSILON)).max(1.0);
++    let outer_size = outer_size.map(|value| px(f32::from(value).clamp(1.0, limit)));
++    inset_by_tiling(
++        Bounds {
++            origin: Point::default(),
++            size: outer_size,
++        },
++        inset,
++        tiling,
++    )
++    .size
++    .map(|value| (f32::from(value) as i32).max(1))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn fixed_size_tracks_programmatic_expansion_in_logical_pixels() {
++        for height in [395.0, 440.0, 520.0, 395.0] {
++            assert_eq!(
++                fixed_window_geometry_size(
++                    size(px(330.0), px(height)),
++                    px(0.0),
++                    Tiling::default(),
++                    8192,
++                    2.0,
++                ),
++                size(330, height as i32),
++            );
++        }
++    }
++
++    #[test]
++    fn fixed_size_uses_the_same_insets_as_xdg_window_geometry() {
++        for tiling in [
++            Tiling::default(),
++            Tiling::tiled(),
++            Tiling {
++                top: true,
++                left: true,
++                ..Tiling::default()
++            },
++        ] {
++            let outer = size(px(330.0), px(395.0));
++            let constrained = fixed_window_geometry_size(outer, px(8.0), tiling, 8192, 2.0);
++            assert_eq!(
++                compute_outer_size(
++                    px(8.0),
++                    Some(constrained.map(|value| px(value as f32))),
++                    tiling,
++                ),
++                Some(outer),
++            );
++        }
++    }
++
++    #[test]
++    fn fixed_size_stays_positive_and_within_the_scaled_texture_limit() {
++        assert_eq!(
++            fixed_window_geometry_size(
++                size(px(10000.0), px(10000.0)),
++                px(8.0),
++                Tiling::default(),
++                8192,
++                2.0,
++            ),
++            size(4080, 4080),
++        );
++        assert_eq!(
++            fixed_window_geometry_size(
++                size(px(0.0), px(10.0)),
++                px(8.0),
++                Tiling::default(),
++                8192,
++                1.0,
++            ),
++            size(1, 1),
++        );
++    }
++}
