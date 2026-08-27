@@ -351,7 +351,12 @@ fn running_instance_pid() -> Option<u32> {
         .parse::<u32>()
         .ok()?;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    {
+        linux_gpui_process_is_running(pid).then_some(pid)
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         let alive = std::process::Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "comm="])
@@ -378,10 +383,18 @@ fn running_instance_pid() -> Option<u32> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_gpui_process_is_running(pid: u32) -> bool {
+    std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| is_gpui_process_image(&path))
+}
+
 fn is_gpui_process_image(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|name| name.eq_ignore_ascii_case(BINARY_NAME))
+    let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return false;
+    };
+    #[cfg(target_os = "linux")]
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+    name.eq_ignore_ascii_case(BINARY_NAME)
 }
 
 #[cfg(any(target_os = "macos", windows, test))]
@@ -898,6 +911,51 @@ mod tests {
         assert!(!is_gpui_process_image(std::path::Path::new(
             "cap-gpui-helper"
         )));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_process_check_distinguishes_live_unlinked_and_exited_processes() {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join(BINARY_NAME);
+        std::fs::copy("/bin/sleep", &binary).unwrap();
+        let mut child = std::process::Command::new(&binary)
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let started = std::time::Instant::now();
+        // spawn can return before /proc stops exposing the child's pre-exec image.
+        while !std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| path == binary)
+            && started.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let live = super::linux_gpui_process_is_running(pid);
+        std::fs::remove_file(&binary).unwrap();
+        let unlinked = super::linux_gpui_process_is_running(pid);
+        child.kill().unwrap();
+        let started = std::time::Instant::now();
+        let mut zombie = false;
+        while started.elapsed() < std::time::Duration::from_secs(5) {
+            zombie = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, state)| state.starts_with('Z'))
+            });
+            if zombie {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let exited = super::linux_gpui_process_is_running(pid);
+        child.wait().unwrap();
+
+        assert!(live);
+        assert!(unlinked);
+        assert!(zombie);
+        assert!(!exited);
+        assert!(!super::linux_gpui_process_is_running(pid));
+        assert!(!super::linux_gpui_process_is_running(std::process::id()));
     }
 
     #[test]
