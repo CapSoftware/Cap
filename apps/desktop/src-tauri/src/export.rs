@@ -1351,11 +1351,7 @@ pub async fn get_export_estimates(
 
     let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
     let project_config = meta.project_config();
-    let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.duration()
-    } else {
-        metadata.duration
-    };
+    let duration_seconds = export_estimate_duration(&project_config, metadata.duration);
 
     let (resolution, fps) = match &settings {
         ExportSettings::Mp4(s) => (s.resolution_base, s.fps),
@@ -1442,6 +1438,17 @@ pub struct ExportPreviewResult {
 fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
     let bytes_per_frame = total_pixels * 0.4;
     (bytes_per_frame * total_frames) / (1024.0 * 1024.0)
+}
+
+fn export_estimate_duration(
+    project_config: &cap_project::ProjectConfiguration,
+    source_duration: f64,
+) -> f64 {
+    project_config
+        .timeline
+        .as_ref()
+        .map(cap_project::TimelineConfiguration::duration)
+        .unwrap_or(source_duration)
 }
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
@@ -1709,11 +1716,7 @@ async fn generate_export_preview_inner(
     let fps_f64 = settings.fps as f64;
 
     let metadata = get_video_metadata(project_path.clone()).await?;
-    let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.duration()
-    } else {
-        metadata.duration
-    };
+    let duration_seconds = export_estimate_duration(&project_config, metadata.duration);
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let estimated_size_mb = if settings.cursor_only {
@@ -1742,6 +1745,46 @@ async fn generate_export_preview_inner(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn export_estimates_use_source_duration_without_a_timeline() {
+        assert_eq!(
+            export_estimate_duration(&cap_project::ProjectConfiguration::default(), 361.0),
+            361.0
+        );
+    }
+
+    #[test]
+    fn export_estimates_follow_trims_and_playback_speed() {
+        for (timescale, expected) in [(1.0, 12.0), (2.0, 6.0)] {
+            let project = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [{"start": 45.0, "end": 57.0, "timescale": timescale}],
+                    "zoomSegments": []
+                }
+            }))
+            .unwrap();
+
+            assert_eq!(export_estimate_duration(&project, 361.0), expected);
+        }
+    }
+
+    #[test]
+    fn export_estimates_include_transition_overlap() {
+        let project = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    {"start": 5.0, "end": 11.0, "timescale": 1.0},
+                    {"start": 20.0, "end": 26.0, "timescale": 1.0}
+                ],
+                "transitions": [{"segmentIndex": 1, "type": "cross-fade", "duration": 1.0}],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(export_estimate_duration(&project, 361.0), 11.0);
+    }
 
     #[test]
     fn export_settings_exposes_force_ffmpeg_for_mp4_only() {
@@ -2030,7 +2073,7 @@ async fn generate_export_preview_fast_inner(
     let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
     let fps_f64 = settings.fps as f64;
 
-    let duration_seconds = editor.recordings.duration();
+    let duration_seconds = export_estimate_duration(&project_config, editor.recordings.duration());
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let estimated_size_mb = if settings.cursor_only {
