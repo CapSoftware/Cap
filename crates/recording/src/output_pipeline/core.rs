@@ -2141,6 +2141,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut source_clock = SourceClockState::new("video");
         let mut dropped_during_pause: u64 = 0;
         let mut last_frame = None;
+        let mut first_frame_offset = None;
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -2206,6 +2207,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             ));
                         }
                     };
+
+                    if first_frame_offset.is_none() {
+                        first_frame_offset = Some(remap.duration().saturating_sub(total_pause_duration));
+                    }
 
                     if anomaly_tracker.take_resync_flag() {
                         info!(
@@ -2320,6 +2325,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             }
                         };
 
+                        if first_frame_offset.is_none() {
+                            first_frame_offset = Some(
+                                remap.duration().saturating_sub(shared_pause.total_pause_duration()),
+                            );
+                        }
+
                         let _ = anomaly_tracker.take_resync_flag();
                         let duration =
                             drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
@@ -2359,6 +2370,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         }
 
         let final_pause_duration = shared_pause.total_pause_duration();
+        // Video PTS begin at the first frame, which may arrive minutes after a portal request starts.
+        let video_stopped_at = stopped_at.saturating_sub(first_frame_offset.unwrap_or(stopped_at));
 
         if was_cancelled
             && !shared_pause.check().0
@@ -2366,7 +2379,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             && let Some((_, last_timestamp)) = timestamp_span.get()
             && let Some(final_timestamp) = static_video_tail_timestamp(
                 last_timestamp,
-                stopped_at,
+                video_stopped_at,
                 Duration::from_nanos(frame_duration_ns),
             )
         {
@@ -5165,10 +5178,10 @@ mod tests {
             }
         }
 
-        #[tokio::test]
-        async fn static_capture_finishes_with_two_nominally_spaced_frames() {
+        async fn record_static_capture(startup_delay: Duration) -> (Vec<Duration>, Duration) {
             let temp_dir = tempfile::tempdir().unwrap();
             let clock = Timestamps::now();
+            tokio::time::sleep(startup_delay).await;
             let (sender, receiver) = flume::bounded(4);
             let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
             let pipeline = OutputPipeline::builder(temp_dir.path().join("static.mp4"))
@@ -5181,16 +5194,24 @@ mod tests {
                 .await
                 .unwrap();
 
+            let first_frame_at = Instant::now();
             sender
                 .send_async(StaticFrame {
-                    timestamp: Timestamp::Instant(clock.instant()),
+                    timestamp: Timestamp::Instant(first_frame_at),
                 })
                 .await
                 .unwrap();
             tokio::time::sleep(Duration::from_millis(180)).await;
+            let capture_duration = first_frame_at.elapsed();
             pipeline.stop().await.unwrap();
 
             let timestamps = sent.lock().unwrap().clone();
+            (timestamps, capture_duration)
+        }
+
+        #[tokio::test]
+        async fn static_capture_finishes_with_two_nominally_spaced_frames() {
+            let (timestamps, _) = record_static_capture(Duration::ZERO).await;
             assert_eq!(timestamps.len(), 3);
             let final_frame = timestamps[timestamps.len() - 1];
             let penultimate_frame = timestamps[timestamps.len() - 2];
@@ -5199,6 +5220,16 @@ mod tests {
                 Duration::from_nanos(33_333_333)
             );
             assert!(final_frame > Duration::from_millis(100));
+        }
+
+        #[tokio::test]
+        async fn static_tail_excludes_source_initialization_delay() {
+            let (timestamps, capture_duration) =
+                record_static_capture(Duration::from_secs(1)).await;
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+            let final_frame = *timestamps.last().unwrap();
+            assert!(final_frame > capture_duration.saturating_sub(Duration::from_millis(100)));
+            assert!(final_frame < capture_duration.saturating_add(Duration::from_millis(250)));
         }
     }
 

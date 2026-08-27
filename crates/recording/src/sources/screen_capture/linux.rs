@@ -1,3 +1,4 @@
+use super::cadence::FrameCadenceGate;
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -26,7 +27,11 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 use x11rb::connection::Connection as _;
-use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat, ImageOrder};
+use x11rb::protocol::Event;
+use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
+use x11rb::protocol::xproto::{
+    ChangeWindowAttributesAux, ConnectionExt as _, EventMask, ImageFormat, ImageOrder, MapState,
+};
 use x11rb::rust_connection::RustConnection;
 
 #[derive(Debug)]
@@ -54,6 +59,12 @@ pub struct VideoSourceConfig {
     input: LinuxInputConfig,
 }
 
+impl VideoSourceConfig {
+    pub(crate) fn video_info(&self) -> VideoInfo {
+        self.video_info
+    }
+}
+
 enum LinuxInputConfig {
     X11(X11InputConfig),
     Wayland(WaylandInputConfig),
@@ -61,6 +72,7 @@ enum LinuxInputConfig {
 
 pub(crate) struct X11InputConfig {
     pub display_name: String,
+    pub window_id: Option<u32>,
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -91,79 +103,75 @@ impl ScreenCaptureConfig<X11Capture> {
     pub async fn to_sources(
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
+        let source = if prefers_wayland_portal() {
+            let (video_info, input) = create_wayland_source_config(self).await?;
+            VideoSourceConfig {
+                video_info,
+                input: LinuxInputConfig::Wayland(input),
+            }
+        } else {
+            let display = Display::from_id(&self.config.display)
+                .ok_or_else(|| anyhow!("Display not found"))?;
+            let display_position = display
+                .raw_handle()
+                .physical_position()
+                .ok_or_else(|| anyhow!("Display position unavailable"))?;
+            let display_size = display
+                .physical_size()
+                .ok_or_else(|| anyhow!("Display size unavailable"))?;
+
+            let crop = self.config.crop_bounds.map(|crop| {
+                (
+                    crop.position().x(),
+                    crop.position().y(),
+                    crop.size().width(),
+                    crop.size().height(),
+                )
+            });
+            let (x, y, width, height) = x11_capture_rect(
+                display_position.x(),
+                display_position.y(),
+                display_size.width(),
+                display_size.height(),
+                crop,
+            )?;
+            let video_info =
+                if matches!(&self.config.linux_source, LinuxCaptureSource::Window { .. }) {
+                    self.video_info
+                } else {
+                    VideoInfo {
+                        width,
+                        height,
+                        ..self.video_info
+                    }
+                };
+
+            VideoSourceConfig {
+                video_info,
+                input: LinuxInputConfig::X11(X11InputConfig {
+                    display_name: std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()),
+                    window_id: match &self.config.linux_source {
+                        LinuxCaptureSource::Window { id } => {
+                            Some(id.to_string().parse().context("Invalid X11 window ID")?)
+                        }
+                        LinuxCaptureSource::Display | LinuxCaptureSource::Area => None,
+                    },
+                    x,
+                    y,
+                    width: video_info.width,
+                    height: video_info.height,
+                    fps: self.config.fps,
+                    show_cursor: self.config.show_cursor,
+                }),
+            }
+        };
         let system_audio = if self.system_audio {
             Some(create_system_audio_source_config().await?)
         } else {
             None
         };
 
-        if prefers_wayland_portal() {
-            match create_wayland_source_config(self).await {
-                Ok((video_info, input)) => {
-                    return Ok((
-                        VideoSourceConfig {
-                            video_info,
-                            input: LinuxInputConfig::Wayland(input),
-                        },
-                        system_audio,
-                    ));
-                }
-                Err(error) if std::env::var_os("DISPLAY").is_some() => {
-                    tracing::warn!(
-                        error = %error,
-                        "Wayland portal capture failed; falling back to X11 capture"
-                    );
-                }
-                Err(error) => return Err(error),
-            }
-        }
-
-        let display =
-            Display::from_id(&self.config.display).ok_or_else(|| anyhow!("Display not found"))?;
-        let display_position = display
-            .raw_handle()
-            .physical_position()
-            .ok_or_else(|| anyhow!("Display position unavailable"))?;
-        let display_size = display
-            .physical_size()
-            .ok_or_else(|| anyhow!("Display size unavailable"))?;
-
-        let crop = self.config.crop_bounds.map(|crop| {
-            (
-                crop.position().x(),
-                crop.position().y(),
-                crop.size().width(),
-                crop.size().height(),
-            )
-        });
-        let (x, y, width, height) = x11_capture_rect(
-            display_position.x(),
-            display_position.y(),
-            display_size.width(),
-            display_size.height(),
-            crop,
-        )?;
-        let video_info = VideoInfo {
-            width,
-            height,
-            ..self.video_info
-        };
-
-        Ok((
-            VideoSourceConfig {
-                video_info,
-                input: LinuxInputConfig::X11(X11InputConfig {
-                    display_name: std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string()),
-                    x,
-                    y,
-                    width,
-                    height,
-                    fps: self.config.fps,
-                    show_cursor: self.config.show_cursor,
-                }),
-            },
-            system_audio,
-        ))
+        Ok((source, system_audio))
     }
 }
 
@@ -286,6 +294,9 @@ struct PipewireCaptureState {
     fatal_error: Arc<parking_lot::Mutex<Option<String>>>,
     sent: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+    rate_limited: Arc<AtomicU64>,
+    capture_clock: Instant,
+    cadence_gate: FrameCadenceGate,
 }
 
 impl PipewireCaptureState {
@@ -300,10 +311,11 @@ impl PipewireCaptureState {
 async fn create_wayland_source_config(
     config: &ScreenCaptureConfig<X11Capture>,
 ) -> anyhow::Result<(VideoInfo, WaylandInputConfig)> {
-    let portal = open_wayland_portal(config.config.linux_source, config.config.show_cursor).await?;
-    let crop_bounds = match config.config.linux_source {
+    let portal =
+        open_wayland_portal(&config.config.linux_source, config.config.show_cursor).await?;
+    let crop_bounds = match &config.config.linux_source {
         LinuxCaptureSource::Area => config.config.crop_bounds,
-        LinuxCaptureSource::Display | LinuxCaptureSource::Window => None,
+        LinuxCaptureSource::Display | LinuxCaptureSource::Window { .. } => None,
     };
     let video_info = wayland_video_info(&portal.stream, config.video_info, crop_bounds);
 
@@ -320,7 +332,7 @@ async fn create_wayland_source_config(
 }
 
 async fn open_wayland_portal(
-    source: LinuxCaptureSource,
+    source: &LinuxCaptureSource,
     show_cursor: bool,
 ) -> anyhow::Result<WaylandPortalCapture> {
     let proxy: Screencast<'static> = Screencast::new()
@@ -374,19 +386,21 @@ async fn open_wayland_portal(
     })
 }
 
-fn prefers_wayland_portal() -> bool {
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return false;
-    }
-
-    std::env::var_os("DISPLAY").is_none()
-        || std::env::var("XDG_SESSION_TYPE")
-            .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
+pub(crate) fn prefers_wayland_portal() -> bool {
+    prefers_wayland_environment(
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+        std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+    )
 }
 
-fn wayland_source_type(source: LinuxCaptureSource) -> ashpd::enumflags2::BitFlags<SourceType> {
+fn prefers_wayland_environment(wayland: bool, x11: bool, session: Option<&str>) -> bool {
+    wayland && (!x11 || session.is_some_and(|session| session.eq_ignore_ascii_case("wayland")))
+}
+
+fn wayland_source_type(source: &LinuxCaptureSource) -> ashpd::enumflags2::BitFlags<SourceType> {
     match source {
-        LinuxCaptureSource::Window => SourceType::Window.into(),
+        LinuxCaptureSource::Window { .. } => SourceType::Window.into(),
         LinuxCaptureSource::Display | LinuxCaptureSource::Area => SourceType::Monitor.into(),
     }
 }
@@ -427,6 +441,7 @@ fn capture_wayland(
     let fatal_error = Arc::new(parking_lot::Mutex::new(None));
     let sent = Arc::new(AtomicU64::new(0));
     let dropped = Arc::new(AtomicU64::new(0));
+    let rate_limited = Arc::new(AtomicU64::new(0));
     let started = Instant::now();
 
     let thread_loop = unsafe { pw::thread_loop::ThreadLoopBox::new(Some("cap-wayland"), None) }
@@ -448,6 +463,9 @@ fn capture_wayland(
         fatal_error: fatal_error.clone(),
         sent: sent.clone(),
         dropped: dropped.clone(),
+        rate_limited: rate_limited.clone(),
+        capture_clock: started,
+        cadence_gate: FrameCadenceGate::new(1_000_000_000 / i64::from(input.fps.max(1))),
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -524,6 +542,7 @@ fn capture_wayland(
     tracing::info!(
         sent = sent.load(Ordering::Relaxed),
         dropped = dropped.load(Ordering::Relaxed),
+        rate_limited = rate_limited.load(Ordering::Relaxed),
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Linux Wayland PipeWire capture stopped"
     );
@@ -582,12 +601,24 @@ fn process_pipewire_frame(
         return Ok(None);
     }
 
+    let captured_at = Instant::now();
+    let ticks = i64::try_from(
+        captured_at
+            .saturating_duration_since(state.capture_clock)
+            .as_nanos(),
+    )
+    .unwrap_or(i64::MAX);
+    if !state.cadence_gate.admit(ticks) {
+        state.rate_limited.fetch_add(1, Ordering::Relaxed);
+        return Ok(None);
+    }
+
     let Some(raw_frame) = frame_from_pipewire_data(&mut datas[0], state.format, state.crop_bounds)?
     else {
         return Ok(Some(StallSendOutcome::StalledAndDropped { waited_ms: 0 }));
     };
     let frame = prepare_pipewire_frame(raw_frame, &mut state.scaler, state.video_info)?;
-    let timestamp = Timestamp::Instant(Instant::now());
+    let timestamp = Timestamp::Instant(captured_at);
 
     Ok(Some(send_with_stall_budget_futures(
         &mut state.video_tx,
@@ -1370,6 +1401,7 @@ fn capture_x11(
     while !stop_token.is_cancelled() {
         let mut frame = match grabber.grab() {
             Ok(frame) => frame,
+            Err(error) if input_config.window_id.is_some() => return Err(error),
             Err(error) => {
                 // X11 servers can transiently fail GetImage (e.g. while the
                 // root geometry changes). Log, back off one interval, retry.
@@ -1425,6 +1457,7 @@ fn capture_x11(
 pub(crate) struct X11Grabber {
     conn: RustConnection,
     root: x11rb::protocol::xproto::Window,
+    window: Option<X11WindowCapture>,
     x: i16,
     y: i16,
     width: u16,
@@ -1433,6 +1466,12 @@ pub(crate) struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+}
+
+struct X11WindowCapture {
+    id: u32,
+    pixmap: u32,
+    border_width: u16,
 }
 
 impl X11Grabber {
@@ -1448,22 +1487,38 @@ impl X11Grabber {
             .get(screen_num)
             .ok_or_else(|| anyhow!("X11 screen {screen_num} not found"))?;
         let root = screen.root;
-        let root_depth = screen.root_depth;
-        let root_visual_id = screen.root_visual;
+        let visual_id = match config.window_id {
+            Some(id) => {
+                if id == root || id == 0 {
+                    bail!("X11 window capture requires a non-root window");
+                }
+                conn.get_window_attributes(id)
+                    .context("request X11 window attributes")?
+                    .reply()
+                    .context("read X11 window attributes")?
+                    .visual
+            }
+            None => screen.root_visual,
+        };
 
-        let visual = screen
+        let (depth, visual) = screen
             .allowed_depths
             .iter()
-            .flat_map(|depth| depth.visuals.iter())
-            .find(|visual| visual.visual_id == root_visual_id)
-            .ok_or_else(|| anyhow!("X11 root visual {root_visual_id} not found"))?;
+            .find_map(|depth| {
+                depth
+                    .visuals
+                    .iter()
+                    .find(|visual| visual.visual_id == visual_id)
+                    .map(|visual| (depth.depth, visual))
+            })
+            .ok_or_else(|| anyhow!("X11 visual {visual_id} not found"))?;
 
         let bits_per_pixel = setup
             .pixmap_formats
             .iter()
-            .find(|format| format.depth == root_depth)
+            .find(|format| format.depth == depth)
             .map(|format| format.bits_per_pixel)
-            .ok_or_else(|| anyhow!("X11 pixmap format for depth {root_depth} not found"))?;
+            .ok_or_else(|| anyhow!("X11 pixmap format for depth {depth} not found"))?;
 
         let source_pixel = x11_source_pixel(
             setup.image_byte_order == ImageOrder::MSB_FIRST,
@@ -1502,9 +1557,37 @@ impl X11Grabber {
             config.fps.max(1),
         );
 
-        Ok(Self {
+        let window = if let Some(id) = config.window_id {
+            let version = conn
+                .composite_query_version(0, 4)
+                .context("XComposite is required for isolated window capture")?
+                .reply()
+                .context("query XComposite version")?;
+            if version.major_version == 0 && version.minor_version < 2 {
+                bail!("XComposite 0.2 or later is required for isolated window capture");
+            }
+            conn.change_window_attributes(
+                id,
+                &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+            )?
+            .check()?;
+            conn.composite_redirect_window(id, Redirect::AUTOMATIC)
+                .context("redirect X11 window for isolated capture")?
+                .check()
+                .context("enable isolated X11 window capture")?;
+            Some(X11WindowCapture {
+                id,
+                pixmap: 0,
+                border_width: 0,
+            })
+        } else {
+            None
+        };
+
+        let mut grabber = Self {
             conn,
             root,
+            window,
             x,
             y,
             width,
@@ -1513,18 +1596,99 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
-        })
+        };
+        grabber.refresh_window_pixmap()?;
+        Ok(grabber)
+    }
+
+    fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
+        let Some(window) = self.window.as_mut() else {
+            return Ok(());
+        };
+        let mut storage_changed = false;
+        while let Some(event) = self.conn.poll_for_event()? {
+            match event {
+                Event::UnmapNotify(event) if event.window == window.id => {
+                    bail!("Selected X11 window was unmapped");
+                }
+                Event::DestroyNotify(event) if event.window == window.id => {
+                    bail!("Selected X11 window was closed");
+                }
+                Event::ConfigureNotify(event) if event.window == window.id => {
+                    storage_changed = true
+                }
+                Event::ReparentNotify(event) if event.window == window.id => storage_changed = true,
+                Event::MapNotify(event) if event.window == window.id => storage_changed = true,
+                _ => {}
+            }
+        }
+        let attributes = self
+            .conn
+            .get_window_attributes(window.id)?
+            .reply()
+            .context("selected X11 window is no longer available")?;
+        if attributes.map_state != MapState::VIEWABLE {
+            bail!("Selected X11 window is no longer viewable");
+        }
+        let geometry = self
+            .conn
+            .get_geometry(window.id)?
+            .reply()
+            .context("read selected X11 window geometry")?;
+        if geometry.width == 0 || geometry.height == 0 {
+            bail!("Selected X11 window has no content");
+        }
+
+        if storage_changed
+            || window.pixmap == 0
+            || self.width != geometry.width
+            || self.height != geometry.height
+            || window.border_width != geometry.border_width
+        {
+            let pixmap = self.conn.generate_id()?;
+            self.conn
+                .composite_name_window_pixmap(window.id, pixmap)?
+                .check()
+                .context("access isolated X11 window pixels")?;
+            let previous = std::mem::replace(&mut window.pixmap, pixmap);
+            if previous != 0 {
+                self.conn.free_pixmap(previous)?.check()?;
+            }
+            self.width = geometry.width;
+            self.height = geometry.height;
+            window.border_width = geometry.border_width;
+        }
+
+        if self.show_cursor {
+            let position = self
+                .conn
+                .translate_coordinates(window.id, self.root, 0, 0)?
+                .reply()
+                .context("locate selected X11 window cursor")?;
+            self.x = position.dst_x;
+            self.y = position.dst_y;
+        }
+        Ok(())
     }
 
     /// Capture one frame of the configured region as a BGRZ video frame.
     pub(crate) fn grab(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+        self.refresh_window_pixmap()?;
+        let (drawable, x, y) = match &self.window {
+            Some(window) => {
+                let border = i16::try_from(window.border_width)
+                    .context("X11 window border exceeds capture limits")?;
+                (window.pixmap, border, border)
+            }
+            None => (self.root, self.x, self.y),
+        };
         let reply = self
             .conn
             .get_image(
                 ImageFormat::Z_PIXMAP,
-                self.root,
-                self.x,
-                self.y,
+                drawable,
+                x,
+                y,
                 self.width,
                 self.height,
                 u32::MAX,
@@ -1564,29 +1728,12 @@ impl X11Grabber {
                 .copy_from_slice(&reply.data[src_start..src_start + copy]);
         }
 
-        // Convert to BGRZ only when the server's visual differs; the common
-        // case (32-bit little-endian BGRX) is already BGRZ and short-circuits.
-        let mut frame = if self.source_pixel == self.output.pixel_format {
-            source
-        } else {
-            if self.scaler.is_none() {
-                self.scaler = Some(FrameScaler::new(
-                    self.source_pixel,
-                    u32::from(self.width),
-                    u32::from(self.height),
-                    self.output,
-                )?);
-            }
-            self.scaler
-                .as_mut()
-                .expect("scaler initialized")
-                .scale(&source, self.output)?
-        };
+        let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
 
-        if self.show_cursor {
-            if let Err(error) = self.composite_cursor(&mut frame) {
-                tracing::trace!(error = %error, "X11 cursor composite skipped");
-            }
+        if self.show_cursor
+            && let Err(error) = self.composite_cursor(&mut frame)
+        {
+            tracing::trace!(error = %error, "X11 cursor composite skipped");
         }
 
         Ok(frame)
@@ -1605,21 +1752,26 @@ impl X11Grabber {
             .reply()
             .context("read X11 cursor image")?;
 
-        let cursor_width = i32::from(cursor.width);
-        let cursor_height = i32::from(cursor.height);
-        if cursor_width <= 0 || cursor_height <= 0 {
+        if cursor.width == 0 || cursor.height == 0 {
             return Ok(());
         }
-        if cursor.cursor_image.len() != (cursor_width * cursor_height) as usize {
+        if cursor.cursor_image.len() != usize::from(cursor.width) * usize::from(cursor.height) {
             return Ok(());
         }
 
-        // Top-left of the cursor image in capture-region coordinates.
-        let origin_x = i32::from(cursor.x) - i32::from(cursor.xhot) - i32::from(self.x);
-        let origin_y = i32::from(cursor.y) - i32::from(cursor.yhot) - i32::from(self.y);
+        let scale_x = f64::from(frame.width()) / f64::from(self.width);
+        let scale_y = f64::from(frame.height()) / f64::from(self.height);
+        let cursor_width = (f64::from(cursor.width) * scale_x).ceil() as i32;
+        let cursor_height = (f64::from(cursor.height) * scale_y).ceil() as i32;
+        let origin_x = ((f64::from(cursor.x) - f64::from(cursor.xhot) - f64::from(self.x))
+            * scale_x)
+            .floor() as i32;
+        let origin_y = ((f64::from(cursor.y) - f64::from(cursor.yhot) - f64::from(self.y))
+            * scale_y)
+            .floor() as i32;
 
-        let frame_width = i32::from(self.width);
-        let frame_height = i32::from(self.height);
+        let frame_width = frame.width() as i32;
+        let frame_height = frame.height() as i32;
         let stride = frame.stride(0);
         let buf = frame.data_mut(0);
 
@@ -1633,7 +1785,11 @@ impl X11Grabber {
                 if fx < 0 || fx >= frame_width {
                     continue;
                 }
-                let pixel = cursor.cursor_image[(cy * cursor_width + cx) as usize];
+                let source_x =
+                    ((f64::from(cx) / scale_x) as usize).min(usize::from(cursor.width) - 1);
+                let source_y =
+                    ((f64::from(cy) / scale_y) as usize).min(usize::from(cursor.height) - 1);
+                let pixel = cursor.cursor_image[source_y * usize::from(cursor.width) + source_x];
                 let alpha = (pixel >> 24) & 0xff;
                 if alpha == 0 {
                     continue;
@@ -1826,7 +1982,17 @@ mod system_audio_tests {
 
 #[cfg(test)]
 mod pipewire_frame_tests {
-    use super::{FrameScaler, VideoInfo, prepare_pipewire_frame};
+    use super::{FrameScaler, VideoInfo, prefers_wayland_environment, prepare_pipewire_frame};
+
+    #[test]
+    fn active_wayland_sessions_use_the_portal_even_with_xwayland() {
+        assert!(prefers_wayland_environment(true, false, None));
+        assert!(prefers_wayland_environment(true, true, Some("wayland")));
+        assert!(prefers_wayland_environment(true, true, Some("Wayland")));
+        assert!(!prefers_wayland_environment(true, true, Some("x11")));
+        assert!(!prefers_wayland_environment(true, true, None));
+        assert!(!prefers_wayland_environment(false, true, Some("wayland")));
+    }
 
     #[test]
     fn matching_pipewire_frames_reuse_owned_pixel_storage_without_a_scaler() {

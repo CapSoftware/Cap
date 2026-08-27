@@ -1139,7 +1139,7 @@ mod tests {
         std::fs::write(target.join(cap_bin_name()), b"dev").unwrap();
         assert_eq!(
             resolve_selftest_binary_in(None, Some(&exe_dir), Some(&bundle), Some(&root)),
-            Some(target.join(cap_bin_name()))
+            cfg!(debug_assertions).then(|| target.join(cap_bin_name()))
         );
 
         // The installed app beats the dev checkout.
