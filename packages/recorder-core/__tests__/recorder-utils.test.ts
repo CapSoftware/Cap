@@ -229,4 +229,3 @@ describe("detectRecordingModeFromTrack", () => {
 		expect(detectRecordingModeFromTrack(tabTrack)).toBe("tab");
 	});
 });
-
