@@ -32,8 +32,8 @@ use std::{
 use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
-    CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, KeyboardData,
-    KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
+    CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
+    KeyboardData, KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
 };
 use gpui::{
     AnyElement, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -77,13 +77,6 @@ pub const STEREO_MODES: [(StereoMode, &str); 3] = [
     (StereoMode::Stereo, "Stereo"),
     (StereoMode::MonoL, "Mono L"),
     (StereoMode::MonoR, "Mono R"),
-];
-
-/// `CURSOR_TYPE_OPTIONS` (`:421-433`).
-pub const CURSOR_TYPES: [(&str, &str, &str); 3] = [
-    ("auto", "Auto", "Use the cursor Cap recorded"),
-    ("pointer", "Pointer", "Always draw the standard arrow"),
-    ("circle", "Circle", "Draw a simple circle instead"),
 ];
 
 /// `CURSOR_ANIMATION_STYLE_OPTIONS` (`:434-476`) -- the four presets plus the
@@ -421,6 +414,9 @@ pub enum CursorSlider {
     Tension,
     Friction,
     Mass,
+    RippleStrength,
+    RippleSize,
+    RippleDuration,
 }
 
 impl CursorSlider {
@@ -432,6 +428,15 @@ impl CursorSlider {
             Self::Tension => (1., 600., 1.),
             Self::Friction => (0., 200., 0.1),
             Self::Mass => (0.1, 15., 0.01),
+            // Strength and size are stored as fractions and shown as
+            // percentages; `CursorRippleConfig`'s own ranges, x100.
+            Self::RippleStrength => (0., 100., 1.),
+            Self::RippleSize => (25., 300., 1.),
+            Self::RippleDuration => (
+                CursorRippleConfig::DURATION_RANGE.0,
+                CursorRippleConfig::DURATION_RANGE.1,
+                0.05,
+            ),
         }
     }
 
@@ -444,6 +449,9 @@ impl CursorSlider {
             Self::Tension => cursor.tension,
             Self::Friction => cursor.friction,
             Self::Mass => cursor.mass,
+            Self::RippleStrength => cursor.ripple.strength_clamped() * 100.,
+            Self::RippleSize => cursor.ripple.size_clamped() * 100.,
+            Self::RippleDuration => cursor.ripple.duration_clamped(),
         }
     }
 }
@@ -1046,6 +1054,9 @@ impl EditorWindow {
                         match_cursor_preset(cursor.tension, cursor.mass, cursor.friction)
                             .unwrap_or(CursorAnimationStyle::Custom);
                 }
+                CursorSlider::RippleStrength => cursor.ripple.strength = value / 100.,
+                CursorSlider::RippleSize => cursor.ripple.size = value / 100.,
+                CursorSlider::RippleDuration => cursor.ripple.duration = value,
             }
             true
         });
@@ -1628,10 +1639,6 @@ impl EditorWindow {
             return body.into_any_element();
         }
 
-        let cursor_type = format!("{:?}", cursor.cursor_type()).to_lowercase();
-        let type_index = CURSOR_TYPES
-            .iter()
-            .position(|(value, _, _)| *value == cursor_type);
         let style_index = CURSOR_STYLES
             .iter()
             .position(|(style, _, _)| *style == cursor.animation_style);
@@ -1639,29 +1646,9 @@ impl EditorWindow {
 
         body = body
             .child(
-                ui::Field::plain(&theme, "Cursor Type")
+                ui::Field::plain(&theme, "Cursor Style")
                     .icon("icons/cursor.svg")
-                    .child(
-                        ui::RadioCards::plain(
-                            &theme,
-                            "cursor-type",
-                            CURSOR_TYPES
-                                .iter()
-                                .map(|(_, label, description)| {
-                                    ui::RadioCard::new(*label, Some(description))
-                                })
-                                .collect(),
-                            type_index,
-                        )
-                        .on_select(cx.listener(
-                            |this, index: &usize, window, cx| {
-                                let Some((value, _, _)) = CURSOR_TYPES.get(*index) else {
-                                    return;
-                                };
-                                this.set_cursor_type(value, window, cx);
-                            },
-                        )),
-                    ),
+                    .child(self.render_cursor_style_picker(cx)),
             )
             .child(
                 ui::Field::plain(&theme, "Size")
@@ -1673,6 +1660,7 @@ impl EditorWindow {
                     .icon("icons/rotate-3d.svg")
                     .child(self.slider(SliderKey::Cursor(CursorSlider::Tilt), "x100%", cx)),
             )
+            .child(self.render_cursor_ripple(cx))
             .child(
                 ui::Field::plain(&theme, "Hide When Idle")
                     .icon("icons/timer.svg")
@@ -1719,136 +1707,112 @@ impl EditorWindow {
         }
 
         let smooth = !cursor.raw;
-        body.child(
-            ui::Field::plain(&theme, "Cursor Movement Style")
-                .icon("icons/rabbit.svg")
-                .child(
-                    ui::RadioCards::plain(
-                        &theme,
-                        "cursor-style",
-                        CURSOR_STYLES
-                            .iter()
-                            .map(|(_, label, description)| {
-                                ui::RadioCard::new(*label, Some(description))
-                            })
-                            .collect(),
-                        style_index,
+        let mut body = body
+            .child(
+                ui::Field::plain(&theme, "Cursor Movement Style")
+                    .icon("icons/rabbit.svg")
+                    .child(
+                        ui::RadioCards::plain(
+                            &theme,
+                            "cursor-style",
+                            CURSOR_STYLES
+                                .iter()
+                                .map(|(_, label, description)| {
+                                    ui::RadioCard::new(*label, Some(description))
+                                })
+                                .collect(),
+                            style_index,
+                        )
+                        .on_select(cx.listener(
+                            |this, index: &usize, window, cx| {
+                                let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
+                                    return;
+                                };
+                                let style = *style;
+                                // `applyCursorStylePreset` (`:551-561`): the style and
+                                // its three physics values, in one batch.
+                                this.edit_project("cursor-style", window, cx, move |project| {
+                                    project.cursor.animation_style = style;
+                                    if let Some(preset) = style.preset() {
+                                        project.cursor.tension = preset.tension;
+                                        project.cursor.mass = preset.mass;
+                                        project.cursor.friction = preset.friction;
+                                    }
+                                    true
+                                });
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        ui::Field::plain(&theme, "Smooth Movement")
+                            .icon("icons/ease-curve.svg")
+                            .value(
+                                ui::Toggle::plain(&theme, "cursor-smooth", smooth)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.sidebar.cursor_physics_open.set_open(!smooth);
+                                        this.animate_collapsibles(window, cx);
+                                        this.edit_project("cursor-raw", window, cx, move |p| {
+                                            p.cursor.raw = smooth;
+                                            true
+                                        });
+                                    }))
+                                    .into_any_element(),
+                            ),
                     )
-                    .on_select(cx.listener(
-                        |this, index: &usize, window, cx| {
-                            let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
-                                return;
-                            };
-                            let style = *style;
-                            // `applyCursorStylePreset` (`:551-561`): the style and
-                            // its three physics values, in one batch.
-                            this.edit_project("cursor-style", window, cx, move |project| {
-                                project.cursor.animation_style = style;
-                                if let Some(preset) = style.preset() {
-                                    project.cursor.tension = preset.tension;
-                                    project.cursor.mass = preset.mass;
-                                    project.cursor.friction = preset.friction;
-                                }
-                                true
-                            });
-                        },
+                    .child(collapsible(
+                        &self.sidebar.cursor_physics_open,
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.))
+                            // `pt-4 pb-6`
+                            .pt(px(16.))
+                            .pb(px(24.))
+                            .child(ui::Field::plain(&theme, "Tension").child(self.slider(
+                                SliderKey::Cursor(CursorSlider::Tension),
+                                "",
+                                cx,
+                            )))
+                            .child(ui::Field::plain(&theme, "Friction").child(self.slider(
+                                SliderKey::Cursor(CursorSlider::Friction),
+                                "",
+                                cx,
+                            )))
+                            .child(ui::Field::plain(&theme, "Mass").child(self.slider(
+                                SliderKey::Cursor(CursorSlider::Mass),
+                                "",
+                                cx,
+                            )))
+                            .into_any_element(),
                     )),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    ui::Field::plain(&theme, "Smooth Movement")
-                        .icon("icons/ease-curve.svg")
-                        .value(
-                            ui::Toggle::plain(&theme, "cursor-smooth", smooth)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.sidebar.cursor_physics_open.set_open(!smooth);
-                                    this.animate_collapsibles(window, cx);
-                                    this.edit_project("cursor-raw", window, cx, move |p| {
-                                        p.cursor.raw = smooth;
-                                        true
-                                    });
-                                }))
-                                .into_any_element(),
-                        ),
-                )
-                .child(collapsible(
-                    &self.sidebar.cursor_physics_open,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(16.))
-                        // `pt-4 pb-6`
-                        .pt(px(16.))
-                        .pb(px(24.))
-                        .child(ui::Field::plain(&theme, "Tension").child(self.slider(
-                            SliderKey::Cursor(CursorSlider::Tension),
-                            "",
-                            cx,
-                        )))
-                        .child(ui::Field::plain(&theme, "Friction").child(self.slider(
-                            SliderKey::Cursor(CursorSlider::Friction),
-                            "",
-                            cx,
-                        )))
-                        .child(ui::Field::plain(&theme, "Mass").child(self.slider(
-                            SliderKey::Cursor(CursorSlider::Mass),
-                            "",
-                            cx,
-                        )))
-                        .into_any_element(),
-                )),
-        )
-        .child(
-            ui::Field::plain(&theme, "High Quality SVG Cursors")
-                .icon("icons/sparkles.svg")
-                .value(
-                    ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let next = !this.project.cursor.use_svg;
-                            this.edit_project("cursor-svg", window, cx, move |p| {
-                                p.cursor.use_svg = next;
-                                true
-                            });
-                        }))
-                        .into_any_element(),
-                ),
-        )
-        .into_any_element()
-    }
+            );
 
-    /// `CursorConfiguration::type` is private in `cap-project` with a getter
-    /// and no setter, and this app does not edit the shared crate -- so the
-    /// write goes through serde, which is the field's public surface. One
-    /// round trip per click of a radio card costs nothing.
-    fn set_cursor_type(
-        &mut self,
-        value: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_project("cursor-type", window, cx, move |project| {
-            let Ok(mut json) = serde_json::to_value(&project.cursor) else {
-                return false;
-            };
-            let Some(object) = json.as_object_mut() else {
-                return false;
-            };
-            if object.get("type").and_then(|value| value.as_str()) == Some(value) {
-                return false;
-            }
-            object.insert("type".into(), serde_json::Value::String(value.into()));
-            match serde_json::from_value(json) {
-                Ok(cursor) => {
-                    project.cursor = cursor;
-                    true
-                }
-                Err(_) => false,
-            }
-        });
+        // An explicit family forces the SVG assets, so the toggle would be
+        // showing a setting the renderer is already overriding.
+        if cursor.cursor_type().family().is_none() {
+            body = body.child(
+                ui::Field::plain(&theme, "High Quality SVG Cursors")
+                    .icon("icons/sparkles.svg")
+                    .value(
+                        ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let next = !this.project.cursor.use_svg;
+                                this.edit_project("cursor-svg", window, cx, move |p| {
+                                    p.cursor.use_svg = next;
+                                    true
+                                });
+                            }))
+                            .into_any_element(),
+                    ),
+            );
+        }
+
+        body.into_any_element()
     }
 
     // -- Keyboard ------------------------------------------------------------

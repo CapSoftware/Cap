@@ -168,6 +168,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "maximize.svg",
     "moon.svg",
     "mouse-pointer-2.svg",
+    "mouse-pointer-click.svg",
     "move.svg",
     "move-right.svg",
     "palette.svg",
@@ -324,6 +325,9 @@ mod tests {
         // The five later tabs, the colour-grade section and the eight segment
         // panels each name their own glyphs.
         include_str!("editor_tabs.rs"),
+        // The cursor tab's style picker and ripple section live one directory
+        // down, and the ripple field names its own glyph.
+        include_str!("editor_sidebar/cursor.rs"),
         include_str!("editor_color.rs"),
         include_str!("editor_panels.rs"),
         // The crop dialog's ratio / Full / Reset glyphs and the chevron

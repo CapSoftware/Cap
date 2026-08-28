@@ -47,9 +47,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cap_cursor_info::CursorFamily;
 use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
 use cap_project::{
-    ClipSpeedAudioMode, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    ClipSpeedAudioMode, Cursors, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, TimelineConfiguration, XY,
 };
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
@@ -237,6 +238,10 @@ pub struct ProjectSummary {
     /// The cursor tab is disabled on `!meta().hasRecordedCursorData`
     /// (`ConfigSidebar.tsx:610`).
     pub has_cursor_data: bool,
+    /// The asset family the recorded cursor shapes belong to, which the style
+    /// picker highlights as "Recorded" and falls back to while the project's
+    /// own type is `Auto`.
+    pub recorded_cursor_family: Option<CursorFamily>,
     /// `editorInstance.recordings.segments[i].display.duration` -- the ceiling
     /// a clip's end handle trims out to (`TL/ClipTrack.tsx:1160-1162`).
     pub clip_display_durations: Vec<f64>,
@@ -374,6 +379,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         duration: duration.max(0.0),
         has_camera,
         has_cursor_data: has_recorded_cursor_data(&meta, studio.as_ref()),
+        recorded_cursor_family: recorded_cursor_family(studio.as_ref()),
         clip_display_durations: recordings
             .segments
             .iter()
@@ -438,6 +444,25 @@ fn has_recorded_cursor_data(meta: &RecordingMeta, studio: &StudioRecordingMeta) 
                 .is_some_and(|cursor| meta.path(cursor).exists())
         }),
     }
+}
+
+/// The family the recording's own cursor shapes belong to.
+///
+/// Keyed by cursor id so the answer does not depend on `HashMap` iteration
+/// order: a bundle whose shapes span two families would otherwise pick a
+/// different card between two opens of the same recording.
+fn recorded_cursor_family(studio: &StudioRecordingMeta) -> Option<CursorFamily> {
+    let StudioRecordingMeta::MultipleSegments { inner } = studio else {
+        return None;
+    };
+    let Cursors::Correct(cursors) = &inner.cursors else {
+        return None;
+    };
+    let mut ids: Vec<_> = cursors.keys().collect();
+    ids.sort();
+    ids.into_iter()
+        .find_map(|id| cursors.get(id).and_then(|cursor| cursor.shape))
+        .map(|shape| shape.family())
 }
 
 /// One rendered frame, lifted into gpui's sprite atlas.
@@ -1310,6 +1335,9 @@ pub struct EditorWindow {
     /// model can be rebuilt after every edit.
     has_camera: bool,
     multiple_clips: bool,
+    /// `ProjectSummary::recorded_cursor_family`, kept here because the cursor
+    /// tab renders long before (and independently of) the load state's box.
+    pub(crate) recorded_cursor_family: Option<CursorFamily>,
     /// The debounced `project-config.json` write, and the task driving it.
     pending_save: Rc<RefCell<PendingProjectSave>>,
     save_task: Option<gpui::Task<()>>,
@@ -1620,6 +1648,7 @@ impl EditorWindow {
             recording_duration: 0.0,
             has_camera: false,
             multiple_clips: false,
+            recorded_cursor_family: None,
             pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
             name_input,
@@ -1709,6 +1738,7 @@ impl EditorWindow {
         self.recording_duration = summary.recording_duration;
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
+        self.recorded_cursor_family = summary.recorded_cursor_family;
         self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
@@ -8336,6 +8366,7 @@ impl Render for EditorWindow {
         // a brand-new box empty until something else asked for a frame.
         self.prepare_sidebar_fields(window, cx);
         self.prepare_animated_gradient_fields(window, cx);
+        self.prepare_cursor_fields(window, cx);
         self.sync_hex_inputs(window, cx);
         self.sync_picker_hex(window, cx);
         self.sync_crop_container(window);

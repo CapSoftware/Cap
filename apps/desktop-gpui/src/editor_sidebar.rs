@@ -35,7 +35,7 @@
 //!   re-encode (`src-tauri/src/recording.rs:181-208, 437-472`).
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -63,6 +63,7 @@ use crate::{
 };
 
 mod animated_gradient;
+mod cursor;
 
 // ---------------------------------------------------------------------------
 // The catalogue: every constant the background section reads
@@ -725,6 +726,9 @@ pub enum ColorTarget {
     GradientTo,
     AnimatedGradientStop(usize),
     BorderColor,
+    /// The click ripple's ring colour, the one `[u8; 3]` target outside the
+    /// background tab.
+    CursorRipple,
     CaptionColor,
     CaptionBackground,
     CaptionHighlight,
@@ -744,6 +748,7 @@ impl ColorTarget {
                 | Self::GradientTo
                 | Self::AnimatedGradientStop(_)
                 | Self::BorderColor
+                | Self::CursorRipple
         )
     }
 }
@@ -797,6 +802,16 @@ pub struct SidebarState {
     /// `KCollapsible open={!project.cursor.raw}` physics panel.
     pub camera_shadow_open: CollapsibleState,
     pub cursor_physics_open: CollapsibleState,
+    /// The click-ripple settings, revealed by their own toggle.
+    pub cursor_ripple_open: CollapsibleState,
+    /// The style picker's rasterised cursor art, keyed by shape and the device
+    /// pixel box it was drawn for. A `BTreeMap` because `CursorShape` is `Ord`
+    /// but not `Hash`.
+    cursor_previews:
+        std::cell::RefCell<BTreeMap<(cap_cursor_info::CursorShape, u32, u32), Arc<RenderImage>>>,
+    /// The device scale those were rasterised at, sampled once a frame from
+    /// `render` -- the only place in the sidebar's chain with a `&Window`.
+    cursor_scale: f32,
     /// The 3D panel's three `Camera3DSection`s and the zoom panel's helper.
     pub panel_sections: std::cell::RefCell<HashMap<PanelSection, std::rc::Rc<CollapsibleState>>>,
 
@@ -873,6 +888,9 @@ impl SidebarState {
             grade_previews: std::cell::RefCell::new(HashMap::new()),
             camera_shadow_open: CollapsibleState::new(false),
             cursor_physics_open: CollapsibleState::new(!config.cursor.raw),
+            cursor_ripple_open: CollapsibleState::new(config.cursor.ripple.enabled),
+            cursor_previews: std::cell::RefCell::new(BTreeMap::new()),
+            cursor_scale: 2.,
             panel_sections: std::cell::RefCell::new(HashMap::new()),
             noise: std::cell::RefCell::new(None),
             menu: None,
@@ -1628,6 +1646,7 @@ impl EditorWindow {
                     .as_ref()
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
+            ColorTarget::CursorRipple => Some(self.project.cursor.ripple.color),
             _ => self.hex_string_for(target).and_then(|hex| {
                 hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             }),
@@ -1663,6 +1682,17 @@ impl EditorWindow {
     ) {
         if target.is_hex_string() {
             return self.set_hex_color(target, color, window, cx);
+        }
+        // The one `[u8; 3]` target that does not live under `background`, so
+        // it takes the general fan-out rather than `edit_background`.
+        if target == ColorTarget::CursorRipple {
+            return self.edit_project("cursor-ripple-color", window, cx, move |project| {
+                if project.cursor.ripple.color == color {
+                    return false;
+                }
+                project.cursor.ripple.color = color;
+                true
+            });
         }
         self.edit_background(
             "color",
@@ -3864,6 +3894,8 @@ pub(crate) fn format_slider_value(value: f32, unit: &str) -> String {
         "int" => format!("{}", value.round() as i32),
         "x100%" => format!("{}%", (value * 100.).round() as i32),
         "pct" => format!("{:.1}%", value * 100.),
+        // The ripple duration's `${v.toFixed(2)}s`.
+        "secs" => format!("{value:.2}s"),
         unit => format!("{value:.1}{unit}"),
     }
 }

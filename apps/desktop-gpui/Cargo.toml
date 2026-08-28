@@ -56,6 +56,12 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+# The cursor style picker draws the same SVG assets the renderer composites.
+# gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
+# be rasterised instead: `resvg` at the pin cap-rendering already builds, into
+# a `RenderImage` (`src/editor_sidebar/cursor.rs`).
+cap-cursor-info = { path = "../../crates/cursor-info" }
+resvg = "0.45"
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
