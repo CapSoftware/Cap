@@ -2410,14 +2410,15 @@ pub struct ProjectUniforms {
     pub camera3d_zoom: Option<camera3d::Camera3DScreenZoom>,
 }
 
-/// Ripples for every mouse-down still inside its animation window, newest
-/// last. The centre comes from the smoothed cursor path at the click's own
-/// timestamp, so the ring sits under where the cursor was DRAWN rather than
-/// where the raw sample was.
+fn cursor_time_for_interpolation(time: f32, stop_time: Option<f32>) -> f32 {
+    stop_time.map_or(time, |stop_time| time.min(stop_time))
+}
+
 fn collect_click_ripples(
     project: &ProjectConfiguration,
     cursor_events: &CursorEvents,
     now_ms: f64,
+    cursor_stop_time: Option<f32>,
     cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
 ) -> Vec<ClickRipple> {
     let ripple = &project.cursor.ripple;
@@ -2436,7 +2437,9 @@ fn collect_click_ripples(
                 return None;
             }
 
-            let position = cursor_interp_fn((click.time_ms / 1000.0) as f32)?.position;
+            let cursor_time =
+                cursor_time_for_interpolation((click.time_ms / 1000.0) as f32, cursor_stop_time);
+            let position = cursor_interp_fn(cursor_time)?.position;
 
             Some(ClickRipple {
                 position,
@@ -3492,17 +3495,10 @@ impl ProjectUniforms {
             .stop_movement_in_last_seconds
             .map(|seconds| (total_duration - seconds as f64).max(0.0) as f32);
 
-        let cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
-            current_recording_time.min(stop_time)
-        } else {
-            current_recording_time
-        };
-
-        let prev_cursor_time_for_interp = if let Some(stop_time) = cursor_stop_time {
-            prev_recording_time.min(stop_time)
-        } else {
-            prev_recording_time
-        };
+        let cursor_time_for_interp =
+            cursor_time_for_interpolation(current_recording_time, cursor_stop_time);
+        let prev_cursor_time_for_interp =
+            cursor_time_for_interpolation(prev_recording_time, cursor_stop_time);
 
         let cursor_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = project.screen_motion_blur.clamp(0.0, 1.0);
@@ -3517,6 +3513,7 @@ impl ProjectUniforms {
             project,
             cursor_events,
             current_recording_time as f64 * 1000.0,
+            cursor_stop_time,
             cursor_interp_fn,
         );
         let lookback_t = (cursor_time_for_interp - 0.4).max(0.0);
@@ -4501,6 +4498,116 @@ impl ProjectUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ripple_click(time_ms: f64, down: bool) -> cap_project::CursorClickEvent {
+        cap_project::CursorClickEvent {
+            active_modifiers: Vec::new(),
+            cursor_num: 0,
+            cursor_id: "cursor".to_owned(),
+            time_ms,
+            down,
+        }
+    }
+
+    fn ripple_cursor_at(time: f32) -> Option<InterpolatedCursorPosition> {
+        Some(InterpolatedCursorPosition {
+            position: Coord::new(XY::new(f64::from(time), 0.5)),
+            velocity: XY::new(0.0, 0.0),
+            cursor_id: "cursor".to_owned(),
+        })
+    }
+
+    #[test]
+    fn click_ripples_share_cursor_freeze_without_freezing_the_animation() {
+        let mut project = ProjectConfiguration::default();
+        project.cursor.ripple.enabled = true;
+        project.cursor.ripple.duration = 1.0;
+        let events = CursorEvents {
+            clicks: vec![ripple_click(8_500.0, true)],
+            ..Default::default()
+        };
+
+        for (now_ms, expected_progress) in [(8_750.0, 0.25), (9_000.0, 0.5)] {
+            let ripples =
+                collect_click_ripples(&project, &events, now_ms, Some(8.0), &ripple_cursor_at);
+            let displayed = ripple_cursor_at(cursor_time_for_interpolation(
+                (now_ms / 1000.0) as f32,
+                Some(8.0),
+            ))
+            .unwrap();
+
+            assert_eq!(ripples.len(), 1);
+            assert_eq!(ripples[0].position.coord, displayed.position.coord);
+            assert_eq!(ripples[0].position.coord.x, 8.0);
+            assert_eq!(ripples[0].progress, expected_progress);
+        }
+    }
+
+    #[test]
+    fn click_ripples_preserve_click_positions_before_the_freeze_or_without_it() {
+        let mut project = ProjectConfiguration::default();
+        project.cursor.ripple.enabled = true;
+        let events = CursorEvents {
+            clicks: vec![ripple_click(8_500.0, true)],
+            ..Default::default()
+        };
+
+        for (stop_time, expected_position) in [(None, 8.5), (Some(9.0), 8.5), (Some(0.0), 0.0)] {
+            let ripples =
+                collect_click_ripples(&project, &events, 8_750.0, stop_time, &ripple_cursor_at);
+
+            assert_eq!(ripples.len(), 1);
+            assert_eq!(ripples[0].position.coord.x, expected_position);
+        }
+    }
+
+    #[test]
+    fn click_ripples_exclude_future_expired_and_release_events() {
+        let mut project = ProjectConfiguration::default();
+        project.cursor.ripple.enabled = true;
+        project.cursor.ripple.duration = 1.0;
+        let events = CursorEvents {
+            clicks: vec![
+                ripple_click(8_000.0, true),
+                ripple_click(8_500.0, false),
+                ripple_click(9_000.0, true),
+                ripple_click(9_001.0, true),
+            ],
+            ..Default::default()
+        };
+
+        let ripples =
+            collect_click_ripples(&project, &events, 9_000.0, Some(8.0), &ripple_cursor_at);
+
+        assert_eq!(ripples.len(), 1);
+        assert_eq!(ripples[0].progress, 0.0);
+        assert_eq!(ripples[0].position.coord.x, 8.0);
+    }
+
+    #[test]
+    fn click_ripples_respect_visibility_and_the_instance_limit() {
+        let mut project = ProjectConfiguration::default();
+        let events = CursorEvents {
+            clicks: (0..10)
+                .map(|index| ripple_click(index as f64, true))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at).is_empty());
+
+        project.cursor.ripple.enabled = true;
+        project.cursor.hide = true;
+        assert!(collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at).is_empty());
+
+        project.cursor.hide = false;
+        let ripples = collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at);
+        assert_eq!(ripples.len(), layers::MAX_CLICK_RIPPLES);
+        assert_eq!(ripples[0].position.coord.x, f64::from(0.004_f32));
+        assert_eq!(
+            ripples.last().unwrap().position.coord.x,
+            f64::from(0.009_f32)
+        );
+    }
 
     fn render_options(screen_width: u32, screen_height: u32) -> RenderOptions {
         RenderOptions {
