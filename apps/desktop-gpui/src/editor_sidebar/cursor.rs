@@ -1,23 +1,3 @@
-//! The Cursor tab's style picker and its click-ripple section.
-//!
-//! The picker is one row of four tiles, each showing a family's arrow drawn
-//! from the **real** cursor art in `crates/cursor-info/assets` -- the same
-//! SVGs the renderer composites -- so the choice is made by looking at the
-//! cursor rather than by reading the word "Windows". The arrow alone is what
-//! makes a family recognisable, so the tile shows nothing else. `svg()` keeps
-//! only a glyph's alpha and tints it with the element's text colour, which
-//! would flatten a two-tone cursor into a silhouette, so each arrow is
-//! rasterised with `resvg` into a [`gpui::RenderImage`] and cached per
-//! (shape, device-pixel box).
-//!
-//! The tiles are plain theme surfaces: the assets carry their own
-//! black-on-white edge and a soft drop shadow, so they read on a light or a
-//! dark tile the way a real cursor reads over a light or dark window.
-//!
-//! The fourth tile is `Circle`, whose art has no asset: it is the renderer's
-//! own touch circle (`crates/rendering/src/layers/cursor.rs`
-//! `create_circle_cursor`) restated with gpui primitives.
-
 use cap_cursor_info::{CursorFamily, CursorShape};
 use cap_project::CursorType;
 
@@ -27,8 +7,6 @@ use crate::editor_tabs::CursorSlider;
 const CARD_GAP: f32 = 8.;
 const TILE_HEIGHT: f32 = 60.;
 const TILE_RADIUS: f32 = 10.;
-/// The arrow's box. Square, and every arrow asset is taller than it is wide,
-/// so the fit lands on the height and each family keeps its own width.
 const ARROW_BOX: f32 = 34.;
 const CIRCLE_DISC: f32 = 28.;
 const CARD_GROUP: &str = "cursor-style-card";
@@ -58,9 +36,6 @@ impl CursorCard {
         }
     }
 
-    /// What clicking the card writes. Always explicit -- the picker never
-    /// writes `Auto` back, because a card is only ever shown selected on the
-    /// strength of a family it can name.
     fn cursor_type(self) -> CursorType {
         match self {
             Self::Family(CursorFamily::MacOS) => CursorType::MacOS,
@@ -71,8 +46,6 @@ impl CursorCard {
     }
 }
 
-/// Host order: the platform's own cursors first, then the other two, then the
-/// styled circle.
 fn cursor_cards() -> [CursorCard; 4] {
     if cfg!(target_os = "windows") {
         [
@@ -91,9 +64,6 @@ fn cursor_cards() -> [CursorCard; 4] {
     }
 }
 
-/// Which card reads as selected: the explicit type when there is one, and
-/// otherwise the family the recording was made with -- or, failing that, this
-/// host's -- because that is what `Auto` will actually draw.
 fn selected_card(cursor_type: &CursorType, recorded: Option<CursorFamily>) -> CursorCard {
     if *cursor_type == CursorType::Circle {
         return CursorCard::Circle;
@@ -120,7 +90,6 @@ fn black(alpha: f32) -> Hsla {
     gpui::hsla(0., 0., 0., alpha)
 }
 
-/// One cursor shape, rasterised to fit `width` x `height` device pixels.
 fn rasterize_cursor(shape: CursorShape, width: u32, height: u32) -> Option<Arc<RenderImage>> {
     let raw = shape.resolve()?.raw;
     let tree = resvg::usvg::Tree::from_str(raw, &resvg::usvg::Options::default()).ok()?;
@@ -146,8 +115,6 @@ fn rasterize_cursor(shape: CursorShape, width: u32, height: u32) -> Option<Arc<R
     ])))
 }
 
-/// The touch circle: a translucent disc with a dark outer ring, a light inner
-/// ring and a faint shadow, as `create_circle_cursor` draws it.
 fn circle_art() -> AnyElement {
     div()
         .size(px(CIRCLE_DISC))
@@ -173,9 +140,6 @@ fn circle_art() -> AnyElement {
 }
 
 impl EditorWindow {
-    /// The ripple colour's hex field, and the device scale the previews are
-    /// rasterised for. Both need a `&mut Window`, which the sidebar's render
-    /// chain does not carry, so they are settled once a frame from `render`.
     pub(crate) fn prepare_cursor_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.tab != SidebarTab::Cursor {
             return;
@@ -219,10 +183,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// The tile: the family's arrow (or the touch circle) centred on a plain
-    /// surface. `RadioCards`' grammar for the states -- `border-gray-3
-    /// bg-gray-2`, `hover:border-gray-5`, and `border-blue-8 bg-blue-3/40`
-    /// plus a 1px ring (so a 2px edge) when checked.
     fn render_cursor_tile(&self, card: CursorCard, selected: bool, recorded: bool) -> AnyElement {
         let theme = self.theme;
         let art = match card {
@@ -305,7 +265,6 @@ impl EditorWindow {
                     .child(card.label()),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                // `CursorType` is not `Copy`, and the listener is an `Fn`.
                 let cursor_type = cursor_type.clone();
                 this.edit_project("cursor-type", window, cx, move |project| {
                     if *project.cursor.cursor_type() == cursor_type {
@@ -318,7 +277,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// `grid grid-cols-4 gap-2`: one row, the four cards sharing the width.
     pub(crate) fn render_cursor_style_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.selected_cursor_card();
         let recorded = self.recorded_cursor_family;
@@ -335,8 +293,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// "Click Ripple" and, once it is on, the ring's colour and its three
-    /// shape sliders.
     pub(crate) fn render_cursor_ripple(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let ripple = &self.project.cursor.ripple;
@@ -418,8 +374,6 @@ mod tests {
         }
     }
 
-    /// Every card writes a type that resolves back to the card it was drawn
-    /// on, which is what keeps the selected ring on the card just clicked.
     #[test]
     fn every_card_round_trips_through_its_type() {
         for card in cursor_cards() {
@@ -435,7 +389,6 @@ mod tests {
             selected_card(&CursorType::Auto, Some(CursorFamily::MacOSTahoe)),
             CursorCard::Family(CursorFamily::MacOSTahoe)
         );
-        // The legacy value renders exactly as `Auto` does.
         assert_eq!(
             selected_card(&CursorType::Pointer, Some(CursorFamily::Windows)),
             CursorCard::Family(CursorFamily::Windows)
@@ -446,9 +399,6 @@ mod tests {
         );
     }
 
-    /// Every family's arrow resolves and rasterises at the tile's box (at 1x
-    /// and 2x) -- a card with a missing asset would silently draw an empty
-    /// tile.
     #[test]
     fn every_arrow_rasterises() {
         for family in [

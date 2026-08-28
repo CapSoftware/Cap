@@ -16,8 +16,6 @@ import { Field, Slider } from "./ui";
 export type CursorFamily = "macos" | "tahoe" | "windows";
 type CursorStyle = CursorFamily | "circle";
 
-// One arrow per family: the arrow is what makes a cursor family recognisable
-// at a glance, and the tile only has to say "this one", not exhibit the set.
 const CURSOR_FAMILIES = {
 	macos: { label: "macOS", arrow: macArrow },
 	tahoe: { label: "macOS Tahoe", arrow: tahoeArrow },
@@ -70,16 +68,11 @@ function cursorStyleOrder(): CursorStyle[] {
 }
 
 function CursorArrow(props: { svg: string }) {
-	// The assets carry their own black-on-white edge and a soft drop shadow,
-	// so they read on the plain tile in both themes, the same way a real
-	// cursor reads over a light or dark window.
 	return (
 		<div class="h-[34px] [&>svg]:h-full [&>svg]:w-auto" innerHTML={props.svg} />
 	);
 }
 
-// The renderer's touch circle (`create_circle_cursor`): a translucent disc
-// with a dark outer ring, a light inner ring and a faint shadow.
 function CircleCursor() {
 	return (
 		<div class="size-7 rounded-full bg-white/15 shadow-[0_0_0_1px_rgba(0,0,0,0.38),inset_0_0_0_1px_rgba(255,255,255,0.42),0_0_5px_rgba(0,0,0,0.16)]" />
@@ -123,9 +116,6 @@ export function CursorStylePicker() {
 
 	const recorded = createMemo(() => recordedCursorFamily(meta()));
 
-	// `auto` draws the recording's own family (or, without shape info, this
-	// host's), so that is the tile that reads as selected. Clicking always
-	// writes an explicit family; `auto` is never written back.
 	const selected = createMemo<CursorStyle>(() => {
 		const type = project.cursor.type;
 		if (type === "circle" || isExplicitCursorFamily(type)) return type;
