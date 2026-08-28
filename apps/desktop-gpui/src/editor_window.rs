@@ -47,9 +47,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cap_cursor_info::CursorFamily;
 use cap_editor::{EditorFrameOutput, EditorInstance, EditorState};
 use cap_project::{
-    ClipSpeedAudioMode, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    ClipSpeedAudioMode, Cursors, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     StudioRecordingMeta, TimelineConfiguration, XY,
 };
 use cap_rendering::{FrameLayout, ProjectRecordingsMeta, RenderedFrame};
@@ -72,6 +73,8 @@ use crate::{
     theme::Theme,
     ui,
 };
+
+mod frame;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -237,6 +240,10 @@ pub struct ProjectSummary {
     /// The cursor tab is disabled on `!meta().hasRecordedCursorData`
     /// (`ConfigSidebar.tsx:610`).
     pub has_cursor_data: bool,
+    /// The asset family the recorded cursor shapes belong to, which the style
+    /// picker highlights as "Recorded" and falls back to while the project's
+    /// own type is `Auto`.
+    pub recorded_cursor_family: Option<CursorFamily>,
     /// `editorInstance.recordings.segments[i].display.duration` -- the ceiling
     /// a clip's end handle trims out to (`TL/ClipTrack.tsx:1160-1162`).
     pub clip_display_durations: Vec<f64>,
@@ -374,6 +381,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         duration: duration.max(0.0),
         has_camera,
         has_cursor_data: has_recorded_cursor_data(&meta, studio.as_ref()),
+        recorded_cursor_family: recorded_cursor_family(studio.as_ref()),
         clip_display_durations: recordings
             .segments
             .iter()
@@ -438,6 +446,25 @@ fn has_recorded_cursor_data(meta: &RecordingMeta, studio: &StudioRecordingMeta) 
                 .is_some_and(|cursor| meta.path(cursor).exists())
         }),
     }
+}
+
+/// The family the recording's own cursor shapes belong to.
+///
+/// Keyed by cursor id so the answer does not depend on `HashMap` iteration
+/// order: a bundle whose shapes span two families would otherwise pick a
+/// different card between two opens of the same recording.
+fn recorded_cursor_family(studio: &StudioRecordingMeta) -> Option<CursorFamily> {
+    let StudioRecordingMeta::MultipleSegments { inner } = studio else {
+        return None;
+    };
+    let Cursors::Correct(cursors) = &inner.cursors else {
+        return None;
+    };
+    let mut ids: Vec<_> = cursors.keys().collect();
+    ids.sort();
+    ids.into_iter()
+        .find_map(|id| cursors.get(id).and_then(|cursor| cursor.shape))
+        .map(|shape| shape.family())
 }
 
 /// One rendered frame, lifted into gpui's sprite atlas.
@@ -1310,6 +1337,9 @@ pub struct EditorWindow {
     /// model can be rebuilt after every edit.
     has_camera: bool,
     multiple_clips: bool,
+    /// `ProjectSummary::recorded_cursor_family`, kept here because the cursor
+    /// tab renders long before (and independently of) the load state's box.
+    pub(crate) recorded_cursor_family: Option<CursorFamily>,
     /// The debounced `project-config.json` write, and the task driving it.
     pending_save: Rc<RefCell<PendingProjectSave>>,
     save_task: Option<gpui::Task<()>>,
@@ -1383,6 +1413,7 @@ pub struct EditorWindow {
     preview_quality: crate::store::EditorPreviewQuality,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
+    frame_controls: frame::FrameControls,
     add_track: Option<AddTrackMenu>,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
     pub(crate) camera3d_setup: Option<Camera3DSetup>,
@@ -1620,6 +1651,7 @@ impl EditorWindow {
             recording_duration: 0.0,
             has_camera: false,
             multiple_clips: false,
+            recorded_cursor_family: None,
             pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
             name_input,
@@ -1645,6 +1677,7 @@ impl EditorWindow {
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
+            frame_controls: frame::FrameControls::default(),
             add_track: None,
             audio_picker: None,
             camera3d_setup: None,
@@ -1709,6 +1742,7 @@ impl EditorWindow {
         self.recording_duration = summary.recording_duration;
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
+        self.recorded_cursor_family = summary.recorded_cursor_family;
         self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
@@ -2334,12 +2368,35 @@ impl EditorWindow {
         self.stop_playback(cx);
     }
 
+    fn capture_playback_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !is_playback_shortcut(&event.keystroke, ui::text_input_has_focus(window, cx)) {
+            return;
+        }
+        // Focused GPUI buttons arm a second click on key-up unless Space is
+        // consumed before their key-down listener runs.
+        window.prevent_default();
+        cx.stop_propagation();
+        if !event.is_held {
+            self.toggle_play(window, cx);
+        }
+    }
+
     /// The editor's key bindings live in `useEditorShortcuts`
     /// (`Player.tsx:236-286`): `Space` play/pause, `S` split (E4's) and
     /// `Mod+=` / `Mod+-` zoom. `Mod` is Cmd-or-Ctrl
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.frame_controls.is_open() && event.keystroke.key == "escape" {
+            self.close_frame_controls(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // Crop mode first. It takes Escape and the four arrows and lets
         // **everything else through**, which is what the source does: the
         // dialog is a Kobalte modal but `useEditorShortcuts` and the
@@ -2534,10 +2591,6 @@ impl EditorWindow {
             return;
         }
         match keystroke.key.as_str() {
-            "space" => {
-                cx.stop_propagation();
-                self.toggle_play(window, cx);
-            }
             // `e.code === "Backspace" || (e.code === "Delete" &&
             // hasNoModifiers)` (`TL/index.tsx:963`). gpui reports the main
             // delete key as `backspace` and forward-delete as `delete`, which
@@ -2777,6 +2830,7 @@ impl EditorWindow {
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
+        self.focus_root(window, cx);
         let viewport_width: f32 = window.viewport_size().width.into();
         let time = self.time_at(f32::from(event.position.x), viewport_width);
         if ruler {
@@ -2890,6 +2944,7 @@ impl EditorWindow {
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
+        self.focus_root(window, cx);
         if self.clip_anim.is_some() {
             self.clip_anim = None;
             self.clip_anim_generation += 1;
@@ -7306,13 +7361,7 @@ impl EditorWindow {
                                 this.open_crop(window, cx);
                             })),
                     )
-                    // `FrameButton`, whose idle label is "Frame".
-                    .child(self.editor_button(
-                        "icons/app-window-mac.svg",
-                        Some("Frame"),
-                        None,
-                        None,
-                    )),
+                    .child(self.render_frame_button(cx)),
             )
             .child(
                 div()
@@ -8328,6 +8377,10 @@ fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_samp
     since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
+fn is_playback_shortcut(keystroke: &gpui::Keystroke, text_input_focused: bool) -> bool {
+    keystroke.key == "space" && !keystroke.modifiers.modified() && !text_input_focused
+}
+
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
@@ -8336,8 +8389,10 @@ impl Render for EditorWindow {
         // a brand-new box empty until something else asked for a frame.
         self.prepare_sidebar_fields(window, cx);
         self.prepare_animated_gradient_fields(window, cx);
+        self.prepare_cursor_fields(window, cx);
         self.sync_hex_inputs(window, cx);
         self.sync_picker_hex(window, cx);
+        self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
@@ -8379,6 +8434,7 @@ impl Render for EditorWindow {
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(Self::capture_playback_key))
             .on_key_down(cx.listener(Self::on_key))
             // Only the cropper needs key-*up*: its nudge loop runs until every
             // arrow is released (`Cropper.tsx:1025-1051`).
@@ -8648,6 +8704,7 @@ impl Render for EditorWindow {
             // sidebar and the drag layers alike.
             .children(self.render_sidebar_menu(cx))
             .children(self.render_toolbar_menu(cx))
+            .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
             .children(self.render_clip_speed_popover(cx))
             .children(self.render_color_picker_popover(cx))
@@ -8838,6 +8895,24 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields() {
+        let space = gpui::Keystroke::parse("space").unwrap();
+        assert!(is_playback_shortcut(&space, false));
+        assert!(!is_playback_shortcut(&space, true));
+        for key in [
+            "enter",
+            "s",
+            "shift-space",
+            "cmd-space",
+            "ctrl-space",
+            "alt-space",
+        ] {
+            let keystroke = gpui::Keystroke::parse(key).unwrap();
+            assert!(!is_playback_shortcut(&keystroke, false), "{key}");
+        }
+    }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the
     /// Tauri app itself (`lib.rs:192-194`); the render size of a display

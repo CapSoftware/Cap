@@ -70,7 +70,6 @@ import {
 	type CaptionTrackSegment,
 	type ClipOffsets,
 	type CursorAnimationStyle,
-	type CursorType,
 	commands,
 	type KeyboardTrackSegment,
 	type NotchConfiguration,
@@ -121,6 +120,11 @@ import {
 } from "./audio";
 import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { ColorCorrectionSection } from "./ColorCorrectionSection";
+import {
+	CursorRippleSection,
+	CursorStylePicker,
+	isExplicitCursorFamily,
+} from "./CursorStylePicker";
 import { syncCaptionWordsWithText } from "./captions";
 import { type ClipTransition, clipSourceTimeAt } from "./clip-transitions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
@@ -427,19 +431,6 @@ type CursorPresetValues = {
 };
 
 const DEFAULT_MOTION_BLUR = 1.0;
-
-const CURSOR_TYPE_OPTIONS = [
-	{
-		value: "auto" as CursorType,
-		label: "Auto",
-		description: "Uses the actual cursor from your recording.",
-	},
-	{
-		value: "circle" as CursorType,
-		label: "Circle",
-		description: "A touch-style circle cursor like mobile simulators.",
-	},
-];
 
 const CURSOR_ANIMATION_STYLE_OPTIONS = [
 	{
@@ -841,35 +832,7 @@ export function ConfigSidebar() {
 						}
 					/>
 					<Show when={!project.cursor.hide}>
-						<Field name="Cursor Type" icon={<IconCapCursor />}>
-							<RadioGroup
-								class="flex flex-col gap-2"
-								value={project.cursor.type}
-								onChange={(value) =>
-									setProject("cursor", "type", value as CursorType)
-								}
-							>
-								{CURSOR_TYPE_OPTIONS.map((option) => (
-									<RadioGroup.Item
-										value={option.value}
-										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
-									>
-										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
-											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
-											<div class="flex flex-col text-left">
-												<span class="text-sm font-medium text-gray-12">
-													{option.label}
-												</span>
-												<span class="text-xs text-gray-11">
-													{option.description}
-												</span>
-											</div>
-										</RadioGroup.ItemLabel>
-									</RadioGroup.Item>
-								))}
-							</RadioGroup>
-						</Field>
+						<CursorStylePicker />
 						<Field name="Size" icon={<IconCapEnlarge />}>
 							<Slider
 								value={[project.cursor.size]}
@@ -889,6 +852,7 @@ export function ConfigSidebar() {
 								formatTooltip={(value) => `${Math.round(value * 100)}%`}
 							/>
 						</Field>
+						<CursorRippleSection />
 						<Field
 							name="Hide When Idle"
 							icon={<IconLucideTimer class="size-4" />}
@@ -1000,18 +964,20 @@ export function ConfigSidebar() {
 								</div>
 							</KCollapsible.Content>
 						</KCollapsible>
-						<Field
-							name="High Quality SVG Cursors"
-							icon={<IconLucideSparkles />}
-							value={
-								<Toggle
-									checked={project.cursor.useSvg ?? true}
-									onChange={(value) => {
-										setProject("cursor", "useSvg", value);
-									}}
-								/>
-							}
-						/>
+						<Show when={!isExplicitCursorFamily(project.cursor.type)}>
+							<Field
+								name="High Quality SVG Cursors"
+								icon={<IconLucideSparkles />}
+								value={
+									<Toggle
+										checked={project.cursor.useSvg ?? true}
+										onChange={(value) => {
+											setProject("cursor", "useSvg", value);
+										}}
+									/>
+								}
+							/>
+						</Show>
 					</Show>
 
 					{/* <Field name="Animation Style" icon={<IconLucideRabbit />}>

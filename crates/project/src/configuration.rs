@@ -6,6 +6,7 @@ use std::{
     sync::LazyLock,
 };
 
+use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
@@ -646,8 +647,79 @@ impl Default for AudioConfiguration {
 pub enum CursorType {
     #[default]
     Auto,
+    // Legacy, unused by the renderer; kept so old configs keep loading.
     Pointer,
     Circle,
+    #[serde(rename = "macos")]
+    MacOS,
+    #[serde(rename = "tahoe")]
+    MacOSTahoe,
+    Windows,
+}
+
+impl CursorType {
+    /// The asset family an explicit selection forces; `None` renders exactly
+    /// what was recorded.
+    pub fn family(&self) -> Option<CursorFamily> {
+        match self {
+            Self::MacOS => Some(CursorFamily::MacOS),
+            Self::MacOSTahoe => Some(CursorFamily::MacOSTahoe),
+            Self::Windows => Some(CursorFamily::Windows),
+            Self::Auto | Self::Pointer | Self::Circle => None,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CursorRippleConfig {
+    pub enabled: bool,
+    pub color: Color,
+    pub strength: f32,
+    pub size: f32,
+    pub duration: f32,
+}
+
+impl Default for CursorRippleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: [71, 133, 255],
+            strength: Self::DEFAULT_STRENGTH,
+            size: Self::DEFAULT_SIZE,
+            duration: Self::DEFAULT_DURATION,
+        }
+    }
+}
+
+impl CursorRippleConfig {
+    pub const DEFAULT_STRENGTH: f32 = 0.7;
+    pub const DEFAULT_SIZE: f32 = 1.0;
+    pub const DEFAULT_DURATION: f32 = 0.6;
+
+    pub const STRENGTH_RANGE: (f32, f32) = (0.0, 1.0);
+    pub const SIZE_RANGE: (f32, f32) = (0.25, 3.0);
+    pub const DURATION_RANGE: (f32, f32) = (0.2, 1.5);
+
+    pub fn strength_clamped(&self) -> f32 {
+        clamp_finite(self.strength, Self::STRENGTH_RANGE, Self::DEFAULT_STRENGTH)
+    }
+
+    pub fn size_clamped(&self) -> f32 {
+        clamp_finite(self.size, Self::SIZE_RANGE, Self::DEFAULT_SIZE)
+    }
+
+    pub fn duration_clamped(&self) -> f32 {
+        clamp_finite(self.duration, Self::DURATION_RANGE, Self::DEFAULT_DURATION)
+    }
+}
+
+fn clamp_finite(value: f32, range: (f32, f32), fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(range.0, range.1)
+    } else {
+        fallback
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -756,6 +828,8 @@ pub struct CursorConfiguration {
     pub click_spring: Option<ClickSpringConfig>,
     #[serde(default)]
     pub stop_movement_in_last_seconds: Option<f32>,
+    #[serde(default)]
+    pub ripple: CursorRippleConfig,
 }
 
 impl Default for CursorConfiguration {
@@ -780,6 +854,7 @@ impl Default for CursorConfiguration {
             base_rotation: 0.0,
             click_spring: None,
             stop_movement_in_last_seconds: None,
+            ripple: CursorRippleConfig::default(),
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -802,6 +877,10 @@ impl CursorConfiguration {
 
     pub fn cursor_type(&self) -> &CursorType {
         &self.r#type
+    }
+
+    pub fn set_cursor_type(&mut self, cursor_type: CursorType) {
+        self.r#type = cursor_type;
     }
 
     pub fn click_spring_config(&self) -> ClickSpringConfig {
@@ -3327,5 +3406,104 @@ mod tests {
         assert_eq!(spring.stiffness, default_spring.stiffness);
         assert_eq!(spring.damping, default_spring.damping);
         assert_eq!(spring.mass, default_spring.mass);
+    }
+
+    #[test]
+    fn legacy_cursor_config_loads_with_ripple_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            r#"{ "cursor": { "type": "auto", "size": 120 } }"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+
+        assert_eq!(*config.cursor.cursor_type(), CursorType::Auto);
+        assert_eq!(config.cursor.size, 120);
+        assert_eq!(config.cursor.ripple, CursorRippleConfig::default());
+        assert!(!config.cursor.ripple.enabled);
+        assert_eq!(config.cursor.ripple.color, [71, 133, 255]);
+    }
+
+    #[test]
+    fn cursor_type_families_round_trip() {
+        for (token, expected, family) in [
+            ("macos", CursorType::MacOS, Some(CursorFamily::MacOS)),
+            (
+                "tahoe",
+                CursorType::MacOSTahoe,
+                Some(CursorFamily::MacOSTahoe),
+            ),
+            ("windows", CursorType::Windows, Some(CursorFamily::Windows)),
+            ("circle", CursorType::Circle, None),
+            ("pointer", CursorType::Pointer, None),
+            ("auto", CursorType::Auto, None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("project-config.json"),
+                format!(r#"{{ "cursor": {{ "type": "{token}" }} }}"#),
+            )
+            .unwrap();
+
+            let config = ProjectConfiguration::load(dir.path()).unwrap();
+            assert_eq!(*config.cursor.cursor_type(), expected, "{token}");
+            assert_eq!(config.cursor.cursor_type().family(), family, "{token}");
+
+            let json = serde_json::to_value(&config.cursor).unwrap();
+            assert_eq!(json["type"], token, "{token} does not re-serialise");
+        }
+    }
+
+    #[test]
+    fn set_cursor_type_replaces_the_private_field() {
+        let mut cursor = CursorConfiguration::default();
+        assert_eq!(*cursor.cursor_type(), CursorType::Auto);
+
+        cursor.set_cursor_type(CursorType::MacOSTahoe);
+
+        assert_eq!(*cursor.cursor_type(), CursorType::MacOSTahoe);
+    }
+
+    #[test]
+    fn ripple_config_clamps_hand_edited_values() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("project-config.json"),
+            r#"{ "cursor": { "ripple": {
+                "enabled": true,
+                "color": [10, 20, 30],
+                "strength": 9.0,
+                "size": 0.0,
+                "duration": 40.0
+            } } }"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfiguration::load(dir.path()).unwrap();
+        let ripple = &config.cursor.ripple;
+
+        assert!(ripple.enabled);
+        assert_eq!(ripple.color, [10, 20, 30]);
+        assert_eq!(ripple.strength_clamped(), 1.0);
+        assert_eq!(ripple.size_clamped(), 0.25);
+        assert_eq!(ripple.duration_clamped(), 1.5);
+
+        let nonfinite = CursorRippleConfig {
+            strength: f32::NAN,
+            size: f32::INFINITY,
+            duration: f32::NEG_INFINITY,
+            ..Default::default()
+        };
+        assert_eq!(
+            nonfinite.strength_clamped(),
+            CursorRippleConfig::DEFAULT_STRENGTH
+        );
+        assert_eq!(nonfinite.size_clamped(), CursorRippleConfig::DEFAULT_SIZE);
+        assert_eq!(
+            nonfinite.duration_clamped(),
+            CursorRippleConfig::DEFAULT_DURATION
+        );
     }
 }
