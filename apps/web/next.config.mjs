@@ -83,6 +83,46 @@ const nextConfig = {
 			},
 		].filter(Boolean),
 	},
+	async headers() {
+		return [
+			{
+				source: "/:path*",
+				headers: [
+					{
+						key: "X-Content-Type-Options",
+						value: "nosniff",
+					},
+					{
+						key: "Referrer-Policy",
+						value: "strict-origin-when-cross-origin",
+					},
+					{
+						key: "X-DNS-Prefetch-Control",
+						value: "off",
+					},
+					{
+						key: "Strict-Transport-Security",
+						value: "max-age=63072000; includeSubDomains",
+					},
+				],
+			},
+			// Clickjacking protection for the authenticated/interactive app
+			// surfaces (including subpaths). Shared videos (/s, /embed) and public
+			// collections (/c) are intentionally embeddable, so X-Frame-Options is
+			// NOT applied to them.
+			...[
+				"/dashboard/:path*",
+				"/onboarding/:path*",
+				"/admin/:path*",
+				"/verify-otp/:path*",
+				"/login/:path*",
+				"/signup/:path*",
+			].map((source) => ({
+				source,
+				headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
+			})),
+		];
+	},
 	async rewrites() {
 		return [
 			{
