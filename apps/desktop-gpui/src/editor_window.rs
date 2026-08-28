@@ -74,6 +74,8 @@ use crate::{
     ui,
 };
 
+mod frame;
+
 // ---------------------------------------------------------------------------
 // Window geometry
 // ---------------------------------------------------------------------------
@@ -1411,6 +1413,7 @@ pub struct EditorWindow {
     preview_quality: crate::store::EditorPreviewQuality,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
+    frame_controls: frame::FrameControls,
     add_track: Option<AddTrackMenu>,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
     pub(crate) camera3d_setup: Option<Camera3DSetup>,
@@ -1674,6 +1677,7 @@ impl EditorWindow {
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
+            frame_controls: frame::FrameControls::default(),
             add_track: None,
             audio_picker: None,
             camera3d_setup: None,
@@ -2370,6 +2374,11 @@ impl EditorWindow {
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.frame_controls.is_open() && event.keystroke.key == "escape" {
+            self.close_frame_controls(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // Crop mode first. It takes Escape and the four arrows and lets
         // **everything else through**, which is what the source does: the
         // dialog is a Kobalte modal but `useEditorShortcuts` and the
@@ -7336,13 +7345,7 @@ impl EditorWindow {
                                 this.open_crop(window, cx);
                             })),
                     )
-                    // `FrameButton`, whose idle label is "Frame".
-                    .child(self.editor_button(
-                        "icons/app-window-mac.svg",
-                        Some("Frame"),
-                        None,
-                        None,
-                    )),
+                    .child(self.render_frame_button(cx)),
             )
             .child(
                 div()
@@ -8369,6 +8372,7 @@ impl Render for EditorWindow {
         self.prepare_cursor_fields(window, cx);
         self.sync_hex_inputs(window, cx);
         self.sync_picker_hex(window, cx);
+        self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
         let theme = self.theme;
         // The timeline's own bounds are what `secsPerPixel` divides by, and
@@ -8679,6 +8683,7 @@ impl Render for EditorWindow {
             // sidebar and the drag layers alike.
             .children(self.render_sidebar_menu(cx))
             .children(self.render_toolbar_menu(cx))
+            .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
             .children(self.render_clip_speed_popover(cx))
             .children(self.render_color_picker_popover(cx))

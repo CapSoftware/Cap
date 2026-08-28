@@ -39,6 +39,9 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
 /// illustration would come out as a filled silhouette.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
     "app-window-mac.svg",
+    "app-window.svg",
+    "ban.svg",
+    "globe.svg",
     "area.svg",
     "arrows.svg",
     "audio-on.svg",
@@ -316,6 +319,7 @@ mod tests {
         include_str!("mode_select_window.rs"),
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
+        include_str!("editor_window/frame.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
