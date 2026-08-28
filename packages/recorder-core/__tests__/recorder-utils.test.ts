@@ -192,9 +192,11 @@ describe("openShareUrlInNewTab", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("does not navigate when the share url is missing", () => {
+	it("does not navigate when the share url is missing or whitespace", () => {
 		expect(openShareUrlInNewTab(null)).toBe(false);
 		expect(openShareUrlInNewTab(undefined)).toBe(false);
 		expect(openShareUrlInNewTab("")).toBe(false);
+		expect(openShareUrlInNewTab("   ")).toBe(false);
 	});
 });
+

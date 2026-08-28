@@ -123,12 +123,14 @@ export const shouldPreferStreamingUpload = (
 };
 
 export const openShareUrlInNewTab = (shareUrl?: string | null) => {
-	if (!shareUrl || typeof window === "undefined") {
+	const trimmedUrl = shareUrl?.trim();
+	if (!trimmedUrl || typeof window === "undefined") {
 		return false;
 	}
 
-	return window.open(shareUrl, "_blank", "noopener,noreferrer") !== null;
+	return window.open(trimmedUrl, "_blank", "noopener,noreferrer") !== null;
 };
+
 
 export const selectRecordingPipelineFromSupport = (
 	hasAudio: boolean,
