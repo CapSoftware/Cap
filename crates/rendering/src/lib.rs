@@ -20,8 +20,8 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
-    CaptionsLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, KeyboardLayer,
-    MaskLayer, NotchLayer, NotchUniforms, TextLayer,
+    CaptionsLayer, ClickRippleLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer,
+    KeyboardLayer, MaskLayer, NotchLayer, NotchUniforms, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -2355,6 +2355,14 @@ fn fit_crop_to_target(
     [x0, y0, x0 + w, y0 + h]
 }
 
+/// One in-flight click ripple: where the drawn cursor was when the button
+/// went down, and how far through its animation it is.
+#[derive(Clone, Debug)]
+pub struct ClickRipple {
+    pub position: Coord<RawDisplayUVSpace>,
+    pub progress: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
@@ -2380,6 +2388,7 @@ pub struct ProjectUniforms {
     display_outer_bounds: [f32; 4],
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub prev_cursor: Option<InterpolatedCursorPosition>,
+    pub click_ripples: Vec<ClickRipple>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
@@ -2399,6 +2408,48 @@ pub struct ProjectUniforms {
     /// The 2D zoom re-expressed as an on-screen card magnification while a 3D
     /// pose is active (the display itself renders unzoomed into the card).
     pub camera3d_zoom: Option<camera3d::Camera3DScreenZoom>,
+}
+
+/// Ripples for every mouse-down still inside its animation window, newest
+/// last. The centre comes from the smoothed cursor path at the click's own
+/// timestamp, so the ring sits under where the cursor was DRAWN rather than
+/// where the raw sample was.
+fn collect_click_ripples(
+    project: &ProjectConfiguration,
+    cursor_events: &CursorEvents,
+    now_ms: f64,
+    cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
+) -> Vec<ClickRipple> {
+    let ripple = &project.cursor.ripple;
+    if project.cursor.hide || !ripple.enabled {
+        return Vec::new();
+    }
+
+    let duration_ms = ripple.duration_clamped() as f64 * 1000.0;
+    let mut ripples: Vec<ClickRipple> = cursor_events
+        .clicks
+        .iter()
+        .filter(|click| click.down)
+        .filter_map(|click| {
+            let age_ms = now_ms - click.time_ms;
+            if age_ms < 0.0 || age_ms >= duration_ms {
+                return None;
+            }
+
+            let position = cursor_interp_fn((click.time_ms / 1000.0) as f32)?.position;
+
+            Some(ClickRipple {
+                position,
+                progress: (age_ms / duration_ms) as f32,
+            })
+        })
+        .collect();
+
+    if ripples.len() > layers::MAX_CLICK_RIPPLES {
+        ripples.drain(..ripples.len() - layers::MAX_CLICK_RIPPLES);
+    }
+
+    ripples
 }
 
 #[derive(Debug, Clone)]
@@ -3407,7 +3458,7 @@ impl ProjectUniforms {
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
-        _cursor_events: &CursorEvents,
+        cursor_events: &CursorEvents,
         segment_frames: &DecodedSegmentFrames,
         total_duration: f64,
         zoom_timeline: &ZoomTransformTimeline,
@@ -3462,6 +3513,12 @@ impl ProjectUniforms {
 
         let interpolated_cursor = cursor_interp_fn(cursor_time_for_interp);
         let prev_interpolated_cursor = cursor_interp_fn(prev_cursor_time_for_interp);
+        let click_ripples = collect_click_ripples(
+            project,
+            cursor_events,
+            current_recording_time as f64 * 1000.0,
+            cursor_interp_fn,
+        );
         let lookback_t = (cursor_time_for_interp - 0.4).max(0.0);
         let past_cursor_for_tilt = cursor_interp_fn(lookback_t);
 
@@ -4429,6 +4486,7 @@ impl ProjectUniforms {
             frame_number,
             recording_time: current_recording_time as f64,
             prev_cursor: prev_interpolated_cursor,
+            click_ripples,
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: cursor_motion_blur,
             masks,
@@ -5718,6 +5776,7 @@ pub struct RendererLayers {
     frame: FrameLayer,
     display: DisplayLayer,
     notch: NotchLayer,
+    click_ripple: ClickRippleLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
     camera_only: CameraLayer,
@@ -5756,6 +5815,7 @@ impl RendererLayers {
                 shared_composite_pipeline.clone(),
                 prefer_cpu_conversion,
             ),
+            click_ripple: ClickRippleLayer::new(device),
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new_with_all_shared_pipelines(
                 device,
@@ -5928,6 +5988,13 @@ impl RendererLayers {
             );
         }
 
+        self.click_ripple.prepare(
+            uniforms,
+            uniforms.resolution_base,
+            &uniforms.zoom,
+            constants,
+        );
+
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -6083,6 +6150,12 @@ impl RendererLayers {
         timings.display_prepare_duration = start.elapsed();
 
         let start = Instant::now();
+        self.click_ripple.prepare(
+            uniforms,
+            uniforms.resolution_base,
+            &uniforms.zoom,
+            constants,
+        );
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -6301,6 +6374,7 @@ impl RendererLayers {
 
         if should_render_cursor {
             let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
+            self.click_ripple.render(&mut pass);
             self.cursor.render(&mut pass);
         }
 
