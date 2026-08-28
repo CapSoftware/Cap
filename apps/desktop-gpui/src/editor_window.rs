@@ -2368,6 +2368,24 @@ impl EditorWindow {
         self.stop_playback(cx);
     }
 
+    fn capture_playback_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !is_playback_shortcut(&event.keystroke, ui::text_input_has_focus(window, cx)) {
+            return;
+        }
+        // Focused GPUI buttons arm a second click on key-up unless Space is
+        // consumed before their key-down listener runs.
+        window.prevent_default();
+        cx.stop_propagation();
+        if !event.is_held {
+            self.toggle_play(window, cx);
+        }
+    }
+
     /// The editor's key bindings live in `useEditorShortcuts`
     /// (`Player.tsx:236-286`): `Space` play/pause, `S` split (E4's) and
     /// `Mod+=` / `Mod+-` zoom. `Mod` is Cmd-or-Ctrl
@@ -2573,10 +2591,6 @@ impl EditorWindow {
             return;
         }
         match keystroke.key.as_str() {
-            "space" => {
-                cx.stop_propagation();
-                self.toggle_play(window, cx);
-            }
             // `e.code === "Backspace" || (e.code === "Delete" &&
             // hasNoModifiers)` (`TL/index.tsx:963`). gpui reports the main
             // delete key as `backspace` and forward-delete as `delete`, which
@@ -2816,6 +2830,7 @@ impl EditorWindow {
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
+        self.focus_root(window, cx);
         let viewport_width: f32 = window.viewport_size().width.into();
         let time = self.time_at(f32::from(event.position.x), viewport_width);
         if ruler {
@@ -2929,6 +2944,7 @@ impl EditorWindow {
         if event.button != MouseButton::Left || self.transport.is_none() {
             return;
         }
+        self.focus_root(window, cx);
         if self.clip_anim.is_some() {
             self.clip_anim = None;
             self.clip_anim_generation += 1;
@@ -8361,6 +8377,10 @@ fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_samp
     since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
+fn is_playback_shortcut(keystroke: &gpui::Keystroke, text_input_focused: bool) -> bool {
+    keystroke.key == "space" && !keystroke.modifiers.modified() && !text_input_focused
+}
+
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
@@ -8414,6 +8434,7 @@ impl Render for EditorWindow {
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(Self::capture_playback_key))
             .on_key_down(cx.listener(Self::on_key))
             // Only the cropper needs key-*up*: its nudge loop runs until every
             // arrow is released (`Cropper.tsx:1025-1051`).
@@ -8874,6 +8895,24 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields() {
+        let space = gpui::Keystroke::parse("space").unwrap();
+        assert!(is_playback_shortcut(&space, false));
+        assert!(!is_playback_shortcut(&space, true));
+        for key in [
+            "enter",
+            "s",
+            "shift-space",
+            "cmd-space",
+            "ctrl-space",
+            "alt-space",
+        ] {
+            let keystroke = gpui::Keystroke::parse(key).unwrap();
+            assert!(!is_playback_shortcut(&keystroke, false), "{key}");
+        }
+    }
 
     /// `default_editor_preview_resolution()` is asserted to be 1248x702 in the
     /// Tauri app itself (`lib.rs:192-194`); the render size of a display
