@@ -198,3 +198,35 @@ describe("openShareUrlInNewTab", () => {
 		expect(openShareUrlInNewTab("")).toBe(false);
 	});
 });
+
+describe("detectRecordingModeFromTrack", () => {
+	it("returns null when track is null", async () => {
+		const { detectRecordingModeFromTrack } = await import(
+			"@cap/recorder-core/recorder-utils"
+		);
+		expect(detectRecordingModeFromTrack(null)).toBeNull();
+	});
+
+	it("detects fullscreen, window, and tab from track label heuristics", async () => {
+		const { detectRecordingModeFromTrack } = await import(
+			"@cap/recorder-core/recorder-utils"
+		);
+		const screenTrack = {
+			label: "Entire Screen 1",
+			getSettings: () => ({}),
+		} as unknown as MediaStreamTrack;
+		const windowTrack = {
+			label: "Application Window (Cap)",
+			getSettings: () => ({}),
+		} as unknown as MediaStreamTrack;
+		const tabTrack = {
+			label: "Browser Tab - YouTube",
+			getSettings: () => ({}),
+		} as unknown as MediaStreamTrack;
+
+		expect(detectRecordingModeFromTrack(screenTrack)).toBe("fullscreen");
+		expect(detectRecordingModeFromTrack(windowTrack)).toBe("window");
+		expect(detectRecordingModeFromTrack(tabTrack)).toBe("tab");
+	});
+});
+
