@@ -50,3 +50,26 @@ describe("waitForIceGatheringComplete", () => {
 		);
 	});
 });
+
+describe("toSessionDescriptionInit", () => {
+	it("formats valid RTCSessionDescription to RTCSessionDescriptionInit", async () => {
+		const { toSessionDescriptionInit } = await import("./webrtc");
+		const desc = {
+			type: "offer" as RTCSdpType,
+			sdp: "v=0\r\no=- 123456 2 IN IP4 127.0.0.1\r\n",
+			toJSON: () => ({}),
+		};
+		expect(toSessionDescriptionInit(desc as RTCSessionDescription)).toEqual({
+			type: "offer",
+			sdp: "v=0\r\no=- 123456 2 IN IP4 127.0.0.1\r\n",
+		});
+	});
+
+	it("throws error when session description is null or undefined", async () => {
+		const { toSessionDescriptionInit } = await import("./webrtc");
+		expect(() => toSessionDescriptionInit(null)).toThrow(
+			"Missing session description",
+		);
+	});
+});
+
