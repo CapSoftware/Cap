@@ -65,6 +65,19 @@ describe("toSessionDescriptionInit", () => {
 		});
 	});
 
+	it("formats answer RTCSessionDescription to RTCSessionDescriptionInit", async () => {
+		const { toSessionDescriptionInit } = await import("./webrtc");
+		const desc = {
+			type: "answer" as RTCSdpType,
+			sdp: "v=0\r\no=- 654321 2 IN IP4 127.0.0.1\r\n",
+			toJSON: () => ({}),
+		};
+		expect(toSessionDescriptionInit(desc as RTCSessionDescription)).toEqual({
+			type: "answer",
+			sdp: "v=0\r\no=- 654321 2 IN IP4 127.0.0.1\r\n",
+		});
+	});
+
 	it("throws error when session description is null or undefined", async () => {
 		const { toSessionDescriptionInit } = await import("./webrtc");
 		expect(() => toSessionDescriptionInit(null)).toThrow(
@@ -72,4 +85,3 @@ describe("toSessionDescriptionInit", () => {
 		);
 	});
 });
-
