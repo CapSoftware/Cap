@@ -229,3 +229,47 @@ describe("detectRecordingModeFromTrack", () => {
 		expect(detectRecordingModeFromTrack(tabTrack)).toBe("tab");
 	});
 });
+
+describe("error retry utilities", () => {
+	it("identifies user cancellation errors correctly", async () => {
+		const { isUserCancellationError } = await import(
+			"@cap/recorder-core/recorder-utils"
+		);
+		const notAllowed = new DOMException("Permission denied", "NotAllowedError");
+		const abort = new DOMException("Aborted by user", "AbortError");
+		const other = new DOMException("Format unsupported", "NotSupportedError");
+
+		expect(isUserCancellationError(notAllowed)).toBe(true);
+		expect(isUserCancellationError(abort)).toBe(true);
+		expect(isUserCancellationError(other)).toBe(false);
+		expect(isUserCancellationError(new Error("generic error"))).toBe(false);
+	});
+
+	it("identifies retryable display media preference errors", async () => {
+		const { shouldRetryDisplayMediaWithoutPreferences } = await import(
+			"@cap/recorder-core/recorder-utils"
+		);
+		const notSupported = new DOMException(
+			"Preferences not supported",
+			"NotSupportedError",
+		);
+		const overconstrained = new DOMException(
+			"Constraint unfulfilled",
+			"OverconstrainedError",
+		);
+		const invalidAccess = new DOMException(
+			"Invalid access",
+			"InvalidAccessError",
+		);
+		const typeError = new TypeError("Invalid parameter");
+		const notAllowed = new DOMException("Permission denied", "NotAllowedError");
+
+		expect(shouldRetryDisplayMediaWithoutPreferences(notSupported)).toBe(true);
+		expect(shouldRetryDisplayMediaWithoutPreferences(overconstrained)).toBe(
+			true,
+		);
+		expect(shouldRetryDisplayMediaWithoutPreferences(invalidAccess)).toBe(true);
+		expect(shouldRetryDisplayMediaWithoutPreferences(typeError)).toBe(true);
+		expect(shouldRetryDisplayMediaWithoutPreferences(notAllowed)).toBe(false);
+	});
+});
