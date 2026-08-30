@@ -851,20 +851,26 @@ mod tests {
             SegmentedVideoEncoderConfig::default(),
         )
         .unwrap();
-        for i in 0..120 {
+        for i in 0..600 {
             encoder
                 .queue_frame(
                     create_test_frame(320, 240),
-                    Duration::from_micros(i * 33_320),
+                    Duration::from_secs_f64(f64::from(i) / 30.0),
                 )
                 .unwrap();
+            if !encoder.completed_segments().is_empty() {
+                break;
+            }
         }
         let retained_segments: Vec<_> = encoder
             .completed_segments()
             .iter()
             .map(|segment| (segment.path.clone(), std::fs::read(&segment.path).unwrap()))
             .collect();
-        assert!(!retained_segments.is_empty());
+        assert!(
+            !retained_segments.is_empty(),
+            "Video encoder did not publish a complete segment within 600 frames"
+        );
         let manifest_path = base_path.join("dash_manifest.mpd");
         if manifest_path.exists() {
             std::fs::remove_file(&manifest_path).unwrap();
