@@ -913,20 +913,14 @@ fn concatenate_m4s_segments_with_init_validated_with_reader(
         let mut octx = avformat::output(output)?;
         remux_streams_validated_with_reader(&mut ictx, &mut octx, read_packet)
     })();
-    let cleanup = std::fs::remove_file(&combined_path);
-    match result {
-        Ok(()) => cleanup.map_err(Into::into),
-        Err(error) => {
-            if let Err(cleanup_error) = cleanup {
-                tracing::warn!(
-                    "failed to remove validated combined file {}: {}",
-                    combined_path.display(),
-                    cleanup_error
-                );
-            }
-            Err(error)
-        }
+    if let Err(cleanup_error) = std::fs::remove_file(&combined_path) {
+        tracing::warn!(
+            "failed to remove validated combined file {}: {}",
+            combined_path.display(),
+            cleanup_error
+        );
     }
+    result
 }
 
 fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {

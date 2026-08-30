@@ -1453,6 +1453,24 @@ impl RecoveryManager {
         output: &Path,
         completion: Option<(PathBuf, bool)>,
     ) -> Result<PathBuf, RecoveryError> {
+        Self::finalize_instant_output_with(
+            display_dir,
+            audio_dir,
+            output,
+            completion,
+            |source, destination| std::fs::rename(source, destination),
+            |workspace| std::fs::remove_dir_all(workspace),
+        )
+    }
+
+    fn finalize_instant_output_with(
+        display_dir: &Path,
+        audio_dir: &Path,
+        output: &Path,
+        completion: Option<(PathBuf, bool)>,
+        publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+        cleanup: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<PathBuf, RecoveryError> {
         let content = output
             .parent()
             .ok_or_else(|| RecoveryError::Validation("Instant output has no parent".into()))?;
@@ -1581,19 +1599,13 @@ impl RecoveryManager {
             if output.try_exists()? {
                 copy_recovery_input(output, &workspace.join("original-output.mp4"))?;
             }
-            std::fs::rename(&final_output, output)?;
+            publish(&final_output, output)?;
             Ok(output.to_path_buf())
         })();
-        match result {
-            Ok(output) => {
-                std::fs::remove_dir_all(&workspace)?;
-                Ok(output)
-            }
-            Err(error) => {
-                let _ = std::fs::remove_dir_all(&workspace);
-                Err(error)
-            }
+        if let Err(error) = cleanup(&workspace) {
+            warn!(path = %workspace.display(), %error, "Could not remove temporary Instant finalization workspace");
         }
+        result
     }
 
     fn finalize_instant_staged(
@@ -3153,6 +3165,183 @@ fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
     }
 
     std::fs::rename(src, dst).map_err(RecoveryError::Io)
+}
+
+#[cfg(test)]
+mod instant_cleanup_tests {
+    use super::*;
+    use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+    use std::{cell::Cell, fs, io};
+
+    fn playable_instant_project() -> tempfile::TempDir {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let display = directory.path().join("content/display");
+        let mut encoder = SegmentedVideoEncoder::init(
+            display,
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..60 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + index as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        assert!(!encoder.completed_segments().is_empty());
+        drop(encoder);
+        directory
+    }
+
+    fn refuse_workspace_cleanup(workspace: &Path) -> io::Result<()> {
+        assert!(workspace.is_dir());
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "injected workspace cleanup failure",
+        ))
+    }
+
+    fn retained_workspace(project: &Path) -> PathBuf {
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        workspaces.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn cleanup_failure_does_not_fail_published_instant_output() {
+        for completed in [false, true] {
+            let directory = playable_instant_project();
+            let project = directory.path();
+            let output = project.join("content/output.mp4");
+            let before = recovery_snapshot(project).unwrap();
+            let cleanup_attempted = Cell::new(false);
+            let result = RecoveryManager::finalize_instant_output_with(
+                &project.join("content/display"),
+                &project.join("content/audio"),
+                &output,
+                completed.then(|| (project.to_path_buf(), false)),
+                |source, destination| fs::rename(source, destination),
+                |workspace| {
+                    cleanup_attempted.set(true);
+                    refuse_workspace_cleanup(workspace)
+                },
+            )
+            .unwrap();
+
+            assert_eq!(result, output);
+            assert!(cleanup_attempted.get());
+            validate_recovered_track(&output, ffmpeg::media::Type::Video).unwrap();
+            assert!(
+                !retained_workspace(project)
+                    .join("content/output.mp4")
+                    .exists()
+            );
+            let mut after = recovery_snapshot(project).unwrap();
+            assert!(after.remove(Path::new("content/output.mp4")).is_some());
+            assert_eq!(after, before);
+        }
+    }
+
+    #[test]
+    fn cleanup_failure_preserves_instant_validation_error() {
+        for completed in [false, true] {
+            let directory = playable_instant_project();
+            let project = directory.path();
+            let audio = project.join("content/audio");
+            fs::create_dir(&audio).unwrap();
+            let before = recovery_snapshot(project).unwrap();
+            let output = project.join("content/output.mp4");
+            let cleanup_attempted = Cell::new(false);
+            let error = RecoveryManager::finalize_instant_output_with(
+                &project.join("content/display"),
+                &audio,
+                &output,
+                completed.then(|| (project.to_path_buf(), true)),
+                |_, _| panic!("invalid recording must not reach publication"),
+                |workspace| {
+                    cleanup_attempted.set(true);
+                    refuse_workspace_cleanup(workspace)
+                },
+            )
+            .unwrap_err();
+
+            assert!(cleanup_attempted.get());
+            assert!(matches!(error, RecoveryError::Validation(message)
+                if message == "Required Instant audio has no recoverable fragments"));
+            assert!(!output.exists());
+            assert!(retained_workspace(project).is_dir());
+            assert_eq!(recovery_snapshot(project).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn cleanup_failure_preserves_instant_publication_error() {
+        for completed in [false, true] {
+            let directory = playable_instant_project();
+            let project = directory.path();
+            let output = project.join("content/output.mp4");
+            let before = recovery_snapshot(project).unwrap();
+            let publication_attempted = Cell::new(false);
+            let cleanup_attempted = Cell::new(false);
+            let error = RecoveryManager::finalize_instant_output_with(
+                &project.join("content/display"),
+                &project.join("content/audio"),
+                &output,
+                completed.then(|| (project.to_path_buf(), false)),
+                |source, destination| {
+                    assert_eq!(destination, output);
+                    validate_recovered_track(source, ffmpeg::media::Type::Video).unwrap();
+                    publication_attempted.set(true);
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "injected publication failure",
+                    ))
+                },
+                |workspace| {
+                    cleanup_attempted.set(true);
+                    refuse_workspace_cleanup(workspace)
+                },
+            )
+            .unwrap_err();
+
+            assert!(publication_attempted.get());
+            assert!(cleanup_attempted.get());
+            assert!(matches!(error, RecoveryError::Io(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    && error.to_string() == "injected publication failure"));
+            assert!(!output.exists());
+            assert!(
+                retained_workspace(project)
+                    .join("content/output.mp4")
+                    .is_file()
+            );
+            assert_eq!(recovery_snapshot(project).unwrap(), before);
+        }
+    }
 }
 
 #[cfg(test)]
