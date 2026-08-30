@@ -907,6 +907,20 @@ impl RecoveryManager {
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
     ) -> Result<RecoveredRecording, RecoveryError> {
+        Self::finalize_with_operations(
+            recording,
+            purpose,
+            copy_recovery_input_with_durability,
+            |_, _| Ok(()),
+        )
+    }
+
+    fn finalize_with_operations(
+        recording: &IncompleteRecording,
+        purpose: RecoveryPurpose,
+        mut copy_input: impl FnMut(&Path, &Path, RecoveryCopyDurability) -> Result<(), RecoveryError>,
+        before_source_check: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
+    ) -> Result<RecoveredRecording, RecoveryError> {
         Self::require_no_track_failure(&recording.project_path)?;
         let project = &recording.project_path;
         let _lock = RecoveryLock::acquire(project)?;
@@ -933,14 +947,14 @@ impl RecoveryManager {
             for name in RECOVERY_INPUTS {
                 let source = project.join(name);
                 if source.try_exists()? {
-                    copy_recovery_input_with_durability(
-                        &source,
-                        &staged.join(name),
-                        staging_durability,
-                    )?;
+                    copy_input(&source, &staged.join(name), staging_durability)?;
                 }
             }
-            if recovery_snapshot(&staged)? != before || recovery_snapshot(project)? != before {
+            // Clean finalization mutates only staged bytes and rechecks originals before publication.
+            if recovery_snapshot(&staged)? != before
+                || (video_validation == VideoValidation::Full
+                    && recovery_snapshot(project)? != before)
+            {
                 return Err(RecoveryError::Validation(
                     "Recording changed while copying".into(),
                 ));
@@ -983,6 +997,7 @@ impl RecoveryManager {
                 return Err(RecoveryError::Validation("Staged metadata mismatch".into()));
             }
             sync_recovery_input(&staged)?;
+            before_source_check(project, &staged)?;
             Self::require_no_track_failure(project)?;
             if recovery_snapshot(project)? != before {
                 return Err(RecoveryError::Validation(
@@ -3340,6 +3355,364 @@ mod instant_cleanup_tests {
                     .is_file()
             );
             assert_eq!(recovery_snapshot(project).unwrap(), before);
+        }
+    }
+}
+
+#[cfg(test)]
+mod clean_studio_snapshot_tests {
+    use super::*;
+    use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+    use std::{cell::Cell, cell::RefCell, fs, io};
+
+    const DISPLAY: &str = "content/segments/segment-0/display";
+    const FRAGMENT: &str = "content/segments/segment-0/display/segment_001.m4s";
+    const OUTPUT: &str = "content/segments/segment-0/display.mp4";
+
+    fn playable_studio_project(status: StudioRecordingStatus) -> tempfile::TempDir {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path();
+        let mut encoder = SegmentedVideoEncoder::init(
+            project.join(DISPLAY),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..60 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + index as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        drop(encoder);
+        assert!(project.join(FRAGMENT).is_file());
+        RecordingMeta {
+            platform: None,
+            project_path: project.to_path_buf(),
+            pretty_name: "Snapshot finalization fixture".into(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: vec![MultipleSegment {
+                        display: VideoMeta {
+                            path: OUTPUT.into(),
+                            fps: 30,
+                            start_time: None,
+                            device_id: None,
+                        },
+                        camera: None,
+                        mic: None,
+                        system_audio: None,
+                        cursor: None,
+                        keyboard: None,
+                        display_notch: None,
+                    }],
+                    cursors: Cursors::default(),
+                    status: Some(status),
+                },
+            })),
+        }
+        .save_for_project()
+        .unwrap();
+        ProjectConfiguration::default().write(project).unwrap();
+        fs::write(
+            project.join("recording-diagnostics.json"),
+            br#"{"version":2,"segments":[{"trackFailures":[]}]}"#,
+        )
+        .unwrap();
+        directory
+    }
+
+    fn change_fragment_bytes(project: &Path) {
+        let path = project.join(FRAGMENT);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&path, bytes).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), modified);
+    }
+
+    fn assert_unpublished(project: &Path) {
+        assert!(project.join(DISPLAY).is_dir());
+        assert!(!project.join(OUTPUT).exists());
+        assert!(!project.join(RECOVERY_PUBLICATION).exists());
+        assert!(fs::read_dir(project).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".recovery-")
+        }));
+    }
+
+    fn assert_staged_output(staged: &Path) {
+        validate_recovered_track(&staged.join(OUTPUT), ffmpeg::media::Type::Video).unwrap();
+        assert!(matches!(
+            RecordingMeta::load_for_project(staged)
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Complete
+        ));
+    }
+
+    #[derive(Clone, Copy)]
+    enum SourceChange {
+        FragmentBytes,
+        AddedSegment,
+        RemovedFragment,
+    }
+
+    impl SourceChange {
+        fn apply(self, project: &Path) {
+            match self {
+                Self::FragmentBytes => change_fragment_bytes(project),
+                Self::AddedSegment => {
+                    fs::create_dir(project.join("content/segments/segment-1")).unwrap();
+                }
+                Self::RemovedFragment => fs::remove_file(project.join(FRAGMENT)).unwrap(),
+            }
+        }
+    }
+
+    fn check_persistent_source_changes(during_copy: bool) {
+        for change in [
+            SourceChange::FragmentBytes,
+            SourceChange::AddedSegment,
+            SourceChange::RemovedFragment,
+        ] {
+            let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+            let project = directory.path();
+            let recording = RecoveryManager::inspect_recording(project).unwrap();
+            let expected = RefCell::new(None);
+            let reached_final_check = Cell::new(false);
+            let error = RecoveryManager::finalize_with_operations(
+                &recording,
+                RecoveryPurpose::Finalize,
+                |source, destination, durability| {
+                    copy_recovery_input_with_durability(source, destination, durability)?;
+                    if during_copy && source == project.join("content") {
+                        change.apply(project);
+                        *expected.borrow_mut() = Some(recovery_snapshot(project)?);
+                    }
+                    Ok(())
+                },
+                |source, staged| {
+                    assert_staged_output(staged);
+                    reached_final_check.set(true);
+                    if !during_copy {
+                        change.apply(source);
+                        *expected.borrow_mut() = Some(recovery_snapshot(source)?);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+            assert!(matches!(error, RecoveryError::Validation(message)
+                if message == "Recording changed before publication"));
+            assert!(reached_final_check.get());
+            assert_eq!(
+                recovery_snapshot(project).unwrap(),
+                expected.into_inner().unwrap()
+            );
+            assert_unpublished(project);
+        }
+    }
+
+    #[test]
+    fn persistent_source_changes_during_copy_cannot_publish() {
+        check_persistent_source_changes(true);
+    }
+
+    #[test]
+    fn persistent_source_changes_before_publication_cannot_publish() {
+        check_persistent_source_changes(false);
+    }
+
+    #[test]
+    fn failed_copy_preserves_originals_and_removes_partial_stage() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        let error = RecoveryManager::finalize_with_operations(
+            &recording,
+            RecoveryPurpose::Finalize,
+            |source, destination, _| {
+                assert_eq!(source, project.join("content"));
+                fs::create_dir(destination)?;
+                fs::write(destination.join("partial.m4s"), b"partial copy")?;
+                Err(io::Error::other("injected copy failure").into())
+            },
+            |_, _| panic!("failed copy must not reach the final source check"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, RecoveryError::Io(error)
+            if error.to_string() == "injected copy failure"));
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+        assert_unpublished(project);
+    }
+
+    #[test]
+    fn independently_changed_staged_bytes_cannot_publish() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        let error = RecoveryManager::finalize_with_operations(
+            &recording,
+            RecoveryPurpose::Finalize,
+            |source, destination, durability| {
+                copy_recovery_input_with_durability(source, destination, durability)?;
+                if source == project.join("content") {
+                    change_fragment_bytes(destination.parent().unwrap());
+                }
+                Ok(())
+            },
+            |_, _| panic!("changed staged bytes must not reach the final source check"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, RecoveryError::Validation(message)
+            if message == "Recording changed while copying"));
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+        assert_unpublished(project);
+    }
+
+    #[test]
+    fn late_required_track_failure_preserves_originals_without_publication() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let expected = RefCell::new(None);
+        let error = RecoveryManager::finalize_with_operations(
+            &recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |source, staged| {
+                assert_staged_output(staged);
+                fs::write(
+                    source.join("recording-diagnostics.json"),
+                    br#"{"version":2,"segments":[{"trackFailures":[{"track":"display","stage":"stop","error":"injected late failure"}]}]}"#,
+                )?;
+                *expected.borrow_mut() = Some(recovery_snapshot(source)?);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, RecoveryError::RequiredTrackFailure(_)));
+        assert_eq!(
+            recovery_snapshot(project).unwrap(),
+            expected.into_inner().unwrap()
+        );
+        assert_unpublished(project);
+    }
+
+    #[test]
+    fn clean_finalization_accepts_source_restored_identically_before_publication() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let recording = RecoveryManager::inspect_recording(project).unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        let raw = fs::read(project.join(FRAGMENT)).unwrap();
+        let reached_final_check = Cell::new(false);
+        RecoveryManager::finalize_with_operations(
+            &recording,
+            RecoveryPurpose::Finalize,
+            |source, destination, durability| {
+                copy_recovery_input_with_durability(source, destination, durability)?;
+                if source == project.join("content") {
+                    change_fragment_bytes(project);
+                }
+                Ok(())
+            },
+            |source, staged| {
+                assert_staged_output(staged);
+                assert_ne!(recovery_snapshot(source)?, before);
+                fs::write(source.join(FRAGMENT), &raw)?;
+                assert_eq!(recovery_snapshot(source)?, before);
+                reached_final_check.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(reached_final_check.get());
+        assert_staged_output(project);
+        let workspace = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.join("original-segments").is_dir())
+            .unwrap();
+        for (path, digest) in before {
+            let backup = if let Ok(relative) = path.strip_prefix("content/segments") {
+                workspace.join("original-segments").join(relative)
+            } else {
+                continue;
+            };
+            if let Some(digest) = digest {
+                assert_eq!(
+                    blake3::hash(&fs::read(backup).unwrap())
+                        .as_bytes()
+                        .as_slice(),
+                    digest
+                );
+            } else {
+                assert!(backup.is_dir());
+            }
+        }
+    }
+
+    #[test]
+    fn full_validation_keeps_early_source_change_rejection() {
+        for (purpose, status) in [
+            (RecoveryPurpose::Recover, StudioRecordingStatus::NeedsRemux),
+            (RecoveryPurpose::Finalize, StudioRecordingStatus::InProgress),
+        ] {
+            let directory = playable_studio_project(status);
+            let project = directory.path();
+            let recording = RecoveryManager::inspect_recording(project).unwrap();
+            let expected = RefCell::new(None);
+            let error = RecoveryManager::finalize_with_operations(
+                &recording,
+                purpose,
+                |source, destination, durability| {
+                    copy_recovery_input_with_durability(source, destination, durability)?;
+                    if source == project.join("content") {
+                        change_fragment_bytes(project);
+                        *expected.borrow_mut() = Some(recovery_snapshot(project)?);
+                    }
+                    Ok(())
+                },
+                |_, _| panic!("full validation must reject before source restoration is possible"),
+            )
+            .unwrap_err();
+            assert!(matches!(error, RecoveryError::Validation(message)
+                if message == "Recording changed while copying"));
+            assert_eq!(
+                recovery_snapshot(project).unwrap(),
+                expected.into_inner().unwrap()
+            );
+            assert_unpublished(project);
         }
     }
 }
