@@ -240,15 +240,12 @@ pub struct RecordingSession {
     paused_accum: Duration,
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
-    #[cfg(any(target_os = "linux", windows))]
     failure_monitor: Option<Task<()>>,
-    #[cfg(any(target_os = "linux", windows))]
     recording_generation: u64,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
     terminal_operation: u64,
-    #[cfg(any(target_os = "linux", windows))]
     pipeline_failed: bool,
     #[cfg(target_os = "linux")]
     stop_requested: bool,
@@ -280,15 +277,12 @@ impl RecordingSession {
             paused_accum: Duration::ZERO,
             paused_since: None,
             storage_monitor: None,
-            #[cfg(any(target_os = "linux", windows))]
             failure_monitor: None,
-            #[cfg(any(target_os = "linux", windows))]
             recording_generation: 0,
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
             terminal_operation: 0,
-            #[cfg(any(target_os = "linux", windows))]
             pipeline_failed: false,
             #[cfg(target_os = "linux")]
             stop_requested: false,
@@ -393,19 +387,13 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
-        #[cfg(windows)]
-        {
-            self.failure_monitor = None;
-            self.recording_generation = self.recording_generation.wrapping_add(1);
-            self.pipeline_failed = false;
-        }
+        self.failure_monitor = None;
+        self.recording_generation = self.recording_generation.wrapping_add(1);
+        self.pipeline_failed = false;
         #[cfg(target_os = "linux")]
         {
-            self.failure_monitor = None;
-            self.recording_generation = self.recording_generation.wrapping_add(1);
             self.instant_attempt = (config.mode == recording::RecordingMode::Instant)
                 .then(recording::InstantAttempt::new);
-            self.pipeline_failed = false;
             self.clean_control.invalidate();
             self.clean_control.uncertain = false;
         }
@@ -461,7 +449,6 @@ impl RecordingSession {
                     Ok(Ok(active)) => {
                         tracing::info!(dir = %active.project_dir.display(), "recording started");
                         let project_dir = active.project_dir.clone();
-                        #[cfg(any(target_os = "linux", windows))]
                         let done = active.done_fut();
                         this.active = Some(active);
                         this.phase = Phase::Recording { paused: false };
@@ -471,7 +458,6 @@ impl RecordingSession {
                         this.paused_accum = Duration::ZERO;
                         this.paused_since = None;
                         this.monitor_storage(project_dir, cx);
-                        #[cfg(any(target_os = "linux", windows))]
                         this.monitor_recording_failure(done, cx);
                         #[cfg(target_os = "linux")]
                         if this.stop_requested {
@@ -535,13 +521,12 @@ impl RecordingSession {
         .detach();
     }
 
-    #[cfg(any(target_os = "linux", windows))]
     fn monitor_recording_failure(&mut self, done: cap_recording::DoneFut, cx: &mut Context<Self>) {
         let generation = self.recording_generation;
         let task = gpui_tokio::Tokio::spawn(cx, done);
         self.failure_monitor = Some(cx.spawn(async move |this, cx| {
             let error = match task.await {
-                Ok(Ok(())) => return,
+                Ok(Ok(())) => "Recording ended unexpectedly.".to_string(),
                 Ok(Err(error)) => error.to_string(),
                 Err(error) => format!("Recording completion task failed: {error}"),
             };
@@ -677,7 +662,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
-        #[cfg(target_os = "linux")]
+        #[cfg(not(windows))]
         {
             self.failure_monitor = None;
         }
@@ -700,15 +685,12 @@ impl RecordingSession {
             owner: stop_owner.clone(),
             operation,
         };
-        #[cfg(windows)]
+        #[cfg(not(target_os = "linux"))]
         let stop_generation = self.recording_generation;
         let phase_before_stop = self.phase;
         let low_storage = self.stopped_for_low_storage;
-        #[cfg(any(target_os = "linux", windows))]
         let recording_failed = self.pipeline_failed;
-        #[cfg(not(any(target_os = "linux", windows)))]
-        let recording_failed = false;
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         let original_failure = recording_failed.then(|| self.error.clone()).flatten();
         #[cfg(target_os = "linux")]
         let defer_share_until_success =
@@ -732,9 +714,11 @@ impl RecordingSession {
             .or_else(|| active.clean_studio_stop_handle());
         #[cfg(windows)]
         let retained_stop = recording_failed
-            .then(|| active.failed_windows_stop_handle())
+            .then(|| active.failed_stop_handle())
             .or_else(|| active.clean_windows_studio_stop_handle());
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(target_os = "macos")]
+        let retained_stop = recording_failed.then(|| active.failed_stop_handle());
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let retained_stop: Option<recording::CaptureStopFuture> = None;
         let retains_active = retained_stop.is_some();
         let stop_future: recording::CaptureStopFuture = match retained_stop {
@@ -759,7 +743,7 @@ impl RecordingSession {
             this.update(cx, |this, cx| {
                 #[cfg(target_os = "linux")]
                 if !stop_ticket.is_current(this.phase, this.recording_generation, this.terminal_operation, this.recording_owner().as_ref(), retains_active) { return; }
-                #[cfg(windows)]
+                #[cfg(not(target_os = "linux"))]
                 if this.recording_generation != stop_generation || this.phase != Phase::Stopping { return; }
                 let capture_stopped = match &result {
                     Ok((stopped, _)) => *stopped,
@@ -771,7 +755,7 @@ impl RecordingSession {
                         Err(error) => format!("Stop task failed: {error}"),
                         Ok((_, Ok(_))) => "Capture stop was not acknowledged".into(),
                     };
-                    #[cfg(windows)]
+                    #[cfg(any(target_os = "macos", windows))]
                     let error = match &original_failure {
                         Some(first) => format!("{first}; cleanup: {error}"),
                         None => error,
@@ -785,7 +769,9 @@ impl RecordingSession {
                     } else {
                         format!("{error}. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop.")
                     };
-                    #[cfg(not(windows))]
+                    #[cfg(target_os = "macos")]
+                    let message = format!("{error}. Capture cleanup is unconfirmed. Use your recording Stop control to retry.");
+                    #[cfg(not(any(target_os = "macos", windows)))]
                     let message = format!("{error}. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop.");
                     this.error = Some(message);
                     #[cfg(target_os = "linux")]
@@ -794,7 +780,7 @@ impl RecordingSession {
                     return;
                 }
                 let result = result.map(|(_, result)| result);
-                #[cfg(windows)]
+                #[cfg(any(target_os = "macos", windows))]
                 let result = result.map(|result| result.map_err(|error| match &original_failure {
                     Some(first) => error.context(first.clone()),
                     None => error,
@@ -1123,7 +1109,7 @@ impl RecordingSession {
         let Some(active) = self.active.take() else {
             return;
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(not(windows))]
         {
             self.failure_monitor = None;
         }
@@ -1354,14 +1340,9 @@ impl RecordingSession {
             self.clean_control.invalidate();
             self.clean_control.uncertain = false;
             self.show_controls_after_pause = false;
-            self.failure_monitor = None;
-            self.pipeline_failed = false;
         }
-        #[cfg(windows)]
-        {
-            self.failure_monitor = None;
-            self.pipeline_failed = false;
-        }
+        self.failure_monitor = None;
+        self.pipeline_failed = false;
         self.storage_monitor = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;
@@ -1374,7 +1355,6 @@ impl RecordingSession {
     }
 }
 
-#[cfg(any(target_os = "linux", windows, test))]
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
     current == completed && matches!(phase, Phase::Recording { .. })
 }
@@ -1809,8 +1789,8 @@ mod instant_terminal_tests {
     }
 }
 
-#[cfg(all(test, windows))]
-mod windows_recording_failure_tests {
+#[cfg(test)]
+mod recording_failure_tests {
     use super::*;
 
     #[test]

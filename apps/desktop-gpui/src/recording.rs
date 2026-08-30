@@ -519,22 +519,22 @@ async fn finish_windows_startup_setup<T>(
     }
 }
 
-#[cfg(any(windows, test))]
-async fn finish_windows_failed_capture(
-    cancel: impl Future<Output = anyhow::Result<()>>,
+#[cfg(any(target_os = "macos", windows, test))]
+async fn finish_failed_capture(
+    stop: impl Future<Output = anyhow::Result<()>>,
     persist_stopped: impl FnOnce() -> anyhow::Result<()>,
 ) -> (bool, anyhow::Result<PathBuf>) {
-    if let Err(error) = cancel.await {
+    if let Err(error) = stop.await {
         return (
             false,
-            Err(error.context("Failed capture cancellation is unconfirmed; local files preserved")),
+            Err(error.context("Failed capture shutdown is unconfirmed; local files preserved")),
         );
     }
     if let Err(error) = persist_stopped() {
         return (
             true,
             Err(error.context(
-                "Capture cancelled, but stopped metadata could not be saved; local files preserved",
+                "Capture stopped, but stopped metadata could not be saved; local files preserved",
             )),
         );
     }
@@ -545,7 +545,6 @@ async fn finish_windows_failed_capture(
 }
 
 impl ActiveRecording {
-    #[cfg(any(target_os = "linux", windows))]
     pub fn done_fut(&self) -> cap_recording::DoneFut {
         match &self.handle {
             Handle::Studio(handle) => handle.done_fut(),
@@ -739,19 +738,26 @@ impl ActiveRecording {
         ))
     }
 
-    #[cfg(windows)]
-    pub(crate) fn failed_windows_stop_handle(&self) -> CaptureStopFuture {
-        let cancel: futures_util::future::BoxFuture<'static, anyhow::Result<()>> =
-            match &self.handle {
-                Handle::Studio(handle) => {
-                    let handle = handle.clone();
-                    Box::pin(async move { handle.stop().await.map(|_| ()) })
-                }
-                Handle::Instant(handle) => {
-                    let handle = handle.clone();
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn failed_stop_handle(&self) -> CaptureStopFuture {
+        let stop: futures_util::future::BoxFuture<'static, anyhow::Result<()>> = match &self.handle
+        {
+            Handle::Studio(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.stop().await.map(|_| ()) })
+            }
+            Handle::Instant(handle) => {
+                let handle = handle.clone();
+                #[cfg(windows)]
+                {
                     Box::pin(async move { handle.cancel().await })
                 }
-            };
+                #[cfg(target_os = "macos")]
+                {
+                    Box::pin(async move { handle.stop().await.map(|_| ()) })
+                }
+            }
+        };
         let upload = self.instant_upload.clone();
         let directory = self.project_dir.clone();
         Box::pin(async move {
@@ -763,7 +769,7 @@ impl ActiveRecording {
             if let Some(upload) = upload.as_mut() {
                 upload.abort_segments().await;
             }
-            finish_windows_failed_capture(cancel, || {
+            finish_failed_capture(stop, || {
                 if let Some(upload) = upload.as_ref() {
                     mark_instant_recording_stopped(&directory, upload.metadata_lock())?;
                 }
@@ -954,8 +960,8 @@ impl ActiveRecording {
                     .await
                     .context("instant thumbnail task")?;
 
-                    #[cfg(any(target_os = "linux", windows))]
                     if segmented {
+                        #[cfg(any(target_os = "linux", windows))]
                         if let Err(error) = upload.finish_screenshot(&completed.project_path).await {
                             persist_instant_upload_failure(&completed.project_path, &error, upload.metadata_lock())?;
                             return Err(anyhow!(error));
@@ -1990,10 +1996,7 @@ async fn start_attempt_with_upload(
                     project_dir.clone(),
                     segment_rx,
                     metadata_lock,
-                    #[cfg(any(target_os = "linux", windows))]
                     Some(crate::upload::CompletionAuthorization::new()),
-                    #[cfg(not(any(target_os = "linux", windows)))]
-                    None,
                 )
                 .map_err(anyhow::Error::msg)
             })();
@@ -3435,7 +3438,7 @@ mod instant_lifecycle_tests {
 }
 
 #[cfg(test)]
-mod windows_failed_capture_tests {
+mod failed_capture_tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -3482,7 +3485,7 @@ mod windows_failed_capture_tests {
     async fn cancellation_error_never_persists_stopped_or_reports_success() {
         let written = AtomicBool::new(false);
         let (stopped, result) =
-            finish_windows_failed_capture(async { Err(anyhow!("cancel failed")) }, || {
+            finish_failed_capture(async { Err(anyhow!("cancel failed")) }, || {
                 written.store(true, Ordering::SeqCst);
                 Ok(())
             })
@@ -3495,7 +3498,7 @@ mod windows_failed_capture_tests {
     #[tokio::test]
     async fn acknowledged_cancel_only_persists_stopped_and_keeps_failure() {
         let written = AtomicBool::new(false);
-        let (stopped, result) = finish_windows_failed_capture(async { Ok(()) }, || {
+        let (stopped, result) = finish_failed_capture(async { Ok(()) }, || {
             written.store(true, Ordering::SeqCst);
             Ok(())
         })
@@ -3508,8 +3511,7 @@ mod windows_failed_capture_tests {
     #[tokio::test]
     async fn metadata_failure_preserves_error_after_acknowledged_cancel() {
         let (stopped, result) =
-            finish_windows_failed_capture(async { Ok(()) }, || Err(anyhow!("metadata denied")))
-                .await;
+            finish_failed_capture(async { Ok(()) }, || Err(anyhow!("metadata denied"))).await;
         assert!(stopped);
         assert!(format!("{:#}", result.unwrap_err()).contains("metadata denied"));
     }
@@ -3520,7 +3522,7 @@ mod windows_failed_capture_tests {
         let written = Arc::new(AtomicBool::new(false));
         let observed = written.clone();
         let task = tokio::spawn(async move {
-            finish_windows_failed_capture(
+            finish_failed_capture(
                 async { receiver.await.map_err(anyhow::Error::from) },
                 || {
                     observed.store(true, Ordering::SeqCst);

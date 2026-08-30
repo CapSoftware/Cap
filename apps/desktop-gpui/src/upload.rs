@@ -69,7 +69,6 @@ struct CompletionRequirement {
 }
 
 impl CompletionAuthorization {
-    #[cfg(any(test, target_os = "linux", windows))]
     pub(crate) fn new() -> Self {
         let (permit, permission) = tokio::sync::oneshot::channel();
         let (denied, denial) = tokio::sync::watch::channel(false);
@@ -268,7 +267,6 @@ impl InstantUpload {
         self.completion_control.clone()
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
     pub(crate) fn authorize_completion(&mut self) -> Result<(), String> {
         if self.cancel.load(Ordering::Acquire) {
             return Err("Cancelled Instant recording cannot complete".into());
