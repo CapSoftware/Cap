@@ -5,6 +5,15 @@
 
 
 export const commands = {
+async submitCameraPresentation(nonce: string, input: CameraPresentationInput | null, error: string | null) : Promise<null> {
+    return await TAURI_INVOKE("submit_camera_presentation", { nonce, input, error });
+},
+async getCleanCaptureState() : Promise<Snapshot> {
+    return await TAURI_INVOKE("get_clean_capture_state");
+},
+async revealCaptureWindow(generation: number, targetOverlay: string | null) : Promise<boolean> {
+    return await TAURI_INVOKE("reveal_capture_window", { generation, targetOverlay });
+},
 async animatedGradientCatalog() : Promise<AnimatedGradientCatalog> {
     return await TAURI_INVOKE("animated_gradient_catalog");
 },
@@ -526,6 +535,7 @@ async updatesChannelChanged() : Promise<null> {
 
 export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
+cameraPresentationRequested: CameraPresentationRequested,
 currentRecordingChanged: CurrentRecordingChanged,
 devicesUpdated: DevicesUpdated,
 diagnosticProgress: DiagnosticProgress,
@@ -558,6 +568,7 @@ uploadProgressEvent: UploadProgressEvent,
 videoImportProgress: VideoImportProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
+cameraPresentationRequested: "camera-presentation-requested",
 currentRecordingChanged: "current-recording-changed",
 devicesUpdated: "devices-updated",
 diagnosticProgress: "diagnostic-progress",
@@ -802,6 +813,8 @@ export type CameraDeviceSettings = { width: number | null; height: number | null
 export type CameraFormatInfo = { width: number; height: number; frameRate: number }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
+export type CameraPresentationInput = { viewportWidth: number; viewportHeight: number; left: number; top: number; width: number; height: number; radius: number; layoutRevision: number; state: CameraPreviewState }
+export type CameraPresentationRequested = { nonce: string; generation: number; cameraRevision: string }
 export type CameraPreviewShape = "round" | "square" | "full"
 export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirrored: boolean; background_blur?: BackgroundBlurMode }
 export type CameraShape = "square" | "source"
@@ -1101,6 +1114,7 @@ export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; micropho
 export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
+export type Phase = "awaitingShortcut" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "resumeFailed" | "restarting" | "stopping" | "restoring"
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows" | "Linux"
@@ -1187,6 +1201,7 @@ export type ShadowConfiguration = { size: number; opacity: number; blur: number 
 export type SharingMeta = { id: string; link: string; content_hash?: string | null }
 export type ShowCapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { CaptureArea: { screen_id: DisplayId } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type Snapshot = { generation: number; phase: Phase | null; mode: RecordingMode | null; shortcut: string | null; error: string | null }
 export type SplitLayout = { screenZoom: number; screenPosition: XY<number>; cameraZoom: number; cameraPosition: XY<number> }
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode; organization_id?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
