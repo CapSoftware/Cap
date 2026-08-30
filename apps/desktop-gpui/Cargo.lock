@@ -1522,6 +1522,7 @@ name = "cap-desktop-gpui"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "ashpd 0.11.1",
  "base64 0.22.1",
  "cap-camera",
  "cap-camera-effects",
@@ -1950,6 +1951,7 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "workspace-hack",
+ "zbus",
 ]
 
 [[package]]

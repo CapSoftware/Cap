@@ -1203,6 +1203,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-timestamp",
+ "cap-utils",
  "chrono",
  "cidre",
  "clap",
@@ -1439,6 +1440,7 @@ version = "0.6.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "ashpd",
  "async-stream",
  "axum",
  "base64 0.22.1",
@@ -1460,6 +1462,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-rendering",
+ "cap-timestamp",
  "cap-utils",
  "chrono",
  "cidre",
@@ -1475,7 +1478,9 @@ dependencies = [
  "flume",
  "futures",
  "futures-intrusive",
+ "gdkwayland-sys",
  "global-hotkey",
+ "gtk",
  "image 0.25.8",
  "kameo",
  "keyed_priority_queue",
@@ -1546,6 +1551,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+ "wayland-sys",
  "webview2-com",
  "wgpu",
  "whisper-rs",
@@ -2020,6 +2026,7 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "workspace-hack",
+ "zbus",
 ]
 
 [[package]]

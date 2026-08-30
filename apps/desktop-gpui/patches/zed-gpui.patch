@@ -1,25 +1,87 @@
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 20600c3eb519..11bf6cfb0a00 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -812,6 +812,17 @@
+         detail: Option<&str>,
+         answers: &[PromptButton],
+     ) -> Option<oneshot::Receiver<usize>>;
++    /// `None` forbids capture-time hiding because this backend has no visibility fence.
++    fn retained_visibility(&self) -> Option<bool> {
++        None
++    }
++    /// Retains the window and renderer state until the compositor acknowledges the change.
++    fn set_retained_visibility(
++        &self,
++        _visible: bool,
++    ) -> Result<oneshot::Receiver<Result<(u64, bool)>>> {
++        anyhow::bail!("Retained window visibility is unsupported by this backend")
++    }
+     fn activate(&self);
+     /// Requests that the operating system draw attention to this window.
+     fn request_attention(&self) {}
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index afb2171476..6cc35624a4 100644
+index afb2171476d5..6cc35624a4e1 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
-@@ -830,0 +831,4 @@ pub struct PaintSurface {
+@@ -828,6 +828,10 @@
+     pub order: DrawOrder,
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
 +    pub corner_radii: Corners<ScaledPixels>,
 +    /// Normalized sub-rect of the source texture to sample, for object-fit
 +    /// crops. The full texture is `(0,0)..(1,1)`.
 +    pub source_uv: Bounds<f32>,
+     #[cfg(target_os = "macos")]
+     pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+ }
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 0480dc9574..484179d778 100644
+index 0480dc957438..aabf36147842 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -1519,0 +1520 @@ impl Window {
+@@ -1517,13 +1517,17 @@
+                 // Throttle frame rate based on conditions:
+                 // - Thermal pressure (Serious/Critical): cap to ~60fps
+                 // - Inactive window (not focused): cap to ~30fps to save energy
 +                let will_draw = invalidator.is_dirty() || request_frame_options.force_render;
-@@ -1526 +1527,4 @@ impl Window {
+                 let min_frame_interval = if !request_frame_options.force_render
+                     && !request_frame_options.require_presentation
+                     && next_frame_callbacks.borrow().is_empty()
+                 {
+                     None
+                 } else if !active.get() {
 -                    Some(Duration::from_micros(33333))
 +                    // The skip below returns before the dirty check, so without
 +                    // this an unrelated pending next-frame callback caps fresh
 +                    // content at 30fps -- video playback in an unfocused window.
 +                    (!will_draw).then_some(Duration::from_micros(33333))
-@@ -4544,0 +4549,18 @@ impl Window {
+                 } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
+                     Some(Duration::from_micros(16667))
+                 } else {
+@@ -2447,6 +2451,19 @@
+         self.platform_window.window_controls()
+     }
+ 
++    /// This is retained state; capture still needs a completed visibility receipt.
++    pub fn retained_visibility(&self) -> Option<bool> {
++        self.platform_window.retained_visibility()
++    }
++
++    /// The receipt acknowledges compositor processing, not physical presentation.
++    pub fn set_retained_visibility(
++        &mut self,
++        visible: bool,
++    ) -> anyhow::Result<futures::channel::oneshot::Receiver<anyhow::Result<(u64, bool)>>> {
++        self.platform_window.set_retained_visibility(visible)
++    }
++
+     /// Updates the window's title at the platform level.
+     pub fn set_window_title(&mut self, title: &str) {
+         self.platform_window.set_title(title);
+@@ -4542,16 +4559,56 @@
+     /// This method should only be called as part of the paint phase of element drawing.
+     #[cfg(target_os = "macos")]
+     pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
 +        self.paint_surface_fitted(bounds, bounds, Corners::default(), image_buffer);
 +    }
 +
@@ -38,7 +100,10 @@ index 0480dc9574..484179d778 100644
 +        corner_radii: Corners<Pixels>,
 +        image_buffer: CVPixelBuffer,
 +    ) {
-@@ -4549 +4571,20 @@ impl Window {
+         use crate::PaintSurface;
+ 
+         self.invalidator.debug_assert_paint();
+ 
 -        let bounds = self.snap_bounds(bounds);
 +        let source_uv = if visible == fitted {
 +            Bounds {
@@ -60,31 +125,54 @@ index 0480dc9574..484179d778 100644
 +            }
 +        };
 +        let bounds = self.snap_bounds(visible);
-@@ -4550,0 +4592 @@ impl Window {
+         let content_mask = self.snapped_content_mask();
 +        let corner_radii = corner_radii.scale(self.scale_factor());
-@@ -4554,0 +4597,2 @@ impl Window {
+         self.next_frame.scene.insert_primitive(PaintSurface {
+             order: 0,
+             bounds,
+             content_mask,
 +            corner_radii,
 +            source_uv,
+             image_buffer,
+         });
+     }
 diff --git a/crates/gpui_macos/src/metal_renderer.rs b/crates/gpui_macos/src/metal_renderer.rs
-index c93a383c38..1d35af12f6 100644
+index c93a383c38c6..1d35af12f64b 100644
 --- a/crates/gpui_macos/src/metal_renderer.rs
 +++ b/crates/gpui_macos/src/metal_renderer.rs
-@@ -10,3 +10,3 @@ use gpui::{
+@@ -7,17 +7,18 @@
+     quartzcore::AutoresizingMask,
+ };
+ use gpui::{
 -    AtlasTextureId, BackdropBlur, Background, Bounds, ContentMask, DevicePixels, DrawOrder,
 -    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
 -    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 +    AtlasTextureId, BackdropBlur, Background, Bounds, ContentMask, Corners, DevicePixels,
 +    DrawOrder, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
 +    ScaledPixels, Scene, Shadow, Size, Underline, point, size,
-@@ -19,2 +19,3 @@ use core_video::{
+ };
+ #[cfg(any(test, feature = "test-support"))]
+ use image::RgbaImage;
+ 
+ use core_foundation::base::TCFType;
+ use core_video::{
 -    metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
 -    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
 +    metal_texture::{CVMetalTexture, CVMetalTextureGetTexture},
 +    metal_texture_cache::CVMetalTextureCache,
 +    pixel_buffer::{kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange},
-@@ -50,0 +52 @@ const SCRATCH_RELEASE_AFTER_FRAMES: u32 = 30;
+ };
+ use foreign_types::{ForeignType, ForeignTypeRef};
+ use metal::{
+@@ -48,17 +49,12 @@
+ /// out popover close/reopen and brief path-free frames, short enough that a
+ /// few seconds of activity reclaims the memory.
+ const SCRATCH_RELEASE_AFTER_FRAMES: u32 = 30;
 +const SURFACE_ERROR_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-@@ -55,7 +57 @@ pub(crate) type Renderer = MetalRenderer;
+ 
+ pub(crate) type Context = Arc<Mutex<InstanceBufferPool>>;
+ pub(crate) type Renderer = MetalRenderer;
+ 
 -pub(crate) unsafe fn new_renderer(
 -    context: self::Context,
 -    _native_window: *mut c_void,
@@ -93,11 +181,27 @@ index c93a383c38..1d35af12f6 100644
 -    transparent: bool,
 -) -> Renderer {
 +pub(crate) fn new_renderer(context: self::Context, transparent: bool) -> Result<Renderer> {
-@@ -173,0 +170 @@ pub(crate) struct MetalRenderer {
+     MetalRenderer::new(context, transparent)
+ }
+ 
+@@ -171,11 +167,13 @@
+     path_free_frames: u32,
+     /// Last time `COMET_GPU_STATS` logged.
+     stats_last_log: Option<std::time::Instant>,
 +    surface_error_last_log: Option<std::time::Instant>,
-@@ -178,0 +176 @@ pub(crate) struct MetalRenderer {
+     quads_pipeline_state: metal::RenderPipelineState,
+     underlines_pipeline_state: metal::RenderPipelineState,
+     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
+     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
+     surfaces_pipeline_state: metal::RenderPipelineState,
 +    bgra_surfaces_pipeline_state: metal::RenderPipelineState,
-@@ -211,2 +209,5 @@ impl MetalRenderer {
+     unit_vertices: metal::Buffer,
+     #[allow(clippy::arc_with_non_send_sync)]
+     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
+@@ -208,8 +206,11 @@
+ 
+ impl MetalRenderer {
+     /// Creates a new MetalRenderer with a CAMetalLayer for window-based rendering.
 -    pub fn new(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>, transparent: bool) -> Self {
 -        let device = Self::create_device();
 +    pub fn new(
@@ -105,25 +209,50 @@ index c93a383c38..1d35af12f6 100644
 +        transparent: bool,
 +    ) -> Result<Self> {
 +        let device = Self::create_device()?;
-@@ -242,2 +243,2 @@ impl MetalRenderer {
+ 
+         let layer = metal::MetalLayer::new();
+         layer.set_device(&device);
+@@ -239,12 +240,12 @@
+     /// This renderer can render scenes to images without requiring a CAMetalLayer,
+     /// window, or AppKit. Use `render_scene_to_image()` to render scenes.
+     #[cfg(any(test, feature = "test-support"))]
 -    pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Self {
 -        let device = Self::create_device();
 +    pub fn new_headless(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Result<Self> {
 +        let device = Self::create_device()?;
-@@ -247 +248 @@ impl MetalRenderer {
+         Self::new_internal(device, None, true, instance_buffer_pool)
+     }
+ 
 -    fn create_device() -> metal::Device {
 +    fn create_device() -> Result<metal::Device> {
-@@ -255 +256 @@ impl MetalRenderer {
+         // Prefer low‐power integrated GPUs on Intel Mac. On Apple
+         // Silicon, there is only ever one GPU, so this is equivalent to
+         // `metal::Device::system_default()`.
+@@ -252,17 +253,15 @@
+             .into_iter()
+             .min_by_key(|d| (d.is_removable(), !d.is_low_power()))
+         {
 -            d
 +            Ok(d)
-@@ -262,4 +263,2 @@ impl MetalRenderer {
+         } else {
+             // For some reason `all()` can return an empty list, see https://github.com/zed-industries/zed/issues/37689
+             // In that case, we fall back to the system default device.
+             log::error!(
+                 "Unable to enumerate Metal devices; attempting to use system default device"
+             );
 -            metal::Device::system_default().unwrap_or_else(|| {
 -                log::error!("unable to access a compatible graphics device");
 -                std::process::exit(1);
 -            })
 +            metal::Device::system_default()
 +                .ok_or_else(|| anyhow::anyhow!("unable to access a compatible graphics device"))
-@@ -274,9 +273,2 @@ impl MetalRenderer {
+         }
+     }
+ 
+@@ -271,15 +270,8 @@
+         layer: Option<metal::MetalLayer>,
+         opaque: bool,
+         instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
 -    ) -> Self {
 -        #[cfg(feature = "runtime_shaders")]
 -        let library = device
@@ -135,31 +264,85 @@ index c93a383c38..1d35af12f6 100644
 -            .expect("error building metal library");
 +    ) -> Result<Self> {
 +        let library = build_shader_library(&device)?;
-@@ -327 +319 @@ impl MetalRenderer {
+ 
+         fn to_float2_bits(point: PointF) -> u64 {
+             let mut output = point.y.to_bits() as u64;
+@@ -324,7 +316,7 @@
+             "path_rasterization_fragment",
+             MTLPixelFormat::BGRA8Unorm,
+             PATH_SAMPLE_COUNT,
 -        );
 +        )?;
-@@ -335 +327 @@ impl MetalRenderer {
+         let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
+             &device,
+             &library,
+@@ -332,7 +324,7 @@
+             "path_sprite_vertex",
+             "path_sprite_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -343 +335 @@ impl MetalRenderer {
+         let shadows_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -340,7 +332,7 @@
+             "shadow_vertex",
+             "shadow_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -353 +345 @@ impl MetalRenderer {
+         // Blending DISABLED: the blur REPLACES the region with the blurred
+         // snapshot verbatim (fragments outside the rounded rect discard).
+         let backdrop_blur_pipeline_state = build_pipeline_state_no_blend(
+@@ -350,7 +342,7 @@
+             "backdrop_blur_vertex",
+             "backdrop_blur_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -361 +353 @@ impl MetalRenderer {
+         let quads_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -358,7 +350,7 @@
+             "quad_vertex",
+             "quad_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -369 +361 @@ impl MetalRenderer {
+         let underlines_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -366,7 +358,7 @@
+             "underline_vertex",
+             "underline_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -377 +369 @@ impl MetalRenderer {
+         let monochrome_sprites_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -374,7 +366,7 @@
+             "monochrome_sprite_vertex",
+             "monochrome_sprite_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -385 +377 @@ impl MetalRenderer {
+         let polychrome_sprites_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -382,7 +374,7 @@
+             "polychrome_sprite_vertex",
+             "polychrome_sprite_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
-@@ -393 +385,9 @@ impl MetalRenderer {
+         let surfaces_pipeline_state = build_pipeline_state(
+             &device,
+             &library,
+@@ -390,14 +382,24 @@
+             "surface_vertex",
+             "surface_fragment",
+             MTLPixelFormat::BGRA8Unorm,
 -        );
 +        )?;
 +        let bgra_surfaces_pipeline_state = build_pipeline_state(
@@ -170,24 +353,49 @@ index c93a383c38..1d35af12f6 100644
 +            "surface_bgra_fragment",
 +            MTLPixelFormat::BGRA8Unorm,
 +        )?;
-@@ -397,2 +397,4 @@ impl MetalRenderer {
+ 
+         let command_queue = device.new_command_queue();
+         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
 -        let core_video_texture_cache =
 -            CVMetalTextureCache::new(None, device.clone(), None).unwrap();
+-
+-        Self {
 +        let core_video_texture_cache = CVMetalTextureCache::new(None, device.clone(), None)
 +            .map_err(|status| {
 +                anyhow::anyhow!("failed to create Core Video Metal texture cache: {status}")
 +            })?;
-@@ -400 +402 @@ impl MetalRenderer {
--        Self {
++
 +        Ok(Self {
-@@ -417,0 +420 @@ impl MetalRenderer {
+             device,
+             layer,
+             presents_with_transaction: false,
+@@ -415,11 +417,13 @@
+             blur_free_frames: 0,
+             path_free_frames: 0,
+             stats_last_log: None,
 +            surface_error_last_log: None,
-@@ -422,0 +426 @@ impl MetalRenderer {
+             quads_pipeline_state,
+             underlines_pipeline_state,
+             monochrome_sprites_pipeline_state,
+             polychrome_sprites_pipeline_state,
+             surfaces_pipeline_state,
 +            bgra_surfaces_pipeline_state,
-@@ -432 +436 @@ impl MetalRenderer {
+             unit_vertices,
+             instance_buffer_pool,
+             sprite_atlas,
+@@ -429,7 +433,7 @@
+             path_sample_count: PATH_SAMPLE_COUNT,
+             #[cfg(any(test, feature = "test-support"))]
+             headless_render_target: None,
 -        }
 +        })
-@@ -489,3 +493,7 @@ impl MetalRenderer {
+     }
+ 
+     pub fn layer(&self) -> Option<&metal::MetalLayerRef> {
+@@ -486,9 +490,13 @@
+             self.path_intermediate_msaa_texture = None;
+             return;
+         }
 -        if self.path_intermediate_texture.as_ref().is_some_and(|texture| {
 -            texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
 -        }) {
@@ -198,34 +406,82 @@ index c93a383c38..1d35af12f6 100644
 +                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
 +            })
 +        {
-@@ -921,0 +930 @@ impl MetalRenderer {
+             return;
+         }
+ 
+@@ -919,6 +927,7 @@
+         let command_buffer = command_queue.new_command_buffer();
+         let alpha = if self.opaque { 1. } else { 0. };
+         let mut instance_offset = 0;
 +        let mut retained_surface_textures = CommandBufferResources::default();
-@@ -1141,0 +1151 @@ impl MetalRenderer {
+ 
+         // Big scratch textures are only worth holding while they're in use:
+         // after a run of frames that don't need them, drop them and let the
+@@ -1139,6 +1148,7 @@
+                     &mut instance_offset,
+                     viewport_size,
+                     command_encoder,
 +                    &mut retained_surface_textures,
-@@ -1172,0 +1183,2 @@ impl MetalRenderer {
+                 ),
+                 PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
+             };
+@@ -1170,6 +1180,8 @@
+         self.instance_buffer_pool.lock().note_usage(instance_offset);
+         self.maybe_log_gpu_stats();
+ 
 +        retained_surface_textures.retain_until_completion(command_buffer);
 +
-@@ -1196,3 +1208 @@ impl MetalRenderer {
+         Ok(command_buffer.to_owned())
+     }
+ 
+@@ -1193,9 +1205,7 @@
+         self.stats_last_log = Some(now);
+ 
+         let texture_bytes = |texture: &Option<metal::Texture>| {
 -            texture
 -                .as_ref()
 -                .map_or(0, |t| t.width() * t.height() * 4)
 +            texture.as_ref().map_or(0, |t| t.width() * t.height() * 4)
-@@ -1385,2 +1395 @@ impl MetalRenderer {
+         };
+         let backdrop_bytes =
+             texture_bytes(&self.backdrop_scratch) + texture_bytes(&self.backdrop_blurred);
+@@ -1382,8 +1392,7 @@
+             }
+         }
+         let kernel: *mut objc::runtime::Object = unsafe {
 -            let alloc: *mut objc::runtime::Object =
 -                msg_send![class!(MPSImageGaussianBlur), alloc];
 +            let alloc: *mut objc::runtime::Object = msg_send![class!(MPSImageGaussianBlur), alloc];
-@@ -1444,2 +1453,4 @@ impl MetalRenderer {
+             let kernel: *mut objc::runtime::Object = msg_send![
+                 alloc,
+                 initWithDevice: self.device.as_ptr() as *mut objc::runtime::Object
+@@ -1441,8 +1450,10 @@
+             mem::size_of_val(&source_rect) as u64,
+             source_rect.as_ptr() as *const _,
+         );
 -        command_encoder
 -            .set_fragment_texture(BackdropBlurInputIndex::SourceTexture as u64, Some(source_texture));
 +        command_encoder.set_fragment_texture(
 +            BackdropBlurInputIndex::SourceTexture as u64,
 +            Some(source_texture),
 +        );
-@@ -1896,0 +1908 @@ impl MetalRenderer {
+ 
+         let blur_bytes_len = mem::size_of_val(blurs);
+         let buffer_contents =
+@@ -1894,8 +1905,8 @@
+         instance_offset: &mut usize,
+         viewport_size: Size<DevicePixels>,
+         command_encoder: &metal::RenderCommandEncoderRef,
 +        retained_surface_textures: &mut CommandBufferResources<CVMetalTexture>,
-@@ -1898 +1909,0 @@ impl MetalRenderer {
+     ) -> bool {
 -        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
-@@ -1916,8 +1927,3 @@ impl MetalRenderer {
+         command_encoder.set_vertex_buffer(
+             SurfaceInputIndex::Vertices as u64,
+             Some(&self.unit_vertices),
+@@ -1913,41 +1924,112 @@
+                 DevicePixels::from(surface.image_buffer.get_height() as i32),
+             );
+ 
 -            assert_eq!(
 -                surface.image_buffer.get_pixel_format(),
 -                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -237,7 +493,12 @@ index c93a383c38..1d35af12f6 100644
 +            let pixel_format = surface.image_buffer.get_pixel_format();
 +            if pixel_format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
 +                let y_texture = match self.core_video_texture_cache.create_texture_from_image(
-@@ -1930,5 +1936,10 @@ impl MetalRenderer {
+                     surface.image_buffer.as_concrete_TypeRef(),
+                     None,
+                     MTLPixelFormat::R8Unorm,
+                     surface.image_buffer.get_width_of_plane(0),
+                     surface.image_buffer.get_height_of_plane(0),
+                     0,
 -                )
 -                .unwrap();
 -            let cb_cr_texture = self
@@ -253,7 +514,12 @@ index c93a383c38..1d35af12f6 100644
 +                    }
 +                };
 +                let cb_cr_texture = match self.core_video_texture_cache.create_texture_from_image(
-@@ -1941,2 +1952,67 @@ impl MetalRenderer {
+                     surface.image_buffer.as_concrete_TypeRef(),
+                     None,
+                     MTLPixelFormat::RG8Unorm,
+                     surface.image_buffer.get_width_of_plane(1),
+                     surface.image_buffer.get_height_of_plane(1),
+                     1,
 -                )
 -                .unwrap();
 +                ) {
@@ -323,17 +589,28 @@ index c93a383c38..1d35af12f6 100644
 +                ));
 +                continue;
 +            }
-@@ -1945 +2021 @@ impl MetalRenderer {
+ 
+             align_offset(instance_offset);
 -            let next_offset = *instance_offset + mem::size_of::<Surface>();
 +            let next_offset = *instance_offset + mem::size_of::<SurfaceBounds>();
-@@ -1954,0 +2031,6 @@ impl MetalRenderer {
-+            // The fragment reads corner radii from the same instance record.
-+            command_encoder.set_fragment_buffer(
+             if next_offset > instance_buffer.size {
+                 return false;
+             }
+ 
+             command_encoder.set_vertex_buffer(
 +                SurfaceInputIndex::Surfaces as u64,
 +                Some(&instance_buffer.metal_buffer),
 +                *instance_offset as u64,
 +            );
-@@ -1960,9 +2041,0 @@ impl MetalRenderer {
++            // The fragment reads corner radii from the same instance record.
++            command_encoder.set_fragment_buffer(
+                 SurfaceInputIndex::Surfaces as u64,
+                 Some(&instance_buffer.metal_buffer),
+                 *instance_offset as u64,
+@@ -1957,15 +2039,6 @@
+                 mem::size_of_val(&texture_size) as u64,
+                 &texture_size as *const Size<DevicePixels> as *const _,
+             );
 -            // let y_texture = y_texture.get_texture().unwrap().
 -            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
 -                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
@@ -343,10 +620,22 @@ index c93a383c38..1d35af12f6 100644
 -                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
 -                Some(metal::TextureRef::from_ptr(texture as *mut _))
 -            });
-@@ -1978,0 +2052,2 @@ impl MetalRenderer {
+ 
+             unsafe {
+                 let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
+@@ -1976,6 +2049,8 @@
+                     SurfaceBounds {
+                         bounds: surface.bounds,
+                         content_mask: surface.content_mask,
 +                        corner_radii: surface.corner_radii,
 +                        source_uv: surface.source_uv,
-@@ -1987,0 +2063,50 @@ impl MetalRenderer {
+                     },
+                 );
+             }
+@@ -1985,6 +2060,56 @@
+         }
+         true
+     }
 +
 +    fn log_surface_texture_error(&mut self, error: std::fmt::Arguments<'_>) {
 +        let now = std::time::Instant::now();
@@ -397,7 +686,13 @@ index c93a383c38..1d35af12f6 100644
 +    last_log.is_none_or(|last_log| {
 +        now.saturating_duration_since(last_log) >= SURFACE_ERROR_LOG_INTERVAL
 +    })
-@@ -2016,0 +2142,15 @@ fn new_command_encoder_for_texture<'a>(
+ }
+ 
+ fn new_command_encoder_for_texture<'a>(
+@@ -2014,6 +2139,21 @@
+     command_encoder
+ }
+ 
 +fn build_shader_library(device: &metal::DeviceRef) -> Result<metal::Library> {
 +    #[cfg(feature = "runtime_shaders")]
 +    {
@@ -413,125 +708,221 @@ index c93a383c38..1d35af12f6 100644
 +    }
 +}
 +
-@@ -2024 +2164 @@ fn build_pipeline_state(
+ fn build_pipeline_state(
+     device: &metal::DeviceRef,
+     library: &metal::LibraryRef,
+@@ -2021,19 +2161,30 @@
+     vertex_fn_name: &str,
+     fragment_fn_name: &str,
+     pixel_format: metal::MTLPixelFormat,
 -) -> metal::RenderPipelineState {
 +) -> Result<metal::RenderPipelineState> {
-@@ -2027 +2167,5 @@ fn build_pipeline_state(
+     let vertex_fn = library
+         .get_function(vertex_fn_name, None)
 -        .expect("error locating vertex function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2030 +2174,5 @@ fn build_pipeline_state(
+     let fragment_fn = library
+         .get_function(fragment_fn_name, None)
 -        .expect("error locating fragment function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2036 +2184,4 @@ fn build_pipeline_state(
+ 
+     let descriptor = metal::RenderPipelineDescriptor::new();
+     descriptor.set_label(label);
+     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
 -    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
 +    let color_attachment = descriptor
 +        .color_attachments()
 +        .object_at(0)
 +        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
-@@ -2053 +2204 @@ fn build_pipeline_state(
+     color_attachment.set_pixel_format(pixel_format);
+     color_attachment.set_blending_enabled(true);
+     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+@@ -2050,7 +2201,7 @@
+ 
+     device
+         .new_render_pipeline_state(&descriptor)
 -        .expect("could not create render pipeline state")
 +        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
-@@ -2063 +2214 @@ fn build_pipeline_state_no_blend(
+ }
+ 
+ fn build_pipeline_state_no_blend(
+@@ -2060,25 +2211,36 @@
+     vertex_fn_name: &str,
+     fragment_fn_name: &str,
+     pixel_format: metal::MTLPixelFormat,
 -) -> metal::RenderPipelineState {
 +) -> Result<metal::RenderPipelineState> {
-@@ -2066 +2217,5 @@ fn build_pipeline_state_no_blend(
+     let vertex_fn = library
+         .get_function(vertex_fn_name, None)
 -        .expect("error locating vertex function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2069 +2224,5 @@ fn build_pipeline_state_no_blend(
+     let fragment_fn = library
+         .get_function(fragment_fn_name, None)
 -        .expect("error locating fragment function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2075 +2234,4 @@ fn build_pipeline_state_no_blend(
+ 
+     let descriptor = metal::RenderPipelineDescriptor::new();
+     descriptor.set_label(label);
+     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
 -    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
 +    let color_attachment = descriptor
 +        .color_attachments()
 +        .object_at(0)
 +        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
-@@ -2081 +2243 @@ fn build_pipeline_state_no_blend(
+     color_attachment.set_pixel_format(pixel_format);
+     color_attachment.set_blending_enabled(false);
+ 
+     device
+         .new_render_pipeline_state(&descriptor)
 -        .expect("could not create render pipeline state")
 +        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
-@@ -2110 +2272 @@ fn build_path_sprite_pipeline_state(
+ }
+ 
+ /// The draw order of a batch's first primitive — where the backdrop-blur
+@@ -2107,19 +2269,30 @@
+     vertex_fn_name: &str,
+     fragment_fn_name: &str,
+     pixel_format: metal::MTLPixelFormat,
 -) -> metal::RenderPipelineState {
 +) -> Result<metal::RenderPipelineState> {
-@@ -2113 +2275,5 @@ fn build_path_sprite_pipeline_state(
+     let vertex_fn = library
+         .get_function(vertex_fn_name, None)
 -        .expect("error locating vertex function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2116 +2282,5 @@ fn build_path_sprite_pipeline_state(
+     let fragment_fn = library
+         .get_function(fragment_fn_name, None)
 -        .expect("error locating fragment function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2122 +2292,4 @@ fn build_path_sprite_pipeline_state(
+ 
+     let descriptor = metal::RenderPipelineDescriptor::new();
+     descriptor.set_label(label);
+     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
 -    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
 +    let color_attachment = descriptor
 +        .color_attachments()
 +        .object_at(0)
 +        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
-@@ -2136 +2309 @@ fn build_path_sprite_pipeline_state(
+     color_attachment.set_pixel_format(pixel_format);
+     color_attachment.set_blending_enabled(true);
+     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+@@ -2133,7 +2306,7 @@
+ 
+     device
+         .new_render_pipeline_state(&descriptor)
 -        .expect("could not create render pipeline state")
 +        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
-@@ -2147 +2320 @@ fn build_path_rasterization_pipeline_state(
+ }
+ 
+ fn build_path_rasterization_pipeline_state(
+@@ -2144,13 +2317,21 @@
+     fragment_fn_name: &str,
+     pixel_format: metal::MTLPixelFormat,
+     path_sample_count: u32,
 -) -> metal::RenderPipelineState {
 +) -> Result<metal::RenderPipelineState> {
-@@ -2150 +2323,5 @@ fn build_path_rasterization_pipeline_state(
+     let vertex_fn = library
+         .get_function(vertex_fn_name, None)
 -        .expect("error locating vertex function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal vertex function {vertex_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2153 +2330,5 @@ fn build_path_rasterization_pipeline_state(
+     let fragment_fn = library
+         .get_function(fragment_fn_name, None)
 -        .expect("error locating fragment function");
 +        .map_err(|error| {
 +            anyhow::anyhow!(
 +                "failed to locate Metal fragment function {fragment_fn_name} for {label}: {error}"
 +            )
 +        })?;
-@@ -2163 +2344,4 @@ fn build_path_rasterization_pipeline_state(
+ 
+     let descriptor = metal::RenderPipelineDescriptor::new();
+     descriptor.set_label(label);
+@@ -2160,7 +2341,10 @@
+         descriptor.set_raster_sample_count(path_sample_count as _);
+         descriptor.set_alpha_to_coverage_enabled(false);
+     }
 -    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
 +    let color_attachment = descriptor
 +        .color_attachments()
 +        .object_at(0)
 +        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
-@@ -2175 +2359 @@ fn build_path_rasterization_pipeline_state(
+     color_attachment.set_pixel_format(pixel_format);
+     color_attachment.set_blending_enabled(true);
+     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+@@ -2172,7 +2356,7 @@
+ 
+     device
+         .new_render_pipeline_state(&descriptor)
 -        .expect("could not create render pipeline state")
 +        .map_err(|error| anyhow::anyhow!("failed to create Metal pipeline {label}: {error}"))
-@@ -2246 +2430 @@ pub struct PathSprite {
+ }
+ 
+ // Align to multiples of 256 make Metal happy.
+@@ -2243,11 +2427,13 @@
+     pub bounds: Bounds<ScaledPixels>,
+ }
+ 
 -#[derive(Clone, Debug, Eq, PartialEq)]
 +#[derive(Clone, Debug, PartialEq)]
-@@ -2250,0 +2435,2 @@ pub struct SurfaceBounds {
+ #[repr(C)]
+ pub struct SurfaceBounds {
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
 +    pub corner_radii: Corners<ScaledPixels>,
 +    pub source_uv: Bounds<f32>,
-@@ -2260 +2446 @@ impl MetalHeadlessRenderer {
+ }
+ 
+ #[cfg(any(test, feature = "test-support"))]
+@@ -2257,10 +2443,10 @@
+ 
+ #[cfg(any(test, feature = "test-support"))]
+ impl MetalHeadlessRenderer {
 -    pub fn new() -> Self {
 +    pub fn new() -> Result<Self> {
-@@ -2262,2 +2448,2 @@ impl MetalHeadlessRenderer {
+         let instance_buffer_pool = Arc::new(Mutex::new(InstanceBufferPool::default()));
 -        let renderer = MetalRenderer::new_headless(instance_buffer_pool);
 -        Self { renderer }
 +        let renderer = MetalRenderer::new_headless(instance_buffer_pool)?;
 +        Ok(Self { renderer })
-@@ -2285,0 +2472,79 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
+     }
+ }
+ 
+@@ -2280,6 +2466,85 @@
+ 
+     fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
+         self.renderer.sprite_atlas().clone()
++    }
++}
++
 +#[cfg(test)]
 +mod renderer_hardening_tests {
 +    use super::*;
@@ -608,24 +999,52 @@ index c93a383c38..1d35af12f6 100644
 +        assert!(surface_error_log_due(None, last_log));
 +        assert!(!surface_error_log_due(Some(last_log), before_interval));
 +        assert!(surface_error_log_due(Some(last_log), at_interval));
-+    }
-+}
-+
-@@ -2372 +2637,2 @@ mod backdrop_blur_tests {
+     }
+ }
+ 
+@@ -2369,7 +2634,8 @@
+     fn render(scene: &mut Scene) -> RgbaImage {
+         scene.finish();
+         let mut renderer =
 -            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())));
 +            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())))
 +                .expect("failed to initialize headless renderer");
-@@ -2454 +2720,4 @@ mod backdrop_blur_tests {
+         renderer
+             .render_scene_to_image(scene, size(DevicePixels(VIEW_W), DevicePixels(VIEW_H)))
+             .expect("render_scene_to_image failed")
+@@ -2451,7 +2717,10 @@
+         let b = render(&mut scene);
+ 
+         let diff = max_abs_diff(&a, &b, 0, 168, 152, 312);
 -        assert!(diff <= 3, "vignette or shift at window edge: max diff {diff}");
 +        assert!(
 +            diff <= 3,
 +            "vignette or shift at window edge: max diff {diff}"
 +        );
+     }
+ 
+     #[test]
+diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
+index b25067935e5f..c60ef0b4ec97 100644
+--- a/crates/gpui_macos/src/platform.rs
++++ b/crates/gpui_macos/src/platform.rs
+@@ -666,7 +666,7 @@
+             foreground_executor,
+             background_executor,
+             renderer_context,
+-        )))
++        )?))
+     }
+ 
+     fn window_appearance(&self) -> WindowAppearance {
 diff --git a/crates/gpui_macos/src/shaders.metal b/crates/gpui_macos/src/shaders.metal
-index 97bad184dc..71a05aca4f 100644
+index 97bad184dc58..e087c0dc8a54 100644
 --- a/crates/gpui_macos/src/shaders.metal
 +++ b/crates/gpui_macos/src/shaders.metal
-@@ -883,3 +883,4 @@ vertex SurfaceVertexOutput surface_vertex(
+@@ -880,16 +880,30 @@
+       to_device_position(unit_vertex, surface.bounds, viewport_size);
+   float4 clip_distance = distance_from_clip_rect(unit_vertex, surface.bounds,
+                                                  surface.content_mask.bounds);
 -  // We are going to copy the whole texture, so the texture position corresponds
 -  // to the current vertex of the unit triangle.
 -  float2 texture_position = unit_vertex;
@@ -633,7 +1052,12 @@ index 97bad184dc..71a05aca4f 100644
 +      float2(surface.source_uv.origin.x, surface.source_uv.origin.y) +
 +      unit_vertex * float2(surface.source_uv.size.width,
 +                           surface.source_uv.size.height);
-@@ -891,0 +893,11 @@ vertex SurfaceVertexOutput surface_vertex(
+   return SurfaceVertexOutput{
+       device_position,
+       texture_position,
+       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+ }
+ 
 +float surface_corner_alpha(float2 position, SurfaceBounds surface) {
 +  float max_radius = max(
 +      max(surface.corner_radii.top_left, surface.corner_radii.top_right),
@@ -645,10 +1069,16 @@ index 97bad184dc..71a05aca4f 100644
 +  return saturate(0.5 - distance);
 +}
 +
-@@ -892,0 +905,2 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
 +                                 constant SurfaceBounds *surfaces
 +                                 [[buffer(SurfaceInputIndex_Surfaces)]],
-@@ -907 +921,15 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
+                                  texture2d<float> y_texture
+                                  [[texture(SurfaceInputIndex_YTexture)]],
+                                  texture2d<float> cb_cr_texture
+@@ -904,7 +918,21 @@
+       y_texture.sample(texture_sampler, input.texture_position).r,
+       cb_cr_texture.sample(texture_sampler, input.texture_position).rg, 1.0);
+ 
 -  return ycbcrToRGBTransform * ycbcr;
 +  float4 color = ycbcrToRGBTransform * ycbcr;
 +  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
@@ -665,18 +1095,36 @@ index 97bad184dc..71a05aca4f 100644
 +      color_texture.sample(texture_sampler, input.texture_position).rgb, 1.0);
 +  color.a *= surface_corner_alpha(input.position.xy, surfaces[0]);
 +  return color;
+ }
+ 
+ float4 hsla_to_rgba(Hsla hsla) {
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index 8a3aa5ea06..aacd697be5 100644
+index 8a3aa5ea067d..aacd697be58d 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
-@@ -7 +6,0 @@ use crate::{
+@@ -4,7 +4,6 @@
+     kTISPropertyInputSourceIsASCIICapable, kTISPropertyInputSourceType, kTISTypeKeyboardInputMode,
+     ns_string, renderer,
+ };
 -#[cfg(any(test, feature = "test-support"))]
-@@ -776 +775,3 @@ impl MacWindow {
+ use anyhow::Result;
+ use block::ConcreteBlock;
+ use cocoa::{
+@@ -773,7 +772,9 @@
+         foreground_executor: ForegroundExecutor,
+         background_executor: BackgroundExecutor,
+         renderer_context: renderer::Context,
 -    ) -> Self {
 +    ) -> Result<Self> {
 +        let renderer =
 +            objc::rc::autoreleasepool(|| renderer::new_renderer(renderer_context, false))?;
-@@ -896,7 +897 @@ impl MacWindow {
+         unsafe {
+             let pool = NSAutoreleasePool::new(nil);
+ 
+@@ -893,13 +894,7 @@
+                 cursor_style: CursorStyle::Arrow,
+                 cursor_visible,
+                 frame_source: None,
 -                renderer: renderer::new_renderer(
 -                    renderer_context,
 -                    native_window as *mut _,
@@ -685,82 +1133,36 @@ index 8a3aa5ea06..aacd697be5 100644
 -                    false,
 -                ),
 +                renderer,
-@@ -1101 +1096 @@ impl MacWindow {
+                 request_frame_callback: None,
+                 event_callback: None,
+                 activate_callback: None,
+@@ -1098,7 +1093,7 @@
+ 
+             pool.drain();
+ 
 -            window
 +            Ok(window)
-@@ -3135 +3130,2 @@ unsafe fn remove_layer_background(layer: id) {
+         }
+     }
+ 
+@@ -3132,7 +3127,8 @@
+                 let hit: BOOL = msg_send![description, containsString: blur_test];
+                 if hit == YES {
+                     let radius: id = msg_send![class!(NSNumber), numberWithDouble: 60.0f64];
 -                    let _: () = msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
 +                    let _: () =
 +                        msg_send![filter, setValue: radius forKey: ns_string("inputRadius")];
-diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
---- a/crates/gpui_windows/src/directx_atlas.rs
-+++ b/crates/gpui_windows/src/directx_atlas.rs
-@@ -110,0 +111,9 @@ impl PlatformAtlas for DirectXAtlas {
-+        let cached_texture_index = if id.kind == AtlasTextureKind::Polychrome {
-+            textures.textures.iter().position(|entry| {
-+                entry
-+                    .as_ref()
-+                    .is_some_and(|entry| entry.live_atlas_keys == 0)
-+            })
-+        } else {
-+            None
-+        };
-@@ -119 +129,7 @@ impl PlatformAtlas for DirectXAtlas {
--            if texture.is_unreferenced() {
-+            if texture.is_unreferenced() && id.kind == AtlasTextureKind::Polychrome {
-+                *texture_slot = Some(texture);
-+                if let Some(index) = cached_texture_index {
-+                    textures.textures[index] = None;
-+                    textures.free_list.push(index);
-+                }
-+            } else if texture.is_unreferenced() {
-@@ -420 +435,33 @@ mod tests {
--}
-+
-+    #[test]
-+    fn test_reuses_one_unreferenced_polychrome_texture() {
-+        let Some(atlas) = create_atlas() else {
-+            return;
-+        };
-+
-+        let small = Size {
-+            width: DevicePixels(64),
-+            height: DevicePixels(64),
-+        };
-+        let large = Size {
-+            width: DevicePixels(1280),
-+            height: DevicePixels(720),
-+        };
-+        let small_key = make_image_key(10);
-+        let first_key = make_image_key(11);
-+        let second_key = make_image_key(12);
-+
-+        insert_tile(&atlas, &small_key, small);
-+        atlas.remove(&small_key);
-+        let first = insert_tile(&atlas, &first_key, large);
-+        atlas.remove(&first_key);
-+        let second = insert_tile(&atlas, &second_key, large);
-+
-+        assert_eq!(first.texture_id, second.texture_id);
-+        let state = atlas.0.lock();
-+        assert_eq!(
-+            state.polychrome_textures.textures.iter().flatten().count(),
-+            1
-+        );
-+    }
-+}
-diff --git a/crates/gpui_macos/src/platform.rs b/crates/gpui_macos/src/platform.rs
-index b25067935e..c60ef0b4ec 100644
---- a/crates/gpui_macos/src/platform.rs
-+++ b/crates/gpui_macos/src/platform.rs
-@@ -669 +669 @@ impl Platform for MacPlatform {
--        )))
-+        )?))
+                     let _: () = msg_send![layer, setFilters: filters];
+                     break;
+                 }
 diff --git a/crates/gpui_platform/src/gpui_platform.rs b/crates/gpui_platform/src/gpui_platform.rs
-index 1d2fea90b4..c2e070e721 100644
+index 1d2fea90b477..c2e070e721fe 100644
 --- a/crates/gpui_platform/src/gpui_platform.rs
 +++ b/crates/gpui_platform/src/gpui_platform.rs
-@@ -67,3 +67,7 @@ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRende
+@@ -64,9 +64,13 @@
+ pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRenderer>> {
+     #[cfg(target_os = "macos")]
+     {
 -        Some(Box::new(
 -            gpui_macos::metal_renderer::MetalHeadlessRenderer::new(),
 -        ))
@@ -771,3 +1173,117 @@ index 1d2fea90b4..c2e070e721 100644
 +                None
 +            }
 +        }
+     }
+ 
+     #[cfg(not(target_os = "macos"))]
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 587315debfa8..e58084906c1f 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -108,7 +108,7 @@
+ struct WgpuResources {
+     device: Arc<wgpu::Device>,
+     queue: Arc<wgpu::Queue>,
+-    surface: wgpu::Surface<'static>,
++    surface: Option<wgpu::Surface<'static>>,
+     pipelines: WgpuPipelines,
+     bind_group_layouts: WgpuBindGroupLayouts,
+     atlas_sampler: wgpu::Sampler,
+@@ -449,7 +449,7 @@
+         let resources = WgpuResources {
+             device,
+             queue,
+-            surface,
++            surface: Some(surface),
+             pipelines,
+             bind_group_layouts,
+             atlas_sampler,
+@@ -982,9 +982,9 @@
+                 texture.destroy();
+             }
+ 
+-            resources
+-                .surface
+-                .configure(&resources.device, &surface_config);
++            if let Some(surface) = &resources.surface {
++                surface.configure(&resources.device, &surface_config);
++            }
+ 
+             // Invalidate intermediate textures - they will be lazily recreated
+             // in draw() after we confirm the surface is healthy. This avoids
+@@ -1040,9 +1040,9 @@
+             let Some(resources) = self.resources.as_mut() else {
+                 return;
+             };
+-            resources
+-                .surface
+-                .configure(&resources.device, &surface_config);
++            if let Some(surface) = &resources.surface {
++                surface.configure(&resources.device, &surface_config);
++            }
+             resources.pipelines = Self::create_pipelines(
+                 &resources.device,
+                 &resources.bind_group_layouts,
+@@ -1118,24 +1118,30 @@
+ 
+         self.atlas.before_frame();
+ 
+-        let frame = match self.resources().surface.get_current_texture() {
++        let frame = match self
++            .resources()
++            .surface
++            .as_ref()
++            .expect("Configured surface missing")
++            .get_current_texture()
++        {
+             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                 // Textures must be destroyed before the surface can be reconfigured.
+                 drop(frame);
+                 let surface_config = self.surface_config.clone();
+                 let resources = self.resources_mut();
+-                resources
+-                    .surface
+-                    .configure(&resources.device, &surface_config);
++                if let Some(surface) = &resources.surface {
++                    surface.configure(&resources.device, &surface_config);
++                }
+                 return false;
+             }
+             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                 let surface_config = self.surface_config.clone();
+                 let resources = self.resources_mut();
+-                resources
+-                    .surface
+-                    .configure(&resources.device, &surface_config);
++                if let Some(surface) = &resources.surface {
++                    surface.configure(&resources.device, &surface_config);
++                }
+                 return false;
+             }
+             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+@@ -1687,6 +1693,15 @@
+         })
+     }
+ 
++    /// Dropping the returned surface retires WSI presentation without discarding the atlas.
++    #[cfg(not(target_family = "wasm"))]
++    pub fn take_surface_for_visibility(&mut self) -> Option<wgpu::Surface<'static>> {
++        self.surface_configured = false;
++        self.resources
++            .as_mut()
++            .and_then(|resources| resources.surface.take())
++    }
++
+     /// Mark the surface as unconfigured so rendering is skipped until a new
+     /// surface is provided via [`replace_surface`](Self::replace_surface).
+     ///
+@@ -1745,7 +1760,7 @@
+                 .as_mut()
+                 .expect("GPU resources not available");
+             surface.configure(&res.device, &self.surface_config);
+-            res.surface = surface;
++            res.surface = Some(surface);
+ 
+             // Invalidate intermediate textures — they'll be recreated lazily.
+             res.invalidate_intermediate_textures();

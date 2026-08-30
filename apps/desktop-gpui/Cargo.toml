@@ -185,6 +185,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 raw-window-handle = "0.6"
 x11rb = "0.13"
