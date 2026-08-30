@@ -452,12 +452,7 @@ impl Actor {
             if let Some(pipeline) = pipeline {
                 if let Some(audio) = pipeline.audio {
                     let (audio_res, video_res) = tokio::join!(audio.stop(), pipeline.video.stop());
-                    #[cfg(not(windows))]
-                    if let Err(e) = audio_res {
-                        warn!("Audio pipeline stop failed: {e:#}");
-                    }
                     video_res?;
-                    #[cfg(windows)]
                     audio_res?;
                 } else {
                     pipeline.video.stop().await?;
@@ -618,19 +613,7 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        #[cfg(target_os = "linux")]
-        {
-            self.stop().await
-        }
-        #[cfg(windows)]
-        {
-            self.stop().await
-        }
-        #[cfg(not(any(target_os = "linux", windows)))]
-        {
-            let _ = self.stop().await;
-            Ok(())
-        }
+        self.stop().await
     }
 }
 
@@ -2666,9 +2649,77 @@ mod quiescence_tests {
     }
 }
 
-#[cfg(all(test, windows))]
-mod windows_cancel_tests {
+#[cfg(all(test, not(target_os = "linux")))]
+mod non_linux_stop_tests {
     use super::*;
+    use crate::output_pipeline::{
+        AudioFrame, AudioMuxer, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
+        ChannelVideoSourceConfig, Muxer, TaskPool, VideoFrame, VideoMuxer,
+    };
+    use cap_timestamp::Timestamp;
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+
+    #[derive(Clone, Copy)]
+    struct Frame(Timestamp);
+
+    impl VideoFrame for Frame {
+        fn timestamp(&self) -> Timestamp {
+            self.0
+        }
+    }
+
+    struct Finalizer {
+        entered: Arc<tokio::sync::Notify>,
+        finished: Arc<AtomicBool>,
+        release: Option<std::sync::mpsc::Receiver<()>>,
+        error: Option<&'static str>,
+    }
+
+    struct TestMuxer(Finalizer);
+
+    impl Muxer for TestMuxer {
+        type Config = Finalizer;
+
+        async fn setup(
+            config: Self::Config,
+            _: PathBuf,
+            _: Option<VideoInfo>,
+            _: Option<cap_media_info::AudioInfo>,
+            _: Arc<AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self(config))
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            self.0.entered.notify_one();
+            if let Some(release) = self.0.release.take() {
+                release.recv()?;
+            }
+            self.0.finished.store(true, Ordering::Release);
+            Ok(match self.0.error {
+                Some(error) => Err(anyhow::anyhow!(error)),
+                None => Ok(()),
+            })
+        }
+    }
+
+    impl VideoMuxer for TestMuxer {
+        type VideoFrame = Frame;
+
+        fn send_video_frame(&mut self, _: Frame, _: Duration) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl AudioMuxer for TestMuxer {
+        fn send_audio_frame(&mut self, _: AudioFrame, _: Duration) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
 
     fn stopped_actor(error: Option<String>) -> Actor {
         Actor {
@@ -2689,6 +2740,14 @@ mod windows_cancel_tests {
         for _ in 0..2 {
             assert!(
                 actor
+                    .ask(Stop)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("stop cleanup failed")
+            );
+            assert!(
+                actor
                     .ask(Cancel)
                     .await
                     .unwrap_err()
@@ -2698,6 +2757,151 @@ mod windows_cancel_tests {
         }
         actor.kill();
         actor.wait_for_stop().await;
+    }
+
+    async fn audio_failure_waits_for_video_and_remains_visible(cancel: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let timestamps = Timestamps::now();
+        let video_info = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 4, 4, 30);
+        let video_entered = Arc::new(tokio::sync::Notify::new());
+        let video_finished = Arc::new(AtomicBool::new(false));
+        let audio_finished = Arc::new(AtomicBool::new(false));
+        let (release, blocked) = std::sync::mpsc::channel();
+        let (video_sender, video_receiver) = flume::bounded(4);
+        let video = OutputPipeline::builder(directory.path().join("display"))
+            .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(
+                video_info,
+                video_receiver,
+            ))
+            .with_timestamps(timestamps)
+            .build::<TestMuxer>(Finalizer {
+                entered: video_entered.clone(),
+                finished: video_finished.clone(),
+                release: Some(blocked),
+                error: None,
+            })
+            .await
+            .unwrap();
+        video_sender
+            .send(Frame(Timestamp::Instant(timestamps.instant())))
+            .unwrap();
+        let video_cancel = video.cancel_token();
+
+        let audio_info = cap_media_info::AudioInfo::new_raw(
+            cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+            48_000,
+            2,
+        );
+        let (mut audio_sender, audio_receiver) = futures::channel::mpsc::channel(4);
+        let audio = OutputPipeline::builder(directory.path().join("audio"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                audio_info,
+                audio_receiver,
+            ))
+            .with_timestamps(timestamps)
+            .build::<TestMuxer>(Finalizer {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                finished: audio_finished.clone(),
+                release: None,
+                error: Some("audio finalization failed"),
+            })
+            .await
+            .unwrap();
+        audio_sender
+            .try_send(AudioFrame::new(
+                audio_info.empty_frame(960),
+                Timestamp::Instant(timestamps.instant()),
+            ))
+            .unwrap();
+        let audio_done = audio.done_fut();
+        let actor = Actor::spawn(Actor {
+            recording_dir: directory.path().to_path_buf(),
+            output_dir: directory.path().join("display"),
+            capture_target: ScreenCaptureTarget::CameraOnly,
+            video_info,
+            state: ActorState::Recording {
+                pipeline: Pipeline {
+                    video,
+                    audio: Some(audio),
+                    video_info,
+                    segments_dir: directory.path().join("display"),
+                    segment_rx: None,
+                },
+                segment_start_time: current_time_f64(),
+            },
+            total_pause_duration: Duration::ZERO,
+            pause_started_at: None,
+            terminal_stop_error: None,
+        });
+        let stop_actor = actor.clone();
+        let stop = tokio::spawn(async move {
+            if cancel {
+                stop_actor.ask(Cancel).await.map_err(|e| e.to_string())
+            } else {
+                stop_actor
+                    .ask(Stop)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), video_cancel.cancelled())
+            .await
+            .unwrap();
+        drop(video_sender);
+        tokio::time::timeout(Duration::from_secs(2), video_entered.notified())
+            .await
+            .unwrap();
+        let audio_error = tokio::time::timeout(Duration::from_secs(2), audio_done)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            audio_error
+                .to_string()
+                .contains("audio finalization failed")
+        );
+        assert!(audio_finished.load(Ordering::Acquire));
+        assert!(!video_finished.load(Ordering::Acquire));
+        assert!(!stop.is_finished());
+
+        release.send(()).unwrap();
+        let stop_error = tokio::time::timeout(Duration::from_secs(2), stop)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(stop_error.contains("audio finalization failed"));
+        assert!(video_finished.load(Ordering::Acquire));
+        assert!(
+            actor
+                .ask(Stop)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("audio finalization failed")
+        );
+        assert!(
+            actor
+                .ask(Cancel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("audio finalization failed")
+        );
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_video_after_audio_finalization_fails() {
+        audio_failure_waits_for_video_and_remains_visible(false).await;
+    }
+
+    #[tokio::test]
+    async fn cancel_waits_for_video_after_audio_finalization_fails() {
+        audio_failure_waits_for_video_and_remains_visible(true).await;
     }
 
     #[tokio::test]
