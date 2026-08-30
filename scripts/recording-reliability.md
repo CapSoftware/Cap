@@ -77,7 +77,7 @@ SQLite's crash-testing approach is a useful model for a persistence harness: inj
 
 The measured candidate is not yet at 0.5.9 parity. A Linux 120-second Studio pair took 537.342 ms versus 362.396 ms from Stop to process exit. Windows 12-second Instant pairs took 446.028 versus 405.319 ms and 473.999 versus 376.941 ms from capture-thread completion to process exit. These are different boundaries and limited samples, not universal latency distributions. The Linux project occupied about 141 MB versus 70 MB because original media was retained.
 
-The original PR introduced the private copy and repeated full snapshots. Current repairs reduced decoding and temporary-write overhead, but retained the complete-media copy. A slow disk or long recording magnifies that work. Do not remove preservation merely to match a stopwatch.
+The original PR introduced the private copy and repeated full snapshots. Repairs reduced decoding and temporary-write overhead, but retained the complete-media copy. A subsequent bounded clean-Studio change removes one redundant original-input scan while retaining the independently verified staged copy, final source snapshot, track-failure guard and publication transaction. Full recovery keeps its earlier check. The timings above precede that scan reduction; new native parity measurements remain required. A slow disk or long recording magnifies the remaining work. Do not remove preservation merely to match a stopwatch.
 
 Apply optimizations in increasing order of risk:
 
@@ -108,6 +108,8 @@ On Windows use `python` and add `--windows-job-source scripts/recording-reliabil
 
 Run the same assertion schema on all three OSes. A VM proves its guest capture and filesystem paths, not every physical microphone/camera/GPU. Missing devices, silent stimuli, unavailable editor controls or inaccessible cloud environments are `PENDING`, not `PASS`. Requested audio must be present and demonstrably non-silent; A/V synchronization needs an independently measurable flash/tone or equivalent stimulus, not just container timestamps.
 
+The decode oracle preserves the demuxer timebase and passes every frame through. FFmpeg's default output encoder timebase can round distinct input timestamps together when writing to a null sink; a synthetic monotonic-timestamp fixture reproduced that false error. Input packet decode timestamps are therefore checked independently, while reordered presentation timestamps and audio preroll remain valid. Decode errors are still failures, and each file's initial hash is retained even when verification fails. [FFmpeg timestamp options](https://ffmpeg.org/ffmpeg.html#Advanced-options).
+
 | Scenario family | Required evidence |
 | --- | --- |
 | Clean Instant and Studio | Start/stop events, complete local metadata, expected tracks, duration/cadence, full decode, project validation |
@@ -131,6 +133,6 @@ Record exact source/build identity, OS/filesystem, requested inputs, fixture ide
 
 ## Implementation and release gates
 
-First changes are deliberately bounded: atomic recording metadata replacement, fail-closed Tauri segment completion, and a common local recording oracle. They do not implement the entire lifecycle described above. In particular, background GPUI upload/restart reconciliation, final-object-based deletion, filesystem durability ordering and strict performance parity remain separate work until verified.
+First changes are deliberately bounded: atomic recording metadata replacement with Windows open-reader support, fail-closed Tauri segment completion, validated restart inventories, exact multipart retry reads, one redundant clean-Studio scan removed, and a common local recording oracle. They do not implement the entire lifecycle described above. In particular, background GPUI upload/restart reconciliation, final-object-based deletion, filesystem durability ordering and strict performance parity remain separate work until verified.
 
 Before release: all required native scenarios must pass on the final source/build; every false-success/data-loss finding must be fixed; 0.5.9 projects and supported recording combinations must remain compatible; performance comparisons must meet the agreed parity requirement; and a fresh independent/Greptile review must cover the final changes. A review score or green CI job cannot replace missing native or cloud evidence.

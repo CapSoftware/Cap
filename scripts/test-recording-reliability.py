@@ -109,6 +109,28 @@ class RecordingReliabilityTests(unittest.TestCase):
                 reliability.audio_levels(stderr)
         self.assertEqual(reliability.audio_levels("RMS level dB: -24.5")["maximumRmsDbfs"], -24.5)
 
+    def test_packet_timestamps_preserve_reordered_presentation_and_audio_preroll(self):
+        probe = {"streams": [{"index": 0, "codec_type": "video"}, {"index": 1, "codec_type": "audio"}], "packets": [
+            {"stream_index": 0, "dts": -2, "pts": 0},
+            {"stream_index": 1, "dts": -1024, "pts": -1024},
+            {"stream_index": 0, "dts": -1, "pts": 2},
+            {"stream_index": 1, "dts": 0, "pts": 0},
+            {"stream_index": 0, "dts": 0, "pts": 1},
+        ]}
+        self.assertEqual(reliability.packet_timestamps(probe), {0: 3, 1: 2})
+
+    def test_duplicate_reversed_and_missing_packet_timestamps_fail(self):
+        for second in [0, -1, None, "1", True]:
+            probe = {"streams": [{"index": 0, "codec_type": "video"}], "packets": [
+                {"stream_index": 0, "dts": 0, "pts": 0},
+                {"stream_index": 0, "dts": second, "pts": 1},
+            ]}
+            with self.subTest(second=second), self.assertRaises(ValueError):
+                reliability.packet_timestamps(probe)
+        for probe in [{"streams": [], "packets": []}, {"streams": [{"index": 0, "codec_type": "audio"}], "packets": []}]:
+            with self.subTest(probe=probe), self.assertRaises(ValueError):
+                reliability.packet_timestamps(probe)
+
     def test_pending_and_failed_requirements_cannot_become_success(self):
         self.assertEqual(reliability.aggregate([]), "FAIL")
         self.assertEqual(reliability.aggregate([{"status": "PASS"}, {"status": "PENDING"}]), "PENDING")

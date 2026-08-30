@@ -129,6 +129,25 @@ def media_metrics(probe, expected_duration, fps, kind):
     return measurements
 
 
+def packet_timestamps(probe):
+    streams = {stream["index"] for stream in probe.get("streams", []) if stream.get("codec_type") in {"video", "audio"}}
+    previous, counts = {}, {}
+    for packet in probe.get("packets", []):
+        index = packet.get("stream_index")
+        if index not in streams:
+            continue
+        dts, pts = packet.get("dts"), packet.get("pts")
+        if type(dts) is not int or type(pts) is not int:
+            raise ValueError("Media packet has no integer decode/presentation timestamp")
+        if index in previous and dts <= previous[index]:
+            raise ValueError("Input packet decode timestamps are not strictly increasing")
+        previous[index] = dts
+        counts[index] = counts.get(index, 0) + 1
+    if not streams or set(counts) != streams:
+        raise ValueError("Missing timestamped packets for a media stream")
+    return counts
+
+
 def audio_levels(stderr):
     levels = re.findall(r"RMS level dB:\s*(-?inf|[-+0-9.eE]+)", stderr)
     if not levels:
@@ -315,12 +334,14 @@ def checked_json(stdout, stderr):
 def check_media(runner, args, prefix, media):
     path = Path(media["path"])
     before = sha256(path)
-    stdout, stderr = runner.run(prefix + "-probe", [str(args.ffprobe), "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(path)])
+    write_json(runner.root / f"{prefix}-media-before.json", {**media, "bytes": path.stat().st_size, "sha256Before": before})
+    stdout, stderr = runner.run(prefix + "-probe", [str(args.ffprobe), "-v", "error", "-count_frames", "-show_streams", "-show_format", "-show_packets", "-show_entries", "packet=stream_index,dts,pts:stream:format", "-of", "json", str(path)])
     if stderr.strip():
         raise ValueError("FFprobe emitted an error while counting decoded frames")
     probe = strict_json(stdout)
     metrics = media_metrics(probe, args.duration, args.fps, media["kind"])
-    _, errors = runner.run(prefix + "-decode", [str(args.ffmpeg), "-v", "error", "-nostdin", "-xerror", "-err_detect", "explode+crccheck", "-i", str(path), "-map", "0:v?", "-map", "0:a?", "-f", "null", "-"], 120)
+    packets = packet_timestamps(probe)
+    _, errors = runner.run(prefix + "-decode", [str(args.ffmpeg), "-v", "error", "-nostdin", "-xerror", "-err_detect", "explode+crccheck", "-i", str(path), "-map", "0:v?", "-map", "0:a?", "-fps_mode", "passthrough", "-enc_time_base", "demux", "-f", "null", "-"], 120)
     if errors.strip():
         raise ValueError("Full decode emitted errors")
     audio = [stream for stream in probe["streams"] if stream.get("codec_type") == "audio"]
@@ -334,7 +355,7 @@ def check_media(runner, args, prefix, media):
     after = sha256(path)
     if before != after:
         raise ValueError("Read-only media verification changed the artifact")
-    return {**media, "bytes": path.stat().st_size, "sha256Before": before, "sha256After": after, "measurements": metrics, "audio": levels}
+    return {**media, "bytes": path.stat().st_size, "sha256Before": before, "sha256After": after, "measurements": metrics, "packetCounts": packets, "audio": levels}
 
 
 def run_case(runner, args, label, binary, head, mode):
