@@ -20,6 +20,7 @@ use crate::{
     recording::RecordingMode,
     session::{Phase, RecordingSession},
     theme::Theme,
+    ui,
 };
 
 pub struct ControlsWindow {
@@ -112,10 +113,13 @@ impl ControlsWindow {
         let session = self.session.read(cx);
         let starting = session.phase == Phase::Starting;
         let stopping = session.phase == Phase::Stopping;
+        let error = session.error.clone();
         let label: SharedString = if starting {
             "Starting".into()
         } else if stopping {
             "Saving…".into()
+        } else if error.is_some() {
+            "Error".into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
@@ -138,6 +142,9 @@ impl ControlsWindow {
                     }))
             })
             .when(stopping, |this| this.opacity(0.6))
+            .when_some(error, |this, error| {
+                this.tooltip(move |_, cx| ui::Tooltip::new(&theme, error.clone()).view(cx))
+            })
             .child(
                 svg()
                     .path("icons/stop-circle.svg")
