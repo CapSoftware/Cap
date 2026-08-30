@@ -120,6 +120,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import useRequestPermission from "./useRequestPermission";
+import { getPostResizeWindowPosition } from "./window-geometry";
 
 const MAIN_WINDOW_SIZE = {
 	compact: { width: 330, height: 395 },
@@ -205,9 +206,6 @@ const listScreenshotsQuery = queryOptions<ScreenshotWithPath[]>({
 const nextAnimationFrame = () =>
 	new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-const clamp = (value: number, minimum: number, maximum: number) =>
-	Math.min(Math.max(value, minimum), maximum);
-
 async function resizeMainWindow(expanded: boolean, animate: boolean) {
 	const currentWindow = getCurrentWindow();
 	const [physicalSize, outerSize, scaleFactor, physicalPosition, monitor] =
@@ -254,36 +252,6 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 	const reduceMotion = window.matchMedia(
 		"(prefers-reduced-motion: reduce)",
 	).matches;
-
-	if (monitor && physicalPosition) {
-		const padding = MAIN_WINDOW_SCREEN_PADDING * scaleFactor;
-		const workArea = monitor.workArea;
-		const targetPhysicalWidth = (targetWidth + frameWidth) * scaleFactor;
-		const targetPhysicalHeight = (targetHeight + frameHeight) * scaleFactor;
-		const minimumX = workArea.position.x + padding;
-		const minimumY = workArea.position.y + padding;
-		const maximumX = Math.max(
-			minimumX,
-			workArea.position.x + workArea.size.width - targetPhysicalWidth - padding,
-		);
-		const maximumY = Math.max(
-			minimumY,
-			workArea.position.y +
-				workArea.size.height -
-				targetPhysicalHeight -
-				padding,
-		);
-		const targetX = clamp(physicalPosition.x, minimumX, maximumX);
-		const targetY = clamp(physicalPosition.y, minimumY, maximumY);
-
-		if (targetX !== physicalPosition.x || targetY !== physicalPosition.y) {
-			await currentWindow
-				.setPosition(
-					new PhysicalPosition(Math.round(targetX), Math.round(targetY)),
-				)
-				.catch(() => undefined);
-		}
-	}
 
 	if (Math.abs(widthDelta) > 0.5 || Math.abs(heightDelta) > 0.5) {
 		if (!animate || reduceMotion) {
@@ -332,6 +300,36 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 			await resizeWorker;
 			if (resizeFailed) throw resizeError;
 		}
+	}
+
+	if (monitor && physicalPosition) {
+		// AppKit keeps the bottom edge fixed while growing an NSWindow, so restore
+		// the intended top-left position only after the resize finishes.
+		const positionAfterResize = await currentWindow
+			.outerPosition()
+			.catch(() => null);
+		if (!positionAfterResize) return;
+
+		const targetPosition = getPostResizeWindowPosition(
+			physicalPosition,
+			positionAfterResize,
+			{
+				width: (targetWidth + frameWidth) * scaleFactor,
+				height: (targetHeight + frameHeight) * scaleFactor,
+			},
+			monitor.workArea,
+			MAIN_WINDOW_SCREEN_PADDING * scaleFactor,
+		);
+		if (!targetPosition) return;
+
+		await currentWindow
+			.setPosition(
+				new PhysicalPosition(
+					Math.round(targetPosition.x),
+					Math.round(targetPosition.y),
+				),
+			)
+			.catch(() => undefined);
 	}
 }
 
