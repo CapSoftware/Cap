@@ -12,8 +12,8 @@ use ashpd::desktop::{
     screencast::{CursorMode, Screencast, SourceType, Stream as PortalStream},
 };
 use cap_timestamp::Timestamp;
-use futures::channel::mpsc;
-use kameo::Actor as _;
+use futures::{Stream, StreamExt, channel::mpsc};
+use kameo::{Actor as _, actor::ActorRef};
 use pipewire as pw;
 use pw::{properties::properties, spa};
 use std::{
@@ -175,7 +175,7 @@ impl ScreenCaptureConfig<X11Capture> {
     }
 }
 
-pub(crate) fn x11_capture_rect(
+pub fn x11_capture_rect(
     display_x: f64,
     display_y: f64,
     display_width: f64,
@@ -867,10 +867,43 @@ pub struct SystemAudioSourceConfig {
     feed_lock: Arc<MicrophoneFeedLock>,
     device_name: String,
     monitor_route: Option<PactlMonitorRoute>,
+    feed: OwnedSystemAudioFeed,
 }
 
 pub struct SystemAudioSource {
     inner: crate::sources::Microphone,
+    monitor_route: Option<PactlMonitorRoute>,
+    feed: OwnedSystemAudioFeed,
+}
+
+struct OwnedSystemAudioFeed {
+    actor: ActorRef<MicrophoneFeed>,
+    build_scope: Option<crate::output_pipeline::PipelineBuildScope>,
+    stopped: bool,
+}
+
+impl Drop for OwnedSystemAudioFeed {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        self.actor.kill();
+        if let Some(scope) = &self.build_scope
+            && !scope.is_committed()
+        {
+            let feed = self.actor.clone();
+            scope.spawn_cleanup(async move {
+                feed.wait_for_stop().await;
+                Ok(())
+            });
+        }
+    }
+}
+
+impl Drop for SystemAudioSource {
+    fn drop(&mut self) {
+        drop(self.monitor_route.take());
+    }
 }
 
 struct PactlMonitorRoute {
@@ -879,7 +912,384 @@ struct PactlMonitorRoute {
     default_source: Option<String>,
     default_source_index: Option<u32>,
     source_output: u32,
+    original_source: u32,
     previous_process_source_outputs: Vec<PactlSourceOutput>,
+}
+
+impl Drop for PactlMonitorRoute {
+    fn drop(&mut self) {
+        let restore = || -> anyhow::Result<()> {
+            let outputs = current_process_source_outputs()?;
+            let Some(output) = outputs
+                .iter()
+                .find(|output| output.id == self.source_output)
+            else {
+                return Ok(());
+            };
+            if output.source != self.monitor_source_index {
+                return Ok(());
+            }
+            let destination = previous_source_destination(
+                self.original_source,
+                self.monitor_source_index,
+                &self.monitor_source,
+                self.default_source.as_deref(),
+            );
+            if destination != self.monitor_source_index.to_string() {
+                move_pactl_source_output(self.source_output, &destination)?;
+            }
+            Ok(())
+        };
+        if let Err(error) = restore() {
+            tracing::warn!(%error, "Could not restore the Linux system-audio input route");
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PulseInputRole {
+    #[default]
+    Microphone,
+    SystemAudio,
+}
+
+mod alsa_input_backend {
+    use anyhow::{Context as _, anyhow, bail, ensure};
+    use std::ffi::{CStr, CString, c_char, c_int, c_void};
+
+    #[link(name = "asound")]
+    unsafe extern "C" {
+        fn snd_config_update_ref(config: *mut *mut c_void) -> c_int;
+        fn snd_config_unref(config: *mut c_void);
+        fn snd_config_delete(config: *mut c_void) -> c_int;
+        fn snd_config_search_definition(
+            config: *mut c_void,
+            base: *const c_char,
+            name: *const c_char,
+            result: *mut *mut c_void,
+        ) -> c_int;
+        fn snd_config_search(
+            config: *mut c_void,
+            key: *const c_char,
+            result: *mut *mut c_void,
+        ) -> c_int;
+        fn snd_config_get_string(config: *const c_void, result: *mut *const c_char) -> c_int;
+        #[cfg(test)]
+        fn snd_config_load_string(
+            config: *mut *mut c_void,
+            text: *const c_char,
+            size: usize,
+        ) -> c_int;
+    }
+
+    struct Config {
+        raw: *mut c_void,
+        shared: bool,
+    }
+
+    impl Drop for Config {
+        fn drop(&mut self) {
+            unsafe {
+                if self.shared {
+                    snd_config_unref(self.raw);
+                } else {
+                    let _ = snd_config_delete(self.raw);
+                }
+            }
+        }
+    }
+
+    fn definition(root: *mut c_void, base: &CStr, name: &CStr) -> anyhow::Result<Config> {
+        let mut raw = std::ptr::null_mut();
+        let status =
+            unsafe { snd_config_search_definition(root, base.as_ptr(), name.as_ptr(), &mut raw) };
+        ensure!(
+            status >= 0 && !raw.is_null(),
+            "Could not resolve ALSA input configuration {name:?}: {status}"
+        );
+        Ok(Config { raw, shared: false })
+    }
+
+    fn child(config: *mut c_void, key: &CStr) -> Option<*mut c_void> {
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { snd_config_search(config, key.as_ptr(), &mut raw) };
+        (status >= 0 && !raw.is_null()).then_some(raw)
+    }
+
+    fn string(config: *mut c_void) -> Option<CString> {
+        let mut value = std::ptr::null();
+        let status = unsafe { snd_config_get_string(config, &mut value) };
+        if status < 0 || value.is_null() {
+            return None;
+        }
+        Some(unsafe { CStr::from_ptr(value) }.to_owned())
+    }
+
+    fn nested_pcm(
+        root: *mut c_void,
+        node: *mut c_void,
+        key: &CStr,
+        depth: usize,
+    ) -> anyhow::Result<bool> {
+        let node = child(node, key).context("ALSA input slave is missing")?;
+        let named = string(node)
+            .map(|name| definition(root, c"pcm_slave", &name))
+            .transpose()?;
+        let slave = named.as_ref().map_or(node, |config| config.raw);
+        let pcm = child(slave, c"pcm").context("ALSA input slave PCM is missing")?;
+        node_uses_pulse(root, pcm, depth + 1)
+    }
+
+    fn node_uses_pulse(root: *mut c_void, node: *mut c_void, depth: usize) -> anyhow::Result<bool> {
+        ensure!(
+            depth < 32,
+            "ALSA input configuration exceeds the alias depth limit"
+        );
+        if let Some(name) = string(node) {
+            let resolved = definition(root, c"pcm", &name)?;
+            return node_uses_pulse(root, resolved.raw, depth + 1);
+        }
+        let kind = child(node, c"type")
+            .and_then(string)
+            .context("ALSA input plugin type is missing")?;
+        match kind.as_bytes() {
+            b"pulse" => Ok(true),
+            b"asym" => nested_pcm(root, node, c"capture", depth),
+            b"file" if child(node, c"infile").is_some() => Ok(false),
+            b"plug" | b"rate" | b"route" | b"linear" | b"lfloat" | b"copy" | b"softvol"
+            | b"dsnoop" | b"mmap_emul" | b"file" => nested_pcm(root, node, c"slave", depth),
+            _ if child(node, c"slave").is_some() => nested_pcm(root, node, c"slave", depth),
+            b"multi" => {
+                bail!("ALSA input has multiple backends; cannot identify a single Pulse route")
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub(super) fn uses_pulse(device_name: &str) -> anyhow::Result<bool> {
+        let name = CString::new(device_name).context("Invalid ALSA input name")?;
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { snd_config_update_ref(&mut raw) };
+        if status < 0 || raw.is_null() {
+            return Err(anyhow!("Could not read ALSA input configuration: {status}"));
+        }
+        let root = Config { raw, shared: true };
+        let input = definition(root.raw, c"pcm", &name)?;
+        node_uses_pulse(root.raw, input.raw, 0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn configured_input_uses_pulse(text: &str) -> anyhow::Result<bool> {
+            let text = CString::new(text)?;
+            let mut raw = std::ptr::null_mut();
+            let status =
+                unsafe { snd_config_load_string(&mut raw, text.as_ptr(), text.as_bytes().len()) };
+            ensure!(
+                status >= 0 && !raw.is_null(),
+                "ALSA test configuration failed: {status}"
+            );
+            let root = Config { raw, shared: false };
+            let input = definition(root.raw, c"pcm", c"default")?;
+            node_uses_pulse(root.raw, input.raw, 0)
+        }
+
+        #[test]
+        fn direct_default_is_not_mistaken_for_pulse() {
+            assert!(!configured_input_uses_pulse("pcm.default { type hw card 0 }").unwrap());
+            assert!(!configured_input_uses_pulse("pcm.default { type custom_hardware }").unwrap());
+        }
+
+        #[test]
+        fn pulse_default_aliases_and_plug_chains_are_detected() {
+            assert!(
+                configured_input_uses_pulse(
+                    "pcm.default pulse_input\npcm.pulse_input { type pulse }"
+                )
+                .unwrap()
+            );
+            assert!(configured_input_uses_pulse("pcm.default { type plug slave.pcm inner }\npcm.inner { type rate slave.pcm { type pulse } }").unwrap());
+        }
+
+        #[test]
+        fn asymmetric_default_checks_capture_instead_of_playback() {
+            assert!(!configured_input_uses_pulse("pcm.default { type asym playback.pcm { type pulse } capture.pcm { type hw card 0 } }").unwrap());
+            assert!(configured_input_uses_pulse("pcm.default { type asym playback.pcm { type hw card 0 } capture.pcm { type pulse } }").unwrap());
+        }
+
+        #[test]
+        fn named_slaves_and_file_inputs_keep_their_capture_backend() {
+            assert!(configured_input_uses_pulse("pcm.default { type plug slave captured }\npcm_slave.captured { pcm { type pulse } }").unwrap());
+            assert!(!configured_input_uses_pulse("pcm.default { type plug slave.pcm { type file infile synthetic.raw slave.pcm { type null } } }").unwrap());
+        }
+
+        #[test]
+        fn malformed_or_ambiguous_inputs_do_not_claim_a_pulse_route() {
+            for wrapper in [
+                "plug",
+                "rate",
+                "route",
+                "linear",
+                "lfloat",
+                "copy",
+                "softvol",
+                "dsnoop",
+                "mmap_emul",
+                "file",
+            ] {
+                assert!(
+                    configured_input_uses_pulse(&format!("pcm.default {{ type {wrapper} }}"))
+                        .is_err()
+                );
+            }
+            assert!(configured_input_uses_pulse("pcm.default { type multi }").is_err());
+        }
+    }
+}
+
+pub(crate) struct PulseInputRoute {
+    source: String,
+    source_index: u32,
+    previous_outputs: Vec<PactlSourceOutput>,
+}
+
+impl PulseInputRoute {
+    pub(crate) fn prepare(device_name: &str, role: PulseInputRole) -> anyhow::Result<Option<Self>> {
+        if !uses_default_pulse_input(device_name) {
+            return Ok(None);
+        }
+        let default_source = pactl_default_source();
+        if default_source.is_none() && role == PulseInputRole::Microphone {
+            return Ok(None);
+        }
+        if !alsa_input_backend::uses_pulse(device_name)? {
+            anyhow::ensure!(
+                role != PulseInputRole::SystemAudio,
+                "The selected ALSA input is not a Pulse system-audio monitor"
+            );
+            return Ok(None);
+        }
+        let default_sink = pactl_default_sink();
+        let sources = Command::new("pactl")
+            .args(["list", "short", "sources"])
+            .output()
+            .context("inspect the default PulseAudio/PipeWire input")?;
+        if !sources.status.success() {
+            anyhow::ensure!(
+                role != PulseInputRole::SystemAudio,
+                "Could not inspect Linux system-audio monitor sources"
+            );
+            return Ok(None);
+        }
+        let Some((source_index, source)) = pulse_input_route_destination(
+            &String::from_utf8_lossy(&sources.stdout),
+            role,
+            default_source.as_deref(),
+            default_sink.as_deref(),
+        ) else {
+            anyhow::ensure!(
+                role != PulseInputRole::SystemAudio,
+                "No Linux system-audio monitor source is available"
+            );
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            source,
+            source_index,
+            previous_outputs: current_process_source_outputs()?,
+        }))
+    }
+
+    pub(crate) fn apply(
+        self,
+        input_callback_observed: &AtomicBool,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<()> {
+        let output = wait_for_started_source_output(
+            &self.previous_outputs,
+            input_callback_observed,
+            cancel,
+            current_process_source_outputs,
+        )?;
+        if output.source != self.source_index {
+            // Pulse remembers the generic ALSA application's last route, including speaker capture.
+            move_pactl_source_output(output.id, &self.source)?;
+        }
+        Ok(())
+    }
+}
+
+fn pulse_input_route_destination(
+    sources: &str,
+    role: PulseInputRole,
+    default_source: Option<&str>,
+    default_sink: Option<&str>,
+) -> Option<(u32, String)> {
+    match role {
+        PulseInputRole::Microphone => {
+            let source = default_source?;
+            Some((pactl_source_index(sources, source)?, source.to_string()))
+        }
+        PulseInputRole::SystemAudio => sources
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let index = fields.next()?.parse::<u32>().ok()?;
+                let name = fields.next()?;
+                let rank = pactl_monitor_preference(name, default_sink)?;
+                Some((rank, name.to_ascii_lowercase(), index, name.to_string()))
+            })
+            .min()
+            .map(|(_, _, index, name)| (index, name)),
+    }
+}
+
+fn wait_for_started_source_output(
+    previous_outputs: &[PactlSourceOutput],
+    input_callback_observed: &AtomicBool,
+    cancel: &CancellationToken,
+    mut current_outputs: impl FnMut() -> anyhow::Result<Vec<PactlSourceOutput>>,
+) -> anyhow::Result<PactlSourceOutput> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        anyhow::ensure!(
+            !cancel.is_cancelled(),
+            "Linux input route confirmation cancelled"
+        );
+        let has_captured_audio = input_callback_observed.load(Ordering::Acquire);
+        let outputs = current_outputs()?;
+        if let Some(id) =
+            started_input_source_output(previous_outputs, &outputs, has_captured_audio)?
+        {
+            return outputs
+                .into_iter()
+                .find(|output| output.id == id)
+                .ok_or_else(|| anyhow!("The started PulseAudio/PipeWire input disappeared"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    bail!("The PulseAudio/PipeWire input did not start delivering audio within three seconds")
+}
+
+fn started_input_source_output(
+    previous: &[PactlSourceOutput],
+    current: &[PactlSourceOutput],
+    input_callback_observed: bool,
+) -> anyhow::Result<Option<u32>> {
+    if !input_callback_observed
+        || !current
+            .iter()
+            .any(|output| !previous.iter().any(|previous| previous.id == output.id))
+    {
+        return Ok(None);
+    }
+    newly_created_source_output(previous, current).map(Some)
+}
+
+fn uses_default_pulse_input(device_name: &str) -> bool {
+    device_name.eq_ignore_ascii_case("default") || device_name.eq_ignore_ascii_case("pulse")
 }
 
 impl AudioSource for SystemAudioSource {
@@ -900,11 +1310,15 @@ impl AudioSource for SystemAudioSource {
                 .await
                 .with_context(|| format!("set up Linux system audio source '{device_name}'"))?;
 
-            if let Some(route) = config.monitor_route {
-                apply_pactl_monitor_route(&route)?;
+            if let Some(route) = config.monitor_route.as_ref() {
+                apply_pactl_monitor_route(route)?;
             }
 
-            Ok(Self { inner })
+            Ok(Self {
+                inner,
+                monitor_route: config.monitor_route,
+                feed: config.feed,
+            })
         }
     }
 
@@ -912,67 +1326,125 @@ impl AudioSource for SystemAudioSource {
         self.inner.audio_info()
     }
 
-    fn stop(&mut self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
-        self.inner.stop()
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        drop(self.monitor_route.take());
+        self.inner.stop().await?;
+        self.feed.actor.kill();
+        self.feed.actor.wait_for_stop().await;
+        self.feed.stopped = true;
+        Ok(())
     }
 }
 
 async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
-    let selected = select_system_audio_monitor()?;
-
     let (error_tx, _error_rx) = flume::bounded(16);
-    let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
-    feed.ask(microphone::SetInput {
-        label: selected.device_name.clone(),
-        settings: None,
-    })
-    .await
-    .map_err(|e| anyhow!("Failed to set Linux system audio input: {e}"))?
-    .await
-    .with_context(|| {
-        format!(
-            "Linux system audio input '{}' failed to connect",
-            selected.device_name
-        )
-    })?;
+    let feed = MicrophoneFeed::spawn(MicrophoneFeed::new_system_audio(error_tx));
+    let owned_feed = OwnedSystemAudioFeed {
+        actor: feed.clone(),
+        build_scope: crate::output_pipeline::PipelineBuildScope::current(),
+        stopped: false,
+    };
+    let (device_name, monitor_route) = retry_system_audio_connection(
+        || async {
+            let selected = select_system_audio_monitor()?;
+            let device_name = selected.device_name.clone();
+            feed.ask(microphone::SetInput {
+                label: device_name.clone(),
+                settings: None,
+            })
+            .await
+            .map_err(|e| anyhow!("Failed to set Linux system audio input: {e}"))?
+            .await
+            .with_context(|| {
+                format!("Linux system audio input '{device_name}' failed to connect")
+            })?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let route = selected.into_monitor_route()?;
+            if let Some(route) = route.as_ref() {
+                apply_pactl_monitor_route(route)?;
+            }
+            let routed_at = cap_timestamp::Timestamps::now();
+            let (sender, receiver) = flume::bounded(1);
+            feed.ask(microphone::AddSender(sender.clone()))
+                .await
+                .map_err(|e| anyhow!("Failed to observe Linux system audio startup: {e}"))?;
+            let ready = wait_for_audio_after_route(
+                receiver.stream().map(|samples| samples.timestamp),
+                routed_at,
+            )
+            .await;
+            feed.ask(microphone::RemoveSender(sender))
+                .await
+                .map_err(|e| {
+                    anyhow!("Failed to detach the Linux system audio startup observer: {e}")
+                })?;
+            ready?;
+            Ok((device_name, route))
+        },
+        || async {
+            feed.ask(microphone::RemoveInput)
+                .await
+                .map_err(|e| anyhow!("Failed to close the unrouted Linux system audio input: {e}"))
+        },
+    )
+    .await?;
 
     let lock = feed
         .ask(microphone::Lock)
         .await
         .map_err(|e| anyhow!("Failed to lock Linux system audio input: {e}"))?;
 
-    let monitor_route = if let Some(monitor_source) = selected.monitor_source {
-        let current_source_outputs = current_process_source_outputs()?;
-        let source_output = newly_created_source_output(
-            &selected.previous_process_source_outputs,
-            &current_source_outputs,
-        )?;
-
-        Some(PactlMonitorRoute {
-            monitor_source,
-            monitor_source_index: selected.monitor_source_index.ok_or_else(|| {
-                anyhow!("PulseAudio/PipeWire monitor source has no routing index")
-            })?,
-            default_source: selected.default_source,
-            default_source_index: selected.default_source_index,
-            source_output,
-            previous_process_source_outputs: selected.previous_process_source_outputs,
-        })
-    } else {
-        None
-    };
-
-    if let Some(route) = monitor_route.as_ref() {
-        apply_pactl_monitor_route(route)?;
-    }
-
     Ok(SystemAudioSourceConfig {
         feed_lock: Arc::new(lock),
-        device_name: selected.device_name,
+        device_name,
         monitor_route,
+        feed: owned_feed,
     })
+}
+
+async fn wait_for_audio_after_route(
+    timestamps: impl Stream<Item = Timestamp>,
+    routed_at: cap_timestamp::Timestamps,
+) -> anyhow::Result<()> {
+    futures::pin_mut!(timestamps);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(timestamp) = timestamps.next().await {
+            if timestamp.checked_duration_since(routed_at).is_some() {
+                return Ok(());
+            }
+        }
+        bail!("Linux system audio input closed before delivering routed audio")
+    })
+    .await
+    .context("Linux system audio input did not resume after routing within three seconds")?
+}
+
+async fn retry_system_audio_connection<T, ConnectFuture, DisconnectFuture>(
+    mut connect: impl FnMut() -> ConnectFuture,
+    mut disconnect: impl FnMut() -> DisconnectFuture,
+) -> anyhow::Result<T>
+where
+    ConnectFuture: std::future::Future<Output = anyhow::Result<T>>,
+    DisconnectFuture: std::future::Future<Output = anyhow::Result<()>>,
+{
+    let mut remaining_retries = 2;
+    loop {
+        match connect().await {
+            Ok(input) => return Ok(input),
+            Err(error) => {
+                disconnect().await?;
+                if remaining_retries == 0 {
+                    return Err(error)
+                        .context("Linux system audio could not reach the output monitor");
+                }
+                remaining_retries -= 1;
+                tracing::warn!(%error, remaining_retries, "Reconnecting the Linux system-audio input after routing failed");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
 }
 
 struct SelectedSystemAudioInput {
@@ -982,6 +1454,36 @@ struct SelectedSystemAudioInput {
     default_source: Option<String>,
     default_source_index: Option<u32>,
     previous_process_source_outputs: Vec<PactlSourceOutput>,
+}
+
+impl SelectedSystemAudioInput {
+    fn into_monitor_route(self) -> anyhow::Result<Option<PactlMonitorRoute>> {
+        let Some(monitor_source) = self.monitor_source else {
+            return Ok(None);
+        };
+        let current_source_outputs = current_process_source_outputs()?;
+        let source_output = newly_created_source_output(
+            &self.previous_process_source_outputs,
+            &current_source_outputs,
+        )?;
+        let original_source = current_source_outputs
+            .iter()
+            .find(|output| output.id == source_output)
+            .ok_or_else(|| anyhow!("PulseAudio/PipeWire system-audio stream disappeared"))?
+            .source;
+
+        Ok(Some(PactlMonitorRoute {
+            monitor_source,
+            monitor_source_index: self.monitor_source_index.ok_or_else(|| {
+                anyhow!("PulseAudio/PipeWire monitor source has no routing index")
+            })?,
+            default_source: self.default_source,
+            default_source_index: self.default_source_index,
+            source_output,
+            original_source,
+            previous_process_source_outputs: self.previous_process_source_outputs,
+        }))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1253,18 +1755,59 @@ fn newly_created_source_output(
 }
 
 fn move_pactl_source_output(source_output: u32, source: &str) -> anyhow::Result<()> {
+    let source_index = match source.parse::<u32>() {
+        Ok(index) => index,
+        Err(_) => {
+            let sources = Command::new("pactl")
+                .args(["list", "short", "sources"])
+                .output()
+                .context("resolve PulseAudio/PipeWire routing destination")?;
+            if !sources.status.success() {
+                bail!("Could not inspect PulseAudio/PipeWire routing destinations");
+            }
+            pactl_source_index(&String::from_utf8_lossy(&sources.stdout), source).ok_or_else(
+                || anyhow!("PulseAudio/PipeWire routing destination '{source}' disappeared"),
+            )?
+        }
+    };
     let status = Command::new("pactl")
         .args(["move-source-output", &source_output.to_string(), source])
         .status()
         .context("move PulseAudio/PipeWire system-audio stream")?;
 
-    if status.success() {
-        Ok(())
-    } else {
+    if !status.success() {
         bail!(
             "Could not route PulseAudio/PipeWire system-audio stream {source_output} to '{source}'"
-        )
+        );
     }
+
+    for _ in 0..10 {
+        if source_output_route_matches(
+            &current_process_source_outputs()?,
+            source_output,
+            source_index,
+        )? {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    bail!(
+        "PulseAudio/PipeWire acknowledged routing stream {source_output} to '{source}', but the input did not change"
+    )
+}
+
+fn source_output_route_matches(
+    outputs: &[PactlSourceOutput],
+    source_output: u32,
+    source_index: u32,
+) -> anyhow::Result<bool> {
+    outputs
+        .iter()
+        .find(|output| output.id == source_output)
+        .map(|output| output.source == source_index)
+        .ok_or_else(|| {
+            anyhow!("PulseAudio/PipeWire stream {source_output} disappeared while routing")
+        })
 }
 
 fn pulse_cpal_device_name(available_devices: &[String]) -> Option<String> {
@@ -1857,9 +2400,86 @@ fn x11_source_pixel(
 #[cfg(test)]
 mod system_audio_tests {
     use super::{
-        PactlSourceOutput, newly_created_source_output, pactl_monitor_preference,
-        pactl_source_index, preferred_system_audio_device, previous_source_destination,
-        process_source_output_ids, source_output_needs_move,
+        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, newly_created_source_output,
+        pactl_monitor_preference, pactl_source_index, preferred_system_audio_device,
+        previous_source_destination, process_source_output_ids, pulse_input_route_destination,
+        retry_system_audio_connection, source_output_needs_move, source_output_route_matches,
+        started_input_source_output, uses_default_pulse_input, wait_for_audio_after_route,
+        wait_for_started_source_output,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn cancelled_system_route_does_not_probe_or_publish_a_stream() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let observed = std::sync::atomic::AtomicBool::new(true);
+        let result = wait_for_started_source_output(&[], &observed, &cancel, || {
+            panic!("cancelled route must not inspect Pulse")
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn system_audio_reconnect_selects_output_monitor_instead_of_default_microphone() {
+        let sources = "1\tmicrophone\n2\tother.monitor\n3\tspeakers.monitor\n";
+        assert_eq!(
+            pulse_input_route_destination(
+                sources,
+                PulseInputRole::SystemAudio,
+                Some("microphone"),
+                Some("speakers")
+            ),
+            Some((3, "speakers.monitor".to_string()))
+        );
+    }
+
+    #[test]
+    fn microphone_reconnect_retains_default_microphone_instead_of_output_monitor() {
+        let sources = "1\tmicrophone\n2\tspeakers.monitor\n";
+        assert_eq!(
+            pulse_input_route_destination(
+                sources,
+                PulseInputRole::Microphone,
+                Some("microphone"),
+                Some("speakers")
+            ),
+            Some((1, "microphone".to_string()))
+        );
+    }
+
+    #[test]
+    fn system_audio_reconnect_does_not_fall_back_to_a_microphone() {
+        assert_eq!(
+            pulse_input_route_destination(
+                "1\tmicrophone\n",
+                PulseInputRole::SystemAudio,
+                Some("microphone"),
+                Some("speakers")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn system_audio_reconnect_follows_the_current_default_output() {
+        let sources = "1\tmicrophone\n2\told.monitor\n3\tnew.monitor\n";
+        assert_eq!(
+            pulse_input_route_destination(
+                sources,
+                PulseInputRole::SystemAudio,
+                Some("microphone"),
+                Some("new")
+            ),
+            Some((3, "new.monitor".to_string()))
+        );
+    }
+    use crate::feeds::microphone::MicrophoneFeed;
+    use cap_timestamp::{Timestamp, Timestamps};
+    use kameo::Actor as _;
+    use std::{
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        time::{Duration, Instant},
     };
 
     #[test]
@@ -1949,6 +2569,185 @@ mod system_audio_tests {
     }
 
     #[test]
+    fn default_input_waits_for_capture_instead_of_selecting_a_probe_stream() {
+        let previous = [PactlSourceOutput { id: 11, source: 3 }];
+        let probing = [
+            PactlSourceOutput { id: 11, source: 3 },
+            PactlSourceOutput { id: 12, source: 3 },
+        ];
+        let capturing = [
+            PactlSourceOutput { id: 11, source: 3 },
+            PactlSourceOutput { id: 13, source: 2 },
+        ];
+
+        assert_eq!(
+            started_input_source_output(&previous, &probing, false).unwrap(),
+            None
+        );
+        assert_eq!(
+            started_input_source_output(&previous, &capturing, true).unwrap(),
+            Some(13)
+        );
+        assert_eq!(
+            started_input_source_output(&previous, &previous, true).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn pulse_input_accepts_a_buffered_first_callback() {
+        let observed = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let callback = scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(650));
+                observed.store(true, Ordering::Release);
+            });
+            let output =
+                wait_for_started_source_output(&[], &observed, &CancellationToken::new(), || {
+                    Ok(vec![PactlSourceOutput { id: 12, source: 3 }])
+                });
+            callback.join().unwrap();
+            assert_eq!(output.unwrap(), PactlSourceOutput { id: 12, source: 3 });
+        });
+    }
+
+    #[tokio::test]
+    async fn system_audio_retries_initial_input_connection_failures() {
+        let attempts = AtomicUsize::new(0);
+        let closed = AtomicUsize::new(0);
+        let input = retry_system_audio_connection(
+            || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(closed.load(Ordering::Relaxed), attempt);
+                std::future::ready(if attempt == 0 {
+                    Err(anyhow::anyhow!("Default input route was not applied"))
+                } else {
+                    Ok(42)
+                })
+            },
+            || {
+                closed.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(input, 42);
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        assert_eq!(closed.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn system_audio_connection_retries_are_bounded_and_close_the_final_input() {
+        let attempts = AtomicUsize::new(0);
+        let closed = AtomicUsize::new(0);
+        let result = retry_system_audio_connection(
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Err::<(), _>(anyhow::anyhow!("Input route was not applied")))
+            },
+            || {
+                closed.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Ok(()))
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+        assert_eq!(closed.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn system_audio_does_not_reconnect_when_the_previous_input_cannot_close() {
+        let attempts = AtomicUsize::new(0);
+        let result = retry_system_audio_connection(
+            || {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                std::future::ready(Err::<(), _>(anyhow::anyhow!("Input route was not applied")))
+            },
+            || std::future::ready(Err(anyhow::anyhow!("Input is still locked"))),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err().to_string(), "Input is still locked");
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn system_audio_waits_for_samples_captured_after_the_route_change() {
+        let routed_at = Timestamps::now();
+        let (sender, receiver) = flume::bounded(2);
+        sender
+            .send(Timestamp::Instant(
+                routed_at
+                    .instant()
+                    .checked_sub(Duration::from_millis(100))
+                    .unwrap(),
+            ))
+            .unwrap();
+        let ready = wait_for_audio_after_route(receiver.stream(), routed_at);
+        tokio::pin!(ready);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut ready)
+                .await
+                .is_err()
+        );
+        sender.send(Timestamp::Instant(Instant::now())).unwrap();
+        ready.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn system_audio_readiness_rejects_a_closed_input() {
+        let result = wait_for_audio_after_route(futures::stream::empty(), Timestamps::now()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn system_audio_releases_its_feed_even_when_other_references_remain() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+        feed.wait_for_startup().await;
+        assert!(feed.is_alive());
+
+        let owned = OwnedSystemAudioFeed {
+            actor: feed.clone(),
+            build_scope: None,
+            stopped: false,
+        };
+        drop(owned);
+
+        tokio::time::timeout(Duration::from_secs(1), feed.wait_for_stop())
+            .await
+            .unwrap();
+        assert!(!feed.is_alive());
+    }
+
+    #[tokio::test]
+    async fn failed_resume_scope_joins_its_private_system_audio_actor_shutdown() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+        feed.wait_for_startup().await;
+        let scope = crate::output_pipeline::PipelineBuildScope::new();
+        let owned = scope
+            .run(async {
+                OwnedSystemAudioFeed {
+                    actor: feed.clone(),
+                    build_scope: crate::output_pipeline::PipelineBuildScope::current(),
+                    stopped: false,
+                }
+            })
+            .await;
+        drop(owned);
+        tokio::time::timeout(Duration::from_secs(1), scope.cancel_and_join())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!feed.is_alive());
+    }
+
+    #[test]
     fn remembered_monitor_input_returns_to_selected_microphone() {
         assert_eq!(
             previous_source_destination(2, 2, "desktop.monitor", Some("microphone.monitor")),
@@ -1977,6 +2776,33 @@ mod system_audio_tests {
         let sources = "2 desktop.monitor module-null-sink\n3 microphone.monitor module-null-sink";
         assert_eq!(pactl_source_index(sources, "microphone.monitor"), Some(3));
         assert_eq!(pactl_source_index(sources, "missing.monitor"), None);
+    }
+
+    #[test]
+    fn routing_acknowledgement_requires_the_requested_source() {
+        let unchanged = [PactlSourceOutput {
+            id: 1128,
+            source: 61,
+        }];
+        let routed = [PactlSourceOutput {
+            id: 1128,
+            source: 47,
+        }];
+
+        assert!(!source_output_route_matches(&unchanged, 1128, 47).unwrap());
+        assert!(source_output_route_matches(&routed, 1128, 47).unwrap());
+        assert!(source_output_route_matches(&[], 1128, 47).is_err());
+        assert!(source_output_route_matches(&routed, 1129, 47).is_err());
+    }
+
+    #[test]
+    fn only_generic_pulse_devices_follow_the_default_input() {
+        assert!(uses_default_pulse_input("default"));
+        assert!(uses_default_pulse_input("PULSE"));
+        assert!(!uses_default_pulse_input("USB Microphone"));
+        assert!(!uses_default_pulse_input("desktop.monitor"));
+        assert!(!uses_default_pulse_input("hw:1,0"));
+        assert!(!uses_default_pulse_input("pipewire"));
     }
 }
 

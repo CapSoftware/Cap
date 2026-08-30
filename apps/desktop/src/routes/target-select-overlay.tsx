@@ -4,7 +4,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { useQuery } from "@tanstack/solid-query";
 import {
 	LogicalPosition,
 	type PhysicalPosition,
@@ -78,6 +78,7 @@ import { createDevicesQuery } from "~/utils/devices";
 import { shouldConfirmRecordingWithoutMicrophone } from "~/utils/general-settings";
 import {
 	createCameraMutation,
+	createMicrophoneMutation,
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
@@ -1875,18 +1876,7 @@ function RecordingControls(props: {
 	const cameras = createMemo(() => devices.data?.cameras ?? []);
 	const mics = createMemo(() => devices.data?.microphones ?? []);
 	const permissions = createMemo(() => devices.data?.permissions);
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			const previous = rawOptions.micName ?? null;
-			if (previous !== name) setOptions("micName", name);
-			try {
-				await commands.setMicInput(name);
-			} catch (error) {
-				if (previous !== name) setOptions("micName", previous);
-				throw error;
-			}
-		},
-	}));
+	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
 
 	onMount(async () => {
@@ -1938,7 +1928,10 @@ function RecordingControls(props: {
 	});
 
 	const startLoading = () =>
-		devices.isPending || recordingStartSafety.isPending;
+		devices.isPending ||
+		recordingStartSafety.isPending ||
+		setMicInput.isPending ||
+		setCamera.isPending;
 	const startDisabled = () => !!props.disabled || startLoading();
 
 	const startRecording = async (confirmedWithoutMicrophone = false) => {

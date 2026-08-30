@@ -300,6 +300,40 @@ struct LibraryRow<T> {
     thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct RecordingStartPermit(std::rc::Rc<std::cell::Cell<bool>>);
+
+impl RecordingStartPermit {
+    fn prepare(phase: Phase, clean_capture_owned: bool, preparing: bool) -> Result<Self, String> {
+        if phase != Phase::Idle || clean_capture_owned || preparing {
+            return Err("Another recording or recording preparation owns the inputs".into());
+        }
+        Ok(Self(std::rc::Rc::new(std::cell::Cell::new(true))))
+    }
+
+    fn allows(&self, phase: Phase, clean_capture_owned: bool) -> bool {
+        if phase != Phase::Idle || clean_capture_owned {
+            self.cancel();
+        }
+        self.0.get()
+    }
+
+    pub(crate) fn is_current(&self, cx: &gpui::App) -> bool {
+        self.allows(
+            RecordingSession::global(cx).read(cx).phase,
+            app_windows::clean_capture_owned(cx),
+        )
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.0.set(false);
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 pub struct MainWindow {
     theme: Theme,
     expanded: bool,
@@ -331,6 +365,7 @@ pub struct MainWindow {
     /// controls bar window can drive the same recording.
     session: Entity<RecordingSession>,
     checking_storage: bool,
+    deep_link_start: Option<RecordingStartPermit>,
     /// The Recents scan, or `None` while the first one is in flight -- which
     /// is the query's `isLoading`, and draws the same three skeleton cards.
     recents: Option<Vec<RecentEntry>>,
@@ -412,6 +447,9 @@ impl MainWindow {
         let mut previous_phase = Phase::Idle;
         cx.observe_in(&session, window, move |this, session, window, cx| {
             let phase = session.read(cx).phase;
+            if phase != Phase::Idle {
+                this.cancel_deep_link_start();
+            }
             if phase == Phase::Idle && previous_phase != Phase::Idle {
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                 if let Some(notice) = session.read(cx).storage_notice.clone() {
@@ -493,6 +531,7 @@ impl MainWindow {
             enumerating: true,
             session,
             checking_storage: false,
+            deep_link_start: None,
             recents: None,
             recents_task: None,
             library: None,
@@ -1735,6 +1774,8 @@ impl MainWindow {
             excluded_windows,
             camera_feed,
             mic_feed,
+            #[cfg(target_os = "linux")]
+            linux_instant_camera: None,
         };
 
         self.start_recording_config(config, cx);
@@ -1745,16 +1786,84 @@ impl MainWindow {
         config: recording::StartConfig,
         cx: &mut Context<Self>,
     ) {
-        self.check_storage_before_start(config, false, cx);
+        self.check_storage_before_start(config, false, None, cx);
+    }
+
+    pub(crate) fn prepare_deep_link_start(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<RecordingStartPermit, String> {
+        let permit = RecordingStartPermit::prepare(
+            self.session.read(cx).phase,
+            app_windows::clean_capture_owned(cx),
+            self.checking_storage,
+        )?;
+        self.checking_storage = true;
+        self.deep_link_start = Some(permit.clone());
+        Ok(permit)
+    }
+
+    pub(crate) fn cancel_deep_link_start(&mut self) {
+        if let Some(permit) = self.deep_link_start.take() {
+            permit.cancel();
+            self.checking_storage = false;
+        }
+    }
+
+    pub(crate) fn finish_deep_link_start(&mut self, permit: &RecordingStartPermit) {
+        if self
+            .deep_link_start
+            .as_ref()
+            .is_some_and(|current| current.same(permit))
+        {
+            self.cancel_deep_link_start();
+        }
+    }
+
+    pub(crate) fn start_recording_config_with_permit(
+        &mut self,
+        config: recording::StartConfig,
+        permit: RecordingStartPermit,
+        cx: &mut Context<Self>,
+    ) {
+        self.check_storage_before_start(config, false, Some(permit), cx);
+    }
+
+    fn recording_start_is_current(
+        &self,
+        permit: Option<&RecordingStartPermit>,
+        cx: &gpui::App,
+    ) -> bool {
+        self.session.read(cx).phase == Phase::Idle
+            && permit.is_none_or(|permit| {
+                self.deep_link_start
+                    .as_ref()
+                    .is_some_and(|current| current.same(permit))
+                    && permit.is_current(cx)
+            })
+    }
+
+    fn finish_recording_start(&mut self, permit: Option<&RecordingStartPermit>) {
+        if let Some(permit) = permit {
+            self.finish_deep_link_start(permit);
+        } else {
+            self.checking_storage = false;
+        }
     }
 
     fn check_storage_before_start(
         &mut self,
         config: recording::StartConfig,
         acknowledged: bool,
+        permit: Option<RecordingStartPermit>,
         cx: &mut Context<Self>,
     ) {
-        if self.checking_storage || self.session.read(cx).phase != Phase::Idle {
+        if (permit.is_none() && self.checking_storage)
+            || !self.recording_start_is_current(permit.as_ref(), cx)
+        {
+            if permit.is_some() {
+                self.finish_recording_start(permit.as_ref());
+            }
             return;
         }
         self.checking_storage = true;
@@ -1764,8 +1873,8 @@ impl MainWindow {
                 recording::available_recording_storage()
             }).await;
             if !this.update(cx, |this, cx| {
-                if this.session.read(cx).phase != Phase::Idle {
-                    this.checking_storage = false;
+                if !this.recording_start_is_current(permit.as_ref(), cx) {
+                    this.finish_recording_start(permit.as_ref());
                     return false;
                 }
                 true
@@ -1776,7 +1885,11 @@ impl MainWindow {
                 Ok(storage) => storage,
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        this.checking_storage = false;
+                        if !this.recording_start_is_current(permit.as_ref(), cx) {
+                            this.finish_recording_start(permit.as_ref());
+                            return;
+                        }
+                        this.finish_recording_start(permit.as_ref());
                         this.session.update(cx, |session, cx| {
                             session.error = Some(format!("Could not check recording storage: {error}"));
                             cx.notify();
@@ -1792,8 +1905,26 @@ impl MainWindow {
             let can_start = storage.status() != cap_utils::disk_space::DiskSpaceStatus::Exhausted;
             if storage.status() == cap_utils::disk_space::DiskSpaceStatus::Ok || acknowledged && can_start {
                 this.update(cx, |this, cx| {
-                    this.checking_storage = false;
-                    cx.defer(move |cx| app_windows::begin_recording(config, cx));
+                    if !this.recording_start_is_current(permit.as_ref(), cx) {
+                        this.finish_recording_start(permit.as_ref());
+                        return;
+                    }
+                    if permit.is_none() {
+                        this.checking_storage = false;
+                    }
+                    cx.defer(move |cx| {
+                        if let Some(permit) = permit {
+                            let allowed = main.update(cx, |this, _, cx| {
+                                let allowed = this.recording_start_is_current(Some(&permit), cx);
+                                this.finish_deep_link_start(&permit);
+                                allowed
+                            }).unwrap_or(false);
+                            if !allowed {
+                                return;
+                            }
+                        }
+                        app_windows::begin_recording(config, cx);
+                    });
                 }).ok();
                 return;
             }
@@ -1809,8 +1940,10 @@ impl MainWindow {
                 vec![gpui::PromptButton::cancel("OK")]
             };
             let receiver = cx.update(|cx| {
-                if RecordingSession::global(cx).read(cx).phase != Phase::Idle {
-                    return Err(anyhow::anyhow!("A recording has already started."));
+                if RecordingSession::global(cx).read(cx).phase != Phase::Idle
+                    || permit.as_ref().is_some_and(|permit| !permit.is_current(cx))
+                {
+                    return Err(anyhow::anyhow!("Recording preparation is no longer current."));
                 }
                 app_windows::show_main_window(cx);
                 cx.activate(true);
@@ -1823,14 +1956,20 @@ impl MainWindow {
                 Err(_) => false,
             };
             this.update(cx, |this, cx| {
-                this.checking_storage = false;
-                if this.session.read(cx).phase != Phase::Idle {
+                if !this.recording_start_is_current(permit.as_ref(), cx) {
+                    this.finish_recording_start(permit.as_ref());
                     return;
                 }
+                if permit.is_none() {
+                    this.checking_storage = false;
+                }
                 if confirmed {
-                    this.check_storage_before_start(config, true, cx);
-                } else if this.session.read(cx).editor_recording_target().is_some() {
-                    cx.defer(app_windows::abort_editor_recording_flow);
+                    this.check_storage_before_start(config, true, permit, cx);
+                } else {
+                    this.finish_recording_start(permit.as_ref());
+                    if this.session.read(cx).editor_recording_target().is_some() {
+                        cx.defer(app_windows::abort_editor_recording_flow);
+                    }
                 }
                 cx.notify();
             }).ok();
@@ -1973,10 +2112,49 @@ impl Render for MainWindow {
                     .filter(|_| self.session.read(cx).phase == Phase::Idle),
                 |this, recording| this.child(self.render_recovery_toast(recording, cx)),
             )
+            .when(app_windows::clean_capture_pending(cx), |this| {
+                this.child(self.render_clean_capture_preflight(cx))
+            })
     }
 }
 
 impl MainWindow {
+    fn render_clean_capture_preflight(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .absolute()
+            .inset_0()
+            .bg(theme.gray_1)
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(16.))
+            .p(px(24.))
+            .child(div().text_size(px(18.)).child("Keep your capture clean"))
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .child(app_windows::clean_capture_camera_message(cx)),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .child(app_windows::clean_capture_shortcut_message(cx)),
+            )
+            .child(
+                div()
+                    .id("cancel-clean-capture")
+                    .rounded(px(8.))
+                    .p(px(12.))
+                    .bg(theme.gray_3)
+                    .cursor_pointer()
+                    .child("Cancel")
+                    .on_click(
+                        cx.listener(|_, _, _, cx| cx.defer(app_windows::cancel_clean_capture)),
+                    ),
+            )
+    }
+
     fn render_recovery_toast(
         &self,
         recording: library::IncompleteRecordingItem,
@@ -2419,6 +2597,63 @@ impl MainWindow {
         actions
     }
 
+    fn render_idle_error(&self, error: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let copy_error = error.clone();
+        let shown_error = error.clone();
+
+        div()
+            .id("recording-error-panel")
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .min_w_0()
+            .max_h(px(72.))
+            .gap(px(4.))
+            .overflow_hidden()
+            .child(recording_error_text(error).text_color(self.theme.red_9))
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .justify_end()
+                    .gap(px(6.))
+                    .child(
+                        ui::Button::body(
+                            &self.theme,
+                            "copy-recording-error",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Xs,
+                        )
+                        .label("Copy error")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                copy_error.clone(),
+                            ));
+                        })),
+                    )
+                    .child(
+                        ui::Button::body(
+                            &self.theme,
+                            "dismiss-recording-error",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Xs,
+                        )
+                        .label("Dismiss")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.session.update(cx, |session, cx| {
+                                if clear_shown_idle_error(
+                                    session.phase,
+                                    &mut session.error,
+                                    &shown_error,
+                                ) {
+                                    cx.notify();
+                                }
+                            });
+                        })),
+                    ),
+            )
+    }
+
     /// Page root: `px-[13px] gap-2 pb-[8px]`.
     fn render_body(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div()
@@ -2465,16 +2700,7 @@ impl MainWindow {
                         .error
                         .clone()
                         .filter(|_| self.session.read(cx).phase == Phase::Idle),
-                    |this, error| {
-                        this.child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(self.theme.red_9)
-                                .text_center()
-                                .child(error),
-                        )
-                    },
+                    |this, error| this.child(self.render_idle_error(error, cx)),
                 ),
         }
     }
@@ -2488,6 +2714,14 @@ impl MainWindow {
         let phase = self.session.read(cx).phase;
         let stopping = phase == Phase::Stopping;
         let starting = phase == Phase::Starting;
+        #[cfg(target_os = "linux")]
+        let can_resume = clean_capture_resume_available(
+            phase,
+            app_windows::clean_capture_active(cx),
+            self.session.read(cx).clean_capture_controls_safe(),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let can_resume = false;
 
         let mut wash: Hsla = theme.gray_1.into();
         wash.a = 0.8;
@@ -2502,6 +2736,61 @@ impl MainWindow {
             .px(px(24.))
             .pb(px(32.))
             .bg(wash)
+            .when_some(self.session.read(cx).error.clone(), |this, error| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .mb(px(8.))
+                        .text_size(px(11.))
+                        .text_color(theme.red_9)
+                        .text_center()
+                        .child(error),
+                )
+            })
+            .when(can_resume, |this| {
+                this.child(
+                    div()
+                        .mb(px(12.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .text_size(px(12.))
+                        .child("Recording paused. Cap will hide before resuming.")
+                        .child(
+                            div()
+                                .id("resume-clean-recording")
+                                .h(px(36.))
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(theme.gray_5)
+                                .bg(theme.gray_3)
+                                .child("Resume")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        let session = this.session.clone();
+                                        cx.defer(move |cx| {
+                                            if clean_capture_resume_available(
+                                                session.read(cx).phase,
+                                                app_windows::clean_capture_active(cx),
+                                                session.read(cx).clean_capture_controls_safe(),
+                                            ) {
+                                                session.update(cx, |session, cx| {
+                                                    session.toggle_pause(cx)
+                                                });
+                                            }
+                                        });
+                                    }
+                                    #[cfg(not(target_os = "linux"))]
+                                    let _ = (this, cx);
+                                })),
+                        ),
+                )
+            })
             .child(
                 div()
                     .id("stop-recording")
@@ -5036,5 +5325,203 @@ impl PillState {
             .font_weight(FontWeight::MEDIUM)
             .text_color(fg)
             .child(text)
+    }
+}
+
+fn recording_error_text(error: String) -> impl IntoElement + Styled {
+    div()
+        .id("recording-error-text")
+        .w_full()
+        .min_w_0()
+        .min_h_0()
+        .max_h(px(48.))
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .whitespace_normal()
+        .overflow_scroll()
+        .child(error)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn clean_capture_resume_available(phase: Phase, active: bool, paused_acknowledged: bool) -> bool {
+    active && phase == (Phase::Recording { paused: true }) && paused_acknowledged
+}
+
+fn clear_shown_idle_error(phase: Phase, current: &mut Option<String>, shown: &str) -> bool {
+    if phase != Phase::Idle || current.as_deref() != Some(shown) {
+        return false;
+    }
+    *current = None;
+    true
+}
+
+#[cfg(test)]
+mod recording_start_permit_tests {
+    use super::*;
+
+    #[test]
+    fn start_dispatch_rejects_owned_inputs_before_any_side_effect() {
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            for owned in [false, true] {
+                for preparing in [false, true] {
+                    let mut inputs = ("original camera", "original microphone");
+                    let result = RecordingStartPermit::prepare(phase, owned, preparing).map(|_| {
+                        inputs = ("requested camera", "requested microphone");
+                    });
+                    let allowed = phase == Phase::Idle && !owned && !preparing;
+                    assert_eq!(result.is_ok(), allowed);
+                    assert_eq!(
+                        inputs,
+                        if allowed {
+                            ("requested camera", "requested microphone")
+                        } else {
+                            ("original camera", "original microphone")
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_start_does_not_revoke_the_request_that_owns_preparation() {
+        let current = RecordingStartPermit::prepare(Phase::Idle, false, false).unwrap();
+        assert!(RecordingStartPermit::prepare(Phase::Idle, false, true).is_err());
+        assert!(current.allows(Phase::Idle, false));
+    }
+
+    #[test]
+    fn cancelled_permit_blocks_preview_storage_prompt_and_final_handoff_callbacks() {
+        for stop_before in 0..5 {
+            let permit = RecordingStartPermit::prepare(Phase::Idle, false, false).unwrap();
+            let callbacks: [_; 5] = std::array::from_fn(|_| permit.clone());
+            let mut started = false;
+            for (step, callback) in callbacks.iter().enumerate() {
+                if step == stop_before {
+                    permit.cancel();
+                }
+                if !callback.allows(Phase::Idle, false) {
+                    continue;
+                }
+                if step == callbacks.len() - 1 {
+                    started = true;
+                }
+            }
+            assert!(!started);
+        }
+    }
+
+    #[test]
+    fn observing_transition_or_clean_ownership_permanently_revokes_a_request() {
+        for (phase, owned) in [
+            (Phase::Starting, false),
+            (Phase::Recording { paused: false }, false),
+            (Phase::Stopping, false),
+            (Phase::Idle, true),
+        ] {
+            let permit = RecordingStartPermit::prepare(Phase::Idle, false, false).unwrap();
+            assert!(!permit.allows(phase, owned));
+            assert!(!permit.allows(Phase::Idle, false));
+        }
+    }
+
+    #[test]
+    fn stale_completion_cannot_revoke_a_later_start_permit() {
+        let previous = RecordingStartPermit::prepare(Phase::Idle, false, false).unwrap();
+        let completion = previous.clone();
+        assert!(completion.same(&previous));
+        previous.cancel();
+        let current = RecordingStartPermit::prepare(Phase::Idle, false, false).unwrap();
+        assert!(!completion.same(&current));
+        completion.cancel();
+        assert!(current.allows(Phase::Idle, false));
+    }
+}
+
+#[cfg(test)]
+mod recording_error_panel_tests {
+    use super::*;
+
+    #[test]
+    fn clean_capture_resume_requires_the_acknowledged_active_paused_session() {
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            for active in [false, true] {
+                for acknowledged in [false, true] {
+                    assert_eq!(
+                        clean_capture_resume_available(phase, active, acknowledged),
+                        active && acknowledged && phase == (Phase::Recording { paused: true }),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_error_keeps_bounded_scrollable_text() {
+        let mut element = recording_error_text("Requested microphone unavailable. ".repeat(200));
+        let style = element.style();
+        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(style.min_size.height, Some(px(0.).into()));
+        assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
+        assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
+    }
+
+    #[test]
+    fn unbroken_error_keeps_both_scroll_axes() {
+        let mut element = recording_error_text("x".repeat(8192));
+        let style = element.style();
+        assert_eq!(style.max_size.height, Some(px(48.).into()));
+        assert_eq!(style.overflow.x, Some(gpui::Overflow::Scroll));
+        assert_eq!(style.overflow.y, Some(gpui::Overflow::Scroll));
+    }
+
+    #[test]
+    fn dismiss_clears_only_matching_idle_error() {
+        let shown = "Requested microphone unavailable. ".repeat(200);
+        let mut current = Some(shown.clone());
+        assert!(clear_shown_idle_error(Phase::Idle, &mut current, &shown));
+        assert!(current.is_none());
+        assert!(!clear_shown_idle_error(Phase::Idle, &mut current, &shown));
+    }
+
+    #[test]
+    fn stale_dismiss_retains_new_error() {
+        let mut current = Some("A different failure".to_owned());
+        assert!(!clear_shown_idle_error(
+            Phase::Idle,
+            &mut current,
+            "Old failure"
+        ));
+        assert_eq!(current.as_deref(), Some("A different failure"));
+    }
+
+    #[test]
+    fn dismiss_never_clears_active_or_unconfirmed_cleanup_error() {
+        for phase in [
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            let mut current = Some("Capture cleanup is unconfirmed".to_owned());
+            assert!(!clear_shown_idle_error(
+                phase,
+                &mut current,
+                "Capture cleanup is unconfirmed",
+            ));
+            assert_eq!(current.as_deref(), Some("Capture cleanup is unconfirmed"));
+        }
     }
 }

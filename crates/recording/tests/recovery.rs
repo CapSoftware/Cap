@@ -489,16 +489,8 @@ fn test_failed_recording_is_terminal_for_startup_recovery() {
 
     let recording = TestRecording::new().unwrap();
     let display_dir = recording.create_display_dir(0).unwrap();
-    recording
-        .write_manifest(
-            0,
-            "display",
-            &[("segment_001.m4s", true, 150)],
-            Some("init.mp4"),
-        )
-        .unwrap();
-    std::fs::write(display_dir.join("init.mp4"), create_minimal_mp4_data()).unwrap();
-    std::fs::write(display_dir.join("segment_001.m4s"), vec![1u8; 150]).unwrap();
+    write_synthetic_fragments(&display_dir, 180, Duration::from_secs(2));
+    assert_valid_synthetic_fragments(&display_dir);
     recording
         .write_recording_meta(StudioRecordingStatus::Failed {
             error: "Some other error".to_string(),
@@ -805,18 +797,20 @@ fn test_inspect_recording_recovers_orphaned_m4s_fragments_with_init() {
     let recording = TestRecording::new().unwrap();
     let display_dir = recording.create_display_dir(0).unwrap();
 
+    write_synthetic_fragments(&display_dir, 180, Duration::from_secs(2));
+    let expected_fragments = assert_valid_synthetic_fragments(&display_dir);
+    let first = &expected_fragments[0];
+    let first_name = first.file_name().unwrap().to_str().unwrap();
+    let first_size = std::fs::metadata(first).unwrap().len();
     recording
         .write_manifest(
             0,
             "display",
-            &[("segment_001.m4s", false, 150)],
+            &[(first_name, true, first_size)],
             Some("init.mp4"),
         )
         .unwrap();
-    std::fs::write(display_dir.join("init.mp4"), create_minimal_mp4_data()).unwrap();
-    std::fs::write(display_dir.join("segment_001.m4s"), vec![1u8; 150]).unwrap();
-    std::fs::write(display_dir.join("segment_002.m4s"), vec![2u8; 175]).unwrap();
-    std::fs::write(display_dir.join("segment_003.m4s.tmp"), vec![3u8; 200]).unwrap();
+    std::fs::write(display_dir.join("segment_999.m4s.tmp"), vec![3u8; 200]).unwrap();
     recording
         .write_recording_meta(StudioRecordingStatus::Failed {
             error: "No recoverable segments found".to_string(),
@@ -828,15 +822,8 @@ fn test_inspect_recording_recovers_orphaned_m4s_fragments_with_init() {
     assert_eq!(incomplete.recoverable_segments.len(), 1);
 
     let segment = &incomplete.recoverable_segments[0];
-    assert_eq!(segment.display_fragments.len(), 2);
-    assert_eq!(
-        segment
-            .display_fragments
-            .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-            .collect::<Vec<_>>(),
-        vec!["segment_001.m4s".to_string(), "segment_002.m4s".to_string()]
-    );
+    assert_eq!(segment.display_fragments, expected_fragments);
+    assert!(display_dir.join("segment_999.m4s.tmp").exists());
     assert_eq!(
         segment
             .display_init_segment
@@ -1258,11 +1245,23 @@ fn write_synthetic_fragments(display_dir: &Path, total_frames: u64, segment_dura
 
     for i in 0..total_frames {
         let frame = make_synthetic_video_frame(320, 240);
-        let ts = Duration::from_micros(i * 33_333);
+        let ts = Duration::from_nanos(i * 1_000_000_000 / 30);
         encoder.queue_frame(frame, ts).expect("queue frame");
     }
 
     drop(encoder);
+}
+
+fn assert_valid_synthetic_fragments(display_dir: &Path) -> Vec<PathBuf> {
+    let fragments = list_m4s_segments(display_dir);
+    assert!(fragments.len() >= 2);
+    let control = TempDir::new().unwrap();
+    let output = control.path().join("fixture-control.mp4");
+    concatenate_m4s_segments_with_init(&display_dir.join("init.mp4"), &fragments, &output).unwrap();
+    assert!(probe_video_can_decode(&output).unwrap());
+    probe_video_seek_points(&output, 8).unwrap();
+    assert!(cap_enc_ffmpeg::remux::get_media_duration(&output).unwrap() >= Duration::from_secs(4));
+    fragments
 }
 
 #[test]
@@ -1360,7 +1359,9 @@ fn recover_preserves_fragments_when_progressive_mp4_validation_fails() {
     assert!(
         matches!(
             result,
-            Err(RecoveryError::UnplayableVideo(_)) | Err(RecoveryError::VideoConcat(_))
+            Err(RecoveryError::UnplayableVideo(_))
+                | Err(RecoveryError::VideoConcat(_))
+                | Err(RecoveryError::Validation(_))
         ),
         "failure should be UnplayableVideo or VideoConcat, got {result:?}"
     );
@@ -1590,4 +1591,470 @@ fn finalize_to_progressive_mp4_public_api_produces_playable_output() {
         display_dir.join("init.mp4").exists(),
         "finalize_to_progressive_mp4 must not delete fragments - that's the caller's responsibility"
     );
+}
+
+fn recovery_input_bytes(project: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, dir: &Path, result: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".recovery")
+            {
+                continue;
+            }
+            if path.is_dir() {
+                visit(root, &path, result);
+            } else {
+                let _ = result.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut result = std::collections::BTreeMap::new();
+    visit(project, project, &mut result);
+    result
+}
+
+fn set_recovery_optional_tracks(project: &Path) {
+    let mut meta = RecordingMeta::load_for_project(project).unwrap();
+    let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+        panic!("studio");
+    };
+    let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("segments");
+    };
+    let segment = &mut inner.segments[0];
+    segment.camera = Some(VideoMeta {
+        path: RelativePathBuf::from("content/segments/segment-0/camera.mp4"),
+        fps: 30,
+        start_time: Some(0.0),
+        device_id: None,
+    });
+    segment.mic = Some(cap_project::AudioMeta {
+        path: RelativePathBuf::from("content/segments/segment-0/audio-input.ogg"),
+        start_time: Some(0.0),
+        device_id: None,
+        gap_summary: None,
+    });
+    segment.system_audio = Some(cap_project::AudioMeta {
+        path: RelativePathBuf::from("content/segments/segment-0/system_audio.ogg"),
+        start_time: Some(0.0),
+        device_id: None,
+        gap_summary: None,
+    });
+    meta.save_for_project().unwrap();
+}
+
+fn write_recovery_wav(path: &Path) {
+    let samples = vec![0_u8; 48000 * 2 * 3];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&48000_u32.to_le_bytes());
+    bytes.extend_from_slice(&96000_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&samples);
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn complete_recovery_fixture() -> TestRecording {
+    let recording = TestRecording::new().unwrap();
+    let display = recording.create_display_dir(0).unwrap();
+    let camera = recording.create_segment_dir(0).unwrap().join("camera");
+    std::fs::create_dir(&camera).unwrap();
+    write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+    write_synthetic_fragments(&camera, 180, Duration::from_secs(2));
+    let segment = recording.path().join("content/segments/segment-0");
+    write_recovery_wav(&segment.join("audio-input.m4a"));
+    write_recovery_wav(&segment.join("system_audio.m4a"));
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+    set_recovery_optional_tracks(recording.path());
+    recording
+}
+
+#[test]
+fn recovery_and_finalize_retain_every_known_track_on_success() {
+    test_utils::init_tracing();
+    for finalize in [false, true] {
+        let recording = complete_recovery_fixture();
+        let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+        let recovered = if finalize {
+            RecoveryManager::finalize(&incomplete)
+        } else {
+            RecoveryManager::recover(&incomplete)
+        }
+        .unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = recovered.meta else {
+            panic!("segments");
+        };
+        assert!(matches!(
+            inner.status,
+            Some(StudioRecordingStatus::Complete)
+        ));
+        assert_eq!(inner.segments.len(), 1);
+        let segment = &inner.segments[0];
+        assert!(segment.camera.is_some());
+        assert!(segment.mic.is_some());
+        assert!(segment.system_audio.is_some());
+        for path in [
+            &segment.display.path,
+            &segment.camera.as_ref().unwrap().path,
+            &segment.mic.as_ref().unwrap().path,
+            &segment.system_audio.as_ref().unwrap().path,
+        ] {
+            assert!(path.to_path(recording.path()).is_file());
+        }
+        cap_project::ProjectConfiguration::load(recording.path())
+            .unwrap()
+            .validate()
+            .unwrap();
+        assert!(recording.path().join(".recovery.lock").is_file());
+    }
+}
+
+#[test]
+fn recovery_and_finalize_missing_known_optional_tracks_preserve_all_original_bytes() {
+    test_utils::init_tracing();
+    for target in ["camera", "audio-input.m4a", "system_audio.m4a"] {
+        let recording = complete_recovery_fixture();
+        let target = recording
+            .path()
+            .join("content/segments/segment-0")
+            .join(target);
+        if target.is_dir() {
+            std::fs::remove_dir_all(target).unwrap();
+        } else {
+            std::fs::remove_file(target).unwrap();
+        }
+        let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+        let before = recovery_input_bytes(recording.path());
+        assert!(RecoveryManager::recover(&incomplete).is_err());
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+        assert!(RecoveryManager::finalize(&incomplete).is_err());
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+    }
+}
+
+#[test]
+fn recovery_rejects_missing_whole_known_segment_without_mutation() {
+    test_utils::init_tracing();
+    let recording = complete_recovery_fixture();
+    let mut meta = RecordingMeta::load_for_project(recording.path()).unwrap();
+    let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+        panic!("studio");
+    };
+    let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("segments");
+    };
+    inner.segments.push(inner.segments[0].clone());
+    meta.save_for_project().unwrap();
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+#[test]
+fn recovery_invalid_camera_audio_and_configuration_leave_raw_and_status_unchanged() {
+    test_utils::init_tracing();
+    for name in [
+        "content/segments/segment-0/camera/init.mp4",
+        "content/segments/segment-0/audio-input.m4a",
+        "content/segments/segment-0/system_audio.m4a",
+        "project-config.json",
+    ] {
+        let recording = complete_recovery_fixture();
+        std::fs::write(recording.path().join(name), b"corrupt input").unwrap();
+        let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+        let before = recovery_input_bytes(recording.path());
+        assert!(RecoveryManager::recover(&incomplete).is_err());
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+        assert!(RecoveryManager::finalize(&incomplete).is_err());
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+    }
+}
+
+#[test]
+fn recovery_rejects_a_present_unlisted_invalid_track_and_a_stale_snapshot() {
+    test_utils::init_tracing();
+    let recording = TestRecording::new().unwrap();
+    write_synthetic_fragments(
+        &recording.create_display_dir(0).unwrap(),
+        180,
+        Duration::from_secs(2),
+    );
+    recording
+        .write_recording_meta(StudioRecordingStatus::InProgress)
+        .unwrap();
+    std::fs::write(
+        recording
+            .path()
+            .join("content/segments/segment-0/audio-input.m4a"),
+        b"invalid unlisted audio",
+    )
+    .unwrap();
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+    let mut meta = RecordingMeta::load_for_project(recording.path()).unwrap();
+    meta.pretty_name = "changed after inspection".into();
+    meta.save_for_project().unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::finalize(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+#[test]
+fn recovery_rejects_video_only_container_used_as_required_audio() {
+    test_utils::init_tracing();
+    let recording = complete_recovery_fixture();
+    let video = recording.path().join("audio-container.mp4");
+    RecoveryManager::finalize_to_progressive_mp4(
+        &recording.path().join("content/segments/segment-0/display"),
+        &video,
+    )
+    .unwrap();
+    let audio = recording
+        .path()
+        .join("content/segments/segment-0/audio-input.m4a");
+    std::fs::copy(video, &audio).unwrap();
+    assert!(cap_enc_ffmpeg::remux::probe_media_valid(&audio));
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+#[test]
+fn recovery_rejects_later_corrupt_video_even_when_first_frame_decodes() {
+    test_utils::init_tracing();
+    let recording = complete_recovery_fixture();
+    let display = recording.path().join("content/segments/segment-0/display");
+    let mut fragments: Vec<_> = std::fs::read_dir(&display)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "m4s"))
+        .collect();
+    fragments.sort();
+    assert!(fragments.len() >= 2);
+    let target = &fragments[1];
+    let mut bytes = std::fs::read(target).unwrap();
+    let mdat = bytes.windows(4).position(|value| value == b"mdat").unwrap() + 4;
+    let end = (mdat + 64).min(bytes.len());
+    bytes[mdat..end].fill(0xff);
+    std::fs::write(target, bytes).unwrap();
+    let combined = recording.path().join("first-frame-control.mp4");
+    let mut control = std::fs::read(display.join("init.mp4")).unwrap();
+    for fragment in &fragments {
+        control.extend(std::fs::read(fragment).unwrap());
+    }
+    std::fs::write(&combined, control).unwrap();
+    assert!(probe_video_can_decode(&combined).unwrap());
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+fn write_recovery_dash_audio(directory: &Path) {
+    let info = cap_media_info::AudioInfo::new_raw(
+        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+        48000,
+        1,
+    );
+    let mut encoder = cap_enc_ffmpeg::dash_audio::DashAudioSegmentEncoder::init(
+        directory.to_path_buf(),
+        info,
+        cap_enc_ffmpeg::dash_audio::DashAudioSegmentEncoderConfig {
+            segment_duration: Duration::from_secs(1),
+        },
+    )
+    .unwrap();
+    for index in 0..150_u64 {
+        let mut frame = info.empty_frame(1024);
+        frame.data_mut(0).fill(0);
+        encoder
+            .queue_frame(
+                frame,
+                Duration::from_secs_f64(index as f64 * 1024.0 / 48000.0),
+            )
+            .unwrap();
+    }
+    encoder.finish().unwrap();
+}
+
+#[test]
+fn instant_recovery_preserves_valid_audio_and_legitimate_video_only_recordings() {
+    test_utils::init_tracing();
+    for with_audio in [false, true] {
+        let recording = TestRecording::new().unwrap();
+        let display = recording.path().join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+        let audio = recording.path().join("content/audio");
+        if with_audio {
+            write_recovery_dash_audio(&audio);
+        }
+        let before = recovery_input_bytes(recording.path());
+        let output = recording.path().join("content/output.mp4");
+        RecoveryManager::finalize_instant_output(&display, &audio, &output).unwrap();
+        let input = ffmpeg::format::input(&output).unwrap();
+        assert!(input.streams().best(ffmpeg::media::Type::Video).is_some());
+        assert_eq!(
+            input.streams().best(ffmpeg::media::Type::Audio).is_some(),
+            with_audio
+        );
+        for (relative, bytes) in before {
+            assert_eq!(
+                std::fs::read(recording.path().join(relative)).unwrap(),
+                bytes
+            );
+        }
+    }
+}
+
+#[test]
+fn instant_recovery_empty_or_invalid_expected_audio_cannot_replace_existing_output() {
+    test_utils::init_tracing();
+    for corrupt in [false, true] {
+        let recording = TestRecording::new().unwrap();
+        let display = recording.path().join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+        let output = recording.path().join("content/output.mp4");
+        RecoveryManager::finalize_to_progressive_mp4(&display, &output).unwrap();
+        let audio = recording.path().join("content/audio");
+        if corrupt {
+            write_recovery_dash_audio(&audio);
+            std::fs::write(audio.join("init.mp4"), b"corrupt audio init").unwrap();
+        } else {
+            std::fs::create_dir(&audio).unwrap();
+        }
+        let before = recovery_input_bytes(recording.path());
+        assert!(RecoveryManager::finalize_instant_output(&display, &audio, &output).is_err());
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+    }
+}
+
+#[test]
+fn instant_recovery_refuses_known_failed_and_known_missing_audio_without_mutation() {
+    test_utils::init_tracing();
+    for inner in [
+        cap_project::InstantRecordingMeta::Failed {
+            error: "required microphone failed".into(),
+        },
+        cap_project::InstantRecordingMeta::Complete {
+            fps: 30,
+            sample_rate: Some(48000),
+        },
+    ] {
+        let recording = TestRecording::new().unwrap();
+        let display = recording.path().join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+        recording
+            .write_recording_meta(StudioRecordingStatus::InProgress)
+            .unwrap();
+        let mut meta = RecordingMeta::load_for_project(recording.path()).unwrap();
+        meta.inner = RecordingMetaInner::Instant(inner);
+        meta.save_for_project().unwrap();
+        let before = recovery_input_bytes(recording.path());
+        assert!(
+            RecoveryManager::finalize_instant_output(
+                &display,
+                &recording.path().join("content/audio"),
+                &recording.path().join("content/output.mp4")
+            )
+            .is_err()
+        );
+        assert_eq!(recovery_input_bytes(recording.path()), before);
+    }
+}
+
+#[test]
+fn repeated_instant_finalization_does_not_retain_staging_copies() {
+    test_utils::init_tracing();
+    let recording = TestRecording::new().unwrap();
+    let display = recording.path().join("content/display");
+    std::fs::create_dir_all(&display).unwrap();
+    write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+    let audio = recording.path().join("content/audio");
+    write_recovery_dash_audio(&audio);
+    let before = recovery_input_bytes(recording.path());
+    let output = recording.path().join("content/output.mp4");
+    for _ in 0..3 {
+        RecoveryManager::finalize_instant_output(&display, &audio, &output).unwrap();
+        let mut after = recovery_input_bytes(recording.path());
+        assert!(after.remove(Path::new("content/output.mp4")).is_some());
+        assert_eq!(after, before);
+        assert!(std::fs::read_dir(recording.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".recovery-")
+        }));
+        let input = ffmpeg::format::input(&output).unwrap();
+        assert!(input.streams().best(ffmpeg::media::Type::Video).is_some());
+        assert!(input.streams().best(ffmpeg::media::Type::Audio).is_some());
+    }
+}
+
+#[test]
+fn instant_recovery_rebuilds_corrupt_prior_output_only_from_valid_required_raw() {
+    test_utils::init_tracing();
+    for invalid_audio in [false, true] {
+        let recording = TestRecording::new().unwrap();
+        let display = recording.path().join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+        let audio = recording.path().join("content/audio");
+        write_recovery_dash_audio(&audio);
+        if invalid_audio {
+            std::fs::write(audio.join("init.mp4"), b"invalid required audio").unwrap();
+        }
+        let output = recording.path().join("content/output.mp4");
+        std::fs::write(&output, b"interrupted MP4 header").unwrap();
+        let before = recovery_input_bytes(recording.path());
+        let result = RecoveryManager::finalize_instant_output(&display, &audio, &output);
+        if invalid_audio {
+            assert!(result.is_err());
+            assert_eq!(recovery_input_bytes(recording.path()), before);
+        } else {
+            result.unwrap();
+            for (relative, bytes) in before {
+                if relative != Path::new("content/output.mp4") {
+                    assert_eq!(
+                        std::fs::read(recording.path().join(relative)).unwrap(),
+                        bytes
+                    );
+                }
+            }
+            let input = ffmpeg::format::input(&output).unwrap();
+            assert!(input.streams().best(ffmpeg::media::Type::Video).is_some());
+            assert!(input.streams().best(ffmpeg::media::Type::Audio).is_some());
+            assert!(std::fs::read_dir(recording.path()).unwrap().all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            }));
+        }
+    }
 }

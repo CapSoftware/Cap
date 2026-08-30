@@ -177,6 +177,14 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
 fn main() {
     #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
         // Logging starts a worker thread, so configure the process environment first.
         unsafe {
@@ -295,6 +303,8 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        #[cfg(target_os = "linux")]
+        single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both

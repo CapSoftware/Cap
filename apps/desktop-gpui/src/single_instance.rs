@@ -1,33 +1,9 @@
-//! New-instance-wins single instancing.
-//!
-//! The app lives in the tray: closing the main window hides it, the process
-//! stays. Without a guard, a `cargo run` after an edit launches a second
-//! instance next to the stale one, and the tray icon and level-100 window the
-//! user is looking at may still belong to the *old* build -- which reads as
-//! "my change only applied on the second run". The Tauri app's single-instance
-//! plugin keeps the old instance and exits the new one; for a parallel
-//! implementation that is mostly launched to see fresh code, the useful
-//! polarity is the reverse: the new instance terminates the old one and takes
-//! over. A capture killed this way lands in the bundle's `InProgress` /
-//! `NeedsRemux` recovery path rather than being lost.
-//!
-//! The pidfile lives in [`crate::store::app_data_dir`], so a harness run
-//! pointed at a `CAP_GPUI_APP_DATA_DIR` sandbox never kills the dev app.
-//!
-//! Deep links need no forwarding under this polarity. The Tauri plugin's
-//! callback relays a second launch's `cap-desktop://` argv to the surviving
-//! old instance (`src-tauri/src/lib.rs:5193-5204`); here the launch that
-//! carries the URL *is* the survivor, and [`crate::deeplink::init`] reads its
-//! own argv. A URL opened while the app is already running never launches a
-//! second instance on macOS at all -- the GURL AppleEvent goes straight to
-//! the running process (`crate::platform::install_url_scheme_handler`).
-
 use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 static INSTANCE_MUTEX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 const MAX_FORWARDED_DEEP_LINK_BYTES: usize = 1024 * 1024;
 
 #[cfg(any(windows, target_os = "macos", test))]
@@ -53,20 +29,35 @@ pub fn acquire() {
         && pid != std::process::id() as i32
         && is_cap_gpui(pid)
     {
-        tracing::info!(pid, "terminating the previous instance");
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
-        for _ in 0..40 {
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                break;
+        #[cfg(target_os = "linux")]
+        {
+            match forward_linux_reopen(&path, pid as u32) {
+                Ok(()) => tracing::info!(pid, "Requested the existing Cap GPUI controls"),
+                Err(error) => tracing::warn!(
+                    pid,
+                    %error,
+                    "Could not reopen Cap GPUI; the existing instance remains unchanged"
+                ),
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::process::exit(0);
         }
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            tracing::warn!(pid, "previous instance ignored SIGTERM; killing it");
+        #[cfg(not(target_os = "linux"))]
+        {
+            tracing::info!(pid, "terminating the previous instance");
             unsafe {
-                libc::kill(pid, libc::SIGKILL);
+                libc::kill(pid, libc::SIGTERM);
+            }
+            for _ in 0..40 {
+                if unsafe { libc::kill(pid, 0) } != 0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if unsafe { libc::kill(pid, 0) } == 0 {
+                tracing::warn!(pid, "previous instance ignored SIGTERM; killing it");
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
             }
         }
     }
@@ -75,6 +66,12 @@ pub fn acquire() {
     }
     if let Err(error) = std::fs::write(&path, std::process::id().to_string()) {
         tracing::warn!(%error, "could not write the instance pidfile");
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Err(error) = start_linux_reopen(&path) {
+        tracing::error!(%error, "could not start Cap GPUI activation");
+        std::process::exit(1);
     }
 
     #[cfg(target_os = "macos")]
@@ -88,6 +85,7 @@ pub fn acquire() {
 /// binary. Linux zombies retain their comm name but lose their exe link.
 #[cfg(unix)]
 fn is_cap_gpui(pid: i32) -> bool {
+    #[cfg(not(target_os = "linux"))]
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
@@ -119,6 +117,391 @@ fn is_cap_gpui_image(path: &Path) -> bool {
     #[cfg(target_os = "linux")]
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
     name.eq_ignore_ascii_case(IMAGE_NAME)
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_REOPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[cfg(target_os = "linux")]
+const MAX_LINUX_REOPEN_ACTIONS: usize = 32;
+
+#[cfg(target_os = "linux")]
+type LinuxReopenActions = Vec<crate::deeplink::DeepLinkAction>;
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct LinuxInstanceIdentity {
+    pid: u32,
+    started: u64,
+    boot: [u8; 36],
+}
+
+#[cfg(target_os = "linux")]
+fn linux_instance_identity(pid: u32) -> std::io::Result<LinuxInstanceIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let fields = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| fields.split_whitespace().collect::<Vec<_>>())
+        .ok_or_else(|| std::io::Error::other("Invalid instance process identity"))?;
+    if fields
+        .first()
+        .is_none_or(|state| matches!(*state, "Z" | "X"))
+    {
+        return Err(std::io::Error::other("The instance is no longer running"));
+    }
+    let started = fields
+        .get(19)
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| std::io::Error::other("Invalid instance start identity"))?;
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    let boot = boot
+        .trim()
+        .as_bytes()
+        .try_into()
+        .map_err(|_| std::io::Error::other("Invalid boot identity"))?;
+    Ok(LinuxInstanceIdentity { pid, started, boot })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_reopen_address(
+    path: &Path,
+    owner: LinuxInstanceIdentity,
+) -> std::io::Result<std::os::unix::net::SocketAddr> {
+    use std::{
+        hash::{Hash, Hasher},
+        os::linux::net::SocketAddrExt,
+    };
+    let directory = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("The instance directory is missing"))?
+        .canonicalize()?;
+    let mut scope = std::collections::hash_map::DefaultHasher::new();
+    directory.hash(&mut scope);
+    owner.hash(&mut scope);
+    for name in [
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_ID",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+    ] {
+        std::env::var_os(name).hash(&mut scope);
+    }
+    std::os::unix::net::SocketAddr::from_abstract_name(format!(
+        "cap-gpui-reopen-{:016x}",
+        scope.finish()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_reopen_payload(owner: LinuxInstanceIdentity) -> [u8; 56] {
+    let mut bytes = [0; 56];
+    bytes[..8].copy_from_slice(b"CAPREOP1");
+    bytes[8..12].copy_from_slice(&owner.pid.to_be_bytes());
+    bytes[12..20].copy_from_slice(&owner.started.to_be_bytes());
+    bytes[20..].copy_from_slice(&owner.boot);
+    bytes
+}
+
+#[cfg(target_os = "linux")]
+fn write_linux_reopen_actions(
+    writer: &mut impl std::io::Write,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+) -> std::io::Result<()> {
+    if actions.len() > MAX_FORWARDED_DEEP_LINK_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Too many forwarded Cap action bytes",
+        ));
+    }
+    let mut header = linux_reopen_payload(owner);
+    if !actions.is_empty() {
+        header[..8].copy_from_slice(b"CAPREOP2");
+    }
+    writer.write_all(&header)?;
+    if !actions.is_empty() {
+        writer.write_all(&(actions.len() as u32).to_be_bytes())?;
+        writer.write_all(actions)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_reopen_action(raw: &str) -> std::io::Result<crate::deeplink::DeepLinkAction> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid forwarded Cap action URL",
+        )
+    };
+    if raw.len() > MAX_FORWARDED_DEEP_LINK_BYTES
+        || !(raw.starts_with("cap-desktop://") || raw.starts_with("cap://"))
+    {
+        return Err(invalid());
+    }
+    let url = reqwest::Url::parse(raw).map_err(|_| invalid())?;
+    crate::deeplink::DeepLinkAction::try_from(&url).map_err(|_| invalid())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_reopen_action_payload(
+    arguments: impl IntoIterator<Item = String>,
+) -> std::io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    for (count, argument) in arguments
+        .into_iter()
+        .filter(|argument| parse_linux_reopen_action(argument).is_ok())
+        .enumerate()
+    {
+        if count == MAX_LINUX_REOPEN_ACTIONS
+            || argument.len() > MAX_FORWARDED_DEEP_LINK_BYTES.saturating_sub(payload.len() + 4)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Too many forwarded Cap actions",
+            ));
+        }
+        payload.extend_from_slice(&(argument.len() as u32).to_be_bytes());
+        payload.extend_from_slice(argument.as_bytes());
+    }
+    Ok(payload)
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_reopen_actions(
+    reader: &mut impl std::io::Read,
+    owner: LinuxInstanceIdentity,
+) -> std::io::Result<LinuxReopenActions> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid forwarded Cap action payload",
+        )
+    };
+    let mut request = [0; 56];
+    reader.read_exact(&mut request)?;
+    let mut header = linux_reopen_payload(owner);
+    if request == header {
+        return Ok(Vec::new());
+    }
+    header[..8].copy_from_slice(b"CAPREOP2");
+    if request != header {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "The activation request belongs to another instance",
+        ));
+    }
+    let mut size = [0; 4];
+    reader.read_exact(&mut size)?;
+    let size = u32::from_be_bytes(size) as usize;
+    if size > MAX_FORWARDED_DEEP_LINK_BYTES {
+        return Err(invalid());
+    }
+    let mut payload = vec![0; size];
+    reader.read_exact(&mut payload)?;
+    let mut remaining = payload.as_slice();
+    let mut actions = Vec::new();
+    while !remaining.is_empty() {
+        if actions.len() == MAX_LINUX_REOPEN_ACTIONS {
+            return Err(invalid());
+        }
+        let (size, rest) = remaining.split_first_chunk::<4>().ok_or_else(invalid)?;
+        let (raw, rest) = rest
+            .split_at_checked(u32::from_be_bytes(*size) as usize)
+            .ok_or_else(invalid)?;
+        let raw = std::str::from_utf8(raw).map_err(|_| invalid())?;
+        actions.push(parse_linux_reopen_action(raw)?);
+        remaining = rest;
+    }
+    Ok(actions)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_peer(stream: &std::os::unix::net::UnixStream) -> std::io::Result<libc::ucred> {
+    use std::os::fd::AsRawFd;
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::addr_of_mut!(credentials).cast(),
+            std::ptr::addr_of_mut!(length),
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if length as usize != std::mem::size_of::<libc::ucred>()
+        || credentials.uid != unsafe { libc::geteuid() }
+        || credentials.pid <= 0
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "The activation peer is not in this user session",
+        ));
+    }
+    Ok(credentials)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_reopen_channel() -> &'static (
+    flume::Sender<LinuxReopenActions>,
+    flume::Receiver<LinuxReopenActions>,
+) {
+    static CHANNEL: std::sync::OnceLock<(
+        flume::Sender<LinuxReopenActions>,
+        flume::Receiver<LinuxReopenActions>,
+    )> = std::sync::OnceLock::new();
+    CHANNEL.get_or_init(|| flume::bounded(1))
+}
+
+#[cfg(target_os = "linux")]
+fn receive_linux_reopen(
+    stream: &mut std::os::unix::net::UnixStream,
+    owner: LinuxInstanceIdentity,
+    requests: &flume::Sender<LinuxReopenActions>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_millis(250)))?;
+    linux_peer(stream)?;
+    let actions = read_linux_reopen_actions(stream, owner)?;
+    match requests.try_send(actions) {
+        Ok(()) => {}
+        Err(flume::TrySendError::Full(actions)) if actions.is_empty() => {}
+        Err(flume::TrySendError::Full(actions)) => {
+            requests
+                .send_timeout(actions, std::time::Duration::from_millis(250))
+                .map_err(|_| std::io::Error::other("The activation queue is busy"))?;
+        }
+        Err(flume::TrySendError::Disconnected(_)) => {
+            return Err(std::io::Error::other("The activation handler has closed"));
+        }
+    }
+    stream.write_all(&[1])
+}
+
+#[cfg(target_os = "linux")]
+fn start_linux_reopen(path: &Path) -> std::io::Result<()> {
+    let owner = linux_instance_identity(std::process::id())?;
+    let address = linux_reopen_address(path, owner)?;
+    let listener = std::os::unix::net::UnixListener::bind_addr(&address)?;
+    let requests = linux_reopen_channel().0.clone();
+    std::thread::Builder::new()
+        .name("cap-gpui-activation".into())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                let result = connection
+                    .and_then(|mut stream| receive_linux_reopen(&mut stream, owner, &requests));
+                if let Err(error) = result {
+                    tracing::warn!(%error, "Rejected a Cap GPUI activation request");
+                }
+            }
+        })?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn send_linux_reopen(
+    address: std::os::unix::net::SocketAddr,
+    owner: LinuxInstanceIdentity,
+    actions: &[u8],
+) -> std::io::Result<()> {
+    use std::io::Read;
+    let started = std::time::Instant::now();
+    let mut stream = loop {
+        if linux_instance_identity(owner.pid)? != owner {
+            return Err(std::io::Error::other("The activation owner changed"));
+        }
+        match std::os::unix::net::UnixStream::connect_addr(&address) {
+            Ok(stream) => break stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                ) && started.elapsed() < std::time::Duration::from_secs(1) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
+    if linux_peer(&stream)?.pid as u32 != owner.pid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "The activation socket belongs to another process",
+        ));
+    }
+    write_linux_reopen_actions(&mut stream, owner, actions)?;
+    let mut reply = [0];
+    stream.read_exact(&mut reply)?;
+    if reply != [1] || linux_instance_identity(owner.pid)? != owner {
+        return Err(std::io::Error::other(
+            "The activation owner did not acknowledge the request",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn forward_linux_reopen(path: &Path, pid: u32) -> std::io::Result<()> {
+    let actions = linux_reopen_action_payload(std::env::args().skip(1))?;
+    let owner = linux_instance_identity(pid)?;
+    let address = linux_reopen_address(path, owner)?;
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("cap-gpui-reopen-request".into())
+        .spawn(move || {
+            let _ = send.send(send_linux_reopen(address, owner, &actions));
+        })?;
+    receive.recv_timeout(LINUX_REOPEN_TIMEOUT).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "The activation request timed out",
+        )
+    })?
+}
+
+#[cfg(target_os = "linux")]
+fn linux_reopen_allowed(
+    phase: crate::session::Phase,
+    mode: Option<crate::recording::RecordingMode>,
+    cleanup_safe: bool,
+) -> bool {
+    cleanup_safe
+        && (phase == crate::session::Phase::Idle
+            || (matches!(phase, crate::session::Phase::Recording { .. })
+                && mode == Some(crate::recording::RecordingMode::Studio)))
+}
+
+#[cfg(target_os = "linux")]
+pub fn init_linux_reopen(cx: &mut gpui::App) {
+    let requests = linux_reopen_channel().1.clone();
+    cx.spawn(async move |cx| {
+        while let Ok(actions) = requests.recv_async().await {
+            cx.update(|cx| {
+                if !actions.is_empty() {
+                    for action in actions {
+                        crate::deeplink::submit_action(action);
+                    }
+                    return;
+                }
+                let session = crate::session::RecordingSession::global(cx);
+                let current = session.read(cx);
+                if linux_reopen_allowed(current.phase, current.mode(), current.instant_cleanup_safe()) {
+                    crate::app_windows::show_main_window(cx);
+                } else {
+                    tracing::info!("Cap controls remain hidden while recording is changing state or cannot pause");
+                }
+            });
+        }
+    })
+    .detach();
 }
 
 #[cfg(windows)]
@@ -510,6 +893,164 @@ mod tests {
         assert!(!super::is_cap_gpui(std::process::id() as i32));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_acquire_child_probe() {
+        if std::env::var_os("CAP_GPUI_ACQUIRE_CHILD_PROBE").is_none() {
+            return;
+        }
+        super::acquire();
+        let marker = crate::store::app_data_dir().join("acquire-returned");
+        std::fs::write(marker, std::process::id().to_string()).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) struct LinuxAcquireFixture {
+        directory: std::path::PathBuf,
+        pub(super) children: Vec<std::process::Child>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl LinuxAcquireFixture {
+        pub(super) fn new() -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "cap-gpui-acquire-test-{}",
+                crate::store::new_uuid_v4()
+            ));
+            std::fs::create_dir(&directory).unwrap();
+            Self {
+                directory,
+                children: Vec::new(),
+            }
+        }
+
+        pub(super) fn start_incumbent(&mut self) -> u32 {
+            let binary = self.directory.join("cap-gpui");
+            std::fs::copy("/bin/sleep", &binary).unwrap();
+            let child = std::process::Command::new(&binary)
+                .arg("30")
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            self.children.push(child);
+            let started = std::time::Instant::now();
+            while !std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| path == binary) {
+                assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            pid
+        }
+
+        fn launch_again(&mut self) -> u32 {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "single_instance::tests::linux_acquire_child_probe",
+                    "--test-threads=1",
+                ])
+                .env("CAP_GPUI_ACQUIRE_CHILD_PROBE", "1")
+                .env("CAP_GPUI_APP_DATA_DIR", &self.directory)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            self.children.push(child);
+            let child = self.children.last_mut().unwrap();
+            let started = std::time::Instant::now();
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success());
+                    return pid;
+                }
+                assert!(started.elapsed() < std::time::Duration::from_secs(5));
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for LinuxAcquireFixture {
+        fn drop(&mut self) {
+            for child in &mut self.children {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_initial_launch_owns_only_its_pidfile() {
+        let mut fixture = LinuxAcquireFixture::new();
+        let launched = fixture.launch_again().to_string();
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.join("cap-gpui.pid")).unwrap(),
+            launched,
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.directory.join("acquire-returned")).unwrap(),
+            launched,
+        );
+        let mut entries = std::fs::read_dir(&fixture.directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, ["acquire-returned", "cap-gpui.pid"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_relaunch_preserves_live_and_unlinked_incumbent_pidfile() {
+        use std::os::unix::fs::MetadataExt;
+
+        let mut fixture = LinuxAcquireFixture::new();
+        let incumbent = fixture.start_incumbent();
+        let pidfile = fixture.directory.join("cap-gpui.pid");
+        let original = incumbent.to_string();
+        std::fs::write(&pidfile, &original).unwrap();
+        let before = std::fs::metadata(&pidfile).unwrap();
+        for unlinked in [false, true] {
+            if unlinked {
+                std::fs::remove_file(fixture.directory.join("cap-gpui")).unwrap();
+            }
+            fixture.launch_again();
+            assert!(fixture.children[0].try_wait().unwrap().is_none());
+            assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), original);
+            let after = std::fs::metadata(&pidfile).unwrap();
+            assert_eq!(after.ino(), before.ino());
+            assert_eq!(after.mtime(), before.mtime());
+            assert_eq!(after.mtime_nsec(), before.mtime_nsec());
+            assert_eq!(after.ctime(), before.ctime());
+            assert_eq!(after.ctime_nsec(), before.ctime_nsec());
+            assert!(!fixture.directory.join("acquire-returned").exists());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_relaunch_after_dead_or_stale_owner_starts_normally() {
+        let mut fixture = LinuxAcquireFixture::new();
+        let incumbent = fixture.start_incumbent();
+        fixture.children[0].kill().unwrap();
+        fixture.children[0].wait().unwrap();
+        let pidfile = fixture.directory.join("cap-gpui.pid");
+        for stale in [
+            incumbent.to_string(),
+            "not-a-pid".to_string(),
+            "0".to_string(),
+        ] {
+            std::fs::write(&pidfile, stale).unwrap();
+            let launched = fixture.launch_again().to_string();
+            assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), launched);
+            assert_eq!(
+                std::fs::read_to_string(fixture.directory.join("acquire-returned")).unwrap(),
+                launched
+            );
+        }
+    }
+
     #[test]
     fn forwarding_endpoint_requires_a_live_instance_shape() {
         assert_eq!(
@@ -640,5 +1181,364 @@ mod tests {
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_reopen_tests {
+    use super::*;
+    use crate::deeplink::DeepLinkAction;
+    use std::io::{Read, Write};
+    use std::os::{
+        linux::net::SocketAddrExt,
+        unix::net::{UnixListener, UnixStream},
+    };
+
+    fn packet(owner: LinuxInstanceIdentity, payload: &[u8]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        write_linux_reopen_actions(&mut packet, owner, payload).unwrap();
+        packet
+    }
+
+    fn action_url(action: &DeepLinkAction) -> String {
+        reqwest::Url::parse_with_params(
+            "cap-desktop://action",
+            &[("value", serde_json::to_string(action).unwrap())],
+        )
+        .unwrap()
+        .to_string()
+    }
+
+    fn raw_action_payload(raw: &[u8]) -> Vec<u8> {
+        let mut payload = (raw.len() as u32).to_be_bytes().to_vec();
+        payload.extend_from_slice(raw);
+        payload
+    }
+
+    #[test]
+    fn duplicate_launch_during_startup_is_authenticated_and_coalesced() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let (requests, received) = flume::bounded(1);
+        for _ in 0..3 {
+            let (mut server, mut client) = UnixStream::pair().unwrap();
+            client.write_all(&packet(owner, &[])).unwrap();
+            receive_linux_reopen(&mut server, owner, &requests).unwrap();
+            let mut reply = [0];
+            client.read_exact(&mut reply).unwrap();
+            assert_eq!(reply, [1]);
+        }
+        assert_eq!(received.len(), 1);
+        assert!(received.recv().unwrap().is_empty());
+    }
+
+    #[test]
+    fn plain_relaunch_keeps_its_legacy_frame_and_actions_require_the_new_version() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let plain = packet(owner, &[]);
+        assert_eq!(plain, linux_reopen_payload(owner));
+        assert!(
+            read_linux_reopen_actions(&mut plain.as_slice(), owner)
+                .unwrap()
+                .is_empty()
+        );
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let mut framed = packet(owner, &payload);
+        assert_eq!(&framed[..8], b"CAPREOP2");
+        framed[..8].copy_from_slice(b"CAPREOP3");
+        assert_eq!(
+            read_linux_reopen_actions(&mut framed.as_slice(), owner)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn client_requires_the_current_owner_acknowledgement() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let address = std::os::unix::net::SocketAddr::from_abstract_name(format!(
+            "cap-gpui-owner-ack-{}",
+            crate::store::new_uuid_v4()
+        ))
+        .unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        let (requests, received) = flume::bounded(1);
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            receive_linux_reopen(&mut stream, owner, &requests)
+        });
+        send_linux_reopen(address, owner, &[]).unwrap();
+        worker.join().unwrap().unwrap();
+        assert!(received.recv().unwrap().is_empty());
+    }
+
+    #[test]
+    fn editor_and_settings_actions_remain_ordered_until_initialization() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let expected = vec![
+            DeepLinkAction::OpenEditor {
+                project_path: "/tmp/recording.cap".into(),
+            },
+            DeepLinkAction::OpenSettings {
+                page: Some("general".into()),
+            },
+        ];
+        let payload = linux_reopen_action_payload(expected.iter().map(action_url)).unwrap();
+        let (requests, received) = flume::bounded(1);
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        client.write_all(&packet(owner, &payload)).unwrap();
+        receive_linux_reopen(&mut server, owner, &requests).unwrap();
+        let mut reply = [0];
+        client.read_exact(&mut reply).unwrap();
+        assert_eq!(reply, [1]);
+        assert_eq!(received.len(), 1);
+        assert_eq!(received.recv().unwrap(), expected);
+    }
+
+    #[test]
+    fn action_queue_saturation_never_acknowledges_dropped_actions() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let (requests, received) = flume::bounded(1);
+        requests.send(Vec::new()).unwrap();
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        client.write_all(&packet(owner, &payload)).unwrap();
+        assert!(receive_linux_reopen(&mut server, owner, &requests).is_err());
+        drop(server);
+        let mut reply = [0];
+        assert!(client.read_exact(&mut reply).is_err());
+        assert!(received.recv().unwrap().is_empty());
+        assert!(received.is_empty());
+    }
+
+    #[test]
+    fn action_payload_bounds_apply_before_reading_or_accumulating_more_urls() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let url = action_url(&DeepLinkAction::OpenSettings { page: None });
+        let payload =
+            linux_reopen_action_payload(vec![url.clone(); MAX_LINUX_REOPEN_ACTIONS]).unwrap();
+        assert_eq!(
+            read_linux_reopen_actions(&mut packet(owner, &payload).as_slice(), owner)
+                .unwrap()
+                .len(),
+            MAX_LINUX_REOPEN_ACTIONS
+        );
+        assert!(
+            linux_reopen_action_payload(vec![url.clone(); MAX_LINUX_REOPEN_ACTIONS + 1]).is_err()
+        );
+        let payload = raw_action_payload(url.as_bytes()).repeat(MAX_LINUX_REOPEN_ACTIONS + 1);
+        assert!(read_linux_reopen_actions(&mut packet(owner, &payload).as_slice(), owner).is_err());
+        let mut oversized = linux_reopen_payload(owner).to_vec();
+        oversized[..8].copy_from_slice(b"CAPREOP2");
+        oversized.extend_from_slice(&((MAX_FORWARDED_DEEP_LINK_BYTES + 1) as u32).to_be_bytes());
+        let mut oversized = std::io::Cursor::new(oversized);
+        assert_eq!(
+            read_linux_reopen_actions(&mut oversized, owner)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(oversized.position(), 60);
+        let mut written = Vec::new();
+        assert!(
+            write_linux_reopen_actions(
+                &mut written,
+                owner,
+                &vec![0; MAX_FORWARDED_DEEP_LINK_BYTES + 1],
+            )
+            .is_err()
+        );
+        assert!(written.is_empty());
+        let oversized = format!(
+            "cap://action?value={}",
+            "x".repeat(MAX_FORWARDED_DEEP_LINK_BYTES)
+        );
+        assert!(linux_reopen_action_payload([oversized]).unwrap().is_empty());
+        let large = action_url(&DeepLinkAction::OpenSettings {
+            page: Some("x".repeat(MAX_FORWARDED_DEEP_LINK_BYTES / 2)),
+        });
+        assert!(linux_reopen_action_payload([large.clone(), large]).is_err());
+    }
+
+    #[test]
+    fn malformed_action_packets_never_reach_the_app_or_expose_the_url() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let (requests, received) = flume::bounded(1);
+        for raw in [
+            b"".as_slice(),
+            b"not a URL",
+            b"https://action?value=%22stop_recording%22",
+            b"cap://auth?token=private-secret",
+            b"cap://action?value=private-secret",
+            b"cap://action?value=%22private-secret%22",
+            b"cap://action?value=%FF\xff",
+        ] {
+            let (mut server, mut client) = UnixStream::pair().unwrap();
+            client
+                .write_all(&packet(owner, &raw_action_payload(raw)))
+                .unwrap();
+            let error = receive_linux_reopen(&mut server, owner, &requests).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(!error.to_string().contains("private-secret"));
+            assert!(received.is_empty());
+        }
+    }
+
+    #[test]
+    fn argv_filter_preserves_supported_schemes_and_excludes_invalid_actions() {
+        assert!(
+            linux_reopen_action_payload(["--foreground".into()])
+                .unwrap()
+                .is_empty()
+        );
+        for scheme in ["cap", "cap-desktop"] {
+            let raw = format!("{scheme}://action?value=%22stop_recording%22");
+            assert_eq!(
+                parse_linux_reopen_action(&raw).unwrap(),
+                DeepLinkAction::StopRecording
+            );
+            assert!(!linux_reopen_action_payload([raw]).unwrap().is_empty());
+        }
+        for raw in [
+            "cap://auth?token=private-secret",
+            "cap://action?value=private-secret",
+        ] {
+            assert!(
+                linux_reopen_action_payload([raw.into()])
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let valid = action_url(&DeepLinkAction::OpenSettings { page: None });
+        let mixed = linux_reopen_action_payload([
+            "cap://action?value=private-secret".into(),
+            valid.clone(),
+        ])
+        .unwrap();
+        assert_eq!(mixed, linux_reopen_action_payload([valid]).unwrap());
+    }
+
+    #[test]
+    fn truncated_action_packets_never_reach_the_app() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let (requests, received) = flume::bounded(1);
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let complete = packet(owner, &payload);
+        for size in [56, 58, complete.len() - 1] {
+            let (mut server, mut client) = UnixStream::pair().unwrap();
+            client.write_all(&complete[..size]).unwrap();
+            client.shutdown(std::net::Shutdown::Write).unwrap();
+            assert!(receive_linux_reopen(&mut server, owner, &requests).is_err());
+            assert!(received.is_empty());
+        }
+        for malformed in [vec![0; 3], 10_u32.to_be_bytes().to_vec()] {
+            assert!(
+                read_linux_reopen_actions(&mut packet(owner, &malformed).as_slice(), owner)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn stale_pid_start_and_boot_requests_never_reach_the_app() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let mut stale_pid = owner;
+        stale_pid.pid = stale_pid.pid.wrapping_add(1);
+        let mut stale_start = owner;
+        stale_start.started = stale_start.started.wrapping_add(1);
+        let mut stale_boot = owner;
+        stale_boot.boot[0] ^= 1;
+        let payload =
+            linux_reopen_action_payload([action_url(&DeepLinkAction::StopRecording)]).unwrap();
+        let (requests, received) = flume::bounded(1);
+        for stale in [stale_pid, stale_start, stale_boot] {
+            let (mut server, mut client) = UnixStream::pair().unwrap();
+            client.write_all(&packet(stale, &payload)).unwrap();
+            let error = receive_linux_reopen(&mut server, owner, &requests).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert!(received.is_empty());
+        }
+    }
+
+    #[test]
+    fn truncated_request_never_reaches_the_app() {
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let (requests, received) = flume::bounded(1);
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        client
+            .write_all(&linux_reopen_payload(owner)[..55])
+            .unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(receive_linux_reopen(&mut server, owner, &requests).is_err());
+        assert!(received.is_empty());
+    }
+
+    #[test]
+    fn kernel_credentials_identify_the_actual_peer() {
+        let (server, _client) = UnixStream::pair().unwrap();
+        let peer = linux_peer(&server).unwrap();
+        assert_eq!(peer.pid as u32, std::process::id());
+        assert_eq!(peer.uid, unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn client_refuses_a_socket_served_by_another_process() {
+        let mut fixture = super::tests::LinuxAcquireFixture::new();
+        let pid = fixture.start_incumbent();
+        let owner = linux_instance_identity(pid).unwrap();
+        let address = std::os::unix::net::SocketAddr::from_abstract_name(format!(
+            "cap-gpui-wrong-peer-{}",
+            crate::store::new_uuid_v4()
+        ))
+        .unwrap();
+        let _listener = UnixListener::bind_addr(&address).unwrap();
+        let error = send_linux_reopen(address, owner, &[]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(fixture.children[0].try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn long_instance_directories_use_no_filesystem_socket() {
+        let directory = std::env::temp_dir()
+            .join(format!(
+                "cap-gpui-reopen-scope-{}",
+                crate::store::new_uuid_v4()
+            ))
+            .join("a".repeat(150));
+        std::fs::create_dir_all(&directory).unwrap();
+        let owner = linux_instance_identity(std::process::id()).unwrap();
+        let address = linux_reopen_address(&directory.join("cap-gpui.pid"), owner).unwrap();
+        assert!(address.as_pathname().is_none());
+        assert!(address.as_abstract_name().unwrap().len() < 107);
+        assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
+        std::fs::remove_dir(&directory).unwrap();
+        std::fs::remove_dir(directory.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn reopen_never_finalizes_instant_or_an_unconfirmed_transition() {
+        use crate::{recording::RecordingMode, session::Phase};
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            for mode in [
+                None,
+                Some(RecordingMode::Studio),
+                Some(RecordingMode::Instant),
+            ] {
+                assert!(!linux_reopen_allowed(phase, mode, false));
+                let expected = phase == Phase::Idle
+                    || (matches!(phase, Phase::Recording { .. })
+                        && mode == Some(RecordingMode::Studio));
+                assert_eq!(linux_reopen_allowed(phase, mode, true), expected);
+            }
+        }
     }
 }

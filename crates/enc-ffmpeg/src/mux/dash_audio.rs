@@ -1,3 +1,4 @@
+use super::fragment_metadata::read_fragment_metadata;
 use crate::audio::aac::{AACEncoder, AACEncoderError};
 use crate::mux::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
 use cap_media_info::AudioInfo;
@@ -49,17 +50,13 @@ pub struct DashAudioSegmentEncoder {
     base_path: PathBuf,
     encoder: AACEncoder,
     output: format::context::Output,
+    initial_padding: Duration,
 
     current_index: u32,
-    segment_duration: Duration,
-    segment_start_time: Option<Duration>,
-    last_frame_timestamp: Option<Duration>,
-    frames_in_segment: u32,
 
     completed_segments: Vec<AudioSegmentInfo>,
 
-    pending_segment_indices: Vec<(u32, Duration)>,
-    frames_since_pending_flush: u32,
+    frames_since_segment_scan: u32,
 
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     init_notified: bool,
@@ -173,6 +170,20 @@ impl DashAudioSegmentEncoder {
         }
 
         let encoder = AACEncoder::init(audio_config, &mut output)?;
+        let parameters = output
+            .stream(0)
+            .ok_or(ffmpeg::Error::StreamNotFound)?
+            .parameters();
+        let initial_padding = unsafe {
+            let parameters = &*parameters.as_ptr();
+            if parameters.initial_padding > 0 && parameters.sample_rate > 0 {
+                Duration::from_secs_f64(
+                    f64::from(parameters.initial_padding) / f64::from(parameters.sample_rate),
+                )
+            } else {
+                Duration::ZERO
+            }
+        };
 
         output.write_header()?;
 
@@ -190,14 +201,10 @@ impl DashAudioSegmentEncoder {
             base_path,
             encoder,
             output,
+            initial_padding,
             current_index: 1,
-            segment_duration: config.segment_duration,
-            segment_start_time: None,
-            last_frame_timestamp: None,
-            frames_in_segment: 0,
             completed_segments: Vec::new(),
-            pending_segment_indices: Vec::new(),
-            frames_since_pending_flush: 0,
+            frames_since_segment_scan: 0,
             segment_tx: None,
             init_notified: false,
         };
@@ -245,176 +252,65 @@ impl DashAudioSegmentEncoder {
         frame: frame::Audio,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
-        let is_first_frame = self.segment_start_time.is_none();
-        let segment_start = match self.segment_start_time {
-            Some(start) => start,
-            None => {
-                self.segment_start_time = Some(timestamp);
-                timestamp
-            }
-        };
-
-        self.last_frame_timestamp = Some(timestamp);
-
         self.encoder
             .send_frame(frame, timestamp, &mut self.output)?;
-        self.frames_in_segment += 1;
 
-        if is_first_frame {
-            self.try_notify_init_segment();
-        }
+        self.try_notify_init_segment();
 
-        if !self.pending_segment_indices.is_empty() {
-            self.frames_since_pending_flush += 1;
-            if self.frames_since_pending_flush >= 10 {
-                self.frames_since_pending_flush = 0;
-                self.flush_pending_segments();
-            }
-        }
-
-        let elapsed_in_segment = timestamp.saturating_sub(segment_start);
-        if elapsed_in_segment >= self.segment_duration {
-            self.on_segment_boundary(self.current_index, timestamp);
+        self.frames_since_segment_scan += 1;
+        if self.frames_since_segment_scan >= 10 {
+            self.frames_since_segment_scan = 0;
+            self.flush_pending_segments();
         }
 
         Ok(())
     }
 
-    fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
-        self.try_notify_init_segment();
+    fn flush_pending_segments(&mut self) {
+        let first_index = self.current_index;
+        loop {
+            let index = self.current_index;
+            let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::debug!(index, %error, "Waiting for finalized segment media");
+                    }
+                    break;
+                }
+            };
+            let duration = self.presentation_duration(index, metadata.duration);
 
-        let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
-        let segment_duration = timestamp.saturating_sub(segment_start);
-
-        let segment_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s"));
-
-        tracing::debug!(
-            segment_index = completed_index,
-            duration_secs = segment_duration.as_secs_f64(),
-            frames = self.frames_in_segment,
-            "Audio segment boundary reached (time-based)"
-        );
-
-        self.current_index = completed_index + 1;
-        self.segment_start_time = Some(timestamp);
-        self.frames_in_segment = 0;
-
-        let tmp_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s.tmp"));
-
-        let (resolved_path, file_size) = if segment_path.exists() {
-            let size = std::fs::metadata(&segment_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (segment_path.clone(), size)
-        } else if tmp_path.exists() {
-            let size = std::fs::metadata(&tmp_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (tmp_path, size)
-        } else {
-            (segment_path.clone(), 0)
-        };
-
-        let file_found = resolved_path.exists();
-
-        if file_found && file_size > 0 {
             self.completed_segments.push(AudioSegmentInfo {
                 path: segment_path.clone(),
-                index: completed_index,
-                duration: segment_duration,
-                file_size: Some(file_size),
+                index,
+                duration,
+                file_size: Some(metadata.file_size),
             });
-
-            self.write_in_progress_manifest();
-
             self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index: completed_index,
-                duration: segment_duration.as_secs_f64(),
-                file_size,
+                path: segment_path,
+                index,
+                duration: duration.as_secs_f64(),
+                file_size: metadata.file_size,
                 is_init: false,
                 media_type: SegmentMediaType::Audio,
             });
-        } else {
-            tracing::debug!(
-                segment_index = completed_index,
-                file_exists = file_found,
-                file_size,
-                "Segment file not ready yet, deferring notification"
-            );
-            self.pending_segment_indices
-                .push((completed_index, segment_duration));
+            self.current_index += 1;
+        }
+
+        if self.current_index != first_index {
             self.write_in_progress_manifest();
         }
     }
 
-    fn flush_pending_segments(&mut self) {
-        if self.pending_segment_indices.is_empty() {
-            return;
+    fn presentation_duration(&self, index: u32, duration: Duration) -> Duration {
+        if index == 1 {
+            // The first AAC fragment includes encoder priming that DASH excludes from its timeline.
+            duration.saturating_sub(self.initial_padding)
+        } else {
+            duration
         }
-
-        let mut still_pending = Vec::new();
-
-        for (index, duration) in std::mem::take(&mut self.pending_segment_indices) {
-            let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
-            let tmp_path = self.base_path.join(format!("segment_{index:03}.m4s.tmp"));
-
-            let (resolved_path, file_size) = if segment_path.exists() {
-                let size = std::fs::metadata(&segment_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (segment_path.clone(), size)
-            } else if tmp_path.exists() {
-                let size = std::fs::metadata(&tmp_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (tmp_path, size)
-            } else {
-                still_pending.push((index, duration));
-                continue;
-            };
-
-            if file_size == 0 {
-                still_pending.push((index, duration));
-                continue;
-            }
-
-            tracing::debug!(
-                segment_index = index,
-                file_size,
-                "Flushing previously pending segment"
-            );
-
-            self.completed_segments.push(AudioSegmentInfo {
-                path: segment_path,
-                index,
-                duration,
-                file_size: Some(file_size),
-            });
-
-            self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index,
-                duration: duration.as_secs_f64(),
-                file_size,
-                is_init: false,
-                media_type: SegmentMediaType::Audio,
-            });
-        }
-
-        if !still_pending.is_empty() {
-            self.write_in_progress_manifest();
-        }
-
-        self.pending_segment_indices = still_pending;
     }
 
     fn current_segment_path(&self) -> PathBuf {
@@ -472,10 +368,6 @@ impl DashAudioSegmentEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
-        let segment_start = self.segment_start_time;
-        let last_timestamp = self.last_frame_timestamp;
-        let frames_before_flush = self.frames_in_segment;
-
         if let Err(e) = self.encoder.flush(&mut self.output) {
             tracing::warn!("Audio encoder flush warning: {e}");
         }
@@ -488,41 +380,15 @@ impl DashAudioSegmentEncoder {
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();
 
-        let end_timestamp =
-            last_timestamp.unwrap_or_else(|| segment_start.unwrap_or(Duration::ZERO));
-        self.collect_orphaned_segments(segment_start, end_timestamp, frames_before_flush);
+        self.collect_orphaned_segments();
 
         self.finalize_manifest();
 
         Ok(())
     }
 
-    pub fn finish_with_timestamp(&mut self, timestamp: Duration) -> Result<(), FinishError> {
-        let segment_start = self.segment_start_time;
-        let frames_before_flush = self.frames_in_segment;
-
-        if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Audio encoder flush warning: {e}");
-        }
-
-        if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Audio write_trailer warning: {e}");
-        }
-
-        self.try_notify_init_segment();
-        self.finalize_pending_tmp_files();
-        self.flush_pending_segments();
-
-        let effective_end_timestamp = self
-            .last_frame_timestamp
-            .map(|last| last.max(timestamp))
-            .unwrap_or(timestamp);
-
-        self.collect_orphaned_segments(segment_start, effective_end_timestamp, frames_before_flush);
-
-        self.finalize_manifest();
-
-        Ok(())
+    pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
+        self.finish()
     }
 
     fn finalize_pending_tmp_files(&self) {
@@ -535,12 +401,11 @@ impl DashAudioSegmentEncoder {
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && name.starts_with("segment_")
                 && name.ends_with(".m4s.tmp")
-                && let Ok(metadata) = std::fs::metadata(&path)
-                && metadata.len() > 0
+                && let Ok(metadata) = read_fragment_metadata(&path)
             {
                 let final_name = name.trim_end_matches(".tmp");
                 let final_path = self.base_path.join(final_name);
-                let file_size = metadata.len();
+                let file_size = metadata.file_size;
 
                 match std::fs::rename(&path, &final_path) {
                     Ok(()) => {
@@ -564,12 +429,7 @@ impl DashAudioSegmentEncoder {
         }
     }
 
-    fn collect_orphaned_segments(
-        &mut self,
-        segment_start: Option<Duration>,
-        end_timestamp: Duration,
-        frames_before_flush: u32,
-    ) {
+    fn collect_orphaned_segments(&mut self) {
         let completed_indices: std::collections::HashSet<u32> =
             self.completed_segments.iter().map(|s| s.index).collect();
 
@@ -598,53 +458,29 @@ impl DashAudioSegmentEncoder {
         orphaned.sort_by_key(|(idx, _)| *idx);
 
         for (index, segment_path) in orphaned {
-            if let Ok(metadata) = std::fs::metadata(&segment_path) {
-                let file_size = metadata.len();
-
-                if file_size < 100 {
-                    tracing::debug!(
-                        "Skipping tiny unlisted audio segment {} ({} bytes)",
-                        segment_path.display(),
-                        file_size
-                    );
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    tracing::warn!(index, %error, "Cannot finalize invalid segment media");
                     continue;
                 }
-
-                sync_file(&segment_path);
-
-                let duration = if index == self.current_index && frames_before_flush > 0 {
-                    if let Some(start) = segment_start {
-                        end_timestamp.saturating_sub(start)
-                    } else {
-                        self.segment_duration
-                    }
-                } else {
-                    self.segment_duration
-                };
-
-                tracing::info!(
-                    "Finalized unlisted audio segment {} with {} bytes, estimated duration {:?}",
-                    segment_path.display(),
-                    file_size,
-                    duration
-                );
-
-                self.completed_segments.push(AudioSegmentInfo {
-                    path: segment_path.clone(),
-                    index,
-                    duration,
-                    file_size: Some(file_size),
-                });
-
-                self.notify_segment(SegmentCompletedEvent {
-                    path: segment_path,
-                    index,
-                    duration: duration.as_secs_f64(),
-                    file_size,
-                    is_init: false,
-                    media_type: SegmentMediaType::Audio,
-                });
-            }
+            };
+            let duration = self.presentation_duration(index, metadata.duration);
+            sync_file(&segment_path);
+            self.completed_segments.push(AudioSegmentInfo {
+                path: segment_path.clone(),
+                index,
+                duration,
+                file_size: Some(metadata.file_size),
+            });
+            self.notify_segment(SegmentCompletedEvent {
+                path: segment_path,
+                index,
+                duration: duration.as_secs_f64(),
+                file_size: metadata.file_size,
+                is_init: false,
+                media_type: SegmentMediaType::Audio,
+            });
         }
 
         self.completed_segments.sort_by_key(|s| s.index);
@@ -730,6 +566,76 @@ mod tests {
             chunk.copy_from_slice(&val.to_ne_bytes());
         }
         frame
+    }
+
+    #[test]
+    fn audio_manifest_and_events_match_muxer_timeline() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut encoder = DashAudioSegmentEncoder::init(
+            base_path.clone(),
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        let mut events = Vec::new();
+        for i in 0..117 {
+            encoder
+                .queue_frame(
+                    create_test_audio_frame(1024, i * 1024),
+                    Duration::from_secs_f64((i * 1024) as f64 / 48_000.0),
+                )
+                .unwrap();
+            for event in rx.try_iter().filter(|event| !event.is_init) {
+                assert_eq!(event.path.extension().unwrap(), "m4s");
+                assert_eq!(
+                    event.file_size,
+                    std::fs::metadata(&event.path).unwrap().len()
+                );
+                events.push(event);
+            }
+        }
+        encoder
+            .finish_with_timestamp(Duration::from_secs(9))
+            .unwrap();
+        events.extend(rx.try_iter().filter(|event| !event.is_init));
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        let segments = manifest["segments"].as_array().unwrap();
+        let mpd = std::fs::read_to_string(base_path.join("dash_manifest.mpd")).unwrap();
+        let attribute = |text: &str, key: &str| -> Option<u64> {
+            text.split_once(&format!("{key}=\""))?
+                .1
+                .split('"')
+                .next()?
+                .parse()
+                .ok()
+        };
+        let timescale = attribute(&mpd, "timescale").unwrap() as f64;
+        let mut durations = Vec::new();
+        for line in mpd
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("<S "))
+        {
+            let duration = attribute(line, "d").unwrap() as f64 / timescale;
+            let repeat_count = attribute(line, "r").unwrap_or(0);
+            durations.extend(std::iter::repeat_n(duration, repeat_count as usize + 1));
+        }
+        assert_eq!(events.len(), segments.len());
+        assert_eq!(events.len(), durations.len());
+        assert!(events.len() >= 3);
+        for (event, (segment, duration)) in events.iter().zip(segments.iter().zip(durations)) {
+            assert!((event.duration - duration).abs() < 1e-6);
+            assert!((segment["duration"].as_f64().unwrap() - duration).abs() < 1e-6);
+        }
+        assert!((manifest["total_duration"].as_f64().unwrap() - 2.496).abs() < 1e-6);
     }
 
     #[test]

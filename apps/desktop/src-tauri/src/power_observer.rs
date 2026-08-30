@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tracing::info;
 
 static SYSTEM_ASLEEP: AtomicBool = AtomicBool::new(false);
@@ -8,19 +9,23 @@ pub fn is_system_asleep() -> bool {
     SYSTEM_ASLEEP.load(Ordering::Acquire)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn mark_sleeping() {
     SYSTEM_ASLEEP.store(true, Ordering::Release);
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn mark_awake() {
     SYSTEM_ASLEEP.store(false, Ordering::Release);
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn on_system_will_sleep(_app: &AppHandle) {
     mark_sleeping();
     info!("System going to sleep");
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn on_system_did_wake(app: &AppHandle) {
     mark_awake();
     info!("System woke from sleep; scheduling recovery refresh");

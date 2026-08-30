@@ -1,3 +1,4 @@
+use super::fragment_metadata::read_fragment_metadata;
 use cap_media_info::VideoInfo;
 use serde::Serialize;
 use std::{
@@ -11,7 +12,6 @@ use crate::mux::segmented_stream::{SegmentCompletedEvent, SegmentMediaType, Vide
 const INIT_SEGMENT_NAME: &str = "init.mp4";
 const MANIFEST_VERSION: u32 = 5;
 const MANIFEST_TYPE: &str = "m4s_segments";
-const PENDING_FLUSH_INTERVAL: u32 = 10;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -85,12 +85,8 @@ pub struct FragmentManifestTracker {
     base_path: PathBuf,
     segment_duration: Duration,
     current_index: u32,
-    segment_start_time: Option<Duration>,
-    last_frame_timestamp: Option<Duration>,
-    frames_in_segment: u32,
     completed_segments: Vec<VideoSegmentInfo>,
-    pending_segment_indices: Vec<(u32, Duration)>,
-    frames_since_pending_flush: u32,
+    frames_since_segment_scan: u32,
     codec_info: CodecInfo,
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     init_notified: bool,
@@ -111,12 +107,8 @@ impl FragmentManifestTracker {
             base_path,
             segment_duration,
             current_index: 1,
-            segment_start_time: None,
-            last_frame_timestamp: None,
-            frames_in_segment: 0,
             completed_segments: Vec::new(),
-            pending_segment_indices: Vec::new(),
-            frames_since_pending_flush: 0,
+            frames_since_segment_scan: 0,
             codec_info,
             segment_tx: None,
             init_notified: false,
@@ -152,34 +144,13 @@ impl FragmentManifestTracker {
         self.write_in_progress_manifest();
     }
 
-    pub fn on_frame(&mut self, timestamp: Duration) {
-        let is_first_frame = self.segment_start_time.is_none();
-        let segment_start = match self.segment_start_time {
-            Some(start) => start,
-            None => {
-                self.segment_start_time = Some(timestamp);
-                timestamp
-            }
-        };
+    pub fn on_frame(&mut self, _timestamp: Duration) {
+        self.try_notify_init_segment();
 
-        self.last_frame_timestamp = Some(timestamp);
-        self.frames_in_segment += 1;
-
-        if is_first_frame {
-            self.try_notify_init_segment();
-        }
-
-        if !self.pending_segment_indices.is_empty() {
-            self.frames_since_pending_flush += 1;
-            if self.frames_since_pending_flush >= PENDING_FLUSH_INTERVAL {
-                self.frames_since_pending_flush = 0;
-                self.flush_pending_segments();
-            }
-        }
-
-        let elapsed_in_segment = timestamp.saturating_sub(segment_start);
-        if elapsed_in_segment >= self.segment_duration {
-            self.on_segment_boundary(self.current_index, timestamp);
+        self.frames_since_segment_scan += 1;
+        if self.frames_since_segment_scan >= 10 {
+            self.frames_since_segment_scan = 0;
+            self.flush_pending_segments();
         }
     }
 
@@ -211,139 +182,39 @@ impl FragmentManifestTracker {
         }
     }
 
-    fn on_segment_boundary(&mut self, completed_index: u32, timestamp: Duration) {
-        self.try_notify_init_segment();
-
-        let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
-        let segment_duration = timestamp.saturating_sub(segment_start);
-
-        let segment_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s"));
-
-        tracing::debug!(
-            segment_index = completed_index,
-            duration_secs = segment_duration.as_secs_f64(),
-            frames = self.frames_in_segment,
-            "Fragment manifest boundary reached (time-based)"
-        );
-
-        self.current_index = completed_index + 1;
-        self.segment_start_time = Some(timestamp);
-        self.frames_in_segment = 0;
-
-        let tmp_path = self
-            .base_path
-            .join(format!("segment_{completed_index:03}.m4s.tmp"));
-
-        let (resolved_path, file_size) = if segment_path.exists() {
-            let size = std::fs::metadata(&segment_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (segment_path.clone(), size)
-        } else if tmp_path.exists() {
-            let size = std::fs::metadata(&tmp_path)
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            (tmp_path, size)
-        } else {
-            (segment_path.clone(), 0)
-        };
-
-        if resolved_path.exists() && file_size > 0 {
-            self.completed_segments.push(VideoSegmentInfo {
-                path: segment_path.clone(),
-                index: completed_index,
-                duration: segment_duration,
-                file_size: Some(file_size),
-            });
-
-            self.write_in_progress_manifest();
-
-            self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index: completed_index,
-                duration: segment_duration.as_secs_f64(),
-                file_size,
-                is_init: false,
-                media_type: SegmentMediaType::Video,
-            });
-        } else {
-            tracing::debug!(
-                segment_index = completed_index,
-                file_size,
-                "Segment file not ready yet, deferring notification"
-            );
-            self.pending_segment_indices
-                .push((completed_index, segment_duration));
-            self.write_in_progress_manifest();
-        }
-    }
-
     pub fn flush_pending_segments(&mut self) {
-        if self.pending_segment_indices.is_empty() {
-            return;
-        }
-
-        let taken = std::mem::take(&mut self.pending_segment_indices);
-        let taken_len = taken.len();
-        let mut still_pending = Vec::new();
-
-        for (index, duration) in taken {
+        let first_index = self.current_index;
+        loop {
+            let index = self.current_index;
             let segment_path = self.base_path.join(format!("segment_{index:03}.m4s"));
-            let tmp_path = self.base_path.join(format!("segment_{index:03}.m4s.tmp"));
-
-            let (resolved_path, file_size) = if segment_path.exists() {
-                let size = std::fs::metadata(&segment_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (segment_path.clone(), size)
-            } else if tmp_path.exists() {
-                let size = std::fs::metadata(&tmp_path)
-                    .ok()
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                (tmp_path, size)
-            } else {
-                still_pending.push((index, duration));
-                continue;
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::debug!(index, %error, "Waiting for finalized segment media");
+                    }
+                    break;
+                }
             };
 
-            if file_size == 0 {
-                still_pending.push((index, duration));
-                continue;
-            }
-
-            tracing::debug!(
-                segment_index = index,
-                file_size,
-                "Flushing previously pending segment"
-            );
-
             self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path.clone(),
+                index,
+                duration: metadata.duration,
+                file_size: Some(metadata.file_size),
+            });
+            self.notify_segment(SegmentCompletedEvent {
                 path: segment_path,
                 index,
-                duration,
-                file_size: Some(file_size),
-            });
-
-            self.notify_segment(SegmentCompletedEvent {
-                path: resolved_path,
-                index,
-                duration: duration.as_secs_f64(),
-                file_size,
+                duration: metadata.duration.as_secs_f64(),
+                file_size: metadata.file_size,
                 is_init: false,
                 media_type: SegmentMediaType::Video,
             });
+            self.current_index += 1;
         }
 
-        let flushed_any = still_pending.len() < taken_len;
-        self.pending_segment_indices = still_pending;
-
-        if flushed_any {
+        if self.current_index != first_index {
             self.write_in_progress_manifest();
         }
     }
@@ -403,17 +274,11 @@ impl FragmentManifestTracker {
         }
     }
 
-    pub fn finalize(&mut self, end_timestamp: Duration) {
-        let segment_start = self.segment_start_time;
-        let frames_before_flush = self.frames_in_segment;
-        let effective_end_timestamp = self
-            .last_frame_timestamp
-            .map(|last| last.max(end_timestamp))
-            .unwrap_or(end_timestamp);
-
+    pub fn finalize(&mut self, _end_timestamp: Duration) {
+        self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();
-        self.collect_orphaned_segments(segment_start, effective_end_timestamp, frames_before_flush);
+        self.collect_orphaned_segments();
         self.finalize_manifest();
     }
 
@@ -427,12 +292,11 @@ impl FragmentManifestTracker {
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && name.starts_with("segment_")
                 && name.ends_with(".m4s.tmp")
-                && let Ok(metadata) = std::fs::metadata(&path)
-                && metadata.len() > 0
+                && let Ok(metadata) = read_fragment_metadata(&path)
             {
                 let final_name = name.trim_end_matches(".tmp");
                 let final_path = self.base_path.join(final_name);
-                let file_size = metadata.len();
+                let file_size = metadata.file_size;
 
                 let rename_result = Self::rename_with_retry(&path, &final_path);
                 match rename_result {
@@ -489,12 +353,7 @@ impl FragmentManifestTracker {
         std::fs::rename(from, to)
     }
 
-    fn collect_orphaned_segments(
-        &mut self,
-        segment_start: Option<Duration>,
-        end_timestamp: Duration,
-        frames_before_flush: u32,
-    ) {
+    fn collect_orphaned_segments(&mut self) {
         let completed_indices: std::collections::HashSet<u32> =
             self.completed_segments.iter().map(|s| s.index).collect();
 
@@ -523,52 +382,28 @@ impl FragmentManifestTracker {
         orphaned.sort_by_key(|(idx, _)| *idx);
 
         for (index, segment_path) in orphaned {
-            if let Ok(metadata) = std::fs::metadata(&segment_path) {
-                let file_size = metadata.len();
-                if file_size < 100 {
-                    tracing::debug!(
-                        "Skipping tiny unlisted segment {} ({} bytes)",
-                        segment_path.display(),
-                        file_size
-                    );
+            let metadata = match read_fragment_metadata(&segment_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    tracing::warn!(index, %error, "Cannot finalize invalid segment media");
                     continue;
                 }
-
-                sync_file(&segment_path);
-
-                let duration = if index == self.current_index && frames_before_flush > 0 {
-                    if let Some(start) = segment_start {
-                        end_timestamp.saturating_sub(start)
-                    } else {
-                        self.segment_duration
-                    }
-                } else {
-                    self.segment_duration
-                };
-
-                tracing::info!(
-                    "Finalized unlisted segment {} with {} bytes, estimated duration {:?}",
-                    segment_path.display(),
-                    file_size,
-                    duration
-                );
-
-                self.completed_segments.push(VideoSegmentInfo {
-                    path: segment_path.clone(),
-                    index,
-                    duration,
-                    file_size: Some(file_size),
-                });
-
-                self.notify_segment(SegmentCompletedEvent {
-                    path: segment_path,
-                    index,
-                    duration: duration.as_secs_f64(),
-                    file_size,
-                    is_init: false,
-                    media_type: SegmentMediaType::Video,
-                });
-            }
+            };
+            sync_file(&segment_path);
+            self.completed_segments.push(VideoSegmentInfo {
+                path: segment_path.clone(),
+                index,
+                duration: metadata.duration,
+                file_size: Some(metadata.file_size),
+            });
+            self.notify_segment(SegmentCompletedEvent {
+                path: segment_path,
+                index,
+                duration: metadata.duration.as_secs_f64(),
+                file_size: metadata.file_size,
+                is_init: false,
+                media_type: SegmentMediaType::Video,
+            });
         }
 
         self.completed_segments.sort_by_key(|s| s.index);
@@ -671,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_advances_segments_on_boundary() {
+    fn tracker_does_not_invent_segments_from_capture_timestamps() {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().to_path_buf();
 
@@ -686,9 +521,66 @@ mod tests {
             tracker.on_frame(Duration::from_millis(i * 15));
         }
 
-        assert!(
-            tracker.current_index() >= 2,
-            "expected at least one boundary crossed"
-        );
+        assert_eq!(tracker.current_index(), 1);
+    }
+
+    #[test]
+    fn tracker_waits_for_finalized_files_and_uses_media_duration() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().to_path_buf();
+        let mut tracker =
+            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tracker.set_segment_callback(tx);
+        let bytes = crate::mux::fragment_metadata::tests::fragment(1, 90_000, &[360_070]);
+        let temporary = base.join("segment_001.m4s.tmp");
+        let finalized = base.join("segment_001.m4s");
+        std::fs::write(&temporary, &bytes).unwrap();
+
+        tracker.on_frame(Duration::ZERO);
+        tracker.on_frame(Duration::from_secs(2));
+        for i in 1..=20 {
+            tracker.on_frame(Duration::from_millis(2000 + i * 33));
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(tracker.completed_segments().is_empty());
+
+        std::fs::rename(&temporary, &finalized).unwrap();
+        for i in 21..=30 {
+            tracker.on_frame(Duration::from_millis(2000 + i * 33));
+        }
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.path, finalized);
+        assert_eq!(event.file_size, bytes.len() as u64);
+        assert!((event.duration - 4.000_777_777).abs() < 1e-9);
+
+        tracker.finalize(Duration::from_secs(3));
+        assert!(rx.try_recv().is_err());
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["segments"][0]["duration"], event.duration);
+        assert_eq!(manifest["total_duration"], event.duration);
+    }
+
+    #[test]
+    fn tracker_finalizes_actual_tail_without_publishing_truncated_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().to_path_buf();
+        let mut tracker =
+            FragmentManifestTracker::new(base.clone(), &test_video_info(), Duration::from_secs(2));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tracker.set_segment_callback(tx);
+        tracker.on_frame(Duration::ZERO);
+        let bytes = crate::mux::fragment_metadata::tests::fragment(1, 90_000, &[155_815]);
+        std::fs::write(base.join("segment_001.m4s.tmp"), &bytes).unwrap();
+        std::fs::write(base.join("segment_002.m4s.tmp"), &bytes[..80]).unwrap();
+        tracker.finalize(Duration::from_secs(10));
+
+        let events: Vec<_> = rx.try_iter().collect();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].index, 1);
+        assert!((events[0].duration - 1.731_277_777).abs() < 1e-9);
+        assert!(!base.join("segment_002.m4s").exists());
+        assert_eq!(tracker.completed_segments().len(), 1);
     }
 }

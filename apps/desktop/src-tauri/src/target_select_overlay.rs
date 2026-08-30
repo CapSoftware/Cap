@@ -13,7 +13,7 @@ use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -59,6 +59,12 @@ pub async fn open_target_select_overlays(
     specific_display_id: Option<String>,
     target_mode: Option<RecordingTargetMode>,
 ) -> Result<(), String> {
+    let reveal_generation = crate::clean_capture::generation(&app);
+    if crate::clean_capture::phase(&app).is_some() {
+        return Err(
+            "Close or finish clean Studio recording before opening the target picker".into(),
+        );
+    }
     let start = Instant::now();
 
     let resolved_specific_display_id = specific_display_id.as_ref().map(|id_str| {
@@ -112,10 +118,10 @@ pub async fn open_target_select_overlays(
         .get(&app);
 
         if let Some(window) = existing_window {
-            show_overlay(&window);
+            crate::clean_capture::schedule_overlay_reveal(&window, reveal_generation, false);
 
             if should_focus {
-                focus_target_select_overlay(&window);
+                focus_target_select_overlay(&window, reveal_generation);
             }
 
             state.spawn(display_id, window.clone());
@@ -127,7 +133,7 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await
             {
-                finish_created_target_select_overlay(&window, should_focus);
+                finish_created_target_select_overlay(&window, should_focus, reveal_generation);
             }
         } else {
             let app_clone = app.clone();
@@ -140,7 +146,7 @@ pub async fn open_target_select_overlays(
                 .show(&app_clone)
                 .await
                 {
-                    finish_created_target_select_overlay(&window, should_focus);
+                    finish_created_target_select_overlay(&window, should_focus, reveal_generation);
                 }
             });
         }
@@ -152,7 +158,7 @@ pub async fn open_target_select_overlays(
     .get(&app);
 
     if let Some(window) = focus_window {
-        focus_target_select_overlay(&window);
+        focus_target_select_overlay(&window, reveal_generation);
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
@@ -215,25 +221,26 @@ pub async fn open_target_select_overlays(
     Ok(())
 }
 
-fn finish_created_target_select_overlay(window: &WebviewWindow, should_focus: bool) {
+fn finish_created_target_select_overlay(
+    window: &WebviewWindow,
+    should_focus: bool,
+    reveal_generation: u32,
+) {
     #[cfg(target_os = "macos")]
-    let _ = (window, should_focus);
+    let _ = (window, should_focus, reveal_generation);
 
     #[cfg(not(target_os = "macos"))]
     {
-        window.show().ok();
-        if should_focus {
-            focus_target_select_overlay(window);
-        }
+        crate::clean_capture::schedule_overlay_reveal(window, reveal_generation, should_focus);
     }
 }
 
-fn focus_target_select_overlay(window: &WebviewWindow) {
+fn focus_target_select_overlay(window: &WebviewWindow, reveal_generation: u32) {
     #[cfg(target_os = "macos")]
-    let _ = window;
+    let _ = (window, reveal_generation);
 
     #[cfg(not(target_os = "macos"))]
-    window.set_focus().ok();
+    crate::clean_capture::schedule_overlay_focus(window, reveal_generation);
 }
 
 fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
@@ -378,7 +385,10 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
 #[tauri::command]
 #[instrument]
 pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let window = Window::from_id(&window_id).ok_or("Window not found")?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    Window::from_id(&window_id).ok_or("Window not found")?;
 
     #[cfg(target_os = "macos")]
     {
@@ -459,6 +469,8 @@ impl WindowFocusManager {
     pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
         let display_id = id.clone();
         let task_id = id.to_string();
+        #[cfg(windows)]
+        let reveal_generation = crate::clean_capture::generation(window.app_handle());
         let handle = tokio::spawn(async move {
             let app = window.app_handle();
             let mut main_window_was_seen = false;
@@ -505,7 +517,11 @@ impl WindowFocusManager {
                         overlay_focused || cap_main.is_focused().ok().unwrap_or_default();
 
                     if !should_refocus {
-                        window.set_focus().ok();
+                        crate::clean_capture::schedule_overlay_reveal(
+                            &window,
+                            reveal_generation,
+                            true,
+                        );
                     }
                 }
 

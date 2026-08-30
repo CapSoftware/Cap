@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use cap_media_info::AudioInfo;
 use cap_timestamp::{MasterClock, SourceClockOutcome, SourceClockState, Timestamp, Timestamps};
 use futures::channel::{mpsc, oneshot};
@@ -10,6 +11,7 @@ use std::{
     },
     time::Duration,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::output_pipeline::{AudioFrame, HealthSender, PipelineHealthEvent, emit_health};
@@ -43,6 +45,7 @@ pub struct AudioMixerBuilder {
     timestamps: Option<Timestamps>,
     master_clock: Option<Arc<MasterClock>>,
     health_tx: Option<HealthSender>,
+    required_stop: Option<CancellationToken>,
 }
 
 impl Default for AudioMixerBuilder {
@@ -58,6 +61,7 @@ impl AudioMixerBuilder {
             timestamps: None,
             master_clock: None,
             health_tx: None,
+            required_stop: None,
         }
     }
 
@@ -73,6 +77,11 @@ impl AudioMixerBuilder {
 
     pub fn with_health_tx(mut self, health_tx: HealthSender) -> Self {
         self.health_tx = Some(health_tx);
+        self
+    }
+
+    pub(crate) fn with_required_inputs(mut self, stop: CancellationToken) -> Self {
+        self.required_stop = Some(stop);
         self
     }
 
@@ -129,6 +138,7 @@ impl AudioMixerBuilder {
             master_clock,
             buffering: MixerBufferingTracker::new(),
             health_tx: self.health_tx,
+            required_stop: self.required_stop,
         })
     }
 
@@ -137,22 +147,28 @@ impl AudioMixerBuilder {
         output: mpsc::Sender<AudioFrame>,
         ready_tx: oneshot::Sender<anyhow::Result<()>>,
         stop_flag: Arc<AtomicBool>,
-    ) {
+    ) -> anyhow::Result<()> {
         let start = Timestamps::now();
 
         let mut mixer = match self.build(output) {
             Ok(mixer) => mixer,
             Err(e) => {
                 tracing::error!("Failed to build audio mixer: {}", e);
-                let _ = ready_tx.send(Err(e.into()));
-                return;
+                let message = format!("Failed to build audio mixer: {e}");
+                let _ = ready_tx.send(Err(anyhow::anyhow!(message.clone())));
+                return Err(anyhow::anyhow!(message));
             }
         };
 
         let _ = ready_tx.send(Ok(()));
 
         loop {
-            if stop_flag.load(Ordering::Relaxed) {
+            if stop_flag.load(Ordering::Relaxed)
+                || mixer
+                    .required_stop
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled)
+            {
                 info!("Mixer stop flag triggered");
                 break;
             }
@@ -165,13 +181,14 @@ impl AudioMixerBuilder {
             #[cfg(not(any(target_os = "macos", windows)))]
             let now = Timestamp::Instant(Instant::now());
 
-            if let Err(()) = mixer.tick(start, now) {
-                info!("Mixer tick errored");
+            if !mixer.tick(start, now)? {
+                info!("Mixer output closed");
                 break;
             }
 
             std::thread::sleep(Duration::from_millis(5));
         }
+        Ok(())
     }
 }
 
@@ -193,6 +210,7 @@ pub struct AudioMixer {
     master_clock: Arc<MasterClock>,
     buffering: MixerBufferingTracker,
     health_tx: Option<HealthSender>,
+    required_stop: Option<CancellationToken>,
 }
 
 #[derive(Debug, Clone)]
@@ -377,7 +395,7 @@ impl AudioMixer {
         index: usize,
         old_info: AudioInfo,
         new_info: AudioInfo,
-    ) {
+    ) -> anyhow::Result<()> {
         let label = self
             .sources
             .get(index)
@@ -428,8 +446,14 @@ impl AudioMixer {
                     error = %e,
                     "AudioMixer: failed to rebuild filter graph after source format change"
                 );
+                if self.required_stop.is_some() {
+                    return Err(e).with_context(|| {
+                        format!("Audio mixer source {index} filter rebuild failed")
+                    });
+                }
             }
         }
+        Ok(())
     }
 
     fn force_reset_source(&mut self, source_label: &'static str, starvation_ms: u64) {
@@ -470,18 +494,30 @@ impl AudioMixer {
         start_timestamp + Duration::from_nanos(clamped)
     }
 
-    fn buffer_sources(&mut self, now: Timestamp) {
+    fn buffer_sources(&mut self, now: Timestamp) -> anyhow::Result<()> {
         let mut format_change: Option<(usize, AudioInfo, AudioInfo)> = None;
         let clock_anchor = self.master_clock.timestamps().instant();
         for (index, source) in self.sources.iter_mut().enumerate() {
             let rate = source.info.rate();
             let buffer_timeout = source.buffer_timeout;
 
-            while let Ok(Some(AudioFrame {
-                inner: frame,
-                timestamp: raw_timestamp,
-            })) = source.rx.try_next()
-            {
+            loop {
+                let AudioFrame {
+                    inner: frame,
+                    timestamp: raw_timestamp,
+                } = match source.rx.try_next() {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) => {
+                        anyhow::ensure!(
+                            self.required_stop
+                                .as_ref()
+                                .is_none_or(|stop| stop.is_cancelled()),
+                            "Required audio mixer source {index} closed while capture was active"
+                        );
+                        break;
+                    }
+                    Err(_) => break,
+                };
                 source.last_input_timestamp = Some(raw_timestamp);
 
                 if format_change.is_none()
@@ -575,7 +611,7 @@ impl AudioMixer {
         }
 
         if let Some((index, old_info, new_info)) = format_change {
-            self.handle_source_format_change(index, old_info, new_info);
+            self.handle_source_format_change(index, old_info, new_info)?;
         }
 
         if self.start_timestamp.is_none() {
@@ -637,13 +673,25 @@ impl AudioMixer {
                 }
             }
         }
+        Ok(())
     }
 
-    fn tick(&mut self, _start: Timestamps, now: Timestamp) -> Result<(), ()> {
-        self.buffer_sources(now);
+    fn tick(&mut self, _start: Timestamps, now: Timestamp) -> anyhow::Result<bool> {
+        self.tick_with_output(now, |sink, frame| sink.sink().frame(frame))
+    }
+
+    fn tick_with_output(
+        &mut self,
+        now: Timestamp,
+        mut read: impl FnMut(
+            &mut ffmpeg::filter::Context,
+            &mut ffmpeg::frame::Audio,
+        ) -> Result<(), ffmpeg::Error>,
+    ) -> anyhow::Result<bool> {
+        self.buffer_sources(now)?;
 
         let Some(start_timestamp) = self.start_timestamp else {
-            return Ok(());
+            return Ok(true);
         };
 
         let wall_now = Instant::now();
@@ -662,12 +710,33 @@ impl AudioMixer {
 
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
-                let _ = self.abuffers[i].source().add(&buffer.inner);
+                let result = self.abuffers[i].source().add(&buffer.inner);
+                if self.required_stop.is_some() {
+                    result
+                        .with_context(|| format!("Audio mixer source {i} filter input failed"))?;
+                }
             }
         }
 
         let mut filtered = ffmpeg::frame::Audio::empty();
-        while self.abuffersink.sink().frame(&mut filtered).is_ok() {
+        loop {
+            match read(&mut self.abuffersink, &mut filtered) {
+                Ok(()) => {}
+                Err(ffmpeg::Error::Eof) => {
+                    anyhow::ensure!(
+                        self.required_stop
+                            .as_ref()
+                            .is_none_or(|stop| stop.is_cancelled()),
+                        "Required audio mixer filter ended while capture was active"
+                    );
+                    break;
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
+                Err(error) if self.required_stop.is_some() => {
+                    return Err(error).context("Audio mixer filter output failed");
+                }
+                Err(_) => break,
+            }
             let output_rate_i32 = Self::INFO.rate();
 
             filtered.set_rate(output_rate_i32 as u32);
@@ -684,7 +753,7 @@ impl AudioMixer {
                         frame = err.into_inner();
                         std::thread::sleep(Duration::from_millis(1));
                     }
-                    Err(_) => return Err(()),
+                    Err(_) => return Ok(false),
                 }
             }
 
@@ -694,7 +763,7 @@ impl AudioMixer {
 
         self.last_tick = Some(now);
 
-        Ok(())
+        Ok(true)
     }
 
     pub fn builder() -> AudioMixerBuilder {
@@ -940,6 +1009,207 @@ mod test {
         assert_eq!(samples[4], samples[5]);
     }
 
+    fn mixer_fixture(
+        strict: bool,
+    ) -> (
+        AudioMixer,
+        Vec<mpsc::Sender<AudioFrame>>,
+        mpsc::Receiver<AudioFrame>,
+    ) {
+        let (output, receiver) = mpsc::channel(4);
+        let mut builder = AudioMixerBuilder::new();
+        if strict {
+            builder = builder.with_required_inputs(CancellationToken::new());
+        }
+        let mut senders = Vec::new();
+        for _ in 0..2 {
+            let (sender, receiver) = mpsc::channel(4);
+            builder.add_source(SOURCE_INFO, receiver);
+            senders.push(sender);
+        }
+        (builder.build(output).unwrap(), senders, receiver)
+    }
+
+    fn mixer_frame(now: Timestamp) -> AudioFrame {
+        AudioFrame::new(SOURCE_INFO.wrap_frame(&[128, 255, 128, 1]), now)
+    }
+
+    #[test]
+    fn strict_mixer_input_error_is_not_silent_but_legacy_still_degrades() {
+        for strict in [false, true] {
+            let (mut mixer, mut sources, _output) = mixer_fixture(strict);
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            let mut invalid = mixer_frame(now);
+            invalid.inner.set_rate(0);
+            sources[0].try_send(invalid).unwrap();
+            sources[1].try_send(mixer_frame(now)).unwrap();
+            let result = mixer.tick(mixer.timestamps, now);
+            if strict {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("source 0 filter input failed")
+                );
+            } else {
+                assert!(result.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn strict_mixer_rebuild_error_propagates_from_actual_graph() {
+        for strict in [false, true] {
+            let (mut mixer, mut sources, _output) = mixer_fixture(strict);
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            let mut invalid = mixer_frame(now);
+            invalid.inner.set_rate(u32::MAX);
+            sources[0].try_send(invalid).unwrap();
+            sources[1].try_send(mixer_frame(now)).unwrap();
+            let result = mixer.tick(mixer.timestamps, now);
+            if strict {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("source 0 filter rebuild failed")
+                );
+            } else {
+                assert!(result.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn strict_mixer_real_empty_and_eof_reads_are_not_errors() {
+        let (mut mixer, _sources, _output) = mixer_fixture(true);
+        let now = Timestamp::Instant(mixer.timestamps.instant());
+        mixer.start_timestamp = Some(now);
+        let mut observed_empty = false;
+        assert!(mixer.tick_with_output(now, |sink, frame| {
+            let result = sink.sink().frame(frame);
+            observed_empty = matches!(result, Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN);
+            result
+        }).unwrap());
+        assert!(observed_empty);
+        for source in &mut mixer.abuffers {
+            source.source().flush().unwrap();
+        }
+        assert!(
+            mixer
+                .tick(mixer.timestamps, now)
+                .unwrap_err()
+                .to_string()
+                .contains("filter ended")
+        );
+        mixer.required_stop.as_ref().unwrap().cancel();
+        let mut observed_eof = false;
+        assert!(
+            mixer
+                .tick_with_output(now, |sink, frame| {
+                    let result = sink.sink().frame(frame);
+                    observed_eof = matches!(result, Err(ffmpeg::Error::Eof));
+                    result
+                })
+                .unwrap()
+        );
+        assert!(observed_eof);
+    }
+
+    #[test]
+    fn strict_mixer_output_failure_uses_the_real_drain_loop() {
+        for strict in [false, true] {
+            let (mut mixer, mut sources, _output) = mixer_fixture(strict);
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            for source in &mut sources {
+                source.try_send(mixer_frame(now)).unwrap();
+            }
+            let mut decoded = false;
+            let result = mixer.tick_with_output(now, |sink, frame| {
+                sink.sink().frame(frame)?;
+                decoded = true;
+                Err(ffmpeg::Error::InvalidData)
+            });
+            assert!(decoded);
+            if strict {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("filter output failed")
+                );
+            } else {
+                assert!(result.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn strict_mixer_distinguishes_open_empty_and_closed_requested_inputs() {
+        for strict in [false, true] {
+            let (mut mixer, mut sources, _output) = mixer_fixture(strict);
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            assert!(mixer.tick(mixer.timestamps, now).unwrap());
+            drop(sources.remove(0));
+            let result = mixer.tick(mixer.timestamps, now);
+            if strict {
+                assert!(result.unwrap_err().to_string().contains("source 0 closed"));
+            } else {
+                assert!(result.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn required_mixer_stop_token_precedes_async_stop_flag_and_input_close() {
+        let (mut mixer, sources, _output) = mixer_fixture(true);
+        let now = Timestamp::Instant(mixer.timestamps.instant());
+        mixer.required_stop.as_ref().unwrap().cancel();
+        drop(sources);
+        assert!(mixer.tick(mixer.timestamps, now).unwrap());
+        let stop = CancellationToken::new();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let mut builder = AudioMixerBuilder::new().with_required_inputs(stop.clone());
+        for _ in 0..2 {
+            let (sender, receiver) = mpsc::channel(4);
+            builder.add_source(SOURCE_INFO, receiver);
+            drop(sender);
+        }
+        let (output, _receiver) = mpsc::channel(4);
+        let (ready, _ready_rx) = oneshot::channel();
+        stop.cancel();
+        let flag = stop_flag.clone();
+        let (complete, completed) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = complete.send(builder.run(output, ready, flag));
+        });
+        let result = completed.recv_timeout(Duration::from_secs(1));
+        if result.is_err() {
+            stop_flag.store(true, Ordering::Release);
+        }
+        worker.join().unwrap();
+        result.unwrap().unwrap();
+        assert!(!stop_flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn strict_mixer_valid_output_and_closed_consumer_remain_clean() {
+        for close_output in [false, true] {
+            let (mut mixer, mut sources, mut output) = mixer_fixture(true);
+            let now = Timestamp::Instant(mixer.timestamps.instant());
+            for source in &mut sources {
+                source.try_send(mixer_frame(now)).unwrap();
+            }
+            if close_output {
+                output.close();
+            }
+            assert_eq!(mixer.tick(mixer.timestamps, now).unwrap(), !close_output);
+            if !close_output {
+                assert!(output.try_next().unwrap().is_some());
+            }
+        }
+    }
+
     mod buffering_tracker {
         use super::*;
         use crate::output_pipeline::{HealthReceiver, HealthSender};
@@ -1121,7 +1391,9 @@ mod test {
             .await
             .unwrap();
 
-            mixer.buffer_sources(Timestamp::Instant(start.instant()));
+            mixer
+                .buffer_sources(Timestamp::Instant(start.instant()))
+                .unwrap();
 
             assert_eq!(mixer.sources[0].buffer.len(), 1);
             assert!(mixer.sources[0].rx.try_next().is_err());
@@ -1151,7 +1423,9 @@ mod test {
             .await
             .unwrap();
 
-            mixer.buffer_sources(Timestamp::Instant(mixer.timestamps.instant()));
+            mixer
+                .buffer_sources(Timestamp::Instant(mixer.timestamps.instant()))
+                .unwrap();
 
             let source = &mut mixer.sources[0];
 
@@ -1183,7 +1457,9 @@ mod test {
             .await
             .unwrap();
 
-            mixer.buffer_sources(Timestamp::Instant(start.instant()));
+            mixer
+                .buffer_sources(Timestamp::Instant(start.instant()))
+                .unwrap();
 
             let source = &mut mixer.sources[0];
 
@@ -1215,7 +1491,9 @@ mod test {
             .await
             .unwrap();
 
-            mixer.buffer_sources(Timestamp::Instant(start.instant()));
+            mixer
+                .buffer_sources(Timestamp::Instant(start.instant()))
+                .unwrap();
 
             mixer.sources[0].buffer.clear();
 
@@ -1226,7 +1504,9 @@ mod test {
             .await
             .unwrap();
 
-            mixer.buffer_sources(Timestamp::Instant(start.instant() + ONE_SECOND));
+            mixer
+                .buffer_sources(Timestamp::Instant(start.instant() + ONE_SECOND))
+                .unwrap();
 
             let source = &mut mixer.sources[0];
 
@@ -1261,7 +1541,9 @@ mod test {
                 .await
                 .unwrap();
             }
-            mixer.buffer_sources(Timestamp::Instant(start.instant() + ONE_SECOND));
+            mixer
+                .buffer_sources(Timestamp::Instant(start.instant() + ONE_SECOND))
+                .unwrap();
             let initial_len = mixer.sources[0].buffer.len();
             assert!(
                 initial_len >= 4,
@@ -1276,7 +1558,7 @@ mod test {
             ))
             .await
             .unwrap();
-            mixer.buffer_sources(far_future);
+            mixer.buffer_sources(far_future).unwrap();
 
             let post_reset_len = mixer.sources[0].buffer.len();
             assert_eq!(

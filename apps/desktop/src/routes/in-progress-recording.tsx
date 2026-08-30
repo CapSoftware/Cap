@@ -21,7 +21,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
 import { getCameraWindow } from "~/utils/camera-window";
@@ -29,6 +29,7 @@ import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCurrentRecordingQuery,
 	createOptionsQuery,
+	revealRecordingWindow,
 } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
 import type {
@@ -232,7 +233,7 @@ function InProgressRecordingInner() {
 				setTime(Date.now());
 				setState({ variant: "recording" });
 				if (wasStartingDismissed) {
-					void getCurrentWindow().show();
+					void revealRecordingWindow();
 				}
 				break;
 			}
@@ -573,14 +574,16 @@ function InProgressRecordingInner() {
 	const updateMicInput = createMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			if (!startedWithMicrophone && name !== null) return;
-			const previous = optionsQuery.rawOptions.micName ?? null;
-			if (previous === name) return;
 			await pauseRecordingForDeviceChange();
 			optionsQuery.setOptions("micName", name);
 			try {
 				await commands.setMicInput(name);
 			} catch (error) {
-				optionsQuery.setOptions("micName", previous);
+				if (
+					(optionsQuery.rawOptions.micName ?? null) !== name ||
+					String(error).includes("selection was superseded by a newer request")
+				)
+					return;
 				throw error;
 			}
 		},
@@ -589,22 +592,28 @@ function InProgressRecordingInner() {
 	const updateCameraInput = createMutation(() => ({
 		mutationFn: async (camera: CameraInfo | null) => {
 			if (!startedWithCameraInput && camera != null) return;
-			const selected = optionsQuery.rawOptions.cameraID ?? null;
-			if (!camera && selected === null) return;
-			if (camera && cameraMatchesSelection(camera, selected)) return;
 			await pauseRecordingForDeviceChange();
 			const next = cameraInfoToId(camera);
-			const previous = cloneDeviceOrModelId(selected);
-			optionsQuery.setOptions("cameraID", next);
+			optionsQuery.setOptions("cameraID", reconcile(next));
 			try {
 				await commands.setCameraInput(next, null);
-				if (!next && cameraWindowOpen()) {
+				if (
+					!next &&
+					optionsQuery.rawOptions.cameraID == null &&
+					cameraWindowOpen()
+				) {
 					const cameraWindow = await getCameraWindow();
-					if (cameraWindow) await cameraWindow.close();
+					if (cameraWindow && optionsQuery.rawOptions.cameraID == null)
+						await cameraWindow.close();
 					await refreshCameraWindowState();
 				}
 			} catch (error) {
-				optionsQuery.setOptions("cameraID", previous);
+				if (
+					JSON.stringify(optionsQuery.rawOptions.cameraID ?? null) !==
+						JSON.stringify(next) ||
+					String(error).includes("selection was superseded by a newer request")
+				)
+					return;
 				throw error;
 			}
 		},
@@ -1117,12 +1126,4 @@ function cameraInfoToId(camera: CameraInfo | null): DeviceOrModelID | null {
 	if (!camera) return null;
 	if (camera.model_id) return { ModelID: camera.model_id };
 	return { DeviceID: camera.device_id };
-}
-
-function cloneDeviceOrModelId(
-	id: DeviceOrModelID | null,
-): DeviceOrModelID | null {
-	if (!id) return null;
-	if ("DeviceID" in id) return { DeviceID: id.DeviceID };
-	return { ModelID: id.ModelID };
 }

@@ -121,6 +121,101 @@ fn preview_radius(state: &CameraWindowState) -> f32 {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LinuxCameraPhysicalRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LinuxCameraRecordingSnapshot {
+    pub content_rect: LinuxCameraPhysicalRect,
+    pub state: CameraWindowState,
+    pub corner_radius_pixels: f32,
+}
+
+#[cfg(target_os = "linux")]
+fn recording_physical_extent(logical: f32, scale_factor: f32) -> anyhow::Result<u32> {
+    let physical = (logical * scale_factor).round();
+    if !logical.is_finite()
+        || logical <= 0.0
+        || !physical.is_finite()
+        || physical < 1.0
+        || f64::from(physical) > f64::from(i32::MAX)
+    {
+        anyhow::bail!("Camera geometry has invalid or unsupported physical dimensions");
+    }
+    Ok(physical as u32)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_camera_recording_snapshot(
+    state: CameraWindowState,
+    frame_dimensions: (usize, usize),
+    client_rect: LinuxCameraPhysicalRect,
+    viewport: (f32, f32),
+    scale_factor: f32,
+) -> anyhow::Result<LinuxCameraRecordingSnapshot> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        anyhow::bail!("Camera window has an invalid scale factor");
+    }
+    if !state.size.is_finite() || state.size <= 0.0 {
+        anyhow::bail!("Camera window has an invalid preview size");
+    }
+    let (frame_width, frame_height) = frame_dimensions;
+    if frame_width == 0
+        || frame_height == 0
+        || u32::try_from(frame_width).is_err()
+        || u32::try_from(frame_height).is_err()
+    {
+        anyhow::bail!("Camera recording requires valid delivered frame dimensions");
+    }
+    let physical_viewport = (
+        recording_physical_extent(viewport.0, scale_factor)?,
+        recording_physical_extent(viewport.1, scale_factor)?,
+    );
+    if physical_viewport != (client_rect.width, client_rect.height) {
+        anyhow::bail!("Camera viewport and X11 client dimensions disagree; wait for resizing");
+    }
+    let expected = window_size(&state, Some(frame_width as f32 / frame_height as f32));
+    if (
+        recording_physical_extent(expected.0, scale_factor)?,
+        recording_physical_extent(expected.1, scale_factor)?,
+    ) != physical_viewport
+    {
+        anyhow::bail!("Camera presentation and viewport disagree; wait for resizing");
+    }
+
+    // X11 supplies the client origin; only the local toolbar offset uses GPUI's scale.
+    let toolbar_height = recording_physical_extent(CAMERA_TOOLBAR_HEIGHT, scale_factor)?;
+    let content_height = client_rect
+        .height
+        .checked_sub(toolbar_height)
+        .filter(|height| *height > 0)
+        .ok_or_else(|| anyhow::anyhow!("Camera viewport has no preview below its toolbar"))?;
+    let content_y = i32::try_from(i64::from(client_rect.y) + i64::from(toolbar_height))?;
+    i32::try_from(i64::from(client_rect.x) + i64::from(client_rect.width))?;
+    i32::try_from(i64::from(client_rect.y) + i64::from(client_rect.height))?;
+    if state.shape == CameraShape::Round && client_rect.width.abs_diff(content_height) > 1 {
+        anyhow::bail!("Round camera preview does not have square physical bounds");
+    }
+
+    Ok(LinuxCameraRecordingSnapshot {
+        content_rect: LinuxCameraPhysicalRect {
+            x: client_rect.x,
+            y: content_y,
+            width: client_rect.width,
+            height: content_height,
+        },
+        state,
+        corner_radius_pixels: preview_radius(&state) * scale_factor,
+    })
+}
+
 #[cfg(target_os = "macos")]
 mod frame {
     use cidre::{arc, cf, cv, vt};
@@ -657,6 +752,46 @@ pub struct CameraWindow {
 }
 
 impl CameraWindow {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn recording_snapshot(
+        &self,
+        window: &Window,
+    ) -> anyhow::Result<LinuxCameraRecordingSnapshot> {
+        use anyhow::Context as _;
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        let frame_dimensions = self
+            .frame_dims
+            .context("Camera recording requires a delivered preview frame")?;
+        let window_id = match HasWindowHandle::window_handle(window)?.as_raw() {
+            RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+            RawWindowHandle::Xcb(handle) => handle.window.get(),
+            _ => anyhow::bail!("Camera recording geometry requires an X11 window"),
+        };
+        let (connection, _) = x11rb::connect(None)?;
+        let geometry = connection.get_geometry(window_id)?.reply()?;
+        let origin = connection
+            .translate_coordinates(window_id, geometry.root, 0, 0)?
+            .reply()?;
+        if !origin.same_screen {
+            anyhow::bail!("Camera client and root window are on different X11 screens");
+        }
+        let viewport = window.viewport_size();
+        linux_camera_recording_snapshot(
+            self.state,
+            frame_dimensions,
+            LinuxCameraPhysicalRect {
+                x: i32::from(origin.dst_x),
+                y: i32::from(origin.dst_y),
+                width: u32::from(geometry.width),
+                height: u32::from(geometry.height),
+            },
+            (f32::from(viewport.width), f32::from(viewport.height)),
+            window.scale_factor(),
+        )
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // `document.documentElement.classList.toggle("dark", true)`
         // (`camera.tsx:128`): the bubble is always dark, whatever the app
@@ -1631,5 +1766,206 @@ fn persist_camera_position(x: f64, y: f64) {
             "cameraWindowPositionsByMonitorName",
             Value::Object(map),
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod recording_snapshot_tests {
+    use super::*;
+
+    fn geometry(
+        state: CameraWindowState,
+        frame_dimensions: (usize, usize),
+        scale: f32,
+        origin: (i32, i32),
+    ) -> (LinuxCameraPhysicalRect, (f32, f32)) {
+        let logical = window_size(
+            &state,
+            Some(frame_dimensions.0 as f32 / frame_dimensions.1 as f32),
+        );
+        let width = (logical.0 * scale).round() as u32;
+        let height = (logical.1 * scale).round() as u32;
+        (
+            LinuxCameraPhysicalRect {
+                x: origin.0,
+                y: origin.1,
+                width,
+                height,
+            },
+            (width as f32 / scale, height as f32 / scale),
+        )
+    }
+
+    #[test]
+    fn snapshot_uses_client_origin_and_scaled_toolbar_at_supported_scales() {
+        let state = CameraWindowState::default();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for origin in [(37, 91), (-1920, -1080)] {
+                let (client, viewport) = geometry(state, (640, 480), scale, origin);
+                let snapshot =
+                    linux_camera_recording_snapshot(state, (640, 480), client, viewport, scale)
+                        .unwrap();
+                let expected_side = (state.size * scale).round() as u32;
+                assert_eq!(
+                    snapshot.content_rect,
+                    LinuxCameraPhysicalRect {
+                        x: origin.0,
+                        y: origin.1 + (CAMERA_TOOLBAR_HEIGHT * scale).round() as i32,
+                        width: expected_side,
+                        height: expected_side,
+                    }
+                );
+                assert_eq!(snapshot.corner_radius_pixels, state.size * scale / 2.0);
+                assert_eq!(snapshot.state, state);
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_preserves_full_aspect_and_live_effect_state() {
+        let state = CameraWindowState {
+            size: 400.0,
+            shape: CameraShape::Full,
+            mirrored: true,
+            background_blur: BlurMode::Heavy,
+        };
+        let (client, viewport) = geometry(state, (1920, 1080), 1.5, (-1400, 20));
+        let snapshot =
+            linux_camera_recording_snapshot(state, (1920, 1080), client, viewport, 1.5).unwrap();
+        assert_eq!(snapshot.content_rect.width, 1067);
+        assert_eq!(snapshot.content_rect.height, 600);
+        assert_eq!(snapshot.content_rect.x, -1400);
+        assert_eq!(snapshot.content_rect.y, 104);
+        assert_eq!(snapshot.corner_radius_pixels, 36.0);
+        assert_eq!(snapshot.state, state);
+    }
+
+    #[test]
+    fn snapshot_square_radius_scales_without_becoming_a_circle() {
+        let state = CameraWindowState {
+            shape: CameraShape::Square,
+            background_blur: BlurMode::Light,
+            ..CameraWindowState::default()
+        };
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let (client, viewport) = geometry(state, (1280, 720), scale, (0, 0));
+            let snapshot =
+                linux_camera_recording_snapshot(state, (1280, 720), client, viewport, scale)
+                    .unwrap();
+            assert_eq!(snapshot.content_rect.width, snapshot.content_rect.height);
+            assert_eq!(snapshot.corner_radius_pixels, 24.0 * scale);
+            assert_eq!(snapshot.state, state);
+        }
+    }
+
+    #[test]
+    fn snapshot_rejects_native_viewport_and_pending_state_resize_mismatches() {
+        let state = CameraWindowState::default();
+        let (client, viewport) = geometry(state, (640, 480), 1.25, (0, 0));
+        assert!(
+            linux_camera_recording_snapshot(
+                state,
+                (640, 480),
+                client,
+                (viewport.0 + 1.0, viewport.1),
+                1.25,
+            )
+            .is_err()
+        );
+        assert!(
+            linux_camera_recording_snapshot(
+                CameraWindowState {
+                    size: 400.0,
+                    ..state
+                },
+                (640, 480),
+                client,
+                viewport,
+                1.25,
+            )
+            .is_err()
+        );
+        let full = CameraWindowState {
+            shape: CameraShape::Full,
+            ..state
+        };
+        let (client, viewport) = geometry(full, (1920, 1080), 1.0, (0, 0));
+        assert!(
+            linux_camera_recording_snapshot(full, (2400, 1000), client, viewport, 1.0).is_err()
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_invalid_scale_size_frame_and_viewport() {
+        let state = CameraWindowState::default();
+        let (client, viewport) = geometry(state, (640, 480), 1.0, (0, 0));
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                linux_camera_recording_snapshot(state, (640, 480), client, viewport, invalid)
+                    .is_err()
+            );
+            assert!(
+                linux_camera_recording_snapshot(
+                    CameraWindowState {
+                        size: invalid,
+                        ..state
+                    },
+                    (640, 480),
+                    client,
+                    viewport,
+                    1.0,
+                )
+                .is_err()
+            );
+            assert!(
+                linux_camera_recording_snapshot(
+                    state,
+                    (640, 480),
+                    client,
+                    (invalid, viewport.1),
+                    1.0,
+                )
+                .is_err()
+            );
+        }
+        for frame in [(0, 480), (640, 0)] {
+            assert!(linux_camera_recording_snapshot(state, frame, client, viewport, 1.0).is_err());
+        }
+        assert!(
+            linux_camera_recording_snapshot(
+                state,
+                (640, 480),
+                LinuxCameraPhysicalRect { width: 0, ..client },
+                viewport,
+                1.0,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_coordinate_and_scaled_extent_overflow() {
+        let state = CameraWindowState::default();
+        for origin in [(i32::MAX, 0), (0, i32::MAX)] {
+            let (client, viewport) = geometry(state, (640, 480), 1.0, origin);
+            assert!(
+                linux_camera_recording_snapshot(state, (640, 480), client, viewport, 1.0).is_err()
+            );
+        }
+        assert!(recording_physical_extent(f32::MAX, 2.0).is_err());
+        assert!(recording_physical_extent(i32::MAX as f32, 1.0).is_err());
+    }
+
+    #[test]
+    fn snapshot_preserves_one_pixel_rounding_difference_at_fractional_scale() {
+        let state = CameraWindowState::default();
+        let scale = 4.0 / 3.0;
+        let (client, viewport) = geometry(state, (640, 480), scale, (0, 0));
+        let snapshot =
+            linux_camera_recording_snapshot(state, (640, 480), client, viewport, scale).unwrap();
+        assert_eq!(snapshot.content_rect.width, 307);
+        assert_eq!(snapshot.content_rect.height, 306);
+        assert_eq!(snapshot.content_rect.x, client.x);
+        assert_eq!(snapshot.content_rect.y, client.y + 75);
     }
 }

@@ -206,7 +206,7 @@ impl WindowImpl {
 
     pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
         if is_wayland_portal_window(self.0) {
-            return Some(DisplayImpl::primary().physical_bounds()?);
+            return DisplayImpl::primary().physical_bounds();
         }
 
         let (conn, screen_num) = x11_connection().ok()?;

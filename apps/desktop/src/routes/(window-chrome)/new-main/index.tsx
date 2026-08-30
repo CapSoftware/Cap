@@ -62,14 +62,17 @@ import {
 } from "~/utils/importMedia";
 import {
 	createCameraMutation,
+	createCleanCaptureQuery,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
+	createMicrophoneMutation,
 	getPermissions,
 	listDisplaysWithThumbnails,
 	listRecordings,
 	listScreens,
 	listWindows,
 	listWindowsWithThumbnails,
+	revealRecordingWindow,
 } from "~/utils/queries";
 import {
 	type CaptureDisplay,
@@ -143,18 +146,8 @@ const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	});
 };
 
-// Must stay in sync with find_mic_by_label_or_fuzzy in src-tauri: Bluetooth
-// mics can reappear under a slightly different name (profile switch), and the
-// backend accepts case-insensitive containment in either direction.
-const findMicrophone = (microphones: MicrophoneWithDetails[], name: string) => {
-	const exact = microphones.find((m) => m.name === name);
-	if (exact) return exact;
-	const nameLower = name.toLowerCase();
-	return microphones.find((m) => {
-		const deviceLower = m.name.toLowerCase();
-		return deviceLower.includes(nameLower) || nameLower.includes(deviceLower);
-	});
-};
+const findMicrophone = (microphones: MicrophoneWithDetails[], name: string) =>
+	microphones.find((microphone) => microphone.name === name);
 
 type WindowListItem = Pick<
 	CaptureWindow,
@@ -1859,6 +1852,7 @@ function Page() {
 	const queryClient = useQueryClient();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
+	const cleanCapture = createCleanCaptureQuery();
 	const [isExpanded, setIsExpanded] = createSignal(false);
 	const [isWindowFocused, setIsWindowFocused] = createSignal(false);
 	const [isWindowResizing, setIsWindowResizing] = createSignal(false);
@@ -2056,9 +2050,7 @@ function Page() {
 				dismissal === "screenshot" ||
 				dismissal === "recordingInstant";
 			if (shouldRevealMainWindow && dismissalReveals) {
-				const currentWindow = getCurrentWindow();
-				void currentWindow.show();
-				void currentWindow.setFocus();
+				void revealRecordingWindow();
 			}
 		}
 	});
@@ -2073,11 +2065,11 @@ function Page() {
 			rawOptions.targetMode != null &&
 			!currentRecording.data
 		)
-			void getCurrentWindow().show();
+			void revealRecordingWindow();
 	});
 
 	const handleMouseEnter = () => {
-		getCurrentWindow().setFocus();
+		void revealRecordingWindow();
 	};
 
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
@@ -2181,9 +2173,7 @@ function Page() {
 	// in a hidden webview and the failure is invisible again.
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		if (payload.variant === "StartFailed") {
-			const currentWindow = getCurrentWindow();
-			void currentWindow.show();
-			void currentWindow.setFocus();
+			void revealRecordingWindow();
 			toast.error(payload.error);
 		}
 	});
@@ -2474,19 +2464,7 @@ function Page() {
 		closeAllMenuPanels();
 	});
 
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			const previous = rawOptions.micName ?? null;
-			if (previous !== name) setOptions("micName", name);
-			try {
-				await commands.setMicInput(name);
-			} catch (error) {
-				if (previous !== name) setOptions("micName", previous);
-				throw error;
-			}
-		},
-	}));
-
+	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
 
 	createUpdateCheck();
@@ -2521,8 +2499,7 @@ function Page() {
 				targetModeSource: null,
 				targetModeDismissal: "cancelled",
 			});
-			await currentWindow.show();
-			await currentWindow.setFocus();
+			await revealRecordingWindow();
 			setIsWindowFocused(true);
 			void commands.closeTargetSelectOverlays().catch((error) => {
 				console.error("Failed to close target select overlays:", error);
@@ -2767,18 +2744,9 @@ function Page() {
 		const previous = micPresence;
 		micPresence = { name, present: !!matched };
 		const reappeared = previous?.present === false && previous.name === name;
-		if (matched && (reappeared || matched.name !== name)) {
-			// The feed rejects non-exact labels, so a fuzzy match (Bluetooth
-			// rename) must be applied under the connected device's name. The
-			// stored selection converges only after the backend accepts it,
-			// keeping a failed call from retriggering this effect.
-			const matchedName = matched.name;
+		if (matched && reappeared) {
 			commands
-				.setMicInput(matchedName)
-				.then(() => {
-					if (rawOptions.micName === name && matchedName !== name)
-						setOptions("micName", matchedName);
-				})
+				.setMicInput(name)
 				.catch((error) =>
 					console.error("Failed to restore reconnected microphone:", error),
 				);
@@ -3169,6 +3137,7 @@ function Page() {
 	);
 
 	const startSignInCleanup = listen("start-sign-in", async () => {
+		const revealGeneration = (await commands.getCleanCaptureState()).generation;
 		const abort = new AbortController();
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
@@ -3182,7 +3151,7 @@ function Page() {
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
 				await win.setIgnoreCursorEvents(false);
-				await win.show();
+				await commands.revealCaptureWindow(revealGeneration, win.label);
 			}
 		}
 	});
@@ -3193,6 +3162,39 @@ function Page() {
 			onMouseEnter={handleMouseEnter}
 			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-(--text-primary)"
 		>
+			<Show when={cleanCapture.data?.phase === "awaitingShortcut"}>
+				<div
+					class="absolute inset-0 z-50 flex flex-col justify-center gap-4 p-5 bg-gray-2"
+					role="dialog"
+					aria-label={
+						cleanCapture.data?.mode === "instant"
+							? "Clean Instant recording"
+							: "Clean Studio recording"
+					}
+				>
+					<strong>Record without Cap's preview and controls</strong>
+					<p class="text-sm">
+						{cleanCapture.data?.mode === "instant"
+							? "Any selected camera will be included in the video with its preview appearance. Cap's preview and controls will hide."
+							: "Any selected camera will keep recording as a separate editable track. Cap's preview and controls will hide."}
+					</p>
+					<p class="text-sm">
+						Press <strong>{cleanCapture.data?.shortcut}</strong> to start, then
+						use it to stop.{" "}
+						{cleanCapture.data?.mode === "instant"
+							? "Open Cap to stop and show controls."
+							: "Open Cap to pause and show controls."}
+					</p>
+					<button
+						type="button"
+						class="rounded-lg border border-gray-5 px-4 py-2"
+						disabled={stopRecording.isPending}
+						onClick={() => stopRecording.mutate()}
+					>
+						Cancel
+					</button>
+				</div>
+			</Show>
 			<WindowChromeHeader
 				maximized={isExpanded()}
 				onMaximize={() => void toggleMainWindowExpanded()}
@@ -3300,6 +3302,14 @@ function Page() {
 					</div>
 				</div>
 			</WindowChromeHeader>
+			<Show when={!isActivelyRecording() && cleanCapture.data?.error}>
+				<div
+					role="alert"
+					class="max-h-20 shrink-0 overflow-auto rounded-lg bg-red-3 p-2 text-sm text-red-11"
+				>
+					{cleanCapture.data?.error}
+				</div>
+			</Show>
 			<Show when={!activeMenu()}>
 				<div class="flex items-center justify-between mt-[16px] mb-[6px]">
 					<div class="flex items-center space-x-1">
@@ -3516,6 +3526,32 @@ function Page() {
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">
+						<Show when={cleanCapture.data?.phase === "paused"}>
+							<div class="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-3 p-2 text-sm">
+								<div class="min-w-0">
+									<Show when={cleanCapture.data?.error}>
+										<p
+											role="alert"
+											class="mb-1 max-h-20 overflow-auto text-red-11"
+										>
+											{cleanCapture.data?.error}
+										</p>
+									</Show>
+									<span>Recording paused. Cap will hide before resuming.</span>
+								</div>
+								<button
+									type="button"
+									class="rounded-md border border-gray-5 px-3 py-1"
+									onClick={() =>
+										void commands
+											.resumeRecording()
+											.catch((error: unknown) => toast.error(String(error)))
+									}
+								>
+									Resume
+								</button>
+							</div>
+						</Show>
 						<button
 							type="button"
 							disabled={stopRecording.isPending}

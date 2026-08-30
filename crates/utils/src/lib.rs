@@ -12,6 +12,10 @@ use tracing::Instrument;
 pub mod disk_space;
 #[cfg(any(target_os = "linux", test))]
 pub mod linux_package;
+#[cfg(target_os = "linux")]
+pub mod linux_recording_stop;
+#[cfg(any(target_os = "linux", test))]
+pub mod linux_runtime;
 #[cfg(target_os = "macos")]
 pub mod macos_qos;
 

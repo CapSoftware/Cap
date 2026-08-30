@@ -126,8 +126,8 @@ pub fn hide_overlay(window: &WebviewWindow) {
 }
 
 pub fn show_overlay(window: &WebviewWindow) {
-    let _ = window.set_ignore_cursor_events(false);
-    let _ = window.show();
+    let generation = crate::clean_capture::generation(window.app_handle());
+    crate::clean_capture::schedule_overlay_reveal(window, generation, false);
 }
 
 fn emit_app_event<E>(app: &AppHandle, event: E)
@@ -328,6 +328,16 @@ async fn init_native_camera_preview(
 }
 
 pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
+    let app_handle = app_state.handle.clone();
+    let requested = app_handle.state::<crate::RequestedInputsState>();
+    let snapshot = requested.snapshot();
+    if snapshot.camera.pending
+        || snapshot.camera.error.is_some()
+        || snapshot.camera.value != app_state.selected_camera_id
+        || app_state.is_recording_active_or_pending()
+    {
+        return;
+    }
     if let Some(id) = app_state.selected_camera_id.clone()
         && !app_state.camera_in_use
     {
@@ -352,174 +362,15 @@ pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
             }
         }
 
-        app_state.camera_in_use = true;
-        app_state.camera_cleanup_done = false;
+        requested.publish_camera_if_current(snapshot.camera.revision, || {
+            app_state.camera_in_use = true;
+            app_state.camera_cleanup_done = false;
+        });
     }
 }
 
 pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
-    let Some(state) = app.try_state::<ArcLock<App>>() else {
-        warn!("App state unavailable while restoring main window inputs");
-        return;
-    };
-
-    let should_restore = state
-        .try_read()
-        .map(|state| !state.is_recording_active_or_pending())
-        .unwrap_or(false);
-
-    if !should_restore {
-        return;
-    }
-
-    let settings = crate::recording_settings::RecordingSettingsStore::get(app)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let stored_camera_id = settings.camera_id.clone();
-
-    if let Err(err) = crate::set_mic_input(state.clone(), settings.mic_name).await {
-        warn!("Failed to restore microphone input for main window: {err}");
-    }
-
-    let Some(operation_lock) = app.try_state::<crate::CameraWindowOperationLock>() else {
-        warn!("CameraWindowOperationLock unavailable while restoring main window inputs");
-        return;
-    };
-    let operation_guard = operation_lock.lock().await;
-
-    let camera_to_restore = state
-        .try_read()
-        .map(|s| {
-            if !s.camera_cleanup_done && !s.camera_in_use {
-                s.selected_camera_id
-                    .clone()
-                    .or_else(|| stored_camera_id.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or(None)
-        // A remembered camera that isn't connected must not run the init/retry
-        // loop below: it would flash the preview window and toast an error on
-        // every main-window reveal while the device is away.
-        .filter(crate::is_camera_available);
-
-    if let Some(camera_id) = camera_to_restore {
-        emit_camera_preview_clear(app);
-        let settings =
-            crate::recording_settings::RecordingSettingsStore::camera_settings_for(app, &camera_id);
-
-        let (camera_feed, camera_ws_sender, native_sender) = {
-            let app_state = &mut *state.write().await;
-            app_state.selected_camera_id = Some(camera_id.clone());
-            app_state.camera_in_use = true;
-            app_state.camera_cleanup_done = false;
-            #[allow(deprecated)]
-            (
-                app_state.camera_feed.clone(),
-                app_state.camera_ws_sender.clone(),
-                app_state.camera_preview.sender(),
-            )
-        };
-
-        if let Some(sender) = native_sender {
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::RemoveSender(camera_ws_sender))
-                .await;
-            if let Err(err) = sender.attach(&camera_feed).await {
-                warn!(error = %err, "Failed to add native preview camera sender");
-            }
-        } else {
-            #[allow(deprecated)]
-            let _ = camera_feed
-                .ask(feeds::camera::AddSender(camera_ws_sender))
-                .await;
-        }
-
-        let mut showed_camera_window = false;
-        let mut attempts = 0;
-        let init_result: Result<(), String> = loop {
-            attempts += 1;
-            let request = camera_feed
-                .ask(feeds::camera::SetInput {
-                    id: camera_id.clone(),
-                    settings,
-                })
-                .await
-                .map_err(|e| e.to_string());
-
-            if !showed_camera_window {
-                showed_camera_window = true;
-                crate::show_camera_window_unlocked(app);
-            }
-
-            match request {
-                Ok(future) => match future.await {
-                    Ok(_) => {
-                        emit_camera_preview_clear(app);
-                        break Ok(());
-                    }
-                    Err(e) => {
-                        if attempts == 1 {
-                            emit_camera_preview_error(
-                                app,
-                                camera_preview_error_message(&e.to_string()),
-                            );
-                        }
-                        if attempts >= 3 {
-                            break Err(format!(
-                                "Failed to restore camera after {attempts} attempts: {e}"
-                            ));
-                        }
-                        warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                },
-                Err(e) => {
-                    if attempts >= 3 {
-                        break Err(e);
-                    }
-                    warn!("Camera restore attempt {attempts} failed: {e}. Retrying...");
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            }
-        };
-
-        drop(operation_guard);
-
-        match init_result {
-            Ok(()) => crate::restore_camera_window(app),
-            Err(error) => {
-                let message = camera_preview_error_message(&error);
-                warn!("Failed to restore camera input for main window: {error}");
-                let _ = camera_feed.ask(feeds::camera::RemoveInput).await;
-                let emit_input_lost = {
-                    let app_state = &mut *state.write().await;
-                    app_state.selected_camera_id = None;
-                    app_state.camera_in_use = false;
-                    app_state
-                        .disconnected_inputs
-                        .insert(RecordingInputKind::Camera)
-                };
-                crate::show_camera_window_unlocked(app);
-                if emit_input_lost {
-                    let _ = RecordingEvent::InputLost {
-                        input: RecordingInputKind::Camera,
-                    }
-                    .emit(app);
-                }
-                emit_camera_preview_error(app, message.clone());
-                let _ = NewNotification {
-                    title: "Camera unavailable".to_string(),
-                    body: message,
-                    is_error: true,
-                }
-                .emit(app);
-            }
-        }
-    }
+    crate::restore_requested_inputs(app).await;
 }
 
 pub(crate) async fn cleanup_camera_window(
@@ -1162,7 +1013,23 @@ pub enum ShowCapWindow {
 }
 
 impl ShowCapWindow {
-    pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
+    pub fn show<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+    ) -> futures::future::BoxFuture<'a, tauri::Result<WebviewWindow>> {
+        Box::pin(self.show_inner(app))
+    }
+
+    async fn show_inner(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
+        let reveal_generation = crate::clean_capture::generation(app);
+        if matches!(self, Self::Main { .. }) && crate::clean_capture::phase(app).is_some() {
+            crate::clean_capture::show_main_controls(app)
+                .await
+                .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+        }
+        #[cfg(target_os = "linux")]
+        crate::clean_capture::admit_wayland_window_creation(app)
+            .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
             let window_id = {
@@ -1239,6 +1106,11 @@ impl ShowCapWindow {
             }
 
             if let Some(window) = self.id(app).get(app) {
+                if crate::clean_capture::phase(app)
+                    .is_some_and(|phase| phase != crate::clean_capture::Phase::Restoring)
+                {
+                    return Ok(window);
+                }
                 #[cfg(target_os = "macos")]
                 {
                     use crate::panel_manager::is_window_handle_valid;
@@ -1398,8 +1270,13 @@ impl ShowCapWindow {
                     if *centered {
                         center_camera_window(app, &window);
                     }
-                    window.show().ok();
-                    window.set_focus().ok();
+                    crate::clean_capture::guarded_show(
+                        window.clone(),
+                        reveal_generation,
+                        true,
+                        false,
+                    )
+                    .await?;
                     return Ok(window);
                 }
             }
@@ -1482,8 +1359,8 @@ impl ShowCapWindow {
                     CursorMonitorInfo::get().bottom_center_position(width, height, 120.0)
                 });
             let _ = window.set_position(logical_point_position(pos_x, pos_y));
-            window.show().ok();
-            window.set_focus().ok();
+            crate::clean_capture::guarded_show(window.clone(), reveal_generation, true, false)
+                .await?;
             fake_window::spawn_fake_window_listener(app.clone(), window.clone());
             return Ok(window);
         }
@@ -1536,9 +1413,8 @@ impl ShowCapWindow {
                     recenter_window_if_offscreen(&window);
                 }
 
-                window.show().ok();
-                window.unminimize().ok();
-                window.set_focus().ok();
+                crate::clean_capture::guarded_show(window.clone(), reveal_generation, true, true)
+                    .await?;
 
                 if let Self::Settings { .. } = self {
                     ensure_settings_window_bounds(&window);
@@ -1686,7 +1562,13 @@ impl ShowCapWindow {
                         }
                     }
 
-                    window.show().ok();
+                    crate::clean_capture::guarded_show(
+                        window.clone(),
+                        reveal_generation,
+                        false,
+                        false,
+                    )
+                    .await?;
                 }
 
                 window
@@ -1885,7 +1767,13 @@ impl ShowCapWindow {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    window.show().ok();
+                    crate::clean_capture::guarded_show(
+                        window.clone(),
+                        reveal_generation,
+                        false,
+                        false,
+                    )
+                    .await?;
                 }
 
                 window
@@ -2239,8 +2127,12 @@ impl ShowCapWindow {
 			                window.__CAP__.cameraWsPort = {};
 			                window.__CAP__.cameraOnlyMode = {};
 			                window.__CAP__.enableNativeCameraPreview = {};
+                            window.__CAP__.cleanCaptureGeneration = {};
 		                ",
-                            state.camera_ws_port, centered, enable_native_camera_preview
+                            state.camera_ws_port,
+                            centered,
+                            enable_native_camera_preview,
+                            reveal_generation
                         ))
                         .content_protected(should_protect)
                         .transparent(true)
@@ -2439,7 +2331,13 @@ impl ShowCapWindow {
 
                     #[cfg(not(target_os = "macos"))]
                     {
-                        window.show().ok();
+                        crate::clean_capture::guarded_show(
+                            window.clone(),
+                            reveal_generation,
+                            false,
+                            false,
+                        )
+                        .await?;
                     }
 
                     drop(state);

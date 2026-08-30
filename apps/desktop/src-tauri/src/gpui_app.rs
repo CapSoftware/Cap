@@ -607,8 +607,17 @@ fn activate_instance(pid: u32) {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn activate_instance(_pid: u32) {}
+
+#[cfg(any(target_os = "linux", test))]
+fn launch_linux_activation(
+    path: Option<&std::path::Path>,
+    launch: impl FnOnce(&std::path::Path, &[String]) -> Result<(), String>,
+) -> Result<(), String> {
+    let path = path.ok_or_else(|| "Cap GPUI isn't included in this build".to_string())?;
+    launch(path, &[])
+}
 
 fn write_handoff_marker() {
     let path = handoff_marker();
@@ -717,8 +726,16 @@ pub async fn switch_to_gpui_app(
 
     match running_instance_pid() {
         Some(pid) => {
-            info!(pid, "Cap GPUI is already running; bringing it forward");
+            #[cfg(target_os = "linux")]
+            if let Err(error) = launch_linux_activation(Some(&path), spawn_detached) {
+                if !own_store_is_shared(&app) {
+                    write_shared_store_flag(false);
+                }
+                return Err(error);
+            }
+            #[cfg(not(target_os = "linux"))]
             activate_instance(pid);
+            info!(pid, "Cap GPUI is already running; requested its controls");
         }
         None => {
             write_handoff_marker();
@@ -740,9 +757,9 @@ pub async fn switch_to_gpui_app(
 /// Whether this app should hand over to `cap-gpui` instead of starting.
 ///
 /// `true` means the caller must exit before any window is created.
-pub fn redirect_at_startup_if_enabled(app: &AppHandle) -> bool {
+pub fn redirect_at_startup_if_enabled(app: &AppHandle) -> Result<bool, String> {
     let update_handoff = handle_update_handoff(app);
-    let redirect = !update_handoff && redirect_decision(app);
+    let redirect = !update_handoff && redirect_decision(app)?;
     if !redirect {
         // Staying up IS the readiness signal the waiting `cap-gpui` needs --
         // and the wait can begin while this app is ALREADY running (switching
@@ -757,10 +774,10 @@ pub fn redirect_at_startup_if_enabled(app: &AppHandle) -> bool {
             }
         });
     }
-    redirect
+    Ok(redirect)
 }
 
-fn redirect_decision(app: &AppHandle) -> bool {
+fn redirect_decision(app: &AppHandle) -> Result<bool, String> {
     let own = GeneralSettingsStore::get(app)
         .ok()
         .flatten()
@@ -784,20 +801,23 @@ fn redirect_decision(app: &AppHandle) -> bool {
                 warn!(%error, "could not reconcile the Cap GPUI setting");
             }
         }
-        return false;
+        return Ok(false);
     }
 
     // The marker exists throughout a live session. Check the process first so
     // reopening Cap does not mistake a running native app for a crashed one.
     if let Some(pid) = running_instance_pid() {
-        info!(pid, "Cap GPUI is already running; handing over to it");
         #[cfg(any(target_os = "macos", windows))]
         {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
             forward_deep_links_to_gpui(pid, &args);
         }
+        #[cfg(target_os = "linux")]
+        launch_linux_activation(binary_path(app).as_deref(), spawn_detached)?;
+        #[cfg(not(target_os = "linux"))]
         activate_instance(pid);
-        return true;
+        info!(pid, "Cap GPUI is already running; requested its controls");
+        return Ok(true);
     }
 
     let marker = handoff_marker();
@@ -817,12 +837,12 @@ fn redirect_decision(app: &AppHandle) -> bool {
                 "The native Cap app exited unexpectedly last time, so the classic app has been restored.",
             )
             .show(|_| {});
-        return false;
+        return Ok(false);
     }
 
     let Some(path) = binary_path(app) else {
         warn!("Cap GPUI is enabled but its binary was not found; starting this app instead");
-        return false;
+        return Ok(false);
     };
 
     write_handoff_marker();
@@ -837,9 +857,9 @@ fn redirect_decision(app: &AppHandle) -> bool {
     if let Err(error) = spawn_detached(&path, &args) {
         warn!("{error}");
         let _ = std::fs::remove_file(handoff_marker());
-        return false;
+        return Ok(false);
     }
-    true
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -849,6 +869,40 @@ mod tests {
         UpdateHandoff, forwarded_gpui_argument, is_forwardable_gpui_deep_link,
         is_gpui_process_image, parse_gpui_forwarding_endpoint, parse_update_handoff,
     };
+
+    #[test]
+    fn linux_activation_launches_the_resolved_binary_once_without_arguments() {
+        let path = std::path::Path::new("/opt/cap/cap-gpui");
+        let mut launches = 0;
+        super::launch_linux_activation(Some(path), |selected, args| {
+            launches += 1;
+            assert_eq!(selected, path);
+            assert!(args.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(launches, 1);
+    }
+
+    #[test]
+    fn linux_activation_requires_a_resolved_binary_before_launch() {
+        let result = super::launch_linux_activation(None, |_, _| {
+            panic!("a missing GPUI binary must not be launched")
+        });
+        assert_eq!(result.unwrap_err(), "Cap GPUI isn't included in this build");
+    }
+
+    #[test]
+    fn linux_activation_preserves_launch_failure() {
+        let path = std::path::Path::new("/opt/cap/cap-gpui");
+        let result = super::launch_linux_activation(Some(path), |_, _| {
+            Err("Failed to launch Cap GPUI: permission denied".into())
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            "Failed to launch Cap GPUI: permission denied"
+        );
+    }
 
     #[test]
     fn startup_redirect_exits_once_when_no_open_event_arrives() {

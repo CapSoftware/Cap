@@ -554,6 +554,7 @@ pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 }
 
 pub struct InstantMultipartUpload {
+    #[cfg(not(target_os = "linux"))]
     pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
 }
 
@@ -567,39 +568,43 @@ impl InstantMultipartUpload {
         recording_dir: PathBuf,
         realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
-        Self {
-            handle: spawn_actor(async move {
-                let start = Instant::now();
-                let result = Self::run(
-                    app.clone(),
-                    file_path.clone(),
-                    pre_created_video,
-                    recording_dir,
-                    realtime_upload_done,
-                )
-                .await;
-                async_capture_event(
-                    &app,
-                    match &result {
-                        Ok(meta) => AnalyticsEvent::MultipartUploadComplete {
-                            duration: start.elapsed(),
-                            length: meta
-                                .as_ref()
-                                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
-                                .unwrap_or_default(),
-                            size: std::fs::metadata(file_path)
-                                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
-                                .unwrap_or_default(),
-                        },
-                        Err(err) => AnalyticsEvent::MultipartUploadFailed {
-                            duration: start.elapsed(),
-                            error: err.to_string(),
-                        },
+        let handle = spawn_actor(async move {
+            let start = Instant::now();
+            let result = Self::run(
+                app.clone(),
+                file_path.clone(),
+                pre_created_video,
+                recording_dir,
+                realtime_upload_done,
+            )
+            .await;
+            async_capture_event(
+                &app,
+                match &result {
+                    Ok(meta) => AnalyticsEvent::MultipartUploadComplete {
+                        duration: start.elapsed(),
+                        length: meta
+                            .as_ref()
+                            .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                            .unwrap_or_default(),
+                        size: std::fs::metadata(file_path)
+                            .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                            .unwrap_or_default(),
                     },
-                );
+                    Err(err) => AnalyticsEvent::MultipartUploadFailed {
+                        duration: start.elapsed(),
+                        error: err.to_string(),
+                    },
+                },
+            );
 
-                result.map(|_| ())
-            }),
+            result.map(|_| ())
+        });
+        #[cfg(target_os = "linux")]
+        drop(handle);
+        Self {
+            #[cfg(not(target_os = "linux"))]
+            handle,
         }
     }
 
@@ -3219,5 +3224,1218 @@ mod tests {
             shutdown_duration < Duration::from_millis(200),
             "manifest shutdown should be near-instant via Notify, took {shutdown_duration:?}"
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) mod strict_instant {
+    use super::*;
+    use cap_enc_ffmpeg::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
+    use futures::{FutureExt as _, stream::FuturesUnordered};
+    use std::{future::Future, panic::AssertUnwindSafe, sync::atomic::AtomicBool};
+
+    #[derive(Clone)]
+    pub struct Control(Arc<ControlInner>);
+
+    struct ControlInner {
+        decision: tokio::sync::watch::Sender<u8>,
+        cleanup: tokio::sync::watch::Sender<Option<bool>>,
+    }
+
+    pub struct Permission {
+        control: Control,
+        granted: bool,
+    }
+
+    impl Control {
+        pub fn new() -> (Self, Permission) {
+            let (decision, _) = tokio::sync::watch::channel(0);
+            let (cleanup, _) = tokio::sync::watch::channel(None);
+            let control = Self(Arc::new(ControlInner { decision, cleanup }));
+            (
+                control.clone(),
+                Permission {
+                    control,
+                    granted: false,
+                },
+            )
+        }
+
+        pub fn deny(&self) {
+            self.0.decision.send_replace(2);
+        }
+
+        pub fn check(&self) -> Result<(), AuthedApiError> {
+            if *self.0.decision.borrow() == 2 {
+                Err("Instant upload authorization revoked".to_string().into())
+            } else {
+                Ok(())
+            }
+        }
+
+        pub async fn step<T, F>(&self, step: impl FnOnce() -> F) -> Result<T, AuthedApiError>
+        where
+            F: Future<Output = Result<T, AuthedApiError>>,
+        {
+            self.check()?;
+            let result = step().await;
+            self.check()?;
+            result
+        }
+
+        async fn complete<T, F>(&self, complete: impl FnOnce() -> F) -> Result<(), AuthedApiError>
+        where
+            F: Future<Output = Result<T, AuthedApiError>>,
+        {
+            self.step(complete).await.map(drop)
+        }
+
+        async fn permission(&self) -> Result<(), AuthedApiError> {
+            let mut decision = self.0.decision.subscribe();
+            loop {
+                let value = *decision.borrow_and_update();
+                match value {
+                    1 => return self.check(),
+                    2 => return Err("Instant completion was denied".to_string().into()),
+                    _ => decision
+                        .changed()
+                        .await
+                        .map_err(|_| "Instant authorization owner lost")?,
+                }
+            }
+        }
+
+        async fn cancelled(&self) {
+            let mut decision = self.0.decision.subscribe();
+            loop {
+                if *decision.borrow_and_update() == 2 {
+                    return;
+                }
+                if decision.changed().await.is_err() {
+                    return;
+                }
+            }
+        }
+
+        pub async fn joined(&self) -> bool {
+            let mut cleanup = self.0.cleanup.subscribe();
+            loop {
+                let state = *cleanup.borrow_and_update();
+                if let Some(joined) = state {
+                    return joined;
+                }
+                if cleanup.changed().await.is_err() {
+                    return false;
+                }
+            }
+        }
+    }
+
+    impl Permission {
+        pub fn grant(mut self) -> Result<(), AuthedApiError> {
+            let changed = self.control.0.decision.send_if_modified(|state| {
+                if *state != 0 {
+                    return false;
+                }
+                *state = 1;
+                true
+            });
+            if !changed {
+                return Err("Instant completion permission is no longer valid"
+                    .to_string()
+                    .into());
+            }
+            self.granted = true;
+            self.control.check()
+        }
+    }
+
+    impl Drop for Permission {
+        fn drop(&mut self) {
+            if !self.granted {
+                self.control.deny();
+            }
+        }
+    }
+
+    struct WorkerGuard(Control);
+    impl Drop for WorkerGuard {
+        fn drop(&mut self) {
+            let missing = self.0.0.cleanup.borrow().is_none();
+            if missing {
+                self.0.deny();
+                let _ = self.0.0.cleanup.send_replace(Some(false));
+            }
+        }
+    }
+
+    struct Bridge {
+        events: tokio::sync::mpsc::Receiver<SegmentCompletedEvent>,
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Bridge {
+        fn new(
+            source: std::sync::mpsc::Receiver<SegmentCompletedEvent>,
+        ) -> Result<Self, AuthedApiError> {
+            let (sender, events) = tokio::sync::mpsc::channel(12);
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_thread = stop.clone();
+            let thread = std::thread::Builder::new()
+                .name("strict-instant-events".into())
+                .spawn(move || {
+                    while !stop_thread.load(Ordering::Acquire) {
+                        match source.recv_timeout(Duration::from_millis(100)) {
+                            Ok(event) => {
+                                if sender.blocking_send(event).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                })
+                .map_err(|error| format!("Starting owned Instant event bridge: {error}"))?;
+            Ok(Self {
+                events,
+                stop,
+                thread: Some(thread),
+            })
+        }
+
+        async fn finish(mut self) -> bool {
+            self.events.close();
+            self.stop.store(true, Ordering::Release);
+            let thread = self.thread.take().unwrap();
+            tokio::task::spawn_blocking(move || thread.join().is_ok())
+                .await
+                .unwrap_or(false)
+        }
+    }
+
+    impl Drop for Bridge {
+        fn drop(&mut self) {
+            self.events.close();
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                drop(tokio::task::spawn_blocking(move || thread.join()));
+            }
+        }
+    }
+
+    trait Transport: Send + Sync {
+        fn put(
+            &self,
+            path: &str,
+            bytes: Bytes,
+        ) -> impl Future<Output = Result<(), AuthedApiError>> + Send;
+        fn complete(&self) -> impl Future<Output = Result<(), AuthedApiError>> + Send;
+    }
+
+    struct LiveTransport<'a> {
+        app: &'a AppHandle,
+        video_id: &'a str,
+        control: &'a Control,
+    }
+
+    impl Transport for LiveTransport<'_> {
+        async fn put(&self, path: &str, bytes: Bytes) -> Result<(), AuthedApiError> {
+            let mut failure = None;
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    self.control
+                        .step(|| async {
+                            tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1)))
+                                .await;
+                            Ok(())
+                        })
+                        .await?;
+                }
+                let target = self
+                    .control
+                    .step(|| {
+                        api::upload_signed(
+                            self.app,
+                            PresignedS3PutRequest {
+                                video_id: self.video_id.into(),
+                                subpath: path.into(),
+                                method: PresignedS3PutRequestMethod::Put,
+                                meta: None,
+                            },
+                        )
+                    })
+                    .await?;
+                let size = bytes.len() as u64;
+                let mut request = self
+                    .app
+                    .state::<HttpClient>()
+                    .put(&target.url)
+                    .header("Content-Length", size)
+                    .header("Content-Type", content_type_for_upload_subpath(path))
+                    .timeout(Duration::from_secs(5 * 60))
+                    .body(bytes.clone());
+                for (name, value) in target.headers {
+                    if !name.eq_ignore_ascii_case("content-length") {
+                        request = request.header(name, value);
+                    }
+                }
+                let result = self
+                    .control
+                    .step(|| async {
+                        let response =
+                            with_drive_content_range(request, &target.url, 0, size, size)
+                                .send()
+                                .await
+                                .map_err(AuthedApiError::from)?;
+                        if !response.status().is_success() {
+                            return Err(format!("Instant PUT failed: {}", response.status()).into());
+                        }
+                        Ok(())
+                    })
+                    .await;
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        let network = matches!(&error, AuthedApiError::Timeout)
+                            || matches!(&error, AuthedApiError::Request(error) if is_reqwest_network_error(error));
+                        failure = Some(error);
+                        self.control.check()?;
+                        if network && attempt < 2 {
+                            network_recovery(self.app, self.control).await?;
+                        }
+                    }
+                }
+                self.control.check()?;
+            }
+            Err(failure.unwrap())
+        }
+
+        async fn complete(&self) -> Result<(), AuthedApiError> {
+            let mut failure = None;
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    self.control
+                        .step(|| async {
+                            tokio::time::sleep(Duration::from_millis(1000u64 << (attempt - 1)))
+                                .await;
+                            Ok(())
+                        })
+                        .await?;
+                }
+                match self
+                    .control
+                    .step(|| api::signal_recording_complete(self.app, self.video_id))
+                    .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(error) => failure = Some(error),
+                }
+                self.control.check()?;
+            }
+            Err(failure.unwrap())
+        }
+    }
+
+    fn event_path(event: &SegmentCompletedEvent) -> String {
+        let media = match event.media_type {
+            SegmentMediaType::Video => "video",
+            SegmentMediaType::Audio => "audio",
+        };
+        if event.is_init {
+            format!("segments/{media}/init.mp4")
+        } else {
+            format!("segments/{media}/segment_{:03}.m4s", event.index)
+        }
+    }
+
+    async fn segment(
+        transport: &impl Transport,
+        control: &Control,
+        event: SegmentCompletedEvent,
+    ) -> Result<SegmentCompletedEvent, AuthedApiError> {
+        control.check()?;
+        let path = event_path(&event);
+        let bytes = control
+            .step(|| SegmentUploader::read_segment_data(&event.path, &path, event.file_size))
+            .await?;
+        if bytes.is_empty() || (event.file_size > 0 && (bytes.len() as u64) < event.file_size) {
+            return Err(format!("Required Instant segment is incomplete: {path}").into());
+        }
+        control.step(|| transport.put(&path, bytes)).await?;
+        Ok(event)
+    }
+
+    async fn segments(
+        transport: &impl Transport,
+        control: &Control,
+        events: &mut tokio::sync::mpsc::Receiver<SegmentCompletedEvent>,
+        required_audio: bool,
+    ) -> Result<(), AuthedApiError> {
+        let mut uploads = FuturesUnordered::new();
+        let mut state = SegmentUploadState::new();
+        let mut closed = false;
+        let mut failure = None;
+        let mut manifest_at = Instant::now();
+        while !closed || !uploads.is_empty() {
+            tokio::select! {
+                _ = control.cancelled(), if failure.is_none() => { failure = Some("Instant upload cancelled".to_string().into()); closed = true; events.close(); }
+                event = events.recv(), if !closed && uploads.len() < 6 => {
+                    match event { Some(event) => uploads.push(segment(transport, control, event)), None => closed = true }
+                }
+                Some(result) = uploads.next(), if !uploads.is_empty() => {
+                    match result {
+                        Ok(event) => {
+                            match (event.is_init, event.media_type) {
+                                (true, SegmentMediaType::Video) => state.video_init_uploaded = true,
+                                (true, SegmentMediaType::Audio) => state.audio_init_uploaded = true,
+                                (false, SegmentMediaType::Video) => { let _ = state.uploaded_video_segments.insert(event.index, event.duration); }
+                                (false, SegmentMediaType::Audio) => { let _ = state.uploaded_audio_segments.insert(event.index, event.duration); }
+                            }
+                            if failure.is_none() && manifest_at.elapsed() >= Duration::from_secs(1) {
+                                let manifest = serde_json::to_vec(&state.to_manifest()).map_err(|error| error.to_string());
+                                let result = match manifest { Ok(bytes) => control.step(|| transport.put("segments/manifest.json", bytes.into())).await, Err(error) => Err(error.into()) };
+                                if let Err(error) = result { failure = Some(error); closed = true; events.close(); }
+                                manifest_at = Instant::now();
+                            }
+                        }
+                        Err(error) => { failure = Some(error); closed = true; events.close(); }
+                    }
+                }
+            }
+            if failure.is_some() {
+                control.deny();
+                closed = true;
+                events.close();
+            }
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        control.permission().await?;
+        let manifest = state.to_complete_manifest();
+        if !manifest.has_video_content()
+            || (required_audio
+                && (!state.audio_init_uploaded || state.uploaded_audio_segments.is_empty()))
+        {
+            return Err("Required Instant media track is missing".to_string().into());
+        }
+        let bytes = serde_json::to_vec(&manifest).map_err(|error| error.to_string())?;
+        control
+            .step(|| transport.put("segments/manifest.json", bytes.into()))
+            .await?;
+        control.step(|| transport.complete()).await
+    }
+
+    pub fn spawn(
+        app: AppHandle,
+        recording_dir: PathBuf,
+        video: VideoUploadInfo,
+        events: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
+        control: Control,
+        required_audio: bool,
+    ) -> SegmentUploader {
+        SegmentUploader {
+            handle: spawn_actor(async move {
+                let _owner = WorkerGuard(control.clone());
+                let _active = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
+                let result = if let Some(events) = events {
+                    match Bridge::new(events) {
+                        Ok(mut bridge) => {
+                            let transport = LiveTransport {
+                                app: &app,
+                                video_id: &video.id,
+                                control: &control,
+                            };
+                            let result = AssertUnwindSafe(segments(
+                                &transport,
+                                &control,
+                                &mut bridge.events,
+                                required_audio,
+                            ))
+                            .catch_unwind()
+                            .await;
+                            let joined = bridge.finish().await;
+                            let _ = control
+                                .0
+                                .cleanup
+                                .send_replace(Some(joined && result.is_ok()));
+                            match result {
+                                Ok(result) if joined => result,
+                                _ => {
+                                    Err("Instant upload cleanup is unconfirmed".to_string().into())
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = control.0.cleanup.send_replace(Some(true));
+                            Err(error)
+                        }
+                    }
+                } else {
+                    let result =
+                        AssertUnwindSafe(multipart(&app, &recording_dir, &video, &control))
+                            .catch_unwind()
+                            .await;
+                    let _ = control.0.cleanup.send_replace(Some(result.is_ok()));
+                    result.unwrap_or_else(|_| {
+                        Err("Instant multipart cleanup is unconfirmed"
+                            .to_string()
+                            .into())
+                    })
+                };
+                if result.is_err() {
+                    control.deny();
+                }
+                result
+            }),
+        }
+    }
+
+    async fn network_recovery(app: &AppHandle, control: &Control) -> Result<(), AuthedApiError> {
+        let started = Instant::now();
+        let mut delay = CONNECTIVITY_PROBE_INITIAL_DELAY;
+        while started.elapsed() <= NETWORK_RECOVERY_TIMEOUT {
+            control
+                .step(|| async {
+                    tokio::time::sleep(delay).await;
+                    Ok(())
+                })
+                .await?;
+            if control
+                .step(|| async { Ok(probe_connectivity(app).await) })
+                .await?
+            {
+                return Ok(());
+            }
+            delay = (delay * 2).min(CONNECTIVITY_PROBE_MAX_DELAY);
+        }
+        Err("Instant upload network recovery timed out"
+            .to_string()
+            .into())
+    }
+
+    struct MultipartTarget<'a> {
+        app: &'a AppHandle,
+        video_id: &'a str,
+        upload_id: &'a str,
+        control: &'a Control,
+        use_md5: bool,
+    }
+
+    async fn part(
+        target: &MultipartTarget<'_>,
+        chunk: Chunk,
+    ) -> Result<UploadedPart, AuthedApiError> {
+        let size = chunk.chunk.len();
+        let md5_sum = target
+            .use_md5
+            .then(|| base64::encode(md5::compute(&chunk.chunk).0));
+        for attempt in 0..2 {
+            let url = target
+                .control
+                .step(|| {
+                    api::upload_multipart_presign_part(
+                        target.app,
+                        target.video_id,
+                        target.upload_id,
+                        chunk.part_number,
+                        md5_sum.as_deref(),
+                    )
+                })
+                .await?;
+            let mut request = target
+                .app
+                .state::<HttpClient>()
+                .put(&url)
+                .header("Content-Length", size)
+                .timeout(Duration::from_secs(5 * 60))
+                .body(chunk.chunk.clone());
+            if let Some(md5_sum) = &md5_sum {
+                request = request.header("Content-MD5", md5_sum);
+            }
+            let request = with_drive_content_range(
+                request,
+                &url,
+                chunk.offset,
+                size as u64,
+                chunk.total_size,
+            );
+            let sent = target
+                .control
+                .step(|| async { Ok(request.send().await) })
+                .await?;
+            let response = match sent {
+                Ok(response) => response,
+                Err(error) if attempt == 0 && is_reqwest_network_error(&error) => {
+                    network_recovery(target.app, target.control).await?;
+                    continue;
+                }
+                Err(error) => return Err(error.to_string().into()),
+            };
+            if !is_upload_response_accepted(
+                &url,
+                response.status(),
+                chunk.offset,
+                size as u64,
+                chunk.total_size,
+            ) {
+                return Err(format!("Instant multipart part failed: {}", response.status()).into());
+            }
+            let etag = response
+                .headers()
+                .get("ETag")
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value.trim_matches('"').to_string())
+                .or_else(|| {
+                    is_google_drive_resumable_url(&url)
+                        .then(|| format!("drive-{}", chunk.part_number))
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Instant multipart part {} is missing ETag",
+                        chunk.part_number
+                    )
+                })?;
+            target.control.check()?;
+            return Ok(UploadedPart {
+                part_number: chunk.part_number,
+                etag,
+                size,
+                total_size: chunk.total_size,
+            });
+        }
+        Err("Instant multipart retries exhausted".to_string().into())
+    }
+
+    async fn multipart(
+        app: &AppHandle,
+        directory: &Path,
+        video: &VideoUploadInfo,
+        control: &Control,
+    ) -> Result<(), AuthedApiError> {
+        let upload = control
+            .step(|| api::upload_multipart_initiate(app, &video.id))
+            .await?;
+        let concurrency = if is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id) {
+            1
+        } else {
+            5
+        };
+        let target = MultipartTarget {
+            app,
+            video_id: &video.id,
+            upload_id: &upload.upload_id,
+            control,
+            use_md5: app.is_server_url_custom().await,
+        };
+        let path = directory.join("content/output.mp4");
+        let stream = strict_chunks(path.clone(), control.clone());
+        let parts = transfer_parts(&path, stream, &target, control, concurrency).await?;
+        let metadata = tokio::task::spawn_blocking(move || build_video_meta(&path))
+            .await
+            .map_err(|error| error.to_string())??;
+        control
+            .complete(|| {
+                api::upload_multipart_complete(
+                    app,
+                    &video.id,
+                    &upload.upload_id,
+                    &parts,
+                    Some(metadata),
+                )
+            })
+            .await
+    }
+
+    fn strict_chunks(path: PathBuf, control: Control) -> impl Stream<Item = io::Result<Chunk>> {
+        try_stream! {
+            let started = Instant::now();
+            let mut file = loop {
+                control.check().map_err(io::Error::other)?;
+                let opened = File::open(&path).await;
+                control.check().map_err(io::Error::other)?;
+                match opened {
+                    Ok(file) => break file,
+                    Err(error) if started.elapsed() >= Duration::from_secs(20) => Err(error)?,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            };
+            let mut offset = 0u64;
+            let mut number = 1;
+            let mut first_size = None;
+            let mut buffer = vec![0; MAX_CHUNK_SIZE as usize];
+            loop {
+                control.check().map_err(io::Error::other)?;
+                let done = *control.0.decision.borrow() == 1;
+                let size = file.metadata().await?.len();
+                control.check().map_err(io::Error::other)?;
+                let available = size.saturating_sub(offset);
+                if available >= MIN_CHUNK_SIZE || (done && available > 0) {
+                    let count = available.min(MAX_CHUNK_SIZE) as usize;
+                    file.seek(std::io::SeekFrom::Start(offset)).await?;
+                    control.check().map_err(io::Error::other)?;
+                    file.read_exact(&mut buffer[..count]).await?;
+                    control.check().map_err(io::Error::other)?;
+                    if offset == 0 { first_size = Some(count); }
+                    yield Chunk { total_size: size, part_number: number, offset, chunk: Bytes::copy_from_slice(&buffer[..count]) };
+                    offset += count as u64; number += 1;
+                } else if done && available == 0 {
+                    if let Some(count) = first_size {
+                        file.seek(std::io::SeekFrom::Start(0)).await?;
+                        control.check().map_err(io::Error::other)?;
+                        file.read_exact(&mut buffer[..count]).await?;
+                        control.check().map_err(io::Error::other)?;
+                        yield Chunk { total_size: size, part_number: 1, offset: 0, chunk: Bytes::copy_from_slice(&buffer[..count]) };
+                    }
+                    break;
+                } else {
+                    tokio::select! { _ = tokio::time::sleep(Duration::from_millis(100)) => {}, _ = control.cancelled() => {} }
+                }
+            }
+        }
+    }
+
+    trait PartTransport: Send + Sync {
+        fn send(
+            &self,
+            chunk: Chunk,
+        ) -> impl Future<Output = Result<UploadedPart, AuthedApiError>> + Send;
+    }
+    impl PartTransport for MultipartTarget<'_> {
+        async fn send(&self, chunk: Chunk) -> Result<UploadedPart, AuthedApiError> {
+            part(self, chunk).await
+        }
+    }
+
+    async fn transfer_parts(
+        path: &Path,
+        stream: impl Stream<Item = io::Result<Chunk>>,
+        transport: &impl PartTransport,
+        control: &Control,
+        concurrency: usize,
+    ) -> Result<Vec<UploadedPart>, AuthedApiError> {
+        let mut chunks = Box::pin(stream);
+        let mut pending = futures::stream::FuturesOrdered::new();
+        let mut parts = Vec::new();
+        let mut failed = Vec::new();
+        let mut failure = None;
+        let mut closed = false;
+        while !closed || !pending.is_empty() {
+            tokio::select! {
+                _ = control.cancelled(), if failure.is_none() => { failure = Some("Instant multipart cancelled".to_string().into()); }
+                chunk = chunks.next(), if !closed && pending.len() < concurrency && failure.is_none() => {
+                    match chunk {
+                        Some(Ok(chunk)) => {
+                            let info = FailedChunkInfo { part_number: chunk.part_number, offset: chunk.offset, chunk_size: chunk.chunk.len(), total_size: chunk.total_size, error: String::new() };
+                            let target = transport;
+                            pending.push_back(async move { (info, control.step(|| target.send(chunk)).await) });
+                        }
+                        Some(Err(error)) => { failure = Some(error.to_string().into()); closed = true; }
+                        None => closed = true,
+                    }
+                }
+                Some((info, result)) = pending.next(), if !pending.is_empty() => {
+                    match result { Ok(part) => parts.push(part), Err(error) => { failed.push(info); if control.check().is_err() { failure = Some(error); } } }
+                }
+            }
+            if failure.is_some() {
+                control.deny();
+                if !closed {
+                    let _ = chunks.next().await;
+                }
+                closed = true;
+            }
+        }
+        drop(chunks);
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        control.permission().await?;
+        for info in failed {
+            control.check()?;
+            let mut file = File::open(path).await.map_err(|error| error.to_string())?;
+            control.check()?;
+            file.seek(std::io::SeekFrom::Start(info.offset))
+                .await
+                .map_err(|error| error.to_string())?;
+            control.check()?;
+            let mut bytes = vec![0; info.chunk_size];
+            file.read_exact(&mut bytes)
+                .await
+                .map_err(|error| error.to_string())?;
+            control.check()?;
+            parts.push(
+                control
+                    .step(|| {
+                        transport.send(Chunk {
+                            part_number: info.part_number,
+                            offset: info.offset,
+                            total_size: info.total_size,
+                            chunk: bytes.into(),
+                        })
+                    })
+                    .await?,
+            );
+        }
+        let mut deduplicated = HashMap::new();
+        for part in parts {
+            let _ = deduplicated.insert(part.part_number, part);
+        }
+        let mut parts: Vec<_> = deduplicated.into_values().collect();
+        parts.sort_by_key(|part| part.part_number);
+        if parts.is_empty()
+            || parts
+                .iter()
+                .enumerate()
+                .any(|(index, part)| part.part_number as usize != index + 1 || part.size == 0)
+        {
+            return Err("Required Instant multipart data is incomplete"
+                .to_string()
+                .into());
+        }
+        Ok(parts)
+    }
+
+    pub async fn upload_thumbnail(
+        app: &AppHandle,
+        video_id: &str,
+        bytes: Vec<u8>,
+        control: &Control,
+    ) -> Result<(), AuthedApiError> {
+        let transport = LiveTransport {
+            app,
+            video_id,
+            control,
+        };
+        control
+            .step(|| transport.put("screenshot/screen-capture.jpg", bytes.into()))
+            .await
+    }
+
+    pub fn resume(
+        app: AppHandle,
+        directory: PathBuf,
+        video: VideoUploadInfo,
+        events: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
+        required_audio: bool,
+    ) {
+        let (control, permission) = Control::new();
+        if permission.grant().is_err() {
+            return;
+        }
+        let upload = spawn(
+            app.clone(),
+            directory.clone(),
+            video.clone(),
+            events,
+            control.clone(),
+            required_audio,
+        );
+        drop(tauri::async_runtime::spawn(async move {
+            let result = upload.handle.await;
+            if matches!(result, Ok(Ok(()))) && control.joined().await && control.check().is_ok() {
+                let result = (|| -> Result<(), String> {
+                    let mut meta = RecordingMeta::load_for_project(&directory)
+                        .map_err(|error| error.to_string())?;
+                    control.check().map_err(|error| error.to_string())?;
+                    meta.upload = Some(UploadMeta::Complete);
+                    meta.save_for_project().map_err(|error| error.to_string())?;
+                    control.check().map_err(|error| error.to_string())
+                })();
+                if let Err(error) = result {
+                    error!(%error, "Resumed Instant upload local completion failed");
+                }
+            }
+            emit_upload_complete(&app, &video.id);
+        }));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[derive(Default)]
+        struct FakeTransport {
+            calls: Mutex<Vec<String>>,
+            fail_audio: AtomicBool,
+            delay_complete: AtomicBool,
+            entered: tokio::sync::Notify,
+            released: tokio::sync::Notify,
+        }
+        impl Transport for FakeTransport {
+            async fn put(&self, path: &str, _: Bytes) -> Result<(), AuthedApiError> {
+                self.calls.lock().unwrap().push(path.into());
+                if self.fail_audio.load(Ordering::Acquire) && path.starts_with("segments/audio/") {
+                    return Err("required audio upload failed".into());
+                }
+                Ok(())
+            }
+            async fn complete(&self) -> Result<(), AuthedApiError> {
+                self.calls.lock().unwrap().push("Complete".into());
+                if self.delay_complete.load(Ordering::Acquire) {
+                    self.entered.notify_one();
+                    self.released.notified().await;
+                }
+                Ok(())
+            }
+        }
+        fn directory(tag: &str) -> PathBuf {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "cap-strict-upload-{tag}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::AcqRel)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        }
+        fn event(path: PathBuf, audio: bool, init: bool) -> SegmentCompletedEvent {
+            SegmentCompletedEvent {
+                path,
+                index: u32::from(!init),
+                duration: if init { 0.0 } else { 1.0 },
+                file_size: 4,
+                is_init: init,
+                media_type: if audio {
+                    SegmentMediaType::Audio
+                } else {
+                    SegmentMediaType::Video
+                },
+            }
+        }
+        fn events(path: &Path, audio: bool) -> tokio::sync::mpsc::Receiver<SegmentCompletedEvent> {
+            let file = path.join("synthetic-bytes");
+            std::fs::write(&file, b"test").unwrap();
+            let (sender, receiver) = tokio::sync::mpsc::channel(12);
+            for init in [true, false] {
+                sender.try_send(event(file.clone(), false, init)).unwrap();
+                if audio {
+                    sender.try_send(event(file.clone(), true, init)).unwrap();
+                }
+            }
+            receiver
+        }
+        #[tokio::test]
+        async fn strict_segment_eof_waits_for_owned_permission() {
+            let dir = directory("eof");
+            let transport = FakeTransport::default();
+            let (control, permission) = Control::new();
+            let mut source = events(&dir, false);
+            let future = segments(&transport, &control, &mut source, false);
+            tokio::pin!(future);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut future)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !transport
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == "Complete")
+            );
+            permission.grant().unwrap();
+            future.await.unwrap();
+            assert!(
+                transport
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == "Complete")
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        #[tokio::test]
+        async fn strict_required_audio_failure_or_absence_never_completes() {
+            for present in [false, true] {
+                let dir = directory("audio");
+                let transport = FakeTransport::default();
+                transport.fail_audio.store(present, Ordering::Release);
+                let (control, permission) = Control::new();
+                permission.grant().unwrap();
+                let mut source = events(&dir, present);
+                assert!(
+                    segments(&transport, &control, &mut source, true)
+                        .await
+                        .is_err()
+                );
+                assert!(
+                    !transport
+                        .calls
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value == "Complete")
+                );
+                std::fs::remove_dir_all(&dir).unwrap();
+            }
+        }
+        #[tokio::test]
+        async fn strict_complete_inflight_revocation_rejects_late_success() {
+            let dir = directory("late-complete");
+            let transport = FakeTransport::default();
+            transport.delay_complete.store(true, Ordering::Release);
+            let (control, permission) = Control::new();
+            permission.grant().unwrap();
+            let mut source = events(&dir, false);
+            let future = segments(&transport, &control, &mut source, false);
+            tokio::pin!(future);
+            tokio::select! { _ = transport.entered.notified() => {}, result = &mut future => panic!("Unexpected completion: {result:?}") }
+            control.deny();
+            transport.released.notify_one();
+            assert!(future.await.is_err());
+            assert_eq!(
+                transport
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|value| *value == "Complete")
+                    .count(),
+                1
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        #[tokio::test]
+        async fn strict_permission_drop_and_old_generation_cannot_complete() {
+            let dir = directory("owner-drop");
+            let transport = FakeTransport::default();
+            let (old, old_permission) = Control::new();
+            old.deny();
+            assert!(old_permission.grant().is_err());
+            let (control, permission) = Control::new();
+            let mut source = events(&dir, false);
+            let future = segments(&transport, &control, &mut source, false);
+            tokio::pin!(future);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut future)
+                    .await
+                    .is_err()
+            );
+            drop(permission);
+            assert!(future.await.is_err());
+            assert!(
+                !transport
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == "Complete")
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        #[tokio::test]
+        async fn owned_bridge_closes_full_queue_before_actual_thread_join() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            for _ in 0..30 {
+                sender
+                    .send(event(PathBuf::from("unused"), false, false))
+                    .unwrap();
+            }
+            let bridge = Bridge::new(receiver).unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), bridge.finish())
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                sender
+                    .send(event(PathBuf::from("unused"), false, false))
+                    .is_err()
+            );
+        }
+        #[derive(Default)]
+        struct FakeParts {
+            entered: tokio::sync::Notify,
+            released: tokio::sync::Notify,
+            delayed: AtomicBool,
+            calls: AtomicUsize,
+        }
+        impl PartTransport for FakeParts {
+            async fn send(&self, chunk: Chunk) -> Result<UploadedPart, AuthedApiError> {
+                self.calls.fetch_add(1, Ordering::AcqRel);
+                if self.delayed.load(Ordering::Acquire) {
+                    self.entered.notify_one();
+                    self.released.notified().await;
+                }
+                Ok(UploadedPart {
+                    part_number: chunk.part_number,
+                    etag: "synthetic".into(),
+                    size: chunk.chunk.len(),
+                    total_size: chunk.total_size,
+                })
+            }
+        }
+        fn chunks() -> impl Stream<Item = io::Result<Chunk>> {
+            stream::iter([Ok(Chunk {
+                total_size: 4,
+                part_number: 1,
+                offset: 0,
+                chunk: Bytes::from_static(b"test"),
+            })])
+        }
+        #[tokio::test]
+        async fn strict_multipart_eof_without_permission_does_not_finalize() {
+            let transport = FakeParts::default();
+            let (control, permission) = Control::new();
+            let future = transfer_parts(Path::new("unused"), chunks(), &transport, &control, 5);
+            tokio::pin!(future);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut future)
+                    .await
+                    .is_err()
+            );
+            permission.grant().unwrap();
+            assert_eq!(future.await.unwrap().len(), 1);
+        }
+        #[tokio::test]
+        async fn strict_multipart_cancel_drains_inflight_part_before_error() {
+            let transport = FakeParts::default();
+            transport.delayed.store(true, Ordering::Release);
+            let (control, permission) = Control::new();
+            permission.grant().unwrap();
+            let future = transfer_parts(Path::new("unused"), chunks(), &transport, &control, 5);
+            tokio::pin!(future);
+            tokio::select! { _ = transport.entered.notified() => {}, result = &mut future => panic!("Unexpected result: {result:?}") }
+            control.deny();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut future)
+                    .await
+                    .is_err()
+            );
+            transport.released.notify_one();
+            assert!(future.await.is_err());
+            assert_eq!(transport.calls.load(Ordering::Acquire), 1);
+        }
+        #[tokio::test]
+        async fn strict_request_boundary_stops_following_request_after_late_response() {
+            let (control, permission) = Control::new();
+            let called = AtomicBool::new(false);
+            let (reply, response) = tokio::sync::oneshot::channel();
+            let future = async {
+                control
+                    .step(|| async {
+                        response.await.unwrap();
+                        Ok(())
+                    })
+                    .await?;
+                control
+                    .step(|| async {
+                        called.store(true, Ordering::Release);
+                        Ok(())
+                    })
+                    .await
+            };
+            tokio::pin!(future);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(1), &mut future)
+                    .await
+                    .is_err()
+            );
+            drop(permission);
+            reply.send(()).unwrap();
+            assert!(future.await.is_err());
+            assert!(!called.load(Ordering::Acquire));
+        }
+        #[tokio::test]
+        async fn lost_upload_worker_marks_cleanup_unconfirmed_and_wakes_waiter() {
+            let (control, _permission) = Control::new();
+            let worker = control.clone();
+            let task = tokio::spawn(async move {
+                let _guard = WorkerGuard(worker);
+                panic!("lost uploader");
+            });
+            assert!(task.await.is_err());
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(1), control.joined())
+                    .await
+                    .unwrap()
+            );
+            assert!(control.check().is_err());
+        }
+        #[tokio::test]
+        async fn strict_reader_waits_for_permission_then_rewrites_first_part() {
+            let dir = directory("reader");
+            let path = dir.join("bytes");
+            std::fs::write(&path, b"test").unwrap();
+            let (control, permission) = Control::new();
+            let mut stream = Box::pin(strict_chunks(path, control));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), stream.next())
+                    .await
+                    .is_err()
+            );
+            permission.grant().unwrap();
+            let first = stream.next().await.unwrap().unwrap();
+            assert_eq!(first.part_number, 1);
+            assert_eq!(first.chunk.as_ref(), b"test");
+            let rewritten = stream.next().await.unwrap().unwrap();
+            assert_eq!(rewritten.part_number, 1);
+            assert_eq!(rewritten.chunk.as_ref(), b"test");
+            assert!(stream.next().await.is_none());
+            drop(stream);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        #[tokio::test]
+        async fn strict_reader_cancellation_is_error_not_successful_eof() {
+            let dir = directory("cancel-reader");
+            let path = dir.join("bytes");
+            std::fs::write(&path, b"test").unwrap();
+            let (control, permission) = Control::new();
+            let mut stream = Box::pin(strict_chunks(path, control));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), stream.next())
+                    .await
+                    .is_err()
+            );
+            drop(permission);
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), stream.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_err()
+            );
+            drop(stream);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        #[tokio::test]
+        async fn strict_multipart_complete_maps_optional_success_and_retains_errors_and_late_revocation()
+         {
+            let (control, permission) = Control::new();
+            permission.grant().unwrap();
+            let result: Result<(), AuthedApiError> = control
+                .complete(|| async { Ok(Some("synthetic-location".to_string())) })
+                .await;
+            result.unwrap();
+            assert!(
+                control
+                    .complete(|| async {
+                        Err::<Option<String>, _>("required completion failed".into())
+                    })
+                    .await
+                    .is_err()
+            );
+            let (release, released) = tokio::sync::oneshot::channel();
+            let future = control.complete(|| async {
+                released.await.unwrap();
+                Ok(Some("late-location".to_string()))
+            });
+            tokio::pin!(future);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut future)
+                    .await
+                    .is_err()
+            );
+            control.deny();
+            release.send(()).unwrap();
+            assert!(future.await.is_err());
+        }
     }
 }

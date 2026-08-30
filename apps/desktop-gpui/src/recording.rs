@@ -18,6 +18,8 @@ use cap_recording::{
     sources::screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
+#[cfg(target_os = "linux")]
+use futures_util::FutureExt as _;
 use kameo::{Actor, actor::ActorRef};
 
 pub use cap_recording::feeds::camera::DeviceOrModelID;
@@ -46,8 +48,20 @@ pub struct StartConfig {
     /// recording locks these instead of spawning its own -- the Tauri model.
     pub camera_feed: Option<ActorRef<CameraFeed>>,
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
+    #[cfg(target_os = "linux")]
+    pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub struct LinuxInstantCameraRequest {
+    pub presentation: instant_recording::LinuxCameraPresentation,
+    pub reference_size: (u32, u32),
+    pub effects: instant_recording::LinuxCameraProcessing,
+    pub processing: crate::feeds::CameraProcessingFactory,
+}
+
+#[cfg_attr(target_os = "linux", derive(Clone))]
 enum Handle {
     // Studio's handle is `Clone`; instant's is not, so it rides in an `Arc`.
     // Both give the owned handles pause/resume need for `'static` futures.
@@ -55,12 +69,20 @@ enum Handle {
     Instant(Arc<instant_recording::ActorHandle>),
 }
 
+type SharedInstantUpload = Arc<tokio::sync::Mutex<Option<crate::upload::InstantUpload>>>;
+
 /// A live recording. Stopping consumes it; dropping it without stopping leaves
 /// the actors to wind down on their own when the refs go away.
+#[cfg_attr(target_os = "linux", derive(Clone))]
 pub struct ActiveRecording {
     handle: Handle,
     pub project_dir: PathBuf,
-    instant_upload: Option<crate::upload::InstantUpload>,
+    instant_upload: Option<SharedInstantUpload>,
+    instant_share_link: Option<String>,
+    #[cfg(target_os = "linux")]
+    instant_completion: Option<crate::upload::CompletionControl>,
+    #[cfg(target_os = "linux")]
+    instant_operation: Arc<tokio::sync::Mutex<()>>,
     /// Recording-scoped mic mute (payload zeroing at the consumer seam; the
     /// stream cadence is unaffected). `None` when the recording has no mic.
     pub mic_mute: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -74,11 +96,464 @@ pub struct ActiveRecording {
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub(crate) struct InstantAttempt(Arc<InstantAttemptInner>);
+
+#[cfg(target_os = "linux")]
+struct InstantAttemptInner {
+    lifecycle: Mutex<Option<instant_recording::InstantLifecycle>>,
+    cancelled: tokio::sync::watch::Sender<bool>,
+    startup: tokio::sync::watch::Sender<StartupState>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupState {
+    Unstarted,
+    Running,
+    Finished,
+    Unconfirmed,
+}
+
+#[cfg(target_os = "linux")]
+impl InstantAttempt {
+    pub fn new() -> Self {
+        Self(Arc::new(InstantAttemptInner {
+            lifecycle: Mutex::new(None),
+            cancelled: tokio::sync::watch::channel(false).0,
+            startup: tokio::sync::watch::channel(StartupState::Unstarted).0,
+        }))
+    }
+
+    pub fn cancel(&self) {
+        self.0.cancelled.send_replace(true);
+        self.0.startup.send_if_modified(|state| {
+            if *state == StartupState::Unstarted {
+                *state = StartupState::Finished;
+                true
+            } else {
+                false
+            }
+        });
+        if let Some(lifecycle) = self.0.lifecycle.lock().unwrap().as_ref() {
+            lifecycle.cancel();
+        }
+    }
+
+    fn attach(&self, lifecycle: instant_recording::InstantLifecycle) -> anyhow::Result<()> {
+        let mut current = self.0.lifecycle.lock().unwrap();
+        anyhow::ensure!(
+            current.is_none(),
+            "An Instant attempt cannot replace its capture lifecycle"
+        );
+        if *self.0.cancelled.borrow() {
+            lifecycle.cancel();
+        }
+        *current = Some(lifecycle);
+        Ok(())
+    }
+
+    pub fn quiescence(&self) -> instant_recording::InstantQuiescence {
+        use instant_recording::InstantQuiescence;
+        match *self.0.startup.borrow() {
+            StartupState::Unconfirmed => InstantQuiescence::Unconfirmed,
+            StartupState::Unstarted | StartupState::Running => InstantQuiescence::Pending,
+            StartupState::Finished => self.0.lifecycle.lock().unwrap().as_ref().map_or(
+                InstantQuiescence::Joined,
+                instant_recording::InstantLifecycle::quiescence,
+            ),
+        }
+    }
+
+    pub async fn wait_for_quiescence(&self) -> instant_recording::InstantQuiescence {
+        let mut startup = self.0.startup.subscribe();
+        loop {
+            let state = *startup.borrow_and_update();
+            match state {
+                StartupState::Unconfirmed => {
+                    return instant_recording::InstantQuiescence::Unconfirmed;
+                }
+                StartupState::Finished => break,
+                _ => {}
+            }
+            if startup.changed().await.is_err() {
+                return instant_recording::InstantQuiescence::Unconfirmed;
+            }
+        }
+        let lifecycle = self.0.lifecycle.lock().unwrap().clone();
+        match lifecycle {
+            Some(lifecycle) => lifecycle.wait_for_quiescence().await,
+            None => instant_recording::InstantQuiescence::Joined,
+        }
+    }
+
+    async fn cancelled(&self) {
+        let mut cancelled = self.0.cancelled.subscribe();
+        loop {
+            let requested = *cancelled.borrow_and_update();
+            if requested || cancelled.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct StartupWaiter {
+    attempt: InstantAttempt,
+    armed: bool,
+}
+#[cfg(target_os = "linux")]
+impl Drop for StartupWaiter {
+    fn drop(&mut self) {
+        if self.armed {
+            self.attempt.cancel();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct StartupCompletion {
+    attempt: InstantAttempt,
+    armed: bool,
+}
+#[cfg(target_os = "linux")]
+impl Drop for StartupCompletion {
+    fn drop(&mut self) {
+        if self.armed {
+            self.attempt.cancel();
+            self.attempt
+                .0
+                .startup
+                .send_replace(StartupState::Unconfirmed);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn owned_instant_start<T, F>(
+    attempt: InstantAttempt,
+    build: impl Future<Output = anyhow::Result<T>> + Send + 'static,
+    cleanup: impl Fn(T) -> F + Send + 'static,
+) -> impl Future<Output = anyhow::Result<T>> + Send
+where
+    T: Send + 'static,
+    F: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    let waiter = StartupWaiter {
+        attempt: attempt.clone(),
+        armed: true,
+    };
+    async move {
+        let mut waiter = waiter;
+        if *attempt.0.cancelled.borrow() {
+            anyhow::bail!("Recording startup cancelled");
+        }
+        let mut started = false;
+        attempt.0.startup.send_if_modified(|state| {
+            if *state == StartupState::Unstarted {
+                *state = StartupState::Running;
+                started = true;
+                true
+            } else {
+                false
+            }
+        });
+        if !started {
+            waiter.armed = false;
+            drop(waiter);
+            anyhow::bail!("Instant startup attempt was already used or cancelled");
+        }
+        let completion = StartupCompletion {
+            attempt: attempt.clone(),
+            armed: true,
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(tokio::spawn(async move {
+            let mut completion = completion;
+            let result = tokio::select! {
+                biased;
+                _ = attempt.cancelled() => Err(anyhow!("Recording startup cancelled")),
+                result = std::panic::AssertUnwindSafe(build).catch_unwind() => {
+                    match result {
+                        Ok(result) => result,
+                        Err(_) => {
+                            attempt.0.startup.send_replace(StartupState::Unconfirmed);
+                            Err(anyhow!("Recording startup panicked; cleanup is unconfirmed"))
+                        }
+                    }
+                }
+            };
+            let cancelled = *attempt.0.cancelled.borrow();
+            let result = match result {
+                Ok(active) if cancelled => {
+                    let _ = cleanup(active).await;
+                    Err(anyhow!(
+                        "Recording startup cancelled; local files preserved"
+                    ))
+                }
+                result => result,
+            };
+            if result.is_err() {
+                attempt.cancel();
+                let lifecycle = attempt.0.lifecycle.lock().unwrap().clone();
+                if let Some(lifecycle) = lifecycle {
+                    lifecycle.wait_for_quiescence().await;
+                }
+            }
+            if let Err(Ok(active)) = sender.send(result) {
+                let _ = cleanup(active).await;
+            }
+            attempt.0.startup.send_if_modified(|state| {
+                if *state == StartupState::Unconfirmed {
+                    false
+                } else {
+                    *state = StartupState::Finished;
+                    true
+                }
+            });
+            completion.armed = false;
+            drop(completion);
+        }));
+        let result = receiver
+            .await
+            .context("Recording startup acknowledgement lost")?;
+        waiter.armed = false;
+        drop(waiter);
+        result
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn owned_instant_operation(
+    operation: impl Future<Output = (bool, anyhow::Result<PathBuf>)> + Send + 'static,
+    cancel: impl Fn() + Send + 'static,
+) -> CaptureStopFuture {
+    let waiter = InstantOperationWaiter {
+        cancel: Box::new(cancel),
+        armed: true,
+    };
+    Box::pin(async move {
+        let mut waiter = waiter;
+        let result = match tokio::spawn(operation).await {
+            Ok(result) => result,
+            Err(error) => (false, Err(anyhow!("Instant cleanup task failed: {error}"))),
+        };
+        if result.1.is_err() {
+            (waiter.cancel)();
+        }
+        waiter.armed = false;
+        drop(waiter);
+        result
+    })
+}
+
+#[cfg(target_os = "linux")]
+struct InstantOperationWaiter {
+    cancel: Box<dyn Fn() + Send>,
+    armed: bool,
+}
+#[cfg(target_os = "linux")]
+impl Drop for InstantOperationWaiter {
+    fn drop(&mut self) {
+        if self.armed {
+            (self.cancel)();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn joined_instant_result<T>(
+    lifecycle: instant_recording::InstantLifecycle,
+    operation: impl Future<Output = anyhow::Result<T>>,
+) -> (bool, anyhow::Result<T>) {
+    run_instant_operation(
+        operation,
+        || lifecycle.cancel(),
+        lifecycle.wait_for_quiescence(),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn run_instant_operation<T>(
+    operation: impl Future<Output = anyhow::Result<T>>,
+    cancel: impl FnOnce(),
+    quiescence: impl Future<Output = instant_recording::InstantQuiescence>,
+) -> (bool, anyhow::Result<T>) {
+    let result = std::panic::AssertUnwindSafe(operation)
+        .catch_unwind()
+        .await
+        .unwrap_or_else(|_| Err(anyhow!("Instant operation panicked")));
+    if result.is_err() {
+        cancel();
+    }
+    let joined = quiescence.await == instant_recording::InstantQuiescence::Joined;
+    if !joined {
+        return (
+            false,
+            Err(anyhow!(
+                "Instant capture cleanup is unconfirmed; local files preserved"
+            )),
+        );
+    }
+    (true, result)
+}
+
+async fn finalize_studio(
+    completed: studio_recording::CompletedRecording,
+    capture_target: ScreenCaptureTarget,
+) -> anyhow::Result<PathBuf> {
+    let project_path = completed.project_path.clone();
+    let needs_remux = matches!(
+        completed.meta.status(),
+        cap_project::StudioRecordingStatus::NeedsRemux
+    );
+    tokio::task::spawn_blocking(move || {
+        if needs_remux {
+            ensure_finalization_storage(&project_path)?;
+        }
+        cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
+            .map_err(anyhow::Error::from)
+    })
+    .await
+    .context("studio finalize task")?
+    .context("studio finalize")?;
+
+    // Everything `handle_recording_finish` does after the remux,
+    // in its order: the first-frame JPEG the library's card is
+    // drawn from, then the camera preview's blur toggle copied
+    // into the project's configuration. Neither is fatal to a
+    // recording that is already on disk, so both only warn.
+    let project_path = completed.project_path.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(display_path) = studio_display_path(&project_path) {
+            write_bundle_thumbnail(&project_path, &display_path);
+        }
+        apply_camera_blur_to_project_config(&project_path, current_camera_blur());
+        let library = serde_json::from_value(serde_json::Value::Object(
+            crate::store::store_section("animated_gradients"),
+        ))
+        .unwrap_or_default();
+        apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
+    })
+    .await
+    .context("studio post-finalize task")?;
+
+    Ok(completed.project_path)
+}
+
+#[cfg(target_os = "linux")]
+async fn finish_studio_after_join<T, F>(
+    stop: impl Future<Output = studio_recording::StudioStopReport>,
+    finish: impl FnOnce(studio_recording::CompletedRecording) -> F,
+) -> (bool, anyhow::Result<T>)
+where
+    F: Future<Output = anyhow::Result<T>>,
+{
+    let report = stop.await;
+    if !report.accepted_intent {
+        return (
+            false,
+            Err(anyhow!("Another Studio terminal action owns cleanup")),
+        );
+    }
+    if report.quiescence != studio_recording::StudioQuiescence::Joined {
+        return (false, Err(anyhow!("Studio capture cleanup is unconfirmed")));
+    }
+    let result = match report.result {
+        Ok(completed) => std::panic::AssertUnwindSafe(finish(completed))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(anyhow!(
+                    "Studio finalization task panicked after capture stopped"
+                ))
+            }),
+        Err(error) => Err(anyhow!(error)),
+    };
+    (true, result)
+}
+
+#[cfg(any(windows, all(target_os = "linux", test)))]
+async fn finish_after_capture_stop<T, F>(
+    stop: impl Future<Output = anyhow::Result<T>>,
+    finalize: impl FnOnce(T) -> F,
+) -> (bool, anyhow::Result<PathBuf>)
+where
+    F: Future<Output = anyhow::Result<PathBuf>>,
+{
+    match stop.await {
+        Ok(completed) => {
+            let result = std::panic::AssertUnwindSafe(finalize(completed))
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    Err(anyhow!(
+                        "Studio finalization task panicked after capture stopped"
+                    ))
+                });
+            (true, result)
+        }
+        Err(error) => (false, Err(error)),
+    }
+}
+
+pub(crate) type CaptureStopFuture =
+    std::pin::Pin<Box<dyn Future<Output = (bool, anyhow::Result<PathBuf>)> + Send>>;
+
+#[cfg(any(windows, test))]
+async fn finish_windows_startup_setup<T>(
+    setup: anyhow::Result<T>,
+    cancel: impl std::future::Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<T> {
+    match setup {
+        Ok(output) => Ok(output),
+        Err(error) => match cancel.await {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(error.context(format!(
+                "Windows startup cleanup failed: {cleanup:#}; partial recording preserved"
+            ))),
+        },
+    }
+}
+
+#[cfg(any(windows, test))]
+async fn finish_windows_failed_capture(
+    cancel: impl Future<Output = anyhow::Result<()>>,
+    persist_stopped: impl FnOnce() -> anyhow::Result<()>,
+) -> (bool, anyhow::Result<PathBuf>) {
+    if let Err(error) = cancel.await {
+        return (
+            false,
+            Err(error.context("Failed capture cancellation is unconfirmed; local files preserved")),
+        );
+    }
+    if let Err(error) = persist_stopped() {
+        return (
+            true,
+            Err(error.context(
+                "Capture cancelled, but stopped metadata could not be saved; local files preserved",
+            )),
+        );
+    }
+    (
+        true,
+        Err(anyhow!("Recording pipeline failed; local files preserved")),
+    )
+}
+
 impl ActiveRecording {
+    pub fn done_fut(&self) -> cap_recording::DoneFut {
+        match &self.handle {
+            Handle::Studio(handle) => handle.done_fut(),
+            Handle::Instant(handle) => handle.done_fut(),
+        }
+    }
+
     pub fn instant_share_url(&self) -> Option<&str> {
-        self.instant_upload
-            .as_ref()
-            .map(|upload| upload.video().link.as_str())
+        self.instant_share_link.as_deref()
     }
 
     /// Stop and finalize. Returns the project directory.
@@ -121,19 +596,271 @@ impl ActiveRecording {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn is_paused_handle(
+        &self,
+    ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send>> {
+        match &self.handle {
+            Handle::Studio(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.is_paused().await })
+            }
+            Handle::Instant(handle) => {
+                let handle = handle.clone();
+                Box::pin(async move { handle.is_paused().await })
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn clean_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
+        let Handle::Studio(handle) = &self.handle else {
+            return None;
+        };
+        let handle = handle.clone();
+        Some(Box::pin(async move {
+            let capture_target = handle.capture_target.clone();
+            finish_studio_after_join(handle.stop_with_report(), |completed| {
+                finalize_studio(completed, capture_target)
+            })
+            .await
+        }))
+    }
+
+    #[cfg(windows)]
+    pub fn clean_windows_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
+        let Handle::Studio(handle) = &self.handle else {
+            return None;
+        };
+        let handle = handle.clone();
+        Some(Box::pin(async move {
+            let capture_target = handle.capture_target.clone();
+            finish_after_capture_stop(handle.stop(), |completed| {
+                finalize_studio(completed, capture_target)
+            })
+            .await
+        }))
+    }
+
+    #[cfg(windows)]
+    pub fn windows_studio_delete_handle(&self) -> Option<CaptureStopFuture> {
+        let Handle::Studio(handle) = &self.handle else {
+            return None;
+        };
+        let handle = handle.clone();
+        let directory = self.project_dir.clone();
+        Some(Box::pin(async move {
+            let report = handle
+                .stop_with_intent(studio_recording::StudioStopIntent::Discard)
+                .await;
+            if !report.accepted_intent || !report.stop_acknowledged {
+                return (
+                    false,
+                    Err(anyhow!(
+                        "Studio discard stop is unconfirmed; local files preserved"
+                    )),
+                );
+            }
+            if let Err(error) = report.result {
+                return (false, Err(anyhow!(error)));
+            }
+            let output = directory.clone();
+            let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&directory))
+                .await
+                .context("Studio discard task failed")
+                .and_then(|result| result.map_err(anyhow::Error::from));
+            (true, result.map(|_| output))
+        }))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn instant_lifecycle(&self) -> Option<instant_recording::InstantLifecycle> {
+        match &self.handle {
+            Handle::Instant(handle) => Some(handle.lifecycle()),
+            _ => None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn instant_stop_handle(
+        &self,
+        preserve_local: bool,
+        failed: bool,
+    ) -> Option<CaptureStopFuture> {
+        let lifecycle = self.instant_lifecycle()?;
+        let active = self.clone();
+        let cancel = active.instant_cancellation();
+        Some(owned_instant_operation(
+            async move {
+                if failed {
+                    joined_instant_result(lifecycle, async move {
+                        active.cancel_preserving().await?;
+                        Err(anyhow!("Recording pipeline failed; local files preserved"))
+                    })
+                    .await
+                } else {
+                    joined_instant_result(lifecycle, active.stop(preserve_local)).await
+                }
+            },
+            cancel,
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn instant_cancellation(&self) -> impl Fn() + Send + 'static {
+        let lifecycle = self.instant_lifecycle();
+        let completion = self.instant_completion.clone();
+        move || {
+            if let Some(completion) = &completion {
+                completion.deny();
+            }
+            if let Some(lifecycle) = &lifecycle {
+                lifecycle.cancel();
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn instant_delete_handle(&self) -> Option<CaptureStopFuture> {
+        let lifecycle = self.instant_lifecycle()?;
+        let active = self.clone();
+        let directory = self.project_dir.clone();
+        let cancel = active.instant_cancellation();
+        Some(owned_instant_operation(
+            async move {
+                joined_instant_result(lifecycle, async move {
+                    active.cancel_and_delete().await?;
+                    Ok(directory)
+                })
+                .await
+            },
+            cancel,
+        ))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn failed_windows_stop_handle(&self) -> CaptureStopFuture {
+        let cancel: futures_util::future::BoxFuture<'static, anyhow::Result<()>> =
+            match &self.handle {
+                Handle::Studio(handle) => {
+                    let handle = handle.clone();
+                    Box::pin(async move { handle.stop().await.map(|_| ()) })
+                }
+                Handle::Instant(handle) => {
+                    let handle = handle.clone();
+                    Box::pin(async move { handle.cancel().await })
+                }
+            };
+        let upload = self.instant_upload.clone();
+        let directory = self.project_dir.clone();
+        Box::pin(async move {
+            let mut upload_guard = match &upload {
+                Some(upload) => Some(upload.lock().await),
+                None => None,
+            };
+            let mut upload = upload_guard.as_deref_mut().and_then(Option::as_mut);
+            if let Some(upload) = upload.as_mut() {
+                upload.abort_segments().await;
+            }
+            finish_windows_failed_capture(cancel, || {
+                if let Some(upload) = upload.as_ref() {
+                    mark_instant_recording_stopped(&directory, upload.metadata_lock())?;
+                }
+                Ok(())
+            })
+            .await
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn cancel_preserving(self) -> anyhow::Result<()> {
+        if let Some(completion) = &self.instant_completion {
+            completion.deny();
+        }
+        let _operation = self.instant_operation.lock().await;
+        if let Handle::Studio(handle) = &self.handle {
+            return handle.cancel().await;
+        }
+        let lifecycle = self
+            .instant_lifecycle()
+            .context("Instant lifecycle missing")?;
+        let Handle::Instant(handle) = &self.handle else {
+            unreachable!()
+        };
+        let (joined, result) = joined_instant_result(lifecycle, handle.cancel()).await;
+        if let Some(upload) = &self.instant_upload
+            && let Some(upload) = upload.lock().await.as_mut()
+        {
+            upload.abort_segments().await;
+            return persist_preserved_instant_stop(
+                &self.project_dir,
+                Some(upload.metadata_lock()),
+                joined,
+                result,
+            );
+        }
+        persist_preserved_instant_stop(&self.project_dir, None, joined, result)
+    }
+
     /// Cancel without finalizing and delete the project directory -- the
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
-        match &self.handle {
-            Handle::Studio(handle) => handle.cancel().await?,
-            Handle::Instant(handle) => handle.cancel().await?,
+        #[cfg(target_os = "linux")]
+        if let Some(completion) = &self.instant_completion {
+            completion.deny();
         }
-        let remote_result = if let Some(upload) = self.instant_upload {
+        #[cfg(target_os = "linux")]
+        let _operation = self.instant_operation.lock().await;
+        let result = match &self.handle {
+            Handle::Studio(handle) => {
+                #[cfg(windows)]
+                {
+                    let report = handle
+                        .stop_with_intent(studio_recording::StudioStopIntent::Discard)
+                        .await;
+                    if !report.accepted_intent || !report.stop_acknowledged {
+                        return Err(anyhow!(
+                            "Studio discard is unconfirmed; local files preserved"
+                        ));
+                    }
+                    report.result.map(|_| ()).map_err(anyhow::Error::msg)
+                }
+                #[cfg(not(windows))]
+                handle.cancel().await
+            }
+            Handle::Instant(handle) => {
+                #[cfg(target_os = "linux")]
+                {
+                    let (_, result) =
+                        joined_instant_result(handle.lifecycle(), handle.cancel()).await;
+                    result
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    handle.cancel().await
+                }
+            }
+        };
+        if let Err(error) = result {
+            if let Some(upload) = &self.instant_upload
+                && let Some(upload) = upload.lock().await.as_mut()
+            {
+                upload.abort_segments().await;
+            }
+            return Err(error);
+        }
+        let upload = match self.instant_upload.as_ref() {
+            Some(upload) => upload.lock().await.take(),
+            None => None,
+        };
+        let remote_result = if let Some(upload) = upload {
             upload.cancel().await
         } else {
             Ok(())
         };
+        #[cfg(target_os = "linux")]
+        remote_result.map_err(anyhow::Error::msg)?;
         tokio::task::spawn_blocking({
             let dir = self.project_dir.clone();
             move || std::fs::remove_dir_all(&dir)
@@ -141,60 +868,34 @@ impl ActiveRecording {
         .await
         .context("delete task")?
         .with_context(|| format!("deleting {}", self.project_dir.display()))?;
+        #[cfg(not(target_os = "linux"))]
         remote_result.map_err(anyhow::Error::msg)?;
         Ok(())
     }
 
     pub async fn stop(self, preserve_local: bool) -> anyhow::Result<PathBuf> {
-        let mut instant_upload = self.instant_upload;
+        #[cfg(target_os = "linux")]
+        let _operation = self.instant_operation.lock().await;
+        let mut upload_guard = match self.instant_upload.as_ref() {
+            Some(upload) => Some(upload.lock().await),
+            None => None,
+        };
+        let mut instant_upload = upload_guard.as_deref_mut().and_then(Option::as_mut);
         match self.handle {
             Handle::Studio(handle) => {
                 let capture_target = handle.capture_target.clone();
                 let completed = handle.stop().await?;
-                let project_path = completed.project_path.clone();
-                let needs_remux = matches!(
-                    completed.meta.status(),
-                    cap_project::StudioRecordingStatus::NeedsRemux
-                );
-                tokio::task::spawn_blocking(move || {
-                    if needs_remux {
-                        ensure_finalization_storage(&project_path)?;
-                    }
-                    cap_recording::recovery::RecoveryManager::remux_if_needed(&project_path)
-                        .map_err(anyhow::Error::from)
-                })
-                .await
-                .context("studio finalize task")?
-                .context("studio finalize")?;
-
-                // Everything `handle_recording_finish` does after the remux,
-                // in its order: the first-frame JPEG the library's card is
-                // drawn from, then the camera preview's blur toggle copied
-                // into the project's configuration. Neither is fatal to a
-                // recording that is already on disk, so both only warn.
-                let project_path = completed.project_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Some(display_path) = studio_display_path(&project_path) {
-                        write_bundle_thumbnail(&project_path, &display_path);
-                    }
-                    apply_camera_blur_to_project_config(&project_path, current_camera_blur());
-                    let library = serde_json::from_value(serde_json::Value::Object(
-                        crate::store::store_section("animated_gradients"),
-                    ))
-                    .unwrap_or_default();
-                    apply_animated_gradient_to_project_config(
-                        &project_path,
-                        &capture_target,
-                        &library,
-                    );
-                })
-                .await
-                .context("studio post-finalize task")?;
-
-                Ok(completed.project_path)
+                finalize_studio(completed, capture_target).await
             }
             Handle::Instant(handle) => {
                 let result = async {
+                    #[cfg(target_os = "linux")]
+                    let stopped = {
+                        let (joined, result) = joined_instant_result(handle.lifecycle(), handle.stop()).await;
+                        anyhow::ensure!(joined, "Instant capture cleanup is unconfirmed; local files preserved");
+                        result
+                    };
+                    #[cfg(not(target_os = "linux"))]
                     let stopped = handle.stop().await;
                     let metadata_result = match instant_upload.as_ref() {
                         Some(upload) => {
@@ -252,6 +953,14 @@ impl ActiveRecording {
                     .await
                     .context("instant thumbnail task")?;
 
+                    #[cfg(any(target_os = "linux", windows))]
+                    if segmented {
+                        if let Err(error) = upload.finish_screenshot(&completed.project_path).await {
+                            persist_instant_upload_failure(&completed.project_path, &error, upload.metadata_lock())?;
+                            return Err(anyhow!(error));
+                        }
+                        upload.authorize_completion().map_err(anyhow::Error::msg)?;
+                    }
                     if let Err(error) = upload.finish_segments().await {
                         persist_instant_upload_failure(
                             &completed.project_path,
@@ -262,12 +971,18 @@ impl ActiveRecording {
                     }
 
                     let upload_result = if segmented {
-                        upload.finish_screenshot(&completed.project_path).await
+                        #[cfg(any(target_os = "linux", windows))]
+                        { Ok(()) }
+                        #[cfg(not(any(target_os = "linux", windows)))]
+                        { upload.finish_screenshot(&completed.project_path).await }
                     } else {
                         crate::upload::upload_exported_video(
                             completed.project_path.clone(),
                             None,
                             |_| {},
+                            #[cfg(target_os = "linux")]
+                            upload.cancellation_token(),
+                            #[cfg(not(target_os = "linux"))]
                             Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         )
                         .await
@@ -282,25 +997,70 @@ impl ActiveRecording {
                             }
                         })
                     };
-                    if let Err(error) = upload_result {
-                        persist_instant_upload_failure(
-                            &completed.project_path,
-                            &error,
-                            upload.metadata_lock(),
-                        )?;
-                        return Err(anyhow!(error));
-                    }
-
-                    persist_instant_upload_complete(&completed.project_path, upload.metadata_lock())?;
-
-                    if !preserve_local
-                        && crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
+                    #[cfg(target_os = "linux")]
                     {
-                        let directory = completed.project_path.clone();
-                        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(directory))
-                            .await
-                            .context("instant upload cleanup task")?
-                            .context("deleting uploaded instant recording")?;
+                        let upload_cancel = Some(upload.cancellation_token());
+                        let delete_local = !preserve_local
+                            && crate::store::GeneralSettings::load()
+                                .delete_instant_recordings_after_upload;
+                        let local_result = finish_instant_upload_locally(
+                            upload_cancel.as_deref(),
+                            async { upload_result },
+                            || {
+                                persist_instant_upload_complete(
+                                    &completed.project_path,
+                                    upload.metadata_lock(),
+                                    upload_cancel.as_deref(),
+                                )
+                            },
+                            async {
+                                if delete_local {
+                                    let directory = completed.project_path.clone();
+                                    let cancel = upload_cancel.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        remove_uploaded_instant_recording(&directory, cancel.as_deref())
+                                    })
+                                    .await
+                                    .context("instant upload cleanup task")??;
+                                }
+                                Ok(())
+                            },
+                        )
+                        .await;
+                        if let Err(error) = local_result {
+                            persist_instant_upload_failure(
+                                &completed.project_path,
+                                &error.to_string(),
+                                upload.metadata_lock(),
+                            )?;
+                            return Err(error);
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        if let Err(error) = upload_result {
+                            persist_instant_upload_failure(
+                                &completed.project_path,
+                                &error,
+                                upload.metadata_lock(),
+                            )?;
+                            return Err(anyhow!(error));
+                        }
+                        persist_instant_upload_complete(
+                            &completed.project_path,
+                            upload.metadata_lock(),
+                            None,
+                        )?;
+                        if !preserve_local
+                            && crate::store::GeneralSettings::load()
+                                .delete_instant_recordings_after_upload
+                        {
+                            let directory = completed.project_path.clone();
+                            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(directory))
+                                .await
+                                .context("instant upload cleanup task")?
+                                .context("deleting uploaded instant recording")?;
+                        }
                     }
 
                     Ok(completed.project_path)
@@ -354,6 +1114,25 @@ fn write_instant_metadata(
         let _ = std::fs::remove_file(&temporary);
     }
     result.context("saving instant recording metadata")
+}
+
+#[cfg(target_os = "linux")]
+fn persist_preserved_instant_stop(
+    project_path: &std::path::Path,
+    metadata_lock: Option<&Mutex<()>>,
+    joined: bool,
+    capture_result: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if !joined {
+        return capture_result;
+    }
+    let metadata_result = metadata_lock
+        .context("instant recording has no upload session")
+        .and_then(|lock| mark_instant_recording_stopped(project_path, lock));
+    if let Err(error) = &metadata_result {
+        tracing::warn!(%error, "Could not mark the preserved instant recording as stopped");
+    }
+    capture_result.and(metadata_result)
 }
 
 fn mark_instant_recording_stopped(
@@ -756,14 +1535,51 @@ pub(crate) fn persist_instant_upload_failure(
     })
 }
 
+fn check_instant_publication_cancelled(
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire)),
+        "Instant recording upload cancelled; local success withheld"
+    );
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn remove_uploaded_instant_recording(
+    directory: &std::path::Path,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<()> {
+    check_instant_publication_cancelled(cancel)?;
+    std::fs::remove_dir_all(directory).context("deleting uploaded instant recording")
+}
+
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) async fn finish_instant_upload_locally(
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    upload: impl std::future::Future<Output = Result<(), String>>,
+    persist: impl FnOnce() -> anyhow::Result<()>,
+    cleanup: impl std::future::Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    upload.await.map_err(anyhow::Error::msg)?;
+    check_instant_publication_cancelled(cancel)?;
+    persist()?;
+    check_instant_publication_cancelled(cancel)?;
+    cleanup.await?;
+    check_instant_publication_cancelled(cancel)
+}
+
 fn persist_instant_upload_complete(
     project_path: &std::path::Path,
     metadata_lock: &Mutex<()>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<()> {
     with_instant_metadata_lock(metadata_lock, || {
+        check_instant_publication_cancelled(cancel)?;
         let mut meta = cap_project::RecordingMeta::load_for_project(project_path)
             .map_err(|error| anyhow!("loading instant recording metadata: {error}"))?;
         meta.upload = Some(cap_project::UploadMeta::Complete);
+        check_instant_publication_cancelled(cancel)?;
         save_instant_metadata(&meta)?;
         Ok(())
     })
@@ -812,30 +1628,63 @@ fn persist_in_progress_instant_meta(
     })
 }
 
-pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
-    match start_attempt(config.clone()).await {
-        Ok(active) => Ok(active),
-        // The mic actor can die between our health checks and the recording
-        // actor's own audio setup (flaky Bluetooth/Continuity devices, or
-        // CoreAudio still tearing down a previous session). One retry without
-        // the mic keeps the screen recording alive; the real fix is app-scoped
-        // feeds with reconnect, which arrive with the camera preview window.
-        Err(error)
-            if config.microphone.is_some() && format!("{error:#}").contains("microphone") =>
-        {
-            tracing::warn!("start failed on the microphone path, retrying without: {error:#}");
-            start_attempt(StartConfig {
-                microphone: None,
-                mic_feed: None,
-                ..config
-            })
-            .await
-        }
-        Err(error) => Err(error),
-    }
+#[cfg(target_os = "linux")]
+fn validate_linux_camera_request(
+    mode: RecordingMode,
+    target: &ScreenCaptureTarget,
+    camera_requested: bool,
+    prepared: bool,
+) -> anyhow::Result<()> {
+    let required = mode == RecordingMode::Instant
+        && !matches!(target, ScreenCaptureTarget::CameraOnly)
+        && camera_requested;
+    anyhow::ensure!(
+        !required || prepared,
+        "Requested Instant camera has not been prepared. Please select the camera again."
+    );
+    anyhow::ensure!(
+        !prepared || required,
+        "Processed camera requires an Instant screen capture with a selected camera"
+    );
+    Ok(())
 }
 
-async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
+pub async fn start(config: StartConfig) -> anyhow::Result<ActiveRecording> {
+    #[cfg(target_os = "linux")]
+    if config.mode == RecordingMode::Instant {
+        return start_tracked(config, InstantAttempt::new()).await;
+    }
+    start_internal(
+        config,
+        #[cfg(target_os = "linux")]
+        None,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn start_tracked(
+    config: StartConfig,
+    attempt: InstantAttempt,
+) -> impl Future<Output = anyhow::Result<ActiveRecording>> + Send {
+    owned_instant_start(
+        attempt.clone(),
+        start_internal(config, Some(attempt)),
+        ActiveRecording::cancel_preserving,
+    )
+}
+
+async fn start_internal(
+    config: StartConfig,
+    #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
+) -> anyhow::Result<ActiveRecording> {
+    #[cfg(target_os = "linux")]
+    validate_linux_camera_request(
+        config.mode,
+        &config.target,
+        config.camera.is_some(),
+        config.linux_instant_camera.is_some(),
+    )?;
     if matches!(config.target, ScreenCaptureTarget::CameraOnly) && config.camera.is_none() {
         return Err(anyhow!("Camera-only recording requires a selected camera."));
     }
@@ -869,7 +1718,28 @@ async fn start_attempt(config: StartConfig) -> anyhow::Result<ActiveRecording> {
         None
     };
 
-    let result = start_attempt_with_upload(config, project_dir, pre_created_video.clone()).await;
+    let result = start_attempt_with_upload(
+        config,
+        project_dir,
+        pre_created_video.clone(),
+        #[cfg(target_os = "linux")]
+        attempt.clone(),
+    )
+    .await;
+    #[cfg(target_os = "linux")]
+    if result.is_err()
+        && let Some(attempt) = &attempt
+    {
+        let lifecycle = attempt.0.lifecycle.lock().unwrap().clone();
+        if let Some(lifecycle) = lifecycle {
+            lifecycle.cancel();
+            anyhow::ensure!(
+                lifecycle.wait_for_quiescence().await
+                    == instant_recording::InstantQuiescence::Joined,
+                "Recording startup failed; capture cleanup is unconfirmed and files are preserved"
+            );
+        }
+    }
     if result.is_err()
         && let Some(video) = pre_created_video
         && let Err(error) = crate::upload::delete_instant_video(&video.id).await
@@ -884,40 +1754,42 @@ async fn start_attempt_with_upload(
     config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
+    #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
+    #[cfg(target_os = "linux")]
+    validate_linux_camera_request(
+        config.mode,
+        &config.target,
+        config.camera.is_some(),
+        config.linux_instant_camera.is_some(),
+    )?;
+
     tracing::info!(dir = %project_dir.display(), "starting recording");
 
-    // The app-scoped feeds (running previews/meters, owned by `Feeds`) are
-    // locked in place when available -- the Tauri model. The per-recording
-    // spawn below is the fallback for a feed that died between selection and
-    // start.
-    // A microphone that enumerates but fails to open (Bluetooth profile
-    // switch, a Continuity iPhone that wandered off) must not kill the whole
-    // recording -- degrade to no-mic, the way the Tauri app's app-scoped feed
-    // surfaces "Not connected" and records on.
     let (mic_feed, mic_lock, mic_errors) = match (&config.mic_feed, &config.microphone) {
         (Some(actor), Some(label)) => match actor.ask(microphone::Lock).await {
-            Ok(lock) => (None, Some(Arc::new(lock)), None),
+            Ok(lock) => {
+                anyhow::ensure!(
+                    lock.device_name() == label,
+                    "Selected microphone '{label}' is not the connected microphone '{}'. Please select it again.",
+                    lock.device_name()
+                );
+                (None, Some(Arc::new(lock)), None)
+            }
             Err(error) => {
                 tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
-                match setup_microphone(label).await {
-                    Ok((feed, lock, error_rx)) => (Some(feed), Some(lock), Some(error_rx)),
-                    Err(error) => {
-                        tracing::warn!(
-                            "microphone '{label}' unavailable, recording without: {error:#}"
-                        );
-                        (None, None, None)
-                    }
-                }
+                let (feed, lock, error_rx) = setup_microphone(label)
+                    .await
+                    .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+                (Some(feed), Some(lock), Some(error_rx))
             }
         },
-        (None, Some(label)) => match setup_microphone(label).await {
-            Ok((feed, lock, error_rx)) => (Some(feed), Some(lock), Some(error_rx)),
-            Err(error) => {
-                tracing::warn!("microphone '{label}' unavailable, recording without: {error:#}");
-                (None, None, None)
-            }
-        },
+        (None, Some(label)) => {
+            let (feed, lock, error_rx) = setup_microphone(label)
+                .await
+                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+            (Some(feed), Some(lock), Some(error_rx))
+        }
         _ => (None, None, None),
     };
 
@@ -925,7 +1797,18 @@ async fn start_attempt_with_upload(
         Some(id) => {
             if let Some(actor) = &config.camera_feed {
                 match actor.ask(camera::Lock).await {
-                    Ok(lock) => (None, Some(Arc::new(lock))),
+                    Ok(lock) => {
+                        let info = lock.camera_info();
+                        let matches_selection = match id {
+                            DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
+                            DeviceOrModelID::ModelID(model_id) => info.model_id() == Some(model_id),
+                        };
+                        anyhow::ensure!(
+                            matches_selection,
+                            "The selected camera is not the connected camera. Please select it again."
+                        );
+                        (None, Some(Arc::new(lock)))
+                    }
                     Err(error) => {
                         tracing::warn!("app camera feed lock failed ({error}), spawning one");
                         let (feed, lock) = setup_camera(id).await?;
@@ -943,6 +1826,36 @@ async fn start_attempt_with_upload(
             }
             (None, None)
         }
+    };
+
+    #[cfg(target_os = "linux")]
+    let processed_camera = if let Some(request) = &config.linux_instant_camera {
+        anyhow::ensure!(
+            config.mode == RecordingMode::Instant
+                && !matches!(config.target, ScreenCaptureTarget::CameraOnly),
+            "Processed camera requires an Instant screen capture"
+        );
+        anyhow::ensure!(
+            request.presentation.mirrored == request.effects.mirrored,
+            "Camera presentation mirror differs from requested processing"
+        );
+        anyhow::ensure!(
+            (request.presentation.effect == instant_recording::LinuxCameraEffect::None)
+                == (request.effects.blur == instant_recording::LinuxCameraBlur::Off),
+            "Camera presentation blur differs from requested processing"
+        );
+        let lock = camera_lock
+            .clone()
+            .context("Processed camera requires a selected camera")?;
+        Some(
+            request
+                .processing
+                .subscribe(lock, request.effects)
+                .await
+                .context("Preparing requested camera effects")?,
+        )
+    } else {
+        None
     };
 
     let mic_mute = mic_lock.as_ref().map(|lock| lock.recording_muted_handle());
@@ -1038,6 +1951,19 @@ async fn start_attempt_with_upload(
             if let Some(lock) = mic_lock.clone() {
                 builder = builder.with_mic_feed(lock);
             }
+            #[cfg(target_os = "linux")]
+            if let (Some(source), Some(request)) = (processed_camera, &config.linux_instant_camera)
+            {
+                builder = builder.with_linux_processed_camera(
+                    source,
+                    request.presentation,
+                    request.reference_size,
+                );
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(attempt) = &attempt {
+                attempt.attach(builder.lifecycle())?;
+            }
             let handle = Arc::new(
                 builder
                     .build(
@@ -1047,33 +1973,54 @@ async fn start_attempt_with_upload(
                     .await
                     .context("instant recording actor")?,
             );
-            let video = pre_created_video
-                .ok_or_else(|| anyhow!("instant recording has no reserved upload"))?;
-            let segment_rx = handle.take_segment_rx();
-            let metadata_lock = Arc::new(Mutex::new(()));
-            persist_in_progress_instant_meta(
-                &project_dir,
-                &video,
-                segment_rx.is_some(),
-                &metadata_lock,
-            )?;
-            instant_upload = Some(
+            let setup = (|| {
+                let video = pre_created_video
+                    .ok_or_else(|| anyhow!("instant recording has no reserved upload"))?;
+                let segment_rx = handle.take_segment_rx();
+                let metadata_lock = Arc::new(Mutex::new(()));
+                persist_in_progress_instant_meta(
+                    &project_dir,
+                    &video,
+                    segment_rx.is_some(),
+                    &metadata_lock,
+                )?;
                 crate::upload::start_instant_upload(
                     video,
                     project_dir.clone(),
                     segment_rx,
                     metadata_lock,
+                    #[cfg(any(target_os = "linux", windows))]
+                    Some(crate::upload::CompletionAuthorization::new()),
+                    #[cfg(not(any(target_os = "linux", windows)))]
+                    None,
                 )
-                .map_err(anyhow::Error::msg)?,
-            );
+                .map_err(anyhow::Error::msg)
+            })();
+            #[cfg(windows)]
+            let setup = finish_windows_startup_setup(setup, handle.cancel()).await;
+            instant_upload = Some(setup?);
             Handle::Instant(handle)
         }
     };
 
+    #[cfg(target_os = "linux")]
+    let instant_completion = instant_upload
+        .as_ref()
+        .and_then(crate::upload::InstantUpload::completion_control);
+    let instant_share_link = instant_upload
+        .as_ref()
+        .map(|upload| upload.video().link.clone());
+    let instant_upload =
+        instant_upload.map(|upload| Arc::new(tokio::sync::Mutex::new(Some(upload))));
     Ok(ActiveRecording {
         handle,
         project_dir,
         instant_upload,
+        instant_share_link,
+        #[cfg(target_os = "linux")]
+        instant_completion,
+        #[cfg(target_os = "linux")]
+        instant_operation: Arc::new(tokio::sync::Mutex::new(())),
         mic_mute,
         _mic_feed: mic_feed,
         _camera_feed: camera_feed,
@@ -1361,8 +2308,37 @@ mod tests {
     use super::*;
     use crate::store::BlurMode;
     use chrono::TimeZone as _;
+    #[cfg(target_os = "linux")]
+    use instant_recording::InstantQuiescence;
     use serde_json::Value;
     use std::sync::{Arc, Barrier};
+    #[cfg(target_os = "linux")]
+    use std::time::Duration;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instant_screen_requested_camera_cannot_bypass_processing_preparation() {
+        let screen = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        for mode in [RecordingMode::Instant, RecordingMode::Studio] {
+            for target in [&screen, &ScreenCaptureTarget::CameraOnly] {
+                for camera_requested in [false, true] {
+                    let required = mode == RecordingMode::Instant
+                        && !matches!(target, ScreenCaptureTarget::CameraOnly)
+                        && camera_requested;
+                    for prepared in [false, true] {
+                        assert_eq!(
+                            validate_linux_camera_request(mode, target, camera_requested, prepared)
+                                .is_ok(),
+                            required == prepared,
+                            "{mode:?}, {target:?}, camera={camera_requested}, prepared={prepared}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn recording_project_names_honor_mode_target_and_custom_datetime_formats() {
@@ -1422,6 +2398,81 @@ mod tests {
         ScreenCaptureTarget::Display {
             id: "1".parse().unwrap(),
         }
+    }
+
+    #[tokio::test]
+    async fn revoked_upload_response_preserves_actual_local_metadata_and_files() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = temp_project("revoked-upload");
+        let metadata_lock = Mutex::new(());
+        let video = cap_project::VideoUploadInfo {
+            id: "revoked".into(),
+            link: "https://example.invalid/s/revoked".into(),
+            config: cap_project::S3UploadMeta {
+                id: "revoked".into(),
+            },
+        };
+        persist_in_progress_instant_meta(&dir, &video, true, &metadata_lock).unwrap();
+        let original = std::fs::read(dir.join("recording-meta.json")).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (response, received) = tokio::sync::oneshot::channel();
+        let future = finish_instant_upload_locally(
+            Some(&cancel),
+            async { received.await.unwrap() },
+            || persist_instant_upload_complete(&dir, &metadata_lock, Some(&cancel)),
+            async { remove_uploaded_instant_recording(&dir, Some(&cancel)) },
+        );
+        tokio::pin!(future);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), &mut future)
+                .await
+                .is_err()
+        );
+        cancel.store(true, Ordering::Release);
+        response.send(Ok(())).unwrap();
+        assert!(future.await.is_err());
+        assert_eq!(
+            std::fs::read(dir.join("recording-meta.json")).unwrap(),
+            original
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoked_local_upload_persist_cannot_begin_cleanup() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = temp_project("revoked-before-cleanup");
+        let cancel = AtomicBool::new(false);
+        let result = finish_instant_upload_locally(
+            Some(&cancel),
+            async { Ok(()) },
+            || {
+                cancel.store(true, Ordering::Release);
+                Ok(())
+            },
+            async { remove_uploaded_instant_recording(&dir, Some(&cancel)) },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(dir.is_dir());
+        assert!(remove_uploaded_instant_recording(&dir, Some(&cancel)).is_err());
+        assert!(dir.is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_local_upload_persist_after_remote_success_preserves_recording() {
+        let dir = temp_project("failed-upload-persist");
+        let result = finish_instant_upload_locally(
+            None,
+            async { Ok(()) },
+            || anyhow::bail!("local metadata could not be saved"),
+            async { remove_uploaded_instant_recording(&dir, None) },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("local metadata"));
+        assert!(dir.is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1623,6 +2674,187 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn preserved_instant_project(tag: &str) -> PathBuf {
+        let dir = temp_project(tag);
+        std::fs::write(
+            dir.join("recording-meta.json"),
+            r#"{"pretty_name":"Preserved capture","sharing":null,"recording":true,"upload":{"state":"Failed","error":"offline"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("partial-media"), b"preserved media").unwrap();
+        dir
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn preserved_instant_joined_results_stop_actual_metadata_without_publication() {
+        for capture_failed in [false, true] {
+            let dir = preserved_instant_project("preserved-joined");
+            let builder =
+                instant_recording::Actor::builder(PathBuf::new(), ScreenCaptureTarget::CameraOnly);
+            let lifecycle = builder.lifecycle();
+            drop(builder);
+            let (joined, result) = joined_instant_result(lifecycle, async move {
+                if capture_failed {
+                    Err(anyhow!("required audio failed"))
+                } else {
+                    Ok(())
+                }
+            })
+            .await;
+            assert!(joined);
+            let result =
+                persist_preserved_instant_stop(&dir, Some(&Mutex::new(())), joined, result);
+            if capture_failed {
+                assert_eq!(result.unwrap_err().to_string(), "required audio failed");
+            } else {
+                result.unwrap();
+            }
+            let meta = cap_project::RecordingMeta::load_for_project(&dir).unwrap();
+            assert!(matches!(
+                meta.inner,
+                cap_project::RecordingMetaInner::Instant(
+                    cap_project::InstantRecordingMeta::InProgress { recording: false }
+                )
+            ));
+            assert!(matches!(
+                meta.upload,
+                Some(cap_project::UploadMeta::Failed { error }) if error == "offline"
+            ));
+            assert!(meta.sharing.is_none());
+            assert_eq!(
+                std::fs::read(dir.join("partial-media")).unwrap(),
+                b"preserved media"
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn preserved_instant_pending_join_does_not_write_stopped_metadata_early() {
+        let dir = preserved_instant_project("preserved-pending");
+        let original = std::fs::read(dir.join("recording-meta.json")).unwrap();
+        let (joined_tx, joined_rx) = tokio::sync::oneshot::channel();
+        let future = async {
+            let (joined, result) = run_instant_operation(
+                async { Err::<(), _>(anyhow!("capture failed before join")) },
+                || {},
+                async { joined_rx.await.unwrap() },
+            )
+            .await;
+            persist_preserved_instant_stop(&dir, Some(&Mutex::new(())), joined, result)
+        };
+        tokio::pin!(future);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut future)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(dir.join("recording-meta.json")).unwrap(),
+            original
+        );
+        joined_tx.send(InstantQuiescence::Joined).unwrap();
+        assert_eq!(
+            future.await.unwrap_err().to_string(),
+            "capture failed before join"
+        );
+        let meta = cap_project::RecordingMeta::load_for_project(&dir).unwrap();
+        assert!(matches!(
+            meta.inner,
+            cap_project::RecordingMetaInner::Instant(
+                cap_project::InstantRecordingMeta::InProgress { recording: false }
+            )
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn preserved_instant_unconfirmed_results_leave_actual_metadata_untouched() {
+        for state in [InstantQuiescence::Pending, InstantQuiescence::Unconfirmed] {
+            for capture_failed in [false, true] {
+                let dir = preserved_instant_project("preserved-unconfirmed");
+                let original = std::fs::read(dir.join("recording-meta.json")).unwrap();
+                let (joined, result) = run_instant_operation(
+                    async move {
+                        if capture_failed {
+                            Err(anyhow!("capture failed"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    || {},
+                    async move { state },
+                )
+                .await;
+                assert!(!joined);
+                assert!(
+                    persist_preserved_instant_stop(&dir, Some(&Mutex::new(())), joined, result)
+                        .is_err()
+                );
+                assert_eq!(
+                    std::fs::read(dir.join("recording-meta.json")).unwrap(),
+                    original
+                );
+                assert!(dir.join("partial-media").is_file());
+                std::fs::remove_dir_all(&dir).unwrap();
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn preserved_instant_metadata_io_error_retains_first_capture_failure_and_files() {
+        for capture_failed in [false, true] {
+            let dir = preserved_instant_project("preserved-metadata-io");
+            std::fs::remove_file(dir.join("recording-meta.json")).unwrap();
+            let result = persist_preserved_instant_stop(
+                &dir,
+                Some(&Mutex::new(())),
+                true,
+                if capture_failed {
+                    Err(anyhow!("original capture error"))
+                } else {
+                    Ok(())
+                },
+            );
+            let error = result.unwrap_err().to_string();
+            if capture_failed {
+                assert_eq!(error, "original capture error");
+            } else {
+                assert!(error.contains("loading recording metadata"));
+            }
+            assert_eq!(
+                std::fs::read(dir.join("partial-media")).unwrap(),
+                b"preserved media"
+            );
+            assert!(!dir.join("recording-meta.json").exists());
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn preserved_instant_missing_upload_lock_never_rewrites_metadata() {
+        let dir = preserved_instant_project("preserved-missing-lock");
+        let original = std::fs::read(dir.join("recording-meta.json")).unwrap();
+        assert!(persist_preserved_instant_stop(&dir, None, true, Ok(())).is_err());
+        assert_eq!(
+            persist_preserved_instant_stop(&dir, None, true, Err(anyhow!("capture failed")))
+                .unwrap_err()
+                .to_string(),
+            "capture failed"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("recording-meta.json")).unwrap(),
+            original
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1885,5 +3117,508 @@ mod tests {
                 Value::String(json.to_string())
             );
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod capture_stop_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_capture_stop_retains_retry_and_never_runs_finalization() {
+        let (stopped, result) = finish_after_capture_stop(
+            async { anyhow::bail!("cleanup unconfirmed") },
+            |(): ()| async { panic!("Failed capture must not finalize") },
+        )
+        .await;
+        assert!(!stopped);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cleanup unconfirmed")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_finalization_after_confirmed_capture_stop_is_safe_to_release() {
+        let (stopped, result) = finish_after_capture_stop(async { Ok(()) }, |()| async {
+            anyhow::bail!("remux failed")
+        })
+        .await;
+        assert!(stopped);
+        assert!(result.unwrap_err().to_string().contains("remux failed"));
+    }
+
+    #[tokio::test]
+    async fn pending_capture_stop_cannot_finalize_or_acknowledge_success() {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let future = finish_after_capture_stop(async { stop_rx.await.unwrap() }, |()| async {
+            Ok(PathBuf::from("saved-project"))
+        });
+        tokio::pin!(future);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut future)
+                .await
+                .is_err()
+        );
+        stop_tx.send(Ok(())).unwrap();
+        let (stopped, result) = future.await;
+        assert!(stopped);
+        assert_eq!(result.unwrap(), PathBuf::from("saved-project"));
+    }
+    #[tokio::test]
+    async fn finalization_panic_preserves_the_successful_capture_stop_acknowledgement() {
+        let (stopped, result) =
+            finish_after_capture_stop(async { Ok(()) }, |()| async { panic!("post-stop failure") })
+                .await;
+        assert!(stopped);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("after capture stopped")
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod instant_lifecycle_tests {
+    use super::*;
+    use instant_recording::InstantQuiescence;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn dropping_unpolled_start_or_cancelling_before_build_never_runs_setup() {
+        let attempt = InstantAttempt::new();
+        let future = owned_instant_start::<(), _>(
+            attempt.clone(),
+            async { panic!("Unpolled setup must not run") },
+            |()| async { Ok(()) },
+        );
+        drop(future);
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Joined
+        );
+        let attempt = InstantAttempt::new();
+        attempt.cancel();
+        let result = owned_instant_start(attempt.clone(), async { Ok(()) }, |()| async {
+            panic!("No active recording exists")
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Joined
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_start_waiter_keeps_lifecycle_until_owned_setup_is_dropped() {
+        let attempt = InstantAttempt::new();
+        let builder =
+            instant_recording::Actor::builder(PathBuf::new(), ScreenCaptureTarget::CameraOnly);
+        attempt.attach(builder.lifecycle()).unwrap();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(owned_instant_start(
+            attempt.clone(),
+            async move {
+                let _builder = builder;
+                started.send(()).unwrap();
+                std::future::pending::<anyhow::Result<()>>().await
+            },
+            |()| async { Ok(()) },
+        ));
+        started_rx.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), attempt.wait_for_quiescence())
+                .await
+                .unwrap(),
+            InstantQuiescence::Joined
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_successful_setup_waits_for_owned_cleanup_before_reveal() {
+        let attempt = InstantAttempt::new();
+        let build_attempt = attempt.clone();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let cleanup = Arc::new(Mutex::new(Some((entered, released))));
+        let task = tokio::spawn(owned_instant_start(
+            attempt.clone(),
+            async move {
+                build_attempt.cancel();
+                Ok(())
+            },
+            move |()| {
+                let (entered, released) = cleanup.lock().unwrap().take().unwrap();
+                async move {
+                    entered.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok(())
+                }
+            },
+        ));
+        entered_rx.await.unwrap();
+        assert_eq!(attempt.quiescence(), InstantQuiescence::Pending);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), attempt.wait_for_quiescence())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Joined
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_panic_is_unconfirmed_even_without_a_live_core_handle() {
+        let attempt = InstantAttempt::new();
+        let result = owned_instant_start(
+            attempt.clone(),
+            async { Err::<(), _>(anyhow!("setup failed")) },
+            |()| async { Ok(()) },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("setup failed"));
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Joined
+        );
+        let attempt = InstantAttempt::new();
+        let result = owned_instant_start::<(), _>(
+            attempt.clone(),
+            async { panic!("setup panic") },
+            |()| async { Ok(()) },
+        )
+        .await;
+        assert!(result.is_err());
+        attempt.cancel();
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Unconfirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_error_waits_for_joined_acknowledgement_and_retains_error() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = cancelled.clone();
+        let (joined, joined_rx) = tokio::sync::oneshot::channel();
+        let future = run_instant_operation(
+            async { Err::<(), _>(anyhow!("required audio failed")) },
+            move || {
+                cancel.store(true, Ordering::Release);
+            },
+            async { joined_rx.await.unwrap() },
+        );
+        tokio::pin!(future);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut future)
+                .await
+                .is_err()
+        );
+        assert!(cancelled.load(Ordering::Acquire));
+        joined.send(InstantQuiescence::Joined).unwrap();
+        let (safe, result) = future.await;
+        assert!(safe);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("required audio failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_transport_error_or_success_cannot_override_unconfirmed_cleanup() {
+        for succeeds in [false, true] {
+            let (safe, result) = run_instant_operation(
+                async move {
+                    if succeeds {
+                        Ok(())
+                    } else {
+                        Err(anyhow!("actor no longer exists"))
+                    }
+                },
+                || {},
+                async { InstantQuiescence::Unconfirmed },
+            )
+            .await;
+            assert!(!safe);
+            assert!(result.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_joined_operation_retains_success_without_requesting_cancellation() {
+        let builder =
+            instant_recording::Actor::builder(PathBuf::new(), ScreenCaptureTarget::CameraOnly);
+        let lifecycle = builder.lifecycle();
+        drop(builder);
+        let (safe, result) =
+            joined_instant_result(lifecycle, async { Ok(PathBuf::from("completed")) }).await;
+        assert!(safe);
+        assert_eq!(result.unwrap(), PathBuf::from("completed"));
+    }
+    #[tokio::test]
+    async fn reused_start_attempt_cannot_replace_or_cancel_the_original_owner() {
+        let attempt = InstantAttempt::new();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn(owned_instant_start(
+            attempt.clone(),
+            async move {
+                started.send(()).unwrap();
+                std::future::pending::<anyhow::Result<()>>().await
+            },
+            |()| async { Ok(()) },
+        ));
+        started_rx.await.unwrap();
+        let second =
+            owned_instant_start(attempt.clone(), async { Ok(()) }, |()| async { Ok(()) }).await;
+        assert!(second.is_err());
+        assert!(!*attempt.0.cancelled.borrow());
+        attempt.cancel();
+        assert!(first.await.unwrap().is_err());
+        assert_eq!(
+            attempt.wait_for_quiescence().await,
+            InstantQuiescence::Joined
+        );
+    }
+    #[tokio::test]
+    async fn dropped_operation_waiter_does_not_release_serialization_before_owned_work_finishes() {
+        let serialized = Arc::new(tokio::sync::Mutex::new(()));
+        let first_lock = serialized.clone();
+        let revoked = Arc::new(AtomicBool::new(false));
+        let revoke = revoked.clone();
+        let finished = Arc::new(AtomicBool::new(false));
+        let first_finished = finished.clone();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let caller = tokio::spawn(owned_instant_operation(
+            async move {
+                let _held = first_lock.lock().await;
+                entered.send(()).unwrap();
+                wait.await.unwrap();
+                first_finished.store(true, Ordering::Release);
+                (true, Ok(PathBuf::from("preserved")))
+            },
+            move || {
+                revoke.store(true, Ordering::Release);
+            },
+        ));
+        entered_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert!(revoked.load(Ordering::Acquire));
+        let retry = serialized.lock();
+        tokio::pin!(retry);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut retry)
+                .await
+                .is_err()
+        );
+        assert!(!finished.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        let _joined = retry.await;
+        assert!(finished.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod windows_failed_capture_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn startup_metadata_error_waits_for_actual_cleanup_future() {
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(finish_windows_startup_setup(
+            Err::<(), _>(anyhow!("metadata denied")),
+            async { wait.await.map_err(anyhow::Error::from) },
+        ));
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        release.send(()).unwrap();
+        assert_eq!(
+            task.await.unwrap().unwrap_err().to_string(),
+            "metadata denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_cleanup_error_retains_original_failure() {
+        let error =
+            finish_windows_startup_setup(Err::<(), _>(anyhow!("upload setup failed")), async {
+                Err(anyhow!("stop failed"))
+            })
+            .await
+            .unwrap_err();
+        let chain = format!("{error:#}");
+        assert!(chain.contains("upload setup failed"));
+        assert!(chain.contains("stop failed"));
+    }
+
+    #[tokio::test]
+    async fn successful_startup_setup_does_not_cancel_capture() {
+        let output = finish_windows_startup_setup(Ok(7), async {
+            panic!("successful capture must not be cancelled")
+        })
+        .await
+        .unwrap();
+        assert_eq!(output, 7);
+    }
+
+    #[tokio::test]
+    async fn cancellation_error_never_persists_stopped_or_reports_success() {
+        let written = AtomicBool::new(false);
+        let (stopped, result) =
+            finish_windows_failed_capture(async { Err(anyhow!("cancel failed")) }, || {
+                written.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert!(!stopped);
+        assert!(!written.load(Ordering::SeqCst));
+        assert!(format!("{:#}", result.unwrap_err()).contains("cancel failed"));
+    }
+
+    #[tokio::test]
+    async fn acknowledged_cancel_only_persists_stopped_and_keeps_failure() {
+        let written = AtomicBool::new(false);
+        let (stopped, result) = finish_windows_failed_capture(async { Ok(()) }, || {
+            written.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert!(stopped);
+        assert!(written.load(Ordering::SeqCst));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn metadata_failure_preserves_error_after_acknowledged_cancel() {
+        let (stopped, result) =
+            finish_windows_failed_capture(async { Ok(()) }, || Err(anyhow!("metadata denied")))
+                .await;
+        assert!(stopped);
+        assert!(format!("{:#}", result.unwrap_err()).contains("metadata denied"));
+    }
+
+    #[tokio::test]
+    async fn held_cancel_cannot_persist_metadata_early() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let written = Arc::new(AtomicBool::new(false));
+        let observed = written.clone();
+        let task = tokio::spawn(async move {
+            finish_windows_failed_capture(
+                async { receiver.await.map_err(anyhow::Error::from) },
+                || {
+                    observed.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!written.load(Ordering::SeqCst));
+        sender.send(()).unwrap();
+        let (stopped, result) = task.await.unwrap();
+        assert!(stopped);
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod studio_report_completion_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn conflicting_studio_action_cannot_authorize_local_completion() {
+        let effects = AtomicUsize::new(0);
+        let (joined, result) = finish_studio_after_join(
+            async {
+                studio_recording::StudioStopReport {
+                    accepted_intent: false,
+                    quiescence: studio_recording::StudioQuiescence::Joined,
+                    result: Err("Discard owns terminal action".into()),
+                }
+            },
+            |_| async {
+                effects.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(!joined);
+        assert!(result.is_err());
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn joined_required_track_failure_never_finalizes_as_success() {
+        let effects = AtomicUsize::new(0);
+        let (joined, result) = finish_studio_after_join(
+            async {
+                studio_recording::StudioStopReport {
+                    accepted_intent: true,
+                    quiescence: studio_recording::StudioQuiescence::Joined,
+                    result: Err("DeviceNotFound".into()),
+                }
+            },
+            |_| async {
+                effects.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+        assert!(joined);
+        assert!(result.is_err());
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_studio_stop_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn studio_stop_error_never_finalizes_or_acknowledges_cleanup() {
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let (acknowledged, result) = finish_after_capture_stop(
+            async { Err::<(), _>(anyhow!("encoder join timed out")) },
+            |_| async {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(PathBuf::new())
+            },
+        )
+        .await;
+        assert!(!acknowledged);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("encoder join timed out")
+        );
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn healthy_studio_stop_retains_existing_finalization() {
+        let (acknowledged, result) = finish_after_capture_stop(async { Ok(()) }, |_| async {
+            Ok(PathBuf::from("preserved.cap"))
+        })
+        .await;
+        assert!(acknowledged);
+        assert_eq!(result.unwrap(), PathBuf::from("preserved.cap"));
     }
 }

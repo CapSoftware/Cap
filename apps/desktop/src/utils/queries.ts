@@ -187,8 +187,28 @@ export function createOptionsQuery() {
 		organizationId: null,
 	});
 
+	let microphoneRevision = 0;
+	let cameraRevision = 0;
+	const markInputChanges = (update: unknown) => {
+		if (
+			update === "micName" ||
+			(typeof update === "object" && update !== null && "micName" in update)
+		)
+			microphoneRevision++;
+		if (
+			update === "cameraID" ||
+			(typeof update === "object" && update !== null && "cameraID" in update)
+		)
+			cameraRevision++;
+	};
 	createEventListener(window, "storage", (e) => {
-		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
+		if (e.key === PERSIST_KEY) {
+			const update: unknown = JSON.parse(e.newValue ?? "{}");
+			if (typeof update === "object" && update !== null) {
+				markInputChanges(update);
+				_setState(update);
+			}
+		}
 	});
 
 	let initialized = false;
@@ -198,10 +218,10 @@ export function createOptionsQuery() {
 			if (data?.target) {
 				_setState("captureTarget", data.target);
 			}
-			if (data?.micName !== undefined) {
+			if (data?.micName !== undefined && microphoneRevision === 0) {
 				_setState("micName", data.micName);
 			}
-			if (data?.cameraId !== undefined) {
+			if (data?.cameraId !== undefined && cameraRevision === 0) {
 				_setState("cameraID", data.cameraId);
 			}
 			if (data?.mode && data.mode !== _state.mode) {
@@ -243,7 +263,29 @@ export function createOptionsQuery() {
 		name: PERSIST_KEY,
 	});
 
-	return { rawOptions: state, setOptions: setState };
+	const setOptions = new Proxy(setState, {
+		apply(target, thisArg, args) {
+			markInputChanges(args[0]);
+			return Reflect.apply(target, thisArg, args);
+		},
+	});
+	return { rawOptions: state, setOptions };
+}
+
+export function createCleanCaptureQuery() {
+	const query = createQuery(() => ({
+		queryKey: ["cleanCapture"] as const,
+		queryFn: () => commands.getCleanCaptureState(),
+		refetchOnWindowFocus: true,
+	}));
+	createQueryInvalidate(query, "currentRecordingChanged");
+	return query;
+}
+
+export async function revealRecordingWindow(generation?: number) {
+	const currentGeneration =
+		generation ?? (await commands.getCleanCaptureState()).generation;
+	return commands.revealCaptureWindow(currentGeneration, null);
 }
 
 export function createCurrentRecordingQuery() {
@@ -285,6 +327,29 @@ export function createLicenseQuery() {
 	return query;
 }
 
+function inputRequestWasSuperseded(error: unknown) {
+	return String(error).includes("selection was superseded by a newer request");
+}
+
+export function createMicrophoneMutation() {
+	const { setOptions, rawOptions } = useRecordingOptions();
+	return useMutation(() => ({
+		mutationFn: async (name: string | null) => {
+			setOptions("micName", name);
+			try {
+				await commands.setMicInput(name);
+			} catch (error) {
+				if (
+					(rawOptions.micName ?? null) !== name ||
+					inputRequestWasSuperseded(error)
+				)
+					return;
+				throw error;
+			}
+		},
+	}));
+}
+
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
@@ -292,36 +357,23 @@ export function createCameraMutation() {
 		model: DeviceOrModelID | null,
 		skipCameraWindow?: boolean,
 	) => {
-		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
 		setOptions("cameraID", reconcile(model));
-		await commands
-			.setCameraInput(model, skipCameraWindow ?? null)
-			.catch(async (e) => {
-				const message =
-					typeof e === "string"
-						? e
-						: e instanceof Error
-							? e.message
-							: String(e);
+		try {
+			await commands.setCameraInput(model, skipCameraWindow ?? null);
+		} catch (error) {
+			if (
+				JSON.stringify(rawOptions.cameraID ?? null) !== JSON.stringify(model) ||
+				inputRequestWasSuperseded(error)
+			)
+				return;
+			throw error;
+		}
 
-				if (
-					message.includes("DeviceNotFound") ||
-					message.includes("CameraTimeout") ||
-					message.includes("Failed to initialize camera")
-				) {
-					setOptions("cameraID", null);
-					console.warn("Selected camera is unavailable.");
-					return;
-				}
-
-				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-					setOptions("cameraID", null);
-				} else setOptions("cameraID", reconcile(before));
-
-				throw e;
-			});
-
-		if (model && !skipCameraWindow) {
+		if (
+			model &&
+			!skipCameraWindow &&
+			JSON.stringify(rawOptions.cameraID) === JSON.stringify(model)
+		) {
 			getCurrentWindow().setFocus();
 		}
 	};

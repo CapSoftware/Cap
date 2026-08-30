@@ -1,5 +1,6 @@
 pub mod dash_audio;
 pub mod fragment_manifest;
+mod fragment_metadata;
 pub mod fragmented_audio;
 pub mod fragmented_mp4;
 pub mod mov;
